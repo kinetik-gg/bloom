@@ -42,7 +42,11 @@ void testOperationMemoization(Expectations& expectations) {
                               kTextContent,
                               "Bloom",
                               {kTextSize, 12.0},
-                              {kTextColor, core::Color4d{0.5, 0.25, 0.75, 1.0}}};
+                              {kTextColor, core::Color4d{0.5, 0.25, 0.75, 1.0}},
+                              {{document::ParameterId::fromRaw(901)},
+                               0,
+                               {document::ParameterId::fromRaw(902), 1.0},
+                               {document::ParameterId::fromRaw(903), 0.0}}};
     std::get<runtime::CompiledLayerOutput>(definition.operations[1]).position.source =
         document::Vec2d{32, 24};
     std::get<runtime::CompiledLayerOutput>(definition.operations[3]).position.source =

@@ -133,6 +133,7 @@ enum class Step {
     ValueGraph,
     LayerTimeline,
     Merges,
+    ContentBounds,
     SafeAreas,
     Images,
     Audio
@@ -148,7 +149,7 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     // A version-only step adds nothing, so there is no member whose presence could prove it already
     // ran; its own source-version refusal (sourceVersionIs() below) is the whole guard.
     if (step == Step::AnimationBreadth || step == Step::ValueGraph || step == Step::LayerTimeline ||
-        step == Step::Merges || step == Step::Audio)
+        step == Step::Merges || step == Step::ContentBounds || step == Step::Audio)
         return false;
     if (scope == Scope::Composition) {
         return value.findMember(step == Step::NodeLayout   ? "nodeLayout"
@@ -186,6 +187,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::ValueGraph       ? "{\"major\":1,\"minor\":4}"
                            : step == Step::LayerTimeline    ? "{\"major\":1,\"minor\":5}"
                            : step == Step::Merges           ? "{\"major\":1,\"minor\":6}"
+                           : step == Step::ContentBounds    ? "{\"major\":1,\"minor\":7}"
                            : step == Step::SafeAreas        ? "{\"major\":1,\"minor\":8}"
                            : step == Step::Images           ? "{\"major\":1,\"minor\":10}"
                                                             : "{\"major\":1,\"minor\":11}");
@@ -318,6 +320,12 @@ MigrationStepOutcome migrateImagesV1_9(const JsonValue& root, std::pmr::memory_r
 MigrationStepOutcome migrateAudioV1_10(const JsonValue& root, std::pmr::memory_resource*,
                                        Buffer& output) {
     if (!sourceVersionIs(root, "10") || !transform(root, Scope::Root, Step::Audio, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateContentBoundsV1_6(const JsonValue& root, std::pmr::memory_resource*,
+                                              Buffer& output) {
+    if (!sourceVersionIs(root, "6") || !transform(root, Scope::Root, Step::ContentBounds, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

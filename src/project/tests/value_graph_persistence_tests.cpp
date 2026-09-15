@@ -1,9 +1,7 @@
-#include <regex>
-// The value graph on the wire (document 1.4): the vec3 constant kind, the driver parameter source,
-// and the 1.3 -> 1.4 migration that changes nothing but the version. The 1.3 fixture is produced by
-// downgrading a freshly written 1.4 document rather than by pasting a second hand-written document
-// literal, so the two versions cannot drift apart here -- the same discipline
-// animation_breadth_persistence_tests.cpp already follows for 1.2 -> 1.3.
+// The value graph on the wire (introduced in document 1.4): the vec3 constant kind and the driver
+// parameter source, written and read back at the current minor. The gating cases are produced by
+// restamping a freshly written document's declared minor rather than by pasting a second
+// hand-written literal, so the claimed version and the payload cannot drift apart here.
 
 #include "zip_container_test_support.hpp"
 
@@ -17,7 +15,6 @@
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/canonical_manifest.hpp>
 #include <bloom/project/document_decode.hpp>
-#include <bloom/project/document_migration.hpp>
 #include <bloom/project/open_archive.hpp>
 #include <bloom/project/save_archive.hpp>
 #include <bloom/project/strict_json_dom.hpp>
@@ -92,6 +89,10 @@ Authored authoredProject() {
     const auto solidEdgeId = draft.ids().allocateEdge();
     const auto stackEdgeId = draft.ids().allocateEdge();
     const auto colorParameter = draft.ids().allocateParameter();
+    const auto widthParameter = draft.ids().allocateParameter();
+    const auto heightParameter = draft.ids().allocateParameter();
+    if (!widthParameter || !heightParameter)
+        throw std::runtime_error("dimension ids");
     const auto positionParameter = draft.ids().allocateParameter();
     const auto anchorParameter = draft.ids().allocateParameter();
     const auto scaleParameter = draft.ids().allocateParameter();
@@ -111,8 +112,10 @@ Authored authoredProject() {
     const bool authoredTopology =
         graph.addNode({*solidNodeId,
                        std::string(document::kSolidSourceNodeType),
-                       {{std::string(document::kSolidColorParameterRole), *colorParameter}},
-                       1}) &&
+                       {{std::string(document::kSolidColorParameterRole), *colorParameter},
+                        {std::string(document::kSolidWidthParameterRole), *widthParameter},
+                        {std::string(document::kSolidHeightParameterRole), *heightParameter}},
+                       document::kSolidSourceNodeSchemaVersion}) &&
         graph.addNode({*layerNodeId,
                        std::string(document::kLayerOutputNodeType),
                        {{std::string(document::kPositionParameterRole), *positionParameter},
@@ -121,7 +124,7 @@ Authored authoredProject() {
                         {std::string(document::kRotationParameterRole), *rotationParameter},
                         {std::string(document::kOpacityParameterRole), *opacityParameter},
                         {std::string(document::kBlendModeParameterRole), *blendModeParameter}},
-                       3}) &&
+                       document::kLayerOutputNodeSchemaVersion}) &&
         graph.addNode({*scalarNodeId,
                        std::string(document::kScalarValueNodeType),
                        {{std::string(document::kValueParameterRole), *scalarValueParameter}},
@@ -147,6 +150,12 @@ Authored authoredProject() {
     }
 
     const bool authoredParameters =
+        composition.parameters().insert(
+            {*widthParameter, std::string(document::kSolidWidthParameterSchemaKey),
+             document::ConstantValueSource{static_cast<double>(composition.format().width())}}) &&
+        composition.parameters().insert(
+            {*heightParameter, std::string(document::kSolidHeightParameterSchemaKey),
+             document::ConstantValueSource{static_cast<double>(composition.format().height())}}) &&
         composition.parameters().insert(
             {*colorParameter, std::string(document::kSolidColorParameterSchemaKey),
              document::ConstantValueSource{core::Color4d{1.0, 1.0, 1.0, 1.0}}}) &&
@@ -290,12 +299,6 @@ void minorGating() {
     const auto decodeClaiming = [&](const std::string_view replacement) {
         auto text = baseline;
         text.replace(minor, anchor.size(), std::string(replacement));
-        if (replacement == "\"minor\": 3") {
-            text = std::regex_replace(text, std::regex(R"(,\s*"backgroundColor"\s*:\s*\[[^\]]*\])"),
-                                      "");
-            text = std::regex_replace(text, std::regex(R"(,\s*"assets"\s*:\s*\[\])"), "");
-            text = std::regex_replace(text, std::regex(R"(,\s*"asset"\s*:\s*"0")"), "");
-        }
         auto dom = parseStrictJsonDom(test::toBytes(text), {}, memory());
         if (!dom) {
             throw std::runtime_error("gating parse");
@@ -303,19 +306,17 @@ void minorGating() {
         return decodeDocumentEnvelope(dom.document()->root());
     };
 
-    // Claiming 1.3 -- a minor this build KNOWS, and one that declares neither kind. There is no
-    // round-trip state for a known minor (that exists only for a minor newer than this build), so
-    // the unknown discriminator is a hard decode failure naming the exact member, which is the only
-    // honest answer: the file says it is 1.3 and 1.3 has no such construct.
+    // Claiming 1.3 -- a minor BELOW the 1.11 floor. The document is refused at the floor, before
+    // any member of it is interpreted, so a construct 1.3 never declared can no more be read as
+    // part of 1.3 than it could be silently migrated forward.
     {
         const auto decoded = decodeClaiming("\"minor\": 3");
-        expect(
-            decoded.outcome() == DocumentDecodeOutcome::Failed &&
-                decoded.error() == DocumentDecodeError::UnsupportedParameterSource,
-            "a document claiming 1.3 while carrying a driver source is refused, never decoded as "
-            "if the construct were part of 1.3");
-        expect(decoded.path().find("/source/kind") != std::string_view::npos,
-               "and the refusal names the exact discriminator it could not accept");
+        expect(decoded.outcome() == DocumentDecodeOutcome::Failed &&
+                   decoded.error() == DocumentDecodeError::UnsupportedSchemaVersion,
+               "a document claiming 1.3 while carrying a driver source is refused, never decoded "
+               "as if the construct were part of 1.3");
+        expect(decoded.path() == "/schemaVersion",
+               "and the refusal names the schema version it could not accept");
     }
 
     // Claiming 1.5 -- a minor NEWER than this build -- still decodes both constructs, because the

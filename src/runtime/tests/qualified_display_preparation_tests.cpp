@@ -79,7 +79,12 @@ oneSolidPlan(const bloom::document::CompositionFormat compositionFormat = format
     using namespace bloom::runtime;
     std::vector<CompiledOperation> operations;
     operations.emplace_back(
-        CompiledSolid{kSolidNode, {kColorParam, bloom::core::Color4d{1.0, 0.0, 0.0, 1.0}}});
+        CompiledSolid{kSolidNode,
+                      {kColorParam, bloom::core::Color4d{1.0, 0.0, 0.0, 1.0}},
+                      {bloom::document::ParameterId::fromRaw(kSolidNode.value() * 100 + 1000),
+                       static_cast<double>(compositionFormat.width())},
+                      {bloom::document::ParameterId::fromRaw(kSolidNode.value() * 100 + 1001),
+                       static_cast<double>(compositionFormat.height())}});
     operations.emplace_back(CompiledLayerOutput{
         kLayerNode, kLayer, OperationIndex::fromRaw(0),
         CompiledVec2Parameter{kPositionParam, bloom::document::Vec2d{2.0, 1.0}},

@@ -390,18 +390,21 @@ lower(const std::vector<document::NodeId>& order) {
     // nothing rather than failing, so an image-only layer routed into the output stays valid.
     const auto appendLayer = [&](const document::NodeId layerNodeId) -> bool {
         const auto* layerNode = findNode(layerNodeId);
-        const auto boundary = std::ranges::find_if(
-            graph.layerOutputs(), [&](const auto& candidate) { return candidate.nodeId == layerNodeId; });
+        const auto boundary =
+            std::ranges::find_if(graph.layerOutputs(), [&](const auto& candidate) {
+                return candidate.nodeId == layerNodeId;
+            });
         if (layerNode == nullptr || layerNode->typeId != document::kLayerOutputNodeType ||
             boundary == graph.layerOutputs().end()) {
             addTopologyFailure(layerNodeId, "Validated audio layer topology could not be lowered.");
             return false;
         }
-        const auto layerAudioEdgeIterator = std::ranges::find_if(graph.edges(), [&](const auto& edge) {
-            const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
-            return input != nullptr && input->nodeId == layerNodeId &&
-                   input->port == document::kLayerOutputAudioInputPort;
-        });
+        const auto layerAudioEdgeIterator =
+            std::ranges::find_if(graph.edges(), [&](const auto& edge) {
+                const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
+                return input != nullptr && input->nodeId == layerNodeId &&
+                       input->port == document::kLayerOutputAudioInputPort;
+            });
         if (layerAudioEdgeIterator == graph.edges().end())
             return true;
         const auto* audioSource = findNode(layerAudioEdgeIterator->source.nodeId);
@@ -427,7 +430,8 @@ lower(const std::vector<document::NodeId>& order) {
                 return std::nullopt;
             const auto stackEdgeIterator =
                 std::ranges::find_if(graph.edges(), [&](const auto& edge) {
-                    const auto* input = std::get_if<document::LayerStackInputRef>(&edge.destination);
+                    const auto* input =
+                        std::get_if<document::LayerStackInputRef>(&edge.destination);
                     return input != nullptr && input->stackNodeId == stack->nodeId() &&
                            input->slotId == entry.slotId &&
                            input->role == document::kLayerStackAudioInputRole;
@@ -519,26 +523,33 @@ lowerSolid(const document::NodeRecord& node) {
     }
     auto width = compiledScalarParameter(findParameterBinding(node, kSolidWidthParameterRole));
     auto height = compiledScalarParameter(findParameterBinding(node, kSolidHeightParameterRole));
-    if (node.typeId == kSolidSourceNodeType && node.schemaVersion >= 2 && (!width || !height)) {
+    if (!width || !height) {
         addTopologyFailure(node.id, "Solid dimensions could not be lowered.");
         return std::nullopt;
     }
-    return runtime::CompiledSolid{node.id, *color, width, height};
+    return runtime::CompiledSolid{node.id, *color, *width, *height};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
 lowerImageSource(const document::NodeRecord& node) {
-    const auto* asset=parameterConstant<std::string>(findParameterBinding(node,"asset"));
-    const auto* start=parameterConstant<std::int64_t>(findParameterBinding(node,"startFrame"));
-    const auto* loop=parameterConstant<std::int64_t>(findParameterBinding(node,"loopMode"));
-    const auto* space=parameterConstant<std::int64_t>(findParameterBinding(node,"colorSpace"));
-    const auto* premultiply=parameterConstant<bool>(findParameterBinding(node,"premultiply"));
-    if (!asset || !start || !loop || !space || !premultiply) { addTopologyFailure(node.id,"Image source parameters could not be lowered."); return std::nullopt; }
-    std::uint64_t raw=0;
-    const auto parsed=std::from_chars(asset->data(),asset->data()+asset->size(),raw);
-    const auto* record=parsed.ec==std::errc{} && parsed.ptr==asset->data()+asset->size()
-        ? request_.snapshot.project().findAsset(document::AssetId::fromRaw(raw)) : nullptr;
-    return runtime::CompiledImageSource{node.id,record?std::optional{*record}:std::nullopt,*start,*loop,*space,*premultiply};
+    const auto* asset = parameterConstant<std::string>(findParameterBinding(node, "asset"));
+    const auto* start = parameterConstant<std::int64_t>(findParameterBinding(node, "startFrame"));
+    const auto* loop = parameterConstant<std::int64_t>(findParameterBinding(node, "loopMode"));
+    const auto* space = parameterConstant<std::int64_t>(findParameterBinding(node, "colorSpace"));
+    const auto* premultiply = parameterConstant<bool>(findParameterBinding(node, "premultiply"));
+    if (!asset || !start || !loop || !space || !premultiply) {
+        addTopologyFailure(node.id, "Image source parameters could not be lowered.");
+        return std::nullopt;
+    }
+    std::uint64_t raw = 0;
+    const auto parsed = std::from_chars(asset->data(), asset->data() + asset->size(), raw);
+    const auto* record =
+        parsed.ec == std::errc{} && parsed.ptr == asset->data() + asset->size()
+            ? request_.snapshot.project().findAsset(document::AssetId::fromRaw(raw))
+            : nullptr;
+    return runtime::CompiledImageSource{node.id, record ? std::optional{*record} : std::nullopt,
+                                        *start,  *loop,
+                                        *space,  *premultiply};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -560,8 +571,8 @@ lowerText(const document::NodeRecord& node) {
         addTopologyFailure(node.id, "Validated text parameters could not be lowered.");
         return std::nullopt;
     }
-    std::optional<runtime::CompiledTextLayout> layout;
-    if (node.schemaVersion >= 2) {
+    runtime::CompiledTextLayout layout;
+    {
         const auto* alignmentBinding = findParameterBinding(node, kTextAlignmentParameterRole);
         const auto* alignment = parameterConstant<std::int64_t>(alignmentBinding);
         const auto drivenAlignment =
@@ -579,10 +590,13 @@ lowerText(const document::NodeRecord& node) {
                                              alignment == nullptr ? 0 : *alignment, *lineHeight,
                                              *letterSpacing, drivenAlignment};
     }
-    return runtime::CompiledText{node.id,  contentBinding->parameterId,
+    return runtime::CompiledText{node.id,
+                                 contentBinding->parameterId,
                                  content == nullptr ? std::string{} : *content,
-                                 *size,    *color,
-                                 layout,   drivenContent};
+                                 *size,
+                                 *color,
+                                 layout,
+                                 drivenContent};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -635,7 +649,6 @@ lowerLayerOutput(const document::NodeRecord& node,
                                         blendMode.value_or(core::kDefaultBlendMode),
                                         boundary->second->inPoint,
                                         boundary->second->endPoint(composition_->duration()),
-                                        node.schemaVersion >= 4,
                                         drivenBlendMode};
 }
 
@@ -664,8 +677,8 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
             // Its typed audio edge is lowered by lowerAudioMix(), so it is intentionally absent
             // from the image merge entries.
             if (definition.audioLayerSlotInput.has_value() &&
-                layerSlotInputEdge(node.id, entry.slotId,
-                                   definition.audioLayerSlotInput->role) != nullptr)
+                layerSlotInputEdge(node.id, entry.slotId, definition.audioLayerSlotInput->role) !=
+                    nullptr)
                 continue;
             addTopologyFailure(node.id, "Validated Layer Stack input could not be lowered.");
             return std::nullopt;
@@ -679,7 +692,7 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
         }
         entries.push_back({entry.slotId, entry.layerId, source->second});
     }
-    return runtime::CompiledMerge{node.id, std::move(entries), node.schemaVersion >= 2};
+    return runtime::CompiledMerge{node.id, std::move(entries)};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation> lowerCompositionOutput(

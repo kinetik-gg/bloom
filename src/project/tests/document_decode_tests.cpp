@@ -468,7 +468,7 @@ void testComposedRoundTrip(Expectations& expectations) {
          {"position", ParameterId::fromRaw(5)},
          {"rotation", ParameterId::fromRaw(10)},
          {"scale", ParameterId::fromRaw(9)}},
-        3};
+        kLayerOutputNodeSchemaVersion};
     const NodeRecord layerStackNode{
         NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
     const NodeRecord compositionOutputNode{NodeId::fromRaw(4),
@@ -477,8 +477,10 @@ void testComposedRoundTrip(Expectations& expectations) {
                                            kCompositionOutputNodeSchemaVersion};
     const NodeRecord solidSourceNode{NodeId::fromRaw(2),
                                      std::string(kSolidSourceNodeType),
-                                     {{"color", ParameterId::fromRaw(7)}},
-                                     1};
+                                     {{"color", ParameterId::fromRaw(7)},
+                                      {"height", ParameterId::fromRaw(13)},
+                                      {"width", ParameterId::fromRaw(12)}},
+                                     kSolidSourceNodeSchemaVersion};
     const bool nodesAdded = graph.addNode(layerOutputNode) && graph.addNode(layerStackNode) &&
                             graph.addNode(compositionOutputNode) && graph.addNode(solidSourceNode);
     const EdgeRecord stackToOutputEdge{
@@ -508,9 +510,15 @@ void testComposedRoundTrip(Expectations& expectations) {
     Composition composition{CompositionId::fromRaw(1), "Hero Shot", *duration, std::move(graph),
                             *format};
     expectations.expect(
-        composition.parameters().insert({ParameterId::fromRaw(7),
-                                         std::string(kSolidColorParameterSchemaKey),
-                                         ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
+        composition.parameters().insert(
+            {ParameterId::fromRaw(12), std::string(kSolidWidthParameterSchemaKey),
+             ConstantValueSource{static_cast<double>(composition.format().width())}}) &&
+            composition.parameters().insert(
+                {ParameterId::fromRaw(13), std::string(kSolidHeightParameterSchemaKey),
+                 ConstantValueSource{static_cast<double>(composition.format().height())}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(7),
+                                             std::string(kSolidColorParameterSchemaKey),
+                                             ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
             composition.parameters().insert({ParameterId::fromRaw(5),
                                              std::string(kPositionParameterSchemaKey),
                                              ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
@@ -549,7 +557,7 @@ void testComposedRoundTrip(Expectations& expectations) {
                                          .edge = 3,
                                          .layer = 1,
                                          .layerSlot = 1,
-                                         .parameter = 11,
+                                         .parameter = 13,
                                          .animationCurve = 9,
                                          .keyframe = 22,
                                          .driverBinding = 0,
@@ -1419,7 +1427,7 @@ void testRejectsUnknownEdgeDestinationKind(Expectations& expectations) {
 void testRejectsUnsortedLayerOutputs(Expectations& expectations) {
     const std::string graph =
         R"({"nodes":[)"
-        R"({"id":"1","typeId":"bloom.layer-output","schemaVersion":1,"parameters":[]}],)"
+        R"({"id":"1","typeId":"bloom.layer-output","schemaVersion":4,"parameters":[]}],)"
         R"("edges":[],)"
         R"("layerOutputs":[)"
         R"({"nodeId":"1","layerId":"2","name":"B","outputPort":"image"},)"
@@ -1438,7 +1446,7 @@ void testRejectsDuplicateLayerOutputs(Expectations& expectations) {
         R"({"nodeId":"1","layerId":"1","name":"A","outputPort":"image"})";
     const std::string graph =
         R"({"nodes":[)"
-        R"({"id":"1","typeId":"bloom.layer-output","schemaVersion":1,"parameters":[]}],)"
+        R"({"id":"1","typeId":"bloom.layer-output","schemaVersion":4,"parameters":[]}],)"
         R"("edges":[],)"
         R"("layerOutputs":[)" +
         boundaryJson + "," + boundaryJson +
@@ -1455,9 +1463,9 @@ void testRejectsDuplicateLayerOutputs(Expectations& expectations) {
 void testAcceptsUnsortedLayerStackEntries(Expectations& expectations) {
     const std::string graph =
         R"({"nodes":[)"
-        R"({"id":"1","typeId":"bloom.layer-stack","schemaVersion":1,"parameters":[]},)"
-        R"({"id":"2","typeId":"bloom.layer-output","schemaVersion":1,"parameters":[]},)"
-        R"({"id":"3","typeId":"bloom.layer-output","schemaVersion":1,"parameters":[]},)"
+        R"({"id":"1","typeId":"bloom.layer-stack","schemaVersion":2,"parameters":[]},)"
+        R"({"id":"2","typeId":"bloom.layer-output","schemaVersion":4,"parameters":[]},)"
+        R"({"id":"3","typeId":"bloom.layer-output","schemaVersion":4,"parameters":[]},)"
         R"({"id":"4","typeId":"bloom.composition-output","schemaVersion":1,"parameters":[]}],)"
         R"("edges":[],)"
         R"("layerOutputs":[)"

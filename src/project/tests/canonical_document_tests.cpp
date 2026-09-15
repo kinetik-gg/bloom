@@ -339,359 +339,385 @@ void testMinimalGoldenBytes(Expectations& expectations) {
 // __PART2__
 
 void testComposedGoldenBytes(Expectations& expectations) {
-    constexpr std::string_view expected =
-        "{\n"
-        "  \"schemaVersion\": {\n"
-        "    \"major\": 1,\n"
-        "    \"minor\": 11\n"
-        "  },\n"
-        "  \"project\": {\n"
-        "    \"id\": \"1\",\n"
-        "    \"name\": \"Spot Check\",\n"
-        "    \"colorSettings\": {\n"
-        "      \"schemaVersion\": {\n"
-        "        \"major\": 1,\n"
-        "        \"minor\": 0\n"
-        "      },\n"
-        "      \"processColorSpaceId\": \"lin_rec709_scene\",\n"
-        "      \"ocioConfig\": {\n"
-        "        \"schemaVersion\": {\n"
-        "          \"major\": 1,\n"
-        "          \"minor\": 0\n"
-        "        },\n"
-        "        \"locator\": {\n"
-        "          \"kind\": \"builtin\",\n"
-        "          \"uri\": \"bloom://ocio/neutral-v1/config.ocio\"\n"
-        "        },\n"
-        "        \"expectedRevision\": {\n"
-        "          \"algorithm\": \"sha256\",\n"
-        "          \"digest\": "
-        "\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\"\n"
-        "        },\n"
-        "        \"portability\": \"builtin\",\n"
-        "        \"contextVariables\": []\n"
-        "      }\n"
-        "    },\n"
-        "    \"compositions\": [\n"
-        "      {\n"
-        "        \"id\": \"1\",\n"
-        "        \"name\": \"Hero Shot\",\n"
-        "        \"duration\": {\n"
-        "          \"numerator\": \"2\",\n"
-        "          \"denominator\": \"1\"\n"
-        "        },\n"
-        "        \"format\": {\n"
-        "          \"width\": 1280,\n"
-        "          \"height\": 720,\n"
-        "          \"pixelAspect\": {\n"
-        "            \"numerator\": \"2\",\n"
-        "            \"denominator\": \"1\"\n"
-        "          },\n"
-        "          \"frameRate\": {\n"
-        "            \"numerator\": \"24000\",\n"
-        "            \"denominator\": \"1001\"\n"
-        "          }\n"
-        "        },\n"
-        "        \"parameters\": [\n"
-        "          {\n"
-        "            \"id\": \"3\",\n"
-        "            \"schemaKey\": \"bloom.layer.opacity\",\n"
-        "            \"source\": {\n"
-        "              \"kind\": \"animation-curve\",\n"
-        "              \"curveId\": \"9\"\n"
-        "            }\n"
-        "          },\n"
-        "          {\n"
-        "            \"id\": \"5\",\n"
-        "            \"schemaKey\": \"bloom.transform.position\",\n"
-        "            \"source\": {\n"
-        "              \"kind\": \"constant\",\n"
-        "              \"value\": {\n"
-        "                \"kind\": \"vec2\",\n"
-        "                \"x\": 96.0,\n"
-        "                \"y\": -48.0\n"
-        "              }\n"
-        "            }\n"
-        "          },\n"
-        "          {\n"
-        "            \"id\": \"7\",\n"
-        "            \"schemaKey\": \"bloom.solid.color\",\n"
-        "            \"source\": {\n"
-        "              \"kind\": \"constant\",\n"
-        "              \"value\": {\n"
-        "                \"kind\": \"color4\",\n"
-        "                \"red\": 0.0,\n"
-        "                \"green\": 0.5,\n"
-        "                \"blue\": 1.0,\n"
-        "                \"alpha\": 1.0\n"
-        "              }\n"
-        "            }\n"
-        "          },\n"
-        "          {\n"
-        "            \"id\": \"8\",\n"
-        "            \"schemaKey\": \"bloom.transform.anchor\",\n"
-        "            \"source\": {\n"
-        "              \"kind\": \"constant\",\n"
-        "              \"value\": {\n"
-        "                \"kind\": \"vec2\",\n"
-        "                \"x\": 0.0,\n"
-        "                \"y\": 0.0\n"
-        "              }\n"
-        "            }\n"
-        "          },\n"
-        "          {\n"
-        "            \"id\": \"9\",\n"
-        "            \"schemaKey\": \"bloom.transform.scale\",\n"
-        "            \"source\": {\n"
-        "              \"kind\": \"constant\",\n"
-        "              \"value\": {\n"
-        "                \"kind\": \"vec2\",\n"
-        "                \"x\": 1.0,\n"
-        "                \"y\": 1.0\n"
-        "              }\n"
-        "            }\n"
-        "          },\n"
-        "          {\n"
-        "            \"id\": \"10\",\n"
-        "            \"schemaKey\": \"bloom.transform.rotation\",\n"
-        "            \"source\": {\n"
-        "              \"kind\": \"constant\",\n"
-        "              \"value\": {\n"
-        "                \"kind\": \"float64\",\n"
-        "                \"value\": 0.0\n"
-        "              }\n"
-        "            }\n"
-        "          },\n"
-        // ADAPTED (blend modes): the Layer Output schema now also requires a blendMode parameter,
-        // persisted as the int64 its stable mapping gives it (Normal = 0).
-        "          {\n"
-        "            \"id\": \"11\",\n"
-        "            \"schemaKey\": \"bloom.layer.blend-mode\",\n"
-        "            \"source\": {\n"
-        "              \"kind\": \"constant\",\n"
-        "              \"value\": {\n"
-        "                \"kind\": \"int64\",\n"
-        "                \"value\": \"0\"\n"
-        "              }\n"
-        "            }\n"
-        "          }\n"
-        "        ],\n"
-        "        \"animationCurves\": [\n"
-        "          {\n"
-        "            \"id\": \"9\",\n"
-        "            \"kind\": \"scalar\",\n"
-        "            \"keyframes\": [\n"
-        "              {\n"
-        "                \"id\": \"21\",\n"
-        "                \"time\": {\n"
-        "                  \"numerator\": \"0\",\n"
-        "                  \"denominator\": \"1\"\n"
-        "                },\n"
-        "                \"value\": 0.25,\n"
-        "                \"outgoingInterpolation\": \"hold\"\n"
-        "              },\n"
-        "              {\n"
-        "                \"id\": \"22\",\n"
-        "                \"time\": {\n"
-        "                  \"numerator\": \"48\",\n"
-        "                  \"denominator\": \"1\"\n"
-        "                },\n"
-        "                \"value\": 1.0,\n"
-        "                \"outgoingInterpolation\": \"linear\"\n"
-        "              }\n"
-        "            ]\n"
-        "          }\n"
-        "        ],\n"
-        "        \"graph\": {\n"
-        "          \"nodes\": [\n"
-        "            {\n"
-        "              \"id\": \"1\",\n"
-        "              \"typeId\": \"bloom.layer-stack\",\n"
-        "              \"schemaVersion\": 2,\n"
-        "              \"parameters\": []\n"
-        "            },\n"
-        "            {\n"
-        "              \"id\": \"2\",\n"
-        "              \"typeId\": \"bloom.solid-source\",\n"
-        "              \"schemaVersion\": 1,\n"
-        "              \"parameters\": [\n"
-        "                {\n"
-        "                  \"role\": \"color\",\n"
-        "                  \"parameterId\": \"7\"\n"
-        "                }\n"
-        "              ]\n"
-        "            },\n"
-        "            {\n"
-        "              \"id\": \"3\",\n"
-        "              \"typeId\": \"bloom.layer-output\",\n"
-        // ADAPTED (blend modes): the Layer Output node schema version is now 3.
-        "              \"schemaVersion\": 3,\n"
-        "              \"parameters\": [\n"
-        "                {\n"
-        "                  \"role\": \"anchor\",\n"
-        "                  \"parameterId\": \"8\"\n"
-        "                },\n"
-        "                {\n"
-        "                  \"role\": \"blendMode\",\n"
-        "                  \"parameterId\": \"11\"\n"
-        "                },\n"
-        "                {\n"
-        "                  \"role\": \"opacity\",\n"
-        "                  \"parameterId\": \"3\"\n"
-        "                },\n"
-        "                {\n"
-        "                  \"role\": \"position\",\n"
-        "                  \"parameterId\": \"5\"\n"
-        "                },\n"
-        "                {\n"
-        "                  \"role\": \"rotation\",\n"
-        "                  \"parameterId\": \"10\"\n"
-        "                },\n"
-        "                {\n"
-        "                  \"role\": \"scale\",\n"
-        "                  \"parameterId\": \"9\"\n"
-        "                }\n"
-        "              ]\n"
-        "            },\n"
-        "            {\n"
-        "              \"id\": \"4\",\n"
-        "              \"typeId\": \"bloom.composition-output\",\n"
-        "              \"schemaVersion\": 1,\n"
-        "              \"parameters\": []\n"
-        "            }\n"
-        "          ],\n"
-        "          \"edges\": [\n"
-        "            {\n"
-        "              \"id\": \"1\",\n"
-        "              \"source\": {\n"
-        "                \"nodeId\": \"2\",\n"
-        "                \"port\": \"image\"\n"
-        "              },\n"
-        "              \"destination\": {\n"
-        "                \"kind\": \"node-input\",\n"
-        "                \"nodeId\": \"3\",\n"
-        "                \"port\": \"image\"\n"
-        "              }\n"
-        "            },\n"
-        "            {\n"
-        "              \"id\": \"2\",\n"
-        "              \"source\": {\n"
-        "                \"nodeId\": \"3\",\n"
-        "                \"port\": \"image\"\n"
-        "              },\n"
-        "              \"destination\": {\n"
-        "                \"kind\": \"layer-stack-input\",\n"
-        "                \"stackNodeId\": \"1\",\n"
-        "                \"slotId\": \"1\",\n"
-        "                \"role\": \"content\"\n"
-        "              }\n"
-        "            },\n"
-        "            {\n"
-        "              \"id\": \"3\",\n"
-        "              \"source\": {\n"
-        "                \"nodeId\": \"1\",\n"
-        "                \"port\": \"image\"\n"
-        "              },\n"
-        "              \"destination\": {\n"
-        "                \"kind\": \"node-input\",\n"
-        "                \"nodeId\": \"4\",\n"
-        "                \"port\": \"image\"\n"
-        "              }\n"
-        "            }\n"
-        "          ],\n"
-        "          \"layerOutputs\": [\n"
-        "            {\n"
-        "              \"nodeId\": \"3\",\n"
-        "              \"layerId\": \"1\",\n"
-        "              \"name\": \"Hero Plate\",\n"
-        "              \"outputPort\": \"image\"\n"
-        "            }\n"
-        "          ],\n"
-        "          \"layerStack\": {\n"
-        "            \"nodeId\": \"1\",\n"
-        "            \"entries\": [\n"
-        "              {\n"
-        "                \"slotId\": \"1\",\n"
-        "                \"layerId\": \"1\"\n"
-        "              }\n"
-        "            ]\n"
-        "          },\n"
-        "          \"compositionOutput\": {\n"
-        "            \"nodeId\": \"4\",\n"
-        "            \"port\": \"image\"\n"
-        "          }\n"
-        "        },\n"
-        "        \"nodeLayout\": [\n"
-        "          {\n"
-        "            \"nodeId\": \"1\",\n"
-        "            \"position\": {\n"
-        "              \"x\": 544.0,\n"
-        "              \"y\": 32.0\n"
-        "            },\n"
-        "            \"width\": 128.0,\n"
-        "            \"collapsed\": false,\n"
-        "            \"muted\": false\n"
-        "          },\n"
-        "          {\n"
-        "            \"nodeId\": \"2\",\n"
-        "            \"position\": {\n"
-        "              \"x\": 32.0,\n"
-        "              \"y\": 32.0\n"
-        "            },\n"
-        "            \"width\": 128.0,\n"
-        "            \"collapsed\": false,\n"
-        "            \"muted\": false\n"
-        "          },\n"
-        "          {\n"
-        "            \"nodeId\": \"3\",\n"
-        "            \"position\": {\n"
-        "              \"x\": 288.0,\n"
-        "              \"y\": 32.0\n"
-        "            },\n"
-        "            \"width\": 128.0,\n"
-        "            \"collapsed\": false,\n"
-        "            \"muted\": false\n"
-        "          },\n"
-        "          {\n"
-        "            \"nodeId\": \"4\",\n"
-        "            \"position\": {\n"
-        "              \"x\": 800.0,\n"
-        "              \"y\": 32.0\n"
-        "            },\n"
-        "            \"width\": 128.0,\n"
-        "            \"collapsed\": false,\n"
-        "            \"muted\": false\n"
-        "          }\n"
-        "        ],\n"
-        "        \"nodeGroups\": [],\n"
-        "        \"backgroundColor\": [\n"
-        "          0.0,\n"
-        "          0.0,\n"
-        "          0.0,\n"
-        "          1.0\n"
-        "        ]\n"
-        "      }\n"
-        "    ],\n"
-        "    \"assets\": []\n"
-        "  },\n"
-        "  \"idAllocation\": {\n"
-        "    \"highestIssued\": {\n"
-        "      \"composition\": \"1\",\n"
-        "      \"node\": \"4\",\n"
-        "      \"edge\": \"3\",\n"
-        "      \"layer\": \"1\",\n"
-        "      \"layerSlot\": \"1\",\n"
-        "      \"parameter\": \"11\",\n"
-        "      \"animationCurve\": \"9\",\n"
-        "      \"keyframe\": \"22\",\n"
-        "      \"driverBinding\": \"0\",\n"
-        "      \"extensionRecord\": \"0\",\n"
-        "      \"nodeGroup\": \"0\",\n"
-        "      \"asset\": \"0\"\n"
-        "    }\n"
-        "  },\n"
-        "  \"extensions\": []\n"
-        "}\n";
+    constexpr std::string_view expected = R"golden({
+  "schemaVersion": {
+    "major": 1,
+    "minor": 11
+  },
+  "project": {
+    "id": "1",
+    "name": "Spot Check",
+    "colorSettings": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "processColorSpaceId": "lin_rec709_scene",
+      "ocioConfig": {
+        "schemaVersion": {
+          "major": 1,
+          "minor": 0
+        },
+        "locator": {
+          "kind": "builtin",
+          "uri": "bloom://ocio/neutral-v1/config.ocio"
+        },
+        "expectedRevision": {
+          "algorithm": "sha256",
+          "digest": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+        },
+        "portability": "builtin",
+        "contextVariables": []
+      }
+    },
+    "compositions": [
+      {
+        "id": "1",
+        "name": "Hero Shot",
+        "duration": {
+          "numerator": "2",
+          "denominator": "1"
+        },
+        "format": {
+          "width": 1280,
+          "height": 720,
+          "pixelAspect": {
+            "numerator": "2",
+            "denominator": "1"
+          },
+          "frameRate": {
+            "numerator": "24000",
+            "denominator": "1001"
+          }
+        },
+        "parameters": [
+          {
+            "id": "3",
+            "schemaKey": "bloom.layer.opacity",
+            "source": {
+              "kind": "animation-curve",
+              "curveId": "9"
+            }
+          },
+          {
+            "id": "5",
+            "schemaKey": "bloom.transform.position",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 96.0,
+                "y": -48.0
+              }
+            }
+          },
+          {
+            "id": "7",
+            "schemaKey": "bloom.solid.color",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "color4",
+                "red": 0.0,
+                "green": 0.5,
+                "blue": 1.0,
+                "alpha": 1.0
+              }
+            }
+          },
+          {
+            "id": "8",
+            "schemaKey": "bloom.transform.anchor",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 0.0,
+                "y": 0.0
+              }
+            }
+          },
+          {
+            "id": "9",
+            "schemaKey": "bloom.transform.scale",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "vec2",
+                "x": 1.0,
+                "y": 1.0
+              }
+            }
+          },
+          {
+            "id": "10",
+            "schemaKey": "bloom.transform.rotation",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": "11",
+            "schemaKey": "bloom.layer.blend-mode",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "int64",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "id": "12",
+            "schemaKey": "bloom.solid.width",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 1280.0
+              }
+            }
+          },
+          {
+            "id": "13",
+            "schemaKey": "bloom.solid.height",
+            "source": {
+              "kind": "constant",
+              "value": {
+                "kind": "float64",
+                "value": 720.0
+              }
+            }
+          }
+        ],
+        "animationCurves": [
+          {
+            "id": "9",
+            "kind": "scalar",
+            "keyframes": [
+              {
+                "id": "21",
+                "time": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "value": 0.25,
+                "outgoingInterpolation": "hold"
+              },
+              {
+                "id": "22",
+                "time": {
+                  "numerator": "48",
+                  "denominator": "1"
+                },
+                "value": 1.0,
+                "outgoingInterpolation": "linear"
+              }
+            ]
+          }
+        ],
+        "graph": {
+          "nodes": [
+            {
+              "id": "1",
+              "typeId": "bloom.layer-stack",
+              "schemaVersion": 2,
+              "parameters": []
+            },
+            {
+              "id": "2",
+              "typeId": "bloom.solid-source",
+              "schemaVersion": 2,
+              "parameters": [
+                {
+                  "role": "color",
+                  "parameterId": "7"
+                },
+                {
+                  "role": "height",
+                  "parameterId": "13"
+                },
+                {
+                  "role": "width",
+                  "parameterId": "12"
+                }
+              ]
+            },
+            {
+              "id": "3",
+              "typeId": "bloom.layer-output",
+              "schemaVersion": 4,
+              "parameters": [
+                {
+                  "role": "anchor",
+                  "parameterId": "8"
+                },
+                {
+                  "role": "blendMode",
+                  "parameterId": "11"
+                },
+                {
+                  "role": "opacity",
+                  "parameterId": "3"
+                },
+                {
+                  "role": "position",
+                  "parameterId": "5"
+                },
+                {
+                  "role": "rotation",
+                  "parameterId": "10"
+                },
+                {
+                  "role": "scale",
+                  "parameterId": "9"
+                }
+              ]
+            },
+            {
+              "id": "4",
+              "typeId": "bloom.composition-output",
+              "schemaVersion": 1,
+              "parameters": []
+            }
+          ],
+          "edges": [
+            {
+              "id": "1",
+              "source": {
+                "nodeId": "2",
+                "port": "image"
+              },
+              "destination": {
+                "kind": "node-input",
+                "nodeId": "3",
+                "port": "image"
+              }
+            },
+            {
+              "id": "2",
+              "source": {
+                "nodeId": "3",
+                "port": "image"
+              },
+              "destination": {
+                "kind": "layer-stack-input",
+                "stackNodeId": "1",
+                "slotId": "1",
+                "role": "content"
+              }
+            },
+            {
+              "id": "3",
+              "source": {
+                "nodeId": "1",
+                "port": "image"
+              },
+              "destination": {
+                "kind": "node-input",
+                "nodeId": "4",
+                "port": "image"
+              }
+            }
+          ],
+          "layerOutputs": [
+            {
+              "nodeId": "3",
+              "layerId": "1",
+              "name": "Hero Plate",
+              "outputPort": "image"
+            }
+          ],
+          "layerStack": {
+            "nodeId": "1",
+            "entries": [
+              {
+                "slotId": "1",
+                "layerId": "1"
+              }
+            ]
+          },
+          "compositionOutput": {
+            "nodeId": "4",
+            "port": "image"
+          }
+        },
+        "nodeLayout": [
+          {
+            "nodeId": "1",
+            "position": {
+              "x": 544.0,
+              "y": 32.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "2",
+            "position": {
+              "x": 32.0,
+              "y": 32.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "3",
+            "position": {
+              "x": 288.0,
+              "y": 32.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          },
+          {
+            "nodeId": "4",
+            "position": {
+              "x": 800.0,
+              "y": 32.0
+            },
+            "width": 128.0,
+            "collapsed": false,
+            "muted": false
+          }
+        ],
+        "nodeGroups": [],
+        "backgroundColor": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    ],
+    "assets": []
+  },
+  "idAllocation": {
+    "highestIssued": {
+      "composition": "1",
+      "node": "4",
+      "edge": "3",
+      "layer": "1",
+      "layerSlot": "1",
+      "parameter": "13",
+      "animationCurve": "9",
+      "keyframe": "22",
+      "driverBinding": "0",
+      "extensionRecord": "0",
+      "nodeGroup": "0",
+      "asset": "0"
+    }
+  },
+  "extensions": []
+}
+)golden";
 
     using namespace bloom::document;
     const auto duration = RationalTime::create(48, 24);
@@ -719,7 +745,7 @@ void testComposedGoldenBytes(Expectations& expectations) {
          {"position", ParameterId::fromRaw(5)},
          {"rotation", ParameterId::fromRaw(10)},
          {"scale", ParameterId::fromRaw(9)}},
-        3};
+        kLayerOutputNodeSchemaVersion};
     const NodeRecord layerStackNode{
         NodeId::fromRaw(1), std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion};
     const NodeRecord compositionOutputNode{NodeId::fromRaw(4),
@@ -728,8 +754,10 @@ void testComposedGoldenBytes(Expectations& expectations) {
                                            kCompositionOutputNodeSchemaVersion};
     const NodeRecord solidSourceNode{NodeId::fromRaw(2),
                                      std::string(kSolidSourceNodeType),
-                                     {{"color", ParameterId::fromRaw(7)}},
-                                     1};
+                                     {{"color", ParameterId::fromRaw(7)},
+                                      {"height", ParameterId::fromRaw(13)},
+                                      {"width", ParameterId::fromRaw(12)}},
+                                     kSolidSourceNodeSchemaVersion};
     const bool nodesAdded = graph.addNode(layerOutputNode) && graph.addNode(layerStackNode) &&
                             graph.addNode(compositionOutputNode) && graph.addNode(solidSourceNode);
     const EdgeRecord stackToOutputEdge{
@@ -759,9 +787,15 @@ void testComposedGoldenBytes(Expectations& expectations) {
     Composition composition{CompositionId::fromRaw(1), "Hero Shot", *duration, std::move(graph),
                             *format};
     expectations.expect(
-        composition.parameters().insert({ParameterId::fromRaw(7),
-                                         std::string(kSolidColorParameterSchemaKey),
-                                         ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
+        composition.parameters().insert(
+            {ParameterId::fromRaw(12), std::string(kSolidWidthParameterSchemaKey),
+             ConstantValueSource{static_cast<double>(composition.format().width())}}) &&
+            composition.parameters().insert(
+                {ParameterId::fromRaw(13), std::string(kSolidHeightParameterSchemaKey),
+                 ConstantValueSource{static_cast<double>(composition.format().height())}}) &&
+            composition.parameters().insert({ParameterId::fromRaw(7),
+                                             std::string(kSolidColorParameterSchemaKey),
+                                             ConstantValueSource{Color4d{0.0, 0.5, 1.0, 1.0}}}) &&
             composition.parameters().insert({ParameterId::fromRaw(5),
                                              std::string(kPositionParameterSchemaKey),
                                              ConstantValueSource{Vec2d{96.0, -48.0}}}) &&
@@ -801,7 +835,7 @@ void testComposedGoldenBytes(Expectations& expectations) {
                                          .edge = 3,
                                          .layer = 1,
                                          .layerSlot = 1,
-                                         .parameter = 11,
+                                         .parameter = 13,
                                          .animationCurve = 9,
                                          .keyframe = 22,
                                          .driverBinding = 0,
@@ -1928,7 +1962,7 @@ void testOverlayCapacityBoundary(Expectations& expectations) {
          {"position", ParameterId::fromRaw(5)},
          {"rotation", ParameterId::fromRaw(10)},
          {"scale", ParameterId::fromRaw(9)}},
-        3};
+        kLayerOutputNodeSchemaVersion};
     const NodeRecord compositionOutputNode{NodeId::fromRaw(3),
                                            std::string(kCompositionOutputNodeType),
                                            {},

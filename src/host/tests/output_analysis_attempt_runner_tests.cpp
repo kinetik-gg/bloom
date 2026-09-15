@@ -87,6 +87,8 @@ constexpr auto kCompositionId = document::CompositionId::fromRaw(0x1002);
 constexpr auto kSolidNodeId = document::NodeId::fromRaw(0x1003);
 constexpr auto kOutputNodeId = document::NodeId::fromRaw(0x1004);
 constexpr auto kColorParameterId = document::ParameterId::fromRaw(0x1005);
+constexpr auto kWidthParameterId = document::ParameterId::fromRaw(0x1105);
+constexpr auto kHeightParameterId = document::ParameterId::fromRaw(0x1106);
 constexpr auto kRevision = document::Revision::fromRaw(0x1006);
 constexpr auto kLayerNodeId = document::NodeId::fromRaw(0x1007);
 constexpr auto kLayerId = document::LayerId::fromRaw(0x1008);
@@ -109,8 +111,11 @@ constexpr auto kBlendModeParameterId = document::ParameterId::fromRaw(0x1010);
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledSolid{
-        kSolidNodeId, {kColorParameterId, bloom::core::Color4d{0.25, 0.5, 0.75, 1.0}}});
+    operations.emplace_back(
+        runtime::CompiledSolid{kSolidNodeId,
+                               {kColorParameterId, bloom::core::Color4d{0.25, 0.5, 0.75, 1.0}},
+                               {kWidthParameterId, 2.0},
+                               {kHeightParameterId, 2.0}});
     // CompiledCompositionOutput requires a layer-stack input, not a bare solid (mirrors
     // bloom/output/tests/flat_exr_test_support.hpp's shellPlan()): solid -> layer output -> layer
     // stack -> composition output.

@@ -45,7 +45,7 @@ always contain JSON-number members in `major`, `minor` order. Each is an unsigne
 
 The schemas use JSON Schema Draft 2020-12. Versioned artifacts through `1.10` remain checked as
 historical fixtures, with the current `1.11` contract also enforced by the canonical writer,
-decoder and migration tests. The manifest artifact still requires container `1.0`; its document
+decoder tests. The manifest artifact still requires container `1.0`; its document
 declaration follows the current document minor. Every historical artifact from `1.0` through `1.10`,
 manifest and document, remains checked, and each version's checker validates what its own minor adds
 and then reduces the artifact to its predecessor so the older checks run unchanged.
@@ -722,8 +722,8 @@ Canonical ordering uses semantic values, never serialized decimal-string lexical
 Container and document versions use independent `{major, minor}` values:
 
 - unknown major versions are rejected without mutation
-- supported older versions migrate through sequential deterministic DOM migrations before trusted
-  document decoding
+- document 1.11 is the minimum loadable schema; earlier minors fail with
+  `UnsupportedSchemaVersion`, without migration or mutation
 - a newer minor opens editable only when every unknown construct is additive, bounded, and
   provably preservable
 - unknown core discriminators are never guessed
@@ -773,46 +773,25 @@ Open editability is explicit:
 - `PreservedReadOnly` cannot construct trusted complete core truth; it retains the original archive
   and permits inspection or byte-preserving Save Copy only.
 
-### Node Schema Upgrades
+### Node Version Validation
 
-A node's own `schemaVersion` is independent of the document's. A document may therefore declare a node
-at an older registered schema version than this build knows, and that is an expected, non-exceptional
-state: it is what every file written before a node type gained a parameter contains.
+A node's `schemaVersion` is independent of the document schema. Built-in nodes must match their
+current registry definitions: Solid v2, Text v2, Layer v4, and Merge v2. Other built-in kinds retain
+their current registered versions. Retired per-kind reroutes are unsupported; only `bloom.reroute`
+is current. Unknown optional-module kinds retain the existing preservation contract.
 
-Node-specific lossless upgrades run between trusted decode and reconstruction. Versions whose
-semantics cannot be converted losslessly remain registered compatibility versions. The rule:
+Project I/O checks node versions before applying the document schema floor. An unsupported node
+fails with one `UnsupportedNodeVersion` error carrying its `nodeTypeId`, `nodeVersion`, and exact
+schema-version path. Reconstruction applies the same registry validation to decoded envelopes and
+names the node ID. Old or future versions of a known kind are never silently upgraded, downgraded,
+or interpreted through another definition. No parameters or IDs are injected and no edges are dropped.
 
-- The upgrade runs before any record is installed, so the live document model only ever sees current
-  truth and every existing checked adder and validation applies unchanged.
-- Parameters the newer schema added are injected at their registered defaults, and those defaults are
-  chosen so the upgraded document evaluates to the pixels the older build produced. Opening an older
-  file is therefore a silent, lossless upgrade, not a visible change.
-- Injected parameters take ids strictly above the document's persisted `idAllocation.highestIssued`
-  parameter value, and that value is raised to match, so a new id can collide with nothing the file
-  declares and the inclusive-watermark rule still holds.
-- A node that already binds an added role keeps its own binding; only missing roles are injected.
-- Upgraded bindings are put into canonical order, so an upgraded node is indistinguishable in ordering
-  from one the canonical writer emitted.
-- The upgrade is in-memory only. Nothing is written back until the document is saved, at which point
-  it is saved as current truth with the current node `schemaVersion`.
-- The upgrade is per node TYPE, not a generic "inject whatever the registry declares" loop: a future
-  type's upgrade may need to derive a value rather than take a default, and that decision belongs to
-  the type.
-- The only failure mode is a persisted parameter high water with no room left for the required ids,
-  which is reported as a typed `ReconstructionStage::NodeSchemaUpgrade` rejection naming the node.
-
-The upgrades that exist today both belong to `bloom.layer-output`, and one per-role table covers both
-steps because the injection rule is already per role rather than per version step:
-
-| From | Injected | Default |
-| --- | --- | --- |
-| version 1 | `bloom.transform.anchor`, `bloom.transform.scale`, `bloom.transform.rotation` | the identity transform |
-| version 1 or 2 | `bloom.layer.blend-mode` | `Normal`, the integer `0` |
-
-A version-1 node therefore receives all four and a version-2 node only the blend mode, from the same
-table, and either way the upgraded document evaluates to the pixels the build that wrote the file
-produced. See [`layer-graph-model.md`](layer-graph-model.md), "Layer Transform" and "Blending", and
-[`color-management.md`](color-management.md), "Blend modes".
+The floor and canonical writer remain **1.11**. This removal changes acceptance, not encoding, so
+it adds no schema minor. The numbered historical migration ladder remains as a record and as
+independently tested schema transforms; archive loading does not run it for documents below the
+floor. The 1.6 → 1.7 step now only advances its schema number; Solid parameter injection and Layer
+node upgrades have been removed. Historical schema artifacts describe their own versions and do
+not imply that those documents can be loaded.
 
 ## Project I/O Boundary
 
@@ -1100,27 +1079,15 @@ the primary persistence record. Historical schema artifacts remain unchanged; 1.
 the new artifacts to 1.5 and run the complete historical ladder.
 
 
-## Content Bounds In Document 1.7
+## Content Bounds Introduced In Document 1.7
 
-The `1.6` → `1.7` DOM migration upgrades each Solid v1 to v2, adding Scalar `width` and `height`
-parameters equal to that composition's format. IDs are allocated above the persisted parameter high
-water (including an initial zero), bindings are ordered by role, and the high water is raised. Numeric tokens outside the owned
-rewrite are copied unchanged; malformed input and exhausted IDs fail through the migration runner.
-Saving/reopening 1.7 repeats neither injection nor coordinate conversion.
+Solid v2 introduced explicit Scalar width and height. Text v2, Layer v4, and Merge v2 use local
+content bounds. These are now the only supported definitions; the current 1.11 schema includes
+those contracts together with per-component animation, image assets, and audio. Documents carrying
+older node versions fail validation. There is no coordinate conversion or compatibility evaluator.
 
-Text v1, Layer v3, and Merge v1 are retained as explicit compatibility versions. Their frame clipping,
-control-character glyph lookup, and original animated/driven pivot arithmetic are preserved. New
-Text v2, Layer v4, and Merge v2 use local content bounds. This is a deliberate exception to full
-coordinate conversion: a constant rewrite cannot preserve old clipped images or a pivot whose offset
-depends on animated content bounds. There is no implicit conversion when an old file is opened.
-
-The document/manifest 1.7 artifacts retain the 1.6 JSON shape and generic typed parameter vocabulary;
-node versions and the node registry define the new per-role contracts. Historical artifacts are
-unchanged. `content_bounds_migration_tests` compares every RGBA32F bit of a pinned 1.6 fixture with
-off-centre rotated/scaled Solid and clipped Text, including an animated anchor, before migration,
-after migration, and after saving/reopening 1.7, at full 41×47 and proxy 7×3 resolution.
-Composition-sized Solid dimensions use the exact proxy extent to avoid rounding an extra column or
-row into the legacy pivot.
+Composition-sized Solid dimensions use the exact proxy extent to avoid rounding an extra column
+or row into local bounds. Current pixel and semantic identity goldens remain unchanged.
 
 ## Viewer Safe Areas In Document 1.8
 
@@ -1184,8 +1151,8 @@ Import, relink, removal, layer placement and background editing use ordinary com
 
 Document `1.11` is an additive schema step. Migration `1.10 → 1.11` changes only the root minor
 version and preserves every existing object, ID, parameter source, graph edge, asset and authored
-value. The canonical writer and manifest declaration emit `1.11`; older documents are upgraded
-through the sequential DOM migration before trusted decoding.
+value. The canonical writer and manifest declaration emit `1.11`, which is also the load floor.
+Earlier documents are rejected; the numbered transform is retained only as historical schema bookkeeping.
 
 An Audio asset uses the same stable `AssetRecord` identity and project-relative `AssetLocator` as
 an image, with `kind: "audio"`, the existing content digest and interpretation envelope, and the

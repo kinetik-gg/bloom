@@ -38,88 +38,16 @@ using StepResult = std::optional<ReconstructionRejected>;
     return {.stage = stage, .compositionId = {}, .recordId = 0};
 }
 
-// One parameter the current Layer Output schema requires but an older version did not persist,
-// paired with the default an upgraded node must receive. The defaults are exactly
-// document::kDefaultAnchor, kDefaultScale, kDefaultRotationDegrees, and kDefaultBlendModeValue --
-// the identity transform and Normal blending -- so an older file evaluates after the upgrade to the
-// pixels the build that wrote it produced. They are read from the document module rather than
-// restated here, so a default can never drift between the registry, the creation command, and this
-// upgrade.
-//
-// The table spans every version below the current one at once rather than one table per version
-// step, because the injection rule is already per-ROLE: a node that binds a role keeps its own
-// binding. A version-1 node therefore receives anchor, scale, rotation, and blendMode, and a
-// version-2 node receives only blendMode, from this one list.
-struct InjectedLayerOutputParameter final {
-    std::string_view role;
-    std::string_view schemaKey;
-    document::ParameterValue defaultValue;
-};
-
-[[nodiscard]] std::array<InjectedLayerOutputParameter, 4> injectedLayerOutputParameters() {
-    return {{
-        {document::kAnchorParameterRole, document::kAnchorParameterSchemaKey,
-         document::kDefaultAnchor},
-        {document::kScaleParameterRole, document::kScaleParameterSchemaKey,
-         document::kDefaultScale},
-        {document::kRotationParameterRole, document::kRotationParameterSchemaKey,
-         document::kDefaultRotationDegrees},
-        {document::kBlendModeParameterRole, document::kBlendModeParameterSchemaKey,
-         document::kDefaultBlendModeValue},
-    }};
-}
-
-// Brings decoded nodes forward to the schema version the build registers, in memory, before any
-// record is installed. Only the Layer Output type has a version to upgrade from; every other
-// foundation type is still at version 1, so this is deliberately a per-type rule rather than a
-// generic "inject whatever the registry declares" loop -- a future type's upgrade may need to
-// derive a value rather than take a default, and that decision belongs to the type.
-//
-// Injected ids come from one counter seeded at the document's persisted parameter high water, which
-// is raised to match, so a new id can collide with nothing the file declares and the
-// inclusive-watermark rule Document's constructor enforces still holds. A node that somehow already
-// binds one of the new roles keeps its own binding.
-[[nodiscard]] StepResult upgradeDecodedNodeSchemas(DecodedDocumentEnvelope& envelope) {
-    const auto injected = injectedLayerOutputParameters();
-    auto& highWater = envelope.highWater.parameter;
-    for (auto& composition : envelope.compositions) {
-        for (auto& node : composition.graph.nodes) {
-            // Task FIX1, item I: the eight per-kind Reroute types became ONE, whose kind comes from
-            // the link it sits on. A node written as one of them becomes that one type, and nothing
-            // else changes -- same ports, same pass-through, same pixels -- because the kind it
-            // used to name is exactly the kind its own incoming link already carries.
-            if (document::isLegacyRerouteNodeType(node.typeId)) {
-                node.typeId = std::string(document::kRerouteNodeType);
+[[nodiscard]] StepResult validateDecodedNodeVersions(const DecodedDocumentEnvelope& envelope) {
+    for (const auto& composition : envelope.compositions) {
+        for (const auto& node : composition.graph.nodes) {
+            if (!document::isSupportedNodeVersion(node.typeId, node.schemaVersion)) {
+                return ReconstructionRejected{.stage = ReconstructionStage::UnsupportedNodeVersion,
+                                              .compositionId = composition.id,
+                                              .recordId = node.id.value(),
+                                              .nodeTypeId = node.typeId,
+                                              .nodeVersion = node.schemaVersion};
             }
-            if (node.typeId != document::kLayerOutputNodeType || node.schemaVersion >= 3) {
-                continue;
-            }
-            for (const auto& parameter : injected) {
-                const auto bound =
-                    std::ranges::any_of(node.parameters, [&parameter](const auto& binding) {
-                        return binding.role == parameter.role;
-                    });
-                if (bound) {
-                    continue;
-                }
-                if (highWater == std::numeric_limits<std::uint64_t>::max()) {
-                    return compositionRejection(ReconstructionStage::NodeSchemaUpgrade,
-                                                composition.id, node.id.value());
-                }
-                ++highWater;
-                const auto parameterId = document::ParameterId::fromRaw(highWater);
-                composition.parameters.push_back(
-                    {parameterId, std::string(parameter.schemaKey),
-                     document::ConstantValueSource{parameter.defaultValue}});
-                node.parameters.push_back({std::string(parameter.role), parameterId});
-            }
-            // Canonical binding order -- UTF-8 by role, then numeric id -- so an upgraded node is
-            // indistinguishable in ordering from one the canonical writer emitted.
-            std::ranges::sort(node.parameters, [](const auto& left, const auto& right) {
-                return left.role != right.role ? left.role < right.role
-                                               : left.parameterId < right.parameterId;
-            });
-            node.schemaVersion = 3;
         }
     }
     return std::nullopt;
@@ -139,22 +67,6 @@ struct InjectedLayerOutputParameter final {
     }
     for (auto& edge : decodedGraph.edges) {
         const auto edgeId = edge.id;
-        // An edge whose SOURCE is a sink is dropped rather than refused (task FIX1, item H). The
-        // composition Output declares no output port now, and a document written before that could
-        // carry an edge from it -- one the compiler never followed, because reachability walks
-        // BACKWARDS from the output and nothing downstream of it exists. Refusing the archive over
-        // a link that never meant anything would lose the artist's whole project to a record that
-        // was already inert. It is dropped silently: this reconstruction path reports rejections,
-        // not warnings, and inventing a warning channel for it belongs with the one the open
-        // pipeline will need for every other advisory rather than here.
-        const auto* source = graph.findNode(edge.source.nodeId);
-        const auto* definition =
-            source == nullptr
-                ? nullptr
-                : document::builtInNodeDefinitions().find(source->typeId, source->schemaVersion);
-        if (definition != nullptr && definition->outputs.empty()) {
-            continue;
-        }
         if (!graph.addEdge(std::move(edge))) {
             return compositionRejection(ReconstructionStage::GraphEdge, compositionId,
                                         edgeId.value());
@@ -228,12 +140,12 @@ ReconstructDocumentResult ReconstructDocumentResult::success(ReconstructedDocume
 ReconstructDocumentResult ReconstructDocumentResult::failure(ReconstructionRejected rejection) {
     ReconstructDocumentResult out;
     out.succeeded_ = false;
-    out.rejection_ = rejection;
+    out.rejection_ = std::move(rejection);
     return out;
 }
 
 ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope) {
-    if (const auto rejection = upgradeDecodedNodeSchemas(envelope); rejection.has_value()) {
+    if (const auto rejection = validateDecodedNodeVersions(envelope); rejection.has_value()) {
         return ReconstructDocumentResult::failure(*rejection);
     }
 

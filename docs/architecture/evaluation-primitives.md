@@ -272,15 +272,15 @@ kernel in the stage; the translate-only case is a path inside this one.
   process representation is premultiplied, so interpolating towards that transparent black is already
   the correct edge falloff: no unpremultiply/repremultiply round trip is involved and no edge pixel
   can carry colour above its own alpha.
-- **Bounds.** A legacy layer's output data window is its transformed bounds clipped to the composition, and
-  its display window stays the composition's. The transformed bounds are the integer bounding box of
+- **Bounds.** A layer's output data window covers its transformed local content, including content
+  outside the composition; its display window stays the composition's. The transformed bounds are the integer bounding box of
   the forward image of the bilinear support box (the source data window grown by one pixel on every
   side), so they may include a pixel the resample then writes as transparent but can never exclude
   one it would write as opaque. A scaled-down, rotated, or moved layer therefore allocates and
   resamples only the pixels it can reach. The Layer Stack composites each entry over the rows and
   columns that entry's own data window occupies.
-- **Empty layers.** A legacy layer whose transformed bounds miss the composition entirely, and a layer
-  collapsed by a scale factor of exactly zero, publish no image at all. The Layer Stack treats an
+- **Empty layers.** Empty content and a layer collapsed by a scale factor of exactly zero publish
+  no image. Off-composition content remains available for a parent transform to bring back. The Layer Stack treats an
   absent entry image as a layer that contributes nothing, which is exactly what compositing an empty
   layer means — not an evaluation failure.
 - **Proxy.** A proxy frame is the same picture at a smaller extent, so the full-resolution transform
@@ -338,8 +338,7 @@ separated by em size times line height and snapped to integer rows. The glyph un
 bounds; only that bounds-sized coverage/image buffer is allocated. Empty lines advance layout without
 inventing ink. CRLF is accepted. Shaping, bidi, wrapping, and selectable font assets remain deferred.
 
-Text v1 explicitly retains the legacy single-line lookup and frame-sized image, including old clipping.
-It uses the same pinned font and unchanged glyph primitive. Solid v2 evaluates its dimension operands
+Solid v2 evaluates its required dimension operands
 into exact local bounds and uses a containing integer buffer, with fractional edge coverage.
 
 Empty content, and content whose glyphs are all blank, rasterize to no coverage and compose a
@@ -349,26 +348,27 @@ missing-glyph box, so unsupported text is visibly missing rather than silently d
 that is not well-formed UTF-8 is refused at the document boundary rather than rendered as
 replacement boxes.
 
-Layer v4 maps `centre(bounds) + anchor` to position in composition space. The plan carries dimension
-and layout operands and explicit local/legacy placement modes. At the sampled frame time, the worker
+Layer v4 maps `centre(bounds) + anchor` to position in composition space. The plan carries required
+dimension and layout operands and one placement contract. At the sampled frame time, the worker
 retains each operation's local and output rectangles and each layer's transformed corners and anchor.
 These values accompany the immutable ProcessFrame and operation-cache result; the viewer reads them
 without evaluation or rasterization. They are derived state and never persisted as project truth.
 
 Merge v2 takes the union of transformed input bounds and retains its intermediate image outside the
 composition. Composition Output crops to the composition window. Source bounds are distinct from the
-bilinear support window so filtering padding never shifts an anchor. Legacy Layer/Merge paths keep
-their original clipping. Zero scale and empty glyph content produce empty geometry.
+bilinear support window so filtering padding never shifts an anchor. Zero scale and empty glyph
+content produce empty geometry.
 
 Preflight validates operand references and schema domains. Actual intermediate image allocations also
 check the remaining request pixel budget, including live text coverage. Cancellation is checked at
 operation and scanline boundaries, and cancelled/failed evaluation publishes no partial frame.
-Operation memoization includes dimension, typography, placement mode, and dependency values and retains
-matching evaluated geometry. Display preparation remains a separate typed stage.
+Operation memoization includes dimension, typography, and dependency values and retains matching
+evaluated geometry. Display preparation remains a separate typed stage.
 
 Evaluator semantics 5, primitive semantics 5, plan semantics 3, and animation semantics 2 remain
-unchanged: legacy plan values retain their exact behavior; the new operand/mode alternatives are
-explicit. Existing pixel and semantic identity goldens are not regenerated.
+unchanged: removing the compatibility operands and the placement selector changes which plans can be
+built, not what a current plan evaluates to. Existing pixel and semantic identity goldens are not
+regenerated.
 
 ## Primitive Families
 
@@ -547,3 +547,11 @@ in the project or on disk.
 Evaluated operation geometry is retained beside cached display pixels. The frame-cache budget
 counts both payloads; releasing the Float32 process image leaves bounds queries and overlays available
 on playback cache hits without evaluation.
+
+### Current Compiled Bounds Contract
+
+Compiled Solid dimensions and Text layout operands are required. Layer transforms always place the
+local-bounds anchor at the authored position, and Merge always unions its inputs' bounds. Plans
+carry no historical evaluation selector. Unsupported document node versions are rejected before
+compilation. Removing compatibility paths does not change current pixels: plan semantics remains 3,
+animation sampling 2, evaluator 5, and render primitives 5.

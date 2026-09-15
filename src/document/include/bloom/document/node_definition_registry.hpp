@@ -175,7 +175,6 @@ enum class NodeCategory : std::uint8_t {
     Output,
     Utilities,
     // Retained persisted schemas, excluded from new-node authoring categories.
-    Compatibility,
 };
 
 // How many instances of a node type one composition may hold (task S1, item 5). The composition's
@@ -312,6 +311,10 @@ class NodeDefinitionRegistry final {
 };
 
 [[nodiscard]] bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry);
+// Unknown module types retain the existing preservation contract. Built-in types must use
+// their current registered version; retired per-kind reroutes have no supported version.
+[[nodiscard]] bool isSupportedNodeVersion(std::string_view typeId, std::uint32_t version);
+
 [[nodiscard]] const NodeDefinitionRegistry& builtInNodeDefinitions();
 
 } // namespace bloom::document

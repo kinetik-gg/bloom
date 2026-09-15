@@ -49,8 +49,6 @@ QString nodeCategoryName(const document::NodeCategory category) {
         return QCoreApplication::translate("node_editor", "Math");
     case document::NodeCategory::Output:
         return QCoreApplication::translate("node_editor", "Output");
-    case document::NodeCategory::Compatibility:
-        return QCoreApplication::translate("node_editor", "Compatibility");
     case document::NodeCategory::Utilities:
         return QCoreApplication::translate("node_editor", "Utilities");
     }

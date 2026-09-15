@@ -132,7 +132,8 @@ struct MigrationStepDescriptor final {
     MigrationStepTransform transform = nullptr;
 };
 
-// The production chain, one entry per shipped minor. The table stays a
+// The historical numbered chain, one entry per schema minor. Archive loading starts at 1.11
+// and does not run these transforms. The table stays a
 // std::span<const MigrationStepDescriptor> parameter on migrateDocumentDom() rather than a
 // compiled-in global, so the runner has exactly one production caller and remains testable with a
 // synthetic chain.

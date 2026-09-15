@@ -18,7 +18,6 @@ target_sources(
         canonical_assets.ipp
         document_decode_composition.cpp
         document_decode_internal.hpp
-        document_bounds_migration.cpp
         document_components_migration.cpp
         document_migration.cpp
         document_layout_migration.cpp

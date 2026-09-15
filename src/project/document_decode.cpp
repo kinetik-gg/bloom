@@ -3,6 +3,7 @@
 #include "document_decode_internal.hpp"
 
 #include <bloom/core/sha256.hpp>
+#include <bloom/document/node_definition_registry.hpp>
 #include <bloom/project/canonical_base64.hpp>
 #include <bloom/project/canonical_decimal.hpp>
 #include <bloom/project/canonical_document.hpp>
@@ -1536,8 +1537,12 @@ DocumentDecodeResult DocumentDecodeResult::successWithRoundTrip(DecodedDocumentE
 }
 
 DocumentDecodeResult DocumentDecodeResult::failure(const DocumentDecodeError error,
-                                                   const std::string_view path) {
+                                                   const std::string_view path,
+                                                   const std::string_view nodeTypeId,
+                                                   const std::uint32_t nodeVersion) {
     DocumentDecodeResult result;
+    result.nodeTypeId_ = nodeTypeId;
+    result.nodeVersion_ = nodeVersion;
     result.outcome_ = DocumentDecodeOutcome::Failed;
     result.error_ = error;
     result.path_ = DocumentDecodePathText::from(path);
@@ -1596,6 +1601,45 @@ DocumentDecodeResult decodeDocumentEnvelope(const JsonValue& root) {
     // > 0} is a same-major newer-minor document RT1 now decodes.
     if (schemaVersion.major != kCanonicalDocumentSchemaVersionV1.major) {
         return DocumentDecodeResult::failure(DocumentDecodeError::DomainViolation,
+                                             "/schemaVersion");
+    }
+
+    // Validate node identities before the schema floor so an old document names the exact
+    // unsupported kind/version instead of silently entering a migration path.
+    const auto* project = root.findMember("project");
+    const auto* compositions = project ? project->findMember("compositions") : nullptr;
+    if (compositions) {
+        std::size_t compositionIndex = 0;
+        for (const auto& composition : compositions->arrayElements()) {
+            const auto* graph = composition.findMember("graph");
+            const auto* nodes = graph ? graph->findMember("nodes") : nullptr;
+            if (nodes) {
+                std::size_t nodeIndex = 0;
+                for (const auto& node : nodes->arrayElements()) {
+                    const auto* kind = node.findMember("typeId");
+                    const auto* version = node.findMember("schemaVersion");
+                    std::uint32_t parsedVersion = 0;
+                    detail::DecodeState versionState;
+                    if (kind && kind->asString() && version &&
+                        detail::decodeUInt32Member(*version, versionState, "/schemaVersion",
+                                                   std::numeric_limits<std::uint32_t>::max(),
+                                                   parsedVersion) &&
+                        parsedVersion != 0 &&
+                        !document::isSupportedNodeVersion(*kind->asString(), parsedVersion)) {
+                        return DocumentDecodeResult::failure(
+                            DocumentDecodeError::UnsupportedNodeVersion,
+                            "/project/compositions/" + std::to_string(compositionIndex) +
+                                "/graph/nodes/" + std::to_string(nodeIndex) + "/schemaVersion",
+                            *kind->asString(), parsedVersion);
+                    }
+                    ++nodeIndex;
+                }
+            }
+            ++compositionIndex;
+        }
+    }
+    if (schemaVersion.minor < kCanonicalDocumentSchemaVersionV1.minor) {
+        return DocumentDecodeResult::failure(DocumentDecodeError::UnsupportedSchemaVersion,
                                              "/schemaVersion");
     }
 

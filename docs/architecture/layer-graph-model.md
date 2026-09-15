@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-09-15
+Updated: 2026-09-16
 
 ## Purpose
 
@@ -105,8 +105,8 @@ re-derived for plan 3, animation 2, evaluator 5 and primitives 5.
 ### Local Content Bounds And Layer Transform
 
 Every image operation has local content bounds in full-resolution pixel-edge coordinates. Solid
-version 2 declares animatable Scalar `width` and `height`, each at least one pixel; creation and
-1.7 migration write the composition size. Fractional dimensions retain their exact geometric bounds
+version 2 declares animatable Scalar `width` and `height`, each at least one pixel; creation
+writes the composition size. Fractional dimensions retain their exact geometric bounds
 and partial coverage at the final row or column. Text version 2 uses the laid-out glyph box,
 including glyph overhangs. Merge version 2 takes the union of its inputs' transformed content
 bounds. A Layer Output's local bounds equal its source's output bounds. Empty content has empty
@@ -139,13 +139,10 @@ Position, anchor, scale and rotation are finite and otherwise unbounded. Opacity
 Negative scale mirrors an axis; zero scale produces empty content. Runtime resource/coordinate limits
 produce diagnostics when a requested image cannot be represented or allocated.
 
-Compatibility is explicit in persisted node versions. A 1.6 document migrates Solid dimensions but
-retains Text v1, Layer v3, and Merge v1 semantics. Legacy Layer position remains a displacement from
-the composition centre, with the original frame-based pivot and clipping. This preserves animated,
-driven, and clipped content to the bit; changing only constant position and anchor values cannot
-preserve those cases. Legacy definitions are available for decoding/evaluation and are excluded from
-new-node authoring categories. Existing Layers v1/v2 upgrade to v3, not v4. Full conversion of legacy
-placement into the new coordinate contract is deferred rather than silently approximated.
+Solid v2, Text v2, Layer v4, and Merge v2 are the only built-in definitions for these kinds.
+Every layer uses this local-bounds contract. Project I/O rejects an unsupported node version with
+`UnsupportedNodeVersion`, naming the kind and version; it never injects parameters, rewrites node
+versions, or converts placement. The document schema floor is 1.11.
 
 ### Blending
 
@@ -171,11 +168,8 @@ In the registered parameter order the blend mode comes last, after the four geom
 opacity: it is the only Layer Output parameter that is not a continuous value at all. That order is
 what the properties grid, the node card, and the timeline all read.
 
-`kLayerOutputNodeSchemaVersion` is `4`. A version-1 or version-2 node — every Layer Output written
-before these changes — is upgraded to compatibility version 3 on open rather than refused: Project I/O injects the missing
-parameters at their defaults, which together are the identity transform and `Normal` blending, so an
-upgraded document renders exactly the picture the build that wrote the file produced. See
-[`project-format.md`](project-format.md), "Node Schema Upgrades".
+`kLayerOutputNodeSchemaVersion` is `4`. Earlier Layer versions are rejected on open; see
+[`project-format.md`](project-format.md), "Node Version Validation".
 
 ## Parameters And Properties
 
@@ -365,8 +359,7 @@ animatable. Content and alignment are discrete. The source uses the single embed
 there is no font selector. Newlines start lines, CR is ignored for CRLF, and alignment places each
 line within the maximum line advance. Wrapping, shaping and bidi remain deferred.
 
-Text version 1 remains the exact legacy single-line/frame-rasterized path, including control-character
-glyph lookup. New source rows are projected from the registry in Nodes and Timeline. The color role
+Source rows are projected from the current registry in Nodes and Timeline. The color role
 is node-local and shared with Solid; the text color schema retains its distinct global identity.
 
 `AddTextLayer` builds the same canonical structured-layer topology `AddSolidLayer` builds, with a
@@ -676,9 +669,9 @@ reroute carrying an image is ELIDED in the image pass exactly as a muted node is
 number is compiled into the value pass. Both are the same pass-through evaluation the eight per-kind
 reroutes had.
 
-The eight it replaces -- `bloom.reroute-image` and its seven siblings -- are rewritten to
-`bloom.reroute` on decode. Nothing else changes: the kind each of them named is exactly the kind its
-own incoming link already carries.
+`bloom.reroute` is the only reroute type. The eight it replaced -- `bloom.reroute-image` and its
+seven siblings -- have no supported version; a document carrying one is rejected with
+`UnsupportedNodeVersion` rather than rewritten on decode.
 
 #### Node Library
 

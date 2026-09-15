@@ -195,40 +195,15 @@ std::vector<std::byte> legacyArchive(std::string& documentText) {
 
 void migrationFromSchema11() {
     std::string documentText;
-    const auto legacy = legacyArchive(documentText);
-    expect(documentText.find("nodeGroup") == std::string::npos,
-           "the 1.1 fixture mentions no group at all");
-    auto openedResult = openProjectArchive(legacy, {}, memory());
-    expect(openedResult.outcome() == OpenArchiveOutcome::Opened, "a 1.1 project opens");
-    if (openedResult.outcome() != OpenArchiveOutcome::Opened)
-        return;
-    auto opened = std::move(openedResult).takeOpened();
-    expect(opened.schemaMinor == 11 && !opened.roundTrip,
-           "migration lands on the current editable schema");
-    const auto snapshot = opened.document->snapshot();
-    const auto& composition = snapshot.project().compositions().front();
-    expect(composition.nodeGroups().empty(), "a 1.1 file gets no groups");
-    expect(snapshot.ids().highWater().nodeGroup == 0, "a 1.1 file has never issued a group id");
-
-    // A group authored after migration allocates from 1, and the saved file is a 1.2 file.
-    auto draft = opened.document->draft(snapshot);
-    const auto id = draft.ids().allocateNodeGroup();
-    expect(id && id->value() == 1, "the first group after migration is id 1");
-    if (!id)
-        return;
-    draft.project().findComposition(composition.id())->nodeGroups()[*id] = {*id, "Group", {}, {}};
-    expect(opened.document->commit(snapshot.revision(), std::move(draft)).committed(),
-           "a group authored after migration publishes");
-    const auto grouped = opened.document->snapshot();
-    auto reopenedResult =
-        openProjectArchive(archiveOf(grouped, opened.colorSettings), {}, memory());
-    expect(reopenedResult.outcome() == OpenArchiveOutcome::Opened, "the regrouped project reopens");
-    if (reopenedResult.outcome() != OpenArchiveOutcome::Opened)
-        return;
-    auto reopened = std::move(reopenedResult).takeOpened();
-    expect(reopened.document->snapshot().project().compositions().front().nodeGroups() ==
-               grouped.project().compositions().front().nodeGroups(),
-           "the group authored on a migrated document is durable");
+    const auto archive = legacyArchive(documentText);
+    const auto result = openProjectArchive(archive, {}, memory());
+    const auto* failure =
+        result.failure()
+            ? std::get_if<SaveArchiveDocumentDecodeFailure>(&result.failure()->payload())
+            : nullptr;
+    expect(result.outcome() == OpenArchiveOutcome::Failed && failure &&
+               failure->error == DocumentDecodeError::UnsupportedSchemaVersion,
+           "documents below the canonical 1.11 floor are refused without migration");
 }
 
 void migrationDeterminismAndChain() {
@@ -279,7 +254,10 @@ void multipleMergeRoundTrip() {
     const auto nested = *nestedId;
     const auto slot = *slotId;
     const auto edge = *edgeId;
-    expect(graph.addNode({nested, std::string(document::kLayerStackNodeType), {}, 1}),
+    expect(graph.addNode({nested,
+                          std::string(document::kLayerStackNodeType),
+                          {},
+                          document::kLayerStackNodeSchemaVersion}),
            "add nested Merge");
     graph.merge(nested)->setEnabled(false);
     expect(graph.layerStack().append({slot, {}}) &&

@@ -571,13 +571,12 @@ valueUtilityDefinition(const bloom::document::ValueUtilityDescriptor& descriptor
 // at all, so an unconnected one genuinely cannot produce anything and the existing missing-input
 // diagnostic is the right report. It also spans Image, unlike every other value lowering, because
 // tidying an image wire is the same gesture as tidying a scalar one.
-[[nodiscard]] NodeDefinition rerouteDefinition(const std::string_view typeId,
-                                               const SocketValueKind socket) {
+[[nodiscard]] NodeDefinition rerouteDefinition() {
     using namespace bloom::document;
-    return {{std::string(typeId), kValueNodeSchemaVersion},
+    return {{std::string(kRerouteNodeType), kValueNodeSchemaVersion},
             NodeLoweringKind::ValueReroute,
-            {{std::string(kValuePortName), socket, true}},
-            {result(kValuePortName, socket)},
+            {{std::string(kValuePortName), SocketValueKind::Image, true}},
+            {result(kValuePortName, SocketValueKind::Image)},
             {},
             std::nullopt,
             NodeCardinality::Many,
@@ -847,7 +846,7 @@ std::vector<NodeDefinition> valueNodeDefinitions() {
     // name one; the kind a reroute actually carries is resolved from the link it sits on, which is
     // what CanonicalGraph::outputKind()/inputKind() answer for this type and what every
     // connect-time and compile-time check therefore asks.
-    definitions.push_back(rerouteDefinition(kRerouteNodeType, SocketValueKind::Image));
+    definitions.push_back(rerouteDefinition());
 
     // Task UTIL-1: one definition per descriptor, in the table's own order.
     for (const auto& descriptor : valueUtilityDescriptors()) {

@@ -434,42 +434,11 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
                            capturedInputVersion.value_or(manifestValue.documentSchemaVersion)}));
         }
 
-        // A same-major document at or below the current minor is the "supported older version"
-        // migrateDocumentDom() exists for (see docs/architecture/project-format.md, "Versions,
-        // Migrations, And Preservation"); an unknown major or a same-major *newer* minor must NOT
-        // reach this stage -- both keep their existing, unmodified handling: an unknown major
-        // fails at DocumentDecode below with DomainViolation exactly as before, and a newer minor
-        // still takes decode's own RT1 PreservationRequired route below, also exactly as before.
-        // decodedDocumentVersion.minor <= current.minor (with major already pinned equal) is the
-        // exact complement of "newer minor" that keeps both those paths untouched. Document
-        // 1.0 receives the production node-layout migration; current 1.1 is an identity step.
-        stage = SaveArchiveStage::DocumentMigration;
+        // Schema 1.11 is the load floor. Historical numbered migration steps remain recorded,
+        // but opening a document never upgrades node semantics or an older schema.
         const JsonValue* trustedDocumentRoot = &documentDom.document()->root();
-        auto effectiveDocumentVersion = decodedDocumentVersion;
-        auto effectiveDocumentValueCount = documentValueCount;
-        std::optional<MigrationResult> documentMigration;
-        if (decodedDocumentVersion.has_value() &&
-            decodedDocumentVersion->major == kCanonicalDocumentSchemaVersionV1.major &&
-            decodedDocumentVersion->minor <= kCanonicalDocumentSchemaVersionV1.minor) {
-            documentMigration.emplace(migrateDocumentDom(
-                *trustedDocumentRoot, *decodedDocumentVersion, kCanonicalDocumentSchemaVersionV1,
-                kProductionDocumentMigrationSteps, documentJsonLimits(limits, remainingValues),
-                operation));
-            if (!*documentMigration) {
-                return ReopenChainResult::failure(SaveArchiveFailure(
-                    stage, SaveArchiveDocumentMigrationFailure{
-                               documentMigration->error(), *decodedDocumentVersion,
-                               kCanonicalDocumentSchemaVersionV1, documentMigration->stepsApplied(),
-                               documentMigration->failedStepSourceVersion(),
-                               documentMigration->failedStepTargetVersion(),
-                               SaveArchiveErrorPath::from(documentMigration->path())}));
-            }
-            if (documentMigration->outcome() == MigrationOutcome::Migrated) {
-                trustedDocumentRoot = documentMigration->migratedRoot();
-                effectiveDocumentVersion = kCanonicalDocumentSchemaVersionV1;
-                effectiveDocumentValueCount = countJsonValues(*trustedDocumentRoot);
-            }
-        }
+        const auto effectiveDocumentVersion = decodedDocumentVersion;
+        const auto effectiveDocumentValueCount = documentValueCount;
 
         stage = SaveArchiveStage::DocumentDecode;
         auto decodeReservation = reserveRepresentation(operation, entries->documentBytes().size(),
@@ -485,11 +454,13 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
                 SaveArchiveErrorPath::from(decodedDocument.path()));
         }
         if (!decodedDocument) {
-            return ReopenChainResult::failure(
-                SaveArchiveFailure(stage, SaveArchiveDocumentDecodeFailure{
-                                              decodedDocument.outcome(), decodedDocument.error(),
-                                              decodedDocument.preservationReason(),
-                                              SaveArchiveErrorPath::from(decodedDocument.path())}));
+            return ReopenChainResult::failure(SaveArchiveFailure(
+                stage,
+                SaveArchiveDocumentDecodeFailure{decodedDocument.outcome(), decodedDocument.error(),
+                                                 decodedDocument.preservationReason(),
+                                                 SaveArchiveErrorPath::from(decodedDocument.path()),
+                                                 std::string(decodedDocument.nodeTypeId()),
+                                                 decodedDocument.nodeVersion()}));
         }
 
         stage = SaveArchiveStage::Reconstruction;
