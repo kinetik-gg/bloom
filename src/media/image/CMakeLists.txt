@@ -6,3 +6,21 @@ else()
     target_compile_options(bloom_media_stb_image PRIVATE -w)
 endif()
 bloom_enable_strict_floating_point(bloom_media_stb_image)
+
+add_library(bloom_media_image STATIC image.cpp sequence.cpp)
+target_sources(bloom_media_image PUBLIC FILE_SET HEADERS BASE_DIRS include
+    FILES include/bloom/media/image.hpp)
+target_compile_features(bloom_media_image PUBLIC cxx_std_20)
+target_link_libraries(bloom_media_image PUBLIC bloom_core bloom_render bloom_color_ocio
+    PRIVATE bloom_media_stb_image)
+bloom_enable_warnings(bloom_media_image)
+bloom_enable_strict_floating_point(bloom_media_image)
+
+if(BUILD_TESTING)
+    include(BloomTesting)
+    bloom_find_dependency(ZLIB)
+    add_executable(bloom_media_image_test tests/image_tests.cpp)
+    target_link_libraries(bloom_media_image_test PRIVATE bloom_media_image bloom_output ZLIB::ZLIBSTATIC)
+    bloom_enable_warnings(bloom_media_image_test)
+    bloom_add_test(NAME bloom.media.image COMMAND bloom_media_image_test LABELS unit media)
+endif()

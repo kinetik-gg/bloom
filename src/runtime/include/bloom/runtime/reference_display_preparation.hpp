@@ -19,6 +19,7 @@ inline constexpr std::uint32_t kReferenceDisplayMapperSemanticsVersion = 2;
 
 enum class ReferenceDisplayIntent : std::uint8_t {
     LinearRec709SceneToSrgb,
+    SrgbDisplayToLinearRec709Scene,
 };
 
 enum class ReferenceDisplayProvider : std::uint8_t {

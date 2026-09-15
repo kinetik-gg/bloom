@@ -337,6 +337,7 @@ constexpr auto kAllowedModuleDependencies =
         {"commands", "document"},  {"project", "core"},      {"project", "document"},
         {"project", "platform"},   {"render", "core"},       {"runtime", "core"},
         {"runtime", "document"},   {"runtime", "render"},    {"media", "core"},
+        {"media", "color"}, /* Qualified input conversion belongs to color. */
         {"media", "platform"},     {"media", "render"},      {"media", "runtime"},
         {"color", "core"},         {"color", "platform"},    {"color", "render"},
         {"runtime", "color"},      {"output", "color"},      {"output", "core"},
