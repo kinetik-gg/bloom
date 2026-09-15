@@ -92,7 +92,8 @@ KSection::KSection(const QString& title, QWidget* parent) : QWidget(parent) {
     body_ = new QWidget(this);
     body_->setObjectName(QStringLiteral("kSectionBody"));
     bodyLayout_ = new QVBoxLayout(body_);
-    bodyLayout_->setContentsMargins(px(Spacing::S), px(Spacing::S), px(Spacing::S), px(Spacing::S));
+    bodyLayout_->setContentsMargins(px(Spacing::SectionPadding), px(Spacing::SectionPadding),
+                                    px(Spacing::SectionPadding), px(Spacing::SectionPadding));
     bodyLayout_->setSpacing(0); // KPropertyRow already owns the complete row pitch.
     layout->addWidget(body_);
 }

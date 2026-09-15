@@ -126,13 +126,16 @@ QWidget* addColorRow(QVBoxLayout* rows, QWidget* parent, kit::KColorChip* chip, 
                                  row->mapFromGlobal(field->mapToGlobal(point)));
                          });
     }
-    rows->addWidget(details);
+    auto* detailRow = addRow(rows, parent, makeRowLabel({}, parent), nullptr, details);
+    detailRow->hide();
     details->hide();
-    QObject::connect(expand, &kit::KButton::toggled, details, [details, expand](bool on) {
-        details->setProperty("expanded", on);
-        details->setVisible(on);
-        expand->setIconId(on ? kit::IconId::CaretDown : kit::IconId::CaretRight);
-    });
+    QObject::connect(expand, &kit::KButton::toggled, details,
+                     [details, detailRow, expand](bool on) {
+                         details->setProperty("expanded", on);
+                         details->setVisible(on);
+                         detailRow->setVisible(on);
+                         expand->setIconId(on ? kit::IconId::CaretDown : kit::IconId::CaretRight);
+                     });
     return row;
 }
 

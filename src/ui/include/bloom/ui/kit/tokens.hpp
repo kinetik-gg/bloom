@@ -128,6 +128,10 @@ enum class Spacing : int {
     PanelHeader = 10,
     ChromePadding = 3,
     ChromeGap = 4,
+    FieldMargin = 1,
+    RowPadding = 1,
+    PropertyGutter = 8,
+    SectionPadding = 8,
     // task F1, item F5: a menu row's own padding, vertical and horizontal. Two more deliberate
     // off-scale steps, named for their purpose exactly as Gutter and PanelHeader are: a menu row
     // is denser vertically and roomier horizontally than the base scale offers, and rounding

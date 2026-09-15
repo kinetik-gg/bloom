@@ -87,9 +87,13 @@ int run(int argc, char** argv) {
                     }
                 }
             }
-            if (qobject_cast<kit::KPropertyRow*>(widget))
+            if (qobject_cast<kit::KPropertyRow*>(widget)) {
+                expect(widget->layout()->contentsMargins().left() ==
+                           kit::px(kit::Spacing::RowPadding),
+                       widget, "B5 row owns its padding");
                 expect(widget->height() == kit::px(kit::Size::PropertyRow), widget,
                        "property row token");
+            }
             if (auto* button = qobject_cast<QToolButton*>(widget);
                 button && !button->icon().isNull()) {
                 const auto pixmap =

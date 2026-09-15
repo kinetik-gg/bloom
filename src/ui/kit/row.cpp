@@ -62,11 +62,13 @@ KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator,
     this->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     auto* layout = new QHBoxLayout(this);
     layout->setSizeConstraint(QLayout::SetNoConstraint);
-    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setContentsMargins(px(Spacing::RowPadding), px(Spacing::RowPadding),
+                               px(Spacing::RowPadding), px(Spacing::RowPadding));
     layout->setSpacing(kit::px(kit::Spacing::XXS));
     label->setFixedWidth(px(Size::PropertiesLabelWidth));
     label->setFixedHeight(px(Size::Control));
     layout->addWidget(label);
+    layout->addSpacing(px(Spacing::PropertyGutter));
     bool expanding = false;
     for (auto* value : values) {
         if (auto* dropdown = qobject_cast<kit::KDropdown*>(value)) {
@@ -99,14 +101,15 @@ QSize KPropertyRow::minimumSizeHint() const {
     return size;
 }
 void KPropertyRow::resizeEvent(QResizeEvent* event) {
-    layout()->setSpacing(width() < px(Size::PanelMinWidth) ? 0 : px(Spacing::XXS));
+    layout()->setSpacing(px(Spacing::XXS));
     label_->setFixedWidth(px(width() < px(Size::PanelMinWidth) ? Size::PropertiesLabelMinWidth
                                                                : Size::PropertiesLabelWidth));
     QWidget::resizeEvent(event);
 }
 KRow::KRow(QWidget* parent) : QWidget(parent), row_(new QHBoxLayout(this)) {
     setFixedHeight(px(Size::ListRow));
-    row_->setContentsMargins(0, 0, 0, 0);
+    row_->setContentsMargins(px(Spacing::RowPadding), px(Spacing::RowPadding),
+                             px(Spacing::RowPadding), px(Spacing::RowPadding));
     row_->setSpacing(0);
     row_->setSizeConstraint(QLayout::SetNoConstraint);
     nameCell_ = new QWidget(this);

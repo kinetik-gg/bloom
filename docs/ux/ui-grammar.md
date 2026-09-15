@@ -209,3 +209,8 @@ Panel children are clipped by `KSurface::clipPanelChildren` to `Radius::Panel`; 
 provide the antialiased boundary. Header and footer share ChromePadding. Viewer declares
 View, Select, Add; Composition commands live under View. Only EditorArea exposes maximize.
 New automation names: `viewerAddMenu`, `viewerAddMenuButton`.
+
+Rows own `Spacing::RowPadding` (1 on all edges); KValueField owns `FieldMargin` (1)
+inside its allocation, including scene proxies. `PropertyGutter` (8) separates labels and
+controls independently of component gaps. KSection owns `SectionPadding` (8 on every edge).
+Expanded RGBA rows use a blank-label KPropertyRow so controls align beneath the swatch.
