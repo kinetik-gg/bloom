@@ -17,10 +17,20 @@
 #include <cmath>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace bloom::ui {
+// The ParameterSample alternatives a CURVE can hold. sampleParameterValue() returns only these
+// four, because only these four have a midpoint; the three task DRIVE-1 added to ParameterSample --
+// a String, an Integer, a Boolean -- are values a row shows, never values a keyframe command
+// receives, and no keyframe command has an overload for one.
+template <typename Value>
+inline constexpr bool interpolable =
+    std::is_same_v<Value, double> || std::is_same_v<Value, document::Vec2d> ||
+    std::is_same_v<Value, document::Vec3d> || std::is_same_v<Value, core::Color4d>;
+
 document::WorkArea CompositionSession::workArea() const noexcept {
     const auto* current = composition();
     return current ? current->workArea().value_or(document::WorkArea{{}, current->duration()})
@@ -1382,12 +1392,26 @@ CompositionSession::effectiveParameterValue(const document::ParameterRecord* par
         if (const auto* color = std::get_if<core::Color4d>(&constant->value)) {
             return ParameterSample(*color);
         }
-        // A String or any other constant kind has no numeric projection; its own reader
-        // (constantStringValue()) serves it.
+        // Task DRIVE-1: the three kinds that have no curve. They are still VALUES a row has to
+        // show, and since a driver can now vary any of them, "what is this parameter right now" is
+        // one question with one answer for every kind rather than four kinds with a reader and
+        // three without. A Boolean is matched before an Integer because the document stores each
+        // in its own alternative, and neither is a projection of the other.
+        if (const auto* text = std::get_if<std::string>(&constant->value)) {
+            return ParameterSample(*text);
+        }
+        if (const auto* flag = std::get_if<bool>(&constant->value)) {
+            return ParameterSample(*flag);
+        }
+        if (const auto* integer = std::get_if<std::int64_t>(&constant->value)) {
+            return ParameterSample(*integer);
+        }
+        // A RationalTime is an instant rather than a quantity, and no row reads one through here.
         return std::nullopt;
     }
-    // An animated source is sampled at the CURRENT session time; a driven one has no value this
-    // layer may read, exactly as every write path already refuses one.
+    // An animated source is sampled at the CURRENT session time; a driven one is produced by the
+    // value graph rather than read off the record, so it answers nothing here and
+    // drivenValueText() answers instead -- exactly as every write path refuses a driven source.
     return sampleParameterValue(*parameter, currentTime_);
 }
 
@@ -1763,8 +1787,10 @@ bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* para
         commands::Transaction transaction(label.addKey.toStdString(), snapshot_.revision());
         std::visit(
             [&](const auto& value) {
-                transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, curveId,
-                                                                 currentTime_, value);
+                if constexpr (interpolable<std::decay_t<decltype(value)>>) {
+                    transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, curveId,
+                                                                     currentTime_, value);
+                }
             },
             *sample);
         return execute(std::move(transaction));
@@ -1785,8 +1811,10 @@ bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* para
     }
     std::visit(
         [&](const auto& value) {
-            transaction.emplace<commands::ConvertAnimationToConstant>(compositionId_, parameterId,
-                                                                      value);
+            if constexpr (interpolable<std::decay_t<decltype(value)>>) {
+                transaction.emplace<commands::ConvertAnimationToConstant>(compositionId_,
+                                                                          parameterId, value);
+            }
         },
         *sample);
     return execute(std::move(transaction));

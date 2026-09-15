@@ -306,6 +306,7 @@ target_sources(
         composition_preview_playback.cpp
         composition_preview_result.cpp
         composition_session.cpp
+        composition_session_drivers.cpp
         composition_session_keyframes.cpp
         editor_area.cpp
         editor_chrome.cpp
