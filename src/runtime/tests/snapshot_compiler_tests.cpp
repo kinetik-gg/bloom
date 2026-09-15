@@ -1092,21 +1092,69 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
                             "the driven colour operand resolves to a value-graph output");
     }
 
-    // The other half of the same rule: the three parameter kinds with a value-graph arm are Scalar,
-    // Vector2 and Colour. An Integer one -- the blend mode -- is linkable and durable, but nothing
-    // carries its value into a compiled operation yet, so it keeps the unsupported-source report.
+    // ADAPTED (task DRIVE-1): the other half of the same rule used to be that only Scalar, Vector2
+    // and Colour had a value-graph arm, so an Integer one -- the blend mode -- stayed an
+    // unsupported source. Every kind has an arm now, so the assertion is the positive one: the link
+    // compiles, and the layer carries the value output rather than only its authored constant.
     auto drivenBlendMode = makeProject(singleLayerOptions());
     attachValueDriver(drivenBlendMode, document::NodeId::fromRaw(14),
                       document::ParameterId::fromRaw(46), document::kIntegerValueNodeType,
                       document::kIntegerValueParameterSchemaKey, std::int64_t{0}, kFirstBlendMode);
     const auto blendModeResult = compile(std::move(drivenBlendMode), registry);
-    expectations.expect(
-        blendModeResult.status == runtime::SnapshotCompileStatus::Unsupported &&
-            hasDiagnostic(blendModeResult,
-                          runtime::CompileDiagnosticCode::UnsupportedParameterSource,
-                          kFirstLayerNode),
-        "a driven Integer parameter reports an unsupported source rather than pretending to "
-        "evaluate");
+    expectations.expect(blendModeResult.status == runtime::SnapshotCompileStatus::Compiled &&
+                            blendModeResult.plan,
+                        "an Integer parameter driven by an Integer value node compiles");
+    if (blendModeResult.plan) {
+        const auto& plan = *blendModeResult.plan;
+        const auto layer = std::ranges::find_if(plan.operations(), [](const auto& operation) {
+            return std::holds_alternative<runtime::CompiledLayerOutput>(operation);
+        });
+        expectations.expect(
+            layer != plan.operations().end() &&
+                std::get<runtime::CompiledLayerOutput>(*layer).drivenBlendMode.has_value(),
+            "the driven blend mode resolves to a value-graph output");
+    }
+
+    // Task DRIVE-1's headline case, at the compiler: a text layer whose WORDS come from a String
+    // node. The layer's source node is retyped to a Text source first, so the parameter the driver
+    // lands on is a real content parameter rather than a colour that happens to take a String.
+    auto drivenContent = makeProject(singleLayerOptions());
+    auto* contentComposition = drivenContent.findComposition(kCompositionId);
+    require(contentComposition != nullptr, "driven-content fixture composition must exist");
+    auto* contentNode = contentComposition->graph().findNode(kFirstSolidNode);
+    require(contentNode != nullptr, "driven-content fixture source node must exist");
+    contentNode->typeId = std::string(document::kTextSourceNodeType);
+    contentNode->schemaVersion = 1;
+    contentNode->parameters = {{std::string(document::kTextParameterRole), kFirstColor},
+                               {std::string(document::kTextSizeParameterRole), kTextSize},
+                               {std::string(document::kTextColorParameterRole), kTextColor}};
+    require(contentComposition->parameters().erase(kFirstColor) &&
+                contentComposition->parameters().insert(
+                    {kFirstColor, std::string(document::kTextParameterSchemaKey),
+                     document::ConstantValueSource{std::string("Title")}}) &&
+                contentComposition->parameters().insert(
+                    {kTextSize, std::string(document::kTextSizeParameterSchemaKey),
+                     document::ConstantValueSource{48.0}}) &&
+                contentComposition->parameters().insert(
+                    {kTextColor, std::string(document::kTextColorParameterSchemaKey),
+                     document::ConstantValueSource{core::Color4d{1.0, 1.0, 1.0, 1.0}}}),
+            "driven-content fixture text parameters must be accepted");
+    attachValueDriver(drivenContent, document::NodeId::fromRaw(14),
+                      document::ParameterId::fromRaw(46), document::kStringValueNodeType,
+                      document::kStringValueParameterSchemaKey, std::string("Driven"), kFirstColor);
+    const auto contentResult = compile(std::move(drivenContent), registry);
+    expectations.expect(contentResult.status == runtime::SnapshotCompileStatus::Compiled &&
+                            contentResult.plan,
+                        "a String parameter driven by a String value node compiles");
+    if (contentResult.plan) {
+        const auto& plan = *contentResult.plan;
+        const auto text = std::ranges::find_if(plan.operations(), [](const auto& operation) {
+            return std::holds_alternative<runtime::CompiledText>(operation);
+        });
+        expectations.expect(text != plan.operations().end() &&
+                                std::get<runtime::CompiledText>(*text).drivenContent.has_value(),
+                            "the driven text content resolves to a value-graph output");
+    }
 }
 
 // An authored blend mode lowers from its stored integer through core::BlendMode's one mapping, and
