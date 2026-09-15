@@ -365,9 +365,11 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
                                                  .unit = {}},
                                                 body);
         bindCell(textColorFields_[index], [this] {
-            (void)session_.setSelectedTextColor(
-                core::Color4d{textColorFields_[0]->value(), textColorFields_[1]->value(),
-                              textColorFields_[2]->value(), textColorFields_[3]->value()});
+            if (const auto value =
+                    properties::colorFromFields(session_, document::kTextColorParameterSchemaKey,
+                                                {textColorFields_[0], textColorFields_[1],
+                                                 textColorFields_[2], textColorFields_[3]}))
+                (void)session_.setSelectedTextColor(*value);
         });
     }
     (void)properties::addColorRow(
@@ -591,9 +593,10 @@ void PropertiesEditor::bindCommits() {
     // Task P3: exactly Position's own commit shape (read every cell in the group, write the whole
     // value through one session call) -- one SetSolidColor command per emitted valueChanged.
     const auto commitSolidColor = [this] {
-        (void)session_.setSelectedSolidColor(
-            core::Color4d{solidColorRed_->value(), solidColorGreen_->value(),
-                          solidColorBlue_->value(), solidColorAlpha_->value()});
+        if (const auto value = properties::colorFromFields(
+                session_, document::kSolidColorParameterSchemaKey,
+                {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_}))
+            (void)session_.setSelectedSolidColor(*value);
     };
     bindCell(solidColorRed_, commitSolidColor);
     bindCell(solidColorGreen_, commitSolidColor);

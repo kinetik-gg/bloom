@@ -41,6 +41,7 @@ class KColorPicker final : public QWidget {
     explicit KColorPicker(QWidget* parent = nullptr);
     ~KColorPicker() override;
 
+    void setColorConverter(KColorConverter converter);
     void setColor(const KColor& color);
     [[nodiscard]] KColor color() const;
 
@@ -126,6 +127,8 @@ class KColorPicker final : public QWidget {
     // MRU list with in-between values nobody asked to remember.
     void commitToRecents();
 
+    KColorConverter converter_;
+    KColor sourceColor_ = KColor::fromRgba(1, 1, 1);
     float hue_ = 0.0F;
     float saturation_ = 0.0F;
     float value_ = 1.0F;

@@ -28,6 +28,7 @@ class KColorChip final : public QWidget {
     explicit KColorChip(QWidget* parent = nullptr);
     ~KColorChip() override;
 
+    void setColorConverter(KColorConverter converter);
     void setColor(const KColor& color);
     [[nodiscard]] KColor color() const noexcept;
 
@@ -65,6 +66,7 @@ class KColorChip final : public QWidget {
     void ensurePicker();
     [[nodiscard]] int controlExtent() const;
 
+    KColorConverter converter_;
     KColor color_{};
     Shape shape_ = Shape::Square;
     ControlSize controlSize_ = ControlSize::Default;

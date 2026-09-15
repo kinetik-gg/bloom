@@ -7,30 +7,32 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <optional>
 
 namespace bloom::ui::kit {
 
-// Task U6 (issue #121): the color picker family's value model, kept deliberately independent of
-// bloom::core::Color4d. bloom_ui_kit is the design system -- CMakeLists.txt says "nothing about a
-// panel, a session, or a document may leak into it" -- and Color4d is a document-authoring type
-// owned by the parameter schema it lives inside (see src/core/include/bloom/core/color.hpp). KColor
-// is the kit's own straight-alpha RGBA working value, self-contained on purpose: the eventual
-// consumer (composition_editors.cpp's Solid Source row) converts between the two at its own
-// boundary, in a later slice this one does not wire.
-//
-// Every channel is float in [0, 1] except hue, which is degrees in [0, 360). Alpha is straight
-// (unassociated), matching Color4d's own convention so a future bridge is a plain field copy plus a
-// float cast, not a re-derivation.
+enum class ColorSpace : std::uint8_t { Display, Reference };
+struct KColor;
+// The adapter is supplied by the owning session. The kit knows no document or OCIO types.
+using KColorConverter = std::function<std::optional<KColor>(const KColor&, ColorSpace)>;
+
+// Straight RGBA. Display RGB is encoded sRGB; Reference RGB retains signed/HDR range.
+// Hex, QColor and HSV/HSL are display-only representations.
 struct KColor final {
     float red = 0.0F;
     float green = 0.0F;
     float blue = 0.0F;
     float alpha = 1.0F;
+    ColorSpace space = ColorSpace::Display;
 
-    [[nodiscard]] static constexpr KColor fromRgba(const float r, const float g, const float b,
-                                                   const float a = 1.0F) noexcept {
-        return KColor{r, g, b, a};
+    [[nodiscard]] std::optional<KColor> converted(ColorSpace target,
+                                                  const KColorConverter& converter) const;
+
+    [[nodiscard]] static constexpr KColor
+    fromRgba(const float r, const float g, const float b, const float a = 1.0F,
+             const ColorSpace space = ColorSpace::Display) noexcept {
+        return KColor{r, g, b, a, space};
     }
 
     // `hue` in degrees, any finite value (normalized modulo 360 internally so 360 and 0 name the

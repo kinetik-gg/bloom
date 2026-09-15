@@ -295,9 +295,19 @@ KColor KColorPicker::currentColor() const {
     return KColor::fromHsva(hue_, saturation_, value_, alpha_);
 }
 
+void KColorPicker::setColorConverter(KColorConverter converter) {
+    converter_ = std::move(converter);
+}
+
 void KColorPicker::setColor(const KColor& color) {
+    const auto display = color.converted(ColorSpace::Display, converter_);
+    const auto authored =
+        color.converted(converter_ ? ColorSpace::Reference : color.space, converter_);
+    if (!display || !authored)
+        return;
+    sourceColor_ = *authored;
     const KColor before = currentColor();
-    const auto hsva = color.toHsva();
+    const auto hsva = display->toHsva();
     hue_ = hsva[0];
     saturation_ = hsva[1];
     value_ = hsva[2];
@@ -308,11 +318,11 @@ void KColorPicker::setColor(const KColor& color) {
     update();
     const KColor after = currentColor();
     if (!(before == after)) {
-        Q_EMIT colorChanged(after);
+        Q_EMIT colorChanged(sourceColor_);
     }
 }
 
-KColor KColorPicker::color() const { return currentColor(); }
+KColor KColorPicker::color() const { return sourceColor_; }
 
 void KColorPicker::setColorModel(const ColorModel model) {
     if (model_ == model) {
@@ -501,7 +511,12 @@ void KColorPicker::applyHsva(const float hue, const float saturation, const floa
     update();
     const KColor after = currentColor();
     if (!(before == after)) {
-        Q_EMIT colorChanged(after);
+        const auto authored =
+            after.converted(converter_ ? ColorSpace::Reference : ColorSpace::Display, converter_);
+        if (authored) {
+            sourceColor_ = *authored;
+            Q_EMIT colorChanged(sourceColor_);
+        }
     }
 }
 

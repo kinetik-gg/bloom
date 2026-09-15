@@ -1,4 +1,5 @@
 #include "properties_registry_row.hpp"
+#include "properties_sections.hpp"
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
 #pragma once
@@ -1111,9 +1112,11 @@ class NodeItem final : public QGraphicsObject {
             if (const auto sampled = session_->effectiveColorValue(row.parameterId);
                 sampled.has_value() && row.color != nullptr) {
                 const QSignalBlocker blocker(row.color);
-                row.color->setColor(kit::KColor{
-                    static_cast<float>(sampled->red), static_cast<float>(sampled->green),
-                    static_cast<float>(sampled->blue), static_cast<float>(sampled->alpha)});
+                row.color->setEnabled(true);
+                const auto* parameter = session_->composition()->parameters().find(row.parameterId);
+                properties::refreshColor(*session_,
+                                         parameter ? parameter->schemaKey : std::string_view{},
+                                         *sampled, row.color);
             }
             return;
         case document::ParameterValueKind::Boolean:
@@ -1173,7 +1176,7 @@ class NodeItem final : public QGraphicsObject {
                 continue;
             }
             std::visit(
-                [&row](const auto& held) {
+                [this, &row, parameter](const auto& held) {
                     using Held = std::decay_t<decltype(held)>;
                     const auto setComponent = [&row](const std::size_t component,
                                                      const double value) {
@@ -1201,9 +1204,9 @@ class NodeItem final : public QGraphicsObject {
                     } else if constexpr (std::is_same_v<Held, core::Color4d>) {
                         if (row.color != nullptr) {
                             const QSignalBlocker blocker(row.color);
-                            row.color->setColor(kit::KColor::fromRgba(
-                                static_cast<float>(held.red), static_cast<float>(held.green),
-                                static_cast<float>(held.blue), static_cast<float>(held.alpha)));
+                            row.color->setEnabled(true);
+                            properties::refreshColor(*session_, parameter->schemaKey, held,
+                                                     row.color);
                         }
                     } else if constexpr (std::is_same_v<Held, std::string>) {
                         if (row.text != nullptr) {
@@ -1366,9 +1369,7 @@ class NodeItem final : public QGraphicsObject {
             colorChip_->setEnabled(value.has_value());
             if (value.has_value()) {
                 const QSignalBlocker blocker(colorChip_);
-                colorChip_->setColor(kit::KColor::fromRgba(
-                    static_cast<float>(value->red), static_cast<float>(value->green),
-                    static_cast<float>(value->blue), static_cast<float>(value->alpha)));
+                properties::refreshColor(*session_, parameter->schemaKey, *value, colorChip_);
             }
             // The swatch quantizes to 8 bits and clamps, so an HDR or negative authoring channel
             // cannot be shown in it honestly; the exact, unclipped value travels in the tooltip,

@@ -276,11 +276,8 @@ void PropertiesRegistryRow::refresh() {
             fields_[2]->setValue(vector->z);
         }
         if (auto* color = std::get_if<core::Color4d>(&value); color && color_) {
-            color_->setColor({static_cast<float>(color->red), static_cast<float>(color->green),
-                              static_cast<float>(color->blue), static_cast<float>(color->alpha)});
-            const std::array channels{color->red, color->green, color->blue, color->alpha};
-            for (std::size_t i = 0; i < channels.size(); ++i)
-                fields_[i]->setValue(channels[i]);
+            properties::refreshColor(session_, definition_.schemaKey, *color, color_,
+                                     {fields_[0], fields_[1], fields_[2], fields_[3]});
         }
         if (auto* boolean = std::get_if<bool>(&value); boolean && toggle_)
             toggle_->setChecked(*boolean);
@@ -343,10 +340,13 @@ void PropertiesRegistryRow::commit() {
         value = text_->text().toStdString();
     else if (multiline_)
         value = multiline_->toPlainText().toStdString();
-    else if (color_)
-        value = core::Color4d{fields_[0]->value(), fields_[1]->value(), fields_[2]->value(),
-                              fields_[3]->value()};
-    else if (fields_[2])
+    else if (color_) {
+        const auto converted = properties::colorFromFields(
+            session_, definition_.schemaKey, {fields_[0], fields_[1], fields_[2], fields_[3]});
+        if (!converted)
+            return;
+        value = *converted;
+    } else if (fields_[2])
         value = document::Vec3d{fields_[0]->value(), fields_[1]->value(), fields_[2]->value()};
     else if (fields_[1])
         value = document::Vec2d{fields_[0]->value(), fields_[1]->value()};

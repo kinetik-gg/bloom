@@ -9,6 +9,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QSignalBlocker>
 
 #include <algorithm>
 
@@ -37,13 +38,26 @@ KColorChip::KColorChip(QWidget* parent) : QWidget(parent) {
     setCursor(Qt::PointingHandCursor);
 }
 
-KColorChip::~KColorChip() = default;
+KColorChip::~KColorChip() { delete picker_; }
+
+void KColorChip::setColorConverter(KColorConverter converter) {
+    converter_ = std::move(converter);
+    if (picker_)
+        picker_->setColorConverter(converter_);
+    update();
+}
 
 void KColorChip::setColor(const KColor& newColor) {
-    if (color_ == newColor) {
+    const auto converted = newColor.converted(converter_ || color_.space == ColorSpace::Reference
+                                                  ? ColorSpace::Reference
+                                                  : newColor.space,
+                                              converter_);
+    if (!converted)
+        return;
+    if (color_ == *converted) {
         return;
     }
-    color_ = newColor;
+    color_ = *converted;
     update();
     Q_EMIT colorChanged(color_);
 }
@@ -76,6 +90,8 @@ void KColorChip::ensurePicker() {
         return;
     }
     picker_ = new KColorPicker();
+    picker_->setColorConverter(converter_);
+    const QSignalBlocker blocker(picker_);
     picker_->setColor(color_);
     connect(picker_, &KColorPicker::colorChanged, this, &KColorChip::setColor);
 }
@@ -90,6 +106,8 @@ void KColorChip::openPicker() {
         return;
     }
     ensurePicker();
+    picker_->setColorConverter(converter_);
+    const QSignalBlocker blocker(picker_);
     picker_->setColor(color_);
     picker_->openBelow(*this);
 }
@@ -198,7 +216,8 @@ void KColorChip::paintEvent(QPaintEvent* event) {
     const auto ringMargin = kFocusRingWidth;
     const QRectF bounds = QRectF(rect()).adjusted(ringMargin, ringMargin, -ringMargin, -ringMargin);
 
-    const QColor swatch = color_.toQColor();
+    const auto display = color_.converted(ColorSpace::Display, converter_);
+    const QColor swatch = display ? display->toQColor() : tokenColor(Color::Muted);
     if (swatch.alpha() < 255) {
         drawAlphaCheckerboard(painter, bounds, checkerCellPx(),
                               shape_ == Shape::Circle ? Radius::Full : Radius::Small);

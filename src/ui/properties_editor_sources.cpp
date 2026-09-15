@@ -39,22 +39,11 @@ void PropertiesEditor::configureSolidColor() {
     for (auto* field : {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_}) {
         field->setEnabled(canEditColor);
     }
-    if (canEditColor) {
-        const QSignalBlocker blockRed(solidColorRed_);
-        const QSignalBlocker blockGreen(solidColorGreen_);
-        const QSignalBlocker blockBlue(solidColorBlue_);
-        const QSignalBlocker blockAlpha(solidColorAlpha_);
-        solidColorRed_->setValue(value->red);
-        solidColorGreen_->setValue(value->green);
-        solidColorBlue_->setValue(value->blue);
-        solidColorAlpha_->setValue(value->alpha);
-    }
     solidColorChip_->setEnabled(canEditColor);
     if (value) {
-        const QSignalBlocker blocker(solidColorChip_);
-        solidColorChip_->setColor(kit::KColor::fromRgba(
-            static_cast<float>(value->red), static_cast<float>(value->green),
-            static_cast<float>(value->blue), static_cast<float>(value->alpha)));
+        properties::refreshColor(
+            session_, parameter->schemaKey, *value, solidColorChip_,
+            {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_});
         solidColorChip_->setToolTip(exactColorText(*value));
     }
     // Mirrors Position/Opacity's own tooltip shape exactly.
@@ -99,20 +88,12 @@ void PropertiesEditor::configureTextSource() {
 
     const auto colorValue = session_.effectiveColorValue(document::kTextColorParameterRole);
     textColor_->setEnabled(colorValue.has_value());
-    if (colorValue.has_value()) {
-        const QSignalBlocker blocker(textColor_);
-        textColor_->setColor(kit::KColor::fromRgba(
-            static_cast<float>(colorValue->red), static_cast<float>(colorValue->green),
-            static_cast<float>(colorValue->blue), static_cast<float>(colorValue->alpha)));
-    }
     if (colorValue) {
-        const std::array channels{colorValue->red, colorValue->green, colorValue->blue,
-                                  colorValue->alpha};
-        for (std::size_t index = 0; index < channels.size(); ++index) {
-            const QSignalBlocker blocker(textColorFields_[index]);
-            textColorFields_[index]->setValue(channels[index]);
-            textColorFields_[index]->setEnabled(textColor_->isEnabled());
-        }
+        for (auto* field : textColorFields_)
+            field->setEnabled(true);
+        properties::refreshColor(
+            session_, color->schemaKey, *colorValue, textColor_,
+            {textColorFields_[0], textColorFields_[1], textColorFields_[2], textColorFields_[3]});
     }
     // The chip's own value model is 8-bit-displayable straight RGBA in [0, 1], so an HDR or
     // negative authored channel cannot be shown in the swatch or round-tripped through the picker.

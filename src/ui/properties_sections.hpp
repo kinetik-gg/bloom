@@ -11,7 +11,9 @@
 // timeline_property_rows.hpp's precedent -- no target outside bloom_ui has any business
 // constructing a Properties row.
 
+#include <bloom/core/color.hpp>
 #include <bloom/ui/kit/tokens.hpp>
+#include <optional>
 
 #include <QString>
 #include <initializer_list>
@@ -34,6 +36,13 @@ class KValueField;
 } // namespace kit
 
 namespace properties {
+
+// Project colour presentation/authoring shared by Properties and node-card adapters.
+void refreshColor(CompositionSession& session, std::string_view schemaKey, core::Color4d value,
+                  kit::KColorChip* chip, std::initializer_list<kit::KValueField*> fields = {});
+[[nodiscard]] std::optional<core::Color4d>
+colorFromFields(CompositionSession& session, std::string_view schemaKey,
+                std::initializer_list<kit::KValueField*> fields);
 
 // The token-sized, right-aligned label column shared by every Properties row.
 [[nodiscard]] int labelColumnWidth();
