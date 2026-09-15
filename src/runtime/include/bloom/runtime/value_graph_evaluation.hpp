@@ -64,6 +64,18 @@ struct ValueGraphCurves final {
     std::span<const CompiledScalarCurve> scalar;
     std::span<const CompiledVec2Curve> vec2;
     std::span<const CompiledColor4Curve> color4;
+    std::span<const CompiledVec3Curve> vec3;
+
+    ValueGraphCurves() = default;
+    ValueGraphCurves(std::span<const CompiledScalarCurve> scalarCurves,
+                     std::span<const CompiledVec2Curve> vec2Curves,
+                     std::span<const CompiledColor4Curve> colorCurves)
+        : scalar(scalarCurves), vec2(vec2Curves), color4(colorCurves) {}
+    ValueGraphCurves(std::span<const CompiledScalarCurve> scalarCurves,
+                     std::span<const CompiledVec2Curve> vec2Curves,
+                     std::span<const CompiledColor4Curve> colorCurves,
+                     std::span<const CompiledVec3Curve> vec3Curves)
+        : scalar(scalarCurves), vec2(vec2Curves), color4(colorCurves), vec3(vec3Curves) {}
 };
 
 struct ValueGraphMemoization final {

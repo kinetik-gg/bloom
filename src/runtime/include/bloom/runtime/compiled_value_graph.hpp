@@ -80,7 +80,7 @@ class ValueOutputIndex final {
 // curve (Vector 3, Integer, Boolean, String) and every generic OPERAND stay constant-or-output.
 struct CompiledValueOperand final {
     document::ParameterId id;
-    std::variant<CompiledValue, ValueOutputIndex, ScalarCurveIndex, Vec2CurveIndex,
+    std::variant<CompiledValue, ValueOutputIndex, ScalarCurveIndex, Vec2CurveIndex, Vec3CurveIndex,
                  Color4CurveIndex>
         source;
 
