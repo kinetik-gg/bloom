@@ -62,7 +62,13 @@ QListView#kDropdownList::item:disabled {
 
 } // namespace
 
-KDropdownPopup::KDropdownPopup(QWidget* parent) : QWidget(parent, Qt::Popup) {
+// Qt::BypassGraphicsProxyWidget: when the anchor lives inside a QGraphicsProxyWidget (a node
+// card row), Qt would otherwise embed this popup into the scene as a sub-proxy, where it lands
+// behind the card and never receives the pointer (owner, 2026-09-15: "we can't open dropdown
+// inside a node"). The flag keeps it a real top-level popup; mapToGlobal() already maps through
+// the proxy and its view.
+KDropdownPopup::KDropdownPopup(QWidget* parent)
+    : QWidget(parent, Qt::Popup | Qt::BypassGraphicsProxyWidget) {
     setObjectName(QStringLiteral("kDropdownPopup"));
     setAttribute(Qt::WA_TranslucentBackground, true);
     setAttribute(Qt::WA_DeleteOnClose, false);
