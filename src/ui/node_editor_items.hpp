@@ -268,6 +268,10 @@ class NodeItem final : public QGraphicsObject {
                     if (value)
                         imageAsset_ = document::AssetId::fromRaw(value->toULongLong());
                 }
+        const auto* imageRecord = imageSource_ && session_
+                                      ? session_->snapshot().project().findAsset(imageAsset_)
+                                      : nullptr;
+        imageSequence_ = imageRecord && imageRecord->kind == document::AssetKind::Sequence;
         reroute_ = document::isRerouteNodeType(node.typeId);
         setData(kNodeMutedRole, layout.muted);
         setData(kNodeCollapsedRole, layout.collapsed);
@@ -689,6 +693,8 @@ class NodeItem final : public QGraphicsObject {
         valueRows_.clear();
         readOnlyRows_.clear();
         readOnlyLabels_.clear();
+        imageDimensions_ = nullptr;
+        imageRange_ = nullptr;
         controlRoles_.clear();
         operandRows_.clear();
         positionX_ = nullptr;
@@ -841,6 +847,16 @@ class NodeItem final : public QGraphicsObject {
                 prepareField(label);
                 readOnlyLabels_.push_back(label);
             }
+        }
+        if (imageSource_) {
+            imageDimensions_ = new kit::KLabel;
+            imageDimensions_->setObjectName("nodeImageDimensions");
+            prepareField(imageDimensions_);
+            valueRows_.push_back({tr("Dimensions"), imageDimensions_, nullptr, {}});
+            imageRange_ = new kit::KLabel;
+            imageRange_->setObjectName("nodeImageRange");
+            prepareField(imageRange_);
+            valueRows_.push_back({tr("Range"), imageRange_, nullptr, {}});
         }
         for (const auto& row : valueRows_)
             wrapPropertyRow(row.label, row.widget, row.diamond);
@@ -1408,6 +1424,11 @@ class NodeItem final : public QGraphicsObject {
         }
         for (std::size_t index = 0; index < readOnlyLabels_.size(); ++index)
             readOnlyLabels_[index]->setElidedText(readOnlyRows_[index].second);
+        if (imageDimensions_ && session_) {
+            const auto* asset = session_->snapshot().project().findAsset(imageAsset_);
+            imageDimensions_->setText(imageDimensionsText(asset));
+            imageRange_->setText(imageRangeText(asset));
+        }
         refreshOperandRows(composition);
         for (auto* child : childItems())
             if (auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child))
@@ -1483,8 +1504,9 @@ class NodeItem final : public QGraphicsObject {
         }
         rowHeight = kit::px(kit::Size::PropertyRow);
 
-        const auto rowCount = static_cast<qreal>(valueRows_.size() + readOnlyRows_.size() +
-                                                 (colorChip_ != nullptr ? 1 : 0));
+        const auto rowCount =
+            static_cast<qreal>(valueRows_.size() - (imageRange_ && !imageSequence_ ? 1 : 0) +
+                               readOnlyRows_.size() + (colorChip_ != nullptr ? 1 : 0));
         // The card's own floor, measured from what it actually carries (task S1, item 2): the
         // shared label column, the narrowest usable control beside it, and the widest socket name,
         // each inside the card's padding. A persisted or dragged width never goes below it, so no
@@ -1566,6 +1588,10 @@ class NodeItem final : public QGraphicsObject {
             row->graphicsProxyWidget()->setOpacity(layout_.muted ? 0.5 : 1.0);
         };
         for (const auto& row : valueRows_) {
+            if (row.widget == imageRange_ && !imageSequence_) {
+                propertyRows_.at(row.widget)->graphicsProxyWidget()->hide();
+                continue;
+            }
             placeRow(row.widget, y);
             y += rowHeight + kCardRowGap;
         }
@@ -1627,6 +1653,9 @@ class NodeItem final : public QGraphicsObject {
     document::NodeLayoutRecord layout_;
     bool reroute_ = false;
     bool imageSource_ = false;
+    bool imageSequence_ = false;
+    kit::KLabel* imageDimensions_ = nullptr;
+    kit::KLabel* imageRange_ = nullptr;
     document::AssetId imageAsset_;
     bool primary_ = false;
     bool authoringEnabled_ = false;

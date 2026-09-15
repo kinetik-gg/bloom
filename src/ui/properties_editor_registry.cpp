@@ -67,12 +67,16 @@ void PropertiesEditor::configureRegistryRows() {
                 selectionLayout->insertWidget(selectionLayout->count() - 1, registryPanel_);
             }
             if (node->typeId == "bloom.image-source") {
-                auto* label = kit::makePropertyRowLabel(tr("Dimensions"), section->body());
-                auto* dimensions = new kit::KLabel(section->body());
-                dimensions->setObjectName("propertiesImageDimensions");
-                auto* row = new kit::KPropertyRow(label, nullptr, {dimensions}, section->body());
-                row->setProperty("rowLabel", tr("Dimensions"));
-                section->bodyLayout()->addWidget(row);
+                for (const auto& [name, object] :
+                     std::array{std::pair{tr("Dimensions"), "propertiesImageDimensions"},
+                                std::pair{tr("Range"), "propertiesImageRange"}}) {
+                    auto* label = kit::makePropertyRowLabel(name, section->body());
+                    auto* value = new kit::KLabel(section->body());
+                    value->setObjectName(object);
+                    auto* row = new kit::KPropertyRow(label, nullptr, {value}, section->body());
+                    row->setProperty("rowLabel", name);
+                    section->bodyLayout()->addWidget(row);
+                }
             }
             int textRowIndex = 3;
             for (const auto& declared : definition->parameters) {
@@ -126,8 +130,12 @@ void PropertiesEditor::configureRegistryRows() {
                         asset = session_.snapshot().project().findAsset(
                             document::AssetId::fromRaw(value->toULongLong()));
                 }
-        dimensions->setText(asset ? tr("%1 × %2").arg(asset->width).arg(asset->height)
-                                  : tr("Unavailable"));
+        dimensions->setText(imageDimensionsText(asset));
+        if (auto* range = findChild<kit::KLabel*>("propertiesImageRange")) {
+            range->setText(imageRangeText(asset));
+            range->parentWidget()->setProperty("unavailableReadout", range->text().isEmpty());
+            range->parentWidget()->setVisible(!range->text().isEmpty());
+        }
     }
 }
 void PropertiesEditor::filterRows() {
@@ -147,6 +155,10 @@ void PropertiesEditor::filterRows() {
                 row->setVisible(row->property("expanded").toBool() &&
                                 disclosure.contains(query, Qt::CaseInsensitive) &&
                                 (!display || display->isHidden()));
+                continue;
+            }
+            if (row->property("unavailableReadout").toBool()) {
+                row->hide();
                 continue;
             }
             const auto label = row->property("rowLabel").toString();

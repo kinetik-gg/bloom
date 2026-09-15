@@ -5,8 +5,10 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QGraphicsView>
 #include <QImage>
+#include <QStyleOptionGraphicsItem>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTreeWidget>
@@ -129,7 +131,7 @@ void run() {
                     if (dropdown->property("nodeParameterRole").toString() == role)
                         control = dropdown;
         checkEnums(control, names);
-        const auto object =
+        const auto* const object =
             role == "loopMode" ? "propertiesImageLoopMode" : "propertiesImageColorSpace";
         checkEnums(properties.findChild<ui::kit::KDropdown*>(object), names);
     }
@@ -145,7 +147,8 @@ void run() {
         QImage pixels(rect.size().toSize(), QImage::Format_ARGB32_Premultiplied);
         pixels.fill(Qt::transparent);
         QPainter painter(&pixels);
-        card->paint(&painter, nullptr, nullptr);
+        QStyleOptionGraphicsItem option;
+        card->paint(&painter, &option, nullptr);
         return pixels;
     };
     waitThumbnail();
@@ -153,8 +156,8 @@ void run() {
     const int cx = bright.width() / 2;
     const int cy =
         ui::kit::px(ui::kit::Size::NodeTitleBand) + ui::kit::px(ui::kit::Size::ImageThumbnail) / 2;
-    require(bright.pixelColor(cx, cy).lightnessF() >
-                ui::kit::color(ui::kit::Color::SurfaceSunken).lightnessF() + 0.3,
+    require(bright.pixelColor(cx, cy).lightness() >
+                ui::kit::color(ui::kit::Color::SurfaceSunken).lightness() + 75,
             "decoded image is visibly brighter than the sunken thumbnail cell");
     document::AssetId sequence;
     for (const auto& record : session.snapshot().project().assets())
@@ -162,16 +165,56 @@ void run() {
             sequence = record.id;
     cardAsset->setCurrentIndex(cardAsset->findData(QString::number(sequence.value())));
     waitThumbnail();
+    ui::kit::KLabel* cardDimensions = nullptr;
+    ui::kit::KLabel* cardRange = nullptr;
+    for (auto* child : card->childItems())
+        if (auto* proxy = dynamic_cast<QGraphicsProxyWidget*>(child)) {
+            if (auto* label = proxy->widget()->findChild<ui::kit::KLabel*>("nodeImageDimensions"))
+                cardDimensions = label;
+            if (auto* label = proxy->widget()->findChild<ui::kit::KLabel*>("nodeImageRange"))
+                cardRange = label;
+        }
+    require(cardDimensions && cardDimensions->text() == "32 × 16", "card dimensions readout");
+    require(cardRange && cardRange->text() == "2 frames · 1–2", "card sequence range readout");
+    const auto* range = properties.findChild<ui::kit::KLabel*>("propertiesImageRange");
+    require(range && range->text() == cardRange->text(), "Properties and card range agree");
     const auto firstFrame = controller.nodeThumbnail(source);
-    require(session.setCurrentTime(*core::RationalTime::create(1, 24)), "advance sequence time");
+    const auto nextFrame = core::RationalTime::create(1, 24);
+    require(nextFrame && session.setCurrentTime(*nextFrame), "advance sequence time");
     waitThumbnail();
-    require(controller.nodeThumbnail(source).pixelColor(0, 0).lightnessF() <
-                firstFrame.pixelColor(0, 0).lightnessF() - 0.3,
+    require(controller.nodeThumbnail(source).pixelColor(0, 0).lightness() <
+                firstFrame.pixelColor(0, 0).lightness() - 75,
             "sequence thumbnail follows session time");
     require(session.setCurrentTime(core::RationalTime::fromInteger(0)), "return sequence time");
     waitThumbnail();
     require(controller.nodeThumbnail(source).cacheKey() == firstFrame.cacheKey(),
             "returning to a frame reuses the content and frame proxy cache");
+    const auto setSource = [&](std::string_view role, document::ParameterValue value) {
+        const auto* parameter = ui::node_editor::parameterForRole(
+            *session.composition()->graph().findNode(source), *session.composition(), role);
+        require(parameter &&
+                    session.setParameterValue(parameter->id, std::move(value), "Set source"),
+                "source timing edit");
+    };
+    const auto frameTwo = core::RationalTime::create(2, 24);
+    require(frameTwo && session.setCurrentTime(*frameTwo), "frame after sequence end");
+    waitThumbnail();
+    require(controller.nodeThumbnail(source).pixelColor(0, 0).lightness() < 75,
+            "Hold clamps to last member");
+    setSource("loopMode", std::int64_t{1});
+    waitThumbnail();
+    require(controller.nodeThumbnail(source).pixelColor(0, 0).lightness() > 180,
+            "Loop wraps to first member");
+    setSource("loopMode", std::int64_t{2});
+    waitThumbnail();
+    require(controller.nodeThumbnail(source).pixelColor(0, 0).lightness() > 180,
+            "Ping-pong reverses to first member");
+    setSource("startFrame", std::int64_t{3});
+    waitThumbnail();
+    require(controller.nodeThumbnail(source).pixelColor(0, 0).lightness() > 180,
+            "time before Start Frame holds first member");
+    require(session.undo() && session.undo() && session.undo(), "restore source timing parameters");
+    require(session.setCurrentTime(core::RationalTime::fromInteger(0)), "restore sequence time");
     cardAsset->setCurrentIndex(cardAsset->findData(QString::number(asset.value())));
     waitThumbnail();
     // Timeline installs this exact typed target; its drop must create the Layer/Merge topology.
@@ -185,7 +228,7 @@ void run() {
     require(drop(timelineTarget, mime), "timeline asset drop");
     require(session.composition()->graph().layerOutputs().size() == 1, "drop creates a Layer");
     require(session.snapshot().project().validate().ok(), "drop preserves valid project graph");
-    const auto layer = session.composition()->graph().layerOutputs().front().id;
+    const auto layer = session.composition()->graph().layerOutputs().front().layerId;
     ui::TimelineLayerEntry entry;
     entry.layerId = layer;
     const auto rows = ui::timelinePropertyEntries(session, {entry}, {layer});
@@ -219,11 +262,27 @@ void run() {
     int glyphPixels = 0;
     for (int y = cy - 10; y <= cy + 10; ++y)
         for (int x = cx - 10; x <= cx + 10; ++x)
-            if (missingCard.pixelColor(x, y).lightnessF() >
-                ui::kit::color(ui::kit::Color::SurfaceSunken).lightnessF() + 0.1)
+            if (missingCard.pixelColor(x, y).lightness() >
+                ui::kit::color(ui::kit::Color::SurfaceSunken).lightness() + 25)
                 ++glyphPixels;
     require(glyphPixels > 5, "missing thumbnail paints a visible warning glyph");
     require(session.undo(), "asset removal is undoable");
+    document::AssetId still;
+    for (const auto& record : session.snapshot().project().assets())
+        if (record.kind == document::AssetKind::Image)
+            still = record.id;
+    cardAsset->setCurrentIndex(cardAsset->findData(QString::number(still.value())));
+    waitThumbnail();
+    require(QFile::remove(directory.filePath("still.png")), "remove fixture media file");
+    require(nextFrame && session.setCurrentTime(*nextFrame), "refresh after file disappears");
+    timer.restart();
+    while (!controller.missing(still) && timer.elapsed() < 15000)
+        QTest::qWait(10);
+    require(controller.missing(still) && controller.nodeThumbnail(source).isNull(),
+            "unreadable asset never reuses a stale decoded proxy");
+    const auto unreadable = renderCard();
+    require(unreadable.pixelColor(cx, cy).lightness() < bright.pixelColor(cx, cy).lightness(),
+            "unreadable source replaces the decoded pixels with the missing state");
     controller.cancel();
     bridge.beginShutdown();
     scheduler.beginShutdown();

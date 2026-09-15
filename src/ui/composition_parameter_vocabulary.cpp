@@ -4,6 +4,18 @@
 #include <bloom/core/scalar_primitives.hpp>
 #include <bloom/ui/kit/icons.hpp>
 namespace bloom::ui {
+QString imageDimensionsText(const document::AssetRecord* asset) {
+    return asset ? QObject::tr("%1 × %2").arg(asset->width).arg(asset->height)
+                 : QObject::tr("Unavailable");
+}
+QString imageRangeText(const document::AssetRecord* asset) {
+    if (!asset || asset->kind != document::AssetKind::Sequence)
+        return {};
+    return QObject::tr("%1 frames · %2–%3")
+        .arg(asset->manifest.members.size())
+        .arg(asset->manifest.first)
+        .arg(asset->manifest.last);
+}
 QString imageAssetDisplayName(const document::AssetRecord& asset) {
     const auto& path =
         asset.kind == document::AssetKind::Sequence ? asset.manifest.pattern : asset.locator.path;
@@ -31,6 +43,7 @@ void refreshImageAssetSelector(kit::KDropdown& selector, const CompositionSessio
     }
     selector.setCurrentIndex(index < 0 ? 0 : index);
     selector.setMutedValue(missing);
+    selector.setWidthFloor(kit::px(kit::Size::PropertiesDropdownWidth));
     selector.setToolTip(missing ? QObject::tr("Missing asset: %1").arg(stored)
                                 : selector.currentText());
 }

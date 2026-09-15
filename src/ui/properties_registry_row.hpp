@@ -9,6 +9,8 @@ class QLineEdit;
 class QPlainTextEdit;
 namespace bloom::ui {
 class CompositionSession;
+QString imageDimensionsText(const document::AssetRecord* asset);
+QString imageRangeText(const document::AssetRecord* asset);
 QString imageAssetDisplayName(const document::AssetRecord& asset);
 void refreshImageAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
                                const QString& stored);
