@@ -983,7 +983,13 @@ typed source-to-boundary and boundary-to-stack edges, and the stack-to-Output au
 undoable transaction.
 
 Layer Output v4 adds optional `audio` input and output ports. The Layer Stack v2 adds one ordered
-audio input per slot and an `audio` output; Composition Output accepts the stack's summed audio. The
+audio input per slot and an `audio` output; Composition Output accepts the stack's summed audio. It
+also accepts a Layer Output or an Audio source wired straight into its audio input: a Layer is a
+one-layer mix under its own enable, solo, and range, and a bare source plays whole from the
+composition start, so a hand-wired shortcut never leaves the preview unsupported. The mix is derived
+from the live document revision through the shared compiled-plan cache rather than from the frame
+the preview happens to show, because a layout-only edit or an unsupported edit can leave that frame
+at an older revision while the audio must keep playing. The
 image edge remains independent, so an audio-only Layer occupies a normal stable stack row without
 inventing transparent image pixels. Layer `enabled` is the audio mute state, `solo` is applied by
 the audio mixer with the same composition-wide rule as image layers, and the half-open Layer range

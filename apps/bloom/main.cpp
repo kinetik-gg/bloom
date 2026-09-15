@@ -137,9 +137,12 @@ int main(int argc, char* argv[]) {
         return bloom::ui::ramPreviewByteBudgetFromSettings(playbackSettings);
     }();
     auto previewFrameCache = std::make_shared<bloom::ui::PreviewFrameCache>(ramPreviewByteBudget);
+    // One compiled-plan cache for every consumer of the live revision: the preview surfaces below
+    // and the audio mix, which derives from the document rather than from a shown frame.
+    auto compiledPlanCache = std::make_shared<bloom::ui::CompiledPlanCache>();
     const auto previewPipeline = bloom::ui::makeCompositionPreviewPipeline(
-        snapshotCompiler, cpuEvaluator, referenceDisplayPreparer,
-        qualifiedDisplayProcessorProvider);
+        snapshotCompiler, cpuEvaluator, referenceDisplayPreparer, qualifiedDisplayProcessorProvider,
+        compiledPlanCache);
     bloom::ui::CompositionPreviewController previewController(
         compositionSession, taskScheduler, taskUiBridge, previewPipeline, {}, previewFrameCache);
     bloom::ui::BackgroundPreviewController backgroundPreviewController(
@@ -190,18 +193,12 @@ int main(int argc, char* argv[]) {
     application.setQuitOnLastWindowClosed(false);
     QSettings settings;
     auto& playback = previewController.playbackController();
-    bloom::ui::AudioPlaybackSession audioPlaybackSession(compositionSession);
+    bloom::ui::AudioPlaybackSession audioPlaybackSession(compositionSession, snapshotCompiler,
+                                                         compiledPlanCache, cpuEvaluator);
     playback.setAudioEngine(std::make_unique<bloom::media::audio::playback::AudioEngine>(
         bloom::media::audio::playback::makeMiniaudioBackend()));
     playback.setAudioEnabled(
         settings.value(QStringLiteral("playback/audio-enabled"), true).toBool());
-    const auto publishAudioMix = [&] {
-        const auto& frame = previewController.state().frame;
-        if (frame != nullptr) {
-            (void)audioPlaybackSession.publish(frame->processIdentity().plan, cpuEvaluator,
-                                               compositionSession.currentTime());
-        }
-    };
     const auto applyAudioMix = [&] {
         const auto& mix = audioPlaybackSession.mix();
         if (!mix.has_value()) {
@@ -223,14 +220,12 @@ int main(int argc, char* argv[]) {
         }
         playback.setAudioMix(*mix, std::move(clips));
     };
-    QObject::connect(&previewController, &bloom::ui::CompositionPreviewController::stateChanged,
-                     &audioPlaybackSession, publishAudioMix);
-    QObject::connect(&compositionSession, &bloom::ui::CompositionSession::currentTimeChanged,
-                     &audioPlaybackSession, publishAudioMix);
     QObject::connect(&audioPlaybackSession, &bloom::ui::AudioPlaybackSession::mixChanged, &playback,
                      applyAudioMix);
     QObject::connect(&assetController, &bloom::ui::AssetController::changed, &playback,
                      applyAudioMix);
+    (void)audioPlaybackSession.refresh();
+    applyAudioMix();
     // Native (server-side) window chrome only (task C1): MainWindow no longer takes a chrome mode
     // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,

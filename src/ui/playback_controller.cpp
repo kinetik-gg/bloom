@@ -160,6 +160,11 @@ void PlaybackController::play() {
     if (audioEnabled_ && audioEngine_ && audioMix_.has_value() && !audioMix_->clips.empty()) {
         const auto status = audioEngine_->play(session_.currentTime());
         audioClockActive_ = !status.has_value();
+        if (status.has_value()) {
+            qWarning("Audio playback could not start (error %d, observed %llu)",
+                     static_cast<int>(status->code),
+                     static_cast<unsigned long long>(status->observed));
+        }
     }
 
     state_ = PlaybackState::Playing;

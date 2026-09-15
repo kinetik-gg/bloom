@@ -608,8 +608,18 @@ void SocketItem::setOrderedInputs(std::vector<document::InputPortRef> inputs) {
 }
 
 bool SocketItem::accepts(const document::InputPortRef& ref) const {
-    return (input.has_value() && *input == ref) ||
-           std::ranges::find(orderedInputs_, ref) != orderedInputs_.end();
+    if ((input.has_value() && *input == ref) ||
+        std::ranges::find(orderedInputs_, ref) != orderedInputs_.end())
+        return true;
+    // The stack pill stands for every role of every slot: a Layer's audio edge into a slot lands
+    // on the same pill as its content edge, so the artist can see that the audio is already routed.
+    const auto* slot = std::get_if<document::LayerStackInputRef>(&ref);
+    return slot != nullptr &&
+           std::ranges::any_of(orderedInputs_, [&](const document::InputPortRef& candidate) {
+               const auto* ordered = std::get_if<document::LayerStackInputRef>(&candidate);
+               return ordered != nullptr && ordered->stackNodeId == slot->stackNodeId &&
+                      ordered->slotId == slot->slotId;
+           });
 }
 
 void SocketItem::setDropIndicator(const std::optional<std::size_t> slotIndex) {

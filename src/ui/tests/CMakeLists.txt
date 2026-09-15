@@ -778,3 +778,15 @@ foreach(scale IN ITEMS 1 1.25 1.5 2)
         COMMAND bloom_color_boundary_test LABELS ui integration color TIMEOUT 60
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale}")
 endforeach()
+
+# End-to-end audio transport: WAV import -> audio layer -> compiled mix -> PlaybackController ->
+# AudioEngine (NullBackend) renders non-silent samples, wired exactly like apps/bloom/main.cpp.
+add_executable(bloom_audio_transport_test audio_transport_tests.cpp)
+target_include_directories(bloom_audio_transport_test PRIVATE ..)
+target_link_libraries(bloom_audio_transport_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_audio_transport_test PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_audio_transport_test)
+add_test(NAME bloom.ui.audio-transport COMMAND bloom_audio_transport_test)
+set_tests_properties(bloom.ui.audio-transport PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1")
