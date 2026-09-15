@@ -2,9 +2,9 @@
 #include "image_source.hpp"
 #include "operation_key.hpp"
 
+#include <bloom/core/rational_time.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/text_raster.hpp>
-#include <bloom/core/rational_time.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1363,9 +1363,8 @@ namespace {
 
 [[nodiscard]] std::optional<core::RationalTime>
 audioStartTime(const std::int64_t frame, const document::FrameRate rate) noexcept {
-    const auto magnitude = frame < 0
-                               ? static_cast<std::uint64_t>(-(frame + 1)) + std::uint64_t{1}
-                               : static_cast<std::uint64_t>(frame);
+    const auto magnitude = frame < 0 ? static_cast<std::uint64_t>(-(frame + 1)) + std::uint64_t{1}
+                                     : static_cast<std::uint64_t>(frame);
     const auto denominator = static_cast<std::uint64_t>(rate.numerator());
     constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
     if (denominator == 0 || magnitude > (maximum + (frame < 0 ? 1U : 0U)) / rate.denominator())
@@ -1390,14 +1389,15 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
         return std::nullopt;
 
     std::optional<ValueGraphEvaluation> valueGraph;
-    const auto needsValueGraph = std::ranges::any_of(plan->audioMix().sources, [](const auto& source) {
-        return std::holds_alternative<ValueOutputIndex>(source.level.source);
-    });
+    const auto needsValueGraph =
+        std::ranges::any_of(plan->audioMix().sources, [](const auto& source) {
+            return std::holds_alternative<ValueOutputIndex>(source.level.source);
+        });
     if (needsValueGraph) {
-        valueGraph = evaluateValueGraph(
-            plan->valueOperations(), plan->valueOutputCount(), time, plan->format().frameRate(),
-            ValueGraphCurves{plan->scalarCurves(), plan->vec2Curves(), plan->color4Curves(),
-                             plan->vec3Curves()});
+        valueGraph = evaluateValueGraph(plan->valueOperations(), plan->valueOutputCount(), time,
+                                        plan->format().frameRate(),
+                                        ValueGraphCurves{plan->scalarCurves(), plan->vec2Curves(),
+                                                         plan->color4Curves(), plan->vec3Curves()});
         if (cancellation.isCancellationRequested() || !valueGraph->diagnostics.empty())
             return std::nullopt;
     }

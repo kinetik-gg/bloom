@@ -187,7 +187,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::LayerTimeline    ? "{\"major\":1,\"minor\":5}"
                            : step == Step::Merges           ? "{\"major\":1,\"minor\":6}"
                            : step == Step::SafeAreas        ? "{\"major\":1,\"minor\":8}"
-                           : step == Step::Images            ? "{\"major\":1,\"minor\":10}"
+                           : step == Step::Images           ? "{\"major\":1,\"minor\":10}"
                                                             : "{\"major\":1,\"minor\":11}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))

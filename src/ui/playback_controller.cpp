@@ -99,9 +99,8 @@ void PlaybackController::setAudioEnabled(const bool enabled) {
     }
 }
 
-void PlaybackController::setAudioMix(
-    runtime::AudioMixDescription description,
-    std::vector<media::audio::playback::AudioClip> clips) {
+void PlaybackController::setAudioMix(runtime::AudioMixDescription description,
+                                     std::vector<media::audio::playback::AudioClip> clips) {
     Q_ASSERT(QThread::currentThread() == thread());
     audioMix_ = std::move(description);
     if (audioEngine_) {
@@ -158,8 +157,7 @@ void PlaybackController::play() {
     lastAppliedFrameIndex_ = startFrameIndex_;
 
     audioClockActive_ = false;
-    if (audioEnabled_ && audioEngine_ && audioMix_.has_value() &&
-        !audioMix_->clips.empty()) {
+    if (audioEnabled_ && audioEngine_ && audioMix_.has_value() && !audioMix_->clips.empty()) {
         const auto status = audioEngine_->play(session_.currentTime());
         audioClockActive_ = !status.has_value();
     }

@@ -57,8 +57,8 @@ class MainWindow final : public QMainWindow {
     MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
                ProjectHost& projectHost, FrameExportController& frameExportController,
                RamPreviewController* ramPreview = nullptr,
-               CompositionPreviewController* previewController = nullptr,
-               QWidget* parent = nullptr, PlaybackController* playbackController = nullptr);
+               CompositionPreviewController* previewController = nullptr, QWidget* parent = nullptr,
+               PlaybackController* playbackController = nullptr);
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);

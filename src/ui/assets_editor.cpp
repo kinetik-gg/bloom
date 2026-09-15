@@ -194,8 +194,8 @@ void AssetsEditor::rebuild() {
         item->setText(0, QString::fromStdString(name));
         item->setText(1, asset.kind == document::AssetKind::Sequence
                              ? tr("Sequence [%1]").arg(asset.manifest.members.size())
-                             : audio ? tr("Audio · %1 s").arg(asset.duration.toSeconds(), 0, 'f', 2)
-                                     : tr("Image"));
+                         : audio ? tr("Audio · %1 s").arg(asset.duration.toSeconds(), 0, 'f', 2)
+                                 : tr("Image"));
         item->setData(0, Qt::UserRole + 2, QVariant::fromValue<qulonglong>(asset.id.value()));
         const auto* controller = session_.assetController();
         const bool missing = controller && controller->missing(asset.id);
@@ -206,7 +206,8 @@ void AssetsEditor::rebuild() {
         row->setObjectName(QStringLiteral("assetsRow"));
         row->setName(item->text(0), asset.kind == document::AssetKind::Sequence
                                         ? kit::IconId::Images
-                                        : audio ? kit::IconId::Audio : kit::IconId::Image);
+                                    : audio ? kit::IconId::Audio
+                                            : kit::IconId::Image);
         auto* kind = new kit::KLabel(row);
         kind->setElidedText(item->text(1));
         auto* warning = new kit::KIconButton(row);

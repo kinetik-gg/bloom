@@ -92,15 +92,15 @@ void PropertiesEditor::configureRegistryRows() {
                             document::AssetId::fromRaw(value->toULongLong()));
                     break;
                 }
-                for (const auto& [name, object, value] :
-                     std::array{std::tuple{tr("Duration"), "propertiesAudioDuration",
-                                           asset ? tr("%1 s").arg(asset->duration.toSeconds(), 0, 'f', 3)
-                                                 : tr("Unavailable")},
-                                  std::tuple{tr("Sample Rate"), "propertiesAudioRate",
-                                             asset ? tr("%1 Hz").arg(asset->rate) : tr("Unavailable")},
-                                  std::tuple{tr("Channels"), "propertiesAudioChannels",
-                                             asset ? QString::number(asset->channels)
-                                                   : tr("Unavailable")}}) {
+                for (const auto& [name, object, value] : std::array{
+                         std::tuple{tr("Duration"), "propertiesAudioDuration",
+                                    asset ? tr("%1 s").arg(asset->duration.toSeconds(), 0, 'f', 3)
+                                          : tr("Unavailable")},
+                         std::tuple{tr("Sample Rate"), "propertiesAudioRate",
+                                    asset ? tr("%1 Hz").arg(asset->rate) : tr("Unavailable")},
+                         std::tuple{tr("Channels"), "propertiesAudioChannels",
+                                    asset ? QString::number(asset->channels)
+                                          : tr("Unavailable")}}) {
                     auto* label = kit::makePropertyRowLabel(name, section->body());
                     auto* readout = new kit::KLabel(section->body());
                     readout->setObjectName(object);

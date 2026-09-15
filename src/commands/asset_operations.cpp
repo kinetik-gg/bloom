@@ -6,8 +6,8 @@
 #include <cctype>
 #include <fstream>
 #include <optional>
-#include <span>
 #include <set>
+#include <span>
 #include <utility>
 
 namespace bloom::commands {
@@ -54,7 +54,7 @@ std::optional<core::Sha256Digest> digestFile(const std::filesystem::path& path) 
                    static_cast<std::streamsize>(buffer.size()));
         const auto count = input.gcount();
         if (count > 0 && !hasher.update(std::span<const std::byte>{buffer}.first(
-                                      static_cast<std::size_t>(count))))
+                             static_cast<std::size_t>(count))))
             return std::nullopt;
     }
     return hasher.finalize();
@@ -79,8 +79,9 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
                 return;
             }
             auto extension = path.extension().string();
-            std::ranges::transform(extension, extension.begin(),
-                                    [](const unsigned char value) { return static_cast<char>(std::tolower(value)); });
+            std::ranges::transform(extension, extension.begin(), [](const unsigned char value) {
+                return static_cast<char>(std::tolower(value));
+            });
             if (extension == ".wav" || extension == ".mp3") {
                 const auto probe = media::audio::probeAudio(path);
                 if (!probe.value()) {
@@ -251,7 +252,8 @@ OperationResult AddAudioLayer::apply(document::Draft& draft) const {
     auto& parameters = composition->parameters();
     const auto insert = [&](const document::ParameterId id, std::string key,
                             document::ParameterValue value) {
-        return parameters.insert({id, std::move(key), document::ConstantValueSource{std::move(value)}});
+        return parameters.insert(
+            {id, std::move(key), document::ConstantValueSource{std::move(value)}});
     };
     if (!insert(parameterIds[0], "bloom.audio.asset", std::to_string(asset_.value())) ||
         !insert(parameterIds[1], "bloom.audio.start-frame", std::int64_t{0}) ||
@@ -272,11 +274,14 @@ OperationResult AddAudioLayer::apply(document::Draft& draft) const {
                                          "Audio layer parameters could not be inserted");
 
     auto& graph = composition->graph();
-    if (!graph.addNode({*sourceNodeId, std::string(document::kAudioSourceNodeType),
-                        {{"asset", parameterIds[0]}, {"startFrame", parameterIds[1]},
+    if (!graph.addNode({*sourceNodeId,
+                        std::string(document::kAudioSourceNodeType),
+                        {{"asset", parameterIds[0]},
+                         {"startFrame", parameterIds[1]},
                          {"level", parameterIds[2]}},
                         document::kAudioSourceNodeSchemaVersion}) ||
-        !graph.addNode({*layerOutputNodeId, std::string(document::kLayerOutputNodeType),
+        !graph.addNode({*layerOutputNodeId,
+                        std::string(document::kLayerOutputNodeType),
                         {{std::string(document::kPositionParameterRole), parameterIds[3]},
                          {std::string(document::kAnchorParameterRole), parameterIds[4]},
                          {std::string(document::kScaleParameterRole), parameterIds[5]},
@@ -284,18 +289,27 @@ OperationResult AddAudioLayer::apply(document::Draft& draft) const {
                          {std::string(document::kOpacityParameterRole), parameterIds[7]},
                          {std::string(document::kBlendModeParameterRole), parameterIds[8]}},
                         document::kLayerOutputNodeSchemaVersion}) ||
-        !graph.addLayerOutput({*layerOutputNodeId, *layerId, asset->locator.path,
-                               std::string(document::kLayerOutputAudioOutputPort), std::nullopt,
-                               true, false, false, {}, {}}) ||
+        !graph.addLayerOutput({*layerOutputNodeId,
+                               *layerId,
+                               asset->locator.path,
+                               std::string(document::kLayerOutputAudioOutputPort),
+                               std::nullopt,
+                               true,
+                               false,
+                               false,
+                               {},
+                               {}}) ||
         !graph.layerStack().append({*slotId, *layerId}) ||
-        !graph.addEdge({*sourceToLayerEdgeId,
-                        {*sourceNodeId, std::string(document::kAudioSourceOutputPort)},
-                        document::NodeInputRef{*layerOutputNodeId,
-                                               std::string(document::kLayerOutputAudioInputPort)}}) ||
-        !graph.addEdge({*layerToStackEdgeId,
-                        {*layerOutputNodeId, std::string(document::kLayerOutputAudioOutputPort)},
-                        document::LayerStackInputRef{graph.layerStack().nodeId(), *slotId,
-                                                     std::string(document::kLayerStackAudioInputRole)}}))
+        !graph.addEdge(
+            {*sourceToLayerEdgeId,
+             {*sourceNodeId, std::string(document::kAudioSourceOutputPort)},
+             document::NodeInputRef{*layerOutputNodeId,
+                                    std::string(document::kLayerOutputAudioInputPort)}}) ||
+        !graph.addEdge(
+            {*layerToStackEdgeId,
+             {*layerOutputNodeId, std::string(document::kLayerOutputAudioOutputPort)},
+             document::LayerStackInputRef{graph.layerStack().nodeId(), *slotId,
+                                          std::string(document::kLayerStackAudioInputRole)}}))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Audio layer topology could not be inserted");
 
@@ -307,18 +321,19 @@ OperationResult AddAudioLayer::apply(document::Draft& draft) const {
         })) {
         const auto outputEdgeId = draft.ids().allocateEdge();
         if (!outputEdgeId ||
-            !graph.addEdge({*outputEdgeId,
-                            {graph.layerStack().nodeId(),
-                             std::string(document::kLayerStackAudioOutputPort)},
-                            document::NodeInputRef{output->nodeId,
-                                                   std::string(document::kCompositionOutputAudioInputPort)}}))
+            !graph.addEdge(
+                {*outputEdgeId,
+                 {graph.layerStack().nodeId(), std::string(document::kLayerStackAudioOutputPort)},
+                 document::NodeInputRef{output->nodeId,
+                                        std::string(document::kCompositionOutputAudioInputPort)}}))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Audio output could not be connected");
     }
     const auto defaults = document::defaultNodeLayout(graph.nodes());
     composition->nodeLayout().try_emplace(*sourceNodeId, defaults.at(*sourceNodeId));
     composition->nodeLayout().try_emplace(*layerOutputNodeId, defaults.at(*layerOutputNodeId));
-    return OperationResult::applied({{"layer", *layerId}, {"slot", *slotId},
+    return OperationResult::applied({{"layer", *layerId},
+                                     {"slot", *slotId},
                                      {"audioNode", *sourceNodeId},
                                      {"layerOutputNode", *layerOutputNodeId}});
 }

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <bloom/core/sha256.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/core/sha256.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/validation.hpp>
 #include <cstdint>

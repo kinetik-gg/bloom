@@ -343,15 +343,20 @@ template <typename Definition>
     if (localBounds)
         inputs.push_back({std::string(kLayerOutputAudioInputPort), SocketValueKind::Audio, false});
     for (const auto& parameter : std::array<InputPortDefinition, 6>{
-             InputPortDefinition{std::string(kPositionParameterRole), SocketValueKind::Vector2, false},
-             InputPortDefinition{std::string(kAnchorParameterRole), SocketValueKind::Vector2, false},
+             InputPortDefinition{std::string(kPositionParameterRole), SocketValueKind::Vector2,
+                                 false},
+             InputPortDefinition{std::string(kAnchorParameterRole), SocketValueKind::Vector2,
+                                 false},
              InputPortDefinition{std::string(kScaleParameterRole), SocketValueKind::Vector2, false},
-             InputPortDefinition{std::string(kRotationParameterRole), SocketValueKind::Scalar, false},
-             InputPortDefinition{std::string(kOpacityParameterRole), SocketValueKind::Scalar, false},
-             InputPortDefinition{std::string(kBlendModeParameterRole), SocketValueKind::Integer, false}})
+             InputPortDefinition{std::string(kRotationParameterRole), SocketValueKind::Scalar,
+                                 false},
+             InputPortDefinition{std::string(kOpacityParameterRole), SocketValueKind::Scalar,
+                                 false},
+             InputPortDefinition{std::string(kBlendModeParameterRole), SocketValueKind::Integer,
+                                 false}})
         inputs.push_back(parameter);
-    std::vector<OutputPortDefinition> outputs{{std::string(kLayerOutputOutputPort),
-                                                SocketValueKind::Image}};
+    std::vector<OutputPortDefinition> outputs{
+        {std::string(kLayerOutputOutputPort), SocketValueKind::Image}};
     if (localBounds)
         outputs.push_back({std::string(kLayerOutputAudioOutputPort), SocketValueKind::Audio});
     return {{std::string(kLayerOutputNodeType), localBounds ? kLayerOutputNodeSchemaVersion : 3},
@@ -382,8 +387,8 @@ template <typename Definition>
 
 [[nodiscard]] NodeDefinition layerStackDefinition(const bool localBounds = true) {
     using namespace bloom::document;
-    std::vector<OutputPortDefinition> outputs{{std::string(kLayerStackOutputPort),
-                                                SocketValueKind::Image}};
+    std::vector<OutputPortDefinition> outputs{
+        {std::string(kLayerStackOutputPort), SocketValueKind::Image}};
     if (localBounds)
         outputs.push_back({std::string(kLayerStackAudioOutputPort), SocketValueKind::Audio});
     return {{std::string(kLayerStackNodeType), localBounds ? kLayerStackNodeSchemaVersion : 1},
@@ -395,9 +400,8 @@ template <typename Definition>
                                      SocketValueKind::Image, true},
             NodeCardinality::Many,
             localBounds ? NodeCategory::Compositing : NodeCategory::Compatibility,
-            localBounds ? std::optional<LayerSlotInputDefinition>{
-                              LayerSlotInputDefinition{std::string(kLayerStackAudioInputRole),
-                                                       SocketValueKind::Audio, true}}
+            localBounds ? std::optional<LayerSlotInputDefinition>{LayerSlotInputDefinition{
+                              std::string(kLayerStackAudioInputRole), SocketValueKind::Audio, true}}
                         : std::nullopt};
 }
 
@@ -440,8 +444,7 @@ template <typename Definition>
             NodeLoweringKind::AudioSource,
             {},
             {{std::string(kAudioSourceOutputPort), SocketValueKind::Audio}},
-            {{"asset", "bloom.audio.asset", ParameterValueKind::String, true, false,
-              std::string{}},
+            {{"asset", "bloom.audio.asset", ParameterValueKind::String, true, false, std::string{}},
              {"startFrame", "bloom.audio.start-frame", ParameterValueKind::Integer, true, false,
               std::int64_t{0}},
              {"level", std::string(kAudioLevelParameterSchemaKey), ParameterValueKind::Float64,

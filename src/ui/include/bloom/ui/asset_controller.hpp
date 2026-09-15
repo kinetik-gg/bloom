@@ -50,10 +50,10 @@ class AssetController final : public QObject {
         bool missing = false;
     };
     using Previews = std::map<document::AssetId, Preview>;
-    using Waveforms = std::map<document::AssetId,
-                               std::shared_ptr<const media::audio::WaveformSummary>>;
-    using AudioBuffers = std::map<document::AssetId,
-                                  std::shared_ptr<const media::audio::AudioBuffer>>;
+    using Waveforms =
+        std::map<document::AssetId, std::shared_ptr<const media::audio::WaveformSummary>>;
+    using AudioBuffers =
+        std::map<document::AssetId, std::shared_ptr<const media::audio::AudioBuffer>>;
     struct Thumbnails {
         Previews assets;
         std::map<document::NodeId, Preview> nodes;

@@ -14,8 +14,8 @@
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
-#include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/radio_group.hpp>
+#include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <limits>
 #include <memory>
@@ -103,11 +103,10 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         connect(selector_, &kit::KDropdown::currentIndexChanged, this, [this] { commit(); });
     } else if (definition_.valueKind == document::ParameterValueKind::Integer) {
         integer_ = new kit::KLineEdit(controls);
-        integer_->setObjectName(definition_.schemaKey == "bloom.image.start-frame"
-                                    ? "propertiesImageStartFrame"
-                                    : definition_.schemaKey == "bloom.audio.start-frame"
-                                    ? "propertiesAudioStartFrame"
-                                    : "propertiesRegistryInteger");
+        integer_->setObjectName(
+            definition_.schemaKey == "bloom.image.start-frame"   ? "propertiesImageStartFrame"
+            : definition_.schemaKey == "bloom.audio.start-frame" ? "propertiesAudioStartFrame"
+                                                                 : "propertiesRegistryInteger");
         integer_->setAccessibleName(label);
         integer_->setFixedSize(kit::px(kit::Size::PropertiesFieldWidth),
                                kit::px(kit::Size::ControlCompact));

@@ -1,10 +1,10 @@
+#include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
-#include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/audio_playback_session.hpp>
@@ -193,8 +193,8 @@ int main(int argc, char* argv[]) {
     bloom::ui::AudioPlaybackSession audioPlaybackSession(compositionSession);
     playback.setAudioEngine(std::make_unique<bloom::media::audio::playback::AudioEngine>(
         bloom::media::audio::playback::makeMiniaudioBackend()));
-    playback.setAudioEnabled(settings.value(QStringLiteral("playback/audio-enabled"), true)
-                                 .toBool());
+    playback.setAudioEnabled(
+        settings.value(QStringLiteral("playback/audio-enabled"), true).toBool());
     const auto publishAudioMix = [&] {
         const auto& frame = previewController.state().frame;
         if (frame != nullptr) {
@@ -227,8 +227,8 @@ int main(int argc, char* argv[]) {
                      &audioPlaybackSession, publishAudioMix);
     QObject::connect(&compositionSession, &bloom::ui::CompositionSession::currentTimeChanged,
                      &audioPlaybackSession, publishAudioMix);
-    QObject::connect(&audioPlaybackSession, &bloom::ui::AudioPlaybackSession::mixChanged,
-                     &playback, applyAudioMix);
+    QObject::connect(&audioPlaybackSession, &bloom::ui::AudioPlaybackSession::mixChanged, &playback,
+                     applyAudioMix);
     QObject::connect(&assetController, &bloom::ui::AssetController::changed, &playback,
                      applyAudioMix);
     // Native (server-side) window chrome only (task C1): MainWindow no longer takes a chrome mode

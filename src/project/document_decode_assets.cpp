@@ -146,9 +146,9 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
             return false;
         }
         previous = asset.id.value();
-        asset.kind = kind == "image" ? document::AssetKind::Image
-                                       : kind == "sequence" ? document::AssetKind::Sequence
-                                                             : document::AssetKind::Audio;
+        asset.kind = kind == "image"      ? document::AssetKind::Image
+                     : kind == "sequence" ? document::AssetKind::Sequence
+                                          : document::AssetKind::Audio;
         constexpr std::array<std::string_view, 2> interpretationKeys{"colorSpace",
                                                                      "alphaAssociation"};
         std::vector<const JsonValue*> interpretation;

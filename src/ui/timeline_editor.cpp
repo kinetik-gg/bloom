@@ -1,9 +1,9 @@
 #include "asset_drop.hpp"
 #include "node_editor_items.hpp"
 #include <QSignalBlocker>
+#include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
-#include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/timeline_editor.hpp>
 #include <memory>
 
@@ -390,14 +390,16 @@ class TimelineLayerRow final : public kit::KRow {
             auto* toggle = toggles_[static_cast<std::size_t>(index)];
             const QSignalBlocker blocker(toggle);
             toggle->setVisible(index != 1 || audioLayer_);
-            toggle->setChecked(index == 0 ? (enabled_ && !audioLayer_)
+            toggle->setChecked(index == 0   ? (enabled_ && !audioLayer_)
                                : index == 1 ? (enabled_ && audioLayer_)
-                               : index == 2 ? solo_ : index == 3 && locked_);
-            toggle->setEnabled(index == 1 ? audioLayer_ && !locked_
-                             : index == 0 ? !audioLayer_ && (!collapsedImage_ || index == 0)
-                                          : index != 1 && !collapsedImage_);
-            toggle->setGlyph(index == 0   ? (enabled_ ? kit::IconId::Visible : kit::IconId::Hidden)
-                             : index == 1 ? (enabled_ ? kit::IconId::AudioOn : kit::IconId::AudioOff)
+                               : index == 2 ? solo_
+                                            : index == 3 && locked_);
+            toggle->setEnabled(index == 1   ? audioLayer_ && !locked_
+                               : index == 0 ? !audioLayer_ && (!collapsedImage_ || index == 0)
+                                            : index != 1 && !collapsedImage_);
+            toggle->setGlyph(index == 0 ? (enabled_ ? kit::IconId::Visible : kit::IconId::Hidden)
+                             : index == 1
+                                 ? (enabled_ ? kit::IconId::AudioOn : kit::IconId::AudioOff)
                              : index == 3 ? (locked_ ? kit::IconId::Locked : kit::IconId::Unlocked)
                                           : toggleIcon(index));
         }
@@ -526,7 +528,8 @@ void TimelineLayerStack::syncCurrentRowFromSelection() {
     }
     for (int index = 0; index < rowCount(); ++index) {
         const auto& entry = entries_[static_cast<std::size_t>(index)];
-        const auto sourceNodeId = entry.imageNodeId.isValid() ? entry.imageNodeId : entry.audioNodeId;
+        const auto sourceNodeId =
+            entry.imageNodeId.isValid() ? entry.imageNodeId : entry.audioNodeId;
         if (sourceNodeId.isValid() && session_.selectedNodes().contains(sourceNodeId))
             resolved = index;
     }
@@ -682,7 +685,7 @@ void TimelineLayerStack::mousePressEvent(QMouseEvent* event) {
                 return;
             commands::Transaction transaction("Toggle Audio", session_.snapshot().revision());
             transaction.emplace<commands::SetLayerEnabled>(session_.compositionId(), id,
-                                                            !layer->enabled);
+                                                           !layer->enabled);
             (void)session_.executeTransaction(std::move(transaction));
             return;
         }
@@ -1154,7 +1157,8 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
         painter.setRenderHint(QPainter::Antialiasing, false);
         painter.fillRect(QRect(0, top, width(), kTimelineRowHeight),
                          kit::color(kit::Color::Surface));
-        const auto sourceNodeId = entry.imageNodeId.isValid() ? entry.imageNodeId : entry.audioNodeId;
+        const auto sourceNodeId =
+            entry.imageNodeId.isValid() ? entry.imageNodeId : entry.audioNodeId;
         const bool selected = sourceNodeId.isValid()
                                   ? session_.selectedNodes().contains(sourceNodeId)
                                   : isLayerSelected(session_, entry.layerId);
@@ -1199,7 +1203,7 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
                                    (static_cast<qreal>(bucket) + 0.5) * bar->width() /
                                        static_cast<qreal>(buckets.size());
                     const auto centre = static_cast<qreal>(bar->center().y());
-                    const auto halfHeight = static_cast<qreal>(bar->height() - 2 * grip) * 0.5;
+                    const auto halfHeight = static_cast<qreal>(bar->height() - (grip + grip)) * 0.5;
                     painter.drawLine(QPointF(x, centre - static_cast<qreal>(maximum) * halfHeight),
                                      QPointF(x, centre - static_cast<qreal>(minimum) * halfHeight));
                 }

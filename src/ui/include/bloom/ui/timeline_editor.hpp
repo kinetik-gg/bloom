@@ -14,8 +14,8 @@
 #include <QString>
 #include <QWidget>
 
-#include <optional>
 #include <memory>
+#include <optional>
 #include <set>
 #include <vector>
 

@@ -30,12 +30,13 @@ void refreshAssetSelector(kit::KDropdown& selector, const CompositionSession& se
         if (audioOnly != (asset.kind == document::AssetKind::Audio))
             continue;
         const bool sequence = asset.kind == document::AssetKind::Sequence;
-        const auto kind = audioOnly
-                              ? QObject::tr("Audio · %1 s").arg(asset.duration.toSeconds(), 0, 'f', 2)
-                              : sequence ? QObject::tr("Sequence [%1]").arg(asset.manifest.members.size())
-                                         : QObject::tr("Image");
-        selector.addItem(kit::icon(audioOnly ? kit::IconId::Audio
-                                             : sequence ? kit::IconId::Images : kit::IconId::Image,
+        const auto kind =
+            audioOnly  ? QObject::tr("Audio · %1 s").arg(asset.duration.toSeconds(), 0, 'f', 2)
+            : sequence ? QObject::tr("Sequence [%1]").arg(asset.manifest.members.size())
+                       : QObject::tr("Image");
+        selector.addItem(kit::icon(audioOnly  ? kit::IconId::Audio
+                                   : sequence ? kit::IconId::Images
+                                              : kit::IconId::Image,
                                    kit::IconRole::Chrome, kit::Color::Muted),
                          imageAssetDisplayName(asset) + " · " + kind,
                          QString::number(asset.id.value()));

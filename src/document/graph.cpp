@@ -679,8 +679,7 @@ CanonicalGraph::inputKind(const InputPortRef& input, const NodeDefinitionRegistr
         }
     } else {
         const auto& layerInput = std::get<LayerStackInputRef>(input);
-        if (definition->layerSlotInput &&
-            definition->layerSlotInput->role == layerInput.role)
+        if (definition->layerSlotInput && definition->layerSlotInput->role == layerInput.role)
             return definition->layerSlotInput->valueKind;
         if (definition->audioLayerSlotInput &&
             definition->audioLayerSlotInput->role == layerInput.role)

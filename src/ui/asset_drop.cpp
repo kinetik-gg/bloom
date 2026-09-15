@@ -96,11 +96,11 @@ class AddAudioNode final : public commands::Operation {
                     break;
                 for (const auto& binding : node->parameters)
                     if (binding.role == "asset") {
-                        auto result = commands::SetParameterSource(
-                                          composition_, binding.parameterId,
-                                          document::ConstantValueSource{
-                                              std::to_string(asset_.value())})
-                                          .apply(draft);
+                        auto result =
+                            commands::SetParameterSource(
+                                composition_, binding.parameterId,
+                                document::ConstantValueSource{std::to_string(asset_.value())})
+                                .apply(draft);
                         if (result.status == commands::OperationStatus::Rejected)
                             return result;
                         return added;

@@ -13,8 +13,8 @@
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/licenses_window.hpp>
-#include <bloom/ui/project_host.hpp>
 #include <bloom/ui/playback_controller.hpp>
+#include <bloom/ui/project_host.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>

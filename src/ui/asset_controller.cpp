@@ -376,13 +376,11 @@ void AssetController::refresh() {
                         if (summary.value() != nullptr) {
                             preview.missing = false;
                             results->waveforms.emplace(
-                                asset.id,
-                                std::make_shared<const media::audio::WaveformSummary>(
-                                    *summary.value()));
+                                asset.id, std::make_shared<const media::audio::WaveformSummary>(
+                                              *summary.value()));
                             results->audioBuffers.emplace(
-                                asset.id,
-                                std::make_shared<const media::audio::AudioBuffer>(
-                                    std::move(*decoded.value())));
+                                asset.id, std::make_shared<const media::audio::AudioBuffer>(
+                                              std::move(*decoded.value())));
                         }
                     }
                     results->assets.emplace(asset.id, std::move(preview));

@@ -1555,9 +1555,8 @@ class NodeItem final : public QGraphicsObject {
                 else
                     outputHeight += socket->rowHeight();
             }
-        const qreal thumbnailHeight = imageSource_ || audioSource_
-                                          ? kit::px(kit::Size::ImageThumbnail)
-                                          : 0;
+        const qreal thumbnailHeight =
+            imageSource_ || audioSource_ ? kit::px(kit::Size::ImageThumbnail) : 0;
         parameterRowsTop_ = kCardHeaderHeight + socketHeight + thumbnailHeight;
         // A card with no parameter rows is exactly its header: no empty body lip below it, which
         // would read as a clipped row rather than as a node that simply has nothing to edit.

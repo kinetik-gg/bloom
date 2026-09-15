@@ -374,8 +374,10 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
                           kit::px(kit::Size::ImageThumbnail) - 2 * kCardPadding);
         painter->fillRect(cell, kit::color(kit::Color::SurfaceSunken));
         const auto* controller = session_ ? session_->assetController() : nullptr;
-        const auto thumbnail = imageSource_ && controller ? controller->nodeThumbnail(id_) : QImage{};
-        const auto waveform = audioSource_ && controller ? controller->waveform(imageAsset_) : nullptr;
+        const auto thumbnail =
+            imageSource_ && controller ? controller->nodeThumbnail(id_) : QImage{};
+        const auto waveform =
+            audioSource_ && controller ? controller->waveform(imageAsset_) : nullptr;
         if (!thumbnail.isNull()) {
             auto size = QSizeF(thumbnail.size());
             size.scale(cell.size(), Qt::KeepAspectRatio);
@@ -392,17 +394,14 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
                     minimum = std::min(minimum, channel.minimum);
                     maximum = std::max(maximum, channel.maximum);
                 }
-                const auto x = cell.left() + cell.width() *
-                                           (static_cast<qreal>(index) + 0.5) /
-                                           static_cast<qreal>(bucketCount);
-                const auto top = cell.center().y() - cell.height() *
-                                                        std::clamp(static_cast<qreal>(maximum), 0.0,
-                                                                   1.0) /
-                                                        2.0;
-                const auto bottom = cell.center().y() - cell.height() *
-                                                           std::clamp(static_cast<qreal>(minimum),
-                                                                      -1.0, 0.0) /
-                                                           2.0;
+                const auto x = cell.left() + cell.width() * (static_cast<qreal>(index) + 0.5) /
+                                                 static_cast<qreal>(bucketCount);
+                const auto top =
+                    cell.center().y() -
+                    cell.height() * std::clamp(static_cast<qreal>(maximum), 0.0, 1.0) / 2.0;
+                const auto bottom =
+                    cell.center().y() -
+                    cell.height() * std::clamp(static_cast<qreal>(minimum), -1.0, 0.0) / 2.0;
                 painter->drawLine(QPointF(x, top), QPointF(x, bottom));
             }
         } else {

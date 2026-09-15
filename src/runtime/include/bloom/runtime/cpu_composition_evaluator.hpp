@@ -62,8 +62,7 @@ class CpuCompositionEvaluator final {
     // image path. A malformed audio operand returns nullopt instead of silently changing the mix.
     [[nodiscard]] std::optional<AudioMixDescription>
     evaluateAudioMix(const std::shared_ptr<const CompiledCompositionPlan>& plan,
-                     core::RationalTime time,
-                     const CancellationToken& cancellation = {}) const;
+                     core::RationalTime time, const CancellationToken& cancellation = {}) const;
 
   private:
     struct AssetContext {
