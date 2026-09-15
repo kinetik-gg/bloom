@@ -90,7 +90,8 @@ template <typename T> class [[nodiscard]] AudioResult final {
 };
 
 struct AudioDecodeLimits final {
-    static constexpr std::uint64_t kDefaultFileSizeCap = 64U * 1024U * 1024U;
+    static constexpr std::uint64_t kDefaultFileSizeCap =
+        std::uint64_t{64} * std::uint64_t{1024} * std::uint64_t{1024};
     static constexpr std::uint64_t kDefaultSampleBudget = 48'000'000U;
 
     std::uint64_t fileSizeCap = kDefaultFileSizeCap;
