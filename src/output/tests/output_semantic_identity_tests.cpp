@@ -396,8 +396,11 @@ tinyFrameWithPixelAspect(const core::PixelAspectRatio pixelAspect) {
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledSolid{
-        test::kSolidNodeId, {test::kColorParameterId, core::Color4d{0.25, 0.5, 0.75, 1.0}}});
+    operations.emplace_back(
+        runtime::CompiledSolid{test::kSolidNodeId,
+                               {test::kColorParameterId, core::Color4d{0.25, 0.5, 0.75, 1.0}},
+                               {test::kWidthParameterId, 1.0},
+                               {test::kHeightParameterId, 1.0}});
     operations.emplace_back(runtime::CompiledLayerOutput{
         test::kLayerNodeId, test::kLayerId, runtime::OperationIndex::fromRaw(0),
         runtime::CompiledVec2Parameter{test::kPositionParameterId, document::Vec2d{0.5, 0.5}},

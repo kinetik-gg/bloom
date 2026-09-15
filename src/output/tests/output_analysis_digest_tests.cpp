@@ -83,6 +83,8 @@ constexpr auto kAnchorParameterId = document::ParameterId::fromRaw(13);
 constexpr auto kScaleParameterId = document::ParameterId::fromRaw(14);
 constexpr auto kRotationParameterId = document::ParameterId::fromRaw(15);
 constexpr auto kBlendModeParameterId = document::ParameterId::fromRaw(16);
+constexpr auto kWidthParameterId = document::ParameterId::fromRaw(17);
+constexpr auto kHeightParameterId = document::ParameterId::fromRaw(18);
 
 constexpr std::string_view kChannels =
     "count=u:4;name-0=utf8:52;name-1=utf8:47;name-2=utf8:42;name-3=utf8:41;"
@@ -156,7 +158,11 @@ planFor(const std::uint32_t width, const std::uint32_t height, const core::Color
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledSolid{kSolidNodeId, {kColorParameterId, colorValue}});
+    operations.emplace_back(
+        runtime::CompiledSolid{kSolidNodeId,
+                               {kColorParameterId, colorValue},
+                               {kWidthParameterId, static_cast<double>(width)},
+                               {kHeightParameterId, static_cast<double>(height)}});
     operations.emplace_back(runtime::CompiledLayerOutput{
         kLayerNodeId, kLayerId, runtime::OperationIndex::fromRaw(0),
         runtime::CompiledVec2Parameter{

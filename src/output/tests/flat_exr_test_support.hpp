@@ -54,6 +54,8 @@ constexpr auto kCompositionId = document::CompositionId::fromRaw(0xB1B2B3B4B5B6B
 constexpr auto kOutputNodeId = document::NodeId::fromRaw(0xC1C2C3C4C5C6C7C8ULL);
 constexpr auto kInputNodeId = document::NodeId::fromRaw(0xD1D2D3D4D5D6D7D8ULL);
 constexpr auto kColorParameterId = document::ParameterId::fromRaw(0xE1E2E3E4E5E6E7E8ULL);
+constexpr auto kWidthParameterId = document::ParameterId::fromRaw(0xE1E2E3E4E5E6E7E9ULL);
+constexpr auto kHeightParameterId = document::ParameterId::fromRaw(0xE1E2E3E4E5E6E7EAULL);
 constexpr auto kSourceRevision = document::Revision::fromRaw(0xF1F2F3F4F5F6F7F8ULL);
 constexpr auto kShellLayerNodeId = document::NodeId::fromRaw(0x61);
 constexpr auto kShellLayerId = document::LayerId::fromRaw(0x62);
@@ -127,8 +129,11 @@ constexpr auto kShellBlendModeParameterId = document::ParameterId::fromRaw(0x6a)
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledSolid{
-        kInputNodeId, {kColorParameterId, core::Color4d{0.0, 0.0, 0.0, 0.0}}});
+    operations.emplace_back(
+        runtime::CompiledSolid{kInputNodeId,
+                               {kColorParameterId, core::Color4d{0.0, 0.0, 0.0, 0.0}},
+                               {kWidthParameterId, 1.0},
+                               {kHeightParameterId, 1.0}});
     operations.emplace_back(runtime::CompiledLayerOutput{
         kShellLayerNodeId, kShellLayerId, runtime::OperationIndex::fromRaw(0),
         runtime::CompiledVec2Parameter{kShellPositionParameterId, document::Vec2d{0.5, 0.5}},
@@ -164,7 +169,11 @@ identityPlan(const std::uint32_t width, const std::uint32_t height,
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledSolid{kInputNodeId, {kColorParameterId, {}}});
+    operations.emplace_back(
+        runtime::CompiledSolid{kInputNodeId,
+                               {kColorParameterId, {}},
+                               {kWidthParameterId, static_cast<double>(width)},
+                               {kHeightParameterId, static_cast<double>(height)}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNodeId, runtime::OperationIndex::fromRaw(0)});
     return std::make_shared<const runtime::CompiledCompositionPlan>(

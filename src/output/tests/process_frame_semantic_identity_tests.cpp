@@ -95,6 +95,8 @@ constexpr auto kCompositionId = document::CompositionId::fromRaw(0x1112131415161
 constexpr auto kOutputNodeId = document::NodeId::fromRaw(0x3132333435363738ULL);
 constexpr auto kInputNodeId = document::NodeId::fromRaw(0x4142434445464748ULL);
 constexpr auto kColorParameterId = document::ParameterId::fromRaw(0x5152535455565758ULL);
+constexpr auto kWidthParameterId = document::ParameterId::fromRaw(0x5152535455565759ULL);
+constexpr auto kHeightParameterId = document::ParameterId::fromRaw(0x515253545556575AULL);
 constexpr auto kSourceRevision = document::Revision::fromRaw(0x2122232425262728ULL);
 
 constexpr auto kShellLayerNodeId = document::NodeId::fromRaw(0x61);
@@ -243,7 +245,11 @@ plan(const std::uint32_t width = 2, const std::uint32_t height = 2,
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledSolid{kInputNodeId, {kColorParameterId, {}}});
+    operations.emplace_back(
+        runtime::CompiledSolid{kInputNodeId,
+                               {kColorParameterId, {}},
+                               {kWidthParameterId, static_cast<double>(width)},
+                               {kHeightParameterId, static_cast<double>(height)}});
     operations.emplace_back(
         runtime::CompiledCompositionOutput{kOutputNodeId, runtime::OperationIndex::fromRaw(0)});
     return std::make_shared<const runtime::CompiledCompositionPlan>(
@@ -315,8 +321,11 @@ shellPlan(const std::uint32_t width, const std::uint32_t height) {
         std::abort();
     }
     std::vector<runtime::CompiledOperation> operations;
-    operations.emplace_back(runtime::CompiledSolid{
-        kInputNodeId, {kColorParameterId, core::Color4d{0.0, 0.0, 0.0, 0.0}}});
+    operations.emplace_back(
+        runtime::CompiledSolid{kInputNodeId,
+                               {kColorParameterId, core::Color4d{0.0, 0.0, 0.0, 0.0}},
+                               {kWidthParameterId, static_cast<double>(width)},
+                               {kHeightParameterId, static_cast<double>(height)}});
     operations.emplace_back(runtime::CompiledLayerOutput{
         kShellLayerNodeId, kShellLayerId, runtime::OperationIndex::fromRaw(0),
         runtime::CompiledVec2Parameter{
@@ -350,7 +359,9 @@ evaluateShell(const std::uint32_t width, const std::uint32_t height) {
         .resolution = runtime::CompositionFormatResolution{},
         .quality = runtime::EvaluationQuality::Reference,
         .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
-        .pixelStorageByteLimit = static_cast<std::size_t>(width) * height * 64U};
+        // The layer image is the transformed bounds grown by one pixel on every side, so the
+        // resident peak is sized from the padded extent rather than the composition's own.
+        .pixelStorageByteLimit = static_cast<std::size_t>(width + 2U) * (height + 2U) * 64U};
     const runtime::CpuCompositionEvaluator evaluator;
     const auto result = evaluator.evaluate(compiledPlan, request, {});
     if (result.status() != runtime::EvaluationStatus::Evaluated || result.frame() == nullptr) {
