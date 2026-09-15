@@ -1,5 +1,5 @@
+#include "driven_value_resolver.hpp"
 #include "node_editor_items.hpp"
-#include "properties_driven_values.hpp"
 #include <algorithm>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/project.hpp>
@@ -168,8 +168,8 @@ void CompositionSession::refreshDrivenValues() {
         return;
     }
     if (drivenValues_ == nullptr) {
-        drivenValues_ = new PropertiesDrivenValues(*this, this);
-        drivenValues_->ready = [this](const PropertiesDrivenValues::Values& values) {
+        drivenValues_ = new DrivenValueResolver(*this, this);
+        drivenValues_->ready = [this](const DrivenValueResolver::Values& values) {
             drivenText_ = values;
             Q_EMIT drivenValuesChanged();
         };

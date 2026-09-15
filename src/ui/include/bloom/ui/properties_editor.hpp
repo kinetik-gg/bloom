@@ -19,7 +19,6 @@ namespace bloom::ui {
 
 class CompositionSession;
 class PropertiesRegistryRow;
-class PropertiesDrivenValues;
 class PropertiesAnchorGrid;
 
 class KeyframeDiamond;
@@ -49,7 +48,9 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     void configureRegistryRows();
     void configureUpstream();
     void configureDrivenRows();
-    PropertiesDrivenValues* drivenValues_ = nullptr;
+    // Task DRIVE-1: this panel reads the session's resolved driven values rather than
+    // running an evaluator of its own; the connection is made once.
+    bool drivenValuesConnected_ = false;
     QWidget* upstreamPanel_ = nullptr;
     QString upstreamSignature_;
     std::vector<PropertiesRegistryRow*> upstreamRows_;

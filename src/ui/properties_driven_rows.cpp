@@ -1,5 +1,4 @@
 #include "node_editor_items.hpp"
-#include "properties_driven_values.hpp"
 #include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
 #include <QAction>
@@ -83,23 +82,25 @@ void PropertiesEditor::configureDrivenRows() {
             row->setProperty("parameterId", QVariant::fromValue(static_cast<qulonglong>(
                                                 parameter ? parameter->id.value() : 0)));
     }
-    if (!drivenValues_) {
-        drivenValues_ = new PropertiesDrivenValues(session_, this);
-        drivenValues_->ready = [this](const PropertiesDrivenValues::Values& values) {
+    // Task DRIVE-1: the resolution is the SESSION's. This panel used to own an evaluator of its
+    // own, which meant the Properties row and the timeline row for one driven parameter were two
+    // answers to one question that could differ; now there is one answer and both read it.
+    if (!drivenValuesConnected_) {
+        drivenValuesConnected_ = true;
+        connect(&session_, &CompositionSession::drivenValuesChanged, this, [this] {
             for (auto* label : findChildren<QLabel*>("propertiesDrivenValue")) {
                 const auto id =
                     document::ParameterId::fromRaw(label->property("parameterId").toULongLong());
-                if (const auto found = values.find(id); found != values.end()) {
-                    label->setText(found->second);
-                    label->setToolTip(found->second);
+                if (const auto text = session_.drivenValueText(id); !text.isEmpty()) {
+                    label->setText(text);
+                    label->setToolTip(text);
                 }
             }
-        };
+        });
     }
     auto rows = findChildren<QWidget*>("propertiesRow");
     rows.append(findChildren<QWidget*>("propertiesRegistryRow"));
     rows.append(findChildren<QWidget*>("mergeInputRow"));
-    std::vector<document::ParameterId> driven;
     for (auto* row : rows) {
         // The inner presentation rows of a generic row inherit its outer context menu.
         if (row->parentWidget() && row->parentWidget()->objectName() == "propertiesRegistryRow")
@@ -200,21 +201,24 @@ void PropertiesEditor::configureDrivenRows() {
         }
         display->setVisible(driver != nullptr);
         if (driver) {
-            driven.push_back(id);
             display->setEnabled(true);
             auto* jump = display->findChild<kit::KButton*>();
-            const auto* node = composition->graph().findNode(driver->sourceNodeId);
-            jump->setText(node ? node_editor::nodeDisplayName(*composition, *node)
-                               : tr("Missing driver"));
+            jump->setText(session_.driverDisplayName(id));
             jump->setToolTip(jump->text());
             jump->setProperty("nodeId", QVariant::fromValue(
                                             static_cast<qulonglong>(driver->sourceNodeId.value())));
             auto* value = display->findChild<QLabel*>("propertiesDrivenValue");
             value->setProperty("parameterId",
                                QVariant::fromValue(static_cast<qulonglong>(id.value())));
-            value->setText(tr("Resolving…"));
+            // Whatever the session already knows, so a rebuilt row does not flash back to
+            // "Resolving…" for a value that was resolved long ago. A String shows the resolved
+            // text exactly as every other kind shows its resolved value: read-only, because the
+            // graph owns it.
+            const auto resolved = session_.drivenValueText(id);
+            value->setText(resolved.isEmpty() ? tr("Resolving…") : resolved);
+            value->setToolTip(value->text());
         }
     }
-    drivenValues_->request(std::move(driven));
+    session_.refreshDrivenValues();
 }
 } // namespace bloom::ui

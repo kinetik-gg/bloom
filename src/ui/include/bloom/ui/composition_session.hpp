@@ -638,7 +638,7 @@ class CompositionSession final : public QObject {
     // revision/time/parameter signature of the newest request, which is what makes
     // refreshDrivenValues() idempotent and therefore safe to call from a handler of the signal it
     // eventually emits.
-    class PropertiesDrivenValues* drivenValues_ = nullptr;
+    class DrivenValueResolver* drivenValues_ = nullptr;
     QString drivenRequest_;
     std::map<document::ParameterId, QString> drivenText_;
 };

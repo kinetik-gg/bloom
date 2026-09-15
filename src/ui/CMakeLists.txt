@@ -308,6 +308,7 @@ target_sources(
         composition_session.cpp
         composition_session_drivers.cpp
         composition_session_keyframes.cpp
+        driven_value_resolver.cpp
         editor_area.cpp
         editor_chrome.cpp
         editor_registry.cpp
@@ -333,7 +334,6 @@ target_sources(
         properties_registry_row.cpp
         properties_editor_registry.cpp
         properties_upstream.cpp
-        properties_driven_values.cpp
         properties_driven_rows.cpp
         composition_parameter_vocabulary.cpp
         composition_driver_probe.cpp
