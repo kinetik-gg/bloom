@@ -83,6 +83,7 @@ int main() {
                  "generated JPEG decodes");
     // "" with an empty base name is the render-farm form: 0000.png, 0001.png, ... (owner,
     // 2026-09-15: such a folder imported as individual images).
+    // Any name shape: the last digit run is the frame; prefix, suffix and padding are free.
     for (const auto* prefix : {"take.", "take_", "take", ""}) {
         png(scratch.file(std::string(prefix) + "0001.png"));
         png(scratch.file(std::string(prefix) + "0003.png"));
@@ -91,6 +92,25 @@ int main() {
                          sequence.value->gaps == std::vector<std::int64_t>{2} &&
                          sequence.value->padding == 4,
                      "sequence form detects members, padding and gap");
+    }
+    {
+        png(scratch.file("stereo0001_left.png"));
+        png(scratch.file("stereo0002_left.png"));
+        png(scratch.file("stereo0001_right.png"));
+        const auto sequence = media::scanSequence(scratch.file("stereo0001_left.png"));
+        check.expect(sequence.value.has_value() && sequence.value->members.size() == 2 &&
+                         sequence.value->pattern == "stereo####_left.png",
+                     "a suffix after the frame number is part of the member identity");
+    }
+    {
+        png(scratch.file("mixed7.png"));
+        png(scratch.file("mixed08.png"));
+        png(scratch.file("mixed009.PNG"));
+        const auto sequence = media::scanSequence(scratch.file("mixed7.png"));
+        check.expect(sequence.value.has_value() && sequence.value->members.size() == 3 &&
+                         sequence.value->first == 7 && sequence.value->last == 9 &&
+                         !sequence.value->diagnostics.empty(),
+                     "mixed padding and extension case still form one sequence, with a note");
     }
     for (std::size_t size = 1; size < 64; ++size) {
         const auto path = scratch.file("hostile.png");

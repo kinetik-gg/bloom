@@ -15,7 +15,7 @@ research below for this closed image profile. See the component security review 
 
 The implemented APIs are `probeImage`, `decodeImage`, and `scanSequence`. Selection admits PNG
 (including 16-bit samples) and JPEG. The scanner recognizes a final fixed-width number in
-`name.0001.png`, `name_0001.png`, or `name0001.png`; two or more matching members create one
+any name whose stem ends in, or contains, a run of digits: the last digit run is the frame number, everything before it is the prefix and everything after it the suffix, and both must match for members to belong together (`shot.0001.png`, `shot_0001.png`, `shot0001.png`, `0001.png`, `shot0001_left.png`); padding may differ between members and is reported once; two or more matching members create one
 sequence asset. Different padding is diagnosed rather than merged. A manifest records explicit
 members, SHA-256 digests, first/last frame and gaps. Hold repeats the nearest endpoint; Loop and
 PingPong wrap after the end, while time before the node start always holds the first member.

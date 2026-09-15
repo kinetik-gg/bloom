@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <bloom/media/image.hpp>
+#include <cctype>
 #include <charconv>
 #include <limits>
 #include <string_view>
@@ -10,31 +11,41 @@ namespace bloom::media {
 namespace {
 struct NumberedName {
     std::string prefix;
+    std::string suffix;
     std::string extension;
     std::uint32_t padding = 0;
     std::int64_t frame = 0;
 };
+// The frame number is the LAST run of digits anywhere in the stem; whatever surrounds it is the
+// member's identity. No naming convention is assumed (owner, 2026-09-15: "detect whatever the
+// format of the name is, as long as it detects sequence numbering with whatever pad digits"):
+// "shot.0001.png", "shot_0001.png", "shot0001.png", "0001.png" and "shot0001_left.png" are all
+// members, and the padding may differ between members.
 std::optional<NumberedName> numberedName(const std::filesystem::path& path) {
-    const auto stem = path.stem().string();
-    auto begin = stem.size();
-    while (begin > 0 && stem[begin - 1] >= '0' && stem[begin - 1] <= '9')
-        --begin;
-    // A stem that is ALL digits ("0000.png") is a numbered member with an empty prefix -- render
-    // farms emit exactly that -- so only a stem with no trailing digits at all is not numbered
-    // (owner, 2026-09-15: a pure-numeric sequence imported as individual images).
-    if (begin == stem.size())
+    auto extension = path.extension().string();
+    std::string lowered = extension;
+    std::ranges::transform(lowered, lowered.begin(), [](const unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    if (lowered != ".png" && lowered != ".jpg" && lowered != ".jpeg")
         return {};
-    const auto digits = std::string_view(stem).substr(begin);
+    const auto stem = path.stem().string();
+    const auto isDigit = [](const char ch) { return ch >= '0' && ch <= '9'; };
+    auto end = stem.size();
+    while (end > 0 && !isDigit(stem[end - 1]))
+        --end;
+    if (end == 0)
+        return {};
+    auto begin = end;
+    while (begin > 0 && isDigit(stem[begin - 1]))
+        --begin;
+    const auto digits = std::string_view(stem).substr(begin, end - begin);
     std::int64_t frame = 0;
     const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), frame);
     if (parsed.ec != std::errc{} || frame < 0)
         return {};
-    auto extension = path.extension().string();
-    if (extension != ".png" && extension != ".jpg" && extension != ".jpeg" && extension != ".PNG" &&
-        extension != ".JPG" && extension != ".JPEG")
-        return {};
-    return NumberedName{stem.substr(0, begin), extension, static_cast<std::uint32_t>(digits.size()),
-                        frame};
+    return NumberedName{stem.substr(0, begin), stem.substr(end), lowered,
+                        static_cast<std::uint32_t>(digits.size()), frame};
 }
 } // namespace
 ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
@@ -46,7 +57,8 @@ ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
         if (!name)
             return {std::move(manifest), {}};
         manifest.padding = name->padding;
-        manifest.pattern = name->prefix + std::string(name->padding, '#') + name->extension;
+        manifest.pattern =
+            name->prefix + std::string(name->padding, '#') + name->suffix + name->extension;
         std::error_code error;
         auto directory = path.parent_path();
         if (directory.empty())
@@ -55,6 +67,7 @@ ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
         if (error)
             return {{}, "Sequence directory is unreadable"};
         std::size_t count = 0;
+        bool mixedPadding = false;
         for (const auto end = std::filesystem::directory_iterator{}; iterator != end;
              iterator.increment(error)) {
             if (error)
@@ -65,12 +78,13 @@ ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
                 return {{}, "Sequence directory exceeds 100000 entries"};
             const auto candidate = numberedName(iterator->path());
             if (!candidate || candidate->prefix != name->prefix ||
-                candidate->extension != name->extension)
+                candidate->suffix != name->suffix || candidate->extension != name->extension)
                 continue;
-            if (candidate->padding != name->padding) {
-                manifest.diagnostics.emplace_back(
-                    "Sequence contains a different frame-number padding");
-                continue;
+            // Mixed padding stays in the sequence: the number is what identifies a frame, the
+            // padding is only how it was written. It is reported once so the artist knows.
+            if (candidate->padding != name->padding && !mixedPadding) {
+                mixedPadding = true;
+                manifest.diagnostics.emplace_back("Sequence mixes frame-number padding");
             }
             const auto probe = probeImage(iterator->path(), cancel);
             if (!probe.value.has_value())
