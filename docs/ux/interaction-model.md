@@ -239,6 +239,9 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | --- | --- |
 | Click layer chevron / collapsed key summary | Expand or collapse that layer / expand it to expose parameter lanes |
 | Inline parameter value / diamond | Commit through the Properties session setters / use the shared animate, add-key, remove-key gesture |
+| Click an upstream group chevron | Collapse or expand that value node's rows; the state is per layer and per node |
+| Inline value / diamond / key on an upstream row | Edit the VALUE NODE's own parameter, key it, and drag its keys exactly as a layer parameter's |
+| Click a driven row's driver link | Select the driving node and frame it in the node canvas |
 | Click key / Shift-click key | Select one / extend the session key selection across lanes |
 | Drag empty parameter lane / Shift-drag empty lane | Box-select keys across rows / add the box contents to the selection |
 | Drag selected key | Move the selected keys together; snap to frames, other keys, playhead and work-area edges |
@@ -300,10 +303,14 @@ New object names: `timelineSetWorkAreaStartAction`, `timelineSetWorkAreaEndActio
 including the hidden `layerParentDropdown`.
 
 Expanded layers contain Transform (Position, Anchor, Scale, Rotation), Appearance (Opacity,
-Blending), and the source node's animatable parameters (Solid Color; Text Size and Color). Each
-parameter occupies one row; vector components share that row. Expansion is per-layer editor state,
+Blending), the source node's animatable parameters (Solid Color; Text Size and Color), and one
+collapsible group per value node driving any of them, titled by that node's display name and holding
+that node's animatable parameters as ordinary rows. Each parameter occupies one row; vector
+components share that row, up to three. A driven parameter row shows its driver's name behind a link
+glyph and the resolved value read-only, with no editor and no diamond -- a driven parameter has no
+key of its own, and the key that moves it is the upstream row's. Expansion is per-layer editor state,
 cleared on composition changes, and is not saved. Collapsed summaries deduplicate coincident key
-times across the boundary and source parameters and only expand the layer when clicked.
+times across the boundary, source and upstream parameters and only expand the layer when clicked.
 
 A click on an already selected key keeps the set during a possible drag, then selects that one key
 on release if no drag occurred. Right-clicking a selected key preserves the set. Locked layers reject parameter and key edits. Batch gestures
@@ -326,7 +333,8 @@ inside `timelineLaneRegion`, with no separate panel beneath the layer stack. The
 `timelineKeyframeIndent` and `timelineKeyframeScrollGutter` wrappers are removed with that separate
 layout. New object names are `timelinePropertyRow`, `timelinePropertyLabel`,
 `timelinePropertyDiamond`, `timelinePropertyValue`, `timelinePropertyBlending`,
-`timelinePropertyColor`, `timelinePropertyComponent`, and `timelineKeyframeRow`.
+`timelinePropertyColor`, `timelinePropertyComponent`, and `timelineKeyframeRow`. The driven display
+adds `timelinePropertyDriven`, `timelinePropertyDriverLink` and `timelinePropertyDrivenValue`.
 
 ## Properties
 
@@ -347,8 +355,11 @@ layout. New object names are `timelinePropertyRow`, `timelinePropertyLabel`,
 | Click alignment segment | Set Left / Center / Right through the registered parameter |
 
 Upstream rows target their own parameter IDs; editing or keying them preserves the current
-selection. Driver results update from cancellable background evaluation at the current session
-time. A stale result cannot overwrite a newer selection, snapshot, or time. Collapsed section state
+selection. Driver results update from ONE cancellable background evaluation owned by the session and
+read by every surface that shows a driven value, at the current session time, so the Properties row
+and the timeline row for one parameter always show the same string. A driven String shows its
+resolved text read-only, exactly as every other kind shows its resolved value. A stale result cannot
+overwrite a newer selection, snapshot, or time. Collapsed section state
 is a UI preference; searching temporarily exposes matches without changing that preference.
 
 ## Retired Bindings
