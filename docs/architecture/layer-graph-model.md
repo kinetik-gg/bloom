@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-09-14
+Updated: 2026-09-15
 
 ## Purpose
 
@@ -33,12 +33,13 @@ same graph. Neither workflow is treated as a simplified import/export view of th
 
 ## Working Graph Shape
 
-A composition has one Output and any number of ordinary image Merge nodes:
+A composition has one Output and any number of ordinary image/audio Merge nodes:
 
 ```text
 Source -> Layer --+-> Merge A --+-> Merge B -> Output
 Source ----------+            |
 Source -> Layer --------------+
+Audio Source -> Layer --audio-+
 ```
 
 ### Layer Output
@@ -47,7 +48,7 @@ A `Layer Output` is an explicit graph node or equivalent first-class boundary th
 `LayerId`. It declares that one image-producing graph result participates as a layer and exposes the
 standard layer-facing property bindings that apply at that boundary.
 
-Its content input is OPTIONAL, and so is its stack slot. An artist wires a Layer node up by hand, so
+Its image content input is OPTIONAL, and so is its stack slot. An artist wires a Layer node up by hand, so
 "added but not yet fed" and "fed but not yet in the stack" are ordinary intermediate states, not
 compositions the compiler refuses to compile: an unfed Layer Output is classified as an empty image and
 draws nothing, and a Layer Output with no slot is simply unreachable from the composition output. The
@@ -62,23 +63,26 @@ copy or translate it.
 
 Merge (`bloom.layer-stack`, the preserved durable type ID) has `Many` cardinality. Each Merge
 owns an ordered collection of stable slots addressed by `(merge node ID, slot ID, content)`.
-Every slot has exactly one image edge. Layer Output, Solid, Text, another Merge, and image reroutes
-are valid sources. A slot records its direct Layer identity when its source is a Layer Output;
+Every slot has one image edge and may have one audio edge. Layer Output, Solid, Text, another Merge,
+image reroutes, and Audio source boundaries are valid sources for their respective typed ports. A
+slot records its direct Layer identity when its source is a Layer Output;
 plain image slots have no Layer identity. A Layer may participate once in each Merge, and membership
 is optional. An unconnected Layer contributes no pixels to Output.
 
 Entry zero is topmost, matching the pill and timeline. Evaluation folds the list bottom to top,
-preserving existing single-Merge documents exactly. Each Layer input supplies its own transform,
-opacity, blend mode, half-open range, enabled and solo state. Plain image inputs composite with
-Normal blending at full opacity. Merge inputs are topologically evaluated before their consumers.
-Merge outputs can feed a Layer image input. A direct source or Layer connection to Output is
+preserving existing single-Merge documents exactly. Each image Layer input supplies its own transform,
+opacity, blend mode, half-open range, enabled and solo state. Audio Layer inputs carry the same
+enabled, solo and range boundary, plus the source's start frame and level. Plain image inputs
+composite with Normal blending at full opacity. Merge inputs are topologically evaluated before
+their consumers. Merge outputs can feed a Layer image input; its audio output is the sum of its
+audio slots. A direct source or Layer connection to Output is
 normalized by a derived Normal Merge so the output remains a full composition image; this creates
 no document node or slot and does not change timeline membership.
 Nested grouping preserves the flattened result for Normal-over composition; arbitrary non-Normal
 blends are not associative and grouping may intentionally change their backdrop.
 
 Solo is composition-wide across all Layer boundaries: any solo Layer suppresses non-solo Layers in
-every Merge, including nested Merges. Plain image inputs have no solo flag and remain active.
+every image or audio Merge, including nested Merges. Plain image inputs have no solo flag and remain active.
 A disabled Merge produces transparency and does not traverse its inputs. Its enabled flag differs
 from node mute, whose existing first-image-input bypass semantics remain available.
 
@@ -968,3 +972,25 @@ Dropping an asset onto Nodes creates only the source. Dropping onto Timeline run
 source → Layer → a new ordered Merge slot, with the existing composition output retained. The
 same command creates all IDs and connections in one undoable transaction. Removing an asset
 leaves graph references intact so the artist can identify and relink the missing source.
+
+## Audio Sources And Layers
+
+`bloom.audio-source` v1 belongs to Sources and outputs the typed `audio` port. Its parameters are
+`asset` (a stable Audio `AssetId` encoded as String), `startFrame` (Integer), and `level` (animatable
+linear Scalar in `[0, 2]`, default `1`). An Audio source is a source, not a hidden image or a
+timeline-only payload. `AddAudioLayer` creates the source, Layer Output, stable Layer/slot IDs, the
+typed source-to-boundary and boundary-to-stack edges, and the stack-to-Output audio edge in one
+undoable transaction.
+
+Layer Output v4 adds optional `audio` input and output ports. The Layer Stack v2 adds one ordered
+audio input per slot and an `audio` output; Composition Output accepts the stack's summed audio. The
+image edge remains independent, so an audio-only Layer occupies a normal stable stack row without
+inventing transparent image pixels. Layer `enabled` is the audio mute state, `solo` is applied by
+the audio mixer with the same composition-wide rule as image layers, and the half-open Layer range
+limits the compiled audio description.
+
+The immutable compiled plan carries `CompiledAudioSource`, `CompiledAudioLayer`, and a
+`CompositionAudioMix` beside the image operations. `CpuCompositionEvaluator::evaluateAudioMix()`
+resolves the source identity, rational start time, sampled level, mute and solo state without
+touching decoded samples, a device, or the filesystem. The UI/audio boundary resolves those asset
+IDs to bounded planar buffers and hands `AudioClip` values to `AudioEngine`.

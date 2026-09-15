@@ -46,7 +46,7 @@ absolute file-URI hint supports local recovery, including the first Save As of a
 content-digest verification still applies. Relink records a fresh relative locator for portable
 packaging after such a move. Media is referenced, never embedded or silently copied.
 
-This slice does not add audio, movie containers, EXIF orientation, ICC interpretation, metadata
+This slice does not add movie containers, EXIF orientation, ICC interpretation, metadata
 round-tripping, external codec processes, or a general proxy service. Files are interpreted by
 the closed sRGB/override rule in `color-management.md`, not by embedded profiles. The broader
 research below does not supersede this implemented boundary.
@@ -304,8 +304,13 @@ frames actually written by the backend callback, the output rate, the rational p
 transport rate; it does not advance from wall-clock guesses. The transport follows this clock, so
 device callback cadence and any underrun remain visible in the authoritative position rather than
 creating a second drifting timeline. `play(at)`, `stop()`, `seek(at)`, and `setRate()` operate on
-the same rational transport state. A future synchronized viewer/timeline transport must consume
-this clock rather than drive audio from its own timer.
+the same rational transport state. AUDIO-2 connects this clock to the viewer/timeline transport. A
+revision-guarded UI audio session publishes the evaluator's device-free mix description, while the
+Asset Controller resolves decoded buffers on its blocking-I/O worker. `PlaybackController` replaces
+clips on publication, plays from the current rational session time, stops on pause or composition
+change, and follows `positionNow()` through `FrameTimeMapping` while audio is active. No backend or
+decoded sample is owned by the evaluator, and the wall-clock transport remains the fallback for an
+empty mix or unavailable device.
 
 ### 5. Proxies, Thumbnails, And Waveforms
 
@@ -317,6 +322,20 @@ allows it and records the consequence.
 
 Thumbnail and waveform generation share the same interpreted source and bounded task contracts.
 They do not run independent “quick” probes that can disagree with the Asset Registry.
+
+## Audio v1 Wiring (AUDIO-2)
+
+Audio assets are imported by the same atomic worker transaction as images. `probeAudio` supplies the
+persisted rate, channel count, frame count and exact duration; `decodeAudio` and `waveformSummary`
+run only on the blocking-I/O worker. The UI publishes a bounded waveform summary for Assets, the
+timeline bar and the audio source node card. Painting reads the immutable summary and never opens or
+decodes a file.
+
+The UI/audio boundary maps a compiled clip's stable asset ID to a published planar `AudioBuffer`
+before calling `AudioEngine::replaceClips`. Audio asset records, source parameters, layer flags and
+graph edges are project truth; decoded buffers, waveform summaries and device state are disposable
+runtime state. WAV/MP3 availability and the fallback behavior are the same on Linux, macOS and
+Windows; a missing or unreadable file shows an explicit warning and contributes no samples.
 
 ### Image-Sequence Assembly
 

@@ -490,6 +490,20 @@ to the frame demanded by total elapsed time. Both loop without accumulated float
 Neither clock waits for cache completion. Explicit RAM Preview is the mode that waits before starting
 playback.
 
+### Audio Clock Master
+
+When audio is enabled, a revision-valid `AudioMixDescription` has been published, and the audio
+backend starts successfully, `AudioEngine::positionNow()` is the playback master. It is derived from
+frames written by the backend callback, the rational play origin, the output rate and playback rate;
+the UI transport maps that exact position through `FrameTimeMapping` and never advances audio from
+its wall-clock timer. Pausing stops the engine, scrubbing seeks then pauses, and a composition or
+revision change clears the old clips before a new mix is accepted.
+
+If there is no resolved audio clip, audio playback is disabled, or the backend cannot start, the
+transport falls back to its existing wall-clock frame schedule. That fallback is explicit and keeps
+RAM Preview's frame-cache behavior unchanged. Mix publication is revision-guarded, so a completed
+worker plan cannot load clips for a newer document revision.
+
 ### Dropped-Frame Counter
 
 The Viewer footer reports "N dropped" during playback. The count includes frame indices skipped by

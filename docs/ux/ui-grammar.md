@@ -288,15 +288,17 @@ not a data migration. The legacy timeline colour-row adapter remains pending thi
 ## Image Assets And Source Cards
 
 Assets rows use `KRow` with a leading Chrome kind glyph: Composition (`film-slate`), Image
-(`image`), or Sequence (`images`). Kind text remains Composition, Image or Sequence [member count].
+(`image`), Sequence (`images`), or Audio (`music-notes`). Kind text remains Composition, Image,
+Sequence [member count], or Audio · duration.
 A missing/changed first member has a warning glyph; the context menu exposes Relink and Remove.
 The footer is four `KIconButton` controls with Chrome glyphs and exact tooltips New Composition,
 New Folder, Import, Delete. Folder authoring remains disabled because this slice adds no folder
 model; its button keeps the New Folder label. No media-pipeline placeholder tooltip remains.
 
 File > Import, footer Import and file drops onto Assets all prepare one worker import transaction.
-Dragging a media row to Nodes creates an Image source; dropping it on Timeline creates a wired
-Layer. Image source cards and Properties use an Asset `KDropdown` listing the project's Image
+Dragging an image/sequence row to Nodes creates an Image source; dragging an Audio row creates an
+Audio source. Dropping media on Timeline creates the matching wired Layer. Image source cards and
+Properties use an Asset `KDropdown` listing the project's Image
 and Sequence assets by filename or sequence pattern, with the kind glyph and Image / Sequence [n]
 text. Selection commits the stable asset id through the shared parameter setter. A removed id
 remains selected as **Missing asset**, in muted ink, with the id in its tooltip. An Image source
@@ -323,6 +325,18 @@ cancels without blocking the UI. Relative-brightness probes pin the decoded and 
 Automation names are `nodeImageAsset`, `nodeImageDimensions`, `nodeImageRange`,
 `propertiesImageAsset`, `propertiesImageLoopMode`, `propertiesImageColorSpace`,
 `propertiesImageDimensions`, and `propertiesImageRange`.
+
+Audio source cards reserve the same 72-pixel body cell for a waveform summary. The summary is
+decoded and bucketed on the worker; the card, Assets panel and timeline only paint its immutable
+min/max ranges. Audio source Properties reuse the asset `KDropdown`, expose Start Frame and a
+linear 0–2 `KSlider` with its `KDiamond`, and show read-only duration, sample rate and channel
+count. The `Audio` socket uses its own `SocketAudio` token, separate from Image and Accent.
+
+Audio timeline rows use `DataAudio` for their clip bar and paint the published bucket ranges with
+that token's ink. Their speaker cell is a live mute command backed by the Layer `enabled` flag;
+image, solid and text rows hide that speaker control entirely rather than showing a disabled
+placeholder. Solo and range remain the same Layer semantics as other rows. An unavailable audio
+file shows the warning glyph and remains relinkable from Assets.
 
 New Composition and the composition Properties section expose a `KColorChip` Background Colour.
 Viewer Solid mode paints that authored RGBA colour, initially opaque black. Black, White and
