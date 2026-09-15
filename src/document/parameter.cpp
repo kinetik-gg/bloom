@@ -38,7 +38,14 @@ namespace {
                 }
                 return true;
             } else if constexpr (std::is_same_v<Source, bloom::document::AnimationCurveSource>) {
-                return valueSource.curveId.isValid();
+                if (!valueSource.curveId.isValid()) {
+                    return false;
+                }
+                if (!valueSource.defaultValue.has_value()) {
+                    return true;
+                }
+                const bloom::document::ConstantValueSource fallback{*valueSource.defaultValue};
+                return isGenericallyValidSource(bloom::document::ParameterSource{fallback});
             } else {
                 // A driver names a node and one of its output ports. Whether that node EXISTS and
                 // whether its kind fits belongs to CanonicalGraph::validate(), which can see the
@@ -232,6 +239,14 @@ constantMatchesSchema(const std::string_view schemaKey,
     }
     if (const auto* constant = std::get_if<bloom::document::ConstantValueSource>(&source)) {
         return constantMatchesSchema(schemaKey, *constant);
+    }
+
+    if (const auto* animation = std::get_if<bloom::document::AnimationCurveSource>(&source)) {
+        if (!animation->defaultValue.has_value()) {
+            return true;
+        }
+        return constantMatchesSchema(
+            schemaKey, bloom::document::ConstantValueSource{*animation->defaultValue});
     }
 
     // Composition validation owns typed curve resolution because a ParameterStore cannot inspect

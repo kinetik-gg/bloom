@@ -82,8 +82,14 @@ struct TargetDeclarations final {
             declarations.animationCurves.insert(animationCurveId(record));
             std::visit(
                 [&declarations](const auto& curve) {
-                    for (const auto& keyframe : curve.keyframes) {
-                        declarations.keyframes.insert(keyframe.id);
+                    using Curve = std::decay_t<decltype(curve)>;
+                    if constexpr (std::is_same_v<Curve, ScalarAnimationCurve>) {
+                        for (const auto& keyframe : curve.keyframes)
+                            declarations.keyframes.insert(keyframe.id);
+                    } else {
+                        for (const auto& component : curve.components)
+                            for (const auto& keyframe : component.keyframes)
+                                declarations.keyframes.insert(keyframe.id);
                     }
                 },
                 record);

@@ -168,9 +168,9 @@ void migrationProof() {
                 document::CommitStatus::Committed,
             "legacy fixture commits");
     auto bytes = encode(doc.snapshot());
-    const auto version = bytes.find("\"minor\": 8");
+    const auto version = bytes.find("\"minor\": 9");
     require(version != std::string::npos, "root version pinned");
-    bytes.replace(version, std::string_view("\"minor\": 8").size(), "\"minor\": 6");
+    bytes.replace(version, std::string_view("\"minor\": 9").size(), "\"minor\": 6");
     auto operation = memory();
     const auto dom = project::parseStrictJsonDom(std::as_bytes(std::span(bytes)), {}, operation);
     require(static_cast<bool>(dom), "1.6 DOM parses");

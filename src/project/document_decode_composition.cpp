@@ -56,10 +56,12 @@ using detail::joinPathIndex;
 using detail::mapRationalError;
 using detail::matchOrderedMembers;
 
+using document::AnimationComponent;
 using document::AnimationCurveId;
 using document::AnimationCurveRecord;
 using document::Color4AnimationCurve;
 using document::Color4Keyframe;
+using document::ComponentAnimationCurve;
 using document::EdgeId;
 using document::EdgeRecord;
 using document::InputPortRef;
@@ -82,6 +84,7 @@ using document::ScalarKeyframe;
 using document::Vec2AnimationCurve;
 using document::Vec2d;
 using document::Vec2Keyframe;
+using document::Vec3AnimationCurve;
 using document::Vec3d;
 
 // Not noexcept: DecodeState::fail() takes its path argument by value, so a failing call here copies
@@ -310,16 +313,30 @@ using document::Vec3d;
         return true;
     }
     if (kindText == "animation-curve") {
-        static constexpr std::array<std::string_view, 2> keys{"kind", "curveId"};
+        static constexpr std::array<std::string_view, 2> legacyKeys{"kind", "curveId"};
+        static constexpr std::array<std::string_view, 3> componentKeys{"kind", "curveId",
+                                                                       "defaultValue"};
         std::vector<const JsonValue*> members;
-        if (!matchOrderedMembers(node, keys, true, state, path, members)) {
+        const bool hasDefault =
+            state.documentMinor >= 9 && node.findMember("defaultValue") != nullptr;
+        if (hasDefault) {
+            if (!matchOrderedMembers(node, componentKeys, true, state, path, members))
+                return false;
+        } else if (!matchOrderedMembers(node, legacyKeys, true, state, path, members)) {
             return false;
         }
         AnimationCurveId curveId;
         if (!decodeObjectId(*members[1], state, joinPath(path, "curveId"), curveId)) {
             return false;
         }
-        out = document::AnimationCurveSource{curveId};
+        std::optional<ParameterValue> defaultValue;
+        if (hasDefault) {
+            ParameterValue value;
+            if (!decodeConstantValue(*members[2], state, joinPath(path, "defaultValue"), value))
+                return false;
+            defaultValue = std::move(value);
+        }
+        out = document::AnimationCurveSource{curveId, std::move(defaultValue)};
         return true;
     }
     if (kindText == "driver" && state.documentMinor >= 4) {
@@ -626,6 +643,111 @@ using document::Vec3d;
     return true;
 }
 
+[[nodiscard]] std::optional<AnimationComponent>
+componentFromText(const std::string_view text) noexcept {
+    if (text == "x")
+        return AnimationComponent::X;
+    if (text == "y")
+        return AnimationComponent::Y;
+    if (text == "z")
+        return AnimationComponent::Z;
+    if (text == "red")
+        return AnimationComponent::Red;
+    if (text == "green")
+        return AnimationComponent::Green;
+    if (text == "blue")
+        return AnimationComponent::Blue;
+    if (text == "alpha")
+        return AnimationComponent::Alpha;
+    return std::nullopt;
+}
+
+template <std::size_t Count>
+[[nodiscard]] bool decodeComponentKeyframe(const JsonValue& node, DecodeState& state,
+                                           const std::string& path,
+                                           const std::array<AnimationComponent, Count>& allowed,
+                                           AnimationComponent& component, ScalarKeyframe& out) {
+    static constexpr std::array<std::string_view, 5> keys{"id", "component", "time", "value",
+                                                          "outgoingInterpolation"};
+    std::vector<const JsonValue*> members;
+    std::vector<RetainedJsonMember> trailing;
+    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing))
+        return false;
+
+    document::KeyframeId id;
+    if (!decodeObjectId(*members[0], state, joinPath(path, "id"), id))
+        return false;
+    std::string_view componentText;
+    if (!decodeStringMember(*members[1], state, joinPath(path, "component"), componentText))
+        return false;
+    const auto parsedComponent = componentFromText(componentText);
+    if (!parsedComponent.has_value() ||
+        std::find(allowed.begin(), allowed.end(), *parsedComponent) == allowed.end()) {
+        state.fail(DocumentDecodeError::UnsupportedParameterSource, joinPath(path, "component"));
+        return false;
+    }
+    core::RationalTime time;
+    if (!decodeRationalTimeValue(*members[2], state, joinPath(path, "time"), time))
+        return false;
+    double value = 0.0;
+    if (!decodeFloat64Member(*members[3], state, joinPath(path, "value"), value))
+        return false;
+    KeyframeInterpolation interpolation = KeyframeInterpolation::Linear;
+    if (!decodeInterpolation(*members[4], state, joinPath(path, "outgoingInterpolation"),
+                             interpolation))
+        return false;
+
+    const AttachmentScope keyframeScope(state, RoundTripCollectionKind::Keyframe,
+                                        std::to_string(id.value()));
+    if (!trailing.empty() && state.roundTrip != nullptr)
+        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
+    component = *parsedComponent;
+    out = ScalarKeyframe{id, time, value, interpolation};
+    return true;
+}
+
+template <std::size_t Count>
+[[nodiscard]] bool
+decodeComponentKeyframeArray(const JsonValue& node, DecodeState& state, const std::string& path,
+                             const std::array<AnimationComponent, Count>& allowed,
+                             std::array<ComponentAnimationCurve, Count>& out) {
+    if (node.kind() != JsonValueKind::Array) {
+        state.fail(DocumentDecodeError::WrongValueKind, path);
+        return false;
+    }
+    const auto elements = node.arrayElements();
+    if (elements.empty()) {
+        state.fail(DocumentDecodeError::EmptyKeyframes, path);
+        return false;
+    }
+    for (auto& component : out)
+        component.keyframes.clear();
+    for (std::size_t index = 0; index < elements.size(); ++index) {
+        AnimationComponent component;
+        ScalarKeyframe keyframe;
+        if (!decodeComponentKeyframe(elements[index], state, joinPathIndex(path, index), allowed,
+                                     component, keyframe))
+            return false;
+        const auto componentIndex = static_cast<std::size_t>(
+            std::find(allowed.begin(), allowed.end(), component) - allowed.begin());
+        auto& keys = out[componentIndex].keyframes;
+        if (!keys.empty() && !(keys.back().time < keyframe.time)) {
+            state.fail(DocumentDecodeError::NonIncreasingKeyframeTime,
+                       joinPathIndex(path, index) + ".time");
+            return false;
+        }
+        keys.push_back(std::move(keyframe));
+    }
+    for (const auto& component : out) {
+        if (!component.keyframes.empty() &&
+            component.keyframes.back().outgoingInterpolation != KeyframeInterpolation::Linear) {
+            state.fail(DocumentDecodeError::FinalKeyframeNotLinear, path);
+            return false;
+        }
+    }
+    return true;
+}
+
 // Shared keyframe-array shape: non-empty, strictly increasing exact rational time, and a
 // canonical Linear final interpolation (docs/architecture/project-format.md, "Animation").
 template <typename Keyframe, typename DecodeOne>
@@ -711,10 +833,33 @@ template <typename Keyframe, typename DecodeOne>
         }
         Vec2AnimationCurve curve;
         curve.id = id;
-        if (!decodeKeyframeArray(*members[2], state, joinPath(path, "keyframes"), curve.keyframes,
-                                 decodeVec2Keyframe)) {
+        const auto& keyElements = members[2]->arrayElements();
+        const bool componentAware =
+            !keyElements.empty() && keyElements.front().findMember("component") != nullptr;
+        if (state.documentMinor >= 9 && componentAware) {
+            if (!decodeComponentKeyframeArray(
+                    *members[2], state, joinPath(path, "keyframes"),
+                    std::array{AnimationComponent::X, AnimationComponent::Y}, curve.components))
+                return false;
+        } else if (!decodeKeyframeArray(*members[2], state, joinPath(path, "keyframes"),
+                                        curve.keyframes, decodeVec2Keyframe)) {
             return false;
         }
+        out = std::move(curve);
+        return true;
+    }
+    if (kindText == "vec3" && state.documentMinor >= 9) {
+        static constexpr std::array<std::string_view, 3> keys{"id", "kind", "keyframes"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        Vec3AnimationCurve curve;
+        curve.id = id;
+        if (!decodeComponentKeyframeArray(
+                *members[2], state, joinPath(path, "keyframes"),
+                std::array{AnimationComponent::X, AnimationComponent::Y, AnimationComponent::Z},
+                curve.components))
+            return false;
         out = std::move(curve);
         return true;
     }
@@ -727,8 +872,18 @@ template <typename Keyframe, typename DecodeOne>
         }
         Color4AnimationCurve curve;
         curve.id = id;
-        if (!decodeKeyframeArray(*members[2], state, joinPath(path, "keyframes"), curve.keyframes,
-                                 decodeColor4Keyframe)) {
+        const auto& keyElements = members[2]->arrayElements();
+        const bool componentAware =
+            !keyElements.empty() && keyElements.front().findMember("component") != nullptr;
+        if (state.documentMinor >= 9 && componentAware) {
+            if (!decodeComponentKeyframeArray(
+                    *members[2], state, joinPath(path, "keyframes"),
+                    std::array{AnimationComponent::Red, AnimationComponent::Green,
+                               AnimationComponent::Blue, AnimationComponent::Alpha},
+                    curve.components))
+                return false;
+        } else if (!decodeKeyframeArray(*members[2], state, joinPath(path, "keyframes"),
+                                        curve.keyframes, decodeColor4Keyframe)) {
             return false;
         }
         out = std::move(curve);

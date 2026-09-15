@@ -1,12 +1,16 @@
 #include <bloom/project/document_migration.hpp>
 
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <bloom/core/rational_interval.hpp>
+#include <bloom/core/scalar_primitives.hpp>
+#include <bloom/document/animation.hpp>
 #include <bloom/document/schema_version.hpp>
 #include <bloom/project/canonical_decimal.hpp>
 #include <bloom/project/canonical_json_writer.hpp>
 #include <bloom/project/project_io_memory.hpp>
 #include <bloom/project/strict_json_dom.hpp>
-
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -40,9 +44,11 @@
 namespace {
 
 using bloom::document::SchemaVersion;
+namespace document = bloom::document;
 using bloom::project::CanonicalJsonWriter;
 using bloom::project::JsonValue;
 using bloom::project::JsonValueKind;
+using bloom::project::kProductionDocumentMigrationSteps;
 using bloom::project::migrateDocumentDom;
 using bloom::project::MigrationError;
 using bloom::project::MigrationOutcome;
@@ -567,6 +573,143 @@ void testBudgetExhaustion(Expectations& expectations) {
                         "operation handle are gone");
 }
 
+struct ProofScalarKeyframe final {
+    bloom::core::RationalTime time;
+    double value = 0.0;
+    document::KeyframeInterpolation outgoingInterpolation = document::KeyframeInterpolation::Linear;
+};
+
+[[nodiscard]] double proofMix(const double left, const double right, const double factor) {
+    const std::array inputs{left, right, factor};
+    const auto result = bloom::core::primitives::evaluateScalar(
+        bloom::core::primitives::ScalarPrimitive::Mix, inputs);
+    if (!result || result.value() == nullptr) {
+        std::abort();
+    }
+    return *result.value();
+}
+
+[[nodiscard]] double proofEase(const double factor) {
+    const std::array inputs{0.0, 1.0, factor};
+    const auto result = bloom::core::primitives::evaluateScalar(
+        bloom::core::primitives::ScalarPrimitive::Smoothstep, inputs);
+    if (!result || result.value() == nullptr) {
+        std::abort();
+    }
+    return *result.value();
+}
+
+[[nodiscard]] double sampleProofScalar(const std::span<const ProofScalarKeyframe> keyframes,
+                                       const bloom::core::RationalTime time) {
+    if (keyframes.empty()) {
+        std::abort();
+    }
+    if (time <= keyframes.front().time) {
+        return keyframes.front().value;
+    }
+    if (time >= keyframes.back().time) {
+        return keyframes.back().value;
+    }
+    const auto right = std::upper_bound(
+        keyframes.begin(), keyframes.end(), time,
+        [](const auto requested, const auto& keyframe) { return requested < keyframe.time; });
+    const auto& left = *(right - 1);
+    if (time == left.time || left.outgoingInterpolation == document::KeyframeInterpolation::Hold) {
+        return left.value;
+    }
+    const auto factor = bloom::core::rationalIntervalFactor(time, left.time, right->time);
+    if (!factor || factor.value() == nullptr) {
+        std::abort();
+    }
+    auto shared = *factor.value();
+    if (left.outgoingInterpolation == document::KeyframeInterpolation::EaseInOut) {
+        shared = proofEase(shared);
+    }
+    return proofMix(left.value, right->value, shared);
+}
+
+[[nodiscard]] document::Vec2d sampleProofVec2(const std::span<const ProofScalarKeyframe> x,
+                                              const std::span<const ProofScalarKeyframe> y,
+                                              const bloom::core::RationalTime time) {
+    return {sampleProofScalar(x, time), sampleProofScalar(y, time)};
+}
+
+void testAnimationComponentMigrationPreservesSampling(Expectations& expectations) {
+    constexpr std::string_view fixture = R"({
+        "schemaVersion":{"major":1,"minor":8},
+        "idAllocation":{"highestIssued":{"keyframe":"3"}},
+        "project":{"compositions":[{"animationCurves":[{"id":"9","kind":"vec2",
+        "keyframes":[
+          {"id":"1","time":{"numerator":0,"denominator":1},
+           "value":{"x":-0.25,"y":2.5},"outgoingInterpolation":"ease-in-out"},
+          {"id":"2","time":{"numerator":7,"denominator":3},
+           "value":{"x":1.25,"y":-1.5},"outgoingInterpolation":"linear"}
+        ]}]}]}
+    })";
+    auto operation = makeOperation(64ULL << 20U);
+    auto parsed = parseFixture(fixture, operation);
+    expectations.expect(static_cast<bool>(parsed), "component migration: fixture parses");
+    if (!parsed)
+        return;
+    const auto migrated =
+        migrateDocumentDom(parsed.document()->root(), SchemaVersion{1, 8}, SchemaVersion{1, 9},
+                           kProductionDocumentMigrationSteps, StrictJsonDomLimits{}, operation);
+    expectations.expect(migrated.outcome() == MigrationOutcome::Migrated &&
+                            migrated.stepsApplied() == 1,
+                        "component migration: the 1.8 -> 1.9 step runs once");
+    const auto* root = migrated.migratedRoot();
+    expectations.expect(root != nullptr, "component migration: migrated DOM is present");
+    if (root == nullptr)
+        return;
+    const auto* allocation = root->findMember("idAllocation");
+    const auto* highest = allocation == nullptr ? nullptr : allocation->findMember("highestIssued");
+    const auto* highestKey = highest == nullptr ? nullptr : highest->findMember("keyframe");
+    expectations.expect(highestKey != nullptr && highestKey->asString() == "5",
+                        "component migration: high water reserves the deterministic split IDs");
+    const auto* project = root->findMember("project");
+    const auto* compositions = project == nullptr ? nullptr : project->findMember("compositions");
+    const auto* composition = compositions == nullptr || compositions->arrayElements().empty()
+                                  ? nullptr
+                                  : &compositions->arrayElements().front();
+    const auto* curves =
+        composition == nullptr ? nullptr : composition->findMember("animationCurves");
+    const auto* curve = curves == nullptr || curves->arrayElements().empty()
+                            ? nullptr
+                            : &curves->arrayElements().front();
+    const auto* keys = curve == nullptr ? nullptr : curve->findMember("keyframes");
+    expectations.expect(keys != nullptr && keys->arrayElements().size() == 4,
+                        "component migration: every legacy Vec2 key becomes two scalar keys");
+    if (keys == nullptr || keys->arrayElements().size() != 4)
+        return;
+    expectations.expect(
+        keys->arrayElements()[0].findMember("component")->asString() == "x" &&
+            keys->arrayElements()[1].findMember("component")->asString() == "y" &&
+            keys->arrayElements()[0].findMember("id")->asString() == "1" &&
+            keys->arrayElements()[1].findMember("id")->asString() == "5",
+        "component migration: X keeps the legacy identity and Y uses the reserved ID");
+
+    const auto zero = bloom::core::RationalTime::fromInteger(0);
+    const auto sevenThirds = bloom::core::RationalTime::create(7, 3).value_or(zero);
+    const std::array legacyX{
+        ProofScalarKeyframe{zero, -0.25, document::KeyframeInterpolation::EaseInOut},
+        ProofScalarKeyframe{sevenThirds, 1.25, document::KeyframeInterpolation::Linear}};
+    const std::array legacyY{
+        ProofScalarKeyframe{zero, 2.5, document::KeyframeInterpolation::EaseInOut},
+        ProofScalarKeyframe{sevenThirds, -1.5, document::KeyframeInterpolation::Linear}};
+    const auto componentX = legacyX;
+    const auto componentY = legacyY;
+    const auto sameBits = [](const double left, const double right) {
+        return std::bit_cast<std::uint64_t>(left) == std::bit_cast<std::uint64_t>(right);
+    };
+    for (const auto sampleTime :
+         {zero, bloom::core::RationalTime::create(1, 3).value_or(zero), sevenThirds}) {
+        const auto before = sampleProofVec2(legacyX, legacyY, sampleTime);
+        const auto after = sampleProofVec2(componentX, componentY, sampleTime);
+        expectations.expect(sameBits(before.x, after.x) && sameBits(before.y, after.y),
+                            "component migration: migrated component sampling is bit-identical");
+    }
+}
+
 } // namespace
 
 int main() try {
@@ -580,6 +723,7 @@ int main() try {
     testStepFailurePropagatesPath(expectations);
     testStrictReparseRejectsInvalidStepOutput(expectations);
     testBudgetExhaustion(expectations);
+    testAnimationComponentMigrationPreservesSampling(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 } catch (const std::exception& exception) {
     std::cerr << "FAILED: unexpected exception: " << exception.what() << '\n';
