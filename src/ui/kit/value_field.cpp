@@ -227,13 +227,9 @@ QRectF KValueField::labelRect() const {
 
 QRectF KValueField::cellRect() const {
     const qreal left = compact_ || label_.isEmpty() ? 0.0 : labelColumnWidth() + px(Spacing::S);
-    // The whole remaining width and the WHOLE height. This cell reserves no focus-ring strip: its
-    // focus affordance is its own single border (kit::borderForInteraction), stroked on the cell's
-    // own edge, so a margin outside that edge would be reserved for something nothing draws. An
-    // earlier revision reserved kFocusRingWidth top and bottom, and hosted inside a
-    // QGraphicsProxyWidget on a node card that unpainted strip read as a darker band above and
-    // below every field.
-    return {left, 0.0, std::max(0.0, width() - left), static_cast<qreal>(height())};
+    const auto margin = px(Spacing::FieldMargin);
+    return QRectF(left, 0.0, std::max(0.0, width() - left), height())
+        .adjusted(margin, margin, -margin, -margin);
 }
 
 QRectF KValueField::cellTextRect() const {

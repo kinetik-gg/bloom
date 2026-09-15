@@ -356,13 +356,13 @@ QString NodeGraphEditor::addNodeRefusal(const std::string& typeId) const {
 
 void NodeGraphEditor::populateAddMenu(QMenu* menu,
                                       std::vector<std::pair<QAction*, std::string>>* recordInto) {
-    for (const auto category : nodeCategoryOrder()) {
+    for (const auto& category : nodeCategoryOrder()) {
         std::vector<const document::NodeDefinition*> section;
         for (const auto& definition : document::builtInNodeDefinitions().definitions())
             // Task FIX1, item I: a reroute is a point on a LINK, made by right-clicking the link or
             // dragging across it. It is not something to pick out of a menu and then find a use
             // for, so it is listed in neither Add surface.
-            if (definition.category == category &&
+            if (nodeCategoryName(definition) == category &&
                 !document::isRerouteNodeType(definition.key.typeId))
                 section.push_back(&definition);
         if (section.empty())
@@ -370,7 +370,9 @@ void NodeGraphEditor::populateAddMenu(QMenu* menu,
         std::ranges::sort(section, [](const auto* left, const auto* right) {
             return nodeTypeDisplayName(left->key.typeId) < nodeTypeDisplayName(right->key.typeId);
         });
-        auto* sectionMenu = menu->addMenu(nodeCategoryName(category));
+        auto* sectionMenu = kit::makeMenu(nodeCategoryName(category), menu);
+        sectionMenu->setProperty("columnFlow", true);
+        menu->addMenu(sectionMenu);
         sectionMenu->setObjectName(QStringLiteral("nodeAddCategoryMenu.") +
                                    nodeCategoryName(category));
         for (const auto* candidate : section) {
@@ -650,11 +652,11 @@ void NodeGraphEditor::openAddSearch(const QPointF scenePosition, const QPoint sc
     // Listed in the category order the sections are read in, and alphabetically inside each one.
     // The registry's own order is by type id, which is neither.
     std::vector<const document::NodeDefinition*> ordered;
-    for (const auto category : nodeCategoryOrder()) {
+    for (const auto& category : nodeCategoryOrder()) {
         std::vector<const document::NodeDefinition*> section;
         for (const auto& definition : document::builtInNodeDefinitions().definitions())
             // The reroute is hidden here for the same reason it is hidden from the Add submenu.
-            if (definition.category == category &&
+            if (nodeCategoryName(definition) == category &&
                 !document::isRerouteNodeType(definition.key.typeId))
                 section.push_back(&definition);
         std::ranges::sort(section, [](const auto* left, const auto* right) {
@@ -687,7 +689,7 @@ void NodeGraphEditor::openAddSearch(const QPointF scenePosition, const QPoint sc
             refusal = tr("Node command submission is unavailable");
         entries.push_back({QString::fromStdString(definition.key.typeId),
                            nodeTypeDisplayName(definition.key.typeId), keywords, refusal,
-                           nodeCategoryName(definition.category)});
+                           nodeCategoryName(definition)});
     }
     search_->setEntries(std::move(entries));
     search_->openAt(screenPosition);
@@ -999,7 +1001,11 @@ void NodeGraphEditor::refreshSelectionReadout() {
     if (footerSelectionLabel_ == nullptr) {
         return;
     }
-    footerSelectionLabel_->setText(tr("%1 nodes").arg(session_.selectedNodes().size()));
+    footerSelectionLabel_->setText(session_.selectedNodes().empty()
+                                       ? QString{}
+                                       : tr("%1 nodes").arg(session_.selectedNodes().size()));
+    footerSelectionLabel_->setProperty("chromeSuppressed", session_.selectedNodes().empty());
+    footerSelectionLabel_->setVisible(!session_.selectedNodes().empty());
 }
 
 void NodeGraphEditor::buildFooter() {
@@ -1040,7 +1046,7 @@ void NodeGraphEditor::buildFooter() {
     connect(snapSwitch, &kit::KSwitch::toggled, this,
             [this](bool checked) { applyGridSnap(checked); });
     footerSnapSwitch_ = snapSwitch;
-    layout->addWidget(snapSwitch);
+    snapSwitch->hide();
 
     footerLinkStyleDropdown_ = new kit::KDropdown(this);
     footerLinkStyleDropdown_->setObjectName(QStringLiteral("nodeLinkStyleDropdown"));
@@ -1058,7 +1064,7 @@ void NodeGraphEditor::buildFooter() {
                 applyLinkStyle(
                     static_cast<LinkStyle>(footerLinkStyleDropdown_->itemData(index).toInt()));
             });
-    layout->addWidget(footerLinkStyleDropdown_);
+    footerLinkStyleDropdown_->hide();
 
     layout->addStretch(1);
 

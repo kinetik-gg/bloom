@@ -34,8 +34,8 @@ void pressKeyAtFocus(App& a, const Qt::Key key) {
 }
 
 [[nodiscard]] QPointF centreOf(const QWidget* widget) {
-    return widget->graphicsProxyWidget()->mapToScene(
-        widget->graphicsProxyWidget()->boundingRect().center());
+    return widget->window()->graphicsProxyWidget()->mapToScene(
+        widget->mapTo(widget->window(), QPointF(widget->rect().center())));
 }
 } // namespace
 
@@ -75,9 +75,9 @@ int main(int argc, char** argv) {
             QCoreApplication::processEvents();
             auto* row = qobject_cast<kit::KValueField*>(a.editor.graphScene()->nodeFieldForTest(
                 layer, QStringLiteral("nodePositionXEditor")));
-            expect(row != nullptr && row->graphicsProxyWidget() != nullptr,
+            expect(row != nullptr && row->window()->graphicsProxyWidget() != nullptr,
                    "the Layer card hosts a value row");
-            if (row != nullptr && row->graphicsProxyWidget() != nullptr) {
+            if (row != nullptr && row->window()->graphicsProxyWidget() != nullptr) {
                 // Click it (the editor opens with the number selected), type, commit with Enter.
                 const QPointF cell = centreOf(row);
                 a.press(cell);
@@ -111,7 +111,7 @@ int main(int argc, char** argv) {
             auto* field = a.editor.graphScene()->nodeFieldForTest(
                 text, QStringLiteral("nodeTextContentEditor"));
             expect(field != nullptr, "the text card hosts a string field");
-            if (field != nullptr && field->graphicsProxyWidget() != nullptr) {
+            if (field != nullptr && field->window()->graphicsProxyWidget() != nullptr) {
                 const QPointF cell = centreOf(field);
                 a.press(cell);
                 a.release(cell);

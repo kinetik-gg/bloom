@@ -35,7 +35,8 @@ namespace {
 class ChromeRow final : public QWidget {
   public:
     ChromeRow(const EditorChromeRowSpec& spec, QWidget* parent, bool footer)
-        : QWidget(parent), entries_(spec.entries) {
+        : QWidget(parent), entries_(spec.entries),
+          padding_(footer ? kit::px(kit::Spacing::ChromePadding) : 0) {
         setObjectName(spec.objectName);
         setFixedHeight(kit::px(footer ? kit::Size::FooterRow : kit::Size::Control));
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -52,6 +53,11 @@ class ChromeRow final : public QWidget {
             }
             if (auto* dropdown = qobject_cast<kit::KDropdown*>(entry.control))
                 dropdown->setControlSize(kit::KDropdown::ControlSize::Default);
+            if (auto* dropdown = qobject_cast<kit::KDropdown*>(entry.control)) {
+                const auto minimum = dropdown->minimumSizeHint().width();
+                dropdown->setMaximumWidth(std::max(minimum, dropdown->maximumWidth()));
+                dropdown->setMinimumWidth(minimum);
+            }
             entry.control->setFixedHeight(kit::px(kit::Size::Control));
             entry.control->setProperty("chromeControl", true);
             entry.control->setVisible(entry.visible);
@@ -83,14 +89,14 @@ class ChromeRow final : public QWidget {
   private:
     int preferred(QWidget* control) const {
         return std::clamp(control->sizeHint().width(), control->minimumWidth(),
-                          control->maximumWidth());
+                          std::max(control->minimumWidth(), control->maximumWidth()));
     }
     int measure() const {
-        int needed = 0;
+        int needed = 2 * padding_;
         for (const auto& entry : entries_)
-            if (entry.visible)
-                needed += preferred(entry.control) + kit::px(kit::Spacing::XXS);
-        return needed;
+            if (entry.visible && !entry.control->property("chromeSuppressed").toBool())
+                needed += preferred(entry.control) + kit::px(kit::Spacing::ChromeGap);
+        return std::max(2 * padding_, needed - kit::px(kit::Spacing::ChromeGap));
     }
     void arrange() {
         if (arranging_)
@@ -103,7 +109,9 @@ class ChromeRow final : public QWidget {
         setProperty("collapsed", collapsed_);
         QList<QWidget*> visible;
         for (auto& entry : entries_) {
-            const bool show = entry.visible && !(collapsed_ && entry.menu);
+            const bool show = entry.visible &&
+                              !entry.control->property("chromeSuppressed").toBool() &&
+                              !(collapsed_ && entry.menu);
             entry.control->setVisible(show);
             if (show)
                 visible.push_back(entry.control);
@@ -113,12 +121,13 @@ class ChromeRow final : public QWidget {
             if (collapsed_)
                 visible.push_back(overflow_);
         }
-        int remaining = width() - std::max(0, static_cast<int>(visible.size()) - 1) *
-                                      kit::px(kit::Spacing::XXS);
+        int remaining =
+            width() - padding_ - padding_ -
+            std::max(0, static_cast<int>(visible.size()) - 1) * kit::px(kit::Spacing::ChromeGap);
         int total = 0;
         for (auto* control : visible)
             total += preferred(control);
-        int x = 0;
+        int x = padding_;
         bool trailingPlaced = false;
         for (auto* control : visible) {
             const bool trailing = std::ranges::any_of(entries_, [control](const auto& entry) {
@@ -144,13 +153,14 @@ class ChromeRow final : public QWidget {
             if (fits)
                 control->setGeometry(x, std::midpoint(0, height() - kit::px(kit::Size::Control)),
                                      extent, kit::px(kit::Size::Control));
-            x += extent + kit::px(kit::Spacing::XXS);
+            x += extent + kit::px(kit::Spacing::ChromeGap);
             remaining -= extent;
         }
         arranging_ = false;
     }
     std::vector<EditorChromeRowSpec::Entry> entries_;
     kit::KMenuButton* overflow_ = nullptr;
+    int padding_ = 0;
     bool collapsed_ = false;
     bool arranging_ = false;
 };
@@ -193,6 +203,7 @@ QWidget* EditorArea::buildSplitChrome(QWidget* left, QWidget* right, int split, 
     leadingLayout->setContentsMargins(0, 0, 0, 0);
     leadingLayout->addWidget(left);
     layout->addWidget(leading);
+    layout->addSpacing(kit::px(kit::Size::TimelineSeparator));
     layout->addWidget(right, 1);
     return row;
 }

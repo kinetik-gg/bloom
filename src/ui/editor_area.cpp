@@ -119,9 +119,9 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     // reused on all four edges now that the switcher and the header button are no longer sized
     // off the header's own margins); contents are explicitly vertically centered below rather
     // than relying on margin arithmetic to land them in the 48px row (Size::EditorHeader).
-    const auto headerPadding = kit::px(kit::Spacing::PanelHeader);
-    headerLayout->setContentsMargins(headerPadding, 0, headerPadding, 0);
-    headerLayout->setSpacing(kit::px(kit::Spacing::XXS));
+    const auto headerPadding = kit::px(kit::Spacing::ChromePadding);
+    headerLayout->setContentsMargins(headerPadding, headerPadding, headerPadding, headerPadding);
+    headerLayout->setSpacing(kit::px(kit::Spacing::ChromeGap));
     header_->setFixedHeight(kit::px(kit::Size::HeaderRow));
 
     // task U8, issue #131, formal amendment 2, A7/A8: a purpose-built kit switcher, not a
@@ -368,9 +368,13 @@ void EditorArea::rebuildEditor(int editorIndex) {
     }
 
     if (headerRight_ != nullptr) {
+        maximizeButton_->setParent(headerLeft_);
+        headerLayout_->addWidget(maximizeButton_);
         headerCellsLayout_->removeWidget(headerRight_);
         delete headerRight_;
         headerRight_ = nullptr;
+        if (headerCellsLayout_->count() > 1)
+            delete headerCellsLayout_->takeAt(1);
     }
     headerLayout_->setStretch(headerMenus_ == nullptr ? 1 : 2, 1);
     headerLeft_->setMinimumWidth(0);
@@ -454,7 +458,16 @@ void EditorArea::rebuildEditor(int editorIndex) {
             headerLayout_->setStretch(2, 0);
             const int inset = static_cast<int>(kit::kHairlineWidth);
             headerCellsLayout_->setContentsMargins(inset, 0, inset, 0);
+            headerCellsLayout_->addSpacing(kit::px(kit::Size::TimelineSeparator));
             headerCellsLayout_->addWidget(headerRight_, 1);
+            headerLayout_->removeWidget(maximizeButton_);
+            auto* gutter =
+                headerRight_->layout()->itemAt(headerRight_->layout()->count() - 1)->widget();
+            auto* actions = new QHBoxLayout(gutter);
+            const auto padding = kit::px(kit::Spacing::ChromePadding);
+            actions->setContentsMargins(padding, padding, padding, padding);
+            actions->setSpacing(kit::px(kit::Spacing::ChromeGap));
+            actions->addWidget(maximizeButton_, 0, Qt::AlignRight | Qt::AlignVCenter);
             watchForActivation(headerRight_);
         }
     }
@@ -517,6 +530,7 @@ void EditorArea::watchForActivation(QWidget* widget) {
 
 void EditorArea::resizeEvent(QResizeEvent* event) {
     QFrame::resizeEvent(event);
+    kit::KSurface::clipPanelChildren(*this);
     layoutCornerMasks();
 }
 

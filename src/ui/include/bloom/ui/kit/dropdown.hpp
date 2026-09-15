@@ -80,6 +80,7 @@ class KDropdown final : public QWidget {
 
     [[nodiscard]] QSize sizeHint() const override;
     [[nodiscard]] QSize minimumSizeHint() const override;
+    void setWidthFloor(int width);
 
   Q_SIGNALS:
     void currentIndexChanged(int index);

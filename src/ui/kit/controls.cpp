@@ -1,7 +1,10 @@
 #include <QButtonGroup>
+#include <QGridLayout>
 #include <QPainter>
 #include <QResizeEvent>
+#include <QShowEvent>
 #include <QVBoxLayout>
+#include <QWidgetAction>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
@@ -26,9 +29,38 @@ KIconButton::KIconButton(QWidget* parent) : QToolButton(parent) {
     setAutoRaise(true);
     setProperty("kitControl", true);
 }
+void KIconButton::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    const bool heading = parentWidget() && parentWidget()->property("headerRow").toBool();
+    if (!heading)
+        fillRoundedSurface(painter, rect(),
+                           color(isChecked() ? (isDown() ? Color::AccentPressed : Color::Accent)
+                                             : Color::ControlSurface),
+                           color(borderForInteraction(isEnabled(), hasFocus(), underMouse())),
+                           Radius::Small);
+    auto glyph = icon().pixmap(iconSize(), devicePixelRatioF(),
+                               isEnabled() ? QIcon::Normal : QIcon::Disabled,
+                               isChecked() ? QIcon::On : QIcon::Off);
+    if (isChecked() && !glyph.isNull()) {
+        QPainter ink(&glyph);
+        ink.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        ink.fillRect(glyph.rect(), isEnabled()
+                                       ? color(Color::OnAccent)
+                                       : withOpacity(color(Color::OnAccent), kDisabledOpacity));
+    }
+    const auto extent = glyph.deviceIndependentSize();
+    const auto dpr = devicePixelRatioF();
+    painter.drawPixmap(QPointF(std::round((width() - extent.width()) * dpr / 2) / dpr,
+                               std::round((height() - extent.height()) * dpr / 2) / dpr),
+                       glyph);
+    painter.setPen(color(isChecked() ? Color::OnAccent : Color::Muted));
+    if (icon().isNull())
+        painter.drawText(rect(), Qt::AlignCenter, text());
+}
+
 KIconToggle::KIconToggle(IconId id, QWidget* parent) : KIconButton(parent), glyph_(id) {
     setCheckable(true);
-    setFixedWidth(px(Size::ToggleCell));
+    setFixedSize(px(Size::ToggleCell), px(Size::ToggleCell));
     ensureKeyboardFocusTracking(*this);
 }
 void KIconToggle::setGlyph(IconId id) {
@@ -37,7 +69,7 @@ void KIconToggle::setGlyph(IconId id) {
 }
 QPixmap KIconToggle::glyphPixmap() const {
     if (property("toolChoice").toBool() && isChecked())
-        return iconPixmap(glyph_, Size::IconControl, Color::Foreground, State::Normal,
+        return iconPixmap(glyph_, Size::IconControl, Color::OnAccent, State::Normal,
                           IconWeight::Fill, devicePixelRatioF());
     return iconPixmap(glyph_, Size::IconControl, Color::Muted,
                       !isEnabled()  ? State::Disabled
@@ -47,12 +79,10 @@ QPixmap KIconToggle::glyphPixmap() const {
 }
 void KIconToggle::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    const QRectF box = QRectF(rect()).adjusted(px(Spacing::XXS), px(Spacing::XXS),
-                                               -px(Spacing::XXS), -px(Spacing::XXS));
+    const QRectF box = rect();
     fillRoundedSurface(
         painter, box,
-        color(property("toolChoice").toBool() && isChecked() ? Color::Accent
-                                                             : Color::ControlSurface),
+        color(property("toolChoice").toBool() && isChecked() ? Color::Accent : Color::Surface),
         color(borderForInteraction(isEnabled(), hasKeyboardFocus(*this), underMouse())),
         Radius::Small);
     const auto glyph = glyphPixmap();
@@ -65,9 +95,13 @@ void KIconToggle::paintEvent(QPaintEvent*) {
 KToolColumn::KToolColumn(QWidget* parent)
     : QWidget(parent), column_(new QVBoxLayout(this)), group_(new QButtonGroup(this)) {
     setFixedWidth(px(Size::ToolColumnWidth));
-    column_->setContentsMargins(px(Spacing::XXS), px(Spacing::XXS), px(Spacing::XXS),
-                                px(Spacing::XXS));
-    column_->setSpacing(px(Spacing::XS));
+    column_->setContentsMargins(px(Spacing::ChromePadding), px(Spacing::ChromePadding),
+                                px(Spacing::ChromePadding), px(Spacing::ChromePadding));
+    column_->setSpacing(px(Spacing::ChromeGap));
+    setAutoFillBackground(true);
+    auto colors = palette();
+    colors.setColor(QPalette::Window, color(Color::Surface));
+    setPalette(colors);
     group_->setExclusive(true);
 }
 KIconToggle* KToolColumn::addTool(IconId id, const QString& label, const QString& objectName,
@@ -77,7 +111,7 @@ KIconToggle* KToolColumn::addTool(IconId id, const QString& label, const QString
     button->setAccessibleName(label);
     button->setToolTip(label);
     button->setProperty("toolChoice", true);
-    button->setFixedWidth(px(Size::Control));
+    button->setFixedSize(px(Size::ToggleCell), px(Size::ToggleCell));
     button->setEnabled(enabled);
     group_->addButton(button);
     column_->addWidget(button, 0, Qt::AlignHCenter);
@@ -109,6 +143,88 @@ KLineEdit::KLineEdit(const QString& text, QWidget* parent) : QLineEdit(text, par
     setProperty("kitControl", true);
 }
 KSearchField::KSearchField(QWidget* parent) : KLineEdit(parent) {}
-QMenu* makeMenu(QWidget* parent) { return new QMenu(parent); }
-QMenu* makeMenu(const QString& title, QWidget* parent) { return new QMenu(title, parent); }
+namespace {
+class FlowMenu final : public QMenu {
+  public:
+    FlowMenu(const QString& title, QWidget* parent) : QMenu(title, parent) {
+        connect(this, &QMenu::aboutToShow, this, [this] { buildColumns(); });
+        connect(this, &QMenu::aboutToHide, this, [this] { restoreActions(); });
+    }
+
+  protected:
+    void showEvent(QShowEvent* event) override {
+        QMenu::showEvent(event);
+        if (!property("columnFlow").toBool())
+            return;
+        const auto bounds = ownerBounds();
+        move(std::clamp(x(), bounds.left(), std::max(bounds.left(), bounds.right() - width() + 1)),
+             std::clamp(y(), bounds.top(), std::max(bounds.top(), bounds.bottom() - height() + 1)));
+    }
+
+  private:
+    QRect ownerBounds() const {
+        auto* owner = parentWidget();
+        while (owner && qobject_cast<QMenu*>(owner))
+            owner = owner->parentWidget();
+        if (!owner)
+            return geometry();
+        owner = owner->window();
+        return {owner->mapToGlobal(QPoint()), owner->size()};
+    }
+    void restoreActions() {
+        if (columns_) {
+            removeAction(columns_);
+            columns_->deleteLater();
+            columns_ = nullptr;
+        }
+        for (auto* action : originals_)
+            action->setVisible(true);
+        originals_.clear();
+    }
+    void buildColumns() {
+        if (!property("columnFlow").toBool())
+            return;
+        restoreActions();
+        const auto bounds = ownerBounds();
+        const int padding = px(Spacing::ChromePadding);
+        const int cap = static_cast<int>(bounds.height() * kMenuWindowHeightShare);
+        const int rows = std::max(1, (cap - 4 * padding) / px(Size::Control));
+        auto* content = new QWidget;
+        auto* grid = new QGridLayout(content);
+        grid->setContentsMargins(padding, padding, padding, padding);
+        grid->setSpacing(0);
+        for (auto* action : actions()) {
+            if (!action->isVisible() || action->isSeparator())
+                continue;
+            auto* button = new KMenuButton(content);
+            button->setDefaultAction(action);
+            button->setFixedWidth(std::max(px(Size::MenuMinWidth), button->sizeHint().width()));
+            button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+            button->setFocusPolicy(Qt::StrongFocus);
+            const int index = static_cast<int>(originals_.size());
+            grid->addWidget(button, index % rows, index / rows);
+            connect(button, &QToolButton::clicked, this, [this] {
+                for (auto* menu = static_cast<QMenu*>(this); menu;
+                     menu = qobject_cast<QMenu*>(menu->parentWidget()))
+                    menu->close();
+            });
+            originals_.push_back(action);
+        }
+        for (auto* action : originals_)
+            action->setVisible(false);
+        // Buttons hold the original actions and retain their enabled state and shortcuts.
+        for (auto* button : content->findChildren<KMenuButton*>())
+            button->show();
+        columns_ = new QWidgetAction(this);
+        columns_->setDefaultWidget(content);
+        addAction(columns_);
+        setProperty("flowColumns", grid->columnCount());
+        setProperty("flowHeightCap", cap);
+    }
+    QList<QAction*> originals_;
+    QWidgetAction* columns_ = nullptr;
+};
+} // namespace
+QMenu* makeMenu(QWidget* parent) { return new FlowMenu({}, parent); }
+QMenu* makeMenu(const QString& title, QWidget* parent) { return new FlowMenu(title, parent); }
 } // namespace bloom::ui::kit

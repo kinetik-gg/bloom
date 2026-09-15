@@ -447,7 +447,7 @@ void testValueNodeOperandsAreEditableAndHideWhenDriven(Expectations& expectation
     const auto operandId = operandParameter->id;
     auto* operandField = qobject_cast<ui::kit::KValueField*>(
         fixture.scene()->nodeFieldForTest(*mathNode, QStringLiteral("nodeOperandEditor")));
-    expectations.expect(operandField != nullptr && operandField->graphicsProxyWidget()->isVisible(),
+    expectations.expect(operandField != nullptr && operandField->isVisible(),
                         "an unlinked operand shows its inline control");
     commands::Transaction link("Link operand", fixture.session.snapshot().revision());
     link.emplace<commands::ConnectPorts>(
@@ -457,8 +457,7 @@ void testValueNodeOperandsAreEditableAndHideWhenDriven(Expectations& expectation
             document::NodeInputRef{*mathNode, std::string(document::kFirstOperandPortName)}});
     expectations.expect(fixture.scene()->submit(std::move(link)).changed(),
                         "the operand socket accepts the Scalar node's output");
-    expectations.expect(operandField != nullptr &&
-                            !operandField->graphicsProxyWidget()->isVisible(),
+    expectations.expect(operandField != nullptr && !operandField->isVisible(),
                         "a driven operand hides its inline control");
     expectations.expect(std::holds_alternative<document::DriverBindingSource>(
                             fixture.session.composition()->parameters().find(operandId)->source),

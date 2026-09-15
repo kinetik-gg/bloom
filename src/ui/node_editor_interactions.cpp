@@ -27,7 +27,9 @@ QPointF snappedToGrid(const QPointF point, const qreal gridSize) {
         if (view != nullptr && view->transform().m11() > 0.0)
             scale = view->transform().m11();
     // Never TIGHTER than the painted hit shape: zooming in does not make a socket harder to hit.
-    return std::max(kSocketHitSlop, kSocketHitSlop / scale);
+    // Pointer coordinates are integer viewport pixels. Include half a pixel so a point
+    // exactly on the radius remains inside after viewport rounding at fractional zoom.
+    return std::max(kSocketHitSlop, (kSocketHitSlop + kit::px(kit::Size::Hairline) / 2.0) / scale);
 }
 SocketItem* socketAt(QGraphicsScene& scene, const QPointF point) {
     SocketItem* closest = nullptr;
@@ -47,8 +49,9 @@ SocketItem* socketAt(QGraphicsScene& scene, const QPointF point) {
     // No socket's own shape held the point. Widen to the zoom-compensated radius, but only where a
     // hosted field is not already under the pointer -- a field keeps its own clicks, exactly as it
     // does when a socket shape does contain the point.
-    if (fieldAt(scene, point))
+    if (fieldAt(scene, point)) {
         return nullptr;
+    }
     const qreal radius = sceneGrabRadius(scene);
     const QRectF region(point.x() - radius, point.y() - radius, radius * 2.0, radius * 2.0);
     for (auto* item : scene.items(region, Qt::IntersectsItemBoundingRect)) {
@@ -98,8 +101,22 @@ std::optional<document::NodeGroupId> groupForDrop(QGraphicsScene& scene, const Q
 bool fieldAt(QGraphicsScene& scene, const QPointF point) {
     for (auto* item : scene.items(point))
         for (auto* parent = item; parent; parent = parent->parentItem())
-            if (qgraphicsitem_cast<QGraphicsProxyWidget*>(parent))
-                return true;
+            if (auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(parent)) {
+                auto* root = proxy->widget();
+                if (!root)
+                    continue;
+                auto* child = root->childAt(proxy->mapFromScene(point).toPoint());
+                // Property labels and gutters belong to the card. Only a live control owns
+                // the click, so its row proxy does not consume the socket's screen-space slop.
+                for (auto* target = child ? child : root; target; target = target->parentWidget()) {
+                    if (target->focusPolicy() != Qt::NoFocus ||
+                        qobject_cast<QAbstractButton*>(target) ||
+                        dynamic_cast<kit::KDiamond*>(target))
+                        return true;
+                    if (target == root)
+                        break;
+                }
+            }
     return false;
 }
 const document::EdgeRecord* inputEdge(const document::Composition& composition,
@@ -406,7 +423,8 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
             }
         }
         gesture.linkKind = socket->kind;
-        gesture.line = addPath({}, QPen(kit::color(socketColorToken(gesture.linkKind)), 2));
+        gesture.line =
+            addPath({}, QPen(kit::color(socketColorToken(gesture.linkKind)), kit::kNodeLinkWidth));
         gesture.line->setZValue(10);
         gesture.line->setData(kNodeItemKindRole, QStringLiteral("link-preview"));
         markLinkAffinity(*this, gesture, socket);
@@ -502,6 +520,13 @@ void NodeGraphicsScene::mouseDoubleClickEvent(QGraphicsSceneMouseEvent* event) {
             return;
         }
     }
+    if (event->button() == Qt::LeftButton && items(event->scenePos()).isEmpty()) {
+        cancelGesture();
+        Q_EMIT addSearchRequested(event->scenePos(), event->screenPos(), std::nullopt,
+                                  std::nullopt);
+        event->accept();
+        return;
+    }
     QGraphicsScene::mouseDoubleClickEvent(event);
 }
 
@@ -564,8 +589,9 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
                   : document::isAcceptedSocketConnection(target->kind, gesture.linkKind));
         const bool incompatible =
             target != nullptr && (!target->draggable() || orientationWrong || kindWrong);
-        gesture.line->setPen(QPen(
-            kit::color(incompatible ? kit::Color::Error : socketColorToken(gesture.linkKind)), 2));
+        gesture.line->setPen(
+            QPen(kit::color(incompatible ? kit::Color::Error : socketColorToken(gesture.linkKind)),
+                 kit::kNodeLinkWidth));
         gesture.line->setPath(gesture.output
                                   ? linkPath(gesture.origin, event->scenePos(), linkStyle_)
                                   : linkPath(event->scenePos(), gesture.origin, linkStyle_));

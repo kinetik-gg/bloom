@@ -168,11 +168,14 @@ void testTheCellIsTheWholeControlAndEnteringEditDoesNotMoveTheValue(Expectations
                         "the field's height is exactly the control height -- no focus-ring strip "
                         "is reserved in it, got " +
                             std::to_string(field.sizeHint().height()));
-    expectations.expect(field.cellRect().top() == 0.0 &&
-                            field.cellRect().height() == static_cast<qreal>(field.height()),
-                        "and the cell spans the control's whole height, so nothing is left over to "
-                        "read as a darker band above or below it");
-    expectations.expect(field.cellRect().right() == static_cast<qreal>(field.width()),
+    expectations.expect(
+        field.cellRect().top() == kit::px(kit::Spacing::FieldMargin) &&
+            field.cellRect().height() ==
+                static_cast<qreal>(field.height() - 2 * kit::px(kit::Spacing::FieldMargin)),
+        "and the cell spans the control's whole height, so nothing is left over to "
+        "read as a darker band above or below it");
+    expectations.expect(field.cellRect().right() ==
+                            static_cast<qreal>(field.width() - kit::px(kit::Spacing::FieldMargin)),
                         "the cell also reaches the control's right edge");
     expectations.expect(
         field.cellTextRect().left() == field.cellRect().left() + kit::px(kit::Spacing::S) &&
@@ -228,7 +231,7 @@ void testGeometryPlacesTheLabelAndCell(Expectations& expectations) {
     unlabelled.resize(unlabelled.sizeHint());
     expectations.expect(unlabelled.labelRect().isNull(),
                         "a field with no label claims no label column");
-    expectations.expect(unlabelled.cellRect().left() == 0.0,
+    expectations.expect(unlabelled.cellRect().left() == kit::px(kit::Spacing::FieldMargin),
                         "and its cell starts at the control's edge");
 }
 

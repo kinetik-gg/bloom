@@ -1,4 +1,5 @@
 #include "node_editor_items.hpp"
+#include "ui3_audit.hpp"
 #include "window_fixture.hpp"
 #include <QGraphicsView>
 #include <bloom/ui/editor_area.hpp>
@@ -11,6 +12,8 @@
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/timeline_editor.hpp>
+#include <bloom/ui/timeline_ruler.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 #include <iostream>
 
@@ -38,6 +41,11 @@ int run(int argc, char** argv) {
         expect(header && header->height() == kit::px(kit::Size::HeaderRow), panel, "header token");
         if (auto* footer = panel->findChild<QWidget*>("editorFooter"))
             expect(footer->height() == kit::px(kit::Size::FooterRow), footer, "footer token");
+        expect(!panel->mask().isEmpty() && !panel->mask().contains(QPoint(0, 0)), panel,
+               "A1 panel clips child chrome at rounded corners");
+        const auto inset = kit::px(kit::Spacing::ChromePadding);
+        auto* picker = panel->findChild<QWidget*>("editorTypePicker");
+        expect(picker->mapTo(header, QPoint()).y() == inset, picker, "A2 chrome vertical inset");
         for (auto* widget : panel->findChildren<QWidget*>()) {
             if (widget->property("chromeControl").toBool() ||
                 widget->objectName() == "editorTypePicker" ||
@@ -51,8 +59,13 @@ int run(int argc, char** argv) {
                 qobject_cast<kit::KValueField*>(widget) || qobject_cast<kit::KSwitch*>(widget) ||
                 qobject_cast<kit::KSlider*>(widget) || qobject_cast<kit::KSearchField*>(widget) ||
                 qobject_cast<kit::KLabel*>(widget) || qobject_cast<kit::KColorChip*>(widget)) {
-                expect(widget->height() == kit::px(kit::Size::Control), widget,
-                       "kit control token");
+                expect(widget->height() ==
+                           kit::px((qobject_cast<kit::KIconToggle*>(widget) ||
+                                    widget->property("rowCell").toString() == "toggle" ||
+                                    widget->width() == kit::px(kit::Size::ToggleCell))
+                                       ? kit::Size::ToggleCell
+                                       : kit::Size::Control),
+                       widget, "kit control token");
                 ++controls;
             }
             if (const auto* button = qobject_cast<kit::KButton*>(widget)) {
@@ -75,16 +88,21 @@ int run(int argc, char** argv) {
                             continue;
                         expect(widget->rect().contains(cell->geometry()), cell,
                                "row cell must fit inside its row");
-                        expect(cell->width() == kit::px(role == "toggle"
+                        expect(cell->width() >= kit::px(role == "toggle"
                                                             ? kit::Size::ToggleCell
                                                             : kit::Size::DropdownWidth),
                                cell, "row column pitch");
                     }
                 }
             }
-            if (qobject_cast<kit::KPropertyRow*>(widget))
-                expect(widget->height() == kit::px(kit::Size::PropertyRow), widget,
-                       "property row token");
+            if (qobject_cast<kit::KPropertyRow*>(widget)) {
+                expect(widget->layout()->contentsMargins().left() ==
+                           kit::px(kit::Spacing::RowPadding),
+                       widget, "B5 row owns its padding");
+                expect(widget->height() == kit::px(kit::Size::PropertyRow) *
+                                               std::max(1, widget->property("rowLines").toInt()),
+                       widget, "property row token");
+            }
             if (auto* button = qobject_cast<QToolButton*>(widget);
                 button && !button->icon().isNull()) {
                 const auto pixmap =
@@ -119,6 +137,43 @@ int run(int argc, char** argv) {
             }
         }
     }
+    auto* viewerMenus = fixture.window->findChild<QWidget*>("viewerHeaderMenuBar");
+    expect(!viewerMenus->property("collapsed").toBool(), viewerMenus,
+           "A3 default viewer menus fit");
+    auto* add = fixture.window->findChild<kit::KMenuButton*>("viewerAddMenuButton");
+    expect(add && add->isVisible(), viewerMenus, "A3 Add is a visible menu button");
+    for (const auto* name : {"viewerCompositionMenuButton", "viewerFullscreenButton"}) {
+        auto* retired = fixture.window->findChild<QWidget*>(name);
+        expect(retired && !retired->isVisible(), viewerMenus, "A3 retired controls stay hidden");
+    }
+    auto* stack = fixture.window->findChild<TimelineLayerStack*>();
+    auto* lanes = fixture.window->findChild<TimelineLaneRegion*>("timelineLaneRegion");
+    if (!lanes) {
+        for (auto* candidate : fixture.window->findChildren<TimelineLaneRegion*>())
+            if (candidate->parentWidget()->objectName() == "timelineBody")
+                lanes = candidate;
+    }
+    expect(stack && lanes, fixture.window.get(), "D11 timeline halves exist");
+    if (stack && lanes) {
+        for (int row = 0; row < stack->rowCount(); ++row)
+            expect(stack->mapTo(fixture.window.get(), QPoint(0, stack->rowTop(row))).y() ==
+                       lanes->mapTo(fixture.window.get(), QPoint(0, lanes->rowTop(row))).y(),
+                   stack, "D11 rows share exact global Y");
+        expect(lanes->x() - stack->geometry().right() - 1 == kit::px(kit::Size::TimelineSeparator),
+               lanes, "D10 lane divider token");
+    }
+    auto* ruler = fixture.window->findChild<TimelineRuler*>();
+    const auto axis = ruler->axisForWidth(ruler->width());
+    expect(axis && axis->pixelForSeconds(0) == kit::px(kit::Spacing::LanePadding), ruler,
+           "D10 key axis has left breathing room");
+    expect(axis && std::abs(ruler->playheadLabelRect().center().x() -
+                            axis->pixelForTime(fixture.session.currentTime())) < 0.01,
+           ruler, "D12 playhead readout centered on needle");
+    for (const auto& label : ruler->majorTickLabelRectsForTest())
+        expect(!label.intersects(ruler->playheadLabelRect()), ruler,
+               "D12 ruler labels avoid playhead readout");
+    auto* navigatorRow = fixture.window->findChild<QWidget*>("timelineNavigatorRow");
+    expect(!navigatorRow->isVisible(), navigatorRow, "D17 fitted composition hides navigator row");
     auto* status = fixture.window->statusStrip();
     expect(status && status->isVisible(), fixture.window.get(), "status remains visible");
     for (auto* cell : status->findChildren<kit::KLabel*>()) {
@@ -129,10 +184,15 @@ int run(int argc, char** argv) {
     auto* tools = fixture.window->findChild<kit::KToolColumn*>("viewerToolColumn");
     expect(tools && tools->isVisible() && tools->width() == kit::px(kit::Size::ToolColumnWidth),
            fixture.window.get(), "tool column token");
+    expect(tools->pos() == QPoint(0, 0), tools, "E20 tool strip sticks to canvas left");
+    expect(kit::color(kit::Color::OnAccent) == QColor(Qt::white), tools, "E19 white accent ink");
+    auto* zoomDropdown = fixture.window->findChild<kit::KDropdown*>("viewerZoomDropdown");
+    expect(zoomDropdown->width() >= zoomDropdown->minimumSizeHint().width(), zoomDropdown,
+           "E21 zoom fits widest item plus chevron");
     const auto choices = tools->findChildren<kit::KIconToggle*>();
     expect(choices.size() == 6, tools, "six tool choices");
     for (auto* choice : choices) {
-        expect(choice->height() == kit::px(kit::Size::Control) && !choice->toolTip().isEmpty(),
+        expect(choice->height() == kit::px(kit::Size::ToggleCell) && !choice->toolTip().isEmpty(),
                choice, "tool extent and help");
         expect(tools->rect().contains(choice->geometry()), choice, "tool stays inside column");
     }
@@ -149,6 +209,10 @@ int run(int argc, char** argv) {
             if (!card || card->data(kNodeItemKindRole).toString() != "node")
                 continue;
             ++cards;
+            const auto [nameRect, categoryRect] = card->titleBandRects();
+            expect(nameRect.center().y() == categoryRect.center().y() &&
+                       !nameRect.intersects(categoryRect),
+                   view, "F26 title and category share one row without overlap");
             expect(card->cardWidth() >= kit::px(kit::Size::NodeCardWidth), view,
                    "node card width token floor");
             expect(card->parameterRowHeight() == kit::px(kit::Size::PropertyRow), view,
@@ -160,8 +224,24 @@ int run(int argc, char** argv) {
                     continue;
                 auto* field = proxy->widget();
                 ++fields;
-                expect(field->height() == kit::px(kit::Size::Control), field,
-                       "node kit control height");
+                expect(qobject_cast<kit::KPropertyRow*>(field) &&
+                           field->height() == kit::px(kit::Size::PropertyRow),
+                       field, "F28 node parameter is a shared property row");
+                for (auto* diamond : field->findChildren<KeyframeDiamond*>()) {
+                    for (auto* value :
+                         field->findChildren<QWidget*>(QString{}, Qt::FindDirectChildrenOnly)) {
+                        if (value == diamond || !value->isVisible() || value->inherits("QLabel"))
+                            continue;
+                        expect(!diamond->geometry().intersects(value->geometry()), diamond,
+                               "F28 diamond column never overlaps a field or swatch");
+                    }
+                }
+                for (auto* value : field->findChildren<kit::KValueField*>()) {
+                    const auto text = value->displayedValue();
+                    const auto point = text.indexOf('.');
+                    expect(point < 0 || (text.size() - point <= 3 && !text.endsWith('0')), value,
+                           "F28 resting values have at most two decimals and no trailing zeros");
+                }
                 expect(card->cardRect().contains(proxy->mapRectToParent(proxy->boundingRect())),
                        field, "field contained in node");
             }
@@ -197,12 +277,30 @@ int run(int argc, char** argv) {
                "timeline menus fit at >=1600px");
         expect(status->isVisible(), status, "status survives window resizing");
     }
+    QStringList groups;
+    for (const auto& entry : stack->entries())
+        if (entry.rowKind == TimelineLayerEntry::Kind::Group)
+            groups.append(entry.name);
+    expect(groups == QStringList{"Object", "Transform", "Source"}, stack,
+           "D16 groups match Properties order");
+    const auto beforeCollapse = stack->rowCount();
+    auto* disclosure = stack->findChild<QToolButton*>("timelinePropertyDisclosure");
+    expect(disclosure && disclosure->isVisible(), stack, "D16 group disclosure is visible");
+    if (disclosure) {
+        QTest::mouseClick(disclosure, Qt::LeftButton);
+        expect(stack->rowCount() < beforeCollapse, stack,
+               "D16 group click collapses its properties");
+        QTest::mouseClick(disclosure, Qt::LeftButton);
+        expect(stack->rowCount() == beforeCollapse, stack,
+               "D16 group click restores its properties");
+    }
     std::cout << "Node audit: " << cards << " cards, " << fields << " fields, " << alignedSockets
               << " aligned sockets\n";
     expect(controls > 30 && icons > 10, fixture.window.get(),
            "audit must inspect real controls and glyphs");
     std::cout << "Audited " << panels.size() << " panels, " << controls << " controls, " << icons
               << " icons at DPR " << fixture.window->devicePixelRatioF() << '\n';
+    test::auditUi3(fixture, expect);
     return failures == 0 ? 0 : 1;
 }
 

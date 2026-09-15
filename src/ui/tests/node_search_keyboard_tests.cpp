@@ -198,10 +198,12 @@ void testSearchKeyboardAndMenus() {
     // arithmetic over those numbers, the plumbing that carries them, and finally where the picture
     // goes.
     expect(sectionHeadings(list->model()) ==
-               QStringList{QStringLiteral("Sources"), QStringLiteral("Layers"),
-                           QStringLiteral("Compositing"), QStringLiteral("Values"),
-                           QStringLiteral("Math"), QStringLiteral("Utilities"),
-                           QStringLiteral("Output")},
+               QStringList{
+                   QStringLiteral("Sources"), QStringLiteral("Layers"),
+                   QStringLiteral("Compositing"), QStringLiteral("Values"), QStringLiteral("Math"),
+                   QStringLiteral("Convert"), QStringLiteral("String"), QStringLiteral("Logic"),
+                   QStringLiteral("Time"), QStringLiteral("Color"), QStringLiteral("Vector"),
+                   QStringLiteral("Utilities"), QStringLiteral("Output")},
            "every populated section is headed, in category order, and the empty ones are absent");
     expect(list->model()->index(0, 0).data(kit::kSearchSectionRole).toBool() &&
                list->model()->index(0, 0).flags() == Qt::NoItemFlags,
@@ -412,7 +414,7 @@ void testSearchKeyboardAndMenus() {
             if (entry->menu() != nullptr)
                 sections.append(entry->text());
         QStringList expected;
-        for (const auto category : node_editor::nodeCategoryOrder())
+        for (const auto& category : node_editor::nodeCategoryOrder())
             expected.append(node_editor::nodeCategoryName(category));
         expect(sections == expected, "whose sections are the registry's categories, in order");
         auto* output = named(menu, "nodeAddCompositionOutputAction");

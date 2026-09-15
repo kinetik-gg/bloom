@@ -265,40 +265,42 @@ void testRulerScrubLandsOnExactFrameTimesIncludingATie(Expectations& expectation
                         "the initial preview leaves the Rendering activity before scrubbing");
 
     ui::TimelineRuler ruler(fixture.session, fixture.controller);
-    ruler.resize(49, 26);
+    ruler.resize(49 + 2 * ui::kit::px(ui::kit::Spacing::LanePadding), 26);
 
-    sendClick(ruler, 0.0);
+    sendClick(ruler, ui::kit::px(ui::kit::Spacing::LanePadding) + 0.0);
     expectations.expect(fixture.session.currentTime() == time(0, 24),
                         "the leftmost pixel scrubs to frame 0");
 
-    sendClick(ruler, 2.0);
+    sendClick(ruler, ui::kit::px(ui::kit::Spacing::LanePadding) + 2.0);
     expectations.expect(fixture.session.currentTime() == time(1, 24),
                         "an even pixel scrubs to its exact frame time");
 
-    sendClick(ruler, 1.0);
+    sendClick(ruler, ui::kit::px(ui::kit::Spacing::LanePadding) + 1.0);
     expectations.expect(fixture.session.currentTime() == time(1, 24),
                         "an exact pixel-space halfway tie scrubs to the GREATER frame index");
 
-    sendClick(ruler, 45.0);
+    sendClick(ruler, ui::kit::px(ui::kit::Spacing::LanePadding) + 45.0);
     expectations.expect(fixture.session.currentTime() == time(23, 24),
                         "the tie immediately below the final frame also resolves to the greater "
                         "index");
 
-    sendClick(ruler, 48.0);
+    sendClick(ruler, ui::kit::px(ui::kit::Spacing::LanePadding) + 48.0);
     expectations.expect(fixture.session.currentTime() == time(23, 24),
                         "the rightmost pixel scrubs to the final valid frame, never the excluded "
                         "duration endpoint");
 
     // A press/move/release drag lands on the final move's exact frame time, and release calls
     // scrub-end (verified indirectly: the request still reaches Ready without ever hanging).
-    sendPress(ruler, 0.0);
-    QMouseEvent move(QEvent::MouseMove, QPointF(20.0, ruler.height() / 2.0),
-                     QPointF(20.0, ruler.height() / 2.0), Qt::NoButton, Qt::LeftButton,
-                     Qt::NoModifier);
+    sendPress(ruler, ui::kit::px(ui::kit::Spacing::LanePadding) + 0.0);
+    QMouseEvent move(
+        QEvent::MouseMove,
+        QPointF(ui::kit::px(ui::kit::Spacing::LanePadding) + 20.0, ruler.height() / 2.0),
+        QPointF(ui::kit::px(ui::kit::Spacing::LanePadding) + 20.0, ruler.height() / 2.0),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
     QCoreApplication::sendEvent(&ruler, &move);
     expectations.expect(fixture.session.currentTime() == time(10, 24),
                         "a pointer move during a drag scrubs to its own exact frame time");
-    sendRelease(ruler, 20.0);
+    sendRelease(ruler, ui::kit::px(ui::kit::Spacing::LanePadding) + 20.0);
     expectations.expect(
         waitUntil(
             [&] { return fixture.controller.state().activity == ui::PreviewActivity::Ready; }),
@@ -1078,7 +1080,7 @@ void testRulerPlayheadPaintsAOnePixelAccentLine(Expectations& expectations) {
         fixture.bridge.beginShutdown();
         return;
     }
-    const auto axis = ui::TimelineAxis::create(*composition, ruler.width());
+    const auto axis = ruler.axisForWidth(ruler.width());
     expectations.expect(axis.has_value(), "the ruler's own shared axis resolves");
     if (!axis.has_value()) {
         fixture.controller.beginShutdown();
@@ -1099,7 +1101,7 @@ void testRulerPlayheadPaintsAOnePixelAccentLine(Expectations& expectations) {
     }
     expectations.expect(sawAccent, "the playhead paints an Accent-colored line at its exact pixel");
 
-    const int sampleY = ruler.height() / 2;
+    const int sampleY = ruler.height() - 3;
     int accentColumns = 0;
     for (int x = 0; x < image.width(); ++x) {
         if (near(image.pixelColor(x, sampleY), accent, 24)) {
@@ -1131,11 +1133,12 @@ void testWorkAreaStripSpansFullWidthWithDimAccentBand(Expectations& expectations
     const QImage image = strip.grab().toImage();
     const QColor accent = ui::kit::color(ui::kit::Color::Accent);
 
-    expectations.expect(near(image.pixelColor(4, 0), accent, 6),
+    expectations.expect(near(image.pixelColor(0, image.height() / 2), accent, 6),
                         "the Accent work-area bar reaches the LEFT edge (time 0)");
-    expectations.expect(near(image.pixelColor(image.width() - 4, 0), accent, 6),
+    expectations.expect(near(image.pixelColor(image.width() - 1, image.height() / 2), accent, 6),
                         "the Accent work-area bar reaches the RIGHT edge (duration)");
-    expectations.expect(near(image.pixelColor(image.width() / 2, 0), accent, 6),
+    expectations.expect(near(image.pixelColor(image.width() / 2, image.height() / 2),
+                             ui::kit::color(ui::kit::Color::BorderHover), 6),
                         "the default work-area bar spans the full duration");
 }
 
@@ -1171,7 +1174,7 @@ void testCacheBarTracksAxisIdentityEvictionAndBatches(Expectations& expectations
                         "three inserts coalesce into one notification");
     for (const int width : {501, 1001}) {
         ruler.resize(width, ruler.height());
-        const auto axis = ui::TimelineAxis::create(*fixture.session.composition(), width);
+        const auto axis = ruler.axisForWidth(width);
         auto rects = ruler.cachedFrameRects();
         std::ranges::sort(rects, {}, &QRectF::left);
         expectations.expect(axis.has_value() && rects.size() == 3, "one segment per cached frame");
@@ -1194,11 +1197,11 @@ void testCacheBarTracksAxisIdentityEvictionAndBatches(Expectations& expectations
         ruler.render(&image);
         const int greenX = static_cast<int>(rects.front().center().x());
         expectations.expect(image.pixelColor(greenX, ruler.height() - 1) ==
-                                ui::kit::color(ui::kit::Color::Ok),
-                            "cached coverage paints the semantic Ok green");
+                                ui::kit::color(ui::kit::Color::Muted),
+                            "cached coverage paints the muted cache band");
         const int gapX = static_cast<int>(axis->pixelForTime(time(3, 48)));
         expectations.expect(image.pixelColor(gapX, ruler.height() - 1) !=
-                                ui::kit::color(ui::kit::Color::Ok),
+                                ui::kit::color(ui::kit::Color::Muted),
                             "the uncached frame gap remains unpainted");
     }
     ruler.zoomToRange(1.0 / 24.0, 4.0 / 24.0);

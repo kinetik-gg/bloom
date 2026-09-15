@@ -1,19 +1,33 @@
 #include <bloom/ui/kit/surfaces.hpp>
+#include <cmath>
 namespace bloom::ui::kit {
 void KDiamond::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     const auto tint = animated_ || underMouse()
                           ? color(Color::Keyframe)
                           : withOpacity(color(Color::Muted), kDisabledOpacity);
-    const auto glyph = iconPixmap(IconId::Keyframe, Size::IconSmall, tint, devicePixelRatioF(),
-                                  keyed_ ? IconWeight::Fill : IconWeight::Regular);
-    const auto extent = glyph.deviceIndependentSize();
-    const QPointF origin((width() - extent.width()) / 2, (height() - extent.height()) / 2);
-    painter.drawPixmap(origin, glyph);
+    // Include the scene transform as well as the paint device DPR. Resolve vertices and stroke in
+    // device pixels: no cached pixmap is resampled when the canvas zoom changes.
+    const auto transform = painter.deviceTransform();
+    const auto center = transform.map(QPointF(width() / 2.0, height() / 2.0));
+    const auto scale = std::hypot(transform.m11(), transform.m12());
+    const auto radius = std::max(1.0, std::round(kKeyDiamondRadius * scale));
+    const auto stroke = std::max(1.0, std::round(kDiamondStroke * scale));
+    const QPointF snapped(std::round(center.x()), std::round(center.y()));
+    QPolygonF diamond{snapped + QPointF(0, -radius), snapped + QPointF(radius, 0),
+                      snapped + QPointF(0, radius), snapped + QPointF(-radius, 0)};
+    const auto inverse = transform.inverted();
+    const auto localDiamond = inverse.map(diamond);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(tint, stroke / scale, Qt::SolidLine, Qt::SquareCap, Qt::MiterJoin));
+    painter.setBrush(keyed_ ? QBrush(tint) : Qt::NoBrush);
+    painter.drawPolygon(localDiamond);
     if (animated_ && !keyed_) {
-        painter.setClipRect(QRectF(origin, QSizeF(extent.width() / 2, extent.height())));
-        painter.drawPixmap(origin, iconPixmap(IconId::Keyframe, Size::IconSmall, tint,
-                                              devicePixelRatioF(), IconWeight::Fill));
+        painter.setClipRect(
+            inverse.mapRect(QRectF(snapped.x() - radius - stroke, snapped.y() - radius - stroke,
+                                   radius + stroke, 2 * (radius + stroke))));
+        painter.setBrush(tint);
+        painter.drawPolygon(localDiamond);
     }
 }
 KAnchorGrid::KAnchorGrid(QWidget* parent) : QWidget(parent) {
@@ -38,11 +52,16 @@ void KListSurface::paintEvent(QPaintEvent*) {
     const int first = offset_ / pitch;
     for (int row = first; row <= (offset_ + height()) / pitch; ++row) {
         const int y = row * pitch - offset_;
-        painter.fillRect(QRect(0, y, width(), pitch),
-                         color(row % 2 == 0 ? Color::Surface : Color::SurfaceRaised));
-        painter.setPen(color(Color::Border));
+        painter.fillRect(QRect(0, y, width(), pitch), color(Color::Surface));
+        painter.setPen(color(Color::Background));
         painter.drawLine(0, y + pitch - 1, width(), y + pitch - 1);
     }
+}
+void KSurface::clipPanelChildren(QWidget& panel) {
+    QPainterPath clip;
+    const auto radius = radiusPx(Radius::Panel, 0);
+    clip.addRoundedRect(QRectF(panel.rect()), radius, radius);
+    panel.setMask(QRegion(clip.toFillPolygon().toPolygon()));
 }
 KSurface::KSurface(QWidget* parent) : QWidget(parent) {
     setAutoFillBackground(true);

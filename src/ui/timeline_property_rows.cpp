@@ -1,6 +1,7 @@
 #include "timeline_property_rows.hpp"
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QStackedLayout>
 #include <QVariant>
 #include <algorithm>
 #include <bloom/document/project.hpp>
@@ -9,6 +10,7 @@
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <memory>
 
@@ -16,7 +18,8 @@ namespace bloom::ui {
 std::vector<TimelineLayerEntry>
 timelinePropertyEntries(const CompositionSession& session,
                         const std::vector<TimelineLayerEntry>& layers,
-                        const std::set<document::LayerId>& expanded) {
+                        const std::set<document::LayerId>& expanded,
+                        const std::set<std::pair<document::LayerId, QString>>& collapsedGroups) {
     std::vector<TimelineLayerEntry> rows;
     const auto* composition = session.composition();
     if (!composition)
@@ -26,13 +29,19 @@ timelinePropertyEntries(const CompositionSession& session,
         rows.push_back(layer);
         if (!layer.expanded)
             continue;
+        bool groupOpen = true;
         const auto group = [&](const QString& name) {
             auto entry = layer;
             entry.rowKind = TimelineLayerEntry::Kind::Group;
             entry.name = name;
+            entry.group = name;
+            groupOpen = !collapsedGroups.contains({layer.layerId, name});
+            entry.expanded = groupOpen;
             rows.push_back(entry);
         };
         const auto add = [&](document::NodeId nodeId, std::string_view role, const QString& name) {
+            if (!groupOpen)
+                return;
             const auto* node = composition->graph().findNode(nodeId);
             if (!node)
                 return;
@@ -48,14 +57,14 @@ timelinePropertyEntries(const CompositionSession& session,
             }
         };
         if (const auto boundary = session.boundaryNodeForLayer(layer.layerId)) {
+            group(QObject::tr("Object"));
+            add(*boundary, document::kOpacityParameterRole, QObject::tr("Opacity"));
+            add(*boundary, document::kBlendModeParameterRole, QObject::tr("Blending"));
             group(QObject::tr("Transform"));
             add(*boundary, document::kPositionParameterRole, QObject::tr("Position"));
             add(*boundary, document::kAnchorParameterRole, QObject::tr("Anchor"));
             add(*boundary, document::kScaleParameterRole, QObject::tr("Scale"));
             add(*boundary, document::kRotationParameterRole, QObject::tr("Rotation"));
-            group(QObject::tr("Object"));
-            add(*boundary, document::kOpacityParameterRole, QObject::tr("Opacity"));
-            add(*boundary, document::kBlendModeParameterRole, QObject::tr("Blending"));
         }
         if (const auto source = session.directSourceNodeForLayer(layer.layerId)) {
             const auto* node = composition->graph().findNode(*source);
@@ -110,15 +119,22 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
       alignment_(new kit::KDropdown(this)), color_(new kit::KColorChip(this)) {
     setObjectName("timelinePropertyRow");
     auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(TimelineEditor::propertyNameIndent(), 0, kit::px(kit::Spacing::XS),
-                               0);
-    layout->setSpacing(kit::px(kit::Spacing::XS));
+    layout->setContentsMargins(0, 0, 0, 0);
     label_->setObjectName("timelinePropertyLabel");
-    label_->setFixedWidth(kit::px(kit::Size::PropertyLabelCompact));
-    label_->setFont(kit::font(kit::TypeRole::Ui));
-    layout->addWidget(label_);
     diamond_->setObjectName("timelinePropertyDiamond");
-    layout->addWidget(diamond_);
+    auto* indicator = new QWidget(this);
+    auto* indicators = new QStackedLayout(indicator);
+    indicators->setStackingMode(QStackedLayout::StackAll);
+    indicators->setContentsMargins(0, 0, 0, 0);
+    indicators->addWidget(diamond_);
+    disclosure_ = new kit::KIconButton(indicator);
+    disclosure_->setObjectName("timelinePropertyDisclosure");
+    disclosure_->setFixedSize(kit::px(kit::Size::ToggleCell), kit::px(kit::Size::ToggleCell));
+    indicators->addWidget(disclosure_);
+    connect(disclosure_, &QToolButton::clicked, this, [this] {
+        if (toggleGroup)
+            toggleGroup(entry_.layerId, entry_.group);
+    });
     for (std::size_t i = 0; i < fields_.size(); ++i) {
         auto* cell = cells_[i] = new QWidget(this);
         auto* cellLayout = new QHBoxLayout(cell);
@@ -127,14 +143,13 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
         auto* component = components_[i] = new kit::KLabel(i == 0 ? "X" : "Y", cell);
         component->setObjectName("timelinePropertyComponent");
         component->setFont(kit::font(kit::TypeRole::UiSmall));
-        component->setFixedWidth(kit::px(kit::Spacing::M));
-        cellLayout->addWidget(component);
+        component->hide();
         auto* field = fields_[i] = new kit::KValueField(cell);
         field->setObjectName("timelinePropertyValue");
-        field->setMinimumWidth(0);
-        field->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        field->setCompact(true);
+        cell->setFixedWidth(kit::px(kit::Size::PropertiesFieldWidth));
         cellLayout->addWidget(field, 1);
-        layout->addWidget(cell, 1);
+
         connect(field, &kit::KValueField::valueChanged, this, [this] {
             if (!binding_)
                 commitValues();
@@ -144,21 +159,23 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
     for (auto mode : core::kBlendModes)
         blending_->addItem(blendModeDisplayName(mode),
                            QVariant::fromValue(core::blendModeStoredValue(mode)));
-    layout->addWidget(blending_, 1);
+
     alignment_->setObjectName("timelinePropertyAlignment");
     alignment_->setAccessibleName(tr("Alignment"));
     alignment_->setControlSize(kit::KDropdown::ControlSize::Compact);
     alignment_->addItem(tr("Left"), 0);
     alignment_->addItem(tr("Center"), 1);
     alignment_->addItem(tr("Right"), 2);
-    layout->addWidget(alignment_, 1);
+
     connect(alignment_, &kit::KDropdown::currentIndexChanged, this, [this](int index) {
         if (!binding_ && index >= 0)
             (void)session_.setParameterValue(entry_.parameterId, static_cast<std::int64_t>(index),
                                              tr("Set Alignment"));
     });
     color_->setObjectName("timelinePropertyColor");
-    layout->addWidget(color_, 1);
+    auto* row = new kit::KPropertyRow(
+        label_, indicator, {cells_[0], cells_[1], blending_, alignment_, color_}, this, true);
+    layout->addWidget(row, 0, Qt::AlignVCenter);
     connect(blending_, &kit::KDropdown::currentIndexChanged, this, [this](int index) {
         if (binding_ || index < 0)
             return;
@@ -203,7 +220,11 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
     setProperty("role", QString::fromStdString(entry.role));
     const bool group = entry.rowKind == TimelineLayerEntry::Kind::Group;
     label_->setMaximumWidth(group ? QWIDGETSIZE_MAX : kit::px(kit::Size::PropertyLabelCompact));
-    label_->setText(group ? entry.name.toUpper() : entry.name);
+    label_->setText(entry.name);
+    disclosure_->setVisible(group);
+    disclosure_->setIcon(kit::icon(
+        entry.expanded ? kit::IconId::CaretDown : kit::IconId::CaretRight, kit::IconRole::Chrome));
+    disclosure_->setAccessibleName(tr("Toggle %1").arg(entry.name));
     label_->setFont(kit::font(group ? kit::TypeRole::UiSmall : kit::TypeRole::Ui));
     label_->setToolTip(entry.name);
     setEnabled(true);
@@ -244,7 +265,8 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         const int count = vector ? 2 : scalar ? 1 : 0;
         for (std::size_t i = 0; i < fields_.size(); ++i) {
             cells_[i]->setVisible(static_cast<int>(i) < count);
-            components_[i]->setVisible(vector.has_value());
+            components_[i]->hide();
+            fields_[i]->setLabel(vector ? (i == 0 ? "X" : "Y") : "");
             fields_[i]->setAccessibleName(entry.name + (vector ? (i == 0 ? " X" : " Y") : ""));
         }
         blending_->setVisible(role == document::kBlendModeParameterRole);

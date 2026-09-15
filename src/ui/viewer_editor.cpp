@@ -1,3 +1,4 @@
+#include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 #include <memory>
@@ -642,7 +643,7 @@ void ViewerEditor::buildHeader() {
     compositionMenu->setObjectName(QStringLiteral("viewerCompositionMenu"));
     compositionMenuButton_->setMenu(compositionMenu);
     compositionMenuButton_->setPopupMode(QToolButton::InstantPopup);
-    bar->addWidget(compositionMenuButton_);
+    compositionMenuButton_->hide();
 
     viewerCompositionNewAction_ = compositionMenu->addAction(tr("New Composition…"));
     viewerCompositionNewAction_->setObjectName(QStringLiteral("viewerNewCompositionAction"));
@@ -835,6 +836,14 @@ void ViewerEditor::buildHeader() {
 
     bar->addMenuButton(tr("View"), viewerViewMenu_, QStringLiteral("viewerViewMenuButton"));
     bar->addMenuButton(tr("Select"), viewerSelectMenu_, QStringLiteral("viewerSelectMenuButton"));
+    auto* addMenu = kit::makeMenu(tr("Add"), this);
+    addMenu->setObjectName("viewerAddMenu");
+    connect(addMenu->addAction(tr("Solid")), &QAction::triggered, this,
+            [this] { (void)addDefaultSolidLayer(session_); });
+    connect(addMenu->addAction(tr("Text")), &QAction::triggered, this,
+            [this] { (void)addDefaultTextLayer(session_); });
+    bar->addMenuButton(tr("Add"), addMenu, "viewerAddMenuButton");
+    viewerViewMenu_->addMenu(compositionMenu)->setText(tr("Composition"));
     bar->addStretch();
 
     fullscreenButton_ = new kit::KIconButton(this);
@@ -858,7 +867,7 @@ void ViewerEditor::buildHeader() {
             fullscreenButton_->setChecked(window()->isFullScreen());
         }
     });
-    bar->addWidget(fullscreenButton_);
+    fullscreenButton_->hide();
     headerMenuWidget_ = EditorArea::buildChromeRow(chrome_.header, this);
     headerMenuWidget_->hide(); // The canvas remains full-bleed until EditorArea hosts chrome.
 
@@ -1284,7 +1293,7 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
         session_, [this](const std::uint64_t frameIndex) { seekToFrame(frameIndex); }, footer);
 
     channelDropdown_->setFixedWidth(kit::px(kit::Size::ViewerChannelWidth));
-    zoomDropdown_->setFixedWidth(kit::px(kit::Size::ViewerZoomWidth));
+    zoomDropdown_->setWidthFloor(kit::px(kit::Size::ViewerZoomWidth));
     resolutionDropdown_->setFixedWidth(kit::px(kit::Size::ViewerResolutionWidth));
     timeReadout_->setFixedWidth(kit::px(kit::Size::ViewerTimecodeWidth));
     ramPreviewButton_->setFixedWidth(kit::px(kit::Size::ViewerModeWidth));
@@ -1344,7 +1353,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
         updatePanCursor();
     });
     tools->adjustSize();
-    tools->move(kit::px(kit::Spacing::S), kit::px(kit::Spacing::S));
+    tools->move(0, 0);
 
     setMinimumSize(kit::px(kit::Size::ViewerMinWidth), kit::px(kit::Size::ViewerMinHeight));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);

@@ -1,4 +1,5 @@
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/row.hpp>
 #pragma once
 #include <bloom/ui/node_editor.hpp>
 
@@ -106,10 +107,12 @@ QString nodeTypeDisplayName(std::string_view typeId);
 QString nodeEyebrow(const document::Composition& composition, const document::NodeRecord& node);
 // The artist-facing heading a node category is listed under in an Add surface (task S1, item 4).
 QString nodeCategoryName(document::NodeCategory category);
+QString nodeCategoryName(const document::NodeDefinition& definition);
+QString nodeCategoryName(const QString& category);
 // The order the headings appear in: the pipeline's own order, from what makes an image to what
 // consumes one. Add surfaces list their entries in this order, and the search popup emits a heading
 // whenever the order moves on.
-[[nodiscard]] std::span<const document::NodeCategory> nodeCategoryOrder();
+[[nodiscard]] std::span<const QString> nodeCategoryOrder();
 QString nodeDisplayName(const document::Composition& composition, const document::NodeRecord& node);
 const document::ParameterRecord* parameterForRole(const document::NodeRecord& node,
                                                   const document::Composition& composition,
@@ -311,6 +314,18 @@ class NodeItem final : public QGraphicsObject {
     // to state "no label is clipped at the minimum width" has to be able to say how wide the label
     // column actually is rather than re-deriving it from a font.
     [[nodiscard]] qreal labelColumnWidth() const { return labelColumnWidth_; }
+    [[nodiscard]] std::pair<QRectF, QRectF> titleBandRects() const {
+        const QFontMetricsF metrics(kit::font(kit::TypeRole::UiSmall));
+        const auto categoryWidth = metrics.horizontalAdvance(eyebrow_);
+        const auto right = width_ - kCardPadding -
+                           (layout_.muted ? kit::px(kit::Size::IconSmall) + kCardPadding : 0);
+        const QRectF category(right - categoryWidth, 0, categoryWidth, kCardHeaderHeight);
+        return {
+            {kCardPadding, 0,
+             std::max(0.0, category.left() - kit::px(kit::Spacing::PropertyGutter) - kCardPadding),
+             kCardHeaderHeight},
+            category};
+    }
     [[nodiscard]] qreal parameterRowHeight() const { return rowHeight_; }
     void setPrimary(bool primary) {
         primary_ = primary;
@@ -351,6 +366,9 @@ class NodeItem final : public QGraphicsObject {
                 proxy->widget()->objectName() == objectName) {
                 return proxy->widget();
             }
+            if (proxy && proxy->widget())
+                if (auto* widget = proxy->widget()->findChild<QWidget*>(objectName))
+                    return widget;
         }
         return nullptr;
     }
@@ -371,7 +389,7 @@ class NodeItem final : public QGraphicsObject {
     void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget*) override;
 
   protected:
-    // See addProxy(): the click focus a hosted widget cannot get from Qt's own delivery path.
+    // See prepareField(): the click focus a hosted widget cannot get from Qt's own delivery path.
     bool eventFilter(QObject* watched, QEvent* event) override {
         if (event->type() == QEvent::MouseButtonPress) {
             auto* widget = qobject_cast<QWidget*>(watched);
@@ -563,7 +581,7 @@ class NodeItem final : public QGraphicsObject {
         });
     }
 
-    void addProxy(QWidget* widget) {
+    void prepareField(QWidget* widget) {
         hostTranslucent(*widget);
         // Click-to-focus, which a hosted widget otherwise never gets. Qt focuses a widget on press
         // inside QWidgetWindow's delivery path (QApplicationPrivate::giveFocusAccordingToFocus-
@@ -575,8 +593,6 @@ class NodeItem final : public QGraphicsObject {
         // threw the edit away. One rule here, for every widget the card hosts, rather than a
         // setFocus() bolted onto each control.
         widget->installEventFilter(this);
-        auto* proxy = new QGraphicsProxyWidget(this);
-        proxy->setWidget(widget);
     }
 
     // Declares which parameter role a control edits, so relayout() can apply the one
@@ -604,7 +620,7 @@ class NodeItem final : public QGraphicsObject {
         auto* diamond = new KeyframeDiamond(*session_, std::string(role));
         diamond->setObjectName(QStringLiteral("nodeKeyframeDiamond"));
         diamond->resize(diamond->sizeHint());
-        addProxy(diamond);
+        prepareField(diamond);
         return diamond;
     }
 
@@ -656,6 +672,7 @@ class NodeItem final : public QGraphicsObject {
                 delete child;
             }
         }
+        propertyRows_.clear();
         valueRows_.clear();
         readOnlyRows_.clear();
         readOnlyLabels_.clear();
@@ -685,8 +702,8 @@ class NodeItem final : public QGraphicsObject {
                                            -1'000'000.0, 1'000'000.0, 2, QStringLiteral("px"));
                 positionY_ = makeCardField(QStringLiteral("nodePositionYEditor"), tr("Position Y"),
                                            -1'000'000.0, 1'000'000.0, 2, QStringLiteral("px"));
-                addProxy(positionX_);
-                addProxy(positionY_);
+                prepareField(positionX_);
+                prepareField(positionY_);
                 registerControlRole(positionX_, document::kPositionParameterRole);
                 registerControlRole(positionY_, document::kPositionParameterRole);
                 bindCell(positionX_, [this] { commitPosition(); });
@@ -701,8 +718,8 @@ class NodeItem final : public QGraphicsObject {
                                          -1'000'000.0, 1'000'000.0, 2, QStringLiteral("px"));
                 anchorY_ = makeCardField(QStringLiteral("nodeAnchorYEditor"), tr("Anchor Y"),
                                          -1'000'000.0, 1'000'000.0, 2, QStringLiteral("px"));
-                addProxy(anchorX_);
-                addProxy(anchorY_);
+                prepareField(anchorX_);
+                prepareField(anchorY_);
                 registerControlRole(anchorX_, document::kAnchorParameterRole);
                 registerControlRole(anchorY_, document::kAnchorParameterRole);
                 bindCell(anchorX_, [this] { commitAnchor(); });
@@ -716,8 +733,8 @@ class NodeItem final : public QGraphicsObject {
                                         -100'000.0, 100'000.0, 2, QStringLiteral("%"));
                 scaleY_ = makeCardField(QStringLiteral("nodeScaleYEditor"), tr("Scale Y"),
                                         -100'000.0, 100'000.0, 2, QStringLiteral("%"));
-                addProxy(scaleX_);
-                addProxy(scaleY_);
+                prepareField(scaleX_);
+                prepareField(scaleY_);
                 registerControlRole(scaleX_, document::kScaleParameterRole);
                 registerControlRole(scaleY_, document::kScaleParameterRole);
                 bindCell(scaleX_, [this] { commitScale(); });
@@ -729,7 +746,7 @@ class NodeItem final : public QGraphicsObject {
             } else if (role == document::kRotationParameterRole) {
                 rotation_ = makeCardField(QStringLiteral("nodeRotationEditor"), tr("Rotation"),
                                           -100'000.0, 100'000.0, 2, QString::fromUtf8("\u00b0"));
-                addProxy(rotation_);
+                prepareField(rotation_);
                 registerControlRole(rotation_, document::kRotationParameterRole);
                 bindCell(rotation_, [this] { commitRotation(); });
                 valueRows_.push_back({tr("Rotation"), rotation_,
@@ -738,7 +755,7 @@ class NodeItem final : public QGraphicsObject {
             } else if (role == document::kOpacityParameterRole) {
                 opacity_ = makeCardField(QStringLiteral("nodeOpacityEditor"), tr("Opacity"), 0.0,
                                          100.0, 1, QStringLiteral("%"));
-                addProxy(opacity_);
+                prepareField(opacity_);
                 registerControlRole(opacity_, document::kOpacityParameterRole);
                 bindCell(opacity_, [this] { commitOpacity(); });
                 valueRows_.push_back({tr("Opacity"), opacity_,
@@ -758,7 +775,7 @@ class NodeItem final : public QGraphicsObject {
                                         QVariant::fromValue(core::blendModeStoredValue(mode)));
                 }
                 blendMode_->resize(blendMode_->sizeHint());
-                addProxy(blendMode_);
+                prepareField(blendMode_);
                 registerControlRole(blendMode_, document::kBlendModeParameterRole);
                 connect(blendMode_, &kit::KDropdown::currentIndexChanged, this,
                         [this](const int index) { commitBlendMode(index); });
@@ -769,7 +786,7 @@ class NodeItem final : public QGraphicsObject {
                 colorChip_->setAccessibleName(isTextSource_ ? tr("Text color") : tr("Solid color"));
                 colorChip_->setControlSize(kit::KColorChip::ControlSize::Compact);
                 colorChip_->resize(colorChip_->sizeHint());
-                addProxy(colorChip_);
+                prepareField(colorChip_);
                 registerControlRole(colorChip_, document::kSolidColorParameterRole);
                 connect(colorChip_, &kit::KColorChip::colorChanged, this,
                         [this](const kit::KColor& color) { commitColor(color); });
@@ -783,7 +800,7 @@ class NodeItem final : public QGraphicsObject {
                 textContent_->setAccessibleName(tr("Text content"));
                 textContent_->setFont(kit::font(kit::TypeRole::Ui));
                 textContent_->resize(textContent_->sizeHint());
-                addProxy(textContent_);
+                prepareField(textContent_);
                 registerControlRole(textContent_, document::kTextParameterRole);
                 connect(textContent_, &QLineEdit::editingFinished, this,
                         [this] { commitTextContent(); });
@@ -794,7 +811,7 @@ class NodeItem final : public QGraphicsObject {
                 textSize_ =
                     makeCardField(QStringLiteral("nodeTextSizeEditor"), tr("Text size"), 1.0,
                                   document::kMaximumTextSizePixels, 1, QStringLiteral("px"));
-                addProxy(textSize_);
+                prepareField(textSize_);
                 registerControlRole(textSize_, document::kTextSizeParameterRole);
                 bindCell(textSize_, [this] { commitTextSize(); });
                 valueRows_.push_back({tr("Size"), textSize_,
@@ -808,10 +825,16 @@ class NodeItem final : public QGraphicsObject {
                 auto* label = new kit::KLabel(QString{}, nullptr, kit::TypeRole::Value);
                 label->setObjectName("nodeReadOnlyValue");
                 label->setMinimumWidth(0);
-                addProxy(label);
+                prepareField(label);
                 readOnlyLabels_.push_back(label);
             }
         }
+        for (const auto& row : valueRows_)
+            wrapPropertyRow(row.label, row.widget, row.diamond);
+        if (colorChip_)
+            wrapPropertyRow(colorRowLabel_, colorChip_, colorDiamond_);
+        for (std::size_t index = 0; index < readOnlyLabels_.size(); ++index)
+            wrapPropertyRow(readOnlyRows_[index].first, readOnlyLabels_[index], nullptr);
         builtRoles_ = std::move(roles);
         fieldsBuilt_ = true;
     }
@@ -853,7 +876,7 @@ class NodeItem final : public QGraphicsObject {
                 row.selector->addItem(item.first, QVariant::fromValue(item.second));
             }
             row.selector->resize(row.selector->sizeHint());
-            addProxy(row.selector);
+            prepareField(row.selector);
             registerControlRole(row.selector, role);
             connect(row.selector, &kit::KDropdown::currentIndexChanged, this,
                     [commit](int) { commit(); });
@@ -869,7 +892,7 @@ class NodeItem final : public QGraphicsObject {
             row.toggle->setAccessibleName(label);
             row.toggle->setCheckable(true);
             row.toggle->resize(row.toggle->sizeHint());
-            addProxy(row.toggle);
+            prepareField(row.toggle);
             registerControlRole(row.toggle, role);
             connect(row.toggle, &kit::KSwitch::toggled, this, [commit](bool) { commit(); });
             valueRows_.push_back({label, row.toggle, nullptr, {}});
@@ -881,7 +904,7 @@ class NodeItem final : public QGraphicsObject {
             row.text->setAccessibleName(label);
             row.text->setFont(kit::font(kit::TypeRole::Ui));
             row.text->resize(row.text->sizeHint());
-            addProxy(row.text);
+            prepareField(row.text);
             registerControlRole(row.text, role);
             connect(row.text, &QLineEdit::editingFinished, this, [commit] { commit(); });
             valueRows_.push_back({label, row.text, nullptr, {}});
@@ -893,7 +916,7 @@ class NodeItem final : public QGraphicsObject {
             row.color->setAccessibleName(label);
             row.color->setControlSize(kit::KColorChip::ControlSize::Compact);
             row.color->resize(row.color->sizeHint());
-            addProxy(row.color);
+            prepareField(row.color);
             registerControlRole(row.color, role);
             connect(row.color, &kit::KColorChip::colorChanged, this,
                     [commit](const kit::KColor&) { commit(); });
@@ -934,7 +957,7 @@ class NodeItem final : public QGraphicsObject {
                                                : -1'000'000'000.0,
                                   1'000'000'000.0, integral ? 0 : 4,
                                   dimension || spacing ? QStringLiteral("px") : QString{});
-                addProxy(field);
+                prepareField(field);
                 registerControlRole(field, role);
                 bindCell(field, commit);
                 row.numeric[static_cast<std::size_t>(component)] = field;
@@ -1481,6 +1504,19 @@ class NodeItem final : public QGraphicsObject {
     // Recomputes the card's own extent from what it actually carries -- the header text, the widest
     // row label, and the widest control -- rather than from a spelled card width, then positions
     // each proxy inside it.
+    void wrapPropertyRow(const QString& label, QWidget* field, KeyframeDiamond* diamond) {
+        if (auto* value = qobject_cast<kit::KValueField*>(field))
+            value->setCompact(true);
+        auto* row =
+            new kit::KPropertyRow(kit::makePropertyRowLabel(label, nullptr), diamond, {field});
+        row->setObjectName("nodePropertyRow");
+        row->setProperty("nodeParameterRole", field->property("nodeParameterRole"));
+        row->setProperty("nodeParameterRowPitch", kit::px(kit::Size::PropertyRow));
+        hostTranslucent(*row);
+        auto* proxy = new QGraphicsProxyWidget(this);
+        proxy->setWidget(row);
+        propertyRows_.emplace(field, row);
+    }
     void relayout() {
         // A reroute is a dot: one input on its left edge, one output on its right, and nothing
         // else. Laid out here rather than in the card path below because none of that path's
@@ -1506,23 +1542,11 @@ class NodeItem final : public QGraphicsObject {
         const QFontMetricsF rowMetrics(kit::font(kit::TypeRole::UiSmall));
         const QFontMetricsF valueMetrics(kit::font(kit::TypeRole::Value));
 
-        qreal labelColumn = 0.0;
+        qreal labelColumn = kit::px(kit::Size::PropertiesLabelWidth);
         qreal controlColumn = 0.0;
         qreal rowHeight = 0.0;
-        // The diamond column is reserved only when this card actually carries one, so a card with
-        // no animatable parameter is exactly as wide as it was before task S5.
-        qreal diamondColumn = 0.0;
-        for (const auto& row : valueRows_) {
-            if (row.diamond != nullptr) {
-                diamondColumn =
-                    std::max(diamondColumn, static_cast<qreal>(row.diamond->sizeHint().width()));
-            }
-        }
-        if (colorDiamond_ != nullptr) {
-            diamondColumn =
-                std::max(diamondColumn, static_cast<qreal>(colorDiamond_->sizeHint().width()));
-        }
-        const qreal diamondSpan = diamondColumn > 0.0 ? diamondColumn + kCardLabelGap : 0.0;
+        const qreal diamondSpan =
+            kit::px(kit::Size::PropertiesDiamondColumn) + kit::px(kit::Spacing::PropertyGutter);
         // sizeHint(), never the CURRENT width: a control is stretched to the card's own control
         // column below, so measuring its live width here would feed the card's width back into
         // itself and make the layout depend on how many times it had been run.
@@ -1564,6 +1588,16 @@ class NodeItem final : public QGraphicsObject {
         if (socketColumn > 0.0) {
             minimumWidth_ = std::max(minimumWidth_, 2.0 * kCardPadding + socketColumn);
         }
+        for (const auto& [field, row] : propertyRows_) {
+            Q_UNUSED(field)
+            minimumWidth_ =
+                std::max(minimumWidth_, row->sizeHint().width() + (kCardPadding + kCardPadding));
+        }
+        const QFontMetricsF titleMetrics(kit::font(kit::TypeRole::Ui));
+        minimumWidth_ = std::max(minimumWidth_, (kCardPadding + kCardPadding) +
+                                                    titleMetrics.horizontalAdvance(title_) +
+                                                    kit::px(kit::Spacing::PropertyGutter) +
+                                                    rowMetrics.horizontalAdvance(eyebrow_));
         const qreal width = std::max(layout_.width, minimumWidth_);
         // Parameter sockets share the row of their kit control. Only transport-only inputs
         // and outputs require their own rows; they retain ordered multi-input hit semantics.
@@ -1601,65 +1635,31 @@ class NodeItem final : public QGraphicsObject {
         labelColumnWidth_ = labelColumn;
         rowHeight_ = rowHeight;
 
-        const qreal diamondLeft = kCardPadding + labelColumn + kCardLabelGap;
-        const qreal controlLeft = diamondLeft + diamondSpan;
-        // CEIL, never truncate: a fractional span rounded down leaves the control a pixel short of
-        // the card's own padding, and at a fractional row pitch that gap is exactly the sliver of
-        // card surface that made a full-width field look inset.
-        const qreal controlSpan = std::max(1.0, std::ceil(width_ - kCardPadding - controlLeft));
         qreal y = parameterRowsTop_;
+        const auto placeRow = [this, rowHeight](QWidget* field, qreal top) {
+            auto* row = propertyRows_.at(field);
+            row->resize(static_cast<int>(std::floor(width_ - (kCardPadding + kCardPadding))),
+                        kit::px(kit::Size::PropertyRow));
+            positionProxy(row, kCardPadding, top);
+            const auto role = controlRoles_.find(field);
+            const bool linked = role != controlRoles_.end() && linkedInputs_.contains(role->second);
+            field->setVisible(!linked);
+            if (role != controlRoles_.end())
+                parameterSocketY_.try_emplace(role->second, top + rowHeight / 2);
+            row->graphicsProxyWidget()->setVisible(!layout_.collapsed);
+            row->graphicsProxyWidget()->setOpacity(layout_.muted ? 0.5 : 1.0);
+        };
         for (const auto& row : valueRows_) {
-            if (const auto role = controlRoles_.find(row.widget); role != controlRoles_.end())
-                parameterSocketY_.try_emplace(role->second, y + rowHeight / 2.0);
-            row.widget->setProperty("nodeParameterRowPitch", kit::px(kit::Size::PropertyRow));
-            row.widget->resize(static_cast<int>(controlSpan), row.widget->sizeHint().height());
-            positionProxy(row.widget, controlLeft, y + (rowHeight - row.widget->height()) / 2.0);
-            if (row.diamond != nullptr) {
-                row.diamond->resize(row.diamond->sizeHint());
-                positionProxy(row.diamond, diamondLeft,
-                              y + (rowHeight - row.diamond->height()) / 2.0);
-            }
+            placeRow(row.widget, y);
             y += rowHeight + kCardRowGap;
         }
-        if (colorChip_ != nullptr) {
-            if (const auto role = controlRoles_.find(colorChip_); role != controlRoles_.end())
-                parameterSocketY_.try_emplace(role->second, y + rowHeight / 2.0);
-            colorChip_->setProperty("nodeParameterRowPitch", kit::px(kit::Size::PropertyRow));
-            colorChip_->resize(colorChip_->sizeHint());
-            // The color row is the last row carrying a real widget -- read-only rows below it are
-            // painted, not positioned -- so `y` is deliberately not advanced again here.
-            positionProxy(colorChip_, controlLeft, y + (rowHeight - colorChip_->height()) / 2.0);
-            if (colorDiamond_ != nullptr) {
-                colorDiamond_->resize(colorDiamond_->sizeHint());
-                positionProxy(colorDiamond_, diamondLeft,
-                              y + (rowHeight - colorDiamond_->height()) / 2.0);
-            }
+        if (colorChip_) {
+            placeRow(colorChip_, y);
+            y += rowHeight + kCardRowGap;
         }
-        if (colorChip_)
-            y += rowHeight;
         for (auto* label : readOnlyLabels_) {
-            label->resize(static_cast<int>(controlSpan), kit::px(kit::Size::Control));
-            positionProxy(label, controlLeft, y + (rowHeight - label->height()) / 2.0);
-            y += rowHeight;
-        }
-        for (auto* child : childItems()) {
-            auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child);
-            if (proxy == nullptr || proxy == renameProxy_)
-                continue;
-            const auto* widget = proxy->widget();
-            // Task S7, item 3: one rule, by role. Every control the card builds registers the
-            // parameter role it edits, and a role whose socket is linked hides its control -- which
-            // is what makes "unlinked shows the widget, linked shows only the socket" one sentence
-            // rather than a per-control chain that had to be extended for every new row.
-            const auto role = controlRoles_.find(widget);
-            const bool linked = role != controlRoles_.end() && linkedInputs_.contains(role->second);
-            proxy->setVisible(!layout_.collapsed && !linked);
-            proxy->setOpacity(layout_.muted ? 0.5 : 1.0);
-            // Exactly 1, always. A fractional scale resampled a control's own hairlines, padding
-            // and text into a blurred, visibly smaller copy of itself -- and it only ever existed
-            // to squeeze a control into a card too narrow for it, which minimumWidth_ above now
-            // makes impossible.
-            proxy->setScale(1.0);
+            placeRow(label, y);
+            y += rowHeight + kCardRowGap;
         }
         const auto inputCount = std::ranges::count_if(
             sockets_, [](const auto* socket) { return socket->input.has_value(); });
@@ -1725,6 +1725,7 @@ class NodeItem final : public QGraphicsObject {
     bool scrubbing_ = false;
     std::vector<std::string> builtRoles_;
     std::vector<ValueRow> valueRows_;
+    std::map<QWidget*, kit::KPropertyRow*> propertyRows_;
     std::vector<OperandRow> operandRows_;
     std::vector<std::pair<QString, QString>> readOnlyRows_;
     kit::KValueField* positionX_ = nullptr;

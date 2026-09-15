@@ -201,8 +201,8 @@ int main(int argc, char** argv) {
             const auto eyebrow = node_editor::nodeEyebrow(
                 *a.session.composition(),
                 *a.session.composition()->graph().findNode(boundary->nodeId));
-            expect(eyebrow.contains(QStringLiteral("Screen")),
-                   "a Layer card's eyebrow names the blend mode it is set to");
+            expect(eyebrow == QStringLiteral("Layers"),
+                   "a Layer card shows its category on the title row");
         }
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

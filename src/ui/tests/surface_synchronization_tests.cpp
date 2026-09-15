@@ -339,8 +339,8 @@ void agree(const Surfaces& surfaces, const std::string& where) {
         const bool driven =
             std::holds_alternative<document::DriverBindingSource>(parameter->source);
         if (card != nullptr) {
-            const auto* proxy = card->graphicsProxyWidget();
-            check.say(proxy != nullptr && proxy->isVisible() != driven,
+            const auto* proxy = card->window()->graphicsProxyWidget();
+            check.say(proxy != nullptr && card->isVisible() != driven,
                       "a card's control is shown exactly while its input is unlinked");
         }
         if (card != nullptr) {

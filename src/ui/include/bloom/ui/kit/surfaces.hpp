@@ -87,5 +87,6 @@ class KListSurface : public QWidget {
 class KSurface : public QWidget {
   public:
     explicit KSurface(QWidget* parent = nullptr);
+    static void clipPanelChildren(QWidget& panel);
 };
 } // namespace bloom::ui::kit

@@ -9,14 +9,16 @@ class KPropertyRow final : public QWidget {
     Q_OBJECT
   public:
     KPropertyRow(QLabel* label, QWidget* indicator, std::initializer_list<QWidget*> values,
-                 QWidget* parent = nullptr);
+                 QWidget* parent = nullptr, bool leadingIndicator = false);
     QSize minimumSizeHint() const override;
+    void setLineCount(int lines);
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
 
   private:
     QLabel* label_;
+    bool leadingIndicator_ = false;
 };
 QLabel* makePropertyRowLabel(const QString& text, QWidget* parent);
 class KRow : public QWidget {
@@ -31,6 +33,7 @@ class KRow : public QWidget {
 
   protected:
     void paintEvent(QPaintEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
   private:
     QHBoxLayout* row_;

@@ -60,11 +60,11 @@ void TimelineAxis::zoomToFit() noexcept {
 }
 
 double TimelineAxis::secondsForPixel(const qreal pixelX) const noexcept {
-    return t0 + pixelX / std::max(1, widthPixels - 1) * (t1 - t0);
+    return t0 + (pixelX - inset) / pixelSpan() * (t1 - t0);
 }
 
 qreal TimelineAxis::pixelForSeconds(const double seconds) const noexcept {
-    return t1 > t0 ? (seconds - t0) / (t1 - t0) * std::max(0, widthPixels - 1) : 0.0;
+    return t1 > t0 ? inset + (seconds - t0) / (t1 - t0) * pixelSpan() : 0.0;
 }
 
 qreal TimelineAxis::pixelForTime(const core::RationalTime time) const noexcept {
@@ -72,15 +72,14 @@ qreal TimelineAxis::pixelForTime(const core::RationalTime time) const noexcept {
 }
 
 double TimelineAxis::pixelsPerFrame() const noexcept {
-    return t1 > t0 ? std::max(1, widthPixels - 1) / (t1 - t0) *
-                         static_cast<double>(frameRate.denominator()) /
+    return t1 > t0 ? pixelSpan() / (t1 - t0) * static_cast<double>(frameRate.denominator()) /
                          static_cast<double>(frameRate.numerator())
                    : 1.0;
 }
 
 std::uint64_t TimelineAxis::frameIndexForPixel(const int pixelX) const noexcept {
-    const int pixel = std::clamp(pixelX, 0, std::max(0, widthPixels - 1));
-    const auto span = static_cast<std::int64_t>(std::max(1, widthPixels - 1));
+    const int pixel = std::clamp(pixelX - inset, 0, pixelSpan());
+    const auto span = static_cast<std::int64_t>(pixelSpan());
     // Fit has an exact rational pixel fraction. Keep its halfway ties exact without forcing
     // viewport zoom (a presentation value) into the document's rational-time representation.
     if (t0 == 0.0 && t1 == duration.toSeconds() &&
@@ -115,6 +114,8 @@ std::optional<TimelineAxis> TimelineRuler::axisForWidth(const int widthPixels) c
         return std::nullopt;
     }
     auto axis = TimelineAxis::create(*composition, widthPixels);
+    if (axis)
+        axis->inset = kit::px(kit::Spacing::LanePadding);
     if (axis.has_value() && visibleEnd_ > visibleStart_) {
         axis->zoomToRange(visibleStart_, visibleEnd_);
     }
@@ -146,8 +147,7 @@ void TimelineRuler::zoomBy(const double factor, const qreal anchorX) {
     if (!axis.has_value() || !std::isfinite(factor) || factor <= 0.0) {
         return;
     }
-    const double fraction =
-        std::clamp(anchorX / std::max(1, width() - kit::px(kit::Size::Hairline)), 0.0, 1.0);
+    const double fraction = std::clamp((anchorX - axis->inset) / axis->pixelSpan(), 0.0, 1.0);
     const double anchor = axis->t0 + fraction * (axis->t1 - axis->t0);
     const double span = std::clamp(
         (axis->t1 - axis->t0) / factor,

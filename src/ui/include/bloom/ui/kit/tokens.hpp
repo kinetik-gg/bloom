@@ -47,6 +47,7 @@ enum class Color : std::uint8_t {
     // one role that marks "this is the active panel."
     BorderActive,
     Accent,
+    OnAccent,
     AccentHover,
     AccentPressed,
     Keyframe,
@@ -126,6 +127,13 @@ enum class Spacing : int {
     // task U8 (issue 131), formal amendment 1, A4: the panel header's own vertical padding.
     // Deliberately off the base-4 scale -- not rounded to XS/S/M or any nearby step.
     PanelHeader = 10,
+    ChromePadding = 3,
+    ChromeGap = 4,
+    FieldMargin = 1,
+    RowPadding = 1,
+    PropertyGutter = 8,
+    SectionPadding = 8,
+    LanePadding = 12,
     // task F1, item F5: a menu row's own padding, vertical and horizontal. Two more deliberate
     // off-scale steps, named for their purpose exactly as Gutter and PanelHeader are: a menu row
     // is denser vertically and roomier horizontally than the base scale offers, and rounding
@@ -196,7 +204,9 @@ enum class Size : int {
     TimelineNameDefault = 280,
     TimelineLeftColumn = TimelineToggleColumn + TimelineNameDefault + 2 * DropdownWidth,
     TimelineColumn = 100,
-    TimelineWorkArea = 6,
+    TimelineWorkArea = 10,
+    TimelineSeparator = 2,
+    TimelineChromeGutter = 32,
     TimelineWorkAreaHandle = 6,
     TimelineNavigatorThumb = 6,
     ScrollBar = 8,
@@ -217,7 +227,7 @@ enum class Size : int {
     // resort. See kit::KValueField::minimumSizeHint().
     ValueCellMin = 72,
     PropertiesLabelWidth = 96,
-    PropertiesLabelMinWidth = 72,
+    PropertiesLabelMinWidth = 64,
     PropertiesRowPitch = 28,
     PropertiesDiamondColumn = 20,
     PropertiesFieldWidth = 72,
@@ -247,6 +257,10 @@ inline constexpr int WorkspaceVersion = 2;
 // Border widths in design pixels. The focus ring is drawn OUTSIDE the control's own rectangle so
 // gaining focus never shifts layout.
 inline constexpr qreal kCompositionFrameWidth = 1.0;
+inline constexpr qreal kNodeLinkWidth = 1.0;
+inline constexpr int kLinkActiveLightness = 135;
+inline constexpr qreal kDiamondStroke = 1.5;
+inline constexpr double kMenuWindowHeightShare = 0.5;
 inline constexpr qreal kKeyDiamondRadius = 4.5;
 inline constexpr qreal kNodeCanvasHalfExtent = 256.0 * 1024;
 inline constexpr qreal kHairlineWidth = 1.0;

@@ -55,6 +55,7 @@ struct TimelineLayerEntry final {
     document::ParameterId parameterId{};
     std::string role{};
     bool expanded = false;
+    QString group{};
     document::NodeId imageNodeId{};
 };
 
@@ -98,6 +99,7 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
     void updateScrollRange();
 
     std::set<document::LayerId> expandedLayers_;
+    std::set<std::pair<document::LayerId, QString>> collapsedGroups_;
     CompositionSession& session_;
     QWidget* headerFallback_ = nullptr;
     QWidget* headerMenus_ = nullptr;
@@ -164,6 +166,7 @@ class TimelineLayerStack final : public kit::KListSurface {
     // shared scrollbar's range from the new viewport rather than polling it.
     void viewportResized();
     void expansionRequested(document::LayerId layer);
+    void groupExpansionRequested(document::LayerId layer, QString group);
 
   protected:
     void resizeEvent(QResizeEvent* event) override;

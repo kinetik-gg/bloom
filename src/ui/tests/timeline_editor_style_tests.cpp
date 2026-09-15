@@ -275,11 +275,14 @@ void testRulerAndLanesShareTheLaneRegionOrigin(Expectations& expectations) {
     const int columnWidth = ui::TimelineEditor::layerColumnWidth();
     expectations.expect(stack->width() == columnWidth,
                         "the layer column paints at its own fixed width");
-    expectations.expect(lanes->mapTo(editor, QPoint(0, 0)).x() == columnWidth,
+    expectations.expect(lanes->mapTo(editor, QPoint(0, 0)).x() ==
+                            columnWidth + ui::kit::px(ui::kit::Size::TimelineSeparator),
                         "the lane region starts exactly at the layer column's right edge");
-    expectations.expect(ruler->mapTo(editor, QPoint(0, 0)).x() == columnWidth,
+    expectations.expect(ruler->mapTo(editor, QPoint(0, 0)).x() ==
+                            columnWidth + ui::kit::px(ui::kit::Size::TimelineSeparator),
                         "the RULER starts at the same x -- it never extends over the left column");
-    expectations.expect(workArea->mapTo(editor, QPoint(0, 0)).x() == columnWidth,
+    expectations.expect(workArea->mapTo(editor, QPoint(0, 0)).x() ==
+                            columnWidth + ui::kit::px(ui::kit::Size::TimelineSeparator),
                         "the work-area strip above them starts at the same x");
     expectations.expect(ruler->width() == lanes->width() && ruler->width() == workArea->width(),
                         "all three share one extent too, so one frame is one x for all of them");
@@ -334,8 +337,9 @@ void testHeaderSplitInEditorArea(Expectations& expectations) {
                             "the ruler fits entirely inside the header");
         expectations.expect(name != nullptr && header->isAncestorOf(name) && name->isVisible(),
                             "the composition name is visible in the header");
-        expectations.expect(fullscreen->mapTo(&area, QPoint(fullscreen->width(), 0)).x() <= laneX,
-                            "fullscreen stays in the left header cell");
+        expectations.expect(fullscreen->mapTo(&area, QPoint(fullscreen->width(), 0)).x() >=
+                                area.width() - ui::kit::px(ui::kit::Spacing::ChromePadding) - 1,
+                            "fullscreen stays at the panel right edge");
         auto* columns = editor->findChild<QWidget*>("timelineColumnHeaderRow");
         expectations.expect(columns->mapTo(editor, QPoint()).y() == 0,
                             "column headings are the body's first row");
@@ -401,7 +405,7 @@ void testTimeViewportGestures(Expectations& expectations) {
     const auto keyRows = keys->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
     expectations.expect(!keyRows.isEmpty(), "an animated key row is present");
     if (!keyRows.isEmpty()) {
-        auto* keyRow = keyRows.at(4);
+        auto* keyRow = keyRows.at(0);
         const auto keyAxis = getAxis(keyRow->width());
         sendMouse(*keyRow, QEvent::MouseButtonPress, keyAxis.pixelForTime(time(3)),
                   keyRow->height() / 2.0);
@@ -666,7 +670,7 @@ void testPlayheadSpansRulerAndEveryLane(Expectations& expectations) {
     const int firstLaneX = accentRunCenter(laneImage, rowHeight / 2);
     const int secondLaneX = accentRunCenter(laneImage, rowHeight + rowHeight / 2);
     const int belowLastLaneX = accentRunCenter(laneImage, 2 * rowHeight + rowHeight / 2);
-    const int markerX = accentRunCenter(rulerImage, 2);
+    const int markerX = qRound(ruler->playheadLabelRect().center().x());
 
     expectations.expect(rulerX >= 0, "the ruler paints the Accent playhead line");
     expectations.expect(firstLaneX >= 0 && secondLaneX >= 0,
@@ -677,7 +681,7 @@ void testPlayheadSpansRulerAndEveryLane(Expectations& expectations) {
     expectations.expect(rulerX == firstLaneX && firstLaneX == secondLaneX &&
                             secondLaneX == belowLastLaneX,
                         "the ruler and every lane put the line at exactly the same x");
-    expectations.expect(markerX == rulerX,
+    expectations.expect(std::abs(markerX - rulerX) <= 1,
                         "the head marker above the ruler sits at the same x as the line it heads");
 
     delete editor;
@@ -731,16 +735,15 @@ void testRowsAreFlatThirtyTwoPixelRows(Expectations& expectations) {
     // row addSolidLayer selected is row 0 and the unselected pair is rows 1 and 2.
     const QImage laneImage = lanes->grab().toImage();
     const QColor surface = ui::kit::color(ui::kit::Color::Surface);
-    const QColor raised = ui::kit::color(ui::kit::Color::SurfaceRaised);
     const int sampleX = laneImage.width() - 4;
-    expectations.expect(near(laneImage.pixelColor(sampleX, 32 + 1), raised, 2) &&
+    expectations.expect(near(laneImage.pixelColor(sampleX, 32 + 1), surface, 2) &&
                             near(laneImage.pixelColor(sampleX, 64 + 1), surface, 2),
-                        "lane rows alternate SurfaceRaised and Surface with low contrast");
+                        "unselected lane rows share the flat Surface fill");
 
     // The hairline separator closes each row, in Border.
-    const QColor border = ui::kit::color(ui::kit::Color::Border);
+    const QColor border = ui::kit::color(ui::kit::Color::Background);
     expectations.expect(near(laneImage.pixelColor(sampleX, 31), border, 6),
-                        "a Border hairline closes the row at its last pixel row");
+                        "a Background hairline closes the row at its last pixel row");
 
     delete editor;
     finishFixture(fixture);
@@ -850,7 +853,9 @@ void testClipBarSpansTheCompositionRangeInItsDataTypeColor(Expectations& expecta
         if (!bar.has_value()) {
             continue;
         }
-        expectations.expect(bar->left() == 0 && bar->right() >= lanes->width() - 2,
+        expectations.expect(bar->left() == ui::kit::px(ui::kit::Spacing::LanePadding) &&
+                                bar->right() >=
+                                    lanes->width() - ui::kit::px(ui::kit::Spacing::LanePadding) - 2,
                             "the bar spans the whole composition range on its lane -- no trim "
                             "feature exists, so a partial bar would be a fiction");
         expectations.expect(bar->height() == ui::kit::px(ui::kit::Size::TimelineBar),
@@ -919,7 +924,7 @@ void testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(Expectations& expecta
         }
         const QImage rowImage = row->grab().toImage();
         // Between the toggle strip and the Name cell: no glyph, no text, just the row's own fill.
-        const QColor fill = rowImage.pixelColor(rowImage.width() - 3, 16);
+        const QColor fill = rowImage.pixelColor(rowImage.width() - 3, 1);
         if (near(fill, raised, 4)) {
             sawRaisedRow = true;
         }
@@ -930,7 +935,7 @@ void testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(Expectations& expecta
                             "no row paints an Accent fill or edge in the left column either");
     }
     expectations.expect(sawRaisedRow && sawPlainRow,
-                        "the left column alternates the same surface steps as the lane beside it");
+                        "the selected left row is raised and unselected rows are flat");
 
     delete editor;
     finishFixture(fixture);
@@ -1276,7 +1281,7 @@ void testDraggingALaneScrubsThroughTheRulerScrubPath(Expectations& expectations)
         return;
     }
 
-    const auto axis = ui::TimelineAxis::create(*composition, lanes->width());
+    const auto axis = editor->rulerForTest()->axisForWidth(lanes->width());
     expectations.expect(axis.has_value(), "the lane region resolves the shared time axis");
     if (!axis.has_value()) {
         delete editor;
@@ -1377,7 +1382,7 @@ void testRangeRowsAndWorkAreaCommands(Expectations& expectations) {
                                           core::RationalTime::fromInteger(3));
     expectations.expect(fixture.session.executeTransaction(std::move(trim)).changed(),
                         "trim setup commits");
-    const auto axis = ui::TimelineAxis::create(*fixture.session.composition(), lanes->width());
+    const auto axis = editor->rulerForTest()->axisForWidth(lanes->width());
     if (!axis) {
         expectations.expect(false, "gesture axis");
         delete editor;
@@ -1462,8 +1467,7 @@ void testRangeRowsAndWorkAreaCommands(Expectations& expectations) {
                         "B/N actions author the shared work area");
     auto* strip = editor->findChild<ui::TimelineWorkAreaStrip*>("timelineWorkAreaStrip");
     if (strip) {
-        const auto stripAxis =
-            ui::TimelineAxis::create(*fixture.session.composition(), strip->width());
+        const auto stripAxis = editor->rulerForTest()->axisForWidth(strip->width());
         if (stripAxis) {
             const auto left = static_cast<int>(
                 std::lround(stripAxis->pixelForTime(core::RationalTime::fromInteger(1))));
@@ -1645,9 +1649,9 @@ void testIntegratedKeyGestures(Expectations& expectations) {
     expectations.expect(moved.size() == 2 && moved[0].time == time(2) && moved[1].time == time(4),
                         "drag moves all selected keys by one frame-grid delta");
     (void)session.undo();
-    mouse(QEvent::MouseButtonPress, 0.5, yFor(rotation) - 10);
-    mouse(QEvent::MouseMove, 5.5, yFor(opacity) + 10);
-    mouse(QEvent::MouseButtonRelease, 5.5, yFor(opacity) + 10);
+    mouse(QEvent::MouseButtonPress, 0.5, std::min(yFor(rotation), yFor(opacity)) - 10);
+    mouse(QEvent::MouseMove, 5.5, std::max(yFor(rotation), yFor(opacity)) + 10);
+    mouse(QEvent::MouseButtonRelease, 5.5, std::max(yFor(rotation), yFor(opacity)) + 10);
     expectations.expect(session.selection().keyframes.size() == 6,
                         "box-select spans parameter rows");
     std::vector<ui::KeyframeSelection> stretchKeys;

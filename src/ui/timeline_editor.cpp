@@ -89,7 +89,7 @@ constexpr int kLayerColumnWidthPx = kit::px(kit::Size::TimelineLeftColumn);
 // to Size::ScrollBarHover, and if that growth came out of the lane region's own width the ruler
 // above it would stop agreeing with the lanes about where a frame is the instant the pointer
 // touched the scrollbar. Reserving the larger extent once means the time axis never moves.
-constexpr int kScrollGutterWidth = kit::px(kit::Size::ScrollBarHover);
+constexpr int kScrollGutterWidth = kit::px(kit::Size::TimelineChromeGutter);
 
 [[nodiscard]] int toggleCellX(const int index) { return kToggleStripX + index * kToggleCellWidth; }
 [[nodiscard]] int nameCellWidth(const int width) {
@@ -261,7 +261,7 @@ kit::KDropdown* makeBlendingDropdown(QWidget* parent) {
 // -- task T1 replaces task U7's surface ladder), so the separator is the only thing giving the grid
 // its rhythm.
 void paintRowSeparator(QPainter& painter, const int top, const int widthPixels) {
-    kit::applyHairlinePen(painter, kit::color(kit::Color::Border));
+    kit::applyHairlinePen(painter, kit::color(kit::Color::Background));
     const auto y = static_cast<qreal>(top + kTimelineRowHeight) - 0.5;
     painter.drawLine(QPointF(0.0, y), QPointF(static_cast<qreal>(widthPixels), y));
 }
@@ -428,7 +428,9 @@ TimelineColumnHeaders::TimelineColumnHeaders(QWidget* parent) : QWidget(parent) 
     QList<QWidget*> glyphs;
     for (int index = 0; index < kToggleCellCount; ++index) {
         auto* glyph = new kit::KIconButton(row);
-        glyph->setIcon(kit::icon(toggleIcon(index), kit::IconRole::Chrome));
+        glyph->setIcon(kit::icon(toggleIcon(index), kit::Size::IconControl, kit::Color::Muted,
+                                 kit::IconWeight::Regular));
+        glyph->setIconSize(QSize(kit::px(kit::Size::IconControl), kit::px(kit::Size::IconControl)));
         glyph->setAttribute(Qt::WA_TransparentForMouseEvents);
         glyphs.append(glyph);
     }
@@ -583,8 +585,12 @@ void TimelineLayerStack::relayoutRows() {
             row->show();
         } else {
             row->hide();
-            if (!property)
+            if (!property) {
                 property = propertyPool_[slot] = new TimelinePropertyRow(session_, this);
+                property->toggleGroup = [this](document::LayerId layer, const QString& group) {
+                    emit groupExpansionRequested(layer, group);
+                };
+            }
             property->bind(entry);
             property->setGeometry(0, rowTop(index), width(), kTimelineRowHeight);
             property->show();
@@ -1086,9 +1092,8 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
     for (int row = scrollOffset_ / kTimelineRowHeight;
          row <= (scrollOffset_ + height()) / kTimelineRowHeight; ++row) {
         const int top = rowTop(row);
-        painter.fillRect(
-            QRect(0, top, width(), kTimelineRowHeight),
-            kit::color(row % 2 == 0 ? kit::Color::Surface : kit::Color::SurfaceRaised));
+        painter.fillRect(QRect(0, top, width(), kTimelineRowHeight),
+                         kit::color(kit::Color::Surface));
         paintRowSeparator(painter, top, width());
     }
     const int firstRow = std::max(0, scrollOffset_ / kTimelineRowHeight);
@@ -1098,17 +1103,13 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
         const auto& entry = entries_[static_cast<std::size_t>(row)];
         const int top = rowTop(row);
         painter.setRenderHint(QPainter::Antialiasing, false);
-        painter.fillRect(
-            QRect(0, top, width(), kTimelineRowHeight),
-            kit::color(row % 2 == 0 ? kit::Color::Surface : kit::Color::SurfaceRaised));
+        painter.fillRect(QRect(0, top, width(), kTimelineRowHeight),
+                         kit::color(kit::Color::Surface));
         const bool selected = entry.imageNodeId.isValid()
                                   ? session_.selectedNodes().contains(entry.imageNodeId)
                                   : isLayerSelected(session_, entry.layerId);
-        if (selected) {
+        if (selected && entry.rowKind == TimelineLayerEntry::Kind::Layer) {
             paintSelectedRowFill(painter, top, width());
-            painter.fillRect(
-                QRect(0, top, kit::px(kit::Size::TimelineWorkAreaHandle) / 2, kTimelineRowHeight),
-                kit::color(kit::Color::Accent));
         }
         paintRowSeparator(painter, top, width());
         if (const auto bar = clipBarRect(row)) {
@@ -1455,6 +1456,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     rulerGutter->setObjectName("timelineRulerScrollGutter");
     rulerGutter->setFixedWidth(kScrollGutterWidth);
     columnHeaderLayout->addWidget(columnHeaders_);
+    columnHeaderLayout->addSpacing(kit::px(kit::Size::TimelineSeparator));
     columnHeaderLayout->addWidget(columnLanes, 1);
     columnHeaderLayout->addWidget(rulerGutter);
 
@@ -1473,8 +1475,15 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     };
     connect(stack_, &TimelineLayerStack::expansionRequested, this, toggleExpansion);
     connect(lanes_, &TimelineLaneRegion::expansionRequested, this, toggleExpansion);
+    connect(stack_, &TimelineLayerStack::groupExpansionRequested, this,
+            [this](document::LayerId layer, const QString& group) {
+                if (!collapsedGroups_.erase({layer, group}))
+                    collapsedGroups_.insert({layer, group});
+                rebuild();
+            });
     connect(&session_, &CompositionSession::compositionChanged, this, [this] {
         expandedLayers_.clear();
+        collapsedGroups_.clear();
         rebuild();
     });
     stack_->addAction(deleteLayerAction_);
@@ -1490,6 +1499,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     // -- and therefore the time axis -- never moves under the pointer.
     gutterLayout->addWidget(scrollBar_, 0, Qt::AlignRight);
     bodyLayout->addWidget(stack_);
+    bodyLayout->addSpacing(kit::px(kit::Size::TimelineSeparator));
     bodyLayout->addWidget(lanes_, 1);
     bodyLayout->addWidget(bodyGutter);
 
@@ -1497,6 +1507,12 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     layout->addWidget(columnHeaderRow);
     layout->addWidget(body, 1);
     layout->addWidget(transportRow);
+    const auto syncNavigator = [this, transportRow] {
+        const auto axis = ruler_->axisForWidth(ruler_->width());
+        transportRow->setVisible(axis && (axis->t0 > 0 || axis->t1 < axis->duration.toSeconds()));
+    };
+    connect(ruler_, &TimelineRuler::axisChanged, transportRow, syncNavigator);
+    syncNavigator();
 
     // ONE scrollbar drives both halves of the grid: left/right scroll sync is structural here, not
     // a pair of handlers keeping two scroll areas in step.
@@ -1559,7 +1575,7 @@ void TimelineEditor::rebuild() {
             }
         }
     }
-    entries = timelinePropertyEntries(session_, entries, expandedLayers_);
+    entries = timelinePropertyEntries(session_, entries, expandedLayers_, collapsedGroups_);
     stack_->setEntries(entries);
     lanes_->setEntries(std::move(entries));
     updateScrollRange();

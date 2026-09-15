@@ -53,8 +53,7 @@ int main(int argc, char** argv) {
         expect(valueField != nullptr, "the Scalar card carries an inline editable value field");
         if (valueField == nullptr)
             return 1;
-        expect(valueField->graphicsProxyWidget() != nullptr &&
-                   valueField->graphicsProxyWidget()->isVisible(),
+        expect(valueField->window()->graphicsProxyWidget() != nullptr && valueField->isVisible(),
                "the Scalar card's inline field is visible at rest");
         valueField->setValue(0.25);
         QCoreApplication::processEvents();
@@ -133,8 +132,8 @@ int main(int argc, char** argv) {
         // --- Step 4: the card hides the widget the link now drives. -----------------------------
         if (auto* opacityField =
                 a.editor.graphScene()->nodeFieldForTest(layer, QStringLiteral("nodeOpacityEditor"));
-            opacityField != nullptr && opacityField->graphicsProxyWidget() != nullptr)
-            expect(!opacityField->graphicsProxyWidget()->isVisible(),
+            opacityField != nullptr && opacityField->window()->graphicsProxyWidget() != nullptr)
+            expect(!opacityField->isVisible(),
                    "a driven opacity hides its inline field on the Layer card");
 
         // --- Step 5: the viewer. ---------------------------------------------------------------

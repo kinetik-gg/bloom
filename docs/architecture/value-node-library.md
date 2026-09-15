@@ -101,12 +101,12 @@ the edge behaviour of every row.
 
 | Group | Count | Category | What it is for |
 | --- | --- | --- | --- |
-| [Conversions](#conversions) | 20 | `Utilities` | Every primitive kind to and from `String`, between the numeric kinds, and between `Color`, `Vector2` and `Vector3` |
-| [Time conversions](#time-conversions) | 4 | `Utilities` | Seconds, frames and non-drop timecode, at the composition's own rate |
-| [String utilities](#string-utilities) | 15 | `Utilities` | Building, measuring, cutting and comparing text |
-| [Math](#math) | 16 | `Math` | The numeric gaps, plus the nine existing arithmetic nodes that moved into the section |
-| [Logic](#logic) | 3 | `Utilities` | Boolean combination and a range predicate |
-| [Readouts](#readouts) | 4 | `Values` | What the composition and the frame are, as numbers |
+| [Conversions](#conversions) | 20 | `Convert` | Every primitive kind to and from `String`, between the numeric kinds, and between `Color`, `Vector2` and `Vector3` |
+| [Time conversions](#time-conversions) | 4 | `Time` | Seconds, frames and non-drop timecode, at the composition's own rate |
+| [String utilities](#string-utilities) | 15 | `String` | Building, measuring, cutting and comparing text |
+| [Math](#math) | 16 | `Math`, `Vector`, `Color` | The numeric gaps, plus the nine existing arithmetic nodes that moved into the section |
+| [Logic](#logic) | 3 | `Logic` | Boolean combination and a range predicate |
+| [Readouts](#readouts) | 4 | `Time` (frame), `Values` (composition) | What the composition and the frame are, as numbers |
 
 Every node's socket names, its inline selectors and its outputs come from ONE record --
 `document::valueUtilityDescriptors()` -- so the tables below describe the same table the registry,
@@ -119,16 +119,15 @@ the compiler and the evaluator read.
   versions, and no golden pixel or output digest shifted.
 - **No persistence step.** A new node type is not a stored-shape change. `NodeCategory` is not
   persisted either, so moving the arithmetic into `Math` needed no migration.
-- **One UI change, and only one.** The Add search popup and the Add Node menu gained a **Math**
-  section header, and the section order became Sources, Layers, Compositing, Values, Math,
-  Utilities, Output. Node cards render every new node through the registry-driven generic path that
+- **UI classification.** The Add search popup and Add Node menu expose Math after Values.
+  The complete current order is defined in [UI grammar](../ux/ui-grammar.md). Node cards render every new node through the registry-driven generic path that
   already existed (`nodeOperandSelector`, `nodeOperandEditor`, `nodeOperandToggle`,
   `nodeOperandTextEditor`, `nodeOperandColorChip`); NO new `objectName` was introduced and none was
   renamed.
 
 ## Conversions
 
-Category `Utilities`. Every row's inputs are listed in socket order; a **selector** is inline and
+Category `Convert` (timecode/frame conversions are `Time`). Every row's inputs are listed in socket order; a **selector** is inline and
 carries no socket.
 
 | Node | Inputs | Outputs | Notes |
@@ -156,7 +155,7 @@ carries no socket.
 
 ## Time Conversions
 
-Category `Utilities`. All four read the COMPOSITION's frame rate -- the same rate a `Time` node's
+Category `Time`. All four read the COMPOSITION's frame rate -- the same rate a `Time` node's
 `frame` output is computed from, so the two can never disagree about which frame an instant falls
 in.
 
@@ -196,7 +195,7 @@ refused rather than read as non-drop.
 
 ## String Utilities
 
-Category `Utilities`.
+Category `String`.
 
 | Node | Inputs | Outputs | Notes |
 | --- | --- | --- | --- |
@@ -245,7 +244,7 @@ answer with the SAME shape the safe parse contract defines -- a value, a `valid`
 
 ## Math
 
-Category `Math`. The section holds the ARITHMETIC and nothing else: the existing Math, Vector Math,
+Categories `Math`, `Vector` and `Color` follow the UI grammar projection. The original arithmetic library includes: the existing Math, Vector Math,
 Vector Measure, Map Range, Clamp, Mix, Mix Color, Compare and Random nodes moved into it from
 `Utilities`, and every numeric node below was added to it. Switch, Separate/Combine, Reroute, the
 conversions and the logic stayed in `Utilities`, because a predicate and a wire are not arithmetic.
@@ -294,7 +293,7 @@ of each would be two nodes an artist has to choose between for one operation.
 
 ## Logic
 
-Category `Utilities`. A predicate is not arithmetic, so these did not move into `Math`.
+Category `Logic`, alongside Boolean, Compare and Switch.
 
 | Node | Inputs | Outputs | Notes |
 | --- | --- | --- | --- |
@@ -304,7 +303,7 @@ Category `Utilities`. A predicate is not arithmetic, so these did not move into 
 
 ## Readouts
 
-Category `Values`, beside the literal sources and `Time`, because a readout is where a value comes
+Categories `Time` for frame readouts and `Values` for composition readouts, because a readout is where a value comes
 FROM. None has an input or a parameter at all: its value belongs to the composition or to the
 evaluation request, not to the document's authored values.
 
@@ -353,3 +352,6 @@ exactly five widenings, each with one answer and no lost information. Every conv
 outside that set: it either loses information (Vector 3 to Vector 2), invents a spelling (anything
 to String), or can fail (anything from String). A refusal the artist can see, followed by a node
 they placed deliberately, is better than a silent coercion whose rule they have to remember.
+
+The current UI category order and normalized family mapping are owned by [UI grammar](../ux/ui-grammar.md).
+This presentation projection leaves the non-persisted document category enum unchanged.

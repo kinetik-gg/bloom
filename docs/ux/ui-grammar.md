@@ -37,6 +37,7 @@ All dimensions resolve through tokens. One design pixel is one Qt logical pixel.
 | `Size::DropdownWidthWide` | 120 | Header selectors |
 | `Size::DropdownWidthExpanded` | 240 | Header selector cap |
 | `Spacing::XXS / XS / S / M / L / XL / XXL` | 2 / 4 / 8 / 12 / 16 / 24 / 32 | Gutters |
+| `Spacing::ChromePadding / ChromeGap` | 3 / 4 | Equal chrome inset on all edges / every item gap; controls have no private side margins |
 | `Spacing::Gutter` | 6 | Panel separation |
 
 Editor literals in fixed extents, QSize, pixel multiplication or geometry arithmetic are
@@ -46,7 +47,8 @@ an owned semantic token, never a local pixel constant.
 ## Rasterization and type
 
 Glyphs are SVG rasterizations at integer physical pixel extents for the current DPR, tested
-at 1, 1.25, 1.5 and 2. Do not scale an existing pixmap or paint a glyph by hand.
+at 1, 1.25, 1.5 and 2. Do not scale an existing pixmap or paint a glyph by hand. KDiamond is the explicit vector
+primitive exception described below; it resolves geometry through the device transform.
 Toggle on uses Fill; off uses Regular, centered in a ToggleCell column.
 `TypeRole` is the only font API. The interface family is pinned, bundled Inter
 (Regular, Medium, SemiBold; SIL OFL); Geist Mono remains the value face. Intake includes
@@ -105,7 +107,8 @@ fields without changing time. It uses nominal-rate timecode and exact rational f
 
 ## Node cards
 
-A card uses `NodeTitleBand`, a Title Case derived display name, and a smaller kind eyebrow.
+A card uses one `NodeTitleBand` row: its Title Case derived display name is left-aligned in Ui,
+and its category is right-aligned in muted UiSmall at the same vertical center.
 Artist-authored names remain intact. The body uses `PropertyRow` pitch with real kit value
 fields, dropdowns, line edits, colour chips and read-only labels hosted in scene proxies.
 Parameter sockets sit on the card edge at their corresponding control row; transport-only
@@ -123,7 +126,7 @@ Every selected card, including the primary selection, uses an Accent outline.
 
 `KDiamond` owns the keyframe indicator's rendering; command dispatch stays in its session
 adapter. `KAnchorGrid` owns the nine-point visual grid, while its Properties adapter resolves
-bounds off the UI thread. `KListSurface` paints the common alternating empty-row backdrop;
+bounds off the UI thread. `KListSurface` paints the common flat empty-row backdrop;
 `KRow` owns populated rows and column headings. A heading explicitly identifies its shorter
 `Control` pitch through `headerRow`.
 
@@ -159,7 +162,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `ViewerZoomWidth` | 64 | Fit/zoom dropdown |
 | `ViewerResolutionWidth` | 96 | Resolution dropdown |
 | `NodeCardWidth / NodeCardMin` | 240 / 128 | Normal card floor / legacy minimum vocabulary |
-| `NodeTitleBand` | 32 | Node title and eyebrow |
+| `NodeTitleBand` | 32 | Node name and category on one row |
 | `NodeSocketDot / NodeRerouteDot` | 8 / 10 | Scene port geometry |
 | `NodeLinkHandleMin` | 32 | Minimum spline tangent |
 | `NodeColumnGap / NodeRowGap` | 80 / 24 | Unplaced-node grid |
@@ -203,3 +206,53 @@ The metric audit covers the status line, six tools, card/control containment and
 alignment at DPR 1, 1.5 and 2. It also verifies the timeline menu set remains expanded at
 1600 and 1920 logical-pixel window widths. Whole-window references and final captures run at
 DPR 1 and 1.5. Changed geometry tests use the viewer's real padded mapping.
+
+Panel children are clipped by `KSurface::clipPanelChildren` to `Radius::Panel`; corner overlays
+provide the antialiased boundary. Header and footer share ChromePadding. Viewer declares
+View, Select, Add; Composition commands live under View. Only EditorArea exposes maximize.
+New automation names: `viewerAddMenu`, `viewerAddMenuButton`.
+
+Rows own `Spacing::RowPadding` (1 on all edges); KValueField owns `FieldMargin` (1)
+inside its allocation, including scene proxies. `PropertyGutter` (8) separates labels and
+controls independently of component gaps. KSection owns `SectionPadding` (8 on every edge).
+Expanded RGBA rows use a blank-label KPropertyRow so controls align beneath the swatch.
+
+Toggle and disclosure cells are ToggleCell squares (24); their glyphs are IconControl (20),
+with Regular off, Fill on, muted disabled and a neutral bordered box. Column headings use
+the same glyph size and pitch. KDiamond uses the Bold outline at every DPR.
+
+Timeline lanes use `LanePadding` (12) on both sides of their time axis. `TimelineSeparator` (2)
+is Background between the layer column and lanes, including the header split. All timeline rows
+share TimelineRow pitch and a zero origin; the 28px KPropertyRow is centered within that pitch.
+Selected rows use SurfaceRaised with no edge stripe. Every populated and empty row uses a
+Background hairline separator, without alternating fills. The work-area band is BorderHover,
+with 10px-tall accent pills (`TimelineWorkArea`); cached-frame strips are muted.
+The frame readout is centered over the needle and reserves its label rectangle against ruler
+labels. A fitted timeline hides the navigator row; zoomed navigation uses a muted 6px thumb.
+The shared `TimelineChromeGutter` (32) reserves room for the panel maximize at the right edge.
+Object, Transform, Source groups are collapsible Title Case rows. KPropertyRow's leading-indicator
+layout places the diamond or disclosure in a ToggleCell column, then the compact label and
+bounded controls; vector component labels live inside fields. New name: `timelinePropertyDisclosure`.
+
+`Color::OnAccent` is white (#ffffff). Kit button painters use it for ink on accent fills,
+including transport, loop, snap and keyframe toggles. KToolColumn is sticky at the canvas left
+edge, paints the header Surface, and owns ChromePadding and ChromeGap around bordered ToggleCells.
+KDropdown's minimum is the measured widest item plus its icon, padding and chevron; requested
+fixed widths are floors. The chrome builder respects that minimum after assigning density.
+
+Node Add menu and search order is Sources, Layers, Compositing, Values, Math, Convert, String,
+Logic, Time, Color, Vector, Utilities, Output. The UI category projection owns normalization;
+the document enum is unchanged and no migration is needed. Utilities contains only reroute and
+Separate/Combine plumbing (reroutes remain link gestures). Time includes Time, frame readouts and
+time conversions; composition readouts and literals remain Values. HSV operations belong to Color.
+Kit menus with `columnFlow` use real action-backed controls in additional columns, capped at
+`kMenuWindowHeightShare` (0.5) of the owner window and positioned within that window. Empty-canvas
+double-click opens Add search at the cursor. Footer count is hidden at zero; snap and link style
+are exposed by View, with their legacy footer controls hidden.
+`kNodeLinkWidth` (1) is identical for idle, selected and hovered links; activation applies
+`kLinkActiveLightness` (135 percent) to the socket-kind tint, preserving its hue.
+Node parameter rows are KPropertyRows with a separate fixed diamond column. Their numeric fields
+use compact resting precision: at most two decimals, no trailing zeros; editing retains full
+precision. KDiamond draws vector geometry through the painter's device transform, including canvas
+zoom. Vertices and `kDiamondStroke` (1.5, Bold icon weight at IconSmall) resolve to integer device
+pixels. No diamond pixmap is cached or scaled. New automation name: `nodePropertyRow`.

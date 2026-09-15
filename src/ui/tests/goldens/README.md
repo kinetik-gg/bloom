@@ -1,7 +1,7 @@
 # Whole-window references
 
 `bloom_window_golden_test` captures the real 1920 × 1200 logical-pixel MainWindow with
-`window_fixture.hpp`: all five panels, a solid background and a selected text layer.
+`window_fixture.hpp`: all five panels, a selected Solid background with its timeline groups expanded and Properties showing it, plus a text layer.
 Settings are isolated, the CPU preview must be ready, motion is disabled, keyboard focus is
 cleared and every widget receives Leave before the grab. No design image is used.
 
@@ -16,8 +16,8 @@ layout, palette or text, which move tens of percent. There are no excluded regio
 To deliberately approve a change, run the executable with `--update-goldens` once with
 `QT_QPA_PLATFORM=offscreen QT_SCALE_FACTOR=1 BLOOM_REDUCED_MOTION=1` and once with scale 1.5.
 Inspect both captures, commit the references, and explain the visual change in that commit.
-Normal ctest runs only compare. Every run also writes `build/grammar2-window-dpr1.png` or
-`build/grammar2-window-dpr15.png` for inspection.
+Normal ctest runs only compare. Every run also writes `build/ui3-window-dpr1.png` or
+`build/ui3-window-dpr15.png` for inspection.
 
 Initial approval: GRAMMAR-1 introduces shared 26 px controls, 32 px chrome and declared overflow.
 The subsequent Inter and timeline row migrations deliberately re-approve their resulting changes.
@@ -41,3 +41,11 @@ and accent selection. Empty timeline rows use the shared alternating backdrop.
 The sample graph is arranged through MoveNodes to keep its saved cards distinct; production
 preserves artist-authored positions, including old compact placements. Both DPR references
 are approved for these intentional changes; comparison limits and coverage are unchanged.
+
+UI-3 approval: shared chrome padding and rounded clipping; square toggle/disclosure cells;
+flat timeline rows with Background separators, collapsible Title Case groups and compact
+property controls; padded time axis and gray work area with blue handles; sticky viewer
+tool strip and measured dropdowns; node titles and muted categories in one band, separate
+vector diamond columns and compact numeric precision. The selected Solid fixture exposes
+the same Object/Transform/Source structure in Timeline and Properties. Both DPR references
+are reapproved for these changes with the existing comparison tolerance and full coverage.
