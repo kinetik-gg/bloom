@@ -116,8 +116,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // compatibility schemas, the value library's first slice, and UTIL-1's twenty conversions, four
     // time conversions, fifteen string utilities, nineteen numeric and logic nodes and four
     // readouts. The number is pinned rather than computed so that adding a node type is a
-    // deliberate edit here. MEDIA-1 adds one Image source definition.
-    expectations.expect(registry.definitions().size() == 105,
+    // deliberate edit here. MEDIA-1 adds one Image source definition and AUDIO-2 adds one Audio
+    // source definition.
+    expectations.expect(registry.definitions().size() == 106,
                         "startup contribution includes every built-in definition");
 
     registry.freeze();
@@ -251,8 +252,11 @@ void testStructuralLoweringsRequireCanonicalKeys(Expectations& expectations) {
     {
         const auto output = builtInDefinition(document::kCompositionOutputNodeType,
                                               document::kCompositionOutputNodeSchemaVersion);
-        expectations.expect(output.outputs.empty() && output.inputs.size() == 1,
-                            "the composition Output declares one input and no output");
+        expectations.expect(
+            output.outputs.empty() && output.inputs.size() == 2 &&
+                output.inputs[1].name == document::kCompositionOutputAudioInputPort &&
+                output.inputs[1].valueKind == runtime::SocketValueKind::Audio,
+            "the composition Output declares image and optional audio inputs and no output");
         runtime::NodeDefinitionRegistry sourcingOutput;
         auto spoof = output;
         spoof.outputs.push_back(

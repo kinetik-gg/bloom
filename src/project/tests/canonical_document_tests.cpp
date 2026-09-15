@@ -152,7 +152,7 @@ void expectRequestError(Expectations& expectations, const CanonicalDocumentV1& r
                         "the matching encode path reports the same typed failure");
 }
 
-// The exact canonical bytes for makeMinimalProject()'s live document at document schema {1, 0}
+// The exact canonical bytes for makeMinimalProject()'s live document at the current document schema
 // with no overlay. Factored out (rather than kept local to testMinimalGoldenBytes, as originally)
 // so RT2's overlay tests below can build on it: they take this known-good text and apply small,
 // explicit, verified-anchor edits (splicing retained members at exact known canonical positions)
@@ -163,7 +163,7 @@ constexpr std::string_view kMinimalDocumentGolden =
     "{\n"
     "  \"schemaVersion\": {\n"
     "    \"major\": 1,\n"
-    "    \"minor\": 10\n"
+    "    \"minor\": 11\n"
     "  },\n"
     "  \"project\": {\n"
     "    \"id\": \"1\",\n"
@@ -343,7 +343,7 @@ void testComposedGoldenBytes(Expectations& expectations) {
         "{\n"
         "  \"schemaVersion\": {\n"
         "    \"major\": 1,\n"
-        "    \"minor\": 10\n"
+        "    \"minor\": 11\n"
         "  },\n"
         "  \"project\": {\n"
         "    \"id\": \"1\",\n"
@@ -843,7 +843,7 @@ void testExtensionGoldenBytes(Expectations& expectations) {
         "{\n"
         "  \"schemaVersion\": {\n"
         "    \"major\": 1,\n"
-        "    \"minor\": 10\n"
+        "    \"minor\": 11\n"
         "  },\n"
         "  \"project\": {\n"
         "    \"id\": \"1\",\n"
@@ -1231,8 +1231,8 @@ void testDriverSourceEncoding(Expectations& expectations) {
                                            "              \"outputPort\": \"value\"\n") !=
                             std::string::npos,
                         "the driver source is written as the node-and-port pair it addresses");
-    expectations.expect(encoded.bytes.find("\"minor\": 10") != std::string::npos,
-                        "a document carrying a driver source declares schema minor 10");
+    expectations.expect(encoded.bytes.find("\"minor\": 11") != std::string::npos,
+                        "a document carrying a driver source declares schema minor 11");
 }
 
 void testLimitsAndCapacityAdversarial(Expectations& expectations) {
@@ -1423,10 +1423,10 @@ void testPlainWriteExplicitDefaultsUnchanged(Expectations& expectations) {
 // Version parameterization: schemaMinor alone (no overlay) changes only the root schemaVersion.
 void testSchemaMinorParameterization(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    // Eleven is intentionally above the current minor so this test exercises the request field
+    // Twelve is intentionally above the current minor so this test exercises the request field
     // rather than merely restating the default current version.
-    requireReplace(expected, "\"minor\": 10\n  },\n  \"project\"",
-                   "\"minor\": 11\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 11\n  },\n  \"project\"",
+                   "\"minor\": 12\n  },\n  \"project\"");
 
     auto newProject = makeMinimalProject();
     Document document{std::move(newProject.project)};
@@ -1440,22 +1440,22 @@ void testSchemaMinorParameterization(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = nullptr,
-                                      .schemaMinor = 11};
+                                      .schemaMinor = 12};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
-                        "schemaMinor=11 with no overlay sizes exactly with the golden");
+                        "schemaMinor=12 with no overlay sizes exactly with the golden");
     const auto encoded = encodeWithSlack(request);
     expectBytesEqual(expectations,
                      encoded.ok ? std::string_view(encoded.bytes) : std::string_view{}, expected,
-                     "schemaMinor=11 with no overlay emits {1, 11} and is otherwise "
+                     "schemaMinor=12 with no overlay emits {1, 12} and is otherwise "
                      "byte-identical");
 }
 
 // The document root itself is an attachment point (its schema path is the empty path).
 void testOverlayRootAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 10\n  },\n  \"project\"",
-                   "\"minor\": 10\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 11\n  },\n  \"project\"",
+                   "\"minor\": 11\n  },\n  \"project\"");
     requireReplace(expected, "  \"extensions\": []\n}\n",
                    "  \"extensions\": [],\n  \"zzzRoot\": true\n}\n");
 
@@ -1489,8 +1489,8 @@ void testOverlayRootAttachmentPoint(Expectations& expectations) {
 // A singleton schema-path attachment point nested one level in (project).
 void testOverlayProjectAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 10\n  },\n  \"project\"",
-                   "\"minor\": 10\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 11\n  },\n  \"project\"",
+                   "\"minor\": 11\n  },\n  \"project\"");
     requireReplace(expected,
                    "    ],\n"
                    "    \"assets\": []\n"
@@ -1537,8 +1537,8 @@ void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations)
     std::string expected(kMinimalDocumentGolden);
     // The fixture is authored at the current schema minor so the overlay test changes only
     // retained members.
-    requireReplace(expected, "\"minor\": 10\n  },\n  \"project\"",
-                   "\"minor\": 10\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 11\n  },\n  \"project\"",
+                   "\"minor\": 11\n  },\n  \"project\"");
     requireReplace(expected,
                    "          \"frameRate\": {\n"
                    "            \"numerator\": \"24\",\n"
@@ -1638,8 +1638,8 @@ void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations)
 // A collection-element attachment point nested two levels in (a graph node).
 void testOverlayNodeAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 10\n  },\n  \"project\"",
-                   "\"minor\": 10\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 11\n  },\n  \"project\"",
+                   "\"minor\": 11\n  },\n  \"project\"");
     requireReplace(expected,
                    "              \"parameters\": []\n"
                    "            },\n"
@@ -1687,8 +1687,8 @@ void testOverlayNodeAttachmentPoint(Expectations& expectations) {
 // Composition/Node.
 void testOverlayEdgeAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 10\n  },\n  \"project\"",
-                   "\"minor\": 10\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 11\n  },\n  \"project\"",
+                   "\"minor\": 11\n  },\n  \"project\"");
     requireReplace(expected,
                    "              }\n"
                    "            }\n"
@@ -1736,8 +1736,8 @@ void testOverlayEdgeAttachmentPoint(Expectations& expectations) {
 // carrying a retained array of booleans.
 void testOverlayIdAllocationAttachmentPoints(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 10\n  },\n  \"project\"",
-                   "\"minor\": 10\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 11\n  },\n  \"project\"",
+                   "\"minor\": 11\n  },\n  \"project\"");
     requireReplace(expected,
                    "      \"nodeGroup\": \"0\",\n"
                    "      \"asset\": \"0\"\n"
@@ -2022,8 +2022,8 @@ void testPreservationDeterminismCycle(Expectations& expectations) {
 
     std::string original(plainEncoded.bytes);
 
-    requireReplace(original, "\"minor\": 10\n  },\n  \"project\"",
-                   "\"minor\": 11\n  },\n  \"project\"");
+    requireReplace(original, "\"minor\": 11\n  },\n  \"project\"",
+                   "\"minor\": 12\n  },\n  \"project\"");
 
     requireReplace(original,
                    "                \"slotId\": \"1\",\n"
@@ -2161,7 +2161,7 @@ void testPreservationDeterminismCycle(Expectations& expectations) {
                                              .payloadScratch = overlayPayloadScratch,
                                              .sortScratch = overlaySortScratch,
                                              .roundTrip = decoded.roundTrip(),
-                                             .schemaMinor = 11};
+                                             .schemaMinor = 12};
     const auto overlaySize = bloom::project::canonicalDocumentSize(overlayRequest);
     expectations.expect(overlaySize.hasValue() && *overlaySize.value() == original.size(),
                         "the overlay re-encode sizes exactly to the spliced original's byte "

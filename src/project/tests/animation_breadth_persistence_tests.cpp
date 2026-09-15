@@ -267,7 +267,7 @@ void roundTripAndReopen() {
            "and an eased key is written with the ease-in-out token");
     expect(text.find("\"red\"") != std::string::npos && text.find("\"alpha\"") != std::string::npos,
            "a colour key's value carries the same named channels a constant colour does");
-    expect(text.find("\"minor\": 10") != std::string::npos,
+    expect(text.find("\"minor\": 11") != std::string::npos,
            "both constructs declare the current document schema minor");
 
     auto openedResult = openProjectArchive(archive, {}, memory());
@@ -277,7 +277,7 @@ void roundTripAndReopen() {
         return;
     }
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.schemaMinor == 10 && !opened.roundTrip,
+    expect(opened.schemaMinor == 11 && !opened.roundTrip,
            "and is read as the current schema minor with nothing unknown to retain");
     const auto reopened = opened.document->snapshot();
     const auto* composition = reopened.project().findComposition(authored.compositionId);
@@ -314,11 +314,11 @@ std::vector<std::byte> legacyArchive(std::string& documentText) {
     const auto snapshot = unanimated.snapshot();
     documentText = documentTextOf(archiveOf(snapshot, settings));
 
-    const auto minor = documentText.find("\"minor\": 10");
+    const auto minor = documentText.find("\"minor\": 11");
     if (minor == std::string::npos) {
         throw std::logic_error("legacy minor anchor");
     }
-    documentText.replace(minor, std::string_view("\"minor\": 10").size(), "\"minor\": 2");
+    documentText.replace(minor, std::string_view("\"minor\": 11").size(), "\"minor\": 2");
 
     removeImageFields(documentText);
     const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 2}};
@@ -349,7 +349,7 @@ void migrationFromTwelve() {
         return;
     }
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.schemaMinor == 10 && !opened.roundTrip,
+    expect(opened.schemaMinor == 11 && !opened.roundTrip,
            "the 1.2 migration ladder lands on the current editable schema");
 
     // The step is version-only, so the migrated document must be byte-identical to what the current
@@ -362,7 +362,7 @@ void migrationFromTwelve() {
     if (minor == std::string::npos) {
         return;
     }
-    expectedFromLegacy.replace(minor, std::string_view("\"minor\": 2").size(), "\"minor\": 10");
+    expectedFromLegacy.replace(minor, std::string_view("\"minor\": 2").size(), "\"minor\": 11");
     auto currentWithoutImages = current;
     removeImageFields(currentWithoutImages);
     expect(currentWithoutImages == expectedFromLegacy,
@@ -389,7 +389,7 @@ void minorGating() {
     const auto authored = authoredProject();
     const auto settings = neutralColorSettings();
     const auto baseline = documentTextOf(archiveOf(authored.document->snapshot(), settings));
-    const auto anchor = std::string_view("\"minor\": 10");
+    const auto anchor = std::string_view("\"minor\": 11");
     const auto minor = baseline.find(anchor);
     expect(minor != std::string::npos, "the animated fixture declares the current minor");
     if (minor == std::string::npos) {
@@ -418,12 +418,12 @@ void minorGating() {
                "and the refusal names the exact discriminator it could not accept");
     }
 
-    // Claiming 1.5 -- a minor NEWER than this build -- still decodes the colour curve, because the
+    // Claiming 1.12 -- a minor NEWER than this build -- still decodes the colour curve, because the
     // gate is "the minor that declares it or later", not "exactly 1.3". That is what makes 1.3's
     // additions additive rather than a one-version island.
     {
         auto text = baseline;
-        text.replace(minor, anchor.size(), "\"minor\": 11");
+        text.replace(minor, anchor.size(), "\"minor\": 12");
         auto dom = parseStrictJsonDom(test::toBytes(text), {}, memory());
         expect(static_cast<bool>(dom), "the 1.4-labelled document parses");
         if (!dom) {

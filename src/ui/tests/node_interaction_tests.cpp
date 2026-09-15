@@ -74,10 +74,10 @@ void testLayoutSelectionAndSockets() {
     expect(f.card(a)->pos() == savedPosition && f.stack.size() == resizedBefore + 1,
            "Escape cancels a move preview");
     f.release(savedPosition + QPointF(90, 45));
-    f.drag({145, 130}, {370, 290});
+    f.drag({145, 150}, {370, 290});
     expect(f.session.selectedNodes() == std::set{a},
            "box selection routes its complete set to session");
-    f.drag({400, 130}, {560, 340}, Qt::ShiftModifier);
+    f.drag({400, 149}, {560, 340}, Qt::ShiftModifier);
     expect(f.session.selectedNodes() == std::set{a, b}, "Shift box extends the selection");
     f.click({25, 680});
     expect(f.session.selectedNodes().empty(), "empty click clears all selection");

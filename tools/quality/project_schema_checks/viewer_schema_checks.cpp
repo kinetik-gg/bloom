@@ -154,41 +154,69 @@ void validateManifestSchemaV1_9(const json::Value& schema) {
     validateReferences(schema, schema);
 }
 
-void validateDocumentSchemaV1_10(const json::Value& schema) {
+void validateDocumentSchemaV1_11(const json::Value& schema) {
     using namespace schema_detail;
-    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-document:1.10",
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-document:1.11",
                        "document id");
     requireExact(schema.at("properties").at("schemaVersion"),
-                 R"({"$ref":"#/$defs/fixedVersion-1.10"})", "document version");
-    requireExact(schema.at("$defs").at("fixedVersion-1.10").at("properties").at("minor"),
-                 R"({"const":10})", "minor");
+                 R"({"$ref":"#/$defs/fixedVersion-1.11"})", "document version");
+    requireExact(schema.at("$defs").at("fixedVersion-1.11").at("properties").at("minor"),
+                 R"({"const":11})", "minor");
     auto definitions = schema.at("$defs");
-    for (const auto* name : {"asset-1.10", "assetLocator-1.10"}) {
+    for (const auto* name : {"asset-1.11", "assetLocator-1.11"}) {
         requireExact(definitions.at(name).at("unevaluatedProperties"), "false",
                      "closed asset record");
         definitions.at(name).at("unevaluatedProperties") = json::Value(true);
     }
     static_cast<void>(validateObjectShape(
-        definitions, "asset-1.10",
+        definitions, "asset-1.11",
         {"id", "kind", "locator", "contentDigest", "interpretation", "width", "height", "manifest"},
-        {"id", "kind", "locator", "contentDigest", "interpretation", "width", "height",
-         "manifest"}));
-    static_cast<void>(validateObjectShape(definitions, "assetLocator-1.10",
+        {"id", "kind", "locator", "contentDigest", "interpretation", "width", "height", "manifest",
+         "audio"}));
+    requireExact(definitions.at("audio-1.11").at("unevaluatedProperties"), "false",
+                 "closed audio metadata");
+    definitions.at("audio-1.11").at("unevaluatedProperties") = json::Value(true);
+    const auto& audio =
+        validateObjectShape(definitions, "audio-1.11", {"rate", "channels", "frames", "duration"},
+                            {"rate", "channels", "frames", "duration"});
+    requireExact(requireMember(audio, "rate", "audio metadata"),
+                 R"({"type":"integer","minimum":8000,"maximum":384000})", "audio metadata rate");
+    requireExact(requireMember(audio, "channels", "audio metadata"),
+                 R"({"type":"integer","minimum":1,"maximum":32})", "audio metadata channels");
+    requireExact(requireMember(audio, "frames", "audio metadata"), R"({"$ref":"#/$defs/objectId"})",
+                 "audio metadata frames");
+    requireExact(requireMember(audio, "duration", "audio metadata"),
+                 R"({"$ref":"#/$defs/positiveRationalTime"})", "audio metadata duration");
+    static_cast<void>(validateObjectShape(definitions, "assetLocator-1.11",
                                           {"kind", "portability", "path", "relinkHint"},
                                           {"kind", "portability", "path", "relinkHint"}));
     requireExact(definitions.at("project-1.0").at("properties").at("assets"),
-                 R"({"type":"array","maxItems":100000,"items":{"$ref":"#/$defs/asset-1.10"}})",
+                 R"({"type":"array","maxItems":100000,"items":{"$ref":"#/$defs/asset-1.11"}})",
                  "assets");
     requireExact(definitions.at("highestIssued-1.2").at("properties").at("asset"),
                  R"({"$ref":"#/$defs/allocatorHighWater"})", "asset watermark");
     validateReferences(schema, schema);
 }
-void validateManifestSchemaV1_10(const json::Value& schema) {
+void validateManifestSchemaV1_11(const json::Value& schema) {
     using namespace schema_detail;
-    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-manifest:1.10",
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-manifest:1.11",
                        "manifest id");
     requireExact(schema.at("$defs").at("document-1.0").at("properties").at("schemaVersion"),
-                 R"({"$ref":"#/$defs/fixedVersion-1.10"})", "manifest document version");
+                 R"({"$ref":"#/$defs/fixedVersion-1.11"})", "manifest document version");
+    const auto& providedNodeTypeItems = schema.at("$defs")
+                                            .at("requirement-1.0")
+                                            .at("properties")
+                                            .at("providedNodeTypeIds")
+                                            .at("items");
+    const auto& reservedTypes = schema_detail::requireArray(
+        schema_detail::requireMember(providedNodeTypeItems, "allOf", "provided node type items"),
+        "provided node type items allOf")[1];
+    requireExact(
+        schema_detail::requireMember(
+            schema_detail::requireMember(reservedTypes, "not", "reserved node types"), "enum",
+            "reserved node types"),
+        R"(["bloom.composition-output","bloom.layer-output","bloom.layer-stack","bloom.solid-source","bloom.text-source","bloom.image-source","bloom.audio-source"])",
+        "manifest reserved node types");
     validateReferences(schema, schema);
 }
 

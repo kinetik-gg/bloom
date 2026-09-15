@@ -57,7 +57,7 @@ void migrationAndReopen() {
     const auto& composition = snapshot.project().compositions().front();
     expect(composition.nodeLayout() == document::defaultNodeLayout(composition.graph().nodes()),
            "legacy migration assigns all default records");
-    expect(opened.schemaMinor == 10 && !opened.roundTrip,
+    expect(opened.schemaMinor == 11 && !opened.roundTrip,
            "migration produces current editable schema");
     auto draft = opened.document->draft(snapshot);
     const auto frameTime = core::RationalTime::create(1, 24);
@@ -125,11 +125,11 @@ void futureLayoutAttachments() {
         throw std::logic_error("layout future entries");
     const auto bytes = entries.document()->documentBytes();
     std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    const auto rootMinor = text.find("\"minor\": 10");
+    const auto rootMinor = text.find("\"minor\": 11");
     const auto layoutStart = text.find("\"nodeLayout\"");
     if (rootMinor == std::string::npos || layoutStart == std::string::npos)
         throw std::logic_error("layout future anchors");
-    text.replace(rootMinor, std::string_view("\"minor\": 10").size(), "\"minor\": 11");
+    text.replace(rootMinor, std::string_view("\"minor\": 11").size(), "\"minor\": 12");
     const auto y = text.find("\"y\": 32.0", layoutStart);
     if (y == std::string::npos)
         throw std::logic_error("layout position anchor");
@@ -138,7 +138,7 @@ void futureLayoutAttachments() {
     if (muted == std::string::npos)
         throw std::logic_error("layout record anchor");
     text.insert(muted + std::string_view("\"muted\": false").size(), R"(, "zzzLayout":"retained")");
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 11}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 12}};
     const auto size = canonicalManifestSize(manifest);
     if (!size)
         throw std::logic_error("future manifest size");
@@ -154,7 +154,7 @@ void futureLayoutAttachments() {
     if (openedResult.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.roundTrip && opened.schemaMinor == 11,
+    expect(opened.roundTrip && opened.schemaMinor == 12,
            "future layout retains its schema and attachments");
     if (!opened.roundTrip)
         throw std::logic_error("layout round-trip state");
@@ -164,7 +164,7 @@ void futureLayoutAttachments() {
                                  CanonicalDocumentV1{.snapshot = &snapshot,
                                                      .colorSettings = &opened.colorSettings,
                                                      .roundTrip = &*opened.roundTrip,
-                                                     .schemaMinor = 11},
+                                                     .schemaMinor = 12},
                                  {}, memory());
     expect(static_cast<bool>(rewritten), "future layout passes verified overlay save");
     if (!rewritten)
