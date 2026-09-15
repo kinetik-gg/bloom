@@ -2,6 +2,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QStyleOptionMenuItem>
 #include <QToolButton>
 #include <bloom/ui/kit/icons.hpp>
 
@@ -14,19 +15,40 @@ class KMenuButton : public QToolButton {
     explicit KMenuButton(QWidget* parent = nullptr);
     QSize sizeHint() const override;
 };
-// One row inside a flowing kit menu (kit::makeMenu with the columnFlow property): the action's
-// text left-aligned at the menu-item inset, its shortcut right-aligned and muted, a raised
-// surface under the pointer, muted ink when disabled. It is the ONLY item widget the flow uses;
-// a header menu title (KMenuButton) is a different control and never appears inside a menu --
-// that mix-up is what made flowed Add entries look centred and greyed (owner, 2026-09-15).
-class KMenuItem final : public QToolButton {
+// The body of a flowing kit menu (kit::makeMenu with the columnFlow property): the menu's own
+// actions laid out in columns and painted with the SAME primitive every other menu row uses --
+// the proxy style's CE_MenuItem (full-width Accent hover bar, Foreground ink, Faint shortcut,
+// reserved icon column) -- so a flowed submenu is indistinguishable from its parent. It tracks
+// the pointer itself, because a popup's child widgets cannot rely on hover attributes, and
+// triggers the row's action on release. (Owner, 2026-09-15: the first attempt used a separate
+// button widget and drifted in hover and highlight; this class exists so that cannot recur.)
+class KMenuFlow final : public QWidget {
     Q_OBJECT
   public:
-    explicit KMenuItem(QWidget* parent = nullptr);
+    // `heightCap` is the tallest the body may be; the row count follows from the measured row
+    // height, so the cap holds whatever the menu-item primitive's height is.
+    KMenuFlow(QMenu* menu, QList<QAction*> actions, int heightCap, QWidget* parent = nullptr);
+    [[nodiscard]] int itemCount() const noexcept { return static_cast<int>(actions_.size()); }
+    [[nodiscard]] QRect itemRect(int index) const;
+    [[nodiscard]] int hoveredIndex() const noexcept { return hovered_; }
+    [[nodiscard]] int columnCount() const noexcept { return columns_; }
     QSize sizeHint() const override;
 
   protected:
     void paintEvent(QPaintEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void leaveEvent(QEvent* event) override;
+
+  private:
+    [[nodiscard]] int indexAt(QPoint position) const;
+    void fillOption(QStyleOptionMenuItem& option, int index) const;
+    QMenu* menu_;
+    QList<QAction*> actions_;
+    int rows_;
+    int columns_ = 1;
+    QSize cell_;
+    int hovered_ = -1;
 };
 class KIconButton : public QToolButton {
     Q_OBJECT

@@ -3,9 +3,12 @@
 #include <QFontMetrics>
 #include <QGridLayout>
 #include <QKeySequence>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
 #include <QShowEvent>
+#include <QStyle>
+#include <QStyleOptionMenuItem>
 #include <QVBoxLayout>
 #include <QWidgetAction>
 #include <bloom/ui/kit/controls.hpp>
@@ -25,41 +28,96 @@ QSize KMenuButton::sizeHint() const {
     size.setHeight(px(Size::Control));
     return size;
 }
-KMenuItem::KMenuItem(QWidget* parent) : QToolButton(parent) {
-    setFont(kit::font(TypeRole::Ui));
-    setFixedHeight(px(Size::Control));
-    setToolButtonStyle(Qt::ToolButtonTextOnly);
-    setAutoRaise(true);
-    setFocusPolicy(Qt::StrongFocus);
+KMenuFlow::KMenuFlow(QMenu* menu, QList<QAction*> actions, const int heightCap, QWidget* parent)
+    : QWidget(parent), menu_(menu), actions_(std::move(actions)), rows_(1) {
+    setMouseTracking(true);
     setAttribute(Qt::WA_Hover, true);
     setProperty("kitControl", true);
-    setProperty("menuItem", true);
+    setProperty("menuFlow", true);
+    int width = px(Size::MenuMinWidth);
+    int height = 0;
+    for (int index = 0; index < itemCount(); ++index) {
+        QStyleOptionMenuItem option;
+        fillOption(option, index);
+        const QFontMetrics metrics(option.font);
+        const QSize contents(metrics.horizontalAdvance(option.text) + 2 * px(Spacing::MenuItemX),
+                             metrics.height());
+        const QSize cell =
+            menu_->style()->sizeFromContents(QStyle::CT_MenuItem, &option, contents, menu_);
+        width = std::max(width, cell.width());
+        height = std::max(height, cell.height());
+    }
+    cell_ = {width, std::max(height, px(Size::Control))};
+    rows_ = std::max(1, heightCap / cell_.height());
+    columns_ = std::max(1, (itemCount() + rows_ - 1) / rows_);
 }
-QSize KMenuItem::sizeHint() const {
-    const QFontMetrics metrics(font());
-    int width = 2 * px(Spacing::MenuItemX) + metrics.horizontalAdvance(text());
-    if (const auto* action = defaultAction(); action != nullptr && !action->shortcut().isEmpty())
-        width += px(Spacing::M) +
-                 metrics.horizontalAdvance(action->shortcut().toString(QKeySequence::NativeText));
-    return {std::max(width, px(Size::MenuMinWidth)), px(Size::Control)};
+void KMenuFlow::fillOption(QStyleOptionMenuItem& option, const int index) const {
+    const auto* action = actions_[index];
+    option.initFrom(menu_);
+    option.font = menu_->font();
+    option.menuItemType = QStyleOptionMenuItem::Normal;
+    option.checkType = QStyleOptionMenuItem::NotCheckable;
+    option.menuHasCheckableItems = false;
+    option.icon = action->icon();
+    option.text = action->text();
+    if (!action->shortcut().isEmpty())
+        option.text += QLatin1Char('\t') + action->shortcut().toString(QKeySequence::NativeText);
+    option.state = QStyle::State_None;
+    if (action->isEnabled())
+        option.state |= QStyle::State_Enabled;
+    if (index == hovered_ && action->isEnabled())
+        option.state |= QStyle::State_Selected;
+    option.rect = itemRect(index);
 }
-void KMenuItem::paintEvent(QPaintEvent*) {
+QRect KMenuFlow::itemRect(const int index) const {
+    if (index < 0 || index >= itemCount())
+        return {};
+    return {(index / rows_) * cell_.width(), (index % rows_) * cell_.height(), cell_.width(),
+            cell_.height()};
+}
+QSize KMenuFlow::sizeHint() const {
+    return {columns_ * cell_.width(), std::min(rows_, std::max(1, itemCount())) * cell_.height()};
+}
+int KMenuFlow::indexAt(const QPoint position) const {
+    for (int index = 0; index < itemCount(); ++index)
+        if (itemRect(index).contains(position))
+            return index;
+    return -1;
+}
+void KMenuFlow::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    if (isEnabled() && (underMouse() || hasFocus() || isDown())) {
-        const QColor surface = color(isDown() ? Color::Field : Color::SurfaceRaised);
-        fillRoundedSurface(painter, rect(), surface, surface, Radius::Small);
+    for (int index = 0; index < itemCount(); ++index) {
+        QStyleOptionMenuItem option;
+        fillOption(option, index);
+        menu_->style()->drawControl(QStyle::CE_MenuItem, &option, &painter, menu_);
     }
-    painter.setFont(font());
-    const int inset = px(Spacing::MenuItemX);
-    const QRect textRect = rect().adjusted(inset, 0, -inset, 0);
-    painter.setPen(color(isEnabled() ? Color::Foreground : Color::Muted));
-    painter.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, text());
-    if (const auto* action = defaultAction(); action != nullptr && !action->shortcut().isEmpty()) {
-        painter.setPen(color(Color::Muted));
-        painter.drawText(textRect, Qt::AlignRight | Qt::AlignVCenter,
-                         action->shortcut().toString(QKeySequence::NativeText));
+}
+void KMenuFlow::mouseMoveEvent(QMouseEvent* event) {
+    const int index = indexAt(event->pos());
+    if (index != hovered_) {
+        hovered_ = index;
+        update();
     }
+    QWidget::mouseMoveEvent(event);
+}
+void KMenuFlow::leaveEvent(QEvent* event) {
+    if (hovered_ != -1) {
+        hovered_ = -1;
+        update();
+    }
+    QWidget::leaveEvent(event);
+}
+void KMenuFlow::mouseReleaseEvent(QMouseEvent* event) {
+    const int index = indexAt(event->pos());
+    if (event->button() == Qt::LeftButton && index >= 0 && actions_[index]->isEnabled()) {
+        auto* action = actions_[index];
+        for (auto* menu = menu_; menu; menu = qobject_cast<QMenu*>(menu->parentWidget()))
+            menu->close();
+        action->trigger();
+        event->accept();
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
 }
 KIconButton::KIconButton(QWidget* parent) : QToolButton(parent) {
     setFont(kit::font(TypeRole::Ui));
@@ -232,35 +290,24 @@ class FlowMenu final : public QMenu {
         const auto bounds = ownerBounds();
         const int padding = px(Spacing::ChromePadding);
         const int cap = static_cast<int>(bounds.height() * kMenuWindowHeightShare);
-        const int rows = std::max(1, (cap - 4 * padding) / px(Size::Control));
-        auto* content = new QWidget;
-        auto* grid = new QGridLayout(content);
-        grid->setContentsMargins(padding, padding, padding, padding);
-        grid->setSpacing(0);
         originals_ = actions();
-        int index = 0;
-        for (auto* action : originals_) {
-            if (!action->isVisible() || action->isSeparator())
-                continue;
-            auto* button = new KMenuItem(content);
-            button->setDefaultAction(action);
-            button->setFixedWidth(std::max(px(Size::MenuMinWidth), button->sizeHint().width()));
-            grid->addWidget(button, index % rows, index / rows);
-            ++index;
-            connect(button, &QToolButton::clicked, this, [this] {
-                for (auto* menu = static_cast<QMenu*>(this); menu;
-                     menu = qobject_cast<QMenu*>(menu->parentWidget()))
-                    menu->close();
-            });
-        }
+        QList<QAction*> flowed;
+        for (auto* action : originals_)
+            if (action->isVisible() && !action->isSeparator())
+                flowed.push_back(action);
+        auto* content = new QWidget;
+        auto* layout = new QVBoxLayout(content);
+        layout->setContentsMargins(0, padding, 0, padding);
+        layout->setSpacing(0);
+        // The frame, the widget action's margins and the content padding all sit inside the cap.
+        auto* flow = new KMenuFlow(this, flowed, cap - 6 * padding, content);
+        layout->addWidget(flow);
         for (auto* action : originals_)
             removeAction(action);
-        for (auto* button : content->findChildren<KMenuItem*>())
-            button->show();
         columns_ = new QWidgetAction(this);
         columns_->setDefaultWidget(content);
         addAction(columns_);
-        setProperty("flowColumns", grid->columnCount());
+        setProperty("flowColumns", flow->columnCount());
         setProperty("flowHeightCap", cap);
     }
     QList<QAction*> originals_;

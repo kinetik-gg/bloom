@@ -6,13 +6,18 @@
 
 #include <QAbstractItemModel>
 #include <QApplication>
+#include <QCoreApplication>
 #include <QEvent>
 #include <QFile>
 #include <QFrame>
+#include <QGraphicsProxyWidget>
+#include <QGraphicsScene>
+#include <QGraphicsView>
 #include <QImage>
 #include <QKeyEvent>
 #include <QListView>
 #include <QMouseEvent>
+#include <QRect>
 #include <QRegion>
 #include <QSignalSpy>
 #include <QString>
@@ -400,6 +405,36 @@ void testTheRowsAreRectangularAndClippedByTheFrame(Expectations& expectations) {
 
 } // namespace
 
+// Regression (owner, 2026-09-15): a dropdown hosted inside a QGraphicsProxyWidget (a node card
+// row) could not open. Qt embeds a child popup of a proxied widget into the scene as a
+// sub-proxy unless the popup bypasses that; the kit popup must stay a real top-level window
+// placed below the anchor's global position.
+void testAProxiedDropdownOpensATopLevelPopupBelowItself(Expectations& expectations) {
+    QGraphicsScene scene;
+    QGraphicsView view(&scene);
+    view.resize(600, 400);
+    view.show();
+    auto* dropdown = new kit::KDropdown;
+    dropdown->addItem(QStringLiteral("Normal"));
+    dropdown->addItem(QStringLiteral("Add"));
+    auto* proxy = scene.addWidget(dropdown);
+    proxy->setPos(120, 80);
+    QCoreApplication::processEvents();
+    dropdown->showPopup();
+    QCoreApplication::processEvents();
+    auto* popup = dropdown->popup();
+    expectations.expect(popup->isVisible(), "a proxied dropdown opens its popup");
+    expectations.expect(popup->graphicsProxyWidget() == nullptr && popup->isWindow(),
+                        "the popup stays a real top-level window, not a scene sub-proxy");
+    const QPoint anchorBottom = dropdown->mapToGlobal(QPoint(0, dropdown->height()));
+    const QRect frame = popup->frameGeometry();
+    expectations.expect(std::abs(frame.top() - anchorBottom.y()) <= 3 * kit::px(kit::Spacing::M) &&
+                            std::abs(frame.left() - anchorBottom.x()) <=
+                                3 * kit::px(kit::Spacing::M),
+                        "the popup sits just below the proxied anchor in global coordinates");
+    dropdown->hidePopup();
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -416,5 +451,6 @@ int main(int argc, char** argv) {
     testThePopupIsDetachedAndSurvivesHoverOut(expectations);
     testAClickOutsideTheFrameClosesThePopup(expectations);
     testTheRowsAreRectangularAndClippedByTheFrame(expectations);
+    testAProxiedDropdownOpensATopLevelPopupBelowItself(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

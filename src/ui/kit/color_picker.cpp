@@ -359,7 +359,7 @@ KRecentColorStore* KColorPicker::recentColorStore() const noexcept {
 void KColorPicker::openBelow(const QWidget& anchor) {
     if ((windowFlags() & Qt::Popup) == 0) {
         setParent(nullptr);
-        setWindowFlags(Qt::Popup);
+        setWindowFlags(Qt::Popup | Qt::BypassGraphicsProxyWidget);
         applyElevation(*this, Elevation::Dialog);
     }
     const QPoint anchorBottomLeft = anchor.mapToGlobal(QPoint(0, anchor.height()));
