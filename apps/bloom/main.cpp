@@ -4,8 +4,10 @@
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/asset_controller.hpp>
+#include <bloom/ui/audio_playback_session.hpp>
 #include <bloom/ui/background_preview_controller.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
@@ -187,11 +189,53 @@ int main(int argc, char* argv[]) {
 
     application.setQuitOnLastWindowClosed(false);
     QSettings settings;
+    auto& playback = previewController.playbackController();
+    bloom::ui::AudioPlaybackSession audioPlaybackSession(compositionSession);
+    playback.setAudioEngine(std::make_unique<bloom::media::audio::playback::AudioEngine>(
+        bloom::media::audio::playback::makeMiniaudioBackend()));
+    playback.setAudioEnabled(settings.value(QStringLiteral("playback/audio-enabled"), true)
+                                 .toBool());
+    const auto publishAudioMix = [&] {
+        const auto& frame = previewController.state().frame;
+        if (frame != nullptr) {
+            (void)audioPlaybackSession.publish(frame->processIdentity().plan, cpuEvaluator,
+                                               compositionSession.currentTime());
+        }
+    };
+    const auto applyAudioMix = [&] {
+        const auto& mix = audioPlaybackSession.mix();
+        if (!mix.has_value()) {
+            playback.setAudioMix({}, {});
+            return;
+        }
+        std::vector<bloom::media::audio::playback::AudioClip> clips;
+        clips.reserve(mix->clips.size());
+        for (const auto& description : mix->clips) {
+            const auto buffer = assetController.audioBuffer(description.assetId);
+            if (buffer == nullptr)
+                continue;
+            clips.push_back({.buffer = *buffer,
+                             .startTime = description.startTime,
+                             .level = static_cast<float>(description.level),
+                             .muted = description.muted,
+                             .solo = description.solo,
+                             .endTime = description.endTime});
+        }
+        playback.setAudioMix(*mix, std::move(clips));
+    };
+    QObject::connect(&previewController, &bloom::ui::CompositionPreviewController::stateChanged,
+                     &audioPlaybackSession, publishAudioMix);
+    QObject::connect(&compositionSession, &bloom::ui::CompositionSession::currentTimeChanged,
+                     &audioPlaybackSession, publishAudioMix);
+    QObject::connect(&audioPlaybackSession, &bloom::ui::AudioPlaybackSession::mixChanged,
+                     &playback, applyAudioMix);
+    QObject::connect(&assetController, &bloom::ui::AssetController::changed, &playback,
+                     applyAudioMix);
     // Native (server-side) window chrome only (task C1): MainWindow no longer takes a chrome mode
     // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,
-                                 frameExportController, &ramPreviewController, &previewController);
-    auto& playback = previewController.playbackController();
+                                 frameExportController, &ramPreviewController, &previewController,
+                                 nullptr, &playback);
     playback.installWindowShortcut(window);
     QObject::connect(&ramPreviewController, &bloom::ui::RamPreviewController::stateChanged,
                      &playback, [&] {

@@ -79,6 +79,36 @@ void PlaybackController::installWindowShortcut(QWidget& window) {
     connect(action, &QAction::triggered, this, &PlaybackController::toggle);
 }
 
+void PlaybackController::setAudioEngine(
+    std::unique_ptr<media::audio::playback::AudioEngine> engine) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    pause();
+    audioEngine_ = std::move(engine);
+    audioClockActive_ = false;
+}
+
+void PlaybackController::setAudioEnabled(const bool enabled) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (audioEnabled_ == enabled) {
+        return;
+    }
+    audioEnabled_ = enabled;
+    if (!audioEnabled_ && audioEngine_) {
+        audioEngine_->stop();
+        audioClockActive_ = false;
+    }
+}
+
+void PlaybackController::setAudioMix(
+    runtime::AudioMixDescription description,
+    std::vector<media::audio::playback::AudioClip> clips) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    audioMix_ = std::move(description);
+    if (audioEngine_) {
+        audioEngine_->replaceClips(std::move(clips));
+    }
+}
+
 PlaybackState PlaybackController::state() const noexcept { return state_; }
 
 bool PlaybackController::isLooping() const noexcept { return looping_; }
@@ -127,6 +157,13 @@ void PlaybackController::play() {
     appliedOffset_ = 0;
     lastAppliedFrameIndex_ = startFrameIndex_;
 
+    audioClockActive_ = false;
+    if (audioEnabled_ && audioEngine_ && audioMix_.has_value() &&
+        !audioMix_->clips.empty()) {
+        const auto status = audioEngine_->play(session_.currentTime());
+        audioClockActive_ = !status.has_value();
+    }
+
     state_ = PlaybackState::Playing;
     previewController_.setPlaybackActive(true);
     previewController_.beginDroppedFrameCounting();
@@ -141,6 +178,10 @@ void PlaybackController::pause() {
     }
     state_ = PlaybackState::Stopped;
     timer_.stop();
+    if (audioEngine_) {
+        audioEngine_->stop();
+    }
+    audioClockActive_ = false;
     previewController_.setPlaybackActive(false);
     previewController_.endDroppedFrameCounting();
     emit stateChanged(state_);
@@ -170,21 +211,30 @@ void PlaybackController::tick() {
         return;
     }
 
-    const auto now = clock_();
-    if (now < startClock_) {
-        // A non-monotonic injected clock (only reachable from a test double) -- no-op rather than
-        // treat a negative duration as unsigned wraparound.
-        return;
-    }
-    const auto elapsed = now - startClock_;
-    const auto elapsedNanoseconds = static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());
+    std::optional<std::uint64_t> frameOffset;
+    if (audioClockActive_ && audioEngine_) {
+        const auto audioFrame = mapping->nearestFrameIndex(audioEngine_->positionNow());
+        if (audioFrame < startFrameIndex_) {
+            return;
+        }
+        frameOffset = audioFrame - startFrameIndex_;
+    } else {
+        const auto now = clock_();
+        if (now < startClock_) {
+            // A non-monotonic injected clock (only reachable from a test double) -- no-op rather
+            // than treat a negative duration as unsigned wraparound.
+            return;
+        }
+        const auto elapsed = now - startClock_;
+        const auto elapsedNanoseconds = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());
 
-    // Real-time, drop-frames-never-slow policy: the target frame is derived from TOTAL elapsed
-    // time since play()'s fixed start every tick (never `lastFrame + 1`, never an accumulated
-    // running clock), so a slow tick jumps straight to the frame elapsed time now demands instead
-    // of catching up frame-by-frame.
-    const auto frameOffset = mapping->frameOffsetForElapsedNanoseconds(elapsedNanoseconds);
+        // Real-time, drop-frames-never-slow policy: the target frame is derived from TOTAL elapsed
+        // time since play()'s fixed start every tick (never `lastFrame + 1`, never an accumulated
+        // running clock), so a slow tick jumps straight to the frame elapsed time now demands
+        // instead of catching up frame-by-frame.
+        frameOffset = mapping->frameOffsetForElapsedNanoseconds(elapsedNanoseconds);
+    }
     if (!frameOffset.has_value()) {
         // Checked-arithmetic overflow guard (unreachable for any realistic elapsed duration and
         // frame rate) -- no-op rather than wrap.
@@ -211,7 +261,8 @@ void PlaybackController::tick() {
     // whatever elapsed time demands.
     const auto steppedOffset = appliedOffset_ + 1;
     auto nextOffset = *frameOffset;
-    if (steppedOffset <= std::numeric_limits<std::uint64_t>::max() - startFrameIndex_ &&
+    if (!audioClockActive_ &&
+        steppedOffset <= std::numeric_limits<std::uint64_t>::max() - startFrameIndex_ &&
         isFrameCached(*mapping, first + (startFrameIndex_ - first + steppedOffset) % frameCount)) {
         nextOffset = steppedOffset;
     }
@@ -267,11 +318,18 @@ bool PlaybackController::isFrameCached(const core::FrameTimeMapping& mapping,
 void PlaybackController::handleCompositionChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
     pause();
+    audioMix_.reset();
+    if (audioEngine_) {
+        audioEngine_->clearClips();
+    }
 }
 
 void PlaybackController::handleCurrentTimeChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (state_ == PlaybackState::Playing && !applyingOwnTimeChange_) {
+        if (audioEngine_) {
+            (void)audioEngine_->seek(session_.currentTime());
+        }
         pause();
     }
 }

@@ -20,6 +20,7 @@ class EditorRegistry;
 class FrameExportController;
 class ProjectHost;
 class RamPreviewController;
+class PlaybackController;
 class WindowStatusBar;
 class WorkspaceHost;
 enum class WorkspaceLayoutRestoreResult;
@@ -57,7 +58,7 @@ class MainWindow final : public QMainWindow {
                ProjectHost& projectHost, FrameExportController& frameExportController,
                RamPreviewController* ramPreview = nullptr,
                CompositionPreviewController* previewController = nullptr,
-               QWidget* parent = nullptr);
+               QWidget* parent = nullptr, PlaybackController* playbackController = nullptr);
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);
@@ -107,6 +108,7 @@ class MainWindow final : public QMainWindow {
     // Borrowed, may be null; owned by the application composition root, and read only by the
     // window status bar's preview cells.
     CompositionPreviewController* previewController_ = nullptr;
+    PlaybackController* playbackController_ = nullptr;
     QMenuBar* menuBar_ = nullptr;
     QMenu* windowMenu_ = nullptr;
     QMenu* viewMenu_ = nullptr;
@@ -144,6 +146,7 @@ class MainWindow final : public QMainWindow {
     QAction* deleteCompositionAction_ = nullptr;
     QAction* viewFullScreenAction_ = nullptr;
     QAction* viewMaximizePanelAction_ = nullptr;
+    QAction* viewAudioEnabledAction_ = nullptr;
     QAction* reportIssueAction_ = nullptr;
     QAction* openSourceLicensesAction_ = nullptr;
     bool workspaceLayoutWritable_ = true;

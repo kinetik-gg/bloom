@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/media/audio/audio.hpp>
 #include <bloom/media/image.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
@@ -117,6 +118,8 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
         previews_.clear();
         nodePreviews_.clear();
         thumbnailCache_.clear();
+        waveforms_.clear();
+        audioBuffers_.clear();
         refresh();
     });
     connect(this, &AssetController::diagnostic, &session_, &CompositionSession::commandRejected);
@@ -149,11 +152,22 @@ QImage AssetController::nodeThumbnail(document::NodeId id) const {
     const auto found = nodePreviews_.find(id);
     return found == nodePreviews_.end() ? QImage{} : found->second.image;
 }
+std::shared_ptr<const media::audio::WaveformSummary>
+AssetController::waveform(const document::AssetId id) const {
+    const auto found = waveforms_.find(id);
+    return found == waveforms_.end() ? nullptr : found->second;
+}
+std::shared_ptr<const media::audio::AudioBuffer>
+AssetController::audioBuffer(const document::AssetId id) const {
+    const auto found = audioBuffers_.find(id);
+    return found == audioBuffers_.end() ? nullptr : found->second;
+}
 void AssetController::requestImport(QWidget* parent) {
     if (!host_.canSave())
         return;
     const auto paths = QFileDialog::getOpenFileNames(
-        parent, tr("Import Images"), {}, tr("Images (*.png *.jpg *.jpeg *.PNG *.JPG *.JPEG)"));
+        parent, tr("Import Media"), {},
+        tr("Media (*.png *.jpg *.jpeg *.wav *.mp3 *.PNG *.JPG *.JPEG *.WAV *.MP3)"));
     if (!paths.empty())
         importFiles(paths);
 }
@@ -161,8 +175,9 @@ void AssetController::importFiles(const QStringList& paths) { prepare(paths); }
 void AssetController::relink(document::AssetId id, QWidget* parent) {
     if (!host_.canSave())
         return;
-    const auto path = QFileDialog::getOpenFileName(parent, tr("Relink Image"), {},
-                                                   tr("Images (*.png *.jpg *.jpeg)"));
+    const auto path = QFileDialog::getOpenFileName(
+        parent, tr("Relink Media"), {},
+        tr("Media (*.png *.jpg *.jpeg *.wav *.mp3 *.PNG *.JPG *.JPEG *.WAV *.MP3)"));
     if (!path.isEmpty())
         prepare({path}, id);
 }
@@ -175,7 +190,7 @@ void AssetController::remove(document::AssetId id) {
 }
 void AssetController::prepare(const QStringList& paths, document::AssetId relinkId) {
     if (!host_.canSave()) {
-        emit diagnostic(tr("Image import requires an idle, editable project"));
+        emit diagnostic(tr("Media import requires an idle, editable project"));
         return;
     }
     if (busy_ || paths.empty())
@@ -187,14 +202,14 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
     base_ = session_.snapshot();
     auto submission = scheduler_.submit<OperationHandle>(
         runtime::TaskRequest(
-            "Import images",
+            "Import media",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
         [files = std::move(files), directory, relinkId](runtime::TaskContext& context) {
             auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
             auto cancel = [&] { return context.isCancellationRequested(); };
             auto progress = [&](std::uint64_t done, std::uint64_t total) {
-                context.reportProgress({.phase = "Importing images",
+                context.reportProgress({.phase = "Importing media",
                                         .subphase = "Probing and scanning",
                                         .completed = done,
                                         .total = total});
@@ -210,7 +225,7 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
             return runtime::TaskResult<OperationHandle>::succeeded(std::move(result));
         });
     if (!submission.accepted()) {
-        emit diagnostic(tr("Image import could not be scheduled"));
+        emit diagnostic(tr("Media import could not be scheduled"));
         return;
     }
     import_ = std::move(submission.handle);
@@ -349,11 +364,35 @@ void AssetController::refresh() {
             for (const auto& asset : snapshot.project().assets()) {
                 if (context.isCancellationRequested())
                     return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
-                runtime::CompiledImageSource source;
-                source.asset = asset;
-                source.premultiply = asset.interpretation.alphaAssociation ==
-                                     document::AssetAlphaAssociation::Straight;
-                results->assets.emplace(asset.id, decode(source));
+                if (asset.kind == document::AssetKind::Audio) {
+                    Preview preview;
+                    preview.missing = true;
+                    auto path = directory / asset.locator.path;
+                    if (!std::filesystem::exists(path) && !asset.locator.relinkHint.empty())
+                        path = nativePath(QString::fromStdString(asset.locator.relinkHint));
+                    auto decoded = media::audio::decodeAudio(path);
+                    if (decoded.value() != nullptr) {
+                        const auto summary = media::audio::waveformSummary(*decoded.value(), 256);
+                        if (summary.value() != nullptr) {
+                            preview.missing = false;
+                            results->waveforms.emplace(
+                                asset.id,
+                                std::make_shared<const media::audio::WaveformSummary>(
+                                    *summary.value()));
+                            results->audioBuffers.emplace(
+                                asset.id,
+                                std::make_shared<const media::audio::AudioBuffer>(
+                                    std::move(*decoded.value())));
+                        }
+                    }
+                    results->assets.emplace(asset.id, std::move(preview));
+                } else {
+                    runtime::CompiledImageSource source;
+                    source.asset = asset;
+                    source.premultiply = asset.interpretation.alphaAssociation ==
+                                         document::AssetAlphaAssociation::Straight;
+                    results->assets.emplace(asset.id, decode(source));
+                }
                 progress();
             }
             for (const auto& source : sources) {
@@ -406,6 +445,8 @@ void AssetController::poll() {
                 previews_ = std::move((*result->value())->assets);
                 nodePreviews_ = std::move((*result->value())->nodes);
                 thumbnailCache_ = std::move((*result->value())->cache);
+                waveforms_ = std::move((*result->value())->waveforms);
+                audioBuffers_ = std::move((*result->value())->audioBuffers);
                 emit changed();
             }
         }
