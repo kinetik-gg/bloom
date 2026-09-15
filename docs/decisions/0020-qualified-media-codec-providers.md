@@ -4,6 +4,24 @@ Status: proposed
 
 Date: 2026-08-25
 
+## Accepted v0 amendment: WAV and MP3 preview audio (2026-09-15)
+
+Building on the narrow v0 in-process image exception introduced by MEDIA-1, AUDIO-1 admits a
+similarly bounded, engine-only audio exception for local WAV and MP3 preview. The pinned private
+`dr_wav` and `minimp3` adapters use a 64 MiB file-size cap and a 48,000,000 interleaved-sample
+budget, validate limits before decoder entry and storage allocation, and reject wrong-magic,
+malformed, truncated, and partial inputs without publishing a buffer. The pinned `miniaudio`
+adapter is device output only; it receives Bloom-owned samples and does not parse media files.
+
+This is an accepted resource-boundary disposition, not process isolation or a general provider
+qualification. The security records under `dependencies/licenses/{dr_wav,minimp3,miniaudio}/`
+record that bounded in-process parsing cannot guarantee containment of a memory-corruption defect,
+and that decode calls are not interruptible. The exception covers no video, encoder, broad codec,
+project-schema, graph, timeline, or UI behavior; AUDIO-2 owns those connections. The engine's
+device callback consumes a lock-free bounded queue, and its frame-written count is the audio master
+clock while playing; the synchronized transport follows that clock rather than an independent
+wall-clock timer.
+
 ## Context
 
 Bloom needs professional still, image-sequence, video, and audio ingest and export on Linux, macOS,

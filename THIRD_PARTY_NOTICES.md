@@ -67,6 +67,9 @@ are not vendored.
 | Component | Version | License | Files | Records |
 | --- | --- | --- | --- | --- |
 | stb_truetype | 1.26 (commit `6e9f34d5429cf16790ec43c9bac3f1ee4ad1f760`) | MIT OR Unlicense | `src/render/third_party/stb_truetype/` | `dependencies/licenses/stb_truetype/` |
+| dr_wav | 0.14.6 (commit `019e75ba8e9ac47222dfb87671029812069f68dc`) | MIT-0 OR public domain | `src/media/third_party/dr_wav/` | `dependencies/licenses/dr_wav/` |
+| minimp3 | 2026-07-27 snapshot (commit `ea99364f61c14656440e8d77e9c233ccf3124633`) | CC0 1.0 | `src/media/third_party/minimp3/` | `dependencies/licenses/minimp3/` |
+| miniaudio | 0.11.25 (commit `9634bedb5b5a2ca38c1ee7108a9358a4e233f14d`) | MIT-0 OR public domain | `src/media/third_party/miniaudio/` | `dependencies/licenses/miniaudio/` |
 
 ### stb_truetype
 
@@ -83,3 +86,13 @@ build and nothing is installed into a qualified prefix. Its acquisition provenan
 and security review live under `dependencies/licenses/stb_truetype/`; the security review records
 that this library is qualified only for the font bytes Bloom itself pins, never for an untrusted
 font file.
+
+### Audio headers
+
+Bloom vendors `dr_wav`, `minimp3`, and `miniaudio` as unmodified single-header sources for the v0
+audio engine. Each is compiled through one Bloom-owned translation unit and private object-library
+target; none is a superbuild dependency or has a `dependencies/dependencies.lock.json` entry. The
+component records under `dependencies/licenses/{dr_wav,minimp3,miniaudio}/` retain the exact license
+bytes, per-file SHA-256 provenance, license review, and in-process security disposition. The audio
+security boundary is deliberately narrow: only WAV/MP3 paths reach the bounded file decoders, and
+the device backend receives decoded samples rather than media paths.
