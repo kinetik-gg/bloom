@@ -220,9 +220,8 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     // already relocated that strip to an external footer slot (FORMAL AMENDMENT 1), in which case
     // the canvas is full-bleed with no inset at all. There is no other inset either way
     // (decision 1).
-    [[nodiscard]] // The whole content area: right of the tool column, above the footer. The
-                  // surround fills it.
-                  [[nodiscard]] QRectF contentRect() const;
+    // The whole content area: right of the tool column, above the footer. The surround fills it.
+    [[nodiscard]] QRectF contentRect() const;
     [[nodiscard]] QRectF canvasRect() const;
 
     // describe no longer belongs to this widget's own geometry.
