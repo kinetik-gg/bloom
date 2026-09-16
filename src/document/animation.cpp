@@ -51,6 +51,17 @@ using bloom::document::Vec3AnimationCurve;
     return keyframe.value.isValid();
 }
 
+// Ease handles exist only on the scalar/component key. For the whole-value projections the
+// predicate is vacuously true, so every keyframe admission path can ask it unconditionally.
+template <typename Keyframe> [[nodiscard]] bool validHandles(const Keyframe& keyframe) noexcept {
+    if constexpr (requires { keyframe.outgoingHandle; }) {
+        return bloom::document::isValidKeyframeHandle(keyframe.outgoingHandle) &&
+               bloom::document::isValidKeyframeHandle(keyframe.incomingHandle);
+    } else {
+        return true;
+    }
+}
+
 template <typename Curve> void normalizeFinalInterpolation(Curve& curve) noexcept {
     if (!curve.keyframes.empty()) {
         curve.keyframes.back().outgoingInterpolation = KeyframeInterpolation::Linear;
@@ -66,7 +77,7 @@ template <typename Curve> [[nodiscard]] bool curveCanEnterStore(const Curve& cur
     for (std::size_t index = 0; index < curve.keyframes.size(); ++index) {
         const auto& keyframe = curve.keyframes[index];
         if (!keyframe.id.isValid() || !ids.insert(keyframe.id).second || !finiteValue(keyframe) ||
-            !validInterpolation(keyframe.outgoingInterpolation)) {
+            !validHandles(keyframe) || !validInterpolation(keyframe.outgoingInterpolation)) {
             return false;
         }
         if (index > 0 && !(curve.keyframes[index - 1].time < keyframe.time)) {
@@ -79,7 +90,7 @@ template <typename Curve> [[nodiscard]] bool curveCanEnterStore(const Curve& cur
 [[nodiscard]] bool componentCurveCanEnterStore(const ComponentAnimationCurve& curve) {
     for (std::size_t index = 0; index < curve.keyframes.size(); ++index) {
         const auto& keyframe = curve.keyframes[index];
-        if (!keyframe.id.isValid() || !finiteValue(keyframe) ||
+        if (!keyframe.id.isValid() || !finiteValue(keyframe) || !validHandles(keyframe) ||
             !validInterpolation(keyframe.outgoingInterpolation) ||
             (index > 0 && !(curve.keyframes[index - 1].time < keyframe.time))) {
             return false;
@@ -131,6 +142,10 @@ template <typename Curve> void validateCurve(const Curve& curve, ValidationResul
             result.add(ValidationCode::InvalidValue, keyframePath + ".value",
                        "Keyframe value must be finite");
         }
+        if (!validHandles(keyframe)) {
+            result.add(ValidationCode::InvalidValue, keyframePath + ".handle",
+                       "Keyframe handle time must be within [0, 1] and its value offset finite");
+        }
         if (!validInterpolation(keyframe.outgoingInterpolation)) {
             result.add(ValidationCode::InvalidInterpolation,
                        keyframePath + ".outgoingInterpolation",
@@ -169,6 +184,10 @@ void validateComponentCurve(const ComponentAnimationCurve& curve, const std::str
             result.add(ValidationCode::InvalidValue, keyframePath + ".value",
                        "Keyframe value must be finite");
         }
+        if (!validHandles(keyframe)) {
+            result.add(ValidationCode::InvalidValue, keyframePath + ".handle",
+                       "Keyframe handle time must be within [0, 1] and its value offset finite");
+        }
         if (!validInterpolation(keyframe.outgoingInterpolation)) {
             result.add(ValidationCode::InvalidInterpolation,
                        keyframePath + ".outgoingInterpolation",
@@ -198,7 +217,7 @@ void validateComponentCurve(const ComponentAnimationCurve& curve, const std::str
 template <typename Curve, typename Keyframe>
 [[nodiscard]] bool insertKeyframe(Curve& curve, Keyframe keyframe, const bool idAlreadyExists) {
     if (!keyframe.id.isValid() || idAlreadyExists || !finiteValue(keyframe) ||
-        !validInterpolation(keyframe.outgoingInterpolation)) {
+        !validHandles(keyframe) || !validInterpolation(keyframe.outgoingInterpolation)) {
         return false;
     }
     const auto position = std::lower_bound(
@@ -214,7 +233,7 @@ template <typename Curve, typename Keyframe>
 
 template <typename Curve, typename Keyframe>
 [[nodiscard]] bool updateKeyframe(Curve& curve, Keyframe keyframe) {
-    if (!keyframe.id.isValid() || !finiteValue(keyframe) ||
+    if (!keyframe.id.isValid() || !finiteValue(keyframe) || !validHandles(keyframe) ||
         !validInterpolation(keyframe.outgoingInterpolation)) {
         return false;
     }
@@ -269,6 +288,10 @@ template <typename Curve>
 } // namespace
 
 namespace bloom::document {
+
+bool isValidKeyframeHandle(const KeyframeHandle& handle) noexcept {
+    return std::isfinite(handle.value) && handle.time >= 0.0 && handle.time <= 1.0;
+}
 
 namespace {
 

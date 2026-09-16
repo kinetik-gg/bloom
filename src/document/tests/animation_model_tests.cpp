@@ -252,6 +252,28 @@ void testStoreRejectsMalformedCurves(ExpectationContext& expectations) {
                 id<AnimationCurveId>(1),
                 {scalarKey(1, RationalTime::fromInteger(0), 0.0, invalidInterpolation)}}),
         "empty, invalid-ID, unordered, duplicate-time, non-finite, and invalid-mode curves reject");
+
+    // Ease handles are admitted on exactly the terms a key value is: the offset must be finite and
+    // the time fraction must stay inside its own segment.
+    auto outOfRange = scalarKey(1, RationalTime::fromInteger(0), 0.0);
+    outOfRange.outgoingHandle.time = 1.5;
+    auto nonFinite = scalarKey(2, RationalTime::fromInteger(0), 0.0);
+    nonFinite.incomingHandle.value = nan;
+    auto accepted = scalarKey(3, RationalTime::fromInteger(0), 0.0);
+    accepted.outgoingHandle = {0.0, -4.0};
+    accepted.incomingHandle = {1.0, 4.0};
+    expectations.expect(
+        !store.insert(ScalarAnimationCurve{id<AnimationCurveId>(1), {outOfRange}}) &&
+            !store.insert(ScalarAnimationCurve{id<AnimationCurveId>(1), {nonFinite}}) &&
+            store.insert(ScalarAnimationCurve{id<AnimationCurveId>(1), {accepted}}) &&
+            store.validate().ok(),
+        "a handle time outside [0, 1] or a non-finite offset rejects; the closed range is "
+        "accepted");
+    expectations.expect(
+        bloom::document::isDefaultKeyframeHandle(bloom::document::KeyframeHandle{}) &&
+            !bloom::document::isDefaultKeyframeHandle(
+                {bloom::document::kDefaultKeyframeHandleTime, -0.0}),
+        "the default-handle test is bitwise, so a negative zero offset is not the default");
 }
 
 void testCompositionAnimationValidation(ExpectationContext& expectations) {

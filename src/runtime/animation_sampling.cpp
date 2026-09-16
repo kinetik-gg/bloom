@@ -60,6 +60,15 @@ validateForSampling(const Curve& curve,
             (index > 0 && !(curve.keyframes[index - 1].time < keyframe.time))) {
             return AnimationSamplingError::InvalidCurve;
         }
+        // Handle domain is part of curve admission, not of the eased branch: a curve carrying an
+        // out-of-range handle is rejected on every request time, so acceptance cannot depend on
+        // which segment the request happens to land in.
+        if constexpr (requires { keyframe.outgoingHandle; }) {
+            if (!bloom::document::isValidKeyframeHandle(keyframe.outgoingHandle) ||
+                !bloom::document::isValidKeyframeHandle(keyframe.incomingHandle)) {
+                return AnimationSamplingError::InvalidCurve;
+            }
+        }
     }
     if (!bloom::core::supportsReferenceFloatingPointEnvironment<double>()) {
         return AnimationSamplingError::UnsupportedFloatingPointEnvironment;
@@ -109,14 +118,15 @@ validateForSampling(const Curve& curve,
     return AnimationSamplingError::None;
 }
 
-// The EaseInOut factor transform. The interpolation is a cubic Bezier with FIXED symmetric handles
-// at (1/3, 0) and (2/3, 1): a cubic Bezier whose x control points are 0, 1/3, 2/3, 1 has x(s) == s
-// identically, so the exact rational interval factor IS the curve parameter and the eased factor is
-// the closed-form polynomial 3t^2 - 2t^3 -- which is exactly ScalarPrimitive::Smoothstep over the
-// unit range. Reusing that already-validated core primitive rather than hand-multiplying keeps the
-// sampler's "no libm, no long double, no compiler-specific extended integer" property and gives the
-// transform its own semantics version (kScalarPrimitiveSemanticsVersion) for free. Endpoints stay
-// exact: Smoothstep maps 0 to exactly 0 and 1 to exactly 1.
+// The EaseInOut factor transform for a segment whose handles are both bitwise DEFAULT, at (1/3, 0)
+// and (2/3, 1). With those control points the interpolation is a cubic Bezier whose x control
+// points are 0, 1/3, 2/3, 1 has x(s) == s identically, so the exact rational interval factor IS the
+// curve parameter and the eased factor is the closed-form polynomial 3t^2 - 2t^3 -- which is
+// exactly ScalarPrimitive::Smoothstep over the unit range. Reusing that already-validated core
+// primitive rather than hand-multiplying keeps the sampler's "no libm, no long double, no
+// compiler-specific extended integer" property and gives the transform its own semantics version
+// (kScalarPrimitiveSemanticsVersion) for free. Endpoints stay exact: Smoothstep maps 0 to exactly 0
+// and 1 to exactly 1.
 [[nodiscard]] AnimationSamplingError easedFactor(const double factor, double& out) noexcept {
     const std::array inputs{0.0, 1.0, factor};
     const auto result =
@@ -125,6 +135,67 @@ validateForSampling(const Curve& curve,
         return scalarError(result.error());
     }
     out = *result.value();
+    return AnimationSamplingError::None;
+}
+
+// One axis of a cubic Bezier at parameter `s`, written out of + - * / alone in a fixed operation
+// order so two calls with the same operands cannot differ by a bit. No libm, no long double, no
+// fused multiply-add: the sampler's arithmetic contract is the same one the exact rational factor
+// already keeps.
+[[nodiscard]] double bezierAxis(const double parameter, const double p0, const double p1,
+                                const double p2, const double p3) noexcept {
+    const double inverse = 1.0 - parameter;
+    const double inverseSquared = inverse * inverse;
+    const double parameterSquared = parameter * parameter;
+    const double weight0 = inverseSquared * inverse;
+    const double weight1 = 3.0 * (inverseSquared * parameter);
+    const double weight2 = 3.0 * (inverse * parameterSquared);
+    const double weight3 = parameterSquared * parameter;
+    return ((weight0 * p0) + (weight1 * p1)) + ((weight2 * p2) + (weight3 * p3));
+}
+
+// The curve parameter whose x equals the segment's interval factor. x(s) is the cubic Bezier with
+// x control points (0, x1, x2, 1); handle times in [0, 1] keep it monotone non-decreasing, which is
+// what makes a bisection an inversion rather than a guess. The loop always runs its full 64 steps
+// -- there is no early exit and no tolerance -- so the result is a pure function of the operands:
+// two calls are bitwise equal, and a larger factor can only ever choose the same or a later half,
+// so s is monotone in the factor.
+[[nodiscard]] double bezierParameterForFactor(const double factor, const double x1,
+                                              const double x2) noexcept {
+    double low = 0.0;
+    double high = 1.0;
+    for (int step = 0; step < 64; ++step) {
+        const double middle = (low + high) * 0.5;
+        if (bezierAxis(middle, 0.0, x1, x2, 1.0) < factor) {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    return (low + high) * 0.5;
+}
+
+// The eased segment of a scalar curve whose ease handles are NOT both default. P0 and P3 are the
+// two keys; P1 is the left key offset by its outgoing handle and P2 the right key offset by its
+// incoming one, with handle times measured as fractions of the segment. When both handle TIMES are
+// bitwise default the x cubic is the identity (control points 0, 1/3, 2/3, 1) and the interval
+// factor is already the curve parameter, so the inversion is skipped entirely.
+template <typename Keyframe>
+[[nodiscard]] AnimationSamplingError sampleBezierSegment(const Keyframe& left,
+                                                         const Keyframe& right, const double factor,
+                                                         double& out) noexcept {
+    const double outgoingTime = left.outgoingHandle.time;
+    const double incomingTime = right.incomingHandle.time;
+    const double parameter =
+        (bloom::document::isDefaultKeyframeHandleTime(outgoingTime) &&
+         bloom::document::isDefaultKeyframeHandleTime(incomingTime))
+            ? factor
+            : bezierParameterForFactor(factor, outgoingTime, 1.0 - incomingTime);
+    out = bezierAxis(parameter, left.value, left.value + left.outgoingHandle.value,
+                     right.value + right.incomingHandle.value, right.value);
+    if (!std::isfinite(out)) {
+        return AnimationSamplingError::NonFiniteResult;
+    }
     return AnimationSamplingError::None;
 }
 
@@ -228,6 +299,23 @@ AnimationSampleResult<Value> sampleCurve(const Curve& curve, const core::Rationa
     }
     double shared = *factor.value();
     if (eased) {
+        // A key whose handles are both bitwise default takes the pre-handle path VERBATIM -- the
+        // closed-form Smoothstep factor and the shared Mix -- which is why every document written
+        // before ease handles existed still samples bit-for-bit and
+        // kAnimationSamplingSemanticsVersion does not move. Only a non-default handle reaches the
+        // Bezier segment, and only a scalar or component key can carry one.
+        if constexpr (requires { leftKeyframe.outgoingHandle; }) {
+            if (!document::isDefaultKeyframeHandle(leftKeyframe.outgoingHandle) ||
+                !document::isDefaultKeyframeHandle(right->incomingHandle)) {
+                double easedValue = 0.0;
+                if (const auto error =
+                        sampleBezierSegment(leftKeyframe, *right, shared, easedValue);
+                    error != AnimationSamplingError::None) {
+                    return {std::nullopt, error, leftKeyframe.id};
+                }
+                return {easedValue, AnimationSamplingError::None, leftKeyframe.id};
+            }
+        }
         if (const auto error = easedFactor(shared, shared); error != AnimationSamplingError::None) {
             return {std::nullopt, error, leftKeyframe.id};
         }

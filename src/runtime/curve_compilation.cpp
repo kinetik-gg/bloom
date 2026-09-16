@@ -28,7 +28,8 @@ CompiledScalarCurve compileAnimationCurve(const document::ScalarAnimationCurve& 
     keyframes.reserve(curve.keyframes.size());
     for (const auto& keyframe : curve.keyframes) {
         keyframes.push_back({keyframe.id, keyframe.time, keyframe.value,
-                             compiledInterpolation(keyframe.outgoingInterpolation)});
+                             compiledInterpolation(keyframe.outgoingInterpolation),
+                             keyframe.outgoingHandle, keyframe.incomingHandle});
     }
     return {curve.id, std::move(keyframes)};
 }
@@ -47,7 +48,8 @@ CompiledVec2Curve compileAnimationCurve(const document::Vec2AnimationCurve& curv
         target.reserve(curve.components[index].keyframes.size());
         for (const auto& keyframe : curve.components[index].keyframes)
             target.push_back({keyframe.id, keyframe.time, keyframe.value,
-                              compiledInterpolation(keyframe.outgoingInterpolation)});
+                              compiledInterpolation(keyframe.outgoingInterpolation),
+                              keyframe.outgoingHandle, keyframe.incomingHandle});
     }
     return result;
 }
@@ -65,7 +67,8 @@ CompiledVec3Curve compileAnimationCurve(const document::Vec3AnimationCurve& curv
         target.reserve(curve.components[index].keyframes.size());
         for (const auto& keyframe : curve.components[index].keyframes)
             target.push_back({keyframe.id, keyframe.time, keyframe.value,
-                              compiledInterpolation(keyframe.outgoingInterpolation)});
+                              compiledInterpolation(keyframe.outgoingInterpolation),
+                              keyframe.outgoingHandle, keyframe.incomingHandle});
     }
     return result;
 }
@@ -84,7 +87,8 @@ CompiledColor4Curve compileAnimationCurve(const document::Color4AnimationCurve& 
         target.reserve(curve.components[index].keyframes.size());
         for (const auto& keyframe : curve.components[index].keyframes)
             target.push_back({keyframe.id, keyframe.time, keyframe.value,
-                              compiledInterpolation(keyframe.outgoingInterpolation)});
+                              compiledInterpolation(keyframe.outgoingInterpolation),
+                              keyframe.outgoingHandle, keyframe.incomingHandle});
     }
     return result;
 }

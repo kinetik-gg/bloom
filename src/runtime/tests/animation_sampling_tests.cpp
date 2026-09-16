@@ -1,7 +1,11 @@
 #include <bloom/runtime/animation_sampling.hpp>
 
 #include <bloom/core/color.hpp>
+#include <bloom/core/rational_interval.hpp>
+#include <bloom/core/scalar_primitives.hpp>
 
+#include <array>
+#include <bit>
 #include <cfenv>
 #include <cmath>
 #include <cstdint>
@@ -248,6 +252,139 @@ void testIndependentComponentSampling(Expectations& expectations) {
                         "colour components preserve per-component Hold, Linear and default paths");
 }
 
+[[nodiscard]] std::uint64_t bits(const double value) noexcept {
+    return std::bit_cast<std::uint64_t>(value);
+}
+
+[[nodiscard]] runtime::CompiledScalarCurve easedSegment(const double from, const double to) {
+    return {document::AnimationCurveId::fromRaw(7),
+            {{document::KeyframeId::fromRaw(20), time(0), from,
+              runtime::CompiledKeyframeInterpolation::EaseInOut},
+             {document::KeyframeId::fromRaw(21), time(1), to,
+              runtime::CompiledKeyframeInterpolation::Linear}}};
+}
+
+// The pre-handle eased path, reassembled from the two core primitives it was always made of. It is
+// the reference the default-handle curve has to match BIT FOR BIT, which is what lets
+// kAnimationSamplingSemanticsVersion stay at 2 while keys gain handles.
+[[nodiscard]] bool preHandleEasedValue(const core::RationalTime at, const double from,
+                                       const double to, double& out) {
+    const auto factor = core::rationalIntervalFactor(at, time(0), time(1));
+    if (!factor || factor.value() == nullptr) {
+        return false;
+    }
+    const std::array smoothInputs{0.0, 1.0, *factor.value()};
+    const auto smooth = core::primitives::evaluateScalar(
+        core::primitives::ScalarPrimitive::Smoothstep, smoothInputs);
+    if (!smooth || smooth.value() == nullptr) {
+        return false;
+    }
+    const std::array mixInputs{from, to, *smooth.value()};
+    const auto mixed =
+        core::primitives::evaluateScalar(core::primitives::ScalarPrimitive::Mix, mixInputs);
+    if (!mixed || mixed.value() == nullptr) {
+        return false;
+    }
+    out = *mixed.value();
+    return true;
+}
+
+void testEaseHandles(Expectations& expectations) {
+    const auto implicit = easedSegment(-3.5, 11.25);
+    auto explicitDefaults = implicit;
+    explicitDefaults.keyframes[0].outgoingHandle = document::KeyframeHandle{};
+    explicitDefaults.keyframes[1].incomingHandle = document::KeyframeHandle{};
+    bool identical = true;
+    for (std::int64_t step = 1; step < 97; ++step) {
+        const auto at = time(step, 97);
+        double reference = 0.0;
+        if (!preHandleEasedValue(at, -3.5, 11.25, reference)) {
+            identical = false;
+            break;
+        }
+        const auto sampled = runtime::sampleAnimationCurve(implicit, at);
+        const auto sampledExplicit = runtime::sampleAnimationCurve(explicitDefaults, at);
+        if (!sampled.value.has_value() || !sampledExplicit.value.has_value() ||
+            bits(*sampled.value) != bits(reference) ||
+            bits(*sampledExplicit.value) != bits(reference)) {
+            identical = false;
+            break;
+        }
+    }
+    expectations.expect(identical,
+                        "a default-handle eased curve samples bit-for-bit as the pre-handle path");
+
+    // A value handle has a closed form the bisection never touches: with both handle times default
+    // the x cubic is the identity, so the curve parameter IS the interval factor. Lifting the left
+    // key's outgoing offset to +1 over a 0 -> 1 segment makes the midpoint exactly 7/8.
+    auto valueHandled = easedSegment(0.0, 1.0);
+    valueHandled.keyframes[0].outgoingHandle.value = 1.0;
+    const auto midpoint = runtime::sampleAnimationCurve(valueHandled, time(1, 2));
+    expectations.expect(midpoint.value.has_value() && bits(*midpoint.value) == bits(0.875),
+                        "a value handle follows the cubic Bezier closed form exactly");
+
+    auto timeHandled = easedSegment(0.0, 1.0);
+    timeHandled.keyframes[0].outgoingHandle.time = 0.9;
+    timeHandled.keyframes[1].incomingHandle.time = 0.1;
+    const auto first = runtime::sampleAnimationCurve(timeHandled, time(1, 3));
+    const auto second = runtime::sampleAnimationCurve(timeHandled, time(1, 3));
+    expectations.expect(first.value.has_value() && second.value.has_value() &&
+                            bits(*first.value) == bits(*second.value),
+                        "the handle-time inversion is deterministic to the bit");
+    bool monotone = true;
+    double previous = -1.0;
+    for (std::int64_t step = 0; step <= 64; ++step) {
+        const auto sampled = runtime::sampleAnimationCurve(timeHandled, time(step, 64));
+        if (!sampled.value.has_value() || *sampled.value < previous) {
+            monotone = false;
+            break;
+        }
+        previous = *sampled.value;
+    }
+    expectations.expect(monotone, "a retimed eased segment stays monotone in the request time");
+
+    auto outOfRange = easedSegment(0.0, 1.0);
+    outOfRange.keyframes[0].outgoingHandle.time = 1.5;
+    expectations.expect(runtime::sampleAnimationCurve(outOfRange, time(1, 2)).error ==
+                            runtime::AnimationSamplingError::InvalidCurve,
+                        "a handle time outside [0, 1] is rejected as an invalid curve");
+    auto nonFiniteHandle = easedSegment(0.0, 1.0);
+    nonFiniteHandle.keyframes[1].incomingHandle.value = std::numeric_limits<double>::quiet_NaN();
+    expectations.expect(runtime::sampleAnimationCurve(nonFiniteHandle, time(1, 2)).error ==
+                            runtime::AnimationSamplingError::InvalidCurve,
+                        "a non-finite handle offset is rejected as an invalid curve");
+
+    // Handles do not loosen the canonical final key: its outgoing mode is still Linear, and the
+    // handles it carries change nothing about the value returned at or after it.
+    auto finalHandled = easedSegment(0.0, 1.0);
+    finalHandled.keyframes[1].incomingHandle.value = 4.0;
+    finalHandled.keyframes[1].outgoingHandle.value = 4.0;
+    const auto atEnd = runtime::sampleAnimationCurve(finalHandled, time(1));
+    expectations.expect(atEnd.value.has_value() && bits(*atEnd.value) == bits(1.0),
+                        "the final key keeps its own value however its handles are placed");
+    finalHandled.keyframes[1].outgoingInterpolation =
+        runtime::CompiledKeyframeInterpolation::EaseInOut;
+    expectations.expect(runtime::sampleAnimationCurve(finalHandled, time(1, 2)).error ==
+                            runtime::AnimationSamplingError::UnsupportedInterpolation,
+                        "the final key stays canonical Linear");
+
+    // A handle belongs to a scalar segment only where the LEFT key is eased. Hold and Linear keep
+    // their own shapes and the handles simply persist.
+    auto linearHandled = easedSegment(0.0, 1.0);
+    linearHandled.keyframes[0].outgoingInterpolation =
+        runtime::CompiledKeyframeInterpolation::Linear;
+    linearHandled.keyframes[0].outgoingHandle.value = 1.0;
+    const auto linearMidpoint = runtime::sampleAnimationCurve(linearHandled, time(1, 2));
+    expectations.expect(linearMidpoint.value.has_value() &&
+                            bits(*linearMidpoint.value) == bits(0.5),
+                        "Linear ignores the handles it carries");
+    auto holdHandled = linearHandled;
+    holdHandled.keyframes[0].outgoingInterpolation = runtime::CompiledKeyframeInterpolation::Hold;
+    const auto holdMidpoint = runtime::sampleAnimationCurve(holdHandled, time(1, 2));
+    expectations.expect(holdMidpoint.value.has_value() && bits(*holdMidpoint.value) == bits(0.0),
+                        "Hold ignores the handles it carries");
+}
+
 void testValidationAndEnvironment(Expectations& expectations) {
     auto curve = scalarCurve();
     curve.keyframes.back().outgoingInterpolation = runtime::CompiledKeyframeInterpolation::Hold;
@@ -289,6 +426,7 @@ int main() {
     testVec2AndExtremeTime(expectations);
     testIndependentComponentSampling(expectations);
     testEaseInOutAtExactThirds(expectations);
+    testEaseHandles(expectations);
     testColor4Sampling(expectations);
     testValidationAndEnvironment(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

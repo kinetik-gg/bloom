@@ -13,6 +13,7 @@
 
 #include <bloom/runtime/curve_compilation.hpp>
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <source_location>
@@ -123,6 +124,33 @@ void testConversionIsMechanicalAndDoesNotEnforceTheFinalKeyInvariant(Expectation
                         "conversion does not itself enforce the final-key Linear invariant");
 }
 
+void testHandlesTravelWithEveryCompiledKey(Expectations& expectations) {
+    document::ScalarKeyframe first{document::KeyframeId::fromRaw(80), time(0), 0.0,
+                                   document::KeyframeInterpolation::EaseInOut};
+    first.outgoingHandle = {0.25, 2.5};
+    document::ScalarKeyframe second{document::KeyframeId::fromRaw(81), time(1), 1.0,
+                                    document::KeyframeInterpolation::Linear};
+    second.incomingHandle = {0.75, -1.5};
+    const document::ScalarAnimationCurve scalar{document::AnimationCurveId::fromRaw(8),
+                                                {first, second}};
+    const auto compiledScalar = runtime::compileAnimationCurve(scalar);
+    expectations.expect(compiledScalar.keyframes.size() == 2 &&
+                            compiledScalar.keyframes[0].outgoingHandle == first.outgoingHandle &&
+                            compiledScalar.keyframes[0].incomingHandle == first.incomingHandle &&
+                            compiledScalar.keyframes[1].incomingHandle == second.incomingHandle,
+                        "a scalar curve carries both handles of every key into the compiled table");
+
+    document::Vec2AnimationCurve vector{document::AnimationCurveId::fromRaw(9),
+                                        std::array<document::ComponentAnimationCurve, 2>{}};
+    vector.components[1].keyframes = {first, second};
+    const auto compiledVector = runtime::compileAnimationCurve(vector);
+    expectations.expect(compiledVector.components[1].size() == 2 &&
+                            compiledVector.components[1][0].outgoingHandle ==
+                                first.outgoingHandle &&
+                            compiledVector.components[1][1].incomingHandle == second.incomingHandle,
+                        "a component curve carries its handles into the compiled table too");
+}
+
 } // namespace
 
 int main() {
@@ -130,5 +158,6 @@ int main() {
     testScalarCurveMapsEveryFieldIncludingHoldAndLinear(expectations);
     testVec2CurveMapsEveryFieldIncludingHoldAndLinear(expectations);
     testConversionIsMechanicalAndDoesNotEnforceTheFinalKeyInvariant(expectations);
+    testHandlesTravelWithEveryCompiledKey(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
