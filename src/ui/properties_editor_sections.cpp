@@ -110,9 +110,43 @@ void PropertiesEditor::buildObjectSection(QVBoxLayout* layout) {
 
     auto* parent = new kit::KDropdown(body);
     parent->setObjectName("propertiesParentDropdown");
-    parent->addItem(tr("None"));
-    parent->setEnabled(false);
-    parent->setToolTip(tr("Layer parenting is not available yet"));
+    parent->setAccessibleName(tr("Parent"));
+    parent->setToolTip(tr("Transform relative to another layer"));
+    const auto refreshParent = [this, parent] {
+        const QSignalBlocker blocker(parent);
+        parent->clearItems();
+        parent->addItem(tr("None"), QVariant::fromValue(qulonglong{0}));
+        const auto layer = contextualLayerId(session_);
+        const auto* composition = session_.composition();
+        const auto* boundary =
+            composition && layer ? composition->graph().findLayer(*layer) : nullptr;
+        parent->setEnabled(boundary && !boundary->locked);
+        if (!layer || !composition)
+            return;
+        for (const auto candidate : session_.candidateParents(*layer)) {
+            const auto nodeId = session_.boundaryNodeForLayer(candidate);
+            const auto* node = nodeId ? composition->graph().findNode(*nodeId) : nullptr;
+            if (node)
+                parent->addItem(node_editor::nodeDisplayName(*composition, *node),
+                                QVariant::fromValue(static_cast<qulonglong>(candidate.value())));
+        }
+        const auto selected = session_.parentOf(*layer);
+        parent->setCurrentIndex(parent->findData(
+            QVariant::fromValue(static_cast<qulonglong>(selected ? selected->value() : 0))));
+    };
+    connect(&session_, &CompositionSession::selectionChanged, parent, refreshParent);
+    connect(&session_, &CompositionSession::snapshotChanged, parent, refreshParent);
+    connect(parent, &kit::KDropdown::currentIndexChanged, parent,
+            [this, parent, refreshParent](int index) {
+                const auto layer = contextualLayerId(session_);
+                if (index < 0 || !layer)
+                    return;
+                const auto raw = parent->itemData(index).toULongLong();
+                (void)session_.setLayerParent(
+                    *layer, raw ? std::optional(document::LayerId::fromRaw(raw)) : std::nullopt);
+                refreshParent();
+            });
+    refreshParent();
     addRow(rows, body, makeRowLabel(tr("Parent"), body), nullptr, parent);
 
     // The items are core::kBlendModes in order, named by the one shared vocabulary, with the mode's

@@ -236,24 +236,6 @@ QString toggleToolTip(const int index) {
            selectedLayer(session) == layer;
 }
 
-// Parent: one always-disabled KDropdown carrying its single honest value ("None"). No parenting
-// feature exists in the document model or the command vocabulary, so there is nothing else to
-// offer, and the tooltip says so rather than the control merely looking unresponsive. Compact
-// control size so a real dropdown fits the 32px row.
-//
-// Blending is no longer one of these: a layer's blend mode is a real Layer Output parameter with a
-// real command behind it, so that dropdown is built by makeBlendingDropdown() below instead.
-kit::KDropdown* makeDisabledPlaceholderDropdown(const QString& value, const QString& toolTip,
-                                                const QString& objectName, QWidget* parent) {
-    auto* dropdown = new kit::KDropdown(parent);
-    dropdown->setObjectName(objectName);
-    dropdown->setControlSize(kit::KDropdown::ControlSize::Compact);
-    dropdown->addItem(value);
-    dropdown->setEnabled(false);
-    dropdown->setToolTip(toolTip);
-    return dropdown;
-}
-
 // The Blending dropdown: every implemented blend mode, in core::kBlendModes order, named by the one
 // shared vocabulary blendModeDisplayName() owns. The item DATA is the mode's stored integer rather
 // than its row index, so the control never depends on the order it happened to be filled in.
@@ -317,9 +299,24 @@ class TimelineLayerRow final : public kit::KRow {
         setAttribute(Qt::WA_TransparentForMouseEvents, false);
         setFixedHeight(kTimelineRowHeight);
         blending_ = makeBlendingDropdown(this);
-        parentDropdown_ = makeDisabledPlaceholderDropdown(
-            TimelineEditor::tr("None"), TimelineEditor::tr("Layer parenting does not exist yet"),
-            QStringLiteral("layerParentDropdown"), this);
+        parentDropdown_ = new kit::KDropdown(this);
+        parentDropdown_->setObjectName("layerParentDropdown");
+        parentDropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
+        parentDropdown_->setAccessibleName(TimelineEditor::tr("Parent"));
+        parentDropdown_->setToolTip(TimelineEditor::tr("Transform relative to another layer"));
+        connect(parentDropdown_, &kit::KDropdown::currentIndexChanged, this, [this](int index) {
+            if (binding_ || !layerId_ || index < 0)
+                return;
+            const auto layer = *layerId_;
+            const auto raw = parentDropdown_->itemData(index).toULongLong();
+            const auto parent = raw ? std::optional(document::LayerId::fromRaw(raw)) : std::nullopt;
+            if (!session_->setLayerParent(layer, parent)) {
+                const QSignalBlocker blocker(parentDropdown_);
+                const auto current = session_->parentOf(layer);
+                parentDropdown_->setCurrentIndex(parentDropdown_->findData(
+                    QVariant::fromValue(static_cast<qulonglong>(current ? current->value() : 0))));
+            }
+        });
         QList<QWidget*> cells;
         for (int index = 0; index < kToggleCellCount; ++index) {
             auto* toggle = new kit::KIconToggle(toggleIcon(index), this);
@@ -382,6 +379,21 @@ class TimelineLayerRow final : public kit::KRow {
         solo_ = layer && layer->solo;
         locked_ = layer && layer->locked;
         blending_->setEnabled(mode.has_value() && !locked_);
+        parentDropdown_->clearItems();
+        parentDropdown_->addItem(TimelineEditor::tr("None"), QVariant::fromValue(qulonglong{0}));
+        for (const auto candidate : session_->candidateParents(entry.layerId)) {
+            const auto boundary = session_->boundaryNodeForLayer(candidate);
+            const auto* node =
+                composition && boundary ? composition->graph().findNode(*boundary) : nullptr;
+            if (node)
+                parentDropdown_->addItem(
+                    node_editor::nodeDisplayName(*composition, *node),
+                    QVariant::fromValue(static_cast<qulonglong>(candidate.value())));
+        }
+        const auto parent = session_->parentOf(entry.layerId);
+        parentDropdown_->setCurrentIndex(parentDropdown_->findData(
+            QVariant::fromValue(static_cast<qulonglong>(parent ? parent->value() : 0))));
+        parentDropdown_->setEnabled(layer && !locked_);
         parentDropdown_->show();
         blending_->setCurrentIndex(row >= 0 ? row : 0);
         blending_->setToolTip(mode.has_value()

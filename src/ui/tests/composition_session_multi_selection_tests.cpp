@@ -1,6 +1,9 @@
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/window_status_bar.hpp>
 
 #include <QApplication>
 
@@ -110,6 +113,56 @@ void multiSelection() {
     expect(session.selectedNodes().empty() && session.selection() == ui::CompositionSelection{},
            "rebind clears the complete set atomically");
 }
+void parentingBounds() {
+    const auto format = document::CompositionFormat::create(32, 32);
+    if (!format)
+        throw std::logic_error("bounds fixture format");
+    auto project = document::makeNewProject("Parent Bounds", "Main",
+                                            core::RationalTime::fromInteger(10), *format);
+    const auto compositionId = project.initialCompositionId;
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, compositionId);
+    if (!session.addSolidLayer("Parent", {1, 0, 0, 1}) || !session.setSelectedPosition(7, 9))
+        throw std::logic_error("parent bounds fixture");
+    const auto parent = session.selection().contextualLayer;
+    if (!session.addSolidLayer("Child", {0, 0, 1, 1}) || !session.setSelectedPosition(3, 4))
+        throw std::logic_error("child bounds fixture");
+    const auto child = session.selection().contextualLayer;
+    if (!parent || !child)
+        throw std::logic_error("bounds fixture layers");
+    const auto evaluate = [&]() -> runtime::EvaluatedOperationBounds {
+        const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+        const auto compiled = compiler.compile({session.snapshot(), compositionId}, {});
+        if (!compiled.plan)
+            throw std::logic_error("compile parent bounds");
+        const runtime::CpuCompositionEvaluator evaluator;
+        const runtime::EvaluationRequest request{
+            .time = session.currentTime(),
+            .output = compiled.plan->output(),
+            .resolution = runtime::CompositionFormatResolution{},
+            .quality = runtime::EvaluationQuality::Reference,
+            .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
+            .pixelStorageByteLimit = std::size_t{1} << 24U};
+        const auto result = evaluator.evaluate(compiled.plan, request, {});
+        if (!result.frame())
+            throw std::logic_error("evaluate parent bounds");
+        for (const auto& bounds : result.frame()->evaluatedBounds())
+            if (bounds.layerId == *child)
+                return bounds;
+        throw std::logic_error("child bounds missing");
+    };
+    const auto before = evaluate();
+    expect(session.setLayerParent(*child, *parent), "choose parent through the session");
+    const auto after = evaluate();
+    expect(after.anchor == document::Vec2d{before.anchor.x + 7, before.anchor.y + 9} &&
+               after.output.left == before.output.left + 7 &&
+               after.output.top == before.output.top + 9,
+           "parenting moves the child viewer overlay anchor and bounds by the evaluated parent "
+           "transform");
+    expect(session.undo() && evaluate() == before, "parent undo restores exact viewer bounds");
+}
+
 void parenting() {
     auto project =
         document::makeNewProject("Parenting", "Main", core::RationalTime::fromInteger(10));
@@ -136,7 +189,10 @@ void parenting() {
            "candidate parents exclude all descendants and self");
     expect(session.candidateParents(layers[2]).size() == 3,
            "ancestors and unrelated layers are candidate parents");
+    ui::WindowStatusBar status(session, nullptr);
     expect(!session.setLayerParent(layers[0], layers[2]), "session rejects parent cycle");
+    expect(status.messageTextForTest().contains("cycle", Qt::CaseInsensitive),
+           "cycle refusal reaches the application status line with its reason");
     expect(session.setLayerParent(layers[2], std::nullopt) && !session.parentOf(layers[2]),
            "session clears parent through command");
     expect(session.undo() && session.parentOf(layers[2]) == layers[1], "parent edit undoes");
@@ -154,6 +210,7 @@ int main(int argc, char** argv) {
     try {
         multiSelection();
         parenting();
+        parentingBounds();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

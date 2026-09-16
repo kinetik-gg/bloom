@@ -1088,9 +1088,9 @@ void testBlendingRowAuthorsTheLayerItDraws(Expectations& expectations) {
 // ADAPTED (blend modes): this pinned BOTH dropdowns as disabled placeholders carrying one honest
 // value. Blending is a real Layer Output parameter with a real command behind it now, so what is
 // pinned for it is the opposite property -- enabled, carrying the whole implemented vocabulary in
-// core::kBlendModes order, starting at the layer's authored mode. Parent is still a placeholder and
-// its half of the case is unchanged; the row-height assertion covers both exactly as before.
-void testBlendingAndParentAreDisabledKDropdowns(Expectations& expectations) {
+// core::kBlendModes order, starting at the layer's authored mode. Parent carries the session's
+// legal parent candidates; both controls fit the shared row height.
+void testBlendingAndParentAreLiveKDropdowns(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Blending Parent Test"));
     (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
@@ -1128,12 +1128,32 @@ void testBlendingAndParentAreDisabledKDropdowns(Expectations& expectations) {
                             ui::blendModeDisplayName(core::kDefaultBlendMode),
                         "a newly created layer's row starts at its authored Normal");
     expectations.expect(!blending->toolTip().isEmpty(), "Blending explains what it does");
-    expectations.expect(!parent->isEnabled() && parent->currentText() == QStringLiteral("None"),
-                        "Parent shows the one honest value \"None\", disabled");
-    expectations.expect(!parent->toolTip().isEmpty(), "Parent's disabled state is explained");
+    expectations.expect(parent->isEnabled() && parent->currentText() == QStringLiteral("None"),
+                        "Parent starts at None and is enabled");
+    expectations.expect(!parent->toolTip().isEmpty(), "Parent explains transform parenting");
     expectations.expect(blending->height() <= 32 && parent->isVisible(),
                         "both fit inside the 32px row and Parent remains visible");
 
+    const auto child = fixture.session.selection().contextualLayer;
+    expectations.expect(fixture.session.addSolidLayer("Parent candidate", {1, 1, 1, 1}),
+                        "add parent candidate");
+    const auto candidate = fixture.session.selection().contextualLayer;
+    if (child && candidate) {
+        fixture.session.selectLayer(*child);
+        const auto dropdowns = editor->findChildren<ui::kit::KDropdown*>("layerParentDropdown");
+        for (auto* dropdown : dropdowns) {
+            const int index = dropdown->findData(
+                QVariant::fromValue(static_cast<qulonglong>(candidate->value())));
+            if (index < 0)
+                continue;
+            dropdown->setCurrentIndex(index);
+            expectations.expect(fixture.session.parentOf(*child) == candidate,
+                                "choosing the timeline parent commits its stable layer id");
+            expectations.expect(fixture.session.undo() && !fixture.session.parentOf(*child),
+                                "parent dropdown edit is undoable");
+            break;
+        }
+    }
     delete editor;
     finishFixture(fixture);
 }
@@ -2197,7 +2217,7 @@ int main(int argc, char** argv) {
         testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(expectations);
         testToggleColumnsCommitLayerFlags(expectations);
         testRangeRowsAndWorkAreaCommands(expectations);
-        testBlendingAndParentAreDisabledKDropdowns(expectations);
+        testBlendingAndParentAreLiveKDropdowns(expectations);
         testBlendingRowAuthorsTheLayerItDraws(expectations);
         testKindHasNoColumnButStaysReadable(expectations);
         testLayerStackIsNoLongerAnItemView(expectations);
