@@ -126,6 +126,15 @@ The compiler evaluates parents before children while preserving the authored Mer
 anchor positions and overlay polygons use the same composed matrix as pixels. Resampling occurs once
 per child placement. Parent values participate in cache dependencies even if the parent draws nothing.
 
+Viewer gestures freeze the evaluated child polygon, local content bounds and sampled authored
+transform at the current time. Its polygon edge vectors reconstruct the world linear matrix;
+removing the child's authored rotation/scale gives the parent's linear matrix. Inverting that
+matrix maps composition-space pointer deltas into the child's authored parent space, including
+non-uniform ancestors and resulting shear. This bounded geometry calculation does no evaluation
+on the UI thread and needs no render-plan layout change. Singular or missing geometry refuses a
+gesture. Scale compensates position to hold the opposite handle (or Alt-selected anchor) fixed;
+anchor edits compensate position so the world polygon remains unchanged.
+
 Parent changes are undoable commands. Deleting or dissolving a parent clears its children's links in
 the same transaction. Copying selected nodes retains a parent only if that parent is also copied,
 then remaps the reference; duplicating a composition remaps the complete hierarchy. Splitting a layer

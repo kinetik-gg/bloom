@@ -274,7 +274,7 @@ void testControllerAttachesOverrideOnlyToArmedInteractiveRequests(Expectations& 
     session.selectLayer(ids.layer);
     const auto mapping = makeMapping(wideFormat());
     controller.beginInteractiveScrub();
-    expectations.expect(!session.beginPositionInteraction(mapping).has_value(),
+    expectations.expect(!session.beginTransformInteraction({}, mapping).has_value(),
                         "the interaction begins for the selected layer");
     {
         const auto generation = currentGeneration(controller);
@@ -288,7 +288,7 @@ void testControllerAttachesOverrideOnlyToArmedInteractiveRequests(Expectations& 
             "request build");
     }
 
-    session.updatePositionInteraction(40.0, 20.0);
+    session.updateTransformInteraction({40.0, 20.0});
     {
         const auto generation = currentGeneration(controller);
         expectations.expect(waitUntil([&] { return isReady(controller); }),
@@ -310,17 +310,17 @@ void testControllerAttachesOverrideOnlyToArmedInteractiveRequests(Expectations& 
         const auto invocation = invocationForGeneration(generation);
         expectations.expect(invocation.has_value() && !invocation->hasOverride,
                             "a Visible request never carries the active interaction's override");
-        expectations.expect(session.positionInteractionActive(),
+        expectations.expect(session.transformInteractionActive(),
                             "the Visible refresh does not disturb the still-active interaction");
     }
 
     // Commit clears the interaction; the next (still-armed) Interactive-priority request carries no
     // override.
-    expectations.expect(session.commitPositionInteraction(), "commit succeeds");
+    expectations.expect(session.commitTransformInteraction(), "commit succeeds");
     controller.notifyScrubEnded();
     expectations.expect(waitUntil([&] { return isReady(controller); }),
                         "the post-commit request reaches Ready");
-    expectations.expect(session.positionInteractionOverride().empty(),
+    expectations.expect(session.transformInteractionOverrides().empty(),
                         "the override is gone after commit");
 
     reachQuiescence(controller, bridge, scheduler, expectations);
@@ -369,17 +369,18 @@ void testAdmissionRejectedOverrideSurfacesErrorWithoutKillingInteraction(
     session.selectLayer(ids.layer);
     const auto mapping = makeMapping(wideFormat());
     controller.beginInteractiveScrub();
-    expectations.expect(!session.beginPositionInteraction(mapping).has_value(), "begin succeeds");
-    session.updatePositionInteraction(10.0, 10.0);
+    expectations.expect(!session.beginTransformInteraction({}, mapping).has_value(),
+                        "begin succeeds");
+    session.updateTransformInteraction({10.0, 10.0});
 
     expectations.expect(
         waitUntil([&] { return controller.state().activity == ui::PreviewActivity::Failed; }),
         "the rejected override surfaces as a Failed preview, never a crash");
-    expectations.expect(session.positionInteractionActive(),
+    expectations.expect(session.transformInteractionActive(),
                         "an admission-rejected override never kills the live interaction -- the "
                         "gesture stays draggable");
 
-    session.cancelPositionInteraction();
+    session.cancelTransformInteraction();
     controller.notifyScrubEnded();
     expectations.expect(waitUntil([&] { return isReady(controller); }),
                         "clearing the override recovers a Ready preview");
@@ -495,12 +496,12 @@ void testDragMovesSelectedSolidLayerCommitsAndUndoes(Expectations& expectations)
 
     const auto revisionBeforeDrag = fixture.session.snapshot().revision();
     sendPress(fixture.viewer, pressPoint);
-    expectations.expect(fixture.session.positionInteractionActive(),
+    expectations.expect(fixture.session.transformInteractionActive(),
                         "pressing on the viewer with a selected layer begins the interaction");
     sendMove(fixture.viewer, releasePoint);
     sendRelease(fixture.viewer, releasePoint);
 
-    expectations.expect(!fixture.session.positionInteractionActive(),
+    expectations.expect(!fixture.session.transformInteractionActive(),
                         "release ends the interaction");
     expectations.expect(fixture.session.snapshot().revision().value() ==
                             revisionBeforeDrag.value() + 1,
@@ -581,11 +582,11 @@ void testDragAtNonIdentityZoomLandsExactlyUnderCursor(Expectations& expectations
 
     sendPress(fixture.viewer, pressPoint);
     expectations.expect(
-        fixture.session.positionInteractionActive(),
+        fixture.session.transformInteractionActive(),
         "pressing on the zoomed viewer with a selected layer begins the interaction");
     // Begin base: the frozen base value is exactly the pre-drag constant, unmoved, before any move
     // event lands.
-    const auto beginOverride = fixture.session.positionInteractionOverride();
+    const auto beginOverride = fixture.session.transformInteractionOverrides();
     expectations.expect(!beginOverride.empty(), "the begun interaction carries an override");
     if (!beginOverride.empty()) {
         const auto* beginValue = std::get_if<document::Vec2d>(&beginOverride.front().value);
@@ -596,7 +597,7 @@ void testDragAtNonIdentityZoomLandsExactlyUnderCursor(Expectations& expectations
     sendMove(fixture.viewer, releasePoint);
     sendRelease(fixture.viewer, releasePoint);
 
-    expectations.expect(!fixture.session.positionInteractionActive(),
+    expectations.expect(!fixture.session.transformInteractionActive(),
                         "release ends the interaction");
 
     // Committed key: the document-space position lands exactly where the ZOOMED mapping (half the
@@ -676,10 +677,10 @@ void testDragAtNonIdentityZoomAndPanLandsExactlyUnderCursor(Expectations& expect
     const QPointF delta = releasePoint - pressPoint;
 
     sendPress(fixture.viewer, pressPoint);
-    expectations.expect(fixture.session.positionInteractionActive(),
+    expectations.expect(fixture.session.transformInteractionActive(),
                         "pressing on the zoomed+panned viewer with a selected layer begins the "
                         "interaction");
-    const auto beginOverride = fixture.session.positionInteractionOverride();
+    const auto beginOverride = fixture.session.transformInteractionOverrides();
     if (!beginOverride.empty()) {
         const auto* beginValue = std::get_if<document::Vec2d>(&beginOverride.front().value);
         expectations.expect(beginValue != nullptr && *beginValue == *base,
@@ -688,7 +689,7 @@ void testDragAtNonIdentityZoomAndPanLandsExactlyUnderCursor(Expectations& expect
     }
     sendMove(fixture.viewer, releasePoint);
     sendRelease(fixture.viewer, releasePoint);
-    expectations.expect(!fixture.session.positionInteractionActive(),
+    expectations.expect(!fixture.session.transformInteractionActive(),
                         "release ends the interaction");
 
     const document::Vec2d expected{base->x + delta.x() / displayRect.width() * 1000.0,
@@ -713,7 +714,8 @@ void testPickingAtZoomAndPan(Expectations& expectations) {
                         "add top layer");
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "picking frame ready");
-    fixture.viewer.setZoomActualSize();
+    QKeyEvent actualSize(QEvent::KeyPress, Qt::Key_1, Qt::ControlModifier);
+    QCoreApplication::sendEvent(&fixture.viewer, &actualSize);
     sendMouse(fixture.viewer, QEvent::MouseButtonPress, {100, 100}, Qt::MiddleButton,
               Qt::MiddleButton);
     sendMouse(fixture.viewer, QEvent::MouseMove, {125, 110}, Qt::NoButton, Qt::MiddleButton);
@@ -724,11 +726,13 @@ void testPickingAtZoomAndPan(Expectations& expectations) {
     const auto revision = fixture.session.snapshot().revision();
     sendPress(fixture.viewer, {210, 155});
     sendRelease(fixture.viewer, {210, 155});
-    expectations.expect(fixture.session.selection().primary == ui::SelectionTarget{top},
+    const auto* selected = std::get_if<document::LayerId>(&fixture.session.selection().primary);
+    expectations.expect(selected && *selected == top,
                         "click picks the topmost overlapping layer at actual zoom and pan");
     expectations.expect(fixture.session.snapshot().revision() == revision,
                         "selection is session only");
-    fixture.viewer.setZoomFit();
+    QKeyEvent fit(QEvent::KeyPress, Qt::Key_0, Qt::ControlModifier);
+    QCoreApplication::sendEvent(&fixture.viewer, &fit);
     const auto display = expectedDisplayRect(fixture.viewer, fixture.controller);
     const auto empty = QPointF(display.center().x(), display.top() - 10);
     sendPress(fixture.viewer, empty);
@@ -758,7 +762,7 @@ void testDragOnEmptyOrUnselectedDoesNothing(Expectations& expectations) {
     const auto revisionBeforeDrag = fixture.session.snapshot().revision();
 
     sendPress(fixture.viewer, QPointF(200.0, 150.0));
-    expectations.expect(!fixture.session.positionInteractionActive(),
+    expectations.expect(!fixture.session.transformInteractionActive(),
                         "pressing with nothing selected never begins an interaction");
     sendMove(fixture.viewer, QPointF(260.0, 110.0));
     sendRelease(fixture.viewer, QPointF(260.0, 110.0));
@@ -793,8 +797,8 @@ void testMidDragResizeCancelsWithNoCommitAndNoOverrideLeft(Expectations& expecta
 
     sendPress(fixture.viewer, QPointF(200.0, 150.0));
     sendMove(fixture.viewer, QPointF(230.0, 170.0));
-    expectations.expect(fixture.session.positionInteractionActive() &&
-                            !fixture.session.positionInteractionOverride().empty(),
+    expectations.expect(fixture.session.transformInteractionActive() &&
+                            !fixture.session.transformInteractionOverrides().empty(),
                         "the interaction is live and overriding mid-drag");
 
     // resize() alone only updates geometry; QWidget may defer dispatching the resizeEvent()
@@ -805,9 +809,9 @@ void testMidDragResizeCancelsWithNoCommitAndNoOverrideLeft(Expectations& expecta
     fixture.viewer.resize(250, 200);
     QResizeEvent resize(fixture.viewer.size(), oldSize);
     QCoreApplication::sendEvent(&fixture.viewer, &resize);
-    expectations.expect(!fixture.session.positionInteractionActive(),
+    expectations.expect(!fixture.session.transformInteractionActive(),
                         "a mid-drag resize cancels the interaction");
-    expectations.expect(fixture.session.positionInteractionOverride().empty(),
+    expectations.expect(fixture.session.transformInteractionOverrides().empty(),
                         "no override is left after the resize cancels it");
 
     // The release that follows is a no-op: the gesture already ended at the resize.
@@ -837,11 +841,11 @@ void testEscapeCancelsMidDrag(Expectations& expectations) {
 
     sendPress(fixture.viewer, QPointF(200.0, 150.0));
     sendMove(fixture.viewer, QPointF(220.0, 160.0));
-    expectations.expect(fixture.session.positionInteractionActive(), "the interaction is live");
+    expectations.expect(fixture.session.transformInteractionActive(), "the interaction is live");
 
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QCoreApplication::sendEvent(&fixture.viewer, &escape);
-    expectations.expect(!fixture.session.positionInteractionActive(),
+    expectations.expect(!fixture.session.transformInteractionActive(),
                         "Escape cancels the live interaction");
     expectations.expect(fixture.session.snapshot().revision() == revisionBeforeDrag,
                         "Escape commits nothing");

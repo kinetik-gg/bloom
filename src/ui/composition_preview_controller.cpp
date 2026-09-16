@@ -69,8 +69,8 @@ CompositionPreviewController::CompositionPreviewController(
             &CompositionPreviewController::handleCompositionChanged);
     connect(&session_, &CompositionSession::currentTimeChanged, this,
             &CompositionPreviewController::handleCurrentTimeChanged);
-    connect(&session_, &CompositionSession::positionInteractionChanged, this,
-            &CompositionPreviewController::handlePositionInteractionChanged);
+    connect(&session_, &CompositionSession::transformInteractionChanged, this,
+            &CompositionPreviewController::handleTransformInteractionChanged);
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this,
             &CompositionPreviewController::consumeReadyResult);
     interactiveCadenceTimer_.setSingleShot(true);
@@ -125,7 +125,7 @@ bool CompositionPreviewController::isShuttingDown() const noexcept { return shut
 
 bool CompositionPreviewController::backgroundWorkAllowed() const noexcept {
     return !shuttingDown_ && !active_.has_value() && !pending_.has_value() &&
-           !interactiveTimeChangeArmed_ && session_.positionInteractionOverride().empty() &&
+           !interactiveTimeChangeArmed_ && session_.transformInteractionOverrides().empty() &&
            !ramPreviewProgress_.has_value();
 }
 
@@ -255,7 +255,7 @@ void CompositionPreviewController::handleCurrentTimeChanged() {
                                                       : PreviewRequestKind::Visible);
 }
 
-void CompositionPreviewController::handlePositionInteractionChanged() {
+void CompositionPreviewController::handleTransformInteractionChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (shuttingDown_) {
         return;
@@ -480,7 +480,7 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
     // animation-and-time.md), and are read fresh here -- never cached across requests.
     std::vector<runtime::SnapshotParameterOverride> interactionOverride;
     if (kind == PreviewRequestKind::Interactive) {
-        interactionOverride = session_.positionInteractionOverride();
+        interactionOverride = session_.transformInteractionOverrides();
     }
 
     // The RAM preview cache (docs/architecture/animation-and-time.md, "RAM preview"). A request

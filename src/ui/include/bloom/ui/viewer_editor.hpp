@@ -200,9 +200,9 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     bool event(QEvent* event) override;
     // Direct viewer manipulation of the selected layer's position (docs/architecture/
     // animation-and-time.md, "Direct Manipulation And Preview Overrides"; issue #82). press ->
-    // beginPositionInteraction (+ beginInteractiveScrub() arming so drag previews ride Interactive
-    // cadence); move -> updatePositionInteraction; release -> commit + disarm; Escape or a detected
-    // resize/format/proxy/pixel-aspect/display-descriptor change -> cancel + disarm. A
+    // beginTransformInteraction (+ beginInteractiveScrub() arming so drag previews ride Interactive
+    // cadence); move -> updateTransformInteraction; release -> commit + disarm; Escape or a
+    // detected resize/format/proxy/pixel-aspect/display-descriptor change -> cancel + disarm. A
     // middle-button press begins a PAN gesture instead
     // (decision 2) and never touches CompositionSession.
     void mousePressEvent(QMouseEvent* event) override;
@@ -296,7 +296,6 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     CompositionSession& session_;
     CompositionPreviewController& previewController_;
     bool dragActive_ = false;
-    QPointF dragOrigin_;
     std::optional<ViewerMapping> activeMapping_;
 
     // Zoom/pan (decision 2).

@@ -221,7 +221,7 @@ class CompositionPreviewController final : public QObject {
                           PreparedPreviewFrameHandle retainedFrame);
     void handleCompositionChanged();
     void handleCurrentTimeChanged();
-    void handlePositionInteractionChanged();
+    void handleTransformInteractionChanged();
     void consumeReadyResult();
     [[nodiscard]] static FrameFreshness
     freshnessFor(const PreparedPreviewFrameHandle& frame,

@@ -1793,6 +1793,9 @@ void ViewerEditor::updatePreviewResolution() {
 }
 
 bool ViewerEditor::event(QEvent* event) {
+    if (dragActive_ && (event->type() == QEvent::UngrabMouse ||
+                        event->type() == QEvent::WindowDeactivate || event->type() == QEvent::Hide))
+        endDrag(false);
     const bool handled = QWidget::event(event);
     if (event->type() == QEvent::DevicePixelRatioChange) {
         if (dragActive_) {
@@ -1955,7 +1958,8 @@ std::optional<ViewerMapping> ViewerEditor::currentMapping() const {
     // mapping source (docs/architecture/animation-and-time.md, "Direct Manipulation And Preview
     // Overrides").
     if (frameHandle->desiredIdentity().compositionId != session_.compositionId() ||
-        frameHandle->desiredIdentity().sourceRevision != session_.snapshot().revision()) {
+        frameHandle->desiredIdentity().sourceRevision != session_.snapshot().revision() ||
+        frameHandle->desiredIdentity().time != session_.currentTime()) {
         return std::nullopt;
     }
     const auto* composition = session_.composition();
@@ -1986,7 +1990,7 @@ std::optional<ViewerMapping> ViewerEditor::currentMapping() const {
     // Fit mode, or the actively zoomed/panned rectangle otherwise -- so a drag begun at zoom 200%
     // and a pan offset maps screen deltas against the geometry the user actually SEES, and lands
     // exactly under the cursor. Freeze semantics are unchanged: this is still computed once here,
-    // handed to CompositionSession::beginPositionInteraction(), and frozen there for the gesture's
+    // handed to CompositionSession::beginTransformInteraction(), and frozen there for the gesture's
     // duration; ViewerMapping's own equality (already comparing displayRect) is what
     // makes mappingStillValid() correctly invalidate a gesture if transform_ changes mid-drag, with
     // zero additional invalidation code needed (mousePressEvent()/wheelEvent() additionally refuse
@@ -2038,9 +2042,9 @@ void ViewerEditor::endDrag(const bool commit) {
     dragActive_ = false;
     activeMapping_.reset();
     if (commit) {
-        (void)session_.commitPositionInteraction();
+        (void)session_.commitTransformInteraction();
     } else {
-        session_.cancelPositionInteraction();
+        session_.cancelTransformInteraction();
     }
     // Reuses TimelineRuler's Interactive-cadence arming (docs/architecture/animation-and-time.md,
     // "Session Time And Scrubbing"): bypasses any remaining trailing delay and disarms it.
@@ -2084,6 +2088,13 @@ void ViewerEditor::updatePanCursor() {
 }
 
 void ViewerEditor::mousePressEvent(QMouseEvent* event) {
+    if (dragActive_ && event->button() == Qt::RightButton) {
+        endDrag(false);
+        event->accept();
+        return;
+    }
+    if (event->button() == Qt::LeftButton)
+        setFocus(Qt::MouseFocusReason);
     if (!dragActive_ && !panActive_) {
         if (const auto geometry = currentDisplayGeometry();
             geometry.has_value() && (event->button() == Qt::MiddleButton ||
@@ -2114,7 +2125,7 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
     }
     setFocus(Qt::MouseFocusReason);
     auto mapping = currentMapping();
-    if (!mapping.has_value() || !canvasRect().contains(event->position())) {
+    if (!mapping.has_value() || !contentRect().contains(event->position())) {
         QWidget::mousePressEvent(event);
         return;
     }
@@ -2125,15 +2136,32 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
         return;
     }
     session_.selectLayer(hit.layerId, event->modifiers().testFlag(Qt::ShiftModifier));
-    if (session_.beginPositionInteraction(*mapping).has_value()) {
-        // Typed rejection (no selection, no resolvable/animated-without-a-key/driven position, or
-        // an empty mapping): the drag simply never starts. No cursor/handle art communicates this
-        // in v1 -- the gesture itself is the whole slice.
-        QWidget::mousePressEvent(event);
+    const auto selected = previewController_.selectedLayerBounds();
+    const auto bounds =
+        std::ranges::find(selected, hit.layerId, &runtime::EvaluatedOperationBounds::layerId);
+    if (bounds == selected.end())
+        return;
+    auto kind = TransformGesture::Kind::Move;
+    switch (hit.region) {
+    case ViewerHitRegion::Scale:
+        kind = TransformGesture::Kind::Scale;
+        break;
+    case ViewerHitRegion::Rotate:
+        kind = TransformGesture::Kind::Rotate;
+        break;
+    case ViewerHitRegion::Anchor:
+        kind = TransformGesture::Kind::Anchor;
+        break;
+    default:
+        break;
+    }
+    if (session_.beginTransformInteraction({kind, hit.handle, event->position(), *bounds}, *mapping,
+                                           {event->modifiers().testFlag(Qt::ShiftModifier),
+                                            event->modifiers().testFlag(Qt::AltModifier)})) {
+        event->accept();
         return;
     }
     dragActive_ = true;
-    dragOrigin_ = event->position();
     activeMapping_ = mapping;
     setFocus(Qt::MouseFocusReason);
     previewController_.beginInteractiveScrub();
@@ -2195,8 +2223,9 @@ void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
     // Total displacement from the ORIGINAL press point, not from the previous move -- base value
     // plus TOTAL gesture displacement, never a chain of already-rounded intermediates (docs/
     // architecture/animation-and-time.md).
-    const QPointF delta = event->position() - dragOrigin_;
-    session_.updatePositionInteraction(delta.x(), delta.y());
+    session_.updateTransformInteraction(event->position(),
+                                        {event->modifiers().testFlag(Qt::ShiftModifier),
+                                         event->modifiers().testFlag(Qt::AltModifier)});
     event->accept();
 }
 
@@ -2212,7 +2241,14 @@ void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
         QWidget::mouseReleaseEvent(event);
         return;
     }
-    endDrag(true);
+    if (mappingStillValid()) {
+        session_.updateTransformInteraction(event->position(),
+                                            {event->modifiers().testFlag(Qt::ShiftModifier),
+                                             event->modifiers().testFlag(Qt::AltModifier)});
+        endDrag(true);
+    } else {
+        endDrag(false);
+    }
     event->accept();
 }
 

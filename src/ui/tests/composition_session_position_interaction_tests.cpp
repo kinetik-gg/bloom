@@ -19,8 +19,11 @@
 #include <bloom/document/project.hpp>
 #include <bloom/render/display_buffer.hpp>
 #include <bloom/render/image_types.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/evaluation.hpp>
+#include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <cmath>
 
 #include <QCoreApplication>
 #include <QRectF>
@@ -123,11 +126,11 @@ void testDisplacementMathNonSquareNegativeAndBaseTotal() {
     // displayRect is 200x100 (2:1); compositionFormat is 1000x100 (10:1): scaleX = 1000/200 = 5,
     // scaleY = 100/100 = 1 -- deliberately different per-axis scale factors.
     const auto mapping = makeMapping(QRectF(0.0, 0.0, 200.0, 100.0), wideFormat());
-    require(!session.beginPositionInteraction(mapping).has_value(),
+    require(!session.beginTransformInteraction({}, mapping).has_value(),
             "begin succeeds for a selected layer with a resolvable constant position");
 
-    session.updatePositionInteraction(20.0, 10.0);
-    const auto override1 = session.positionInteractionOverride();
+    session.updateTransformInteraction({20.0, 10.0});
+    const auto override1 = session.transformInteractionOverrides();
     require(!override1.empty(), "an active interaction always reports an override");
     if (!override1.empty()) {
         const auto* value1 = std::get_if<document::Vec2d>(&override1.front().value);
@@ -138,8 +141,8 @@ void testDisplacementMathNonSquareNegativeAndBaseTotal() {
     }
 
     // Negative displacement.
-    session.updatePositionInteraction(-40.0, -5.0);
-    const auto override2 = session.positionInteractionOverride();
+    session.updateTransformInteraction({-40.0, -5.0});
+    const auto override2 = session.transformInteractionOverrides();
     require(!override2.empty(), "an active interaction always reports an override");
     if (!override2.empty()) {
         const auto* value2 = std::get_if<document::Vec2d>(&override2.front().value);
@@ -151,17 +154,17 @@ void testDisplacementMathNonSquareNegativeAndBaseTotal() {
     // Base + TOTAL displacement, never a chain of already-rounded intermediates: two sequential
     // updates must land exactly where one single combined update lands, not at
     // base + f(first) + f(second).
-    session.cancelPositionInteraction();
-    require(!session.beginPositionInteraction(mapping).has_value(), "restart the interaction");
-    session.updatePositionInteraction(5.0, 5.0);
-    session.updatePositionInteraction(37.0, -13.0);
-    const auto chained = session.positionInteractionOverride();
+    session.cancelTransformInteraction();
+    require(!session.beginTransformInteraction({}, mapping).has_value(), "restart the interaction");
+    session.updateTransformInteraction({5.0, 5.0});
+    session.updateTransformInteraction({37.0, -13.0});
+    const auto chained = session.transformInteractionOverrides();
 
-    session.cancelPositionInteraction();
-    require(!session.beginPositionInteraction(mapping).has_value(),
+    session.cancelTransformInteraction();
+    require(!session.beginTransformInteraction({}, mapping).has_value(),
             "restart the interaction again");
-    session.updatePositionInteraction(37.0, -13.0);
-    const auto direct = session.positionInteractionOverride();
+    session.updateTransformInteraction({37.0, -13.0});
+    const auto direct = session.transformInteractionOverrides();
 
     require(!chained.empty() && !direct.empty(), "both restarted interactions report overrides");
     if (!chained.empty() && !direct.empty()) {
@@ -171,7 +174,7 @@ void testDisplacementMathNonSquareNegativeAndBaseTotal() {
                 "two updates land exactly where one combined update lands (base + TOTAL "
                 "displacement)");
     }
-    session.cancelPositionInteraction();
+    session.cancelTransformInteraction();
 }
 
 void testBeginRejectionsAndFreezing() {
@@ -186,31 +189,31 @@ void testBeginRejectionsAndFreezing() {
     ui::CompositionSession session(document, stack, compositionId);
 
     // No selection.
-    require(session.beginPositionInteraction(validMapping) ==
-                ui::PositionInteractionRejection::NoLayerSelected,
+    require(session.beginTransformInteraction({}, validMapping) ==
+                ui::TransformInteractionRejection::NoLayerSelected,
             "no selection is a typed NoLayerSelected rejection");
-    require(!session.positionInteractionActive(), "a rejected begin leaves no active interaction");
+    require(!session.transformInteractionActive(), "a rejected begin leaves no active interaction");
 
     // Empty mapping.
     session.selectLayer(ids.layer);
-    require(session.beginPositionInteraction(makeMapping(QRectF(), format)) ==
-                ui::PositionInteractionRejection::EmptyMapping,
+    require(session.beginTransformInteraction({}, makeMapping(QRectF(), format)) ==
+                ui::TransformInteractionRejection::EmptyMapping,
             "an empty display rectangle is a typed EmptyMapping rejection");
-    require(!session.positionInteractionActive(),
+    require(!session.transformInteractionActive(),
             "an empty-mapping rejection leaves no active interaction");
 
     // Successful begin freezes the base value/revision.
-    require(!session.beginPositionInteraction(validMapping).has_value(),
+    require(!session.beginTransformInteraction({}, validMapping).has_value(),
             "a selected layer with a resolvable position and a non-empty mapping begins");
-    require(session.positionInteractionActive(), "begin leaves the interaction active");
-    const auto freshOverride = session.positionInteractionOverride();
+    require(session.transformInteractionActive(), "begin leaves the interaction active");
+    const auto freshOverride = session.transformInteractionOverrides();
     require(!freshOverride.empty() && freshOverride.front().parameterId == ids.position &&
                 freshOverride.front().sourceRevision == document.snapshot().revision() &&
                 std::get_if<document::Vec2d>(&freshOverride.front().value) != nullptr &&
                 *std::get_if<document::Vec2d>(&freshOverride.front().value) ==
                     document::Vec2d{1.0, 2.0},
             "a fresh begin's override starts at exactly the base value/revision/target");
-    session.cancelPositionInteraction();
+    session.cancelTransformInteraction();
 }
 
 void testDrivenAndAnimatedParameterRejections() {
@@ -243,10 +246,10 @@ void testDrivenAndAnimatedParameterRejections() {
     }
     ui::CompositionSession drivenSession(document, stack, compositionId);
     drivenSession.selectLayer(ids.layer);
-    require(drivenSession.beginPositionInteraction(mapping) ==
-                ui::PositionInteractionRejection::DrivenParameter,
+    require(drivenSession.beginTransformInteraction({}, mapping) ==
+                ui::TransformInteractionRejection::DrivenParameter,
             "a driven position parameter never begins a gesture (never silently disconnects it)");
-    require(!drivenSession.positionInteractionActive(),
+    require(!drivenSession.transformInteractionActive(),
             "the driven rejection leaves no interaction");
 }
 
@@ -287,10 +290,10 @@ void testAnimatedParameterSampledBaseInsertsKeyAtCurrentTimeAndUndoRemovesOnlyIt
     session.selectLayer(ids.layer);
     require(session.setCurrentTime(time(5)), "session moves to a time between the two keys");
 
-    require(!session.beginPositionInteraction(mapping).has_value(),
+    require(!session.beginTransformInteraction({}, mapping).has_value(),
             "an animated position with no exact key at the current time now begins (D1's "
             "relaxation), rather than refusing");
-    const auto freshOverride = session.positionInteractionOverride();
+    const auto freshOverride = session.transformInteractionOverrides();
     require(!freshOverride.empty(), "an active interaction always reports an override");
     if (!freshOverride.empty()) {
         const auto* value = std::get_if<document::Vec2d>(&freshOverride.front().value);
@@ -299,9 +302,9 @@ void testAnimatedParameterSampledBaseInsertsKeyAtCurrentTimeAndUndoRemovesOnlyIt
                 "between (3,4) and (13,24))");
     }
 
-    session.updatePositionInteraction(10.0, 0.0);
+    session.updateTransformInteraction({10.0, 0.0});
     const auto revisionBeforeCommit = session.snapshot().revision();
-    require(session.commitPositionInteraction(), "commit succeeds for the sampled-base gesture");
+    require(session.commitTransformInteraction(), "commit succeeds for the sampled-base gesture");
     require(session.snapshot().revision().value() == revisionBeforeCommit.value() + 1,
             "commit is exactly one transaction");
 
@@ -366,11 +369,11 @@ void testAnimatedParameterExactKeyStillUpdatesThatKey() {
     session.selectLayer(ids.layer);
     require(session.currentTime() == time(0),
             "the session's default current time already sits exactly on the seeded key's time");
-    require(!session.beginPositionInteraction(mapping).has_value(),
+    require(!session.beginTransformInteraction({}, mapping).has_value(),
             "an animated position with an exact key at the current time begins");
-    session.updatePositionInteraction(10.0, 0.0);
+    session.updateTransformInteraction({10.0, 0.0});
     const auto revisionBeforeCommit = session.snapshot().revision();
-    require(session.commitPositionInteraction(), "commit succeeds for the animated key update");
+    require(session.commitTransformInteraction(), "commit succeeds for the animated key update");
     require(session.snapshot().revision().value() == revisionBeforeCommit.value() + 1,
             "commit is exactly one transaction");
 
@@ -399,12 +402,12 @@ void testCommitIsExactlyOneTransactionAndUndoRestoresExactPriorValue() {
 
     ui::CompositionSession session(document, stack, compositionId);
     session.selectLayer(ids.layer);
-    require(!session.beginPositionInteraction(mapping).has_value(), "begin succeeds");
-    session.updatePositionInteraction(30.0, -20.0);
+    require(!session.beginTransformInteraction({}, mapping).has_value(), "begin succeeds");
+    session.updateTransformInteraction({30.0, -20.0});
 
     const auto revisionBeforeCommit = session.snapshot().revision();
-    require(session.commitPositionInteraction(), "commit succeeds");
-    require(!session.positionInteractionActive(), "commit always clears interaction state");
+    require(session.commitTransformInteraction(), "commit succeeds");
+    require(!session.transformInteractionActive(), "commit always clears interaction state");
     require(session.snapshot().revision().value() == revisionBeforeCommit.value() + 1,
             "one drag creates exactly one document transaction (one undo step)");
     require(session.constantVec2Value(ids.position) ==
@@ -428,9 +431,9 @@ void testZeroMoveCommitsNothing() {
 
     ui::CompositionSession session(document, stack, compositionId);
     session.selectLayer(ids.layer);
-    require(!session.beginPositionInteraction(mapping).has_value(), "begin succeeds");
+    require(!session.beginTransformInteraction({}, mapping).has_value(), "begin succeeds");
     const auto revisionBeforeCommit = session.snapshot().revision();
-    require(session.commitPositionInteraction(), "a zero-displacement commit reports success");
+    require(session.commitTransformInteraction(), "a zero-displacement commit reports success");
     require(session.snapshot().revision() == revisionBeforeCommit,
             "a zero move creates no command / no undo step");
     require(session.constantVec2Value(ids.position) == document::Vec2d{7.0, 8.0},
@@ -448,22 +451,22 @@ void testCancelClearsState() {
 
     ui::CompositionSession session(document, stack, compositionId);
     session.selectLayer(ids.layer);
-    require(!session.beginPositionInteraction(mapping).has_value(), "begin succeeds");
-    session.updatePositionInteraction(99.0, 99.0);
+    require(!session.beginTransformInteraction({}, mapping).has_value(), "begin succeeds");
+    session.updateTransformInteraction({99.0, 99.0});
     const auto revisionBeforeCancel = session.snapshot().revision();
 
-    session.cancelPositionInteraction();
-    require(!session.positionInteractionActive(), "cancel clears interaction state");
-    require(session.positionInteractionOverride().empty(), "cancel leaves no override");
+    session.cancelTransformInteraction();
+    require(!session.transformInteractionActive(), "cancel clears interaction state");
+    require(session.transformInteractionOverrides().empty(), "cancel leaves no override");
     require(session.snapshot().revision() == revisionBeforeCancel, "cancel creates no command");
     require(session.constantVec2Value(ids.position) == document::Vec2d{0.0, 0.0},
             "cancel never mutates project truth");
 
-    // invalidatePositionInteraction() is the same clearing effect, for the Viewer's own detected
+    // invalidateTransformInteraction() is the same clearing effect, for the Viewer's own detected
     // environment changes.
-    require(!session.beginPositionInteraction(mapping).has_value(), "begin succeeds again");
-    session.invalidatePositionInteraction();
-    require(!session.positionInteractionActive(), "invalidate clears interaction state");
+    require(!session.beginTransformInteraction({}, mapping).has_value(), "begin succeeds again");
+    session.invalidateTransformInteraction();
+    require(!session.transformInteractionActive(), "invalidate clears interaction state");
 }
 
 void testInvalidationOnCompositionSwitchAndStaleRevision() {
@@ -507,26 +510,153 @@ void testInvalidationOnCompositionSwitchAndStaleRevision() {
     session.selectLayer(ids.layer);
 
     // Composition switch cancels.
-    require(!session.beginPositionInteraction(mapping).has_value(), "begin succeeds");
+    require(!session.beginTransformInteraction({}, mapping).has_value(), "begin succeeds");
     require(session.setComposition(secondCompositionId), "session switches composition");
-    require(!session.positionInteractionActive(),
+    require(!session.transformInteractionActive(),
             "a composition switch cancels an active interaction (its target belongs to the OLD "
             "composition)");
 
     // An unrelated document edit (stale base revision) cancels.
     require(session.setComposition(firstCompositionId), "session switches back");
     session.selectLayer(ids.layer);
-    require(!session.beginPositionInteraction(mapping).has_value(), "begin succeeds again");
+    require(!session.beginTransformInteraction({}, mapping).has_value(), "begin succeeds again");
     require(session.addSolidLayer(QStringLiteral("Unrelated"), {1, 1, 1, 1}),
             "an unrelated edit advances the document revision");
-    require(!session.positionInteractionActive(),
+    require(!session.transformInteractionActive(),
             "a snapshot change that breaks the frozen base revision cancels the interaction");
+}
+
+runtime::EvaluatedOperationBounds evaluatedBounds(ui::CompositionSession& session,
+                                                  const document::LayerId layer) {
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "registry initializes");
+    registry.freeze();
+    runtime::SnapshotCompiler compiler(registry);
+    const auto compiled = compiler.compile(
+        {session.snapshot(), session.compositionId(), session.transformInteractionOverrides()}, {});
+    require(compiled.plan != nullptr, "gesture snapshot compiles");
+    runtime::CpuCompositionEvaluator evaluator;
+    const auto result = evaluator.evaluate(compiled.plan,
+                                           {.time = session.currentTime(),
+                                            .output = compiled.plan->output(),
+                                            .resolution = runtime::CompositionFormatResolution{},
+                                            .pixelStorageByteLimit = 64 * 1024 * 1024},
+                                           {});
+    require(result.frame() != nullptr, "gesture snapshot evaluates");
+    const auto bounds = result.frame()->evaluatedBounds();
+    const auto found =
+        std::ranges::find(bounds, layer, &runtime::EvaluatedOperationBounds::layerId);
+    require(found != bounds.end(), "layer publishes bounds");
+    return *found;
+}
+
+void requireNear(const document::Vec2d actual, const document::Vec2d expected,
+                 const std::string_view message) {
+    require(std::hypot(actual.x - expected.x, actual.y - expected.y) < 1e-8, message);
+}
+
+void testParentedTransformsCommitAtomically() {
+    const auto format = *document::CompositionFormat::create(200, 200);
+    auto project = document::makeNewProject("Transforms", "Main", time(10), format);
+    const auto composition = project.initialCompositionId;
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, composition);
+    require(session.addSolidLayer(QStringLiteral("Parent"), {1, 0, 0, 1}), "add parent");
+    const auto parent = *std::get_if<document::LayerId>(&session.selection().primary);
+    require(session.setSelectedScale(1.5, 0.75) && session.setSelectedRotation(30),
+            "transform parent");
+    require(session.addSolidLayer(QStringLiteral("Child"), {0, 1, 0, 1}), "add child");
+    const auto child = *std::get_if<document::LayerId>(&session.selection().primary);
+    require(session.setLayerParent(child, parent), "parent child");
+    require(session.setSelectedScale(0.4, 0.6) && session.setSelectedRotation(-20),
+            "transform child");
+    const auto mapping = makeMapping(QRectF(30, 40, 400, 250), format);
+    const auto original = evaluatedBounds(session, child);
+    auto origin = mapping.toScreen(original.anchor);
+    require(!session.beginTransformInteraction(
+                {ui::TransformGesture::Kind::Move, 0, origin, original}, mapping),
+            "begin parented move");
+    session.updateTransformInteraction(origin + QPointF(40, -25));
+    const auto preview = evaluatedBounds(session, child);
+    requireNear(preview.anchor, {original.anchor.x + 20, original.anchor.y - 20},
+                "parented child follows the cursor in composition space");
+    require(session.commitTransformInteraction() &&
+                session.undoLabel() == QStringLiteral("Move Layer"),
+            "move commits one named transaction");
+    require(session.undo(), "undo move");
+    requireNear(evaluatedBounds(session, child).anchor, original.anchor, "one undo restores move");
+
+    origin = mapping.toScreen(original.polygon[0]);
+    require(!session.beginTransformInteraction(
+                {ui::TransformGesture::Kind::Scale, 0, origin, original}, mapping),
+            "begin corner scale");
+    session.updateTransformInteraction(origin + QPointF(-35, -22));
+    const auto scaled = evaluatedBounds(session, child);
+    requireNear(scaled.polygon[2], original.polygon[2],
+                "scale keeps the opposite corner in world space");
+    require(session.transformInteractionOverrides().size() == 2,
+            "scale previews scale and position together");
+    require(session.commitTransformInteraction() &&
+                session.undoLabel() == QStringLiteral("Scale Layer"),
+            "scale commits one transaction");
+    require(session.undo(), "undo scale");
+    for (std::size_t i = 0; i < 4; ++i)
+        requireNear(evaluatedBounds(session, child).polygon[i], original.polygon[i],
+                    "one undo restores both scale and position");
+
+    origin = mapping.toScreen(original.anchor);
+    require(!session.beginTransformInteraction(
+                {ui::TransformGesture::Kind::Anchor, 0, origin, original}, mapping),
+            "begin anchor move");
+    session.updateTransformInteraction(origin + QPointF(18, -12));
+    const auto anchored = evaluatedBounds(session, child);
+    for (std::size_t i = 0; i < 4; ++i)
+        requireNear(anchored.polygon[i], original.polygon[i],
+                    "anchor drag preserves visual placement");
+    requireNear(anchored.anchor, {original.anchor.x + 9, original.anchor.y - 9.6},
+                "anchor follows cursor");
+    require(session.commitTransformInteraction() &&
+                session.undoLabel() == QStringLiteral("Move Anchor"),
+            "anchor commits one transaction");
+    require(session.undo(), "undo anchor");
+    requireNear(evaluatedBounds(session, child).anchor, original.anchor,
+                "one undo restores anchor and position");
+
+    origin = mapping.toScreen(original.polygon[0]);
+    require(
+        !session.beginTransformInteraction({ui::TransformGesture::Kind::Scale, 0, origin, original},
+                                           mapping, {.shift = true, .alt = true}),
+        "begin uniform pivot scale");
+    session.updateTransformInteraction(origin + QPointF(-30, -30), {.shift = true, .alt = true});
+    requireNear(evaluatedBounds(session, child).anchor, original.anchor,
+                "Alt scale fixes the anchor");
+    const auto overrides = session.transformInteractionOverrides();
+    const auto* scale = std::get_if<document::Vec2d>(&overrides.back().value);
+    require(scale && std::abs(scale->x / 0.4 - scale->y / 0.6) < 1e-8,
+            "Shift scales both axes uniformly");
+    session.cancelTransformInteraction();
+
+    require(!session.beginTransformInteraction(
+                {ui::TransformGesture::Kind::Rotate, 0, origin, original}, mapping),
+            "begin rotation");
+    session.updateTransformInteraction(origin + QPointF(45, -10), {.shift = true});
+    const auto rotationOverrides = session.transformInteractionOverrides();
+    const auto* angle = std::get_if<double>(&rotationOverrides.front().value);
+    require(angle && std::abs(*angle / 15.0 - std::round(*angle / 15.0)) < 1e-8,
+            "Shift snaps rotation to 15 degrees");
+    require(session.commitTransformInteraction(), "rotation commits");
+    require(session.undo(), "undo rotation");
+    for (std::size_t i = 0; i < 4; ++i)
+        requireNear(evaluatedBounds(session, child).polygon[i], original.polygon[i],
+                    "undo restores rotation");
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
+    testParentedTransformsCommitAtomically();
     testDisplacementMathNonSquareNegativeAndBaseTotal();
     testBeginRejectionsAndFreezing();
     testDrivenAndAnimatedParameterRejections();

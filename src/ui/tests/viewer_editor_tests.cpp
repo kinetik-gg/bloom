@@ -712,7 +712,7 @@ void testStatusBarReadoutMatchesExactSessionTimeIncludingSubframe(Expectations& 
 }
 
 // Middle-drag pans the view (decision 2) without ever touching CompositionSession's
-// position-interaction gesture (positionInteractionActive() stays false throughout) -- pan is
+// position-interaction gesture (transformInteractionActive() stays false throughout) -- pan is
 // pure Viewer-local state.
 void testMiddleDragPans(Expectations& expectations) {
     using namespace bloom;
@@ -731,7 +731,7 @@ void testMiddleDragPans(Expectations& expectations) {
                      Qt::NoModifier);
     QCoreApplication::sendEvent(&fixture.viewer, &move);
 
-    expectations.expect(!fixture.session.positionInteractionActive(),
+    expectations.expect(!fixture.session.transformInteractionActive(),
                         "a middle-drag pan never begins a CompositionSession position interaction");
     expectations.expect(!fixture.viewer.viewTransformForTest().fitToWindow,
                         "panning materializes the transform out of Fit mode");

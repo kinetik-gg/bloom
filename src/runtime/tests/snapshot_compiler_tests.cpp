@@ -1636,8 +1636,8 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 
 int main() {
     Expectations expectations;
-    testOverrideVectorKindsAndLimits(expectations);
     try {
+        testOverrideVectorKindsAndLimits(expectations);
         testLayerFlagsAndRangeLowering(expectations);
         testMuteKindsAndPixels(expectations);
         testMuteFirstImageInput(expectations);
