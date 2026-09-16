@@ -128,6 +128,68 @@ color4Curve(const document::Snapshot& snapshot, const document::AnimationCurveId
     return *result;
 }
 
+void testComponentCompatibilityProjection(TestContext& test) {
+    Document document(makeSourceProject());
+    CommandStack stack(document);
+    const auto execute = [&]<typename OperationType, typename... Args>(Args&&... args) {
+        Transaction transaction("Component projection", document.snapshot().revision());
+        transaction.emplace<OperationType>(kCompositionId, std::forward<Args>(args)...);
+        return stack.execute(std::move(transaction));
+    };
+    const auto created = execute.template operator()<CreateAnimationForParameter>(
+        kFirstPositionId, time(0, 1), document::AnimationComponent::X);
+    const auto id = created.outputId<document::AnimationCurveId>(kAnimationCurveOutput);
+    test.expect(id.has_value(), "component-only animation is created");
+    if (!id)
+        return;
+    const auto checkUnion = [&] {
+        const auto curve = vec2Curve(document.snapshot(), *id);
+        std::vector<core::RationalTime> times;
+        for (const auto& component : curve.components)
+            for (const auto& key : component.keyframes)
+                times.push_back(key.time);
+        std::ranges::sort(times);
+        times.erase(std::unique(times.begin(), times.end()), times.end());
+        std::vector<core::RationalTime> projected;
+        projected.reserve(curve.keyframes.size());
+        for (const auto& key : curve.keyframes)
+            projected.push_back(key.time);
+        test.expect(projected == times,
+                    "legacy projection equals the exact union of component times");
+    };
+    checkUnion();
+    test.expect(execute
+                    .template operator()<SetKeyframeAtTimeForParameterComponent>(
+                        kFirstPositionId, document::AnimationComponent::Y, time(1, 1), 17.0)
+                    .changed(),
+                "inserting another component key succeeds");
+    checkUnion();
+    test.expect(execute
+                    .template operator()<SetKeyframeAtTimeForParameterComponent>(
+                        kFirstPositionId, document::AnimationComponent::Y, time(1, 1), 23.0)
+                    .changed(),
+                "updating a component key succeeds");
+    test.expect(vec2Curve(document.snapshot(), *id).keyframes.back().value.y == 23.0,
+                "component value updates refresh the projection");
+    const auto key = vec2Curve(document.snapshot(), *id).components[1].keyframes.back().id;
+    test.expect(
+        execute.template operator()<DeleteKeyframe>(*id, key, document::AnimationComponent::Y)
+            .changed(),
+        "component delete succeeds");
+    checkUnion();
+    test.expect(stack.undo().changed(), "component deletion undoes");
+    checkUnion();
+    test.expect(stack.redo().changed(), "component deletion redoes");
+    checkUnion();
+    test.expect(execute
+                    .template operator()<PasteKeyframes>(std::vector<KeyframePaste>{
+                        {kFirstPositionId, time(2, 1), 42.0,
+                         document::KeyframeInterpolation::Linear, document::AnimationComponent::Y}})
+                    .changed(),
+                "component paste succeeds");
+    checkUnion();
+}
+
 // Task S5, item 1: a colour parameter takes a colour curve seeded from its own constant, and every
 // colour key operation mirrors the scalar and Vec2 ones exactly.
 void testColorKeyOperations(TestContext& test) {
@@ -909,6 +971,7 @@ int main() {
         bloom::commands::test::testAnimatedToConstantTransitionUndoRedo(test);
         bloom::commands::test::testColorKeyOperations(test);
         bloom::commands::test::testComponentKeyOperations(test);
+        bloom::commands::test::testComponentCompatibilityProjection(test);
         bloom::commands::test::testTextSizeAnimationRespectsItsSchemaDomain(test);
         bloom::commands::test::testSetKeyframeInterpolation(test);
         bloom::commands::test::testKeyframeHandleAndValueOperations(test);

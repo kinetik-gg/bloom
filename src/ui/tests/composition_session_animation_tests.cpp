@@ -270,7 +270,17 @@ void testComponentDiamondsAndSelections() {
     const auto ids = addSolidLayer(document, stack);
     ui::CompositionSession session(document, stack, compositionId);
 
+    require(session.setParameterComponentValue(ids.position, document::AnimationComponent::X, 31.0),
+            "constant component edit succeeds");
+    require(session.effectiveVec2Value(ids.position) == document::Vec2d{31.0, 20.0},
+            "constant component edit preserves its sibling exactly");
+    require(session.undo(), "constant component edit is undoable");
     const auto exactTime = time(2);
+    session.selectLayer(ids.layer);
+    require(session.setCurrentTime(exactTime), "set component test time");
+    require(session.keyframeParameterState(document::kPositionParameterRole) ==
+                ui::KeyframeParameterState::None,
+            "role parameter state starts empty");
     require(session.keyframeDiamondState(ids.position, document::AnimationComponent::X,
                                          exactTime) == ui::KeyframeDiamondState::Constant,
             "a constant vector component reports the constant diamond state");
@@ -302,9 +312,36 @@ void testComponentDiamondsAndSelections() {
     require(session.keyframeParameterState(ids.position, exactTime) ==
                 ui::KeyframeParameterState::All,
             "the aggregate parameter state becomes All when every component is keyed");
+    session.selectLayer(ids.layer);
+    require(session.keyframeDiamondState(document::kPositionParameterRole,
+                                         document::AnimationComponent::Y) ==
+                ui::KeyframeDiamondState::AnimatedWithKey,
+            "role component state resolves the selected layer");
+    require(
+        session.toggleKeyframe(document::kPositionParameterRole, document::AnimationComponent::Y),
+        "role component toggle removes only Y");
+    require(session.keyframeParameterState(document::kPositionParameterRole) ==
+                ui::KeyframeParameterState::Some,
+            "role aggregate becomes partially keyed");
+    require(session.toggleKeyframe(document::kPositionParameterRole),
+            "partial parameter click fills missing components");
+    require(session.keyframeParameterState(document::kPositionParameterRole) ==
+                ui::KeyframeParameterState::All,
+            "partial parameter click keeps X and adds Y");
     const auto effective = session.effectiveVec2Value(ids.position);
     require(effective.has_value() && *effective == document::Vec2d{10.0, 20.0},
             "component animation keeps the unchanged effective vector value");
+    require(session.setCurrentTime(time(3)), "advance before component edit");
+    require(session.setParameterComponentValue(ids.position, document::AnimationComponent::X, 42.0),
+            "animated component edit inserts only the edited axis");
+    require(
+        session.keyframeDiamondState(ids.position, document::AnimationComponent::X, time(3)) ==
+                ui::KeyframeDiamondState::AnimatedWithKey &&
+            session.keyframeDiamondState(ids.position, document::AnimationComponent::Y, time(3)) ==
+                ui::KeyframeDiamondState::AnimatedWithoutKey,
+        "editing X away from keys leaves Y unkeyed");
+    require(session.effectiveVec2Value(ids.position) == document::Vec2d{42.0, 20.0},
+            "animated component edit preserves the sampled sibling");
 }
 
 // --- Task S5, item 0: THE KEYFRAME GESTURE ------------------------------------------------------

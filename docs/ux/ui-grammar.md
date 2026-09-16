@@ -53,8 +53,9 @@ Toggle on uses Fill; off uses Regular, centered in a ToggleCell column.
 `TypeRole` is the only font API. The interface family is pinned, bundled Inter
 (Regular, Medium, SemiBold; SIL OFL); Geist Mono remains the value face. Intake includes
 upstream release identity, digests computed from downloaded bytes, license and manifest.
-Render-module text-source DejaVu is independent and unchanged. `QFont(` outside the kit
-is a quality violation.
+Render-module text-source rendering embeds the same DejaVu Sans and Inter face files for deterministic
+CPU evaluation; it is independent of Qt's font database. `QFont(` outside the kit is a quality
+violation.
 
 ## Declared chrome and rows
 
@@ -123,6 +124,19 @@ positions are never rearranged, including compact positions stored by existing l
 commands. Artists can rearrange those cards through the existing layout gesture. Links use the socket-kind palette and a horizontal-tangent
 cubic spline with `NodeLinkHandleMin`; existing straight/angled preferences remain available.
 Every selected card, including the primary selection, uses an Accent outline.
+
+
+Keyframe diamonds have four forms: a muted outline for a constant, a gold outline for an animated
+parameter with no key at the playhead, a gold half fill when some components are keyed there, and
+a gold fill when all components are keyed there. A component diamond uses the same forms except
+half fill, and toggles only that component. Parameter diamonds toggle all components together.
+
+Properties and node cards retain aggregate parameter diamonds and place component diamonds after
+each vector field or RGBA channel. Timeline rows put component diamonds before numeric fields;
+the parameter disclosure expands individual X/Y/Z or R/G/B/A rows. Automation names are
+`propertiesComponentDiamond`, `nodeComponentKeyframeDiamond`, and `timelineComponentDiamond`.
+The timeline and Properties Parent dropdowns list None and eligible layer names, submit the shared
+parent command, and restore the authored choice on refusal.
 
 `KDiamond` owns the keyframe indicator's rendering; command dispatch stays in its session
 adapter. `KAnchorGrid` owns the nine-point visual grid, while its Properties adapter resolves

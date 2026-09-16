@@ -71,6 +71,7 @@ constexpr auto kSecondHeight = document::ParameterId::fromRaw(203);
 constexpr auto kTextAlignment = document::ParameterId::fromRaw(204);
 constexpr auto kTextLineHeight = document::ParameterId::fromRaw(205);
 constexpr auto kTextLetterSpacing = document::ParameterId::fromRaw(206);
+constexpr auto kTextFont = document::ParameterId::fromRaw(207);
 constexpr auto kFirstSourceEdge = document::EdgeId::fromRaw(40);
 constexpr auto kFirstStackEdge = document::EdgeId::fromRaw(41);
 constexpr auto kSecondSourceEdge = document::EdgeId::fromRaw(42);
@@ -335,7 +336,8 @@ void retypeFirstSourceToText(document::Project& project, const std::string& cont
                         {std::string(kTextColorParameterRole), kTextColor},
                         {std::string(kTextAlignmentParameterRole), kTextAlignment},
                         {std::string(kTextLineHeightParameterRole), kTextLineHeight},
-                        {std::string(kTextLetterSpacingParameterRole), kTextLetterSpacing}};
+                        {std::string(kTextLetterSpacingParameterRole), kTextLetterSpacing},
+                        {std::string(kTextFontParameterRole), kTextFont}};
     auto& parameters = composition->parameters();
     require(parameters.erase(kFirstColor) && parameters.erase(kFirstWidth) &&
                 parameters.erase(kFirstHeight) &&
@@ -351,7 +353,9 @@ void retypeFirstSourceToText(document::Project& project, const std::string& cont
                                    ConstantValueSource{1.0}}) &&
                 parameters.insert({kTextLetterSpacing,
                                    std::string(kTextLetterSpacingParameterSchemaKey),
-                                   ConstantValueSource{0.0}}),
+                                   ConstantValueSource{0.0}}) &&
+                parameters.insert({kTextFont, std::string(kTextFontParameterSchemaKey),
+                                   ConstantValueSource{kDefaultTextFontValue}}),
             "text fixture parameters must be accepted");
 }
 
@@ -936,14 +940,57 @@ void testReachabilityAndUnsupportedNodes(Expectations& expectations) {
     expectations.expect(compiledText != nullptr && compiledText->sourceNodeId == kFirstSolidNode &&
                             compiledText->content == "Title" && textSize != nullptr &&
                             *textSize == 48.0 && textColor != nullptr &&
-                            *textColor == textColorValue,
+                            *textColor == textColorValue &&
+                            compiledText->face == render::EmbeddedFace::DejaVuSans,
                         "the lowered text operation carries the exact authored content, size, and "
-                        "color");
+                        "color and default face");
     expectations.expect(
         compiledText != nullptr && compiledText->contentParameterId == kFirstColor &&
             compiledText->size.id == kTextSize && compiledText->color.id == kTextColor,
         "and each parameter identity, so an evaluation diagnostic can name the "
         "exact parameter that failed");
+
+    auto interText = makeProject(singleLayerOptions());
+    retypeFirstSourceToText(interText, "Title", 48.0, textColorValue);
+    auto* interComposition = interText.findComposition(kCompositionId);
+    expectations.expect(
+        interComposition != nullptr &&
+            interComposition->parameters().setSource(
+                kTextFont, document::ConstantValueSource{document::kTextFontInterSemiBold}),
+        "the text font selector accepts Inter SemiBold");
+    const auto interResult = compile(std::move(interText), registry);
+    const auto* interCompiledText =
+        interResult.plan && !interResult.plan->operations().empty()
+            ? std::get_if<runtime::CompiledText>(&interResult.plan->operations().front())
+            : nullptr;
+    expectations.expect(interResult.status == runtime::SnapshotCompileStatus::Compiled &&
+                            interCompiledText != nullptr &&
+                            interCompiledText->face == render::EmbeddedFace::InterSemiBold,
+                        "lowering passes the selected Inter SemiBold face into CompiledText");
+
+    auto legacyText = makeProject(singleLayerOptions());
+    retypeFirstSourceToText(legacyText, "Title", 48.0, textColorValue);
+    auto* legacyComposition = legacyText.findComposition(kCompositionId);
+    auto* legacyNode = legacyComposition == nullptr
+                           ? nullptr
+                           : legacyComposition->graph().findNode(kFirstSolidNode);
+    expectations.expect(legacyComposition != nullptr && legacyNode != nullptr &&
+                            legacyComposition->parameters().erase(kTextFont) &&
+                            std::erase_if(legacyNode->parameters,
+                                          [](const auto& binding) {
+                                              return binding.role ==
+                                                     document::kTextFontParameterRole;
+                                          }) == 1,
+                        "an older Text v2 fixture can omit the new font binding");
+    const auto legacyResult = compile(std::move(legacyText), registry);
+    const auto* legacyCompiledText =
+        legacyResult.plan && !legacyResult.plan->operations().empty()
+            ? std::get_if<runtime::CompiledText>(&legacyResult.plan->operations().front())
+            : nullptr;
+    expectations.expect(legacyResult.status == runtime::SnapshotCompileStatus::Compiled &&
+                            legacyCompiledText != nullptr &&
+                            legacyCompiledText->face == render::EmbeddedFace::DejaVuSans,
+                        "an older Text v2 document defaults the missing face to DejaVu Sans");
 
     // A size the schema refuses never reaches the evaluator: the document rejects the value at
     // insertion, so there is no "valid document, unrenderable plan" state to lower.

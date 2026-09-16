@@ -191,12 +191,12 @@ int run(int argc, char** argv) {
                "the Blending control keeps its own");
     }
 
-    // The column's own gestures still belong to the column: a press on the row's blank area
+    // The column's own gestures still belong to the column: a press on the row's name area
     // selects that row, exactly as it did when the row was transparent to the pointer.
     auto* row = surfaces.layerRow(0);
     expect(row != nullptr, "row zero is on screen");
     if (row != nullptr) {
-        click(row, QPoint(TimelineEditor::layerColumnWidth() - 4, row->height() / 2));
+        click(row, QPoint(TimelineEditor::layerColumnWidth() / 2, row->height() / 2));
         expect(stack->currentRow() == 0, "clicking a row still selects it");
         expect(surfaces.session.selection().primary == SelectionTarget{*otherLayer},
                "and selection is still the column's one truth");

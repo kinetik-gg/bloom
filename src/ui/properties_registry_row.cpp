@@ -193,7 +193,15 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
                 field->setRange(1, 1e15);
             if (count > 1)
                 field->setLabel(QString(color_ ? "RGBA" : "XYZ").mid(i, 1));
-            layout->addWidget(field);
+            if (count > 1 && !color_) {
+                const std::array components{document::AnimationComponent::X,
+                                            document::AnimationComponent::Y,
+                                            document::AnimationComponent::Z};
+                layout->addWidget(properties::makeComponentCell(
+                    session_, definition_.role, components[static_cast<std::size_t>(i)], field,
+                    controls, parameter_));
+            } else
+                layout->addWidget(field);
             connect(field, &kit::KValueField::valueChanged, this, [this] {
                 if (!scrubbing_)
                     commit();
@@ -207,9 +215,10 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         }
     }
     if (color_) {
-        (void)properties::addColorRow(
-            outer, this, color_, diamond_, {fields_[0], fields_[1], fields_[2], fields_[3]},
-            "propertiesRegistryColorExpand", "propertiesRegistryColorFields");
+        (void)properties::addColorRow(session_, definition_.role, outer, this, color_, diamond_,
+                                      {fields_[0], fields_[1], fields_[2], fields_[3]},
+                                      "propertiesRegistryColorExpand",
+                                      "propertiesRegistryColorFields", parameter_);
         delete controls;
     } else {
         if (!text_ && !multiline_) {

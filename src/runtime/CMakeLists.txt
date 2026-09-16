@@ -51,7 +51,7 @@ target_sources(
 )
 
 target_compile_features(bloom_runtime_compiler PUBLIC cxx_std_20)
-target_link_libraries(bloom_runtime_compiler PUBLIC bloom_runtime bloom_document)
+target_link_libraries(bloom_runtime_compiler PUBLIC bloom_runtime bloom_document bloom_render)
 bloom_enable_warnings(bloom_runtime_compiler)
 
 add_library(bloom_runtime_evaluator STATIC)

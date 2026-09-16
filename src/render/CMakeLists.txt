@@ -1,60 +1,72 @@
 # --- bloom_render_fonts: the Qt-free runtime font the CPU text path rasterizes -----------------
 #
-# Configure-time embed of the already-vendored DejaVu Sans Book face into a C++ byte array, mirroring
-# src/color/CMakeLists.txt's embed of the Bloom Neutral v1 OCIO config. src/render may not use Qt, and
-# an evaluator must not read media from the filesystem, so the bytes have to be a build-time constant
-# rather than a Qt resource or a runtime file open. No second copy of the font is checked in: this
-# reads the exact same file src/ui registers with Qt, whose provenance and per-file SHA-256 are
-# recorded in src/ui/kit/third_party/dejavu-sans/provenance.md. Reading one checked-in asset at
-# configure time is not a module dependency -- no src/render translation unit includes a src/ui
-# header, and bloom_render links nothing from src/ui.
+# Configure-time embed of the already-vendored DejaVu Sans Book and Inter faces into C++ byte arrays,
+# mirroring src/color/CMakeLists.txt's embed of the Bloom Neutral v1 OCIO config. src/render may not
+# use Qt, and an evaluator must not read media from the filesystem, so the bytes have to be build-time
+# constants rather than a Qt resource or a runtime file open. No second copy of a font is checked in:
+# this reads the exact same files src/ui registers with Qt, whose provenance and per-file SHA-256 are
+# recorded in their third-party provenance records. Reading checked-in assets at configure time is not
+# a module dependency -- no src/render translation unit includes a src/ui header, and bloom_render
+# links nothing from src/ui.
+set(bloom_embedded_face_names DejaVuSans InterRegular InterMedium InterSemiBold)
 set(
-    bloom_dejavu_sans_asset
+    bloom_embedded_face_assets
     "${CMAKE_CURRENT_SOURCE_DIR}/../ui/kit/third_party/dejavu-sans/DejaVuSans.ttf"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../ui/kit/third_party/inter/Inter-Regular.ttf"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../ui/kit/third_party/inter/Inter-Medium.ttf"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../ui/kit/third_party/inter/Inter-SemiBold.ttf"
 )
-cmake_path(NORMAL_PATH bloom_dejavu_sans_asset)
-file(READ "${bloom_dejavu_sans_asset}" bloom_dejavu_sans_hex HEX)
-string(LENGTH "${bloom_dejavu_sans_hex}" bloom_dejavu_sans_hex_length)
-math(EXPR BLOOM_DEJAVU_SANS_BYTE_COUNT "${bloom_dejavu_sans_hex_length} / 2")
-# The asset's exact byte count, pinned so a silent font swap cannot reach the embed unnoticed. A
-# genuine face change is a provenance change: update src/ui/kit/third_party/dejavu-sans/provenance.md
-# and this number together, deliberately, rather than letting a different font ship as if it were
-# this one.
-if(NOT BLOOM_DEJAVU_SANS_BYTE_COUNT EQUAL 757076)
-    message(
-        FATAL_ERROR
-        "src/ui/kit/third_party/dejavu-sans/DejaVuSans.ttf is expected to be exactly 757076 bytes "
-        "(found ${BLOOM_DEJAVU_SANS_BYTE_COUNT}); its bytes and SHA-256 are recorded in that "
-        "directory's provenance.md. If the face genuinely changed, update that record and this "
-        "count together."
+set(bloom_embedded_face_expected_bytes 757076 411640 417300 419744)
+
+list(LENGTH bloom_embedded_face_names bloom_embedded_face_count)
+math(EXPR bloom_embedded_face_last "${bloom_embedded_face_count} - 1")
+foreach(face_index RANGE ${bloom_embedded_face_last})
+    list(GET bloom_embedded_face_names ${face_index} face_name)
+    list(GET bloom_embedded_face_assets ${face_index} face_asset)
+    list(GET bloom_embedded_face_expected_bytes ${face_index} expected_byte_count)
+    string(TOUPPER "${face_name}" face_upper_name)
+    cmake_path(NORMAL_PATH face_asset)
+    file(READ "${face_asset}" face_hex HEX)
+    string(LENGTH "${face_hex}" face_hex_length)
+    math(EXPR actual_byte_count "${face_hex_length} / 2")
+    # Each asset's exact byte count is pinned so a silent font swap cannot reach the embed
+    # unnoticed. A genuine face change is a provenance change: update the asset's provenance.md
+    # and this number together, deliberately, rather than letting a different font ship as if it
+    # were this one.
+    if(NOT actual_byte_count EQUAL expected_byte_count)
+        message(
+            FATAL_ERROR
+            "${face_asset} is expected to be exactly ${expected_byte_count} bytes "
+            "(found ${actual_byte_count}); its bytes and SHA-256 are recorded in the asset's "
+            "provenance.md. If the face genuinely changed, update that record and this count "
+            "together."
+        )
+    endif()
+    string(
+        REGEX REPLACE
+        "([0-9a-f][0-9a-f])"
+        "0x\\1,"
+        face_bytes
+        "${face_hex}"
     )
-endif()
-string(
-    REGEX REPLACE
-    "([0-9a-f][0-9a-f])"
-    "0x\\1,"
-    bloom_dejavu_sans_bytes
-    "${bloom_dejavu_sans_hex}"
-)
-# Wrap at 16 bytes per line. CMake's regex has no brace repetition and only nine backreferences, so
-# the group is spelled out once and captured whole; a trailing partial group simply stays on the last
-# line. Without this the generated file would be one multi-megabyte line.
-string(
-    REGEX REPLACE
-    "(0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,)"
-    "\\1\n"
-    BLOOM_DEJAVU_SANS_PAYLOAD_BYTES
-    "${bloom_dejavu_sans_bytes}"
-)
+    # Wrap at 16 bytes per line. CMake's regex has no brace repetition and only nine backreferences,
+    # so the group is spelled out once and captured whole; a trailing partial group simply stays on
+    # the last line. Without this the generated file would be one multi-megabyte line.
+    string(
+        REGEX REPLACE
+        "(0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,0x..,)"
+        "\\1\n"
+        face_payload_bytes
+        "${face_bytes}"
+    )
+    set(BLOOM_${face_upper_name}_BYTE_COUNT "${actual_byte_count}")
+    set(BLOOM_${face_upper_name}_PAYLOAD_BYTES "${face_payload_bytes}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${face_asset}")
+endforeach()
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/embedded_fonts.cpp.in"
     "${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_fonts.generated.cpp"
     @ONLY
-)
-set_property(
-    DIRECTORY
-    APPEND
-    PROPERTY CMAKE_CONFIGURE_DEPENDS "${bloom_dejavu_sans_asset}"
 )
 
 add_library(

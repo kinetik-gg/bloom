@@ -38,8 +38,7 @@ whole-value assumptions are deliberately recorded here before the component-curv
 The implementation touch points are therefore `src/document/animation.*` and parameter schema
 predicates, `src/commands/animation_operations.*`, `src/runtime/animation_sampling.*`, curve
 compilation, snapshot lowering, and CPU evaluation, project canonical encode/decode plus the
-document migration registry and schemas, and `src/ui/composition_session.*` with its tests. The
-timeline widget files are audit targets only under this task's fence.
+document migration registry and schemas, and `src/ui/composition_session.*` with its tests. KEY-2 now supplies the component-aware widgets and lanes described below.
 
 ## Durable Type Model
 
@@ -276,22 +275,28 @@ preserving subframe spacing. Unrepresentable arithmetic is refused rather than o
 
 ### The Keyframe Gesture
 
-Clicking a parameter row's shared keyframe diamond, at the session's current time, creates and
-removes animation. It has exactly four transitions, each ONE transaction and therefore
-one undo step:
+Parameter diamonds aggregate the component curves at the exact session time. A muted outline
+means constant; a gold outline means animated with no keys here; a gold half fill means some
+components have keys here; a gold fill means all components have keys here. Scalar parameters
+use the same forms without half fill. Driven and non-animatable parameters have no diamond.
 
-1. A CONSTANT parameter becomes animated with one key at the current value and time --
-   `CreateAnimationForParameter` and `SetKeyframeAtTimeForParameter` together in one transaction.
-2. An ANIMATED parameter with no key at the current time gains one, valued at the curve's own exactly
-   sampled value there, so inserting a key never moves the picture.
-3. An ANIMATED parameter WITH a key at the current time loses it.
-4. Losing the curve's LAST key converts the parameter back to a constant holding that key's value,
-   erasing the orphaned curve atomically.
+A parameter click seeds all components from the constant or sampled value when none or some
+are keyed, and removes all component keys at that time when all are keyed. Each click is one
+transaction. A component diamond keys or removes only X/Y/Z or R/G/B/A; an unkeyed sibling
+retains its animation default. Removing the final component key restores the typed source default.
 
-The diamond paints three states, read from the document on every refresh and never cached: empty for
-a constant parameter, outlined for an animated one with no key at the current time, filled for one
-with a key there. A parameter this gesture cannot key -- an unanimatable schema, or a driven source --
-shows no diamond at all, because an inert affordance is a worse lie than an absent one.
+Properties and node cards retain one aggregate parameter diamond and expose a separate diamond
+beside every component cell. Timeline vector and colour rows expose component diamonds before
+their numeric fields and a second disclosure level for individually named component rows.
+A component row edits only its component through the session command adapter, both for constants
+and animation; an animated edit at a new time creates only that component's key.
+
+Parameter lanes display the exact union of component times. Clicking an aggregate glyph selects
+every component key at that time; clicking a component lane selects only its key. Shift extends
+selection. Drag, stretch, duplicate, copy/paste, delete, interpolation and ghost previews preserve
+component addresses. Double-clicking an empty component lane inserts only that component.
+Collapsed layer summaries read those same component keys. The temporary whole-value compatibility
+projection still equals the union of component times, but lanes and graph curves no longer read it.
 
 Editing the VALUE of an animated parameter at a time with no key inserts one, through the same
 `SetKeyframeAtTime` path a constant edit's `SetParameterSource` takes. That requires the row to stay

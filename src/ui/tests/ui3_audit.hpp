@@ -83,7 +83,7 @@ template <typename Expect> void auditUi3(WindowFixture& fixture, const Expect& e
         auto* diamond = new KDiamond;
         diamond->setAttribute(Qt::WA_TranslucentBackground);
         diamond->setFixedSize(px(Size::ToggleCell), px(Size::ToggleCell));
-        diamond->setIndicator(true, false);
+        diamond->setIndicator(true, KDiamond::Fill::Half);
         scene.addWidget(diamond)->setPos(24, 24);
         QImage raster(qRound(96 * dpr), qRound(96 * dpr), QImage::Format_ARGB32_Premultiplied);
         raster.setDevicePixelRatio(dpr);
@@ -104,7 +104,7 @@ template <typename Expect> void auditUi3(WindowFixture& fixture, const Expect& e
         const auto radius = std::round(kKeyDiamondRadius * dpr * zoom);
         expect(opaque > 4 && std::abs(ink.width() - 2 * radius) <= 6, window,
                "C9/F28 vector diamond has crisp coverage at DPR and canvas zoom");
-        diamond->setIndicator(false, false);
+        diamond->setIndicator(false, KDiamond::Fill::None);
         raster.fill(Qt::transparent);
         QPainter emptyPainter(&raster);
         scene.render(&emptyPainter, QRectF(0, 0, 96, 96), QRectF(0, 0, 96 / zoom, 96 / zoom));

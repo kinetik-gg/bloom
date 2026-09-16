@@ -114,8 +114,9 @@ void run() {
         return;
     auto* xRow = row(positionX);
     auto* opacityRow = row(opacity);
-    auto* positionDiamond = xRow->findChild<ui::KeyframeDiamond*>();
-    auto* opacityDiamond = opacityRow->findChild<ui::KeyframeDiamond*>();
+    auto* positionDiamond = xRow->findChild<ui::KeyframeDiamond*>("propertiesKeyframeIndicator");
+    auto* opacityDiamond =
+        opacityRow->findChild<ui::KeyframeDiamond*>("propertiesKeyframeIndicator");
     expect(xIn(positionX, panel) == xIn(opacityRow->findChild<ui::kit::KSlider*>(), panel),
            "control columns start at the same x");
     expect(xIn(positionDiamond, panel) == xIn(opacityDiamond, panel), "keyframe columns align");
@@ -147,9 +148,9 @@ void run() {
            "checked checkbox uses accent blue");
     expect(opacity->displayedValue() == "100", "whole values omit decimal zeroes");
     auto* parent = panel->findChild<ui::kit::KDropdown*>("propertiesParentDropdown");
-    expect(parent && !parent->isEnabled() && parent->currentText() == "None" &&
+    expect(parent && parent->isEnabled() && parent->currentText() == "None" &&
                !parent->toolTip().isEmpty(),
-           "Parent placeholder is honest and disabled");
+           "Parent is a live dropdown with None selected");
     expect(xRow->findChild<QLabel*>("propertiesRowLabel")->font().capitalization() ==
                QFont::MixedCase,
            "property labels preserve title case");
@@ -263,7 +264,20 @@ void run() {
         return count;
     };
     expect(amberPixels(keyed) > amberPixels(between) && amberPixels(between) > amberPixels(unkeyed),
-           "keyed diamond is filled amber, between-key diamond is half, unkeyed is outline");
+           "keyed diamond is filled gold, between keys is a gold outline, constant is muted");
+    expect(
+        session.toggleKeyframe(document::kPositionParameterRole, document::AnimationComponent::X),
+        "key only position X");
+    idle(*positionDiamond);
+    const auto partial = positionDiamond->grab().toImage();
+    expect(session.toggleKeyframe(document::kPositionParameterRole), "complete the position key");
+    idle(*positionDiamond);
+    const auto full = positionDiamond->grab().toImage();
+    (void)session.setCurrentTime(core::RationalTime::fromInteger(2));
+    idle(*positionDiamond);
+    const auto outline = positionDiamond->grab().toImage();
+    expect(amberPixels(full) > amberPixels(partial) && amberPixels(partial) > amberPixels(outline),
+           "parameter diamond distinguishes all, some and no keyed components");
     expect(session.addTextLayer("Text", "Hello", 72, {1, 1, 1, 1}), "create Text fixture");
     settle();
     auto* font = panel->findChild<ui::kit::KDropdown*>("textFontName");
@@ -295,6 +309,19 @@ void run() {
             (void)session.setSelectedTextSize(146);
             expect(field->value() == 50, "percentage spacing reprojects after font size edit");
         }
+    }
+    const auto childLayer = session.selection().contextualLayer;
+    const auto candidates =
+        childLayer ? session.candidateParents(*childLayer) : std::vector<document::LayerId>{};
+    auto* parentChoice = panel->findChild<ui::kit::KDropdown*>("propertiesParentDropdown");
+    expect(parentChoice && parentChoice->count() == static_cast<int>(candidates.size()) + 1,
+           "Properties lists None and the session's parent candidates");
+    if (parentChoice && childLayer && !candidates.empty()) {
+        parentChoice->setCurrentIndex(1);
+        expect(session.parentOf(*childLayer) == candidates.front(),
+               "Properties commits parent selection");
+        expect(session.undo() && !session.parentOf(*childLayer),
+               "Properties parenting is undoable");
     }
     const auto textScreenshot = qEnvironmentVariable("BLOOM_PROPS_TEXT_SCREENSHOT");
     if (!textScreenshot.isEmpty()) {

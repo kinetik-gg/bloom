@@ -419,6 +419,14 @@ void registryRows() {
             dropdown->setCurrentIndex(2);
         expect(session.canUndo(), "enum edit uses command history");
     }
+    auto* font = row(panel, "font");
+    expect(font != nullptr, "registry adds the text font parameter");
+    if (font) {
+        auto* dropdown = font->findChild<ui::kit::KDropdown*>("propertiesRegistryEnum");
+        expect(dropdown != nullptr && dropdown->count() == 4 &&
+                   dropdown->currentText() == QStringLiteral("DejaVu Sans"),
+               "Font is a generic Properties dropdown with the four faces in face order");
+    }
     const auto layer = std::get<document::LayerId>(session.selection().primary);
     const auto boundary = session.boundaryNodeForLayer(layer);
     expect(boundary.has_value(), "text layer has a boundary node");

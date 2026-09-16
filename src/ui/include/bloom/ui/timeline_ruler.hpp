@@ -270,10 +270,12 @@ class TimelineKeyframePanel final : public QWidget {
     };
     [[nodiscard]] std::vector<LaneKey> laneKeys() const;
     [[nodiscard]] std::optional<LaneKey> hitKey(QPointF position) const;
+    void selectLaneKey(const LaneKey& key, bool extend, bool preserveSelection = false);
     void cancelGesture();
     void updateRows();
     std::vector<int> gridRows_;
     std::vector<document::ParameterId> gridParameters_;
+    std::vector<std::optional<document::AnimationComponent>> gridComponents_;
     int gridScroll_ = 0;
     QPointF press_;
     std::optional<LaneKey> pressed_;

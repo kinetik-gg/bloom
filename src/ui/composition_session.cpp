@@ -746,6 +746,69 @@ bool CompositionSession::setSelectionVec2Parameter(const std::string_view role, 
     return executePositionCommand(parameter->id, currentTime_, document::Vec2d{x, y}, commandLabel);
 }
 
+bool CompositionSession::setParameterComponentValue(const document::ParameterId parameterId,
+                                                    const document::AnimationComponent component,
+                                                    const double value) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const auto* current = composition();
+    const auto* parameter = current ? current->parameters().find(parameterId) : nullptr;
+    if (!parameter || !std::isfinite(value)) {
+        reportUnavailable(QStringLiteral("The component value is not available or finite"));
+        return false;
+    }
+    if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
+        auto updated = constant->value;
+        const bool valid = std::visit(
+            [&](auto& held) {
+                using Value = std::decay_t<decltype(held)>;
+                if constexpr (std::is_same_v<Value, document::Vec2d> ||
+                              std::is_same_v<Value, document::Vec3d>) {
+                    if (component == document::AnimationComponent::X) {
+                        held.x = value;
+                        return true;
+                    }
+                    if (component == document::AnimationComponent::Y) {
+                        held.y = value;
+                        return true;
+                    }
+                    if constexpr (std::is_same_v<Value, document::Vec3d>)
+                        if (component == document::AnimationComponent::Z) {
+                            held.z = value;
+                            return true;
+                        }
+                } else if constexpr (std::is_same_v<Value, core::Color4d>) {
+                    if (component == document::AnimationComponent::Red) {
+                        held.red = value;
+                        return true;
+                    }
+                    if (component == document::AnimationComponent::Green) {
+                        held.green = value;
+                        return true;
+                    }
+                    if (component == document::AnimationComponent::Blue) {
+                        held.blue = value;
+                        return true;
+                    }
+                    if (component == document::AnimationComponent::Alpha) {
+                        held.alpha = value;
+                        return true;
+                    }
+                }
+                return false;
+            },
+            updated);
+        if (valid)
+            return setParameterValue(parameterId, std::move(updated),
+                                     QStringLiteral("Set Component"));
+        reportUnavailable(QStringLiteral("This component does not belong to the parameter"));
+        return false;
+    }
+    commands::Transaction transaction("Set Component", snapshot_.revision());
+    transaction.emplace<commands::SetKeyframeAtTimeForParameterComponent>(
+        compositionId_, parameterId, component, currentTime_, value);
+    return execute(std::move(transaction));
+}
+
 bool CompositionSession::setParameterValue(const document::ParameterId parameterId,
                                            document::ParameterValue value,
                                            const QString& commandLabel) {
@@ -1648,6 +1711,27 @@ KeyframeDiamondState CompositionSession::keyframeDiamondState(const std::string_
     return diamondStateFor(parameterForSelection(role));
 }
 
+KeyframeParameterState
+CompositionSession::keyframeParameterState(const std::string_view role) const {
+    const auto* parameter = parameterForSelection(role);
+    return parameter ? keyframeParameterState(parameter->id, currentTime_)
+                     : KeyframeParameterState::Unsupported;
+}
+
+KeyframeDiamondState
+CompositionSession::keyframeDiamondState(const std::string_view role,
+                                         const document::AnimationComponent component) const {
+    const auto* parameter = parameterForSelection(role);
+    return parameter ? keyframeDiamondState(parameter->id, component, currentTime_)
+                     : KeyframeDiamondState::Unsupported;
+}
+
+bool CompositionSession::toggleKeyframe(const std::string_view role,
+                                        const document::AnimationComponent component) {
+    const auto* parameter = parameterForSelection(role);
+    return parameter && toggleKeyframe(parameter->id, component, currentTime_);
+}
+
 KeyframeDiamondState CompositionSession::keyframeDiamondStateForParameter(
     const document::ParameterId parameterId) const {
     const auto* current = composition();
@@ -1874,6 +1958,7 @@ bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* para
                 using Value = std::decay_t<decltype(value)>;
                 if constexpr (std::is_same_v<Value, double> ||
                               std::is_same_v<Value, document::Vec2d> ||
+                              std::is_same_v<Value, document::Vec3d> ||
                               std::is_same_v<Value, core::Color4d>) {
                     transaction.emplace<commands::SetKeyframeAtTimeForParameter>(
                         compositionId_, parameterId, currentTime_, value);
@@ -1900,7 +1985,8 @@ bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* para
     const auto existing = keyframeAtExactTime(*parameter, currentTime_);
 
     // --- animated, no key here -> insert one at the exactly sampled value ----------------------
-    if (!existing.has_value()) {
+    if (!existing.has_value() ||
+        keyframeParameterState(parameterId, currentTime_) == KeyframeParameterState::Some) {
         const auto sample = sampleParameterValue(*parameter, currentTime_);
         if (!sample.has_value()) {
             reportUnavailable(QStringLiteral("The animation curve could not be sampled here"));

@@ -50,6 +50,7 @@ void testHostedFieldsAreFullWidthAndUnscaled() {
     // split by objectName, and each is counted in its own right.
     std::vector<std::pair<QGraphicsProxyWidget*, QWidget*>> hosted;
     std::size_t diamondCount = 0;
+    std::size_t componentDiamondCount = 0;
     for (const auto& entry : allHosted) {
         if (entry.second->objectName() == QStringLiteral("nodeKeyframeDiamond")) {
             ++diamondCount;
@@ -57,16 +58,17 @@ void testHostedFieldsAreFullWidthAndUnscaled() {
         }
         diamondCount += static_cast<std::size_t>(
             entry.second->findChildren<KeyframeDiamond*>("nodeKeyframeDiamond").size());
+        componentDiamondCount += static_cast<std::size_t>(
+            entry.second->findChildren<KeyframeDiamond*>("nodeComponentKeyframeDiamond").size());
         hosted.push_back(entry);
     }
     // ADAPTED (task S4, then blend modes): the Layer Output card now hosts position X/Y, anchor
     // X/Y, scale X/Y, rotation, opacity and the blending dropdown -- nine value controls.
     expect(hosted.size() == 9,
            "the layer output card hosts its transform, opacity and blending controls");
-    // One diamond per animatable PARAMETER, not per field: the paired X/Y rows share a parameter,
-    // so position, anchor, scale, rotation and opacity make five.
-    expect(diamondCount == 5,
-           "and one keyframe diamond per animatable parameter, not per value cell");
+    // Five parameter indicators plus the six independently keyable vector components.
+    expect(diamondCount == 5, "one parameter diamond per animatable parameter");
+    expect(componentDiamondCount == 6, "position, anchor and scale each expose X and Y diamonds");
     for (const auto& [proxy, widget] : hosted) {
         expect(proxy->scale() == 1.0,
                "a hosted control is never scaled: a fractional scale resampled its hairlines, "
@@ -264,6 +266,37 @@ void testBlendingDropdownOnALayerCardCommits() {
            "and it is one undoable command");
 }
 
+void testFontDropdownOnATextCardUsesTheGenericSelector() {
+    Fixture f;
+    expect(f.session.addTextLayer(QStringLiteral("Text"), QStringLiteral("Bloom")),
+           "text layer fixture");
+    const auto layerId = f.session.composition()->graph().layerOutputs().front().layerId;
+    const auto source = f.session.directSourceNodeForLayer(layerId);
+    expect(source.has_value(), "the text layer resolves its source node");
+    if (!source.has_value())
+        return;
+    f.session.selectNode(*source);
+    QCoreApplication::processEvents();
+
+    kit::KDropdown* dropdown = nullptr;
+    auto* sourceCard = f.card(*source);
+    if (sourceCard != nullptr) {
+        for (auto* child : sourceCard->childItems()) {
+            auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child);
+            if (proxy == nullptr || proxy->widget() == nullptr)
+                continue;
+            for (auto* candidate : proxy->widget()->findChildren<kit::KDropdown*>())
+                if (candidate->accessibleName() == QStringLiteral("Font"))
+                    dropdown = candidate;
+        }
+    }
+    expect(dropdown != nullptr, "the text card hosts the generic operand selector for Font");
+    if (dropdown == nullptr)
+        return;
+    expect(dropdown->count() == 4 && dropdown->currentText() == QStringLiteral("DejaVu Sans"),
+           "the text card offers all four faces in the shared order");
+}
+
 // Item 7, Merge. One ordered multi-input for the whole stack, with the slot model untouched
 // beneath.
 void testMergeRendersOneOrderedMultiInput() {
@@ -407,6 +440,7 @@ int main(int argc, char** argv) {
         bloom::ui::test::testSocketsBrightenAndDimDuringALinkDrag();
         bloom::ui::test::testNodeTypesAreNamedForWhatTheyAre();
         bloom::ui::test::testBlendingDropdownOnALayerCardCommits();
+        bloom::ui::test::testFontDropdownOnATextCardUsesTheGenericSelector();
         bloom::ui::test::testMergeRendersOneOrderedMultiInput();
         bloom::ui::test::testEnterAndDoubleClickRenameALayerCard();
     } catch (const std::exception& error) {

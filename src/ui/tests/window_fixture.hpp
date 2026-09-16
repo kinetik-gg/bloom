@@ -69,6 +69,19 @@ struct WindowFixture {
                  !session.addTextLayer("Bloom grammar", "Hello, Bloom!", 100.0) ||
                  !session.setSelectedPosition(720.0, 480.0))
             throw std::runtime_error("Fixture commands failed");
+        if (!author) {
+            std::optional<document::LayerId> background;
+            for (const auto& layer : session.composition()->graph().layerOutputs())
+                if (layer.name == "Background")
+                    background = layer.layerId;
+            if (background) {
+                session.selectLayer(*background);
+                if (!session.toggleKeyframe(document::kPositionParameterRole,
+                                            document::AnimationComponent::X) ||
+                    !session.toggleKeyframe(document::kOpacityParameterRole))
+                    throw std::runtime_error("Fixture component keys failed");
+            }
+        }
         // Author the sample graph through the same command as a user arrangement. Production
         // preserves saved positions, including the compact legacy defaults from layer creation.
         std::map<document::NodeId, document::Vec2d> positions;
@@ -114,6 +127,12 @@ struct WindowFixture {
             if (layer.name == "Background") {
                 session.selectLayer(layer.layerId);
                 Q_EMIT stack->expansionRequested(layer.layerId);
+                if (!author) {
+                    const auto* position =
+                        session.parameterForSelection(document::kPositionParameterRole);
+                    if (position)
+                        Q_EMIT stack->parameterExpansionRequested(position->id);
+                }
                 break;
             }
         }

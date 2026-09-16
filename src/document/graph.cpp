@@ -22,6 +22,7 @@ using bloom::document::NodeInputRef;
 struct ExpectedParameterBinding final {
     std::string_view role;
     std::string_view schemaKey;
+    bool required = true;
 };
 
 constexpr std::array kSolidSourceBindings{
@@ -45,6 +46,8 @@ constexpr std::array kTextSourceBindings{
                              bloom::document::kTextLineHeightParameterSchemaKey},
     ExpectedParameterBinding{bloom::document::kTextLetterSpacingParameterRole,
                              bloom::document::kTextLetterSpacingParameterSchemaKey},
+    ExpectedParameterBinding{bloom::document::kTextFontParameterRole,
+                             bloom::document::kTextFontParameterSchemaKey, false},
 };
 constexpr std::array kLayerOutputBindings{
     ExpectedParameterBinding{bloom::document::kPositionParameterRole,
@@ -70,7 +73,8 @@ expectedBindings(const bloom::document::NodeRecord& node) noexcept {
     }
     if (node.typeId == kTextSourceNodeType &&
         (node.schemaVersion == kTextSourceNodeSchemaVersion || node.schemaVersion == 1)) {
-        return std::span(kTextSourceBindings).first(node.schemaVersion == 1 ? 3 : 6);
+        return node.schemaVersion == 1 ? std::span(kTextSourceBindings).first(3)
+                                       : std::span(kTextSourceBindings);
     }
     if (node.typeId == kLayerOutputNodeType &&
         (node.schemaVersion == kLayerOutputNodeSchemaVersion || node.schemaVersion == 3)) {
@@ -89,6 +93,8 @@ void validateExpectedBindings(const bloom::document::NodeRecord& node,
                          [&](const auto& item) { return item.role == expected.role; });
         const auto bindingPath = path + ".parameters[" + std::string(expected.role) + "]";
         if (binding == node.parameters.end()) {
+            if (!expected.required)
+                continue;
             result.add(ValidationCode::MissingReference, bindingPath,
                        "Known node schema requires this parameter binding");
             continue;

@@ -166,9 +166,33 @@ QWidget* makeCellGroup(const QString& objectName, const std::initializer_list<QW
     return group;
 }
 
-QWidget* addColorRow(QVBoxLayout* rows, QWidget* parent, kit::KColorChip* chip, QWidget* diamond,
+QWidget* makeComponentCell(CompositionSession& session, const std::string_view role,
+                           const document::AnimationComponent component, QWidget* field,
+                           QWidget* parent, const document::ParameterId parameter) {
+    field->setMinimumWidth(kit::px(kit::Size::PropertiesComponentMinWidth));
+    auto* cell = new QWidget(parent);
+    auto* layout = new QHBoxLayout(cell);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(kit::px(kit::Spacing::XXS));
+    auto* diamond = new KeyframeDiamond(session, std::string(role), cell);
+    diamond->setObjectName("propertiesComponentDiamond");
+    diamond->setParameterId(parameter);
+    diamond->setComponent(component);
+    layout->addWidget(field, 1);
+    layout->addWidget(diamond);
+    QObject::connect(&session, &CompositionSession::snapshotChanged, diamond,
+                     &KeyframeDiamond::refresh);
+    QObject::connect(&session, &CompositionSession::selectionChanged, diamond,
+                     &KeyframeDiamond::refresh);
+    QObject::connect(&session, &CompositionSession::currentTimeChanged, diamond,
+                     &KeyframeDiamond::refresh);
+    return cell;
+}
+
+QWidget* addColorRow(CompositionSession& session, const std::string_view role, QVBoxLayout* rows,
+                     QWidget* parent, kit::KColorChip* chip, QWidget* diamond,
                      const std::initializer_list<QWidget*> fields, const QString& expandName,
-                     const QString& groupName) {
+                     const QString& groupName, const document::ParameterId parameter) {
     auto* expand = new kit::KButton(parent);
     expand->setObjectName(expandName);
     expand->setIconId(kit::IconId::CaretRight);
@@ -186,11 +210,18 @@ QWidget* addColorRow(QVBoxLayout* rows, QWidget* parent, kit::KColorChip* chip, 
     grid->setSpacing(kit::px(kit::Spacing::XXS));
     int channel = 0;
     for (auto* field : fields) {
-        grid->addWidget(field, channel / 2, channel % 2);
+        const std::array channels{
+            document::AnimationComponent::Red, document::AnimationComponent::Green,
+            document::AnimationComponent::Blue, document::AnimationComponent::Alpha};
+        grid->addWidget(makeComponentCell(session, role,
+                                          channels[static_cast<std::size_t>(channel)], field,
+                                          details, parameter),
+                        channel / 2, channel % 2);
         ++channel;
     }
-    details->setMaximumWidth(kit::px(kit::Size::PropertiesFieldWidth) * 2 +
-                             kit::px(kit::Spacing::XXS));
+    details->setMaximumWidth(
+        (kit::px(kit::Size::PropertiesFieldWidth) + kit::px(kit::Size::IconSmall)) * 2 +
+        kit::px(kit::Spacing::XXS));
     details->setProperty("disclosureFor", QObject::tr("Color"));
     details->setProperty("expanded", false);
     // Four channels share the full card width below the swatch.

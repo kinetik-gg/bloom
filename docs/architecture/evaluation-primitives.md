@@ -322,14 +322,15 @@ contract.
 
 ### Text Rasterization And Local Layout
 
-Text rasterization is Qt-free and deterministic. One face is available -- the DejaVu Sans Book TTF
-vendored for the interface, embedded into `bloom_render` as a build-time byte array so no evaluation
-reads a font from the filesystem -- and `bloom.text-source` therefore has no font parameter: a font
-parameter would persist a choice neither the schema nor the renderer can honor. Outline rasterization
-is the vendored `stb_truetype` header, compiled into one translation unit behind a narrow Bloom-owned
-adapter; its acquisition provenance, license review, and security review are in
+Text rasterization is Qt-free and deterministic. `bloom_render` embeds four vendored faces as
+build-time byte arrays: DejaVu Sans Book, Inter Regular, Inter Medium, and Inter SemiBold. No
+evaluation reads a font from the filesystem. `bloom.text-source` stores the closed face choice as a
+non-animatable Integer parameter in that same order, defaulting to DejaVu Sans, so a pre-FONT-1 text
+node with no binding still produces the old pixels. Outline rasterization is the vendored
+`stb_truetype` header, compiled into one translation unit behind a narrow Bloom-owned adapter; its
+acquisition provenance, license review, and security review are in
 `dependencies/licenses/stb_truetype/`, and that security review qualifies the library only for font
-bytes Bloom itself pins.
+bytes Bloom itself pins. Each embedded file has a configure-time byte-count assertion.
 
 Text v2 lays out multiple lines using glyph advances and kerning plus authored letter spacing.
 Each line is aligned Left, Center, or Right within the maximum line advance before glyph rasterization,

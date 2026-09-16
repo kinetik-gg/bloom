@@ -33,9 +33,10 @@ class KPanelFrame final : public QWidget {
 class KDiamond : public QWidget {
   public:
     using QWidget::QWidget;
-    void setIndicator(bool animated, bool keyed) {
+    enum class Fill { None, Half, Full };
+    void setIndicator(bool animated, Fill fill) {
         animated_ = animated;
-        keyed_ = keyed;
+        fill_ = fill;
         update();
     }
 
@@ -43,7 +44,8 @@ class KDiamond : public QWidget {
     void paintEvent(QPaintEvent*) override;
 
   private:
-    bool animated_ = false, keyed_ = false;
+    bool animated_ = false;
+    Fill fill_ = Fill::None;
 };
 class KAnchorGrid : public QWidget {
   public:

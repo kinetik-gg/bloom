@@ -26,6 +26,8 @@ family `Inter`. TypeRole names the static family explicitly before the common fa
 platform fallback. Ui and UiSmall use Medium; Title uses SemiBold. Tests verify actual Qt
 resolution and all resource digests. Geist Mono remains the value face.
 
-DejaVu Sans Book remains at its existing path solely for the unchanged render text source.
-Changing this intake requires a new archive verification, manifest, license review and golden
-approval. No variable, italic or additional weight is shipped.
+DejaVu Sans Book remains at its existing path solely for the unchanged render text source. The
+render module also consumes these same three static faces through a configure-time embed for its
+Qt-free CPU text rasterizer; no runtime font-file or Qt font-database lookup is involved. Changing
+this intake requires a new archive verification, manifest, license review and golden approval. No
+variable, italic or additional weight is shipped.

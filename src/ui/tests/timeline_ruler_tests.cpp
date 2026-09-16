@@ -1,3 +1,4 @@
+#include "timeline_property_rows.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -12,10 +13,12 @@
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
 
@@ -1251,12 +1254,125 @@ void testCacheBarTracksAxisIdentityEvictionAndBatches(Expectations& expectations
                         "ruler fixture shuts down");
 }
 
+void testComponentRowsAndLaneSelections(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Component lanes", time(10)));
+    auto& session = fixture.session;
+    expectations.expect(session.addSolidLayer("Components", {1, 0, 0, 1}),
+                        "component layer fixture");
+    const auto selectedLayer = session.selection().contextualLayer;
+    if (!selectedLayer)
+        return;
+    const auto layer = *selectedLayer;
+    const auto parameter = session.parameterForSelection(document::kPositionParameterRole)->id;
+    expectations.expect(
+        session.toggleKeyframe(parameter, document::AnimationComponent::X, time(1)) &&
+            session.toggleKeyframe(parameter, document::AnimationComponent::Y, time(1)) &&
+            session.toggleKeyframe(parameter, document::AnimationComponent::X, time(2)),
+        "independent lane keys");
+    ui::TimelineLayerEntry layerEntry;
+    layerEntry.layerId = layer;
+    const auto entries =
+        ui::timelinePropertyEntries(session, {layerEntry}, {layer}, {}, {parameter});
+    expectations.expect(std::ranges::count_if(entries,
+                                              [](const auto& entry) {
+                                                  return entry.rowKind ==
+                                                         ui::TimelineLayerEntry::Kind::Component;
+                                              }) == 2,
+                        "expanding Position emits X and Y rows");
+    const auto componentEntry = std::ranges::find_if(entries, [](const auto& entry) {
+        return entry.component == document::AnimationComponent::X;
+    });
+    expectations.expect(componentEntry != entries.end() && componentEntry->name == "X",
+                        "component row names its axis");
+    if (componentEntry == entries.end())
+        return;
+    ui::TimelinePropertyRow property(session, nullptr);
+    property.bind(*componentEntry);
+    auto fields = property.findChildren<ui::kit::KValueField*>("timelinePropertyValue");
+    expectations.expect(
+        std::ranges::count_if(fields,
+                              [](auto* field) { return !field->parentWidget()->isHidden(); }) == 1,
+        "component row binds one numeric cell");
+    if (fields.empty())
+        return;
+    fields.front()->setValue(17.0);
+    expectations.expect(session.effectiveVec2Value(parameter).value_or(document::Vec2d{}).x == 17.0,
+                        "component row commits through the component setter");
+    ui::TimelineRuler ruler(session, fixture.controller);
+    ui::TimelineKeyframePanel panel(session);
+    panel.resize(501, static_cast<int>(entries.size()) * ui::kTimelineRowHeight);
+    panel.setRuler(ruler);
+    panel.setGridEntries(entries, 0);
+    panel.show();
+    const auto maybeAxis = ruler.axisForWidth(panel.width());
+    if (!maybeAxis)
+        return;
+    const auto axis = *maybeAxis;
+    const auto rows =
+        panel.findChildren<QWidget*>("timelineKeyframeRow", Qt::FindDirectChildrenOnly);
+    const auto rowFor = [&](int component) -> QWidget* {
+        for (auto* row : rows)
+            if (row->property("parameterId").toULongLong() == parameter.value() &&
+                row->property("component").toInt() == component)
+                return row;
+        return nullptr;
+    };
+    auto* aggregate = rowFor(-1);
+    auto* x = rowFor(static_cast<int>(document::AnimationComponent::X));
+    auto* y = rowFor(static_cast<int>(document::AnimationComponent::Y));
+    expectations.expect(aggregate && x && y, "parameter and component entries all own lanes");
+    if (!aggregate || !x || !y)
+        return;
+    sendClick(*aggregate, axis.pixelForTime(time(1)));
+    expectations.expect(
+        session.selection().keyframes.size() == 2 &&
+            std::ranges::all_of(session.selection().keyframes,
+                                [](const auto& key) { return key.component.has_value(); }),
+        "aggregate click selects every component at that exact time");
+    sendClick(*y, axis.pixelForTime(time(1)));
+    expectations.expect(session.selection().keyframes.size() == 1 &&
+                            session.selection().keyframes.front().component ==
+                                document::AnimationComponent::Y,
+                        "component lane click carries only Y");
+    const QPointF point(axis.pixelForTime(time(2)), x->height() / 2.0);
+    QMouseEvent press(QEvent::MouseButtonPress, point, point, Qt::LeftButton, Qt::LeftButton,
+                      Qt::ShiftModifier);
+    QMouseEvent release(QEvent::MouseButtonRelease, point, point, Qt::LeftButton, Qt::NoButton,
+                        Qt::ShiftModifier);
+    QCoreApplication::sendEvent(x, &press);
+    QCoreApplication::sendEvent(x, &release);
+    expectations.expect(session.selection().keyframes.size() == 2,
+                        "Shift extends across component lanes");
+    sendClick(*x, axis.pixelForTime(time(2)));
+    expectations.expect(session.selectedKeyframeIsFinal(),
+                        "primary component finality uses its own curve");
+    sendPress(*x, axis.pixelForTime(time(2)));
+    sendMove(*x, axis.pixelForTime(time(3)));
+    sendRelease(*x, axis.pixelForTime(time(3)));
+    expectations.expect(
+        session.keyframeDiamondState(parameter, document::AnimationComponent::X, time(3)) ==
+                ui::KeyframeDiamondState::AnimatedWithKey &&
+            session.keyframeDiamondState(parameter, document::AnimationComponent::Y, time(1)) ==
+                ui::KeyframeDiamondState::AnimatedWithKey,
+        "component drag moves X without moving Y");
+    expectations.expect(session.undo(), "component drag is one undoable edit");
+    sendDoubleClick(*y, axis.pixelForTime(time(4)));
+    expectations.expect(
+        session.keyframeDiamondState(parameter, document::AnimationComponent::Y, time(4)) ==
+                ui::KeyframeDiamondState::AnimatedWithKey &&
+            session.keyframeDiamondState(parameter, document::AnimationComponent::X, time(4)) ==
+                ui::KeyframeDiamondState::AnimatedWithoutKey,
+        "component lane double-click inserts only its component");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     Expectations expectations;
+    testComponentRowsAndLaneSelections(expectations);
     testCacheBarTracksAxisIdentityEvictionAndBatches(expectations);
     testRulerScrubLandsOnExactFrameTimesIncludingATie(expectations);
     testKeyframeRowsAppearOnePerAnimatedParameter(expectations);

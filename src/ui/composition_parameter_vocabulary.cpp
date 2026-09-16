@@ -101,6 +101,13 @@ QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view
         add(QObject::tr("Right"), 2);
         return items;
     }
+    if (schemaKey == document::kTextFontParameterSchemaKey) {
+        add(QObject::tr("DejaVu Sans"), document::kTextFontDejaVuSans);
+        add(QObject::tr("Inter Regular"), document::kTextFontInterRegular);
+        add(QObject::tr("Inter Medium"), document::kTextFontInterMedium);
+        add(QObject::tr("Inter SemiBold"), document::kTextFontInterSemiBold);
+        return items;
+    }
     if (schemaKey == document::kScalarOperationParameterSchemaKey) {
         for (const auto operation : document::kScalarOperations) {
             const auto* signature = core::primitives::scalarPrimitiveSignature(operation);

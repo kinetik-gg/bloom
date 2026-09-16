@@ -6,6 +6,7 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/render/embedded_fonts.hpp>
 #include <bloom/runtime/compiled_curves.hpp>
 #include <bloom/runtime/compiled_value_graph.hpp>
 
@@ -213,6 +214,11 @@ struct CompiledText {
     // change: an existing plan value still means precisely what it meant, and every pixel and
     // every digest an existing plan produces is unchanged.
     std::optional<ValueOutputIndex> drivenContent{};
+
+    // The render face is a closed, non-animatable choice. It is optional at the document binding
+    // boundary for old text-source nodes, which lower to this default and therefore retain the
+    // pre-FONT-1 DejaVu Sans pixels exactly.
+    render::EmbeddedFace face = render::EmbeddedFace::DejaVuSans;
 
     friend bool operator==(const CompiledText&, const CompiledText&) = default;
 };

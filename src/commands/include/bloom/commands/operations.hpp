@@ -25,6 +25,7 @@ inline constexpr std::string_view kAddTextLayerLayerOutputNodeOutput = "layerOut
 inline constexpr std::string_view kAddTextLayerTextParameterOutput = "textParameter";
 inline constexpr std::string_view kAddTextLayerSizeParameterOutput = "sizeParameter";
 inline constexpr std::string_view kAddTextLayerColorParameterOutput = "colorParameter";
+inline constexpr std::string_view kAddTextLayerFontParameterOutput = "fontParameter";
 inline constexpr std::string_view kAddTextLayerPositionParameterOutput = "positionParameter";
 inline constexpr std::string_view kAddTextLayerAnchorParameterOutput = "anchorParameter";
 inline constexpr std::string_view kAddTextLayerScaleParameterOutput = "scaleParameter";
@@ -80,8 +81,8 @@ class AddSolidLayer final : public Operation {
 // authoring value, the same encoding a solid color uses; both default to the registered text
 // definition's own defaults so a caller that only has content does not have to restate them.
 //
-// The font is not a parameter: the CPU reference path has exactly one embedded face today, so there
-// is nothing to select and nothing to persist (see bloom/render/text_raster.hpp).
+// The font is a non-animatable integer selector whose default is the text source definition's
+// DejaVu Sans face.
 class AddTextLayer final : public Operation {
   public:
     AddTextLayer(document::CompositionId compositionId, std::string name, std::string text)

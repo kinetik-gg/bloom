@@ -91,6 +91,10 @@ class KeyframeDiamond final : public kit::KDiamond {
     // because its rows ARE the selection's rows. An invalid id clears the binding.
     void setParameterId(document::ParameterId parameterId);
     void setRole(std::string role);
+    void setComponent(std::optional<document::AnimationComponent> component);
+    [[nodiscard]] std::optional<document::AnimationComponent> component() const noexcept {
+        return component_;
+    }
     // Which parameter this diamond currently keys, or nothing when it follows the selection's own
     // row instead. Diagnostic: a card names every one of its diamonds "nodeKeyframeDiamond", so a
     // reader asking whether the right diamond is on the right row has to be able to ask it.
@@ -112,6 +116,7 @@ class KeyframeDiamond final : public kit::KDiamond {
     CompositionSession& session_;
     std::string role_;
     std::optional<document::ParameterId> parameterId_;
+    std::optional<document::AnimationComponent> component_;
     KeyframeDiamondState state_ = KeyframeDiamondState::Unsupported;
     bool hovered_ = false;
 };

@@ -20,7 +20,8 @@ namespace {
 
 using bloom::core::Color4d;
 using bloom::render::coverageSolidRow;
-using bloom::render::embeddedDejaVuSansTrueTypeBytes;
+using bloom::render::EmbeddedFace;
+using bloom::render::embeddedFaceBytes;
 using bloom::render::ImageErrorCode;
 using bloom::render::ImageResult;
 using bloom::render::kMaximumTextPixelSize;
@@ -105,20 +106,30 @@ constexpr std::array<std::uint8_t, kAbGoldenByteCount> kAbGoldenCoverage{
     0,   0,   0,   4,   42,  13,  0,   0,   0};
 
 void testEmbeddedFont(Expectations& expectations) {
-    const auto bytes = embeddedDejaVuSansTrueTypeBytes();
-    expectations.expect(bytes.size() == 757076,
-                        "the embedded face is exactly the vendored DejaVuSans.ttf byte count");
-    expectations.expect(bytes.data() == embeddedDejaVuSansTrueTypeBytes().data(),
-                        "the embed is one immutable static payload, not a per-call copy");
+    constexpr std::array faces{EmbeddedFace::DejaVuSans, EmbeddedFace::InterRegular,
+                               EmbeddedFace::InterMedium, EmbeddedFace::InterSemiBold};
+    constexpr std::array expectedByteCounts{757076U, 411640U, 417300U, 419744U};
+    for (std::size_t index = 0; index < faces.size(); ++index) {
+        const auto bytes = embeddedFaceBytes(faces[index]);
+        expectations.expect(bytes.size() == expectedByteCounts[index],
+                            "the embedded face has its pinned vendored byte count");
+        expectations.expect(bytes.data() == embeddedFaceBytes(faces[index]).data(),
+                            "the embed is one immutable static payload, not a per-call copy");
+        expectations.expect(
+            bytes.size() >= 4 && bytes[0] == 0x00 && bytes[1] == 0x01 && bytes[2] == 0x00 &&
+                bytes[3] == 0x00,
+            "the embedded bytes are a TrueType sfnt, which is what the rasterizer parses");
+    }
     // A TrueType face opens with the 0x00010000 sfnt version tag; a wrong asset (an OpenType/CFF
     // 'OTTO' file, a WOFF, a truncated copy) would not.
     expectations.expect(
-        bytes.size() >= 4 && bytes[0] == 0x00 && bytes[1] == 0x01 && bytes[2] == 0x00 &&
-            bytes[3] == 0x00,
-        "the embedded bytes are a TrueType sfnt, which is what the rasterizer parses");
-    expectations.expect(bloom::render::kEmbeddedDejaVuSansFamilyName == "DejaVu Sans" &&
-                            bloom::render::kEmbeddedDejaVuSansStyleName == "Book",
-                        "the embedded face names the family and style the provenance record does");
+        bloom::render::kEmbeddedDejaVuSansFamilyName == "DejaVu Sans" &&
+            bloom::render::kEmbeddedDejaVuSansStyleName == "Book" &&
+            bloom::render::kEmbeddedInterFamilyName == "Inter" &&
+            bloom::render::kEmbeddedInterRegularStyleName == "Regular" &&
+            bloom::render::kEmbeddedInterMediumStyleName == "Medium" &&
+            bloom::render::kEmbeddedInterSemiBoldStyleName == "SemiBold",
+        "the embedded faces name the families and styles their provenance records do");
 }
 
 void testParameterValidation(Expectations& expectations) {
@@ -147,8 +158,8 @@ void testGlyphCoverageGolden(Expectations& expectations) {
         expectations.expect(false, "the golden's raster parameters are valid");
         return;
     }
-    const auto rasterized = TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
-        "Ab", *parameters.value(), generousByteLimit());
+    const auto rasterized = TextCoverageBitmap::rasterizeEmbeddedText(
+        EmbeddedFace::DejaVuSans, "Ab", *parameters.value(), generousByteLimit());
     if (!rasterized) {
         expectations.expect(false, "a small string rasterizes against the embedded face");
         return;
@@ -193,19 +204,39 @@ void testGlyphCoverageGolden(Expectations& expectations) {
                         "an out-of-range row reads nothing instead of reading past the bitmap");
 }
 
+void testFaceSelectionChangesCoverage(Expectations& expectations) {
+    const auto parameters = TextRasterParameters::create(32.0, 32.0);
+    if (!parameters) {
+        expectations.expect(false, "face-selection raster parameters are valid");
+        return;
+    }
+    const auto dejavu = TextCoverageBitmap::rasterizeEmbeddedText(
+        EmbeddedFace::DejaVuSans, "Bloom", *parameters.value(), generousByteLimit());
+    const auto semiBold = TextCoverageBitmap::rasterizeEmbeddedText(
+        EmbeddedFace::InterSemiBold, "Bloom", *parameters.value(), generousByteLimit());
+    expectations.expect(dejavu && semiBold, "both embedded faces rasterize the same string");
+    if (!dejavu || !semiBold)
+        return;
+    expectations.expect(dejavu.value()->coverage().size() != semiBold.value()->coverage().size() ||
+                            !std::equal(dejavu.value()->coverage().begin(),
+                                        dejavu.value()->coverage().end(),
+                                        semiBold.value()->coverage().begin()),
+                        "DejaVu Sans and Inter SemiBold produce different coverage");
+}
+
 void testEmptyAndBlankContent(Expectations& expectations) {
     const auto parameters = TextRasterParameters::create(24.0, 24.0);
     if (!parameters) {
         expectations.expect(false, "blank-content raster parameters are valid");
         return;
     }
-    const auto empty = TextCoverageBitmap::rasterizeEmbeddedDejaVuSans("", *parameters.value(),
-                                                                       generousByteLimit());
+    const auto empty = TextCoverageBitmap::rasterizeEmbeddedText(
+        EmbeddedFace::DejaVuSans, "", *parameters.value(), generousByteLimit());
     expectations.expect(empty && !empty.value()->hasCoverage() && empty.value()->width() == 0 &&
                             empty.value()->height() == 0,
                         "empty content succeeds with no coverage rather than failing");
-    const auto spaces = TextCoverageBitmap::rasterizeEmbeddedDejaVuSans("   ", *parameters.value(),
-                                                                        generousByteLimit());
+    const auto spaces = TextCoverageBitmap::rasterizeEmbeddedText(
+        EmbeddedFace::DejaVuSans, "   ", *parameters.value(), generousByteLimit());
     expectations.expect(spaces && !spaces.value()->hasCoverage(),
                         "content whose glyphs are all blank also succeeds with no coverage");
     const auto explicitlyEmpty = TextCoverageBitmap::empty();
@@ -221,18 +252,20 @@ void testRefusals(Expectations& expectations) {
         return;
     }
     const std::string illFormed("\xff\xfe", 2);
-    expectations.expect(hasError(TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
-                                     illFormed, *parameters.value(), generousByteLimit()),
-                                 ImageErrorCode::InvalidParameter),
-                        "content that is not well-formed UTF-8 is refused");
+    expectations.expect(
+        hasError(TextCoverageBitmap::rasterizeEmbeddedText(
+                     EmbeddedFace::DejaVuSans, illFormed, *parameters.value(), generousByteLimit()),
+                 ImageErrorCode::InvalidParameter),
+        "content that is not well-formed UTF-8 is refused");
     const std::string truncated("\xe2\x82", 2);
-    expectations.expect(hasError(TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
-                                     truncated, *parameters.value(), generousByteLimit()),
-                                 ImageErrorCode::InvalidParameter),
-                        "a truncated multi-byte sequence is refused, not rendered as .notdef");
+    expectations.expect(
+        hasError(TextCoverageBitmap::rasterizeEmbeddedText(
+                     EmbeddedFace::DejaVuSans, truncated, *parameters.value(), generousByteLimit()),
+                 ImageErrorCode::InvalidParameter),
+        "a truncated multi-byte sequence is refused, not rendered as .notdef");
 
-    const auto budgeted =
-        TextCoverageBitmap::rasterizeEmbeddedDejaVuSans("Ab", *parameters.value(), 4);
+    const auto budgeted = TextCoverageBitmap::rasterizeEmbeddedText(EmbeddedFace::DejaVuSans, "Ab",
+                                                                    *parameters.value(), 4);
     expectations.expect(hasError(budgeted, ImageErrorCode::PixelStorageBudgetExceeded),
                         "a coverage bitmap larger than the byte limit is refused");
     expectations.expect(budgeted.error()->requestedPixelStorageBytes == kAbGoldenCoverage.size() &&
@@ -243,8 +276,8 @@ void testRefusals(Expectations& expectations) {
     // A codepoint the face does not cover resolves to glyph 0, which DejaVu Sans draws as a real
     // missing-glyph box: unsupported text is visibly missing, never silently dropped.
     const std::string emoji("\xf0\x9f\x98\x80", 4);
-    const auto notdef = TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(emoji, *parameters.value(),
-                                                                        generousByteLimit());
+    const auto notdef = TextCoverageBitmap::rasterizeEmbeddedText(
+        EmbeddedFace::DejaVuSans, emoji, *parameters.value(), generousByteLimit());
     expectations.expect(notdef && notdef.value()->hasCoverage(),
                         "an uncovered codepoint rasterizes the face's missing-glyph box");
 }
@@ -256,10 +289,10 @@ void testPerAxisScaling(Expectations& expectations) {
         expectations.expect(false, "per-axis raster parameters are valid");
         return;
     }
-    const auto tall = TextCoverageBitmap::rasterizeEmbeddedDejaVuSans("Bloom", *full.value(),
-                                                                      generousByteLimit());
-    const auto squashed = TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
-        "Bloom", *halfHeight.value(), generousByteLimit());
+    const auto tall = TextCoverageBitmap::rasterizeEmbeddedText(EmbeddedFace::DejaVuSans, "Bloom",
+                                                                *full.value(), generousByteLimit());
+    const auto squashed = TextCoverageBitmap::rasterizeEmbeddedText(
+        EmbeddedFace::DejaVuSans, "Bloom", *halfHeight.value(), generousByteLimit());
     if (!tall || !squashed) {
         expectations.expect(false, "both per-axis rasterizations succeed");
         return;
@@ -321,8 +354,9 @@ void testTypographyGoldens(Expectations& expectations) {
                                                      {TextAlignment::Left, 1, 3, true}}};
     std::array<std::uint64_t, 5> digests{};
     for (std::size_t index = 0; index < settings.size(); ++index) {
-        const auto raster = TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
-            "Ab\ni", *parameters.value(), generousByteLimit(), settings[index]);
+        const auto raster = TextCoverageBitmap::rasterizeEmbeddedText(
+            EmbeddedFace::DejaVuSans, "Ab\ni", *parameters.value(), generousByteLimit(),
+            settings[index]);
         expectations.expect(static_cast<bool>(raster), "multiline typography rasterizes");
         if (!raster)
             continue;
@@ -344,12 +378,14 @@ void testTypographyGoldens(Expectations& expectations) {
                                                 4373560154211617060ULL, 6681727905294334493ULL,
                                                 17380785927925869081ULL},
         "left, centre, right, line-height and letter-spacing coverage goldens");
-    const auto invalid = TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
-        "A", *parameters.value(), generousByteLimit(), {TextAlignment::Left, 0, 0, true});
+    const auto invalid = TextCoverageBitmap::rasterizeEmbeddedText(
+        EmbeddedFace::DejaVuSans, "A", *parameters.value(), generousByteLimit(),
+        {TextAlignment::Left, 0, 0, true});
     expectations.expect(hasError(invalid, ImageErrorCode::InvalidParameter),
                         "zero line height is refused");
-    const auto huge = TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
-        "A\nB", *parameters.value(), 1024, {TextAlignment::Left, 1.0e100, 0, true});
+    const auto huge = TextCoverageBitmap::rasterizeEmbeddedText(
+        EmbeddedFace::DejaVuSans, "A\nB", *parameters.value(), 1024,
+        {TextAlignment::Left, 1.0e100, 0, true});
     expectations.expect(hasError(huge, ImageErrorCode::ArithmeticOverflow),
                         "unrepresentable layout is refused before allocation");
 }
@@ -363,6 +399,7 @@ int main() {
         testEmbeddedFont(expectations);
         testParameterValidation(expectations);
         testGlyphCoverageGolden(expectations);
+        testFaceSelectionChangesCoverage(expectations);
         testEmptyAndBlankContent(expectations);
         testRefusals(expectations);
         testPerAxisScaling(expectations);

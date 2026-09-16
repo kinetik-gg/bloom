@@ -31,9 +31,32 @@ std::vector<TimelineKeyframePanel::LaneKey> TimelineKeyframePanel::laneKeys() co
             continue;
         std::visit(
             [&](const auto& curve) {
-                for (const auto& key : curve.keyframes)
-                    keys.push_back(
-                        {{curve.id, key.id}, key.time, key.outgoingInterpolation, gridRows_[i]});
+                using Curve = std::decay_t<decltype(curve)>;
+                const auto append = [&](const auto& values,
+                                        std::optional<document::AnimationComponent> component) {
+                    for (const auto& key : values)
+                        keys.push_back({{curve.id, key.id, component},
+                                        key.time,
+                                        key.outgoingInterpolation,
+                                        gridRows_[i]});
+                };
+                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                    append(curve.keyframes, std::nullopt);
+                } else {
+                    const std::array vectorNames{document::AnimationComponent::X,
+                                                 document::AnimationComponent::Y,
+                                                 document::AnimationComponent::Z};
+                    const std::array colorNames{
+                        document::AnimationComponent::Red, document::AnimationComponent::Green,
+                        document::AnimationComponent::Blue, document::AnimationComponent::Alpha};
+                    for (std::size_t index = 0; index < curve.components.size(); ++index) {
+                        const auto component = std::is_same_v<Curve, document::Color4AnimationCurve>
+                                                   ? colorNames[index]
+                                                   : vectorNames[index];
+                        if (!gridComponents_[i] || gridComponents_[i] == component)
+                            append(curve.components[index].keyframes, component);
+                    }
+                }
             },
             *record);
     }
@@ -58,6 +81,24 @@ TimelineKeyframePanel::hitKey(QPointF position) const {
     }
     return closest;
 }
+void TimelineKeyframePanel::selectLaneKey(const LaneKey& key, const bool extend,
+                                          const bool preserveSelection) {
+    std::vector<KeyframeSelection> group;
+    for (const auto& candidate : laneKeys())
+        if (candidate.row == key.row && candidate.time == key.time)
+            group.push_back(candidate.selection);
+    const auto& selected = session_.selection().keyframes;
+    if (preserveSelection && !extend && std::ranges::all_of(group, [&](const auto& item) {
+            return std::ranges::find(selected, item) != selected.end();
+        }))
+        return;
+    auto next = extend ? selected : std::vector<KeyframeSelection>{};
+    for (const auto& item : group)
+        if (std::ranges::find(next, item) == next.end())
+            next.push_back(item);
+    session_.selectKeyframes(next);
+}
+
 bool TimelineKeyframePanel::event(QEvent* event) {
     if (gridMode_ && event->type() == QEvent::ShortcutOverride) {
         const auto* key = static_cast<QKeyEvent*>(event);
@@ -108,25 +149,25 @@ void TimelineKeyframePanel::mousePressEvent(QMouseEvent* event) {
     press_ = event->position();
     pressed_ = hitKey(press_);
     gestureRevision_ = session_.snapshot().revision();
-    if (pressed_) {
-        const auto selected = session_.selection().keyframes;
-        if (event->modifiers().testFlag(Qt::ShiftModifier) ||
-            std::ranges::find(selected, pressed_->selection) == selected.end())
-            session_.selectKeyframe(pressed_->selection.curveId, pressed_->selection.keyframeId,
-                                    event->modifiers().testFlag(Qt::ShiftModifier));
+    const auto pressed = pressed_;
+    if (pressed) {
+        selectLaneKey(*pressed, event->modifiers().testFlag(Qt::ShiftModifier), true);
         gestureKeys_ = session_.selection().keyframes;
         gestureData_ = session_.selectedKeyframeData();
-        copying_ = event->modifiers().testFlag(Qt::AltModifier) && gestureKeys_.size() == 1;
-        if (event->modifiers().testFlag(Qt::AltModifier) && gestureData_.size() >= 2 &&
+        copying_ = event->modifiers().testFlag(Qt::AltModifier) && !gestureData_.empty() &&
+                   std::ranges::all_of(gestureData_, [&](const auto& key) {
+                       return key.time == gestureData_.front().time;
+                   });
+        if (!copying_ && event->modifiers().testFlag(Qt::AltModifier) && gestureData_.size() >= 2 &&
             std::ranges::all_of(gestureData_, [&](const auto& key) {
                 return key.parameterId == gestureData_.front().parameterId;
             })) {
             const auto [first, last] =
                 std::minmax_element(gestureData_.begin(), gestureData_.end(),
                                     [](const auto& a, const auto& b) { return a.time < b.time; });
-            if (pressed_->time == first->time)
+            if (pressed->time == first->time)
                 stretchAnchor_ = last->time;
-            else if (pressed_->time == last->time)
+            else if (pressed->time == last->time)
                 stretchAnchor_ = first->time;
         }
     } else {
@@ -177,17 +218,9 @@ void TimelineKeyframePanel::mouseMoveEvent(QMouseEvent* event) {
     if (snapping) {
         auto targets = std::vector<core::RationalTime>{
             session_.currentTime(), session_.workArea().start, session_.workArea().end};
-        if (const auto* composition = session_.composition())
-            for (const auto& record : composition->animationCurves().records())
-                std::visit(
-                    [&](const auto& curve) {
-                        for (const auto& key : curve.keyframes)
-                            if (std::ranges::find(gestureKeys_,
-                                                  KeyframeSelection{curve.id, key.id}) ==
-                                gestureKeys_.end())
-                                targets.push_back(key.time);
-                    },
-                    record);
+        for (const auto& key : laneKeys())
+            if (std::ranges::find(gestureKeys_, key.selection) == gestureKeys_.end())
+                targets.push_back(key.time);
         qreal distance = kit::px(kit::Spacing::S);
         for (const auto target : targets) {
             const auto dx =
@@ -217,7 +250,9 @@ void TimelineKeyframePanel::mouseMoveEvent(QMouseEvent* event) {
                 moves_.clear();
                 return;
             }
-            moves_.push_back({{gestureKeys_[i].curveId, gestureKeys_[i].keyframeId}, *time});
+            moves_.push_back(
+                {{gestureKeys_[i].curveId, gestureKeys_[i].keyframeId, gestureKeys_[i].component},
+                 *time});
         }
         updateRows();
         event->accept();
@@ -249,7 +284,9 @@ void TimelineKeyframePanel::mouseMoveEvent(QMouseEvent* event) {
                 moves_.clear();
                 return;
             }
-            moves_.push_back({{gestureKeys_[i].curveId, gestureKeys_[i].keyframeId}, *time});
+            moves_.push_back(
+                {{gestureKeys_[i].curveId, gestureKeys_[i].keyframeId, gestureKeys_[i].component},
+                 *time});
         }
         updateRows();
         event->accept();
@@ -278,8 +315,9 @@ void TimelineKeyframePanel::mouseMoveEvent(QMouseEvent* event) {
         long double frame = static_cast<long double>(frames[i]) + delta;
         if (stretchAnchor_) {
             if (gestureData_[i].time == *stretchAnchor_) {
-                moves_.push_back(
-                    {{gestureKeys_[i].curveId, gestureKeys_[i].keyframeId}, *stretchAnchor_});
+                moves_.push_back({{gestureKeys_[i].curveId, gestureKeys_[i].keyframeId,
+                                   gestureKeys_[i].component},
+                                  *stretchAnchor_});
                 continue;
             }
             const long double fixed = framePosition(*stretchAnchor_);
@@ -304,7 +342,9 @@ void TimelineKeyframePanel::mouseMoveEvent(QMouseEvent* event) {
             moves_.clear();
             return;
         }
-        moves_.push_back({{gestureKeys_[i].curveId, gestureKeys_[i].keyframeId}, *time});
+        moves_.push_back(
+            {{gestureKeys_[i].curveId, gestureKeys_[i].keyframeId, gestureKeys_[i].component},
+             *time});
     }
     updateRows();
     event->accept();
@@ -331,7 +371,7 @@ void TimelineKeyframePanel::mouseReleaseEvent(QMouseEvent* event) {
             }
         session_.selectKeyframes(keys);
     } else if (pressed_ && !dragging_ && !event->modifiers().testFlag(Qt::ShiftModifier)) {
-        session_.selectKeyframe(pressed_->selection.curveId, pressed_->selection.keyframeId);
+        selectLaneKey(*pressed_, false);
     } else if (dragging_ && !moves_.empty()) {
         const auto moves = moves_;
         auto data = gestureData_;
@@ -368,14 +408,18 @@ void TimelineKeyframePanel::mouseDoubleClickEvent(QMouseEvent* event) {
     const auto found = std::ranges::find(gridRows_, row);
     if (found == gridRows_.end())
         return;
-    const auto parameterId = gridParameters_[static_cast<std::size_t>(found - gridRows_.begin())];
+    const auto index = static_cast<std::size_t>(found - gridRows_.begin());
+    const auto parameterId = gridParameters_[index];
     const auto* parameter = composition->parameters().find(parameterId);
     const auto* source =
         parameter ? std::get_if<document::AnimationCurveSource>(&parameter->source) : nullptr;
     const auto time =
         frameTimeForIndex(axis->frameRate, axis->duration,
                           axis->frameIndexForPixel(static_cast<int>(event->position().x())));
-    if (source && time)
+    const auto component = gridComponents_[index];
+    if (time && component)
+        (void)session_.toggleKeyframe(parameterId, *component, *time);
+    else if (source && time)
         (void)session_.insertKeyframeAtTime(source->curveId, *time);
 }
 void TimelineKeyframePanel::contextMenuEvent(QContextMenuEvent* event) {
@@ -386,9 +430,7 @@ void TimelineKeyframePanel::contextMenuEvent(QContextMenuEvent* event) {
     const auto hit = hitKey(event->pos());
     if (!hit)
         return;
-    if (std::ranges::find(session_.selection().keyframes, hit->selection) ==
-        session_.selection().keyframes.end())
-        session_.selectKeyframe(hit->selection.curveId, hit->selection.keyframeId);
+    selectLaneKey(*hit, false, true);
     cancelGesture();
     std::unique_ptr<QMenu> menuOwner(kit::makeMenu(this));
     auto& menu = *menuOwner;
@@ -452,7 +494,8 @@ void TimelineKeyframePanel::paintGridOverlay(QPainter& painter, const QWidget& r
     painter.setBrush(Qt::NoBrush);
     for (const auto& move : moves_)
         for (const auto& key : laneKeys()) {
-            if (key.selection != KeyframeSelection{move.key.curveId, move.key.keyframeId})
+            if (key.selection !=
+                KeyframeSelection{move.key.curveId, move.key.keyframeId, move.key.component})
                 continue;
             const qreal x = axis->pixelForTime(move.time),
                         y = key.row * kTimelineRowHeight - gridScroll_ + kTimelineRowHeight / 2.0;
