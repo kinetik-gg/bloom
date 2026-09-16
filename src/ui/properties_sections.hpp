@@ -12,6 +12,7 @@
 // constructing a Properties row.
 
 #include <bloom/core/color.hpp>
+#include <bloom/document/animation.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <optional>
 
@@ -66,6 +67,10 @@ QWidget* addRow(QVBoxLayout* section, QWidget* sectionParent, QLabel* label, QWi
 [[nodiscard]] KeyframeDiamond* makeKeyframeDiamond(CompositionSession& session,
                                                    std::string_view role, QWidget* parent);
 
+[[nodiscard]] QWidget* makeComponentCell(CompositionSession& session, std::string_view role,
+                                         document::AnimationComponent component, QWidget* field,
+                                         QWidget* parent, document::ParameterId parameter = {});
+
 // A read-only value cell's text: `role` is Value (Geist Mono) for numeric-looking content and Ui
 // for prose.
 [[nodiscard]] QLabel* makeReadOnlyValueLabel(kit::TypeRole role, QWidget* parent);
@@ -91,9 +96,11 @@ struct ValueCellSpec {
                                      std::initializer_list<QWidget*> cells, QWidget* parent);
 
 // Append a swatch row and a single-line RGBA disclosure. Existing fields retain their names.
-[[nodiscard]] QWidget* addColorRow(QVBoxLayout* rows, QWidget* parent, kit::KColorChip* chip,
+[[nodiscard]] QWidget* addColorRow(CompositionSession& session, std::string_view role,
+                                   QVBoxLayout* rows, QWidget* parent, kit::KColorChip* chip,
                                    QWidget* diamond, std::initializer_list<QWidget*> fields,
-                                   const QString& expandName, const QString& groupName);
+                                   const QString& expandName, const QString& groupName,
+                                   document::ParameterId parameter = {});
 
 // A proportional/axis link toggle for a paired row. Checkable, Ghost, IconId::Link.
 [[nodiscard]] QWidget* makeLinkToggle(const QString& objectName, const QString& tooltip,

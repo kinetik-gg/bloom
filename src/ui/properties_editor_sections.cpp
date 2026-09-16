@@ -180,8 +180,14 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
         tr("Link X and Y: moving one axis moves the other by the same amount"), body));
     positionKeyframe_ = makeKeyframeDiamond(session_, document::kPositionParameterRole, body);
     addRow(rows, body, makeRowLabel(tr("Position"), body), positionKeyframe_,
-           makeCellGroup(QStringLiteral("positionFieldGroup"),
-                         {positionX_, positionLink_, positionY_}, body));
+           makeCellGroup(
+               QStringLiteral("positionFieldGroup"),
+               {properties::makeComponentCell(session_, document::kPositionParameterRole,
+                                              document::AnimationComponent::X, positionX_, body),
+                positionLink_,
+                properties::makeComponentCell(session_, document::kPositionParameterRole,
+                                              document::AnimationComponent::Y, positionY_, body)},
+               body));
 
     // Rotation is a single degree field with a 1 degree scrub step. Its range is deliberately wider
     // than one turn: the schema accepts any finite angle so a rotation curve can wind, and a field
@@ -232,7 +238,14 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
     scaleLink_->setChecked(true);
     scaleKeyframe_ = makeKeyframeDiamond(session_, document::kScaleParameterRole, body);
     addRow(rows, body, makeRowLabel(tr("Scale"), body), scaleKeyframe_,
-           makeCellGroup(QStringLiteral("scaleFieldGroup"), {scaleX_, scaleLink_, scaleY_}, body));
+           makeCellGroup(
+               QStringLiteral("scaleFieldGroup"),
+               {properties::makeComponentCell(session_, document::kScaleParameterRole,
+                                              document::AnimationComponent::X, scaleX_, body),
+                scaleLink_,
+                properties::makeComponentCell(session_, document::kScaleParameterRole,
+                                              document::AnimationComponent::Y, scaleY_, body)},
+               body));
 
     // The anchor is in the same pixel space Position is, so it takes Position's range, decimals,
     // step, and unit verbatim.
@@ -247,7 +260,13 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
     anchorY_ = makeValueCell(anchorSpec, body);
     anchorKeyframe_ = makeKeyframeDiamond(session_, document::kAnchorParameterRole, body);
     addRow(rows, body, makeRowLabel(tr("Anchor"), body), anchorKeyframe_,
-           makeCellGroup(QStringLiteral("anchorFieldGroup"), {anchorX_, anchorY_}, body));
+           makeCellGroup(
+               QStringLiteral("anchorFieldGroup"),
+               {properties::makeComponentCell(session_, document::kAnchorParameterRole,
+                                              document::AnimationComponent::X, anchorX_, body),
+                properties::makeComponentCell(session_, document::kAnchorParameterRole,
+                                              document::AnimationComponent::Y, anchorY_, body)},
+               body));
     anchorGrid_ = new PropertiesAnchorGrid(session_, body);
     addRow(rows, body, makeRowLabel(tr("Anchor Point"), body), nullptr, anchorGrid_);
 }
@@ -297,8 +316,8 @@ void PropertiesEditor::buildSolidSection(QVBoxLayout* layout) {
     solidColorChip_ = new kit::KColorChip(body);
     solidColorChip_->setObjectName("propertiesSolidColorChip");
     (void)properties::addColorRow(
-        rows, body, solidColorChip_, solidColorKeyframe_,
-        {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_},
+        session_, document::kSolidColorParameterRole, rows, body, solidColorChip_,
+        solidColorKeyframe_, {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_},
         "propertiesSolidColorExpand", "solidColorFieldGroup");
     connect(solidColorChip_, &kit::KColorChip::colorChanged, this,
             [this](const kit::KColor& color) {
@@ -373,7 +392,7 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
         });
     }
     (void)properties::addColorRow(
-        rows, body, textColor_, textColorKeyframe_,
+        session_, document::kTextColorParameterRole, rows, body, textColor_, textColorKeyframe_,
         {textColorFields_[0], textColorFields_[1], textColorFields_[2], textColorFields_[3]},
         "propertiesTextColorExpand", "propertiesTextColorFields");
 

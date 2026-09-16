@@ -50,6 +50,7 @@ void testHostedFieldsAreFullWidthAndUnscaled() {
     // split by objectName, and each is counted in its own right.
     std::vector<std::pair<QGraphicsProxyWidget*, QWidget*>> hosted;
     std::size_t diamondCount = 0;
+    std::size_t componentDiamondCount = 0;
     for (const auto& entry : allHosted) {
         if (entry.second->objectName() == QStringLiteral("nodeKeyframeDiamond")) {
             ++diamondCount;
@@ -57,16 +58,17 @@ void testHostedFieldsAreFullWidthAndUnscaled() {
         }
         diamondCount += static_cast<std::size_t>(
             entry.second->findChildren<KeyframeDiamond*>("nodeKeyframeDiamond").size());
+        componentDiamondCount += static_cast<std::size_t>(
+            entry.second->findChildren<KeyframeDiamond*>("nodeComponentKeyframeDiamond").size());
         hosted.push_back(entry);
     }
     // ADAPTED (task S4, then blend modes): the Layer Output card now hosts position X/Y, anchor
     // X/Y, scale X/Y, rotation, opacity and the blending dropdown -- nine value controls.
     expect(hosted.size() == 9,
            "the layer output card hosts its transform, opacity and blending controls");
-    // One diamond per animatable PARAMETER, not per field: the paired X/Y rows share a parameter,
-    // so position, anchor, scale, rotation and opacity make five.
-    expect(diamondCount == 5,
-           "and one keyframe diamond per animatable parameter, not per value cell");
+    // Five parameter indicators plus the six independently keyable vector components.
+    expect(diamondCount == 5, "one parameter diamond per animatable parameter");
+    expect(componentDiamondCount == 6, "position, anchor and scale each expose X and Y diamonds");
     for (const auto& [proxy, widget] : hosted) {
         expect(proxy->scale() == 1.0,
                "a hosted control is never scaled: a fractional scale resampled its hairlines, "

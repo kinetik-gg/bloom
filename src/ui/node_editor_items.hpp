@@ -447,6 +447,8 @@ class NodeItem final : public QGraphicsObject {
         // The role this row's diamond keys, so refreshValues() can bind it to the node's own
         // parameter without re-deriving which role built which control.
         std::string_view role;
+        std::optional<document::AnimationComponent> component{};
+        KeyframeDiamond* componentDiamond = nullptr;
     };
 
     // A generic editor for one parameter, built from its declared ParameterValueKind (task S7).
@@ -731,8 +733,11 @@ class NodeItem final : public QGraphicsObject {
                 bindCell(positionY_, [this] { commitPosition(); });
                 valueRows_.push_back({QStringLiteral("X"), positionX_,
                                       makeCardDiamond(document::kPositionParameterRole),
-                                      document::kPositionParameterRole});
-                valueRows_.push_back({QStringLiteral("Y"), positionY_, nullptr, {}});
+                                      document::kPositionParameterRole,
+                                      document::AnimationComponent::X});
+                valueRows_.push_back({QStringLiteral("Y"), positionY_, nullptr,
+                                      document::kPositionParameterRole,
+                                      document::AnimationComponent::Y});
             } else if (role == document::kAnchorParameterRole) {
                 // Range/decimals/step/unit mirror PropertiesEditor's Anchor editors verbatim.
                 anchorX_ = makeCardField(QStringLiteral("nodeAnchorXEditor"), tr("Anchor X"),
@@ -745,10 +750,12 @@ class NodeItem final : public QGraphicsObject {
                 registerControlRole(anchorY_, document::kAnchorParameterRole);
                 bindCell(anchorX_, [this] { commitAnchor(); });
                 bindCell(anchorY_, [this] { commitAnchor(); });
-                valueRows_.push_back({tr("Anchor X"), anchorX_,
-                                      makeCardDiamond(document::kAnchorParameterRole),
-                                      document::kAnchorParameterRole});
-                valueRows_.push_back({tr("Anchor Y"), anchorY_, nullptr, {}});
+                valueRows_.push_back(
+                    {tr("Anchor X"), anchorX_, makeCardDiamond(document::kAnchorParameterRole),
+                     document::kAnchorParameterRole, document::AnimationComponent::X});
+                valueRows_.push_back({tr("Anchor Y"), anchorY_, nullptr,
+                                      document::kAnchorParameterRole,
+                                      document::AnimationComponent::Y});
             } else if (role == document::kScaleParameterRole) {
                 scaleX_ = makeCardField(QStringLiteral("nodeScaleXEditor"), tr("Scale X"),
                                         -100'000.0, 100'000.0, 2, QStringLiteral("%"));
@@ -760,10 +767,12 @@ class NodeItem final : public QGraphicsObject {
                 registerControlRole(scaleY_, document::kScaleParameterRole);
                 bindCell(scaleX_, [this] { commitScale(); });
                 bindCell(scaleY_, [this] { commitScale(); });
-                valueRows_.push_back({tr("Scale X"), scaleX_,
-                                      makeCardDiamond(document::kScaleParameterRole),
-                                      document::kScaleParameterRole});
-                valueRows_.push_back({tr("Scale Y"), scaleY_, nullptr, {}});
+                valueRows_.push_back(
+                    {tr("Scale X"), scaleX_, makeCardDiamond(document::kScaleParameterRole),
+                     document::kScaleParameterRole, document::AnimationComponent::X});
+                valueRows_.push_back({tr("Scale Y"), scaleY_, nullptr,
+                                      document::kScaleParameterRole,
+                                      document::AnimationComponent::Y});
             } else if (role == document::kRotationParameterRole) {
                 rotation_ = makeCardField(QStringLiteral("nodeRotationEditor"), tr("Rotation"),
                                           -100'000.0, 100'000.0, 2, QString::fromUtf8("\u00b0"));
@@ -815,6 +824,7 @@ class NodeItem final : public QGraphicsObject {
                 // The colour row is the one row that is not a ValueRow (the chip is positioned on
                 // its own, below), so its diamond is held directly rather than in valueRows_.
                 colorDiamond_ = makeCardDiamond(document::kSolidColorParameterRole);
+                addColorComponentRows(document::kSolidColorParameterRole);
             } else if (role == document::kTextParameterRole) {
                 textContent_ = new kit::KLineEdit;
                 textContent_->setObjectName(QStringLiteral("nodeTextContentEditor"));
@@ -860,8 +870,16 @@ class NodeItem final : public QGraphicsObject {
             prepareField(imageRange_);
             valueRows_.push_back({tr("Range"), imageRange_, nullptr, {}});
         }
-        for (const auto& row : valueRows_)
-            wrapPropertyRow(row.label, row.widget, row.diamond);
+        for (auto& row : valueRows_) {
+            if (row.component) {
+                row.componentDiamond = makeCardDiamond(row.role);
+                if (row.componentDiamond) {
+                    row.componentDiamond->setObjectName("nodeComponentKeyframeDiamond");
+                    row.componentDiamond->setComponent(row.component);
+                }
+            }
+            wrapPropertyRow(row.label, row.widget, row.diamond, row.componentDiamond);
+        }
         if (colorChip_)
             wrapPropertyRow(colorRowLabel_, colorChip_, colorDiamond_);
         for (std::size_t index = 0; index < readOnlyLabels_.size(); ++index)
@@ -956,6 +974,8 @@ class NodeItem final : public QGraphicsObject {
                     [commit](const kit::KColor&) { commit(); });
             valueRows_.push_back(
                 {label, row.color, animatable ? makeCardDiamond(role) : nullptr, role});
+            if (animatable)
+                addColorComponentRows(role);
             break;
         }
         case document::ParameterValueKind::Integer:
@@ -995,12 +1015,14 @@ class NodeItem final : public QGraphicsObject {
                 registerControlRole(field, role);
                 bindCell(field, commit);
                 row.numeric[static_cast<std::size_t>(component)] = field;
-                // One diamond per PARAMETER, on its first component row: a Vector 2's X and Y are
-                // one curve, exactly as a layer position's are.
+                const std::array names{document::AnimationComponent::X,
+                                       document::AnimationComponent::Y,
+                                       document::AnimationComponent::Z};
                 valueRows_.push_back(
                     {componentLabel, field,
-                     animatable && component == 0 ? makeCardDiamond(role) : nullptr,
-                     component == 0 ? role : std::string_view{}});
+                     animatable && component == 0 ? makeCardDiamond(role) : nullptr, role,
+                     components > 1 ? std::optional(names[static_cast<std::size_t>(component)])
+                                    : std::nullopt});
             }
             break;
         }
@@ -1384,17 +1406,30 @@ class NodeItem final : public QGraphicsObject {
                     : exact);
         }
 
-        // Every diamond is bound to THIS node's own parameter (never the selection's) and then
-        // re-read, in one pass, so a card that is not selected still paints the truth for its own
-        // rows -- and clicking one keys that parameter without moving the selection.
         for (const auto& row : valueRows_) {
-            if (row.diamond == nullptr) {
-                continue;
-            }
             const auto* parameter = parameterForRole(node, composition, row.role);
-            row.diamond->setParameterId(parameter == nullptr ? document::ParameterId{}
-                                                             : parameter->id);
-            row.diamond->refresh();
+            for (auto* diamond : {row.diamond, row.componentDiamond}) {
+                if (!diamond)
+                    continue;
+                diamond->setParameterId(parameter ? parameter->id : document::ParameterId{});
+                diamond->refresh();
+            }
+            if (row.component && parameter) {
+                if (const auto color = session_->effectiveColorValue(parameter->id)) {
+                    auto* field = qobject_cast<kit::KValueField*>(row.widget);
+                    if (field) {
+                        const QSignalBlocker blocker(field);
+                        const auto values =
+                            std::array{color->red, color->green, color->blue, color->alpha};
+                        const auto index =
+                            static_cast<std::size_t>(
+                                row.component.value_or(document::AnimationComponent::Red)) -
+                            static_cast<std::size_t>(document::AnimationComponent::Red);
+                        if (index < values.size())
+                            field->setValue(values[index]);
+                    }
+                }
+            }
         }
         if (colorDiamond_ != nullptr) {
             const auto* parameter =
@@ -1441,11 +1476,51 @@ class NodeItem final : public QGraphicsObject {
     // Recomputes the card's own extent from what it actually carries -- the header text, the widest
     // row label, and the widest control -- rather than from a spelled card width, then positions
     // each proxy inside it.
-    void wrapPropertyRow(const QString& label, QWidget* field, KeyframeDiamond* diamond) {
+    void addColorComponentRows(const std::string_view role) {
+        const std::array names{
+            document::AnimationComponent::Red, document::AnimationComponent::Green,
+            document::AnimationComponent::Blue, document::AnimationComponent::Alpha};
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            const auto label = QStringLiteral("RGBA").mid(static_cast<qsizetype>(index), 1);
+            auto* field = makeCardField(QStringLiteral("nodeColorComponentEditor"), label,
+                                        index == 3 ? 0.0 : -1'000'000.0,
+                                        index == 3 ? 1.0 : 1'000'000.0, 4, QString{});
+            prepareField(field);
+            registerControlRole(field, role);
+            bindCell(field, [this, field, role, index] {
+                if (refreshing_ || !session_)
+                    return;
+                const auto* composition = session_->composition();
+                const auto* node = composition ? composition->graph().findNode(id_) : nullptr;
+                const auto* parameter =
+                    node ? parameterForRole(*node, *composition, role) : nullptr;
+                if (!parameter)
+                    return;
+                if (auto color = session_->effectiveColorValue(parameter->id)) {
+                    if (index == 0)
+                        color->red = field->value();
+                    else if (index == 1)
+                        color->green = field->value();
+                    else if (index == 2)
+                        color->blue = field->value();
+                    else
+                        color->alpha = field->value();
+                    (void)session_->setParameterValue(parameter->id, *color,
+                                                      tr("Set Color Component"));
+                }
+            });
+            valueRows_.push_back({label, field, nullptr, role, names[index]});
+        }
+    }
+
+    void wrapPropertyRow(const QString& label, QWidget* field, KeyframeDiamond* diamond,
+                         KeyframeDiamond* componentDiamond = nullptr) {
         if (auto* value = qobject_cast<kit::KValueField*>(field))
             value->setCompact(true);
-        auto* row =
-            new kit::KPropertyRow(kit::makePropertyRowLabel(label, nullptr), diamond, {field});
+        auto* row = new kit::KPropertyRow(
+            kit::makePropertyRowLabel(label, nullptr), diamond,
+            componentDiamond ? std::initializer_list<QWidget*>{field, componentDiamond}
+                             : std::initializer_list<QWidget*>{field});
         row->setObjectName("nodePropertyRow");
         row->setProperty("nodeParameterRole", field->property("nodeParameterRole"));
         row->setProperty("nodeParameterRowPitch", kit::px(kit::Size::PropertyRow));
