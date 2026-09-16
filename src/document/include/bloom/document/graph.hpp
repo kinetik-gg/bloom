@@ -129,6 +129,7 @@ struct LayerOutputBoundary {
     core::RationalTime inPoint{};
     // Zero means the composition duration, including for boundaries created before insertion.
     core::RationalTime outPoint{};
+    std::optional<LayerId> parent{};
     [[nodiscard]] core::RationalTime endPoint(core::RationalTime duration) const noexcept {
         return outPoint == core::RationalTime{} ? duration : outPoint;
     }

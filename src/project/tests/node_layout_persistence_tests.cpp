@@ -127,11 +127,11 @@ void futureLayoutAttachments() {
         throw std::logic_error("layout future entries");
     const auto bytes = entries.document()->documentBytes();
     std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    const auto rootMinor = text.find("\"minor\": 12");
+    const auto rootMinor = text.find("\"minor\": 13");
     const auto layoutStart = text.find("\"nodeLayout\"");
     if (rootMinor == std::string::npos || layoutStart == std::string::npos)
         throw std::logic_error("layout future anchors");
-    text.replace(rootMinor, std::string_view("\"minor\": 12").size(), "\"minor\": 13");
+    text.replace(rootMinor, std::string_view("\"minor\": 13").size(), "\"minor\": 14");
     const auto y = text.find("\"y\": 32.0", layoutStart);
     if (y == std::string::npos)
         throw std::logic_error("layout position anchor");
@@ -140,7 +140,7 @@ void futureLayoutAttachments() {
     if (muted == std::string::npos)
         throw std::logic_error("layout record anchor");
     text.insert(muted + std::string_view("\"muted\": false").size(), R"(, "zzzLayout":"retained")");
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 13}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 14}};
     const auto size = canonicalManifestSize(manifest);
     if (!size)
         throw std::logic_error("future manifest size");
@@ -156,7 +156,7 @@ void futureLayoutAttachments() {
     if (openedResult.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.roundTrip && opened.schemaMinor == 13,
+    expect(opened.roundTrip && opened.schemaMinor == 14,
            "future layout retains its schema and attachments");
     if (!opened.roundTrip)
         throw std::logic_error("layout round-trip state");
@@ -166,7 +166,7 @@ void futureLayoutAttachments() {
                                  CanonicalDocumentV1{.snapshot = &snapshot,
                                                      .colorSettings = &opened.colorSettings,
                                                      .roundTrip = &*opened.roundTrip,
-                                                     .schemaMinor = 13},
+                                                     .schemaMinor = 14},
                                  {}, memory());
     expect(static_cast<bool>(rewritten), "future layout passes verified overlay save");
     if (!rewritten)

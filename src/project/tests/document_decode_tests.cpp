@@ -92,7 +92,7 @@ constexpr std::uint64_t kGenerousOperationBudget = 8ULL << 20U; // 8 MiB: ample 
 // carry the current required composition members; rejection fixtures alter only their target.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":12})";
+constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":13})";
 constexpr std::string_view kValidDigest =
     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 
@@ -226,7 +226,7 @@ constexpr std::string_view kMinimalGraphJson =
 // skeleton builder rather than complicating every existing R2/R3 call site above.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":13})";
+constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":14})";
 
 [[nodiscard]] std::string
 documentWithCompositionFutureMinor(const std::string_view compositionJsonText) {
@@ -548,14 +548,21 @@ void testComposedRoundTrip(Expectations& expectations) {
     expectations.expect(composition.animationCurves().insert(curve),
                         "the composed fixture animation curve inserts");
 
+    auto parentNode = layerOutputNode;
+    parentNode.id = NodeId::fromRaw(5);
+    expectations.expect(composition.graph().addNode(parentNode) &&
+                            composition.graph().addLayerOutput(
+                                {parentNode.id, LayerId::fromRaw(2), "Parent", "image"}),
+                        "parent boundary added for persistence proof");
+    composition.graph().findLayer(LayerId::fromRaw(1))->parent = LayerId::fromRaw(2);
     Project project{ProjectId::fromRaw(1), "Spot Check"};
     expectations.expect(project.addComposition(std::move(composition)),
                         "the composed fixture composition adds");
 
     const IdAllocatorHighWater highWater{.composition = 1,
-                                         .node = 4,
+                                         .node = 5,
                                          .edge = 3,
-                                         .layer = 1,
+                                         .layer = 2,
                                          .layerSlot = 1,
                                          .parameter = 13,
                                          .animationCurve = 9,
@@ -1518,6 +1525,24 @@ void testRejectsUnsortedLayerOutputs(Expectations& expectations) {
                         "Layer Output boundaries out of (layerId, nodeId) order are rejected");
 }
 
+void testLayerParentMember(Expectations& expectations) {
+    const std::string graph =
+        R"({"nodes":[{"id":"1","typeId":"bloom.layer-output","schemaVersion":4,"parameters":[]}],)"
+        R"("edges":[],"layerOutputs":[)"
+        R"({"nodeId":"1","layerId":"1","name":"A","outputPort":"image","parent":"2"},)"
+        R"({"nodeId":"1","layerId":"2","name":"B","outputPort":"image"}],)"
+        R"("layerStack":{"nodeId":"1","entries":[]},)"
+        R"("compositionOutput":{"nodeId":"1","port":"image"}})";
+    const auto decoded =
+        decodeText(documentWithComposition(compositionWithInterior("[]", "[]", graph)));
+    expectations.expect(
+        decoded.value() &&
+            decoded.value()->compositions.front().graph.layerOutputs.front().parent ==
+                bloom::document::LayerId::fromRaw(2) &&
+            !decoded.value()->compositions.front().graph.layerOutputs.back().parent,
+        "parent identity decodes and absence stays absent");
+}
+
 void testRejectsDuplicateLayerOutputs(Expectations& expectations) {
     const std::string boundaryJson =
         R"({"nodeId":"1","layerId":"1","name":"A","outputPort":"image"})";
@@ -2214,6 +2239,7 @@ int main() try {
     testRejectsDuplicateEdges(expectations);
     testRejectsUnknownEdgeDestinationKind(expectations);
     testRejectsUnsortedLayerOutputs(expectations);
+    testLayerParentMember(expectations);
     testRejectsDuplicateLayerOutputs(expectations);
     testAcceptsUnsortedLayerStackEntries(expectations);
 

@@ -38,13 +38,13 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.12`.
+The container version remains `1.0`; the current document schema is `1.13`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. Versioned artifacts through `1.11` remain checked as
-historical fixtures, with the current `1.12` contract also enforced by the canonical writer,
+historical fixtures, with the current `1.13` contract also enforced by the canonical writer,
 decoder tests. The manifest artifact still requires container `1.0`; its document
 declaration follows the current document minor. Every historical artifact from `1.0` through `1.11`,
 manifest and document, remains checked, and each version's checker validates what its own minor adds
@@ -723,7 +723,7 @@ Canonical ordering uses semantic values, never serialized decimal-string lexical
 Container and document versions use independent `{major, minor}` values:
 
 - unknown major versions are rejected without mutation
-- document 1.12 is the minimum loadable schema; earlier minors fail with
+- document 1.13 is the minimum loadable schema; earlier minors fail with
   `UnsupportedSchemaVersion`, without migration or mutation
 - a newer minor opens editable only when every unknown construct is additive, bounded, and
   provably preservable
@@ -787,7 +787,7 @@ schema-version path. Reconstruction applies the same registry validation to deco
 names the node ID. Old or future versions of a known kind are never silently upgraded, downgraded,
 or interpreted through another definition. No parameters or IDs are injected and no edges are dropped.
 
-The floor and canonical writer are **1.12**. This removal changes acceptance, not encoding, so
+The floor and canonical writer are **1.13**. This removal changes acceptance, not encoding, so
 it adds no schema minor. The numbered historical migration ladder remains as a record and as
 independently tested schema transforms; archive loading does not run it for documents below the
 floor. The 1.6 → 1.7 step now only advances its schema number; Solid parameter injection and Layer
@@ -1083,7 +1083,7 @@ the new artifacts to 1.5 and run the complete historical ladder.
 ## Content Bounds Introduced In Document 1.7
 
 Solid v2 introduced explicit Scalar width and height. Text v2, Layer v4, and Merge v2 use local
-content bounds. These are now the only supported definitions; the current 1.12 schema includes
+content bounds. These are now the only supported definitions; the current 1.13 schema includes
 those contracts together with per-component animation, image assets, and audio. Documents carrying
 older node versions fail validation. There is no coordinate conversion or compatibility evaluator.
 
@@ -1152,7 +1152,7 @@ Import, relink, removal, layer placement and background editing use ordinary com
 
 Document `1.11` is an additive schema step. Migration `1.10 → 1.11` changes only the root minor
 version and preserves every existing object, ID, parameter source, graph edge, asset and authored
-value. The canonical writer and manifest declaration emit `1.11`; the floor has since moved to `1.12`.
+value. The canonical writer and manifest declaration emit `1.11`; the floor has since moved to `1.13`.
 Earlier documents are rejected; the numbered transform is retained only as historical schema bookkeeping.
 
 An Audio asset uses the same stable `AssetRecord` identity and project-relative `AssetLocator` as
@@ -1174,7 +1174,7 @@ edges and decode to the same image graph and pixels.
 
 Document `1.12` is an additive schema step. Migration `1.11 -> 1.12` changes only the root minor
 version; it adds no member, because every `1.11` key holds the default handle. The canonical writer
-and manifest declaration emit `1.12`, which is also the load floor. Earlier documents are rejected;
+and manifest declaration emitted `1.12`; the load floor is now `1.13`. Earlier documents are rejected;
 the numbered transform is retained only as historical schema bookkeeping.
 
 A scalar keyframe and a component keyframe may each carry `outgoingHandle` and `incomingHandle`,
@@ -1195,3 +1195,15 @@ a default-handled key still samples bit-for-bit as it did. The legacy whole-valu
 The document and manifest artifacts are `document-1.12.schema.json` and
 `manifest-1.12.schema.json`, whose `keyframeHandle-1.12` definition is referenced from the scalar
 and the three component keyframe definitions; the historical `1.11` artifacts remain unchanged.
+
+## Layer Parenting In Document 1.13
+
+The canonical writer, manifest declaration and minimum loadable document schema are `1.13`.
+Earlier minors are rejected. The `1.12 -> 1.13` bookkeeping step changes only the root minor.
+The current artifacts are `document-1.13.schema.json` and `manifest-1.13.schema.json`.
+
+A Layer Output may append `parent` after `labelColor`, before retained unknown members.
+Its value is the canonical decimal-string LayerId of another boundary in the same composition.
+Absence means no parent and is omitted by the writer. Null, zero, unknown or cross-composition
+identities, self-parenting and parent cycles are refused. Parenting changes transform space only;
+it does not change Merge membership, stack order, opacity or visibility.

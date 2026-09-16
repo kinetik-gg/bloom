@@ -1405,6 +1405,8 @@ template <typename Keyframe, typename DecodeOne>
             if (node.findMember(key))
                 keys.push_back(key);
     }
+    if (state.documentMinor >= 13 && node.findMember("parent"))
+        keys.push_back("parent");
     std::vector<const JsonValue*> members;
     std::vector<RetainedJsonMember> trailing;
     if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
@@ -1431,6 +1433,12 @@ template <typename Keyframe, typename DecodeOne>
     std::string_view outputPortText;
     if (!decodeStringMember(*members[3], state, joinPath(path, "outputPort"), outputPortText)) {
         return false;
+    }
+    if (const auto* value = node.findMember("parent"); value && state.documentMinor >= 13) {
+        LayerId parent;
+        if (!decodeObjectId(*value, state, joinPath(path, "parent"), parent))
+            return false;
+        out.parent = parent;
     }
     out.nodeId = nodeId;
     out.layerId = layerId;

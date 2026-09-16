@@ -304,6 +304,13 @@ bool CanonicalGraph::eraseNode(const NodeId id) {
         return edge.source.nodeId == id || destinationNode(edge.destination) == id;
     });
     std::erase_if(layerStacks_, [id](const auto& stack) { return stack.nodeId() == id; });
+    for (auto& child : layerOutputs_) {
+        if (child.parent) {
+            const auto* parent = findLayer(*child.parent);
+            if (parent && parent->nodeId == id)
+                child.parent.reset();
+        }
+    }
     std::erase_if(layerOutputs_, [id](const auto& boundary) { return boundary.nodeId == id; });
     std::erase_if(nodes_, [id](const auto& node) { return node.id == id; });
     return true;
@@ -402,6 +409,27 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
         } else if (node->typeId != kLayerOutputNodeType) {
             result.add(ValidationCode::InvalidLayerBoundary, path + ".nodeId",
                        "Layer Output boundary node has the wrong node type");
+        }
+    }
+
+    // Parent identities are local to this composition, independently of Merge membership.
+    for (const auto& boundary : layerOutputs_) {
+        const auto path = "layerOutputs[" + std::to_string(boundary.layerId.value()) + "].parent";
+        std::unordered_set<LayerId> ancestors{boundary.layerId};
+        auto parent = boundary.parent;
+        while (parent) {
+            const auto found = boundariesByLayer.find(*parent);
+            if (found == boundariesByLayer.end()) {
+                result.add(ValidationCode::MissingReference, path,
+                           "Parent must be a layer in the same composition");
+                break;
+            }
+            if (!ancestors.insert(*parent).second) {
+                result.add(ValidationCode::InvalidLayerBoundary, path,
+                           "Layer parenting must not contain self-parenting or cycles");
+                break;
+            }
+            parent = found->second->parent;
         }
     }
 
