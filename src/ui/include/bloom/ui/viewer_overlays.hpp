@@ -75,9 +75,8 @@ struct ViewerOverlayOptions final {
 // Paints display-only viewer guides in screen space. The helper receives the active transformed
 // display rectangle, so every guide follows zoom and pan. Nothing here touches a render buffer or
 // document export; `bounds` is the immutable, already-evaluated selection diagnostic only.
-void paintViewerOverlays(QPainter& painter, const QRectF& canvasRect, const QRectF& displayRect,
-                         QSize compositionSize, double effectiveZoom,
-                         const ViewerOverlayOptions& options,
+void paintViewerOverlays(QPainter& painter, const QRectF& canvasRect, const ViewerMapping& mapping,
+                         double effectiveZoom, const ViewerOverlayOptions& options,
                          std::span<const runtime::EvaluatedOperationBounds> bounds);
 
 } // namespace bloom::ui

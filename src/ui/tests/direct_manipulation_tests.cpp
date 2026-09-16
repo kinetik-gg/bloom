@@ -731,6 +731,17 @@ void testPickingAtZoomAndPan(Expectations& expectations) {
                         "click picks the topmost overlapping layer at actual zoom and pan");
     expectations.expect(fixture.session.snapshot().revision() == revision,
                         "selection is session only");
+    auto* selector =
+        fixture.viewer.findChild<ui::kit::KDropdown*>(QStringLiteral("viewerObjectSelector"));
+    expectations.expect(selector && selector->currentText() == QStringLiteral("Top"),
+                        "object dropdown follows canvas selection");
+    fixture.session.selectLayer(fixture.session.timelineMerge()->entries().back().layerId);
+    QMouseEvent shiftPress(QEvent::MouseButtonPress, QPointF(210, 155), QPointF(210, 155),
+                           Qt::LeftButton, Qt::LeftButton, Qt::ShiftModifier);
+    QCoreApplication::sendEvent(&fixture.viewer, &shiftPress);
+    sendRelease(fixture.viewer, {210, 155});
+    expectations.expect(fixture.session.selectedNodes().size() == 2,
+                        "Shift click extends layer selection");
     QKeyEvent fit(QEvent::KeyPress, Qt::Key_0, Qt::ControlModifier);
     QCoreApplication::sendEvent(&fixture.viewer, &fit);
     const auto display = expectedDisplayRect(fixture.viewer, fixture.controller);
@@ -745,6 +756,40 @@ void testPickingAtZoomAndPan(Expectations& expectations) {
     expectations.expect(std::abs(roundTrip.x - point.x) < 1e-9 &&
                             std::abs(roundTrip.y - point.y) < 1e-9,
                         "mapping round trip");
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+}
+
+void testKeyboardNudgeAndDelete(Expectations& expectations) {
+    using namespace bloom;
+    GestureFixture fixture(makeTestProject("Keyboard"));
+    expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Layer"), {1, 1, 1, 1}),
+                        "add layer");
+    const auto id = fixture.session.parameterForSelection(document::kPositionParameterRole)->id;
+    const auto base = fixture.session.constantVec2Value(id);
+    const auto key = [&](const int code, const Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        QKeyEvent event(QEvent::KeyPress, code, modifiers);
+        QCoreApplication::sendEvent(&fixture.viewer, &event);
+    };
+    key(Qt::Key_Right);
+    key(Qt::Key_Down, Qt::ShiftModifier);
+    const auto moved = fixture.session.constantVec2Value(id);
+    expectations.expect(base && moved && moved->x == base->x + 1 && moved->y == base->y + 10,
+                        "nudge keys work consecutively without waiting for preview");
+    expectations.expect(fixture.session.undo(), "undo Shift nudge");
+    expectations.expect(fixture.session.undo(), "undo one-pixel nudge");
+    expectations.expect(fixture.session.constantVec2Value(id) == base,
+                        "each nudge is one transaction");
+    const auto first = fixture.session.selection().contextualLayer;
+    expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Second"), {1, 0, 0, 1}),
+                        "add second layer");
+    if (first)
+        fixture.session.selectLayer(*first, true);
+    key(Qt::Key_Delete);
+    expectations.expect(fixture.session.timelineMerge()->entries().empty(),
+                        "Delete removes all selected layers");
+    expectations.expect(fixture.session.undo(), "undo layer delete");
+    expectations.expect(fixture.session.timelineMerge()->entries().size() == 2,
+                        "one undo restores both deleted layers");
     reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
 }
 
@@ -868,6 +913,7 @@ int main(int argc, char** argv) {
     testDragAtNonIdentityZoomLandsExactlyUnderCursor(expectations);
     testDragAtNonIdentityZoomAndPanLandsExactlyUnderCursor(expectations);
     testPickingAtZoomAndPan(expectations);
+    testKeyboardNudgeAndDelete(expectations);
     testDragOnEmptyOrUnselectedDoesNothing(expectations);
     testMidDragResizeCancelsWithNoCommitAndNoOverrideLeft(expectations);
     testEscapeCancelsMidDrag(expectations);

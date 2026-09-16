@@ -206,8 +206,7 @@ void RamPreviewController::submitNextFrame() {
             if (context.isCancellationRequested()) {
                 return runtime::TaskResult<PreviewPreparationResultHandle>::cancelled();
             }
-            return preparation(snapshot, desiredIdentity, pixelStorageByteLimit, std::nullopt,
-                               context);
+            return preparation(snapshot, desiredIdentity, pixelStorageByteLimit, {}, context);
         });
     if (!submission.accepted()) {
         finish(false);

@@ -1576,6 +1576,17 @@ void testViewerHeaderCollapseIsStableAcrossResizes(Expectations& expectations) {
 
 void testViewerOverlayPixelsFollowTransformAndThreshold(Expectations& expectations) {
     using namespace bloom;
+    const auto overlayMapping = [](const QRectF& display) {
+        const auto formatResult = document::CompositionFormat::create(160, 120);
+        if (!formatResult)
+            std::abort();
+        const auto format = *formatResult;
+        const auto window = render::ImageWindow::create(0, 0, 160, 120);
+        const auto descriptor =
+            render::ReferenceDisplayBufferDescriptor::create(*window.value(), format.pixelAspect());
+        return ui::ViewerMapping{display, format, runtime::CompositionFormatResolution{},
+                                 format.pixelAspect(), *descriptor.value()};
+    };
     const auto background = ui::kit::color(ui::kit::Color::Background);
     const auto brightness = [](const QColor color) {
         return color.red() + color.green() + color.blue();
@@ -1590,7 +1601,7 @@ void testViewerOverlayPixelsFollowTransformAndThreshold(Expectations& expectatio
     {
         QPainter painter(&first);
         const QRectF display(40.0, 30.0, 320.0, 240.0);
-        ui::paintViewerOverlays(painter, QRectF(first.rect()), display, QSize(160, 120), 2.0,
+        ui::paintViewerOverlays(painter, QRectF(first.rect()), overlayMapping(display), 2.0,
                                 options, {});
     }
     const QPoint firstCentre(200, 150);
@@ -1603,7 +1614,7 @@ void testViewerOverlayPixelsFollowTransformAndThreshold(Expectations& expectatio
     {
         QPainter painter(&second);
         const QRectF display(10.0, 5.0, 640.0, 480.0);
-        ui::paintViewerOverlays(painter, QRectF(second.rect()), display, QSize(160, 120), 4.0,
+        ui::paintViewerOverlays(painter, QRectF(second.rect()), overlayMapping(display), 4.0,
                                 options, {});
     }
     const QPoint secondCentre(330, 245);
@@ -1616,20 +1627,58 @@ void testViewerOverlayPixelsFollowTransformAndThreshold(Expectations& expectatio
     below.fill(background);
     {
         QPainter painter(&below);
-        ui::paintViewerOverlays(painter, QRectF(below.rect()), QRectF(0, 0, 160, 120),
-                                QSize(160, 120), 3.0, gridOnly, {});
+        ui::paintViewerOverlays(painter, QRectF(below.rect()),
+                                overlayMapping(QRectF(0, 0, 160, 120)), 3.0, gridOnly, {});
     }
     QImage atThreshold(180, 140, QImage::Format_ARGB32);
     atThreshold.fill(background);
     gridOnly.pixelGrid = true;
     {
         QPainter painter(&atThreshold);
-        ui::paintViewerOverlays(painter, QRectF(atThreshold.rect()), QRectF(0, 0, 160, 120),
-                                QSize(160, 120), 4.0, gridOnly, {});
+        ui::paintViewerOverlays(painter, QRectF(atThreshold.rect()),
+                                overlayMapping(QRectF(0, 0, 160, 120)), 4.0, gridOnly, {});
     }
     expectations.expect(brightness(atThreshold.pixelColor(32, 60)) >
                             brightness(below.pixelColor(32, 60)) + 10,
                         "pixel grid is suppressed below 400% and appears at the threshold");
+    const auto mapping = overlayMapping(QRectF(40, 30, 320, 240));
+    const runtime::EvaluatedOperationBounds bound{{0, 0, 160, 120},
+                                                  {0, 0, 160, 120},
+                                                  document::LayerId::fromRaw(1),
+                                                  {{{0, 0}, {160, 0}, {160, 120}, {0, 120}}},
+                                                  {80, 60}};
+    const std::array selected{bound};
+    const auto handles = ui::viewerHandlePoints(mapping, bound);
+    for (const double dpr : {1.0, 1.5, 2.0}) {
+        QImage gizmo(static_cast<int>(420 * dpr), static_cast<int>(320 * dpr),
+                     QImage::Format_ARGB32);
+        gizmo.setDevicePixelRatio(dpr);
+        gizmo.fill(background);
+        {
+            QPainter painter(&gizmo);
+            ui::paintViewerOverlays(painter, QRectF(0, 0, 420, 320), mapping, 2.0, {}, selected);
+        }
+        for (const auto point : handles) {
+            const auto probe = point - QPointF(4, 4);
+            const auto pixel = gizmo.pixelColor(static_cast<int>(probe.x() * dpr),
+                                                static_cast<int>(probe.y() * dpr));
+            expectations.expect(brightness(pixel) > brightness(background) + 20,
+                                "every gizmo handle has a crisp visible edge at each DPR");
+        }
+    }
+    for (std::size_t i = 0; i < handles.size(); ++i) {
+        const auto hit = ui::hitTestViewer(mapping, handles[i], selected, selected);
+        expectations.expect(hit.region == ui::ViewerHitRegion::Scale &&
+                                hit.handle == static_cast<int>(i),
+                            "each handle has a matching scale hit region");
+    }
+    expectations.expect(ui::hitTestViewer(mapping, {30, 20}, selected, selected).region ==
+                            ui::ViewerHitRegion::Rotate,
+                        "outside-corner region rotates");
+    expectations.expect(
+        ui::hitTestViewer(mapping, mapping.toScreen(bound.anchor), selected, selected).region ==
+            ui::ViewerHitRegion::Anchor,
+        "anchor has priority over layer interior");
 }
 
 } // namespace

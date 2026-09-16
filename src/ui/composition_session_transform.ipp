@@ -45,7 +45,7 @@ CompositionSession::beginTransformInteraction(TransformGesture gesture, ViewerMa
             return TransformInteractionRejection::LockedLayer;
         if (std::holds_alternative<document::DriverBindingSource>(parameter->source))
             return TransformInteractionRejection::DrivenParameter;
-        const auto value = sampleParameterValue(*parameter, currentTime_);
+        const auto value = effectiveParameterValue(parameter);
         if (!value || (i < 3 ? !std::holds_alternative<document::Vec2d>(*value)
                              : !std::holds_alternative<double>(*value)))
             return TransformInteractionRejection::NoResolvableTransform;
@@ -105,11 +105,18 @@ void CompositionSession::updateTransformInteraction(const QPointF screenPoint,
     }
     const auto point = transformPoint(state.mapping.toComposition(screenPoint));
     const auto origin = transformPoint(state.mapping.toComposition(state.gesture.origin));
-    const auto delta = state.inverseParent.map(point - origin);
+    const auto screenDelta = screenPoint - state.gesture.origin;
+    const auto compositionDelta =
+        state.mapping.toComposition(state.mapping.displayRect.topLeft() + screenDelta);
+    const auto delta = state.inverseParent.map(transformPoint(compositionDelta));
     if (!std::isfinite(delta.x()) || !std::isfinite(delta.y())) {
         cancelTransformInteraction();
         return;
     }
+    double previousRotation = state.rotation;
+    if (state.gesture.kind == TransformGesture::Kind::Rotate && !state.overrides.empty())
+        if (const auto* value = std::get_if<double>(&state.overrides.front().value))
+            previousRotation = *value;
     state.overrides.clear();
     const auto put = [&](const std::size_t index, auto value) {
         state.overrides.push_back({state.baseRevision, state.parameters[index], value});
@@ -132,6 +139,10 @@ void CompositionSession::updateTransformInteraction(const QPointF screenPoint,
         break;
     }
     case TransformGesture::Kind::Rotate: {
+        if (delta.isNull() && previousRotation == state.rotation) {
+            put(3, state.rotation);
+            break;
+        }
         if (!state.gesture.bounds) {
             cancelTransformInteraction();
             return;
@@ -148,6 +159,9 @@ void CompositionSession::updateTransformInteraction(const QPointF screenPoint,
                                         from.x() * to.x() + from.y() * to.y()) *
                              degrees;
         double rotation = state.rotation + angle;
+        // Select the continuous turn nearest the previous preview; the frozen base still owns
+        // the angle calculation, while crossing atan2's seam never jumps by a full revolution.
+        rotation += 360.0 * std::round((previousRotation - rotation) / 360.0);
         if (modifiers.shift)
             rotation = std::round(rotation / 15.0) * 15.0;
         put(3, rotation);
@@ -229,7 +243,7 @@ bool CompositionSession::commitTransformInteraction() {
         const auto* parameter = composition()->parameters().find(override.parameterId);
         if (!parameter)
             return false;
-        const auto before = sampleParameterValue(*parameter, state.time);
+        const auto before = effectiveParameterValue(parameter);
         const bool same =
             before && std::visit(
                           [&](const auto& value) {

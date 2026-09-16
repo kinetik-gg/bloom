@@ -72,6 +72,42 @@
 namespace bloom::ui {
 namespace {
 
+// Keyboard steps use current authored ancestor linear transforms, so auto-repeat never waits
+// for the previous nudge's preview. Pivot translations do not affect displacement vectors.
+void nudgeViewerSelection(CompositionSession& session, const QPointF compositionDelta) {
+    const auto* layer = std::get_if<document::LayerId>(&session.selection().primary);
+    const auto position = session.effectiveVec2Value(document::kPositionParameterRole);
+    if (!layer || !position || !session.composition())
+        return;
+    QTransform parentWorld;
+    for (auto parent = session.parentOf(*layer); parent; parent = session.parentOf(*parent)) {
+        const auto boundary = session.boundaryNodeForLayer(*parent);
+        const auto* node = boundary ? session.composition()->graph().findNode(*boundary) : nullptr;
+        if (!node)
+            return;
+        const auto scaleBinding = std::ranges::find(node->parameters, document::kScaleParameterRole,
+                                                    &document::ParameterBinding::role);
+        const auto rotationBinding = std::ranges::find(
+            node->parameters, document::kRotationParameterRole, &document::ParameterBinding::role);
+        if (scaleBinding == node->parameters.end() || rotationBinding == node->parameters.end())
+            return;
+        const auto scale = session.effectiveVec2Value(scaleBinding->parameterId);
+        const auto rotation = session.effectiveScalarValue(rotationBinding->parameterId);
+        if (!scale || !rotation)
+            return;
+        QTransform local;
+        local.rotate(*rotation);
+        local.scale(scale->x, scale->y);
+        parentWorld *= local;
+    }
+    bool invertible = false;
+    const auto inverse = parentWorld.inverted(&invertible);
+    if (!invertible)
+        return;
+    const auto delta = inverse.map(compositionDelta);
+    (void)session.setSelectedPosition(position->x + delta.x(), position->y + delta.y());
+}
+
 // Wheel/menu zoom step (decision 2): each wheel notch or Zoom In/Out menu action multiplies the
 // current effective zoom by this factor (clamped into ViewTransform's [kMinZoom, kMaxZoom]). The
 // value itself moved to viewer_editor.hpp for task U4 (issue #123) so the Nodes canvas steps by
@@ -1911,11 +1947,20 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                                                           -kit::kCompositionFrameWidth));
                     if (geometry.has_value()) {
                         const auto bounds = previewController_.selectedLayerBounds();
-                        paintViewerOverlays(painter, frame, displayRect,
-                                            QSize(static_cast<int>(geometry->extent.width()),
-                                                  static_cast<int>(geometry->extent.height())),
-                                            effectiveZoom(displayRect, *geometry), overlayOptions_,
-                                            bounds);
+                        const auto descriptor = render::ReferenceDisplayBufferDescriptor::create(
+                            bufferView->displayWindow, bufferView->pixelAspect);
+                        if (descriptor && session_.composition()) {
+                            const ViewerMapping mapping{
+                                displayRect, session_.composition()->format(),
+                                displayedFrame->desiredIdentity().resolution,
+                                bufferView->pixelAspect, *descriptor.value()};
+                            painter.save();
+                            painter.setClipRect(contentRect());
+                            paintViewerOverlays(painter, frame, mapping,
+                                                effectiveZoom(displayRect, *geometry),
+                                                overlayOptions_, bounds);
+                            painter.restore();
+                        }
                     }
                 }
             }
@@ -2278,6 +2323,47 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
         return;
     }
     if (!dragActive_ && !panActive_) {
+
+        if (event->modifiers() == Qt::NoModifier || event->modifiers() == Qt::ShiftModifier) {
+            if (event->key() == Qt::Key_Delete) {
+                std::set<document::NodeId> nodes;
+                for (const auto node : session_.selectedNodes())
+                    if (session_.layerForNode(node))
+                        nodes.insert(node);
+                if (!nodes.empty()) {
+                    commands::Transaction transaction("Delete Layers",
+                                                      session_.snapshot().revision());
+                    transaction.emplace<commands::RemoveNodes>(session_.compositionId(),
+                                                               std::move(nodes));
+                    (void)session_.executeTransaction(std::move(transaction));
+                }
+                event->accept();
+                return;
+            }
+            QPointF delta;
+            const double step = event->modifiers().testFlag(Qt::ShiftModifier) ? 10.0 : 1.0;
+            switch (event->key()) {
+            case Qt::Key_Left:
+                delta.setX(-step);
+                break;
+            case Qt::Key_Right:
+                delta.setX(step);
+                break;
+            case Qt::Key_Up:
+                delta.setY(-step);
+                break;
+            case Qt::Key_Down:
+                delta.setY(step);
+                break;
+            default:
+                break;
+            }
+            if (!delta.isNull()) {
+                nudgeViewerSelection(session_, delta);
+                event->accept();
+                return;
+            }
+        }
 
         // Ctrl+0 fits and Ctrl+1 is actual size, in this canvas and in the node canvas alike (task
         // S1, item 8). F and Z are retired in both: the Adobe-standard pair is what an artist

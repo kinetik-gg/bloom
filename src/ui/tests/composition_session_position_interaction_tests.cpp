@@ -540,7 +540,7 @@ runtime::EvaluatedOperationBounds evaluatedBounds(ui::CompositionSession& sessio
                                            {.time = session.currentTime(),
                                             .output = compiled.plan->output(),
                                             .resolution = runtime::CompositionFormatResolution{},
-                                            .pixelStorageByteLimit = 64 * 1024 * 1024},
+                                            .pixelStorageByteLimit = std::size_t{64} * 1024 * 1024},
                                            {});
     require(result.frame() != nullptr, "gesture snapshot evaluates");
     const auto bounds = result.frame()->evaluatedBounds();
@@ -556,7 +556,10 @@ void requireNear(const document::Vec2d actual, const document::Vec2d expected,
 }
 
 void testParentedTransformsCommitAtomically() {
-    const auto format = *document::CompositionFormat::create(200, 200);
+    const auto formatResult = document::CompositionFormat::create(200, 200);
+    if (!formatResult)
+        fail("transform format is valid");
+    const auto format = *formatResult;
     auto project = document::makeNewProject("Transforms", "Main", time(10), format);
     const auto composition = project.initialCompositionId;
     document::Document document(std::move(project.project));
@@ -637,6 +640,14 @@ void testParentedTransformsCommitAtomically() {
             "Shift scales both axes uniformly");
     session.cancelTransformInteraction();
 
+    const auto beforeRotationClick = session.snapshot().revision();
+    require(
+        !session.beginTransformInteraction(
+            {ui::TransformGesture::Kind::Rotate, 0, origin, original}, mapping, {.shift = true}),
+        "begin Shift rotation without movement");
+    require(session.commitTransformInteraction() &&
+                session.snapshot().revision() == beforeRotationClick,
+            "Shift-click on a rotation zone creates no change");
     require(!session.beginTransformInteraction(
                 {ui::TransformGesture::Kind::Rotate, 0, origin, original}, mapping),
             "begin rotation");
@@ -650,6 +661,56 @@ void testParentedTransformsCommitAtomically() {
     for (std::size_t i = 0; i < 4; ++i)
         requireNear(evaluatedBounds(session, child).polygon[i], original.polygon[i],
                     "undo restores rotation");
+    origin = mapping.toScreen(original.polygon[0]);
+    require(!session.beginTransformInteraction(
+                {ui::TransformGesture::Kind::Rotate, 0, origin, original}, mapping),
+            "begin a full rotation");
+    QTransform parentLinear;
+    parentLinear.rotate(30);
+    parentLinear.scale(1.5, 0.75);
+    const QPointF pivot(original.anchor.x, original.anchor.y);
+    const auto ray =
+        parentLinear.inverted().map(QPointF(original.polygon[0].x, original.polygon[0].y) - pivot);
+    for (const double turn : {90.0, 180.0, 270.0, 360.0}) {
+        QTransform rotation;
+        rotation.rotate(turn);
+        const auto point = pivot + parentLinear.map(rotation.map(ray));
+        session.updateTransformInteraction(mapping.toScreen({point.x(), point.y()}));
+    }
+    const auto fullTurn = session.transformInteractionOverrides();
+    const auto* fullAngle = std::get_if<double>(&fullTurn.front().value);
+    require(fullAngle && std::abs(*fullAngle - 340) < 1e-8,
+            "rotation tracks a continuous full turn across the angle seam");
+    session.cancelTransformInteraction();
+
+    require(session.toggleKeyframe(document::kPositionParameterRole), "animate position");
+    require(session.toggleKeyframe(document::kScaleParameterRole), "animate scale");
+    require(session.setCurrentTime(time(2)), "move between authored keys");
+    session.selectLayer(child);
+    const auto animatedBounds = evaluatedBounds(session, child);
+    origin = mapping.toScreen(animatedBounds.polygon[0]);
+    require(!session.beginTransformInteraction(
+                {ui::TransformGesture::Kind::Scale, 0, origin, animatedBounds}, mapping),
+            "begin sampled animated scale");
+    session.updateTransformInteraction(origin + QPointF(-25, 14));
+    require(session.commitTransformInteraction(), "commit both animated parameters");
+    const auto keyCount = [&](const std::string_view role) {
+        const auto* parameter = session.parameterForSelection(role);
+        const auto* source =
+            parameter ? std::get_if<document::AnimationCurveSource>(&parameter->source) : nullptr;
+        require(source != nullptr, "parameter remains animated");
+        const auto* curve = std::get_if<document::Vec2AnimationCurve>(
+            session.composition()->animationCurves().find(source->curveId));
+        require(curve != nullptr, "Vec2 curve exists");
+        return curve->keyframes.size();
+    };
+    require(keyCount(document::kPositionParameterRole) == 2 &&
+                keyCount(document::kScaleParameterRole) == 2,
+            "one scale gesture inserts exact-time keys for both touched parameters");
+    require(session.undo(), "undo animated scale");
+    require(keyCount(document::kPositionParameterRole) == 1 &&
+                keyCount(document::kScaleParameterRole) == 1,
+            "one undo removes both newly inserted keys");
 }
 
 } // namespace

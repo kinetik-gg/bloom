@@ -1429,6 +1429,17 @@ void testOverrideVectorKindsAndLimits(Expectations& expectations) {
                             std::get<core::Color4d>(text->color.source) ==
                                 core::Color4d{0.2, 0.3, 0.4, 0.5},
                         "one request lowers string, scalar, integer, colour and vector overrides");
+    auto full = overrides;
+    full.push_back({{}, kTextLineHeight, 1.25});
+    full.push_back({{}, kTextLetterSpacing, 2.0});
+    full.push_back({{}, kFirstOpacity, 0.5});
+    expectations.expect(compile(textProject, registry, full).status ==
+                            runtime::SnapshotCompileStatus::Compiled,
+                        "exactly eight distinct overrides are accepted");
+    full.back().sourceRevision = document::Revision::fromRaw(99);
+    expectations.expect(compile(textProject, registry, full).status ==
+                            runtime::SnapshotCompileStatus::Failed,
+                        "a stale entry rejects the whole override vector");
     auto duplicate = overrides;
     duplicate.push_back(overrides.front());
     expectations.expect(compile(textProject, registry, duplicate).status ==
@@ -1445,7 +1456,7 @@ void testOverrideVectorKindsAndLimits(Expectations& expectations) {
     auto imageProject = makeProject(singleLayerOptions());
     auto* composition = imageProject.findComposition(kCompositionId);
     auto* node = composition->graph().findNode(kFirstSolidNode);
-    const auto* definition = registry.find("bloom.source.image", 1);
+    const auto* definition = registry.find("bloom.image-source", 1);
     require(definition != nullptr, "image definition exists");
     node->typeId = definition->key.typeId;
     node->schemaVersion = definition->key.schemaVersion;
