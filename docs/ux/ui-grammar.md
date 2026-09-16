@@ -198,6 +198,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `MultilineHeight` | 78 | Expanded text editors |
 | `PropertyLabelCompact` | 64 | Timeline property label |
 | `DialogTextWidth / DiagnosticHeight` | 520 / 140 | Read-only explanation / job diagnostics |
+| `SplitHandle` | 6 | Draggable divider hit zone (`KSplitHandle`); paints a `TimelineSeparator`-width hairline centered in it |
 
 `kKeyDiamondRadius` is 4.5 and `kNodeCanvasHalfExtent` is 262144 logical pixels. Ratios,
 centering divisors and wheel detents are unitless computations, not pixel dimensions.
@@ -259,9 +260,15 @@ are hidden is a picture of something nobody can edit. `timeline/keyframes-visibl
 `timeline/snapping` persist the other two header toggles; keys off hides both the key lanes and a
 collapsed layer's summary glyphs, and lane snapping is `snapping && !Shift`.
 
-Timeline lanes use `LanePadding` (12) on both sides of their time axis. `TimelineSeparator` (2)
-is Background between the layer column and lanes, including the header split. All timeline rows
-share TimelineRow pitch and a zero origin; the 28px KPropertyRow is centered within that pitch.
+Timeline lanes use `LanePadding` (12) on both sides of their time axis. The layer column/lanes split
+is a draggable `KSplitHandle` (`Size::SplitHandle`, 6, its hit zone; it paints a `TimelineSeparator`
+(2) Background hairline centered in that zone), used identically for the header split so the ruler
+and lane region always move together with the column headings and rows below them. It is clamped
+between the layer table's own minimum (name, Blending and Parent columns all still visible) and a
+maximum that leaves `PanelMinWidth` for the lanes, persists under `timeline/layer-column-width`
+(default: `TimelineEditor::layerColumnWidth()`), and a double-click resets it to that default. All
+timeline rows share TimelineRow pitch and a zero origin; the 28px KPropertyRow is centered within
+that pitch.
 Selected rows use SurfaceRaised with no edge stripe. Every populated and empty row uses a
 Background hairline separator, without alternating fills. The work-area band is BorderHover,
 with 10px-tall accent pills (`TimelineWorkArea`); cached-frame strips are muted.
@@ -273,6 +280,13 @@ value node driving the layer, titled by that node's display name. KPropertyRow's
 layout places the diamond or disclosure in a ToggleCell column, then the compact label and
 bounded controls; vector component labels live inside fields, three per row so a Vector 3 shows all
 of its components. New name: `timelinePropertyDisclosure`.
+
+The expanded layer's hierarchy nests one step per depth: the layer row itself (never indented), a
+group (Object/Transform/Source or a DRIVE-1 upstream node), that group's parameter rows, and an
+expanded parameter's own component rows each indent their label one `Spacing::M` step further right
+than the level above. Only the label column indents; the diamond and every value cell stay in the
+same fixed column regardless of depth, so a parameter row's and its own expanded component rows'
+editors always line up.
 
 A DRIVEN parameter row never shows an empty cell. It hides every editor it would otherwise carry --
 and its diamond, which has nothing to key -- and shows a Ghost KButton carrying `IconId::Link` and the

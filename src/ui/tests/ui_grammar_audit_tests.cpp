@@ -165,8 +165,10 @@ int run(int argc, char** argv) {
             expect(stack->mapTo(fixture.window.get(), QPoint(0, stack->rowTop(row))).y() ==
                        lanes->mapTo(fixture.window.get(), QPoint(0, lanes->rowTop(row))).y(),
                    stack, "D11 rows share exact global Y");
-        expect(lanes->x() - stack->geometry().right() - 1 == kit::px(kit::Size::TimelineSeparator),
-               lanes, "D10 lane divider token");
+        // task TL-FIX2: the divider is now the draggable KSplitHandle (Size::SplitHandle), which
+        // replaced the bare TimelineSeparator gap here.
+        expect(lanes->x() - stack->geometry().right() - 1 == kit::px(kit::Size::SplitHandle), lanes,
+               "D10 lane divider token");
     }
     auto* ruler = fixture.window->findChild<TimelineRuler*>();
     const auto axis = ruler->axisForWidth(ruler->width());

@@ -36,6 +36,7 @@ target_sources(
         kit/radio_group.cpp
         kit/range_selector.cpp
         kit/slider.cpp
+        kit/split_handle.cpp
         kit/switch_control.cpp
         kit/theme.cpp
         kit/title_bar.cpp
@@ -66,6 +67,7 @@ target_sources(
             include/bloom/ui/kit/radio_group.hpp
             include/bloom/ui/kit/range_selector.hpp
             include/bloom/ui/kit/slider.hpp
+            include/bloom/ui/kit/split_handle.hpp
             include/bloom/ui/kit/switch_control.hpp
             include/bloom/ui/kit/theme.hpp
             include/bloom/ui/kit/title_bar.hpp

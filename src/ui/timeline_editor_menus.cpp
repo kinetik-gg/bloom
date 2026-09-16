@@ -200,6 +200,10 @@ void TimelineEditor::createHeaderMenus() {
 void TimelineEditor::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
     refreshHeaderMenus();
+    // task TL-FIX2: the first show is the first point width() means anything, so this is where a
+    // persisted column width that no longer leaves Size::PanelMinWidth for the lanes (a narrower
+    // window since it was saved) finally gets clamped down to fit.
+    setLayerColumnWidth(layerColumnWidth_, /*persist=*/false);
 }
 
 void TimelineEditor::refreshHeaderMenus() {

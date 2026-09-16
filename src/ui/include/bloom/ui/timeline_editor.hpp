@@ -29,6 +29,10 @@ class QToolButton;
 
 namespace bloom::ui {
 
+namespace kit {
+class KSplitHandle;
+} // namespace kit
+
 class CompositionPreviewController;
 class CompositionSession;
 class TimelineColumnHeaders;
@@ -56,6 +60,11 @@ struct TimelineLayerEntry final {
     QColor labelColor{};
     enum class Kind { Layer, Group, Parameter, Component };
     Kind rowKind = Kind::Layer;
+    // task TL-FIX2: the row's nesting depth -- layer 0, group 1, parameter 2, component 3 (a
+    // DRIVE-1 upstream group and its parameters nest the same as Object/Transform/Source, at 1 and
+    // 2). Carried explicitly rather than derived from rowKind so a future reordering of Kind can
+    // never silently change what the layer stack indents by.
+    int depth = 0;
     document::ParameterId parameterId{};
     // The component this row addresses, for a vector or colour parameter split into per-component
     // rows. Empty for aggregate parameter rows.
@@ -81,9 +90,10 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
     TimelineEditor(CompositionSession& session, CompositionPreviewController& previewController,
                    QWidget* parent = nullptr);
 
-    // The fixed width of the LEFT layer-stack column, and therefore the exact x origin of the
-    // ruler, of every lane, and of the work-area strip above them. Exposed so a test can assert
-    // that alignment against one number instead of re-deriving the cell table.
+    // The DEFAULT width of the LEFT layer-stack column -- what a fresh install (or a reset
+    // double-click on the split handle, task TL-FIX2) starts from. The live width, which the
+    // artist can drag, is an instance member (layerColumnWidth_); this stays a static default so
+    // every caller that wants "the shipped width" keeps working unchanged.
     [[nodiscard]] static int layerColumnWidth();
     [[nodiscard]] static int propertyNameIndent();
 
@@ -93,10 +103,21 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
     [[nodiscard]] TimelineLaneRegion* laneRegionForTest() const noexcept { return lanes_; }
     [[nodiscard]] TimelineRuler* rulerForTest() const noexcept { return ruler_; }
     [[nodiscard]] QScrollBar* verticalScrollBarForTest() const noexcept { return scrollBar_; }
+    // task TL-FIX2. The draggable layer-table/lanes divider, and the live width it edits.
+    [[nodiscard]] kit::KSplitHandle* splitHandleForTest() const noexcept { return splitHandle_; }
+    [[nodiscard]] int layerColumnWidthForTest() const noexcept { return layerColumnWidth_; }
 
   private:
     EditorChromeSpec chrome_;
     void rebuild();
+    // task TL-FIX2. Applies `width` (clamped to the layer table's own minimum, and, once this
+    // widget's own width() is meaningful, to a maximum that leaves Size::PanelMinWidth for the
+    // lanes) to every widget that reads the split: the layer stack and its column headers, the
+    // EditorArea-hosted header split via chrome_.refreshSplit, and the bare-panel fallback
+    // header/navigator leading cells. Persists to QSettings when `persist` is true (a completed
+    // drag or a reset, never a live drag frame, so scrubbing the handle does not thrash disk).
+    void setLayerColumnWidth(int width, bool persist);
+    [[nodiscard]] int minLayerColumnWidth() const noexcept;
     void updateSelection();
     void updateHistoryActions();
     void createHeaderMenus();
@@ -145,6 +166,13 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
     // rather than a pair of signal handlers that could drift.
     QScrollBar* scrollBar_ = nullptr;
     QToolButton* addButton_ = nullptr;
+    // task TL-FIX2: the draggable layer-table/lanes divider, the live (persisted) column width it
+    // edits, and the width layerColumnWidth_ held at the start of the current drag gesture --
+    // dragged() reports a cumulative delta from press, not a per-move one, so applying it needs the
+    // gesture's starting point, not the ever-changing current width.
+    kit::KSplitHandle* splitHandle_ = nullptr;
+    int layerColumnWidth_ = layerColumnWidth();
+    int dragStartColumnWidth_ = 0;
 };
 
 // The LEFT layer-stack column (task T1), replacing the QTreeWidget this panel used to be: a painted

@@ -198,12 +198,18 @@ QWidget* EditorArea::buildSplitChrome(QWidget* left, QWidget* right, int split, 
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     auto* leading = new QWidget(row);
+    // task TL-FIX2: named so a live split (the timeline's draggable layer-table/lanes divider) can
+    // find and resize this cell without a full rebuild -- see
+    // TimelineEditor::setLayerColumnWidth().
+    leading->setObjectName(QStringLiteral("timelineHeaderFallbackSplit"));
     leading->setFixedWidth(split);
     auto* leadingLayout = new QHBoxLayout(leading);
     leadingLayout->setContentsMargins(0, 0, 0, 0);
     leadingLayout->addWidget(left);
     layout->addWidget(leading);
-    layout->addSpacing(kit::px(kit::Size::TimelineSeparator));
+    // task TL-FIX2: SplitHandle, matching the timeline body's own widened divider so the ruler
+    // this fallback header carries never drifts out of alignment with the lanes below it.
+    layout->addSpacing(kit::px(kit::Size::SplitHandle));
     layout->addWidget(right, 1);
     return row;
 }

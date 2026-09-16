@@ -3,6 +3,7 @@
 #include "properties_registry_row.hpp"
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLayoutItem>
 #include <QStackedLayout>
 #include <QVariant>
 #include <algorithm>
@@ -26,6 +27,21 @@ namespace {
     const std::array<QString, 4> captions{QStringLiteral("X"), QStringLiteral("Y"),
                                           QStringLiteral("Z"), QString{}};
     return captions[index];
+}
+
+// task TL-FIX2. The nesting step between consecutive depths (group -> parameter -> component):
+// Spacing::M, the existing gutter token nearest a typical single-level list indent -- small enough
+// that a component row's shrunken label (see bind()) still comfortably fits its one-letter
+// "X"/"R" caption.
+constexpr int kPropertyIndentStep = kit::px(kit::Spacing::M);
+
+// depth 1 (a group, directly under its layer) lands at TimelineEditor::propertyNameIndent() --
+// already reserved for exactly this and, until this task, unused; depth 2 (a parameter) and depth 3
+// (an expanded component) each add one more step. TimelineEditor::propertyNameIndent()'s own
+// formula keeps this strictly to the right of the layer row's own name text, so the row's depth
+// series -- layer, group, parameter, component -- indents by one consistent step throughout.
+[[nodiscard]] int propertyRowIndent(const int depth) {
+    return TimelineEditor::propertyNameIndent() + (depth - 1) * kPropertyIndentStep;
 }
 
 // The two nodes a layer's own rows already come from. Task DRIVE-1's upstream walk starts from
@@ -68,6 +84,7 @@ timelinePropertyEntries(const CompositionSession& session,
         const auto group = [&](const QString& key, const QString& title = {}) {
             auto entry = layer;
             entry.rowKind = TimelineLayerEntry::Kind::Group;
+            entry.depth = 1;
             entry.name = title.isEmpty() ? key : title;
             entry.group = key;
             groupOpen = !collapsedGroups.contains({layer.layerId, key});
@@ -85,6 +102,7 @@ timelinePropertyEntries(const CompositionSession& session,
                     continue;
                 auto entry = layer;
                 entry.rowKind = TimelineLayerEntry::Kind::Parameter;
+                entry.depth = 2;
                 entry.name = name;
                 entry.role = binding.role;
                 entry.parameterId = binding.parameterId;
@@ -108,6 +126,7 @@ timelinePropertyEntries(const CompositionSession& session,
                     for (int index = 0; index < count; ++index) {
                         auto child = entry;
                         child.rowKind = TimelineLayerEntry::Kind::Component;
+                        child.depth = 3;
                         child.component = color ? colorNames[static_cast<std::size_t>(index)]
                                                 : vectorNames[static_cast<std::size_t>(index)];
                         child.name = componentLabel(static_cast<std::size_t>(index), color);
@@ -216,6 +235,15 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
     setObjectName("timelinePropertyRow");
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
+    // task TL-FIX2: explicit zero, not the style-default QHBoxLayout spacing -- this layout now
+    // carries two items (the indent spacer below, then the row), and propertyRowIndent()'s exact
+    // pixel math assumes nothing but the spacer separates them from this widget's own left edge.
+    layout->setSpacing(0);
+    // task TL-FIX2: the depth indent, applied fresh on every bind() (this row is pooled and
+    // re-bound to entries at different depths as the artist scrolls). Zero at construction; a
+    // group/parameter/component entry always sets it before this row is shown.
+    indent_ = new QSpacerItem(0, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+    layout->addSpacerItem(indent_);
     label_->setObjectName("timelinePropertyLabel");
     diamond_->setObjectName("timelinePropertyDiamond");
     auto* indicator = new QWidget(this);
@@ -245,11 +273,12 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
         auto* field = fields_[i] = new kit::KValueField(cell);
         field->setObjectName("timelinePropertyValue");
         field->setCompact(true);
-        auto* diamond = componentDiamonds_[i] = new KeyframeDiamond(session_, "", cell);
-        diamond->setObjectName("timelineComponentDiamond");
-        cellLayout->addWidget(diamond);
-        cell->setFixedWidth(kit::px(kit::Size::PropertiesFieldWidth) +
-                            kit::px(kit::Size::IconSmall));
+        // task TL-FIX2: no per-component diamond in a parameter row's value cells any more -- the
+        // row's own diamond_ (next to the label) is the parameter's single tri-state diamond, and a
+        // component's own diamond only exists on its expanded component row (diamond_ again, bound
+        // with entry.component set there). Painting one here too was the KEY-2 regression this task
+        // fixes: a vector/colour parameter row showed an aggregate diamond AND one per component.
+        cell->setFixedWidth(kit::px(kit::Size::PropertiesFieldWidth));
         cellLayout->addWidget(field, 1);
 
         connect(field, &kit::KValueField::valueChanged, this, [this, i] {
@@ -356,7 +385,20 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
                 QVariant::fromValue(static_cast<qulonglong>(entry.parameterId.value())));
     setProperty("role", QString::fromStdString(entry.role));
     const bool group = entry.rowKind == TimelineLayerEntry::Kind::Group;
-    label_->setMaximumWidth(group ? QWIDGETSIZE_MAX : kit::px(kit::Size::PropertyLabelCompact));
+    const bool componentRow = entry.component.has_value();
+    // task TL-FIX2: nest by depth -- layer 0 (drawn by TimelineLayerRow, never this class), group
+    // 1, parameter 2, component 3. The spacer moves the whole indicator+label group right by
+    // propertyRowIndent(depth); a component row's label shrinks by exactly the step the spacer grew
+    // by since its parameter row, so BOTH land their value columns (diamond_ and the cells) at the
+    // same x. A group's own label stays unbounded (below) since it has no value column to align.
+    const int depth = std::max(1, entry.depth);
+    indent_->changeSize(propertyRowIndent(depth), 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+    layout()->invalidate();
+    const int labelWidth = componentRow
+                               ? kit::px(kit::Size::PropertyLabelCompact) - kPropertyIndentStep
+                               : kit::px(kit::Size::PropertyLabelCompact);
+    label_->setFixedWidth(labelWidth);
+    label_->setMaximumWidth(group ? QWIDGETSIZE_MAX : labelWidth);
     label_->setText(entry.name);
     disclosure_->setVisible(group);
     disclosure_->setIcon(kit::icon(
@@ -384,6 +426,12 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
     }
     bindDriven(false);
     if (!group) {
+        // task TL-FIX2: this IS the component's own diamond on an expanded component row (entry.
+        // component set) -- the automation name the grammar documents for it is
+        // timelineComponentDiamond, distinct from a parameter row's aggregate
+        // timelinePropertyDiamond, even though both are painted by this one widget.
+        diamond_->setObjectName(componentRow ? QStringLiteral("timelineComponentDiamond")
+                                             : QStringLiteral("timelinePropertyDiamond"));
         diamond_->setComponent(entry.component);
         diamond_->setRole(entry.role);
         diamond_->setParameterId(entry.parameterId);
@@ -419,26 +467,13 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         const auto scalar = session_.effectiveScalarValue(entry.parameterId);
         const auto color = session_.effectiveColorValue(entry.parameterId);
         const bool components = vector.has_value() || vector3.has_value() || color.has_value();
-        const bool componentRow = entry.component.has_value();
         const int count = componentRow ? 1 : color ? 4 : vector3 ? 3 : vector ? 2 : scalar ? 1 : 0;
         disclosure_->setVisible(components && !componentRow);
-        const std::array vectorNames{
-            document::AnimationComponent::X, document::AnimationComponent::Y,
-            document::AnimationComponent::Z, document::AnimationComponent::Z};
-        const std::array colorNames{
-            document::AnimationComponent::Red, document::AnimationComponent::Green,
-            document::AnimationComponent::Blue, document::AnimationComponent::Alpha};
         for (std::size_t i = 0; i < fields_.size(); ++i) {
             cells_[i]->setVisible(static_cast<int>(i) < count);
             components_[i]->hide();
             fields_[i]->setLabel(components && !componentRow ? componentLabel(i, color.has_value())
                                                              : QString{});
-            componentDiamonds_[i]->setRole(entry.role);
-            componentDiamonds_[i]->setParameterId(entry.parameterId);
-            componentDiamonds_[i]->setComponent(color ? colorNames[i] : vectorNames[i]);
-            componentDiamonds_[i]->refresh();
-            componentDiamonds_[i]->setVisible(components && !componentRow &&
-                                              static_cast<int>(i) < count);
             fields_[i]->setAccessibleName(
                 components ? entry.name + QLatin1Char(' ') + componentLabel(i) : entry.name);
         }
