@@ -1551,6 +1551,20 @@ void testPropertyRows(Expectations& expectations) {
                             "every child shares its lane y");
     }
     expectations.expect(positions == 1, "Position is one parameter row");
+    int fonts = 0;
+    for (auto* propertyRow : editor.findChildren<QWidget*>("timelinePropertyRow")) {
+        if (!propertyRow->isVisible() ||
+            propertyRow->property("role").toString() !=
+                QString::fromStdString(std::string(document::kTextFontParameterRole)))
+            continue;
+        ++fonts;
+        const auto* dropdown = propertyRow->findChild<ui::kit::KDropdown*>(
+            QStringLiteral("timelinePropertyAlignment"));
+        expectations.expect(dropdown != nullptr && dropdown->count() == 4 &&
+                                dropdown->currentText() == QStringLiteral("DejaVu Sans"),
+                            "Font is a generic timeline dropdown with the four faces in order");
+    }
+    expectations.expect(fonts == 1, "the expanded text source has one Font parameter row");
     for (auto* row : editor.findChildren<QWidget*>("timelinePropertyRow")) {
         if (!row->isVisible() ||
             row->property("role").toString() !=

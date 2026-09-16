@@ -266,6 +266,37 @@ void testBlendingDropdownOnALayerCardCommits() {
            "and it is one undoable command");
 }
 
+void testFontDropdownOnATextCardUsesTheGenericSelector() {
+    Fixture f;
+    expect(f.session.addTextLayer(QStringLiteral("Text"), QStringLiteral("Bloom")),
+           "text layer fixture");
+    const auto layerId = f.session.composition()->graph().layerOutputs().front().layerId;
+    const auto source = f.session.directSourceNodeForLayer(layerId);
+    expect(source.has_value(), "the text layer resolves its source node");
+    if (!source.has_value())
+        return;
+    f.session.selectNode(*source);
+    QCoreApplication::processEvents();
+
+    kit::KDropdown* dropdown = nullptr;
+    auto* sourceCard = f.card(*source);
+    if (sourceCard != nullptr) {
+        for (auto* child : sourceCard->childItems()) {
+            auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child);
+            if (proxy == nullptr || proxy->widget() == nullptr)
+                continue;
+            for (auto* candidate : proxy->widget()->findChildren<kit::KDropdown*>())
+                if (candidate->accessibleName() == QStringLiteral("Font"))
+                    dropdown = candidate;
+        }
+    }
+    expect(dropdown != nullptr, "the text card hosts the generic operand selector for Font");
+    if (dropdown == nullptr)
+        return;
+    expect(dropdown->count() == 4 && dropdown->currentText() == QStringLiteral("DejaVu Sans"),
+           "the text card offers all four faces in the shared order");
+}
+
 // Item 7, Merge. One ordered multi-input for the whole stack, with the slot model untouched
 // beneath.
 void testMergeRendersOneOrderedMultiInput() {
@@ -409,6 +440,7 @@ int main(int argc, char** argv) {
         bloom::ui::test::testSocketsBrightenAndDimDuringALinkDrag();
         bloom::ui::test::testNodeTypesAreNamedForWhatTheyAre();
         bloom::ui::test::testBlendingDropdownOnALayerCardCommits();
+        bloom::ui::test::testFontDropdownOnATextCardUsesTheGenericSelector();
         bloom::ui::test::testMergeRendersOneOrderedMultiInput();
         bloom::ui::test::testEnterAndDoubleClickRenameALayerCard();
     } catch (const std::exception& error) {
