@@ -570,49 +570,75 @@ frames contribute nothing. The counter is a count, not a measured frame rate.
 footer says nothing; during one it reports zero explicitly. Ordinary scrubbing while stopped does
 not affect the count.
 
-## Direct Manipulation And Preview Overrides
+## Direct Manipulation
 
-An active position interaction is session-only state:
+The Select tool picks the topmost evaluated Layer polygon under the pointer in authored stack
+order. Shift-click extends the shared selection; an empty canvas click clears it. The header object
+selector, timeline and properties read that same session selection. Picking uses content polygons,
+not per-pixel alpha. The primary layer owns the transform gesture; simultaneous multi-layer
+transforms remain deferred.
+
+`ViewerMapping` is a frozen value with both screen-to-composition and composition-to-screen
+conversion. Its display rectangle includes Fit or custom zoom/pan, pixel aspect and proxy display
+geometry. It also captures composition format, evaluation resolution and display descriptor.
+Only a frame for the current composition, revision and time can start a gesture. Resize, DPI,
+format, proxy, display-descriptor or view-transform changes invalidate the frozen mapping.
+
+A selection box has eight scale handles, an anchor crosshair, and rotation hit regions outside its
+corners. Hover identifies move, scale, rotate and anchor regions. The viewer takes focus on click.
+Gesture begin samples position, anchor, scale and rotation at exact session time, including between
+keys; it freezes the revision, target IDs, evaluated local bounds/world polygon and pointer origin.
+A missing or singular transform, locked layer, or driven transform parameter refuses the gesture.
+No evaluation or media work runs on the UI thread.
+
+- **Move:** convert total screen displacement through `ViewerMapping`, then the inverse parent
+  linear transform, and add it to the sampled position.
+- **Scale:** corner and edge handles update the corresponding scale axes. Position compensates so
+  the opposite handle stays fixed. Shift applies a common scale factor; Alt uses the anchor as
+  the fixed point. Negative scale remains valid.
+- **Rotate:** measure the pointer angle around the evaluated anchor in parent space. Shift snaps
+  the resulting authored rotation to 15-degree steps. Turns remain continuous across the angle
+  seam. Positive rotation is clockwise with Y down.
+- **Anchor:** transform the displacement into local content coordinates and change the anchor
+  offset. Compensating position in the same gesture keeps the world polygon unchanged.
+
+The parent linear inverse is reconstructed from evaluated polygon edges and the child's sampled
+rotation/scale. This includes rotated, mirrored and non-uniformly scaled ancestors and resulting
+shear. See [Transform Parenting](layer-graph-model.md#transform-parenting). Pointer updates derive
+values from the frozen bases and total displacement, never rounded intermediate edits.
+
+The preview channel is session-only and reusable by future shape/text interactions:
 
 ```text
-PositionInteraction = {
-  base document revision,
-  target ParameterId and LayerId,
-  exact current time,
-  base Vec2d value,
-  current Vec2d override
-}
+SnapshotCompileRequest.parameterOverrides = [ // at most eight distinct parameters
+  { sourceRevision, parameterId, value: double | Vec2d | Color4d | int64 | string }
+]
 ```
 
-Gesture begin freezes a non-empty mapping rectangle, composition format, proxy, pixel aspect, and
-display descriptor for the current composition. A missing current-composition mapping rejects the
-gesture. Resize, DPI, format, proxy, pixel-aspect, or display-descriptor changes cancel it; a stale
-frame from another composition is never used as a mapping source.
+Admission checks the captured revision, target existence, reachability and unique ownership, then
+registered schema, kind and value domain. Source and Layer nodes accept animatable parameters or
+constant String, Integer, Boolean and Color4d parameters. Boolean values use integer zero/one;
+other integers are refused for Boolean targets. Duplicate targets, a ninth override and driven
+sources are refused. A driver is never hidden or disconnected by this channel.
 
-Pointer motion derives the override from the base value plus total gesture displacement, not from a
-chain of already-rounded intermediate positions. Given the frozen fitted composition rectangle:
+Accepted overrides become request-local constant records read by the shared lowering functions,
+including all source operand kinds. Their dormant curves are omitted. The immutable document is
+unchanged; compiled plan and operation caches bypass overridden requests. Preview controller and
+pipeline carry the complete vector only on armed Interactive requests, using the existing 16 ms
+cadence and cancellation/newest-request policy. Release or cancellation removes the vector.
 
-```text
-compositionDx = screenDx / displayWidth  * compositionWidth
-compositionDy = screenDy / displayHeight * compositionHeight
-```
+Release writes every changed parameter through the common constant/keyframe/driven command branch
+in **one** transaction: `Move Layer`, `Scale Layer`, `Rotate Layer` or `Move Anchor`. Constants are
+rewritten, animated values update or insert exact-time keys, and driven edits are refused. One undo
+restores all touched parameters and their prior animation state. Zero-change gestures create no
+history. Escape, secondary-button cancel, capture loss, window deactivation, resize, composition or
+time changes, stale revisions and invalidated mappings clear live state without a command.
 
-The display rectangle already accounts for proxy scaling and pixel aspect. Positive X is right and
-positive Y is down, matching the evaluator's position contract.
-
-`SnapshotCompileRequest` carries zero or one typed parameter override in version 1. Admission checks
-captured revision, target existence, reachability, schema/value kind/domain, then source kind, in
-that order. Constant and compatible animation sources accept the override; `DriverBinding` rejects
-it explicitly. Compilation lowers an accepted override as a constant only for that request and
-never hides or disconnects a driver. The complete override value and target enter deep plan/cache
-identity.
-
-On release, a constant position receives one set-constant transaction. An animated position updates
-the exact-time key or inserts one. A zero move commits nothing. Escape, secondary-button cancel,
-capture loss, a stale revision, a missing target, a parameter-source change, a composition switch,
-or a frozen-mapping change clears the override and creates no command. A locked layer refuses
-translation interaction before an override is created. Multi-selection transforms and constraint
-modes remain deferred.
+Arrow keys nudge the primary layer by one composition pixel; Shift uses ten. Each key event is one
+transaction and samples current authored ancestor transforms so repeated keys do not wait for
+preview completion. Delete removes the selected layers through the existing RemoveNodes command
+in one transaction. All bindings and geometry use Qt's portable input and painting surfaces on
+Linux, macOS and Windows.
 
 ## Required Verification
 
