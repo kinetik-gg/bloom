@@ -1047,6 +1047,7 @@ void TimelineLaneRegion::setEntries(std::vector<TimelineLayerEntry> entries) {
         keyframeArea_->setGeometry(rect());
         keyframePanel_->setGeometry(rect());
         graphView_ = new TimelineGraphView(session_, ruler_, this);
+        graphView_->setSnappingEnabled(snapping_);
         graphView_->setGeometry(rect());
         graphView_->setVisible(graphEditor_);
     }
@@ -1150,6 +1151,8 @@ void TimelineLaneRegion::setSnappingEnabled(const bool enabled) {
     snapping_ = enabled;
     if (keyframePanel_)
         keyframePanel_->setSnappingEnabled(enabled);
+    if (graphView_)
+        graphView_->setSnappingEnabled(enabled);
 }
 
 std::optional<QRect> TimelineLaneRegion::clipBarRect(const int row) const {

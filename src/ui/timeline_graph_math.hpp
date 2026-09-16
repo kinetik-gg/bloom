@@ -49,8 +49,9 @@ inline constexpr double kGraphViewportPadding = 0.1;
 // a zero-height window has no pixel mapping at all.
 [[nodiscard]] GraphValueViewport fitValueViewport(std::span<const double> values);
 
-// The "nice" tick step for `span` at roughly `targetCount` ticks: 1, 2 or 5 times a power of ten,
-// so labels read as round numbers at every zoom.
+// The "nice" tick step for `span` at AT MOST `targetCount` intervals: 1, 2 or 5 times a power of
+// ten, rounded UP from span/targetCount, so labels read as round numbers at every zoom and the
+// gutter never has to fit more of them than it was sized for.
 [[nodiscard]] double niceTickStep(double span, int targetCount);
 
 // The tick values inside `viewport` at `step`, lowest first.

@@ -100,6 +100,12 @@ add_executable(bloom_timeline_frame_math_test
 add_executable(bloom_timeline_ruler_test
     timeline_ruler_tests.cpp
 )
+add_executable(bloom_timeline_graph_math_test
+    timeline_graph_math_tests.cpp
+)
+add_executable(bloom_timeline_graph_view_test
+    timeline_graph_view_tests.cpp
+)
 add_executable(bloom_composition_session_position_interaction_test
     composition_session_position_interaction_tests.cpp
 )
@@ -179,6 +185,13 @@ target_link_libraries(bloom_task_monitor_test PRIVATE bloom_ui)
 target_link_libraries(bloom_viewer_editor_test PRIVATE bloom_ui)
 target_link_libraries(bloom_timeline_frame_math_test PRIVATE bloom_ui)
 target_link_libraries(bloom_timeline_ruler_test PRIVATE bloom_ui)
+target_link_libraries(bloom_timeline_graph_math_test PRIVATE bloom_ui)
+target_link_libraries(bloom_timeline_graph_view_test PRIVATE bloom_ui)
+# The graph editor's arithmetic is a PRIVATE header of src/ui (it has no public consumers), so
+# these two tests reach it through the module's own source root rather than a relative path that
+# would bypass the include-root boundary.
+target_include_directories(bloom_timeline_graph_math_test PRIVATE ..)
+target_include_directories(bloom_timeline_graph_view_test PRIVATE ..)
 target_link_libraries(bloom_composition_session_position_interaction_test PRIVATE bloom_ui)
 target_link_libraries(bloom_direct_manipulation_test PRIVATE bloom_ui)
 target_link_libraries(bloom_frame_export_controller_test PRIVATE bloom_ui)
@@ -222,6 +235,8 @@ bloom_enable_warnings(bloom_task_monitor_test)
 bloom_enable_warnings(bloom_viewer_editor_test)
 bloom_enable_warnings(bloom_timeline_frame_math_test)
 bloom_enable_warnings(bloom_timeline_ruler_test)
+bloom_enable_warnings(bloom_timeline_graph_math_test)
+bloom_enable_warnings(bloom_timeline_graph_view_test)
 bloom_enable_warnings(bloom_composition_session_position_interaction_test)
 bloom_enable_warnings(bloom_direct_manipulation_test)
 bloom_enable_warnings(bloom_frame_export_controller_test)
@@ -505,6 +520,22 @@ bloom_add_test(
     COMMAND bloom_timeline_ruler_test
     LABELS ui integration animation
     TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.timeline_graph_math
+    COMMAND bloom_timeline_graph_math_test
+    LABELS ui unit animation
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.timeline_graph_view
+    COMMAND bloom_timeline_graph_view_test
+    LABELS ui integration animation
+    TIMEOUT 60
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
