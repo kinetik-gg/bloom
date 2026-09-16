@@ -31,6 +31,20 @@
         }
     }
 
+    for (const auto* node : reachableNodes_) {
+        const auto boundary = layerOutputs_.find(node->id);
+        if (boundary == layerOutputs_.end())
+            continue;
+        const auto parentId = boundary->second->parent;
+        if (!parentId)
+            continue;
+        const auto* parent = composition_->graph().findLayer(*parentId);
+        if (parent && indegree.contains(parent->nodeId)) {
+            outgoing[parent->nodeId].push_back(node->id);
+            ++indegree[node->id];
+        }
+    }
+
     auto laterId = [](const document::NodeId left, const document::NodeId right) {
         return left.value() > right.value();
     };
@@ -82,7 +96,8 @@
         if (cancelled()) {
             return std::nullopt;
         }
-        if (isMuted(node->id) || emptyImages_.contains(node->id))
+        if ((isMuted(node->id) || emptyImages_.contains(node->id)) &&
+            !transformParents_.contains(node->id))
             continue;
         for (const auto& binding : node->parameters) {
             if (cancelled()) {
@@ -250,7 +265,7 @@ lower(const std::vector<document::NodeId>& order) {
         // the image operation variant or alter image evaluation semantics.
         if (definition->second->lowering == runtime::NodeLoweringKind::AudioSource)
             continue;
-        if (emptyImages_.contains(nodeId))
+        if (emptyImages_.contains(nodeId) && !transformParents_.contains(nodeId))
             continue;
         if (isValueNode(nodeId))
             continue;
@@ -269,7 +284,7 @@ lower(const std::vector<document::NodeId>& order) {
             indices.emplace(nodeId, source->second);
             continue;
         }
-        if (isMuted(nodeId) &&
+        if (isMuted(nodeId) && !transformParents_.contains(nodeId) &&
             definition->second->lowering != runtime::NodeLoweringKind::LayerStack &&
             definition->second->lowering != runtime::NodeLoweringKind::CompositionOutput) {
             const auto input = firstImageInput(*node);
@@ -301,7 +316,15 @@ lower(const std::vector<document::NodeId>& order) {
             operations.emplace_back(runtime::CompiledCompositionOutput{nodeId, empty});
             continue;
         }
-        auto operation = lowerNode(*node, *definition->second, indices);
+        // An empty transform parent still owns authored transform values. Give it an empty
+        // image input without adding document nodes or Merge membership.
+        std::optional<runtime::OperationIndex> emptyParentInput;
+        if (emptyImages_.contains(nodeId) && transformParents_.contains(nodeId)) {
+            emptyParentInput = runtime::OperationIndex::fromRaw(operations.size());
+            operations.emplace_back(runtime::CompiledMerge{nodeId, {}});
+        }
+        auto operation = emptyParentInput ? lowerLayerOutput(*node, indices, emptyParentInput)
+                                          : lowerNode(*node, *definition->second, indices);
         if (!operation.has_value()) {
             return {};
         }
@@ -601,9 +624,12 @@ lowerText(const document::NodeRecord& node) {
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
 lowerLayerOutput(const document::NodeRecord& node,
-                 const std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+                 const std::unordered_map<document::NodeId, runtime::OperationIndex>& indices,
+                 std::optional<runtime::OperationIndex> emptyInput = std::nullopt) {
     using namespace document;
-    const auto input = findInputOperation(node.id, kLayerOutputContentInputPort, indices);
+    const auto input = emptyInput
+                           ? emptyInput
+                           : findInputOperation(node.id, kLayerOutputContentInputPort, indices);
     const auto boundary = layerOutputs_.find(node.id);
     const auto* positionBinding = findParameterBinding(node, kPositionParameterRole);
     const auto* anchorBinding = findParameterBinding(node, kAnchorParameterRole);
@@ -637,6 +663,16 @@ lowerLayerOutput(const document::NodeRecord& node,
         addTopologyFailure(node.id, "Validated Layer Output could not be lowered.");
         return std::nullopt;
     }
+    std::optional<runtime::OperationIndex> parentIndex;
+    if (boundary->second->parent) {
+        const auto* parent = composition_->graph().findLayer(*boundary->second->parent);
+        const auto found = parent ? indices.find(parent->nodeId) : indices.end();
+        if (found == indices.end()) {
+            addTopologyFailure(node.id, "Layer parent must be lowered before its child.");
+            return std::nullopt;
+        }
+        parentIndex = found->second;
+    }
     return runtime::CompiledLayerOutput{node.id,
                                         boundary->second->layerId,
                                         *input,
@@ -649,7 +685,8 @@ lowerLayerOutput(const document::NodeRecord& node,
                                         blendMode.value_or(core::kDefaultBlendMode),
                                         boundary->second->inPoint,
                                         boundary->second->endPoint(composition_->duration()),
-                                        drivenBlendMode};
+                                        drivenBlendMode,
+                                        parentIndex};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

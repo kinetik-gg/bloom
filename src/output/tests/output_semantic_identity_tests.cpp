@@ -35,6 +35,8 @@
 #include <vector>
 
 namespace {
+// Plan grammar 4 adds the Layer Output parent reference. Identity digests are independently
+// derived for plan 4, animation 2, evaluator 6 and primitives 5; pixel digests are unchanged.
 
 namespace color = bloom::color;
 namespace core = bloom::core;
@@ -66,11 +68,11 @@ using namespace std::chrono_literals;
 // animation slice moved the plan to 2 and sampling to 2; the values below are the oracle's output
 // for that combination (evaluator/primitive 5, plan 2, animation 2), never the implementation's.
 constexpr std::string_view kExpectedPngAnalysisDigest =
-    "326f8f7866f1efc61eb7de0ee4c4ce74f381854d58d87f0ec6d126766f1849b6";
+    "1cc8777d68ee48ea8fdca54b73ea2c9443c38e2604fe8d1afd5ba720e01b7263";
 constexpr std::string_view kExpectedPngOutputDigest =
-    "963f8a92382056bbe20a1ef98bd84f5e7b64812a55a9461703feffb5699393a6";
+    "f3a950929da654cf1d38e3df95897a13c05731f1fe923074a24152e8fdc9b744";
 constexpr std::string_view kExpectedExrOutputDigest =
-    "a2cd61a295670dfec434f82e540f5a5b5372251155b60b362d71683ccb089c88";
+    "9765507f1eb6cc0dfdc1715bd77e7fadb8b9ffc8cca4686ff105724f25170d2b";
 constexpr std::uint64_t kExpectedPngPreimageBytes = 669;
 constexpr std::uint64_t kExpectedExrPreimageBytes = 567;
 

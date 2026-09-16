@@ -136,3 +136,129 @@ void testContentBoundsEdgeCases(Expectations& expectations) {
     expectations.expect(!evaluator.evaluate(incomplete, requestFor(*incomplete), {}).frame(),
                         "hostile plans cannot omit a required dimension identity");
 }
+
+void testParentedBounds(Expectations& expectations) {
+    runtime::CpuCompositionEvaluator evaluator;
+    auto definition = twoSolidPlan()->copyDefinition();
+    definition.format = format(24, 24);
+    auto& parent = std::get<runtime::CompiledLayerOutput>(definition.operations[1]);
+    parent.position.source = document::Vec2d{8, 6};
+    parent.rotation.source = 90.0;
+    parent.opacity.source = 0.0;
+    parent.inPoint = core::RationalTime::fromInteger(1);
+    auto& child = std::get<runtime::CompiledLayerOutput>(definition.operations[3]);
+    child.parent = runtime::OperationIndex::fromRaw(1);
+    child.position.source = document::Vec2d{3, 2};
+    auto& merge = std::get<runtime::CompiledMerge>(definition.operations[4]);
+    merge.entries.erase(merge.entries.begin());
+    const auto plan = publishPlan(definition);
+    const auto result = evaluator.evaluate(plan, requestFor(*plan), {});
+    expectations.expect(result.frame() != nullptr,
+                        "rotated parent evaluates outside its own range");
+    if (!result.frame())
+        return;
+    const std::array<document::Vec2d, 4> polygon{{{8, 5}, {8, 9}, {6, 9}, {6, 5}}};
+    expectations.expect(
+        result.frame()->evaluatedBounds()[3].polygon == polygon &&
+            result.frame()->evaluatedBounds()[3].anchor == document::Vec2d{7, 7} &&
+            result.frame()->evaluatedBounds()[3].output == runtime::ContentBounds{6, 5, 8, 9},
+        "parent times child matrix pins rotated polygon, anchor and bounds numerically");
+    auto sampledPixel = render::Rgba32f::transparent();
+    expectations.expect(
+        pixel(result, 7, 6, sampledPixel) && sampledPixel.blue() == 1.0F &&
+            sampledPixel.alpha() == 1.0F && pixel(result, 2, 2, sampledPixel) &&
+            sampledPixel.alpha() == 0.0F,
+        "child pixels land inside the composed rotated bounds without inheriting parent opacity");
+    const auto cached = evaluator.evaluate(plan, requestFor(*plan), {});
+    expectations.expect(cached.frame() && cached.frame()->operationCacheStatistics().hits ==
+                                              plan->operations().size(),
+                        "cached parent transform still reaches the child");
+    parent.rotation.source = 0.0;
+    const auto changed = publishPlan(definition);
+    const auto changedResult = evaluator.evaluate(changed, requestFor(*changed), {});
+    expectations.expect(
+        changedResult.frame() &&
+            changedResult.frame()->evaluatedBounds()[3].anchor == document::Vec2d{9, 7} &&
+            std::ranges::find(changedResult.frame()->operationCacheStatistics().evaluatedNodes,
+                              child.sourceNodeId) !=
+                changedResult.frame()->operationCacheStatistics().evaluatedNodes.end(),
+        "changing invisible parent resolved rotation invalidates child cache entry");
+
+    auto animated = definition;
+    auto& animatedParent = std::get<runtime::CompiledLayerOutput>(animated.operations[1]);
+    animatedParent.rotation.source = runtime::ScalarCurveIndex::fromRaw(0);
+    animated.scalarCurves.push_back(
+        {document::AnimationCurveId::fromRaw(900),
+         {{document::KeyframeId::fromRaw(900), core::RationalTime{}, 0.0,
+           runtime::CompiledKeyframeInterpolation::Linear},
+          {document::KeyframeId::fromRaw(901), core::RationalTime::fromInteger(1), 90.0,
+           runtime::CompiledKeyframeInterpolation::Linear}}});
+    const auto animatedPlan = publishPlan(animated);
+    auto animatedRequest = requestFor(*animatedPlan);
+    const auto first = evaluator.evaluate(animatedPlan, animatedRequest, {});
+    animatedRequest.time = core::RationalTime::fromInteger(1);
+    const auto last = evaluator.evaluate(animatedPlan, animatedRequest, {});
+    expectations.expect(
+        first.frame() && last.frame() &&
+            first.frame()->evaluatedBounds()[3].anchor == document::Vec2d{9, 7} &&
+            last.frame()->evaluatedBounds()[3].anchor == document::Vec2d{7, 7} &&
+            animatedPlan->operationTimeDependent(runtime::OperationIndex::fromRaw(3)),
+        "animated parent values and time dependence propagate through the child cache key");
+
+    auto sheared = definition;
+    auto& scaledParent = std::get<runtime::CompiledLayerOutput>(sheared.operations[1]);
+    scaledParent.rotation.source = 90.0;
+    scaledParent.scale.source = document::Vec2d{2, 1};
+    std::get<runtime::CompiledLayerOutput>(sheared.operations[3]).rotation.source = 45.0;
+    const auto shearedPlan = publishPlan(sheared);
+    const auto shearResult = evaluator.evaluate(shearedPlan, requestFor(*shearedPlan), {});
+    const double rootTwo = std::sqrt(2.0);
+    const std::array<document::Vec2d, 4> shearPolygon{{{7 + 3 / rootTwo, 8 - rootTwo},
+                                                       {7 - 1 / rootTwo, 8 + 3 * rootTwo},
+                                                       {7 - 3 / rootTwo, 8 + rootTwo},
+                                                       {7 + 1 / rootTwo, 8 - 3 * rootTwo}}};
+    bool matchesShear = shearResult.frame() != nullptr;
+    if (shearResult.frame())
+        for (std::size_t i = 0; i < shearPolygon.size(); ++i) {
+            const auto actual = shearResult.frame()->evaluatedBounds()[3].polygon[i];
+            matchesShear = matchesShear && std::abs(actual.x - shearPolygon[i].x) < 1e-12 &&
+                           std::abs(actual.y - shearPolygon[i].y) < 1e-12;
+        }
+    expectations.expect(matchesShear, "nonuniformly scaled parent retains composed shear");
+
+    parent.rotation.source = 90.0;
+    auto grandparent = parent;
+    grandparent.sourceNodeId = document::NodeId::fromRaw(900);
+    grandparent.layerId = document::LayerId::fromRaw(900);
+    grandparent.position.source = document::Vec2d{12, 1};
+    grandparent.rotation.source = 0.0;
+    grandparent.position.id = document::ParameterId::fromRaw(900);
+    grandparent.anchor.id = document::ParameterId::fromRaw(901);
+    grandparent.scale.id = document::ParameterId::fromRaw(902);
+    grandparent.rotation.id = document::ParameterId::fromRaw(903);
+    grandparent.opacity.id = document::ParameterId::fromRaw(904);
+    grandparent.blendModeParameterId = document::ParameterId::fromRaw(905);
+    auto chainedParent = parent;
+    chainedParent.parent = runtime::OperationIndex::fromRaw(1);
+    auto chainedChild = child;
+    chainedChild.input = runtime::OperationIndex::fromRaw(3);
+    chainedChild.parent = runtime::OperationIndex::fromRaw(2);
+    definition.operations = {
+        definition.operations[0],
+        grandparent,
+        chainedParent,
+        definition.operations[2],
+        chainedChild,
+        runtime::CompiledMerge{kStackNode,
+                               {{kSlotB, kLayerB, runtime::OperationIndex::fromRaw(4)}}},
+        runtime::CompiledCompositionOutput{kOutputNode, runtime::OperationIndex::fromRaw(5)}};
+    definition.output = runtime::OperationIndex::fromRaw(6);
+    const auto chain = publishPlan(definition);
+    const auto chainResult = evaluator.evaluate(chain, requestFor(*chain), {});
+    expectations.expect(
+        chainResult.frame() &&
+            chainResult.frame()->evaluatedBounds()[4].anchor == document::Vec2d{17, 7} &&
+            chainResult.frame()->evaluatedBounds()[4].output ==
+                runtime::ContentBounds{16, 5, 18, 9},
+        "grandparent translation composes with parent rotation and child local placement");
+}

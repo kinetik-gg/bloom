@@ -157,6 +157,10 @@ class CompilePass final {
                 return false;
             }
             layerOutputs_.emplace(boundary.nodeId, &boundary);
+            if (boundary.parent) {
+                if (const auto* parent = composition_->graph().findLayer(*boundary.parent))
+                    transformParents_.insert(parent->nodeId);
+            }
         }
         return true;
     }
@@ -263,6 +267,12 @@ class CompilePass final {
                 continue;
             }
             reachableNodes.emplace(nodeId, node);
+            if (const auto boundary = layerOutputs_.find(nodeId);
+                boundary != layerOutputs_.end() && boundary->second->parent) {
+                const auto* parent = composition_->graph().findLayer(*boundary->second->parent);
+                if (parent)
+                    pending.push_back(parent->nodeId);
+            }
             if (const auto iterator = incoming.find(nodeId); iterator != incoming.end()) {
                 for (const auto* edge : iterator->second) {
                     if (cancelled()) {
@@ -498,7 +508,7 @@ class CompilePass final {
             if (cancelled()) {
                 return;
             }
-            if (isMuted(node->id))
+            if (isMuted(node->id) && !transformParents_.contains(node->id))
                 continue;
             const auto definition = definitions_.find(node->id);
             if (definition == definitions_.end()) {
@@ -560,7 +570,7 @@ class CompilePass final {
             if (cancelled()) {
                 return;
             }
-            if (isMuted(node->id))
+            if (isMuted(node->id) && !transformParents_.contains(node->id))
                 continue;
             const auto definition = definitions_.find(node->id);
             if (definition == definitions_.end()) {
@@ -861,6 +871,7 @@ class CompilePass final {
     std::size_t valueOutputCount_ = 0;
     std::multimap<DiagnosticKey, runtime::CompileDiagnostic> diagnostics_;
     std::unordered_set<document::NodeId> emptyImages_;
+    std::unordered_set<document::NodeId> transformParents_;
     bool hasFailure_ = false;
     bool hasUnsupported_ = false;
 };

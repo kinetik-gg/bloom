@@ -634,6 +634,44 @@ void testValueGraphCycleRefusal(Expectations& expectations) {
                         "a parameter driven by its own node is refused as a graph cycle");
 }
 
+void testParentOrder(Expectations& expectations) {
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+    for (const bool empty : {false, true}) {
+        auto project = makeProject();
+        auto& composition = *project.findComposition(kCompositionId);
+        auto& graph = composition.graph();
+        graph.findLayer(kFirstLayer)->parent = kSecondLayer;
+        if (empty) {
+            require(graph.eraseEdge(kSecondSourceEdge), "empty parent source removed");
+            graph.findLayer(kSecondLayer)->enabled = false;
+            composition.nodeLayout()[kSecondLayerNode].muted = true;
+        }
+        const auto result = compile(std::move(project), registry);
+        expectations.expect(result.plan && result.diagnostics.empty(),
+                            "parent later in stack compiles, including an empty disabled parent");
+        if (!result.plan)
+            continue;
+        const auto operations = result.plan->operations();
+        bool found = false;
+        for (std::size_t index = 0; index < operations.size(); ++index) {
+            if (const auto* child = std::get_if<runtime::CompiledLayerOutput>(&operations[index]);
+                child && child->layerId == kFirstLayer) {
+                found = child->parent && child->parent->value() < index &&
+                        std::get<runtime::CompiledLayerOutput>(operations[child->parent->value()])
+                                .layerId == kSecondLayer;
+            }
+            if (const auto* merge = std::get_if<runtime::CompiledMerge>(&operations[index]);
+                merge && merge->entries.size() == 2)
+                expectations.expect(merge->entries[0].layerId == kFirstLayer &&
+                                        merge->entries[1].layerId == kSecondLayer,
+                                    "parent ordering preserves stack order");
+        }
+        expectations.expect(found, "parent operation precedes child despite later stack position");
+    }
+}
+
 void testNestedMergeCompilation(Expectations& expectations) {
     using namespace document;
     auto project = makeProject(singleLayerOptions());
@@ -1489,6 +1527,7 @@ int main() {
         testLayerFlagsAndRangeLowering(expectations);
         testMuteKindsAndPixels(expectations);
         testMuteFirstImageInput(expectations);
+        testParentOrder(expectations);
         testNestedMergeCompilation(expectations);
         testRegistryMustBeFrozen(expectations);
         testValueGraphDriverResolution(expectations);

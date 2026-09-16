@@ -2020,6 +2020,7 @@ int main(int argc, char* argv[]) {
             benchmarkOperationMemoization(expectations);
             return expectations.failures() == 0 ? 0 : 1;
         }
+        testParentedBounds(expectations);
         testContentBounds(expectations);
         testContentBoundsEdgeCases(expectations);
         testOperationCacheLifecycle(expectations);

@@ -41,7 +41,7 @@ namespace bloom::runtime {
 // new alternative appearing. Both numbers below also enter ProcessFrameIdentity and therefore every
 // cached/exported frame digest (src/output/process_frame_semantic_identity.cpp), which is why the
 // identity goldens were re-derived in the same change.
-inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 3;
+inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 4;
 // Task S5 bumped this 1 -> 2: KeyframeInterpolation gained EaseInOut, so sampling can now produce a
 // value no version-1 sampler could, and the Color4 curve table added a third sampled value kind.
 inline constexpr std::uint32_t kAnimationSamplingSemanticsVersion = 2;
@@ -251,6 +251,8 @@ struct CompiledLayerOutput {
     // the parameter holds no constant at all because it is driven. See CompiledText::drivenContent
     // for why the driver sits beside the constant rather than inside a typed operand.
     std::optional<ValueOutputIndex> drivenBlendMode{};
+    // Plan v4: authored transform dependency, evaluated before this boundary.
+    std::optional<OperationIndex> parent{};
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
 

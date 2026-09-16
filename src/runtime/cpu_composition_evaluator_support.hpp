@@ -79,7 +79,11 @@ void forEachInput(const CompiledOperation& operation, Function&& function) {
                    [](const CompiledSolid&) {},
                    [](const CompiledText&) {},
                    [](const CompiledImageSource&) {},
-                   [&function](const CompiledLayerOutput& layer) { function(layer.input); },
+                   [&function](const CompiledLayerOutput& layer) {
+                       function(layer.input);
+                       if (layer.parent)
+                           function(*layer.parent);
+                   },
                    [&function](const CompiledMerge& stack) {
                        for (const auto& entry : stack.entries) {
                            function(entry.input);
