@@ -132,6 +132,7 @@ struct KeyEntry final {
     // Task S5, item 2: the key's OUTGOING interpolation, so the lane can give each mode its own
     // glyph instead of one diamond for everything.
     document::KeyframeInterpolation outgoingInterpolation = document::KeyframeInterpolation::Linear;
+    std::optional<document::AnimationComponent> component{};
 };
 
 [[nodiscard]] QString
@@ -227,6 +228,11 @@ class TimelineKeyframeRow final : public QWidget {
         connect(&session_, &CompositionSession::snapshotChanged, this, [this] { update(); });
     }
 
+    void setComponent(std::optional<document::AnimationComponent> component) {
+        component_ = component;
+        update();
+    }
+
     void setRuler(TimelineRuler& ruler) {
         ruler_ = &ruler;
         connect(&ruler, &TimelineRuler::axisChanged, this, [this] { update(); });
@@ -264,14 +270,21 @@ class TimelineKeyframeRow final : public QWidget {
         paintPlayheadLine(painter, *axis, session_.currentTime(), height());
 
         const qreal centerY = height() / 2.0;
-        for (const auto& key : collectKeys()) {
-            if (key.time.toSeconds() < axis->t0 || key.time.toSeconds() >= axis->t1) {
+        const auto keys = collectKeys();
+        std::optional<core::RationalTime> paintedTime;
+        for (const auto& key : keys) {
+            if (key.time.toSeconds() < axis->t0 || key.time.toSeconds() >= axis->t1 ||
+                paintedTime == key.time)
                 continue;
-            }
+            paintedTime = key.time;
             const qreal x = axis->pixelForTime(key.time);
-            const bool selected = std::ranges::find(session_.selection().keyframes,
-                                                    KeyframeSelection{curveId_, key.id}) !=
-                                  session_.selection().keyframes.end();
+            const bool selected = std::ranges::any_of(keys, [&](const auto& candidate) {
+                return candidate.time == key.time &&
+                       std::ranges::find(
+                           session_.selection().keyframes,
+                           KeyframeSelection{curveId_, candidate.id, candidate.component}) !=
+                           session_.selection().keyframes.end();
+            });
             // Decision 2: "gold diamonds, Accent selection" -- Keyframe is the token every other
             // keyframe indicator in the interface already uses (PropertiesEditor's own
             // updateKeyframeIndicator()) for exactly this "gold" meaning.
@@ -328,7 +341,7 @@ class TimelineKeyframeRow final : public QWidget {
         if (!closest.has_value()) {
             return;
         }
-        session_.selectKeyframe(curveId_, *closest);
+        selectAtKey(*closest, event->modifiers().testFlag(Qt::ShiftModifier));
         if (auto* panel = parentWidget()) {
             // TimelineKeyframePanel accepts focus so a real Delete/Backspace press reaches it after
             // a click selects a key.
@@ -402,7 +415,7 @@ class TimelineKeyframeRow final : public QWidget {
         if (!hit.has_value()) {
             return;
         }
-        session_.selectKeyframe(curveId_, *hit);
+        selectAtKey(*hit, false);
         const auto current = session_.selectedKeyframeInterpolation();
         const bool isFinal = session_.selectedKeyframeIsFinal();
         const auto keys = collectKeys();
@@ -542,16 +555,51 @@ class TimelineKeyframeRow final : public QWidget {
             return entries;
         }
         std::visit(
-            [&entries](const auto& curve) {
-                entries.reserve(curve.keyframes.size());
-                for (const auto& key : curve.keyframes) {
-                    entries.push_back({key.id, key.time, key.outgoingInterpolation});
+            [&](const auto& curve) {
+                using Curve = std::decay_t<decltype(curve)>;
+                const auto append = [&](const auto& keys,
+                                        std::optional<document::AnimationComponent> component) {
+                    entries.reserve(entries.size() + keys.size());
+                    for (const auto& key : keys)
+                        entries.push_back({key.id, key.time, key.outgoingInterpolation, component});
+                };
+                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>)
+                    append(curve.keyframes, std::nullopt);
+                else {
+                    const std::array vectorNames{document::AnimationComponent::X,
+                                                 document::AnimationComponent::Y,
+                                                 document::AnimationComponent::Z};
+                    const std::array colorNames{
+                        document::AnimationComponent::Red, document::AnimationComponent::Green,
+                        document::AnimationComponent::Blue, document::AnimationComponent::Alpha};
+                    for (std::size_t index = 0; index < curve.components.size(); ++index) {
+                        const auto component = std::is_same_v<Curve, document::Color4AnimationCurve>
+                                                   ? colorNames[index]
+                                                   : vectorNames[index];
+                        if (!component_ || component_ == component)
+                            append(curve.components[index].keyframes, component);
+                    }
                 }
             },
             *record);
+        std::ranges::stable_sort(entries, {}, &KeyEntry::time);
         return entries;
     }
 
+    void selectAtKey(document::KeyframeId id, bool extend) {
+        const auto keys = collectKeys();
+        const auto found = std::ranges::find(keys, id, &KeyEntry::id);
+        if (found == keys.end())
+            return;
+        auto selected = extend ? session_.selection().keyframes : std::vector<KeyframeSelection>{};
+        for (const auto& key : keys) {
+            const KeyframeSelection item{curveId_, key.id, key.component};
+            if (key.time == found->time && std::ranges::find(selected, item) == selected.end())
+                selected.push_back(item);
+        }
+        session_.selectKeyframes(selected);
+    }
+    std::optional<document::AnimationComponent> component_;
     TimelineRuler* ruler_ = nullptr;
     CompositionSession& session_;
     QString label_;
@@ -985,12 +1033,14 @@ void TimelineKeyframePanel::setGridEntries(const std::vector<TimelineLayerEntry>
     gridMode_ = true;
     gridRows_.clear();
     gridParameters_.clear();
+    gridComponents_.clear();
     gridScroll_ = scrollOffset;
     std::vector<document::AnimationCurveId> curves;
     std::vector<int> indices;
     const auto* composition = session_.composition();
     for (std::size_t i = 0; i < entries.size(); ++i) {
-        if (entries[i].rowKind != TimelineLayerEntry::Kind::Parameter)
+        if (entries[i].rowKind != TimelineLayerEntry::Kind::Parameter &&
+            entries[i].rowKind != TimelineLayerEntry::Kind::Component)
             continue;
         document::AnimationCurveId curveId{};
         const auto* parameter =
@@ -1002,6 +1052,7 @@ void TimelineKeyframePanel::setGridEntries(const std::vector<TimelineLayerEntry>
         curves.push_back(curveId);
         indices.push_back(static_cast<int>(i));
         gridParameters_.push_back(entries[i].parameterId);
+        gridComponents_.push_back(entries[i].component);
     }
     gridRows_ = indices;
     if (curves != lastCurveIds_) {
@@ -1027,6 +1078,13 @@ void TimelineKeyframePanel::setGridEntries(const std::vector<TimelineLayerEntry>
     for (std::size_t i = 0; i < rows_.size(); ++i) {
         const QRect geometry(0, indices[i] * kTimelineRowHeight - scrollOffset, width(),
                              kTimelineRowHeight);
+        rows_[i]->setComponent(gridComponents_[i]);
+        rows_[i]->setProperty("parameterId", QVariant::fromValue(static_cast<qulonglong>(
+                                                 gridParameters_[i].value())));
+        rows_[i]->setProperty("component", gridComponents_[i]
+                                               ? static_cast<int>(gridComponents_[i].value_or(
+                                                     document::AnimationComponent::X))
+                                               : -1);
         rows_[i]->setGeometry(geometry);
         rows_[i]->show();
         mask += geometry;

@@ -128,7 +128,9 @@ double TimelineGraphView::bandHeight() const noexcept {
 void TimelineGraphView::setEntries(const std::vector<TimelineLayerEntry>& entries) {
     parameters_.clear();
     for (const auto& entry : entries)
-        if (entry.rowKind == TimelineLayerEntry::Kind::Parameter)
+        if ((entry.rowKind == TimelineLayerEntry::Kind::Parameter ||
+             entry.rowKind == TimelineLayerEntry::Kind::Component) &&
+            std::ranges::find(parameters_, entry.parameterId) == parameters_.end())
             parameters_.push_back(entry.parameterId);
     compiledValid_ = false;
     refreshCurves();
