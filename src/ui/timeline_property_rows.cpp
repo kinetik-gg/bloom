@@ -20,9 +20,11 @@
 namespace bloom::ui {
 namespace {
 // The three component captions a multi-component value cell can carry, in authored order.
-[[nodiscard]] QString componentLabel(const std::size_t index) {
-    const std::array<QString, 3> captions{QStringLiteral("X"), QStringLiteral("Y"),
-                                          QStringLiteral("Z")};
+[[nodiscard]] QString componentLabel(const std::size_t index, const bool color = false) {
+    if (color)
+        return QStringLiteral("RGBA").mid(static_cast<qsizetype>(index), 1);
+    const std::array<QString, 4> captions{QStringLiteral("X"), QStringLiteral("Y"),
+                                          QStringLiteral("Z"), QString{}};
     return captions[index];
 }
 
@@ -47,7 +49,8 @@ std::vector<TimelineLayerEntry>
 timelinePropertyEntries(const CompositionSession& session,
                         const std::vector<TimelineLayerEntry>& layers,
                         const std::set<document::LayerId>& expanded,
-                        const std::set<std::pair<document::LayerId, QString>>& collapsedGroups) {
+                        const std::set<std::pair<document::LayerId, QString>>& collapsedGroups,
+                        const std::set<document::ParameterId>& expandedParameters) {
     std::vector<TimelineLayerEntry> rows;
     const auto* composition = session.composition();
     if (!composition)
@@ -85,7 +88,33 @@ timelinePropertyEntries(const CompositionSession& session,
                 entry.name = name;
                 entry.role = binding.role;
                 entry.parameterId = binding.parameterId;
+                const auto* parameter = composition->parameters().find(binding.parameterId);
+                const bool color =
+                    parameter && document::isColor4AnimatableSchemaKey(parameter->schemaKey);
+                const int count =
+                    color                                                                    ? 4
+                    : parameter && document::isVec3AnimatableSchemaKey(parameter->schemaKey) ? 3
+                    : parameter && document::isVec2AnimatableSchemaKey(parameter->schemaKey) ? 2
+                                                                                             : 0;
+                entry.expanded = count > 0 && expandedParameters.contains(binding.parameterId);
                 rows.push_back(entry);
+                if (entry.expanded && session.driverBindingFor(binding.parameterId) == nullptr) {
+                    const std::array vectorNames{document::AnimationComponent::X,
+                                                 document::AnimationComponent::Y,
+                                                 document::AnimationComponent::Z};
+                    const std::array colorNames{
+                        document::AnimationComponent::Red, document::AnimationComponent::Green,
+                        document::AnimationComponent::Blue, document::AnimationComponent::Alpha};
+                    for (int index = 0; index < count; ++index) {
+                        auto child = entry;
+                        child.rowKind = TimelineLayerEntry::Kind::Component;
+                        child.component = color ? colorNames[static_cast<std::size_t>(index)]
+                                                : vectorNames[static_cast<std::size_t>(index)];
+                        child.name = componentLabel(static_cast<std::size_t>(index), color);
+                        child.expanded = false;
+                        rows.push_back(child);
+                    }
+                }
             }
         };
         if (const auto boundary = session.boundaryNodeForLayer(layer.layerId)) {
@@ -190,13 +219,15 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
     auto* indicators = new QStackedLayout(indicator);
     indicators->setStackingMode(QStackedLayout::StackAll);
     indicators->setContentsMargins(0, 0, 0, 0);
-    indicators->addWidget(diamond_);
+
     disclosure_ = new kit::KIconButton(indicator);
     disclosure_->setObjectName("timelinePropertyDisclosure");
     disclosure_->setFixedSize(kit::px(kit::Size::ToggleCell), kit::px(kit::Size::ToggleCell));
     indicators->addWidget(disclosure_);
     connect(disclosure_, &QToolButton::clicked, this, [this] {
-        if (toggleGroup)
+        if (entry_.rowKind == TimelineLayerEntry::Kind::Parameter && toggleParameter)
+            toggleParameter(entry_.parameterId);
+        else if (toggleGroup)
             toggleGroup(entry_.layerId, entry_.group);
     });
     for (std::size_t i = 0; i < fields_.size(); ++i) {
@@ -211,12 +242,16 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
         auto* field = fields_[i] = new kit::KValueField(cell);
         field->setObjectName("timelinePropertyValue");
         field->setCompact(true);
-        cell->setFixedWidth(kit::px(kit::Size::PropertiesFieldWidth));
+        auto* diamond = componentDiamonds_[i] = new KeyframeDiamond(session_, "", cell);
+        diamond->setObjectName("timelineComponentDiamond");
+        cellLayout->addWidget(diamond);
+        cell->setFixedWidth(kit::px(kit::Size::PropertiesFieldWidth) +
+                            kit::px(kit::Size::IconSmall));
         cellLayout->addWidget(field, 1);
 
-        connect(field, &kit::KValueField::valueChanged, this, [this] {
+        connect(field, &kit::KValueField::valueChanged, this, [this, i] {
             if (!binding_)
-                commitValues();
+                commitValues(i);
         });
     }
     blending_->setObjectName("timelinePropertyBlending");
@@ -264,9 +299,10 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
         if (isVisible() && session_.driverBindingFor(entry_.parameterId) != nullptr)
             bind(entry_);
     });
-    auto* row = new kit::KPropertyRow(
-        label_, indicator,
-        {cells_[0], cells_[1], cells_[2], blending_, alignment_, color_, driven_}, this, true);
+    auto* row = new kit::KPropertyRow(label_, indicator,
+                                      {diamond_, cells_[0], cells_[1], cells_[2], cells_[3],
+                                       blending_, alignment_, color_, driven_},
+                                      this, true);
     layout->addWidget(row, 0, Qt::AlignVCenter);
     connect(blending_, &kit::KDropdown::currentIndexChanged, this, [this](int index) {
         if (binding_ || index < 0)
@@ -345,6 +381,7 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
     }
     bindDriven(false);
     if (!group) {
+        diamond_->setComponent(entry.component);
         diamond_->setRole(entry.role);
         diamond_->setParameterId(entry.parameterId);
         diamond_->refresh();
@@ -378,17 +415,32 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         const auto vector3 = session_.effectiveVec3Value(entry.parameterId);
         const auto scalar = session_.effectiveScalarValue(entry.parameterId);
         const auto color = session_.effectiveColorValue(entry.parameterId);
-        const bool components = vector.has_value() || vector3.has_value();
-        const int count = vector3 ? 3 : vector ? 2 : scalar ? 1 : 0;
+        const bool components = vector.has_value() || vector3.has_value() || color.has_value();
+        const bool componentRow = entry.component.has_value();
+        const int count = componentRow ? 1 : color ? 4 : vector3 ? 3 : vector ? 2 : scalar ? 1 : 0;
+        disclosure_->setVisible(components && !componentRow);
+        const std::array vectorNames{
+            document::AnimationComponent::X, document::AnimationComponent::Y,
+            document::AnimationComponent::Z, document::AnimationComponent::Z};
+        const std::array colorNames{
+            document::AnimationComponent::Red, document::AnimationComponent::Green,
+            document::AnimationComponent::Blue, document::AnimationComponent::Alpha};
         for (std::size_t i = 0; i < fields_.size(); ++i) {
             cells_[i]->setVisible(static_cast<int>(i) < count);
             components_[i]->hide();
-            fields_[i]->setLabel(components ? componentLabel(i) : QString{});
+            fields_[i]->setLabel(components && !componentRow ? componentLabel(i, color.has_value())
+                                                             : QString{});
+            componentDiamonds_[i]->setRole(entry.role);
+            componentDiamonds_[i]->setParameterId(entry.parameterId);
+            componentDiamonds_[i]->setComponent(color ? colorNames[i] : vectorNames[i]);
+            componentDiamonds_[i]->refresh();
+            componentDiamonds_[i]->setVisible(components && !componentRow &&
+                                              static_cast<int>(i) < count);
             fields_[i]->setAccessibleName(
                 components ? entry.name + QLatin1Char(' ') + componentLabel(i) : entry.name);
         }
         blending_->setVisible(role == document::kBlendModeParameterRole);
-        color_->setVisible(color.has_value());
+        color_->setVisible(color.has_value() && !componentRow);
         std::array<double, 4> values{};
         if (vector) {
             values[0] = vector->x * (scale ? 100 : 1);
@@ -400,6 +452,14 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
             values[0] = *scalar * (opacity ? 100 : 1);
         if (color)
             values = {color->red, color->green, color->blue, color->alpha};
+        if (componentRow) {
+            const auto component = entry.component.value();
+            const auto index =
+                static_cast<std::size_t>(component) -
+                (color ? static_cast<std::size_t>(document::AnimationComponent::Red) : 0);
+            if (index < values.size())
+                values[0] = values[index];
+        }
         for (int i = 0; i < count; ++i) {
             auto* field = fields_[static_cast<std::size_t>(i)];
             field->setRange(opacity             ? 0
@@ -444,7 +504,7 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
             color_->setEnabled(
                 reference.converted(kit::ColorSpace::Display, converter).has_value());
             color_->setToolTip(exactColorText(*color));
-            color_->show();
+            color_->setVisible(!componentRow);
         }
         const auto* composition = session_.composition();
         const auto* layer = composition ? composition->graph().findLayer(entry.layerId) : nullptr;
@@ -477,10 +537,29 @@ void TimelinePropertyRow::bindDriven(const bool driven) {
     session_.refreshDrivenValues();
 }
 
-void TimelinePropertyRow::commitValues() {
+void TimelinePropertyRow::commitValues(const std::size_t index) {
     const auto entry = entry_;
     const auto role = std::string_view(entry.role);
     const double x = fields_[0]->value(), y = fields_[1]->value(), z = fields_[2]->value();
+    if (entry.component) {
+        (void)session_.setParameterComponentValue(
+            entry.parameterId, *entry.component,
+            x / (role == document::kScaleParameterRole ? 100 : 1));
+        return;
+    }
+    const bool color = session_.effectiveColorValue(entry.parameterId).has_value();
+    if (color || session_.effectiveVec2Value(entry.parameterId) ||
+        session_.effectiveVec3Value(entry.parameterId)) {
+        const std::array vectors{document::AnimationComponent::X, document::AnimationComponent::Y,
+                                 document::AnimationComponent::Z, document::AnimationComponent::Z};
+        const std::array colors{
+            document::AnimationComponent::Red, document::AnimationComponent::Green,
+            document::AnimationComponent::Blue, document::AnimationComponent::Alpha};
+        (void)session_.setParameterComponentValue(
+            entry.parameterId, color ? colors[index] : vectors[index],
+            fields_[index]->value() / (role == document::kScaleParameterRole ? 100 : 1));
+        return;
+    }
     session_.selectLayer(entry.layerId);
     if (role == document::kPositionParameterRole)
         (void)session_.setSelectedPosition(x, y);

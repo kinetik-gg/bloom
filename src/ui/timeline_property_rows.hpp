@@ -20,19 +20,22 @@ class KLabel;
 // parameters. It is the node's identity rather than its display name, which two nodes may share.
 [[nodiscard]] QString upstreamGroupKey(document::NodeId nodeId);
 
-[[nodiscard]] std::vector<TimelineLayerEntry> timelinePropertyEntries(
-    const CompositionSession& session, const std::vector<TimelineLayerEntry>& layers,
-    const std::set<document::LayerId>& expanded,
-    const std::set<std::pair<document::LayerId, QString>>& collapsedGroups = {});
+[[nodiscard]] std::vector<TimelineLayerEntry>
+timelinePropertyEntries(const CompositionSession& session,
+                        const std::vector<TimelineLayerEntry>& layers,
+                        const std::set<document::LayerId>& expanded,
+                        const std::set<std::pair<document::LayerId, QString>>& collapsedGroups = {},
+                        const std::set<document::ParameterId>& expandedParameters = {});
 
 class TimelinePropertyRow final : public QWidget {
   public:
     TimelinePropertyRow(CompositionSession& session, QWidget* parent);
     void bind(const TimelineLayerEntry& entry);
     std::function<void(document::LayerId, QString)> toggleGroup;
+    std::function<void(document::ParameterId)> toggleParameter;
 
   private:
-    void commitValues();
+    void commitValues(std::size_t index);
     void bindDriven(bool driven);
     CompositionSession& session_;
     TimelineLayerEntry entry_;
@@ -41,9 +44,10 @@ class TimelinePropertyRow final : public QWidget {
     // Three cells, because a Vector 3 parameter has three components and task DRIVE-1's upstream
     // groups put one in the twirl-down: a row that showed two of them would be showing a value
     // that is not the parameter's.
-    std::array<kit::KValueField*, 3> fields_{};
-    std::array<QWidget*, 3> cells_{};
-    std::array<QLabel*, 3> components_{};
+    std::array<kit::KValueField*, 4> fields_{};
+    std::array<QWidget*, 4> cells_{};
+    std::array<QLabel*, 4> components_{};
+    std::array<KeyframeDiamond*, 4> componentDiamonds_{};
     kit::KDropdown* blending_;
     kit::KDropdown* alignment_;
     kit::KColorChip* color_;

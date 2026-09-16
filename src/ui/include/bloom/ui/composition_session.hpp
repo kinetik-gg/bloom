@@ -460,6 +460,9 @@ class CompositionSession final : public QObject {
     // animated one takes a key at the session time, and a driven one is refused with the same
     // wording. The node card's generic operand editor calls this, so editing an animated Scalar
     // node's number at a new time adds a key there instead of replacing its curve with a constant.
+    [[nodiscard]] bool setParameterComponentValue(document::ParameterId parameterId,
+                                                  document::AnimationComponent component,
+                                                  double value);
     [[nodiscard]] bool setParameterValue(document::ParameterId parameterId,
                                          document::ParameterValue value,
                                          const QString& commandLabel);

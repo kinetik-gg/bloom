@@ -270,6 +270,11 @@ void testComponentDiamondsAndSelections() {
     const auto ids = addSolidLayer(document, stack);
     ui::CompositionSession session(document, stack, compositionId);
 
+    require(session.setParameterComponentValue(ids.position, document::AnimationComponent::X, 31.0),
+            "constant component edit succeeds");
+    require(session.effectiveVec2Value(ids.position) == document::Vec2d{31.0, 20.0},
+            "constant component edit preserves its sibling exactly");
+    require(session.undo(), "constant component edit is undoable");
     const auto exactTime = time(2);
     session.selectLayer(ids.layer);
     require(session.setCurrentTime(exactTime), "set component test time");
@@ -326,6 +331,17 @@ void testComponentDiamondsAndSelections() {
     const auto effective = session.effectiveVec2Value(ids.position);
     require(effective.has_value() && *effective == document::Vec2d{10.0, 20.0},
             "component animation keeps the unchanged effective vector value");
+    require(session.setCurrentTime(time(3)), "advance before component edit");
+    require(session.setParameterComponentValue(ids.position, document::AnimationComponent::X, 42.0),
+            "animated component edit inserts only the edited axis");
+    require(
+        session.keyframeDiamondState(ids.position, document::AnimationComponent::X, time(3)) ==
+                ui::KeyframeDiamondState::AnimatedWithKey &&
+            session.keyframeDiamondState(ids.position, document::AnimationComponent::Y, time(3)) ==
+                ui::KeyframeDiamondState::AnimatedWithoutKey,
+        "editing X away from keys leaves Y unkeyed");
+    require(session.effectiveVec2Value(ids.position) == document::Vec2d{42.0, 20.0},
+            "animated component edit preserves the sampled sibling");
 }
 
 // --- Task S5, item 0: THE KEYFRAME GESTURE ------------------------------------------------------

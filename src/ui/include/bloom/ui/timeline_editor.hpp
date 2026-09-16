@@ -54,11 +54,11 @@ struct TimelineLayerEntry final {
     // The clip bar's fill, from the data-type palette -- the one thing that now carries kind.
     kit::Color clipColor = kit::Color::Muted;
     QColor labelColor{};
-    enum class Kind { Layer, Group, Parameter };
+    enum class Kind { Layer, Group, Parameter, Component };
     Kind rowKind = Kind::Layer;
     document::ParameterId parameterId{};
     // The component this row addresses, for a vector or colour parameter split into per-component
-    // rows. Empty for every row this task produces; KEY-2 owns component lanes and fills it.
+    // rows. Empty for aggregate parameter rows.
     std::optional<document::AnimationComponent> component{};
     std::string role{};
     bool expanded = false;
@@ -115,6 +115,7 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
     void updateScrollRange();
 
     std::set<document::LayerId> expandedLayers_;
+    std::set<document::ParameterId> expandedParameters_;
     std::set<std::pair<document::LayerId, QString>> collapsedGroups_;
     CompositionSession& session_;
     QWidget* headerFallback_ = nullptr;
@@ -189,6 +190,7 @@ class TimelineLayerStack final : public kit::KListSurface {
     void viewportResized();
     void expansionRequested(document::LayerId layer);
     void groupExpansionRequested(document::LayerId layer, QString group);
+    void parameterExpansionRequested(document::ParameterId parameter);
 
   protected:
     void resizeEvent(QResizeEvent* event) override;

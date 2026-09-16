@@ -624,6 +624,9 @@ void TimelineLayerStack::relayoutRows() {
             row->hide();
             if (!property) {
                 property = propertyPool_[slot] = new TimelinePropertyRow(session_, this);
+                property->toggleParameter = [this](document::ParameterId parameter) {
+                    emit parameterExpansionRequested(parameter);
+                };
                 property->toggleGroup = [this](document::LayerId layer, const QString& group) {
                     emit groupExpansionRequested(layer, group);
                 };
@@ -1225,8 +1228,15 @@ std::vector<core::RationalTime> TimelineLaneRegion::keySummaryTimes(int row) con
             if (curve)
                 std::visit(
                     [&](const auto& record) {
-                        for (const auto& key : record.keyframes)
-                            times.insert(key.time);
+                        using Curve = std::decay_t<decltype(record)>;
+                        if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                            for (const auto& key : record.keyframes)
+                                times.insert(key.time);
+                        } else {
+                            for (const auto& component : record.components)
+                                for (const auto& key : component.keyframes)
+                                    times.insert(key.time);
+                        }
                     },
                     *curve);
         }
@@ -1683,8 +1693,15 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
                     collapsedGroups_.insert({layer, group});
                 rebuild();
             });
+    connect(stack_, &TimelineLayerStack::parameterExpansionRequested, this,
+            [this](document::ParameterId parameter) {
+                if (!expandedParameters_.erase(parameter))
+                    expandedParameters_.insert(parameter);
+                rebuild();
+            });
     connect(&session_, &CompositionSession::compositionChanged, this, [this] {
         expandedLayers_.clear();
+        expandedParameters_.clear();
         collapsedGroups_.clear();
         rebuild();
     });
@@ -1793,7 +1810,8 @@ void TimelineEditor::rebuild() {
             }
         }
     }
-    entries = timelinePropertyEntries(session_, entries, expandedLayers_, collapsedGroups_);
+    entries = timelinePropertyEntries(session_, entries, expandedLayers_, collapsedGroups_,
+                                      expandedParameters_);
     stack_->setEntries(entries);
     lanes_->setEntries(std::move(entries));
     updateScrollRange();
