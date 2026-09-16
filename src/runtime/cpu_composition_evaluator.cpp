@@ -2,6 +2,7 @@
 #include "image_source.hpp"
 #include "layer_parent_transform.hpp"
 #include "operation_key.hpp"
+#include <bloom/render/path_raster.hpp>
 
 #include <bloom/core/rational_time.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
@@ -52,6 +53,7 @@ static_assert(document::kMaximumTextSizePixels == render::kMaximumTextPixelSize,
                               .field = {}};
     std::visit(
         Overloaded{
+            [&subject](const CompiledShape& shape) { subject.nodeId = shape.sourceNodeId; },
             [&subject](const CompiledSolid& solid) { subject.nodeId = solid.sourceNodeId; },
             [&subject](const CompiledImageSource& image) { subject.nodeId = image.sourceNodeId; },
             [&subject](const CompiledText& text) { subject.nodeId = text.sourceNodeId; },
@@ -326,6 +328,31 @@ enum class ScalarDomain : std::uint8_t {
                 return image.loopMode >= 0 && image.loopMode <= 2 && image.colorSpace >= 0 &&
                        image.colorSpace <= 3 && (!image.asset || image.asset->validate().ok());
             },
+            [&plan, index, &failure](const CompiledShape& shape) {
+                const auto* curve = std::get_if<Vec2CurveIndex>(&shape.size.source);
+                const auto valid = [&](std::string_view key,
+                                       const document::ParameterValue& value) {
+                    return document::shapeConstantMatchesSchema(key, value);
+                };
+                return shape.size.id.isValid() &&
+                       (!curve || curve->value() < plan.vec2Curves().size()) &&
+                       hasValidColorCurveReference(shape.fillColor, plan, index, failure) &&
+                       hasValidColorCurveReference(shape.strokeColor, plan, index, failure) &&
+                       hasValidScalarCurveReference(shape.strokeWidth, plan, index, failure) &&
+                       valid("bloom.shape.kind", static_cast<std::int64_t>(shape.kind)) &&
+                       valid("bloom.shape.corner-radius", shape.cornerRadius) &&
+                       valid("bloom.shape.points", shape.points) &&
+                       valid("bloom.shape.inner-ratio", shape.innerRatio) &&
+                       valid("bloom.shape.line-start", shape.lineStart) &&
+                       valid("bloom.shape.line-end", shape.lineEnd) && shape.path.isValid() &&
+                       valid("bloom.shape.stroke-align",
+                             static_cast<std::int64_t>(shape.strokeAlign)) &&
+                       valid("bloom.shape.stroke-join",
+                             static_cast<std::int64_t>(shape.strokeJoin)) &&
+                       valid("bloom.shape.stroke-cap",
+                             static_cast<std::int64_t>(shape.strokeCap)) &&
+                       valid("bloom.shape.fill-rule", static_cast<std::int64_t>(shape.fillRule));
+            },
             [&plan, index, &failure](const CompiledText& text) {
                 return hasValidScalarCurveReference(text.size, plan, index, failure) &&
                        hasValidColorCurveReference(text.color, plan, index, failure) &&
@@ -341,6 +368,7 @@ enum class ScalarDomain : std::uint8_t {
                     }
                     const auto& input = plan.operations()[layer.input.value()];
                     return std::holds_alternative<CompiledSolid>(input) ||
+                           std::holds_alternative<CompiledShape>(input) ||
                            std::holds_alternative<CompiledText>(input) ||
                            std::holds_alternative<CompiledImageSource>(input) ||
                            std::holds_alternative<CompiledLayerOutput>(input) ||
@@ -966,6 +994,14 @@ template <typename Value>
                     static_cast<void>(registerScalar(solid.height, "height",
                                                      ScalarDomain::Dimension, operationSubject));
                 },
+                [&](const CompiledShape& shape) {
+                    static_cast<void>(
+                        registerVec2(shape.size, "size", operationSubject) &&
+                        registerColor(shape.fillColor, "fillColor", operationSubject) &&
+                        registerColor(shape.strokeColor, "strokeColor", operationSubject) &&
+                        registerScalar(shape.strokeWidth, "strokeWidth", ScalarDomain::Unbounded,
+                                       operationSubject));
+                },
                 [&](const CompiledText& text) {
                     static_cast<void>(
                         registerParameter(text.layout.alignmentId, operationSubject) &&
@@ -1568,6 +1604,24 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             parameter(step.color);
                             parameter(step.width);
                             parameter(step.height);
+                        } else if constexpr (std::is_same_v<Step, CompiledShape>) {
+                            key.add(step.kind);
+                            parameter(step.size);
+                            key.add(step.cornerRadius);
+                            key.add(step.points);
+                            key.add(step.innerRatio);
+                            key.add(step.lineStart);
+                            key.add(step.lineEnd);
+                            key.add(step.path);
+                            key.add(step.fillEnabled);
+                            parameter(step.fillColor);
+                            key.add(step.strokeEnabled);
+                            parameter(step.strokeColor);
+                            parameter(step.strokeWidth);
+                            key.add(step.strokeAlign);
+                            key.add(step.strokeJoin);
+                            key.add(step.strokeCap);
+                            key.add(step.fillRule);
                         } else if constexpr (std::is_same_v<Step, CompiledImageSource>) {
                             key.add(selectedImage->cacheKey);
                         } else if constexpr (std::is_same_v<Step, CompiledText>) {
@@ -1811,6 +1865,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             bounds[index].output = bounds[index].local;
                             produced.emplace(std::move(*image.value));
                         },
+#include "shape_evaluation.ipp"
                         [&](const CompiledText& text) {
                             // A text source produces a full-frame image exactly like a solid, so
                             // the Layer Output stage transforms and fades it with the same

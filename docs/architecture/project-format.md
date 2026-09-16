@@ -16,7 +16,7 @@ migrations are implemented.
 Format-specific semantic verification of
 the complete save/reopen pipeline, and cross-platform publication parity remain pending.
 
-Updated: 2026-09-15
+Updated: 2026-09-16
 
 ## Purpose And Ownership
 
@@ -38,13 +38,13 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.13`.
+The container version remains `1.0`; the current document schema is `1.14`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. Versioned artifacts through `1.11` remain checked as
-historical fixtures, with the current `1.13` contract also enforced by the canonical writer,
+historical fixtures, with the current `1.14` contract also enforced by the canonical writer,
 decoder tests. The manifest artifact still requires container `1.0`; its document
 declaration follows the current document minor. Every historical artifact from `1.0` through `1.11`,
 manifest and document, remains checked, and each version's checker validates what its own minor adds
@@ -79,6 +79,27 @@ determines whether an unknown member is safely additive.
 invalid UTF-8 or Unicode scalar sequences, lone escaped surrogates, duplicate decoded object keys,
 comments, trailing commas, non-finite values, and JSON5 extensions before constructing trusted
 document state.
+
+### Path values (document 1.14)
+
+Document 1.14 adds a constant `path` value. The version-only 1.13 → 1.14 migration changes no
+existing value or pixel. The manifest declares document 1.14; container version remains 1.0.
+
+```json
+{"kind":"path","anchors":[{"point":{"x":0,"y":0},"outHandle":{"x":20,"y":0}},{"point":{"x":40,"y":40},"inHandle":{"x":40,"y":20}}],"closed":false}
+```
+
+Canonical member order is `kind`, `anchors`, `closed`. Each anchor has `point`, then optional
+`inHandle` and `outHandle`, in that order. Points and handles have exactly `x`, `y`, both finite
+Float64 coordinates in full-resolution author pixels. Handles are absolute positions; an omitted
+handle coincides with its anchor. Anchor and point objects are closed, including for newer minors.
+The path value envelope retains the usual additive-member preservation contract.
+
+There are at most 4,096 anchors, checked before decoded anchor allocation; empty paths and open
+paths are valid. The decoder rejects this discriminator in minor 1.13 or earlier. `PathValue` is a
+separate document parameter alternative, with no numeric promotion, driver socket or animation
+support in v1. `schemas/project/document-1.14.schema.json` and the matching manifest artifact pin
+the current structural contract; typed validation also enforces finite coordinates.
 
 ## Constrained ZIP Profile
 
@@ -1083,7 +1104,7 @@ the new artifacts to 1.5 and run the complete historical ladder.
 ## Content Bounds Introduced In Document 1.7
 
 Solid v2 introduced explicit Scalar width and height. Text v2, Layer v4, and Merge v2 use local
-content bounds. These are now the only supported definitions; the current 1.13 schema includes
+content bounds. These are now the only supported definitions; the current 1.14 schema includes
 those contracts together with per-component animation, image assets, and audio. Documents carrying
 older node versions fail validation. There is no coordinate conversion or compatibility evaluator.
 
@@ -1152,7 +1173,7 @@ Import, relink, removal, layer placement and background editing use ordinary com
 
 Document `1.11` is an additive schema step. Migration `1.10 → 1.11` changes only the root minor
 version and preserves every existing object, ID, parameter source, graph edge, asset and authored
-value. The canonical writer and manifest declaration emit `1.11`; the floor has since moved to `1.13`.
+value. The canonical writer and manifest declaration emit `1.11`; the floor has since moved to `1.14`.
 Earlier documents are rejected; the numbered transform is retained only as historical schema bookkeeping.
 
 An Audio asset uses the same stable `AssetRecord` identity and project-relative `AssetLocator` as
@@ -1174,7 +1195,7 @@ edges and decode to the same image graph and pixels.
 
 Document `1.12` is an additive schema step. Migration `1.11 -> 1.12` changes only the root minor
 version; it adds no member, because every `1.11` key holds the default handle. The canonical writer
-and manifest declaration emitted `1.12`; the load floor is now `1.13`. Earlier documents are rejected;
+and manifest declaration emitted `1.12`; the load floor is now `1.14`. Earlier documents are rejected;
 the numbered transform is retained only as historical schema bookkeeping.
 
 A scalar keyframe and a component keyframe may each carry `outgoingHandle` and `incomingHandle`,
@@ -1198,9 +1219,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 
 ## Layer Parenting In Document 1.13
 
-The canonical writer, manifest declaration and minimum loadable document schema are `1.13`.
-Earlier minors are rejected. The `1.12 -> 1.13` bookkeeping step changes only the root minor.
-The current artifacts are `document-1.13.schema.json` and `manifest-1.13.schema.json`.
+Parenting was introduced in document `1.13`; the current writer, manifest declaration and load
+floor are `1.14`. The historical `1.12 -> 1.13` bookkeeping step changes only the root minor.
+Current artifacts are `document-1.14.schema.json` and `manifest-1.14.schema.json`.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
 Its value is the canonical decimal-string LayerId of another boundary in the same composition.

@@ -527,6 +527,40 @@ addStructuredLayer(document::Draft& draft, document::Composition& composition,
 
 } // namespace
 
+std::string_view AddShapeLayer::typeId() const noexcept { return "bloom.layer.add-shape"; }
+OperationResult AddShapeLayer::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(composition_);
+    if (!composition)
+        return invalidComposition(composition_);
+    if (kind_ < document::ShapeKind::Rectangle || kind_ > document::ShapeKind::Path)
+        return OperationResult::rejected(OperationIssueCode::InvalidValue, "Unknown shape kind");
+    const auto definition = document::shapeDefinition();
+    StructuredLayerDescriptor descriptor{document::kShapeSourceNodeType, 1, "image", {}};
+    for (const auto& parameter : definition.parameters) {
+        auto value = parameter.defaultValue;
+        if (parameter.role == "kind")
+            value = static_cast<std::int64_t>(kind_);
+        if (kind_ == document::ShapeKind::Line) {
+            if (parameter.role == "fillEnabled")
+                value = false;
+            if (parameter.role == "strokeEnabled")
+                value = true;
+            if (parameter.role == "strokeColor")
+                value = core::Color4d{1, 1, 1, 1};
+        }
+        descriptor.sourceParameters.push_back(
+            {parameter.role, parameter.schemaKey, std::move(value), parameter.role});
+    }
+    return addStructuredLayer(
+        draft, *composition, std::string(document::shapeKindName(kind_)), descriptor,
+        {static_cast<double>(composition->format().width()) / 2.0,
+         static_cast<double>(composition->format().height()) / 2.0},
+        1.0,
+        {"layer", "slot", "shapeNode", "layerOutputNode", "positionParameter", "anchorParameter",
+         "scaleParameter", "rotationParameter", "opacityParameter", "blendModeParameter",
+         "shapeToLayerEdge", "layerToStackEdge"});
+}
+
 std::string_view AddSolidLayer::typeId() const noexcept { return "bloom.layer.add-solid"; }
 
 OperationResult AddSolidLayer::apply(document::Draft& draft) const {

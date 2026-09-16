@@ -1,4 +1,5 @@
 #pragma once
+#include <bloom/document/shape.hpp>
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -256,6 +257,7 @@ class CompositionSession final : public QObject {
     [[nodiscard]] std::optional<core::BlendMode>
     blendModeForLayer(document::LayerId layerId) const noexcept;
 
+    [[nodiscard]] bool addShapeLayer(document::ShapeKind kind);
     [[nodiscard]] bool addSolidLayer(const QString& name, core::Color4d color);
     // `size` is the em size in pixels and `color` a straight reference-linear-sRGB authoring value;
     // both default to the registered text schema's own defaults.

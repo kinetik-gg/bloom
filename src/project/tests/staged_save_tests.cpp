@@ -200,7 +200,7 @@ void withDocumentInput(
     bloom::document::Document document{std::move(newProject.project)};
     const auto snapshot = document.snapshot();
     const auto colorSettings = neutralColorSettings();
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 13}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 14}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
     use(manifest, documentInput);
 }
@@ -236,7 +236,7 @@ void withBulkDocumentInput(
     // the archive back down to a small compressed size the way a repeated-byte payload would.
     std::uint64_t xorshiftState = 0x9E3779B97F4A7C15ULL;
     const auto nextPseudoRandomByte = [&xorshiftState]() noexcept {
-        xorshiftState ^= xorshiftState << 13U;
+        xorshiftState ^= xorshiftState << 14U;
         xorshiftState ^= xorshiftState >> 7U;
         xorshiftState ^= xorshiftState << 17U;
         return static_cast<std::byte>(xorshiftState & 0xFFU);
@@ -266,7 +266,7 @@ void withBulkDocumentInput(
          .capabilityId = "vendor.bulk.cap",
          .schemaVersion = {1, 0},
          .providedNodeTypeIds = {}}};
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 13},
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 14},
                                        .requirements = requirements};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
     use(manifest, documentInput);

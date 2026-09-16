@@ -135,6 +135,9 @@ timelinePropertyEntries(const CompositionSession& session,
             if (!definition)
                 continue;
             for (const auto& declared : definition->parameters) {
+                if (node->typeId == document::kShapeSourceNodeType &&
+                    !document::shapeRoleVisible(nodeShapeKind(*composition, *node), declared.role))
+                    continue;
                 const auto found = std::ranges::find(node->parameters, declared.role,
                                                      &document::ParameterBinding::role);
                 if (found == node->parameters.end())

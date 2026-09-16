@@ -1,5 +1,6 @@
 #include <bloom/document/node_layout.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/shape.hpp>
 
 #include <algorithm>
 #include <array>
@@ -151,6 +152,21 @@ void nodeGroupRecords() {
 } // namespace
 
 int main() {
+    const auto* shape = builtInNodeDefinitions().find(kShapeSourceNodeType, 1);
+    expect(shape && shape->parameters.size() == 17 && shape->category == NodeCategory::Sources,
+           "one shape source shares all properties");
+    auto wrong = shapeDefinition();
+    wrong.parameters.pop_back();
+    NodeDefinitionRegistry registry;
+    expect(registry.registerDefinition(wrong) == NodeRegistrationStatus::InvalidDefinition,
+           "shape registry pins complete definition");
+    expect(shapeRoleVisible(ShapeKind::Star, "innerRatio") &&
+               !shapeRoleVisible(ShapeKind::Rectangle, "innerRatio"),
+           "shape kind visibility");
+    expect(!shapeConstantMatchesSchema("bloom.shape.points", std::int64_t{65}) &&
+               !shapeConstantMatchesSchema("bloom.shape.kind", std::int64_t{7}),
+           "shape closed domains");
+
     socketKinds();
     layoutRecords();
     nodeGroupRecords();

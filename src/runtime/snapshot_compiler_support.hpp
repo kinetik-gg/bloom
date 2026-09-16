@@ -50,6 +50,8 @@ class CompileCheckpointObserver {
 [[nodiscard]] inline bool hasValueKind(const document::ParameterValue& value,
                                        const ParameterValueKind kind) noexcept {
     switch (kind) {
+    case ParameterValueKind::Path:
+        return std::holds_alternative<document::PathValue>(value);
     case ParameterValueKind::Color4d:
         return std::holds_alternative<core::Color4d>(value);
     case ParameterValueKind::Vec2d:

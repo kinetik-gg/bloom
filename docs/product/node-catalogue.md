@@ -52,7 +52,7 @@ level's dependencies.
 | --- | --- | --- |
 | `F1` | Image, Image Sequence | Stable asset identity, source interpretation, windows, channels, and missing-frame policy |
 | `C1` | Video Clip | Explicit stream, time base, orientation, color, alpha, and decode policy |
-| `C1` | Shape | Resolution-independent path and fill/stroke source |
+| `C1` | Shape | Built: one parametric/path source with shared fill and stroke; viewer drawing tools follow |
 | `C1` | Linear Gradient, Radial Gradient, Four-Point Gradient | Explicit interpolation space, repeat mode, and alpha behavior |
 | `C1` | Checker, Grid, Color Bars | Deterministic diagnostic and design generators |
 | `M1` | Noise, Fractal Noise, Voronoi | Seeded, versioned procedural output with stable CPU/GPU semantics |
@@ -189,8 +189,9 @@ mask, and geometry values remain distinct even where their storage shapes resemb
 
 | Level | Planned nodes | Important behavior |
 | --- | --- | --- |
-| `M1` | Rectangle, Ellipse, Polygon, Star, Path | Stable parametric or authored vector geometry |
-| `M1` | Fill, Stroke, Gradient Fill, Gradient Stroke | Color-managed paint with explicit stroke and interpolation rules |
+| `M1` | Rectangle, Ellipse, Triangle, Polygon, Star, Line, Path | Built in Shape v1: bounded parametric and authored cubic geometry |
+| `M1` | Fill, Stroke | Built in Shape v1: scene-linear colors, stroke alignment, joins, caps and fill rule |
+| `M1` | Gradient Fill, Gradient Stroke | Planned color-managed paint with explicit interpolation rules |
 | `M1` | Transform Path, Offset Path, Trim Path | Path-domain operations independent of raster resolution |
 | `M1` | Merge Paths, Boolean Paths | Declared fill rule and robust topology diagnostics |
 | `M1` | Repeater, Wiggle Path, Round Corners | Non-destructive procedural path modifiers |

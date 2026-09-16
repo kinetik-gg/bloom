@@ -589,6 +589,22 @@ CompositionSession::constantStringValue(const document::ParameterId parameterId)
     return value == nullptr ? std::nullopt : std::optional<QString>(QString::fromStdString(*value));
 }
 
+bool CompositionSession::addShapeLayer(const document::ShapeKind kind) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!composition()) {
+        reportUnavailable(tr("No composition is available for the new shape"));
+        return false;
+    }
+    commands::Transaction transaction("Add Shape Layer", snapshot_.revision());
+    transaction.emplace<commands::AddShapeLayer>(compositionId_, kind);
+    const auto result = commandStack_->execute(std::move(transaction));
+    if (!handleResult(result))
+        return false;
+    if (const auto layer = result.outputId<document::LayerId>("layer"))
+        selectLayer(*layer);
+    return true;
+}
+
 bool CompositionSession::addSolidLayer(const QString& name, const core::Color4d color) {
     Q_ASSERT(QThread::currentThread() == thread());
     const auto* current = composition();

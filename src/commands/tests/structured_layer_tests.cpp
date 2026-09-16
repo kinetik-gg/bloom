@@ -441,6 +441,27 @@ void testCompositionFormatCommand(TestContext& test) {
                 "composition format command should redo exactly");
 }
 
+void testShapeLayers(TestContext& test) {
+    for (std::int64_t kind = 0; kind <= 6; ++kind) {
+        Document document(makeProject());
+        CommandStack stack(document);
+        const auto original = document.snapshot();
+        Transaction add("Add Shape", original.revision());
+        add.emplace<AddShapeLayer>(kCompositionId, static_cast<document::ShapeKind>(kind));
+        const auto result = stack.execute(std::move(add));
+        const auto node = result.outputId<NodeId>("shapeNode");
+        test.expect(result.changed() && node && document.snapshot().project().validate().ok(),
+                    "each shape creates valid shared topology");
+        const auto created = document.snapshot();
+        test.expect(stack.undo().changed() &&
+                        hasSameTruth(composition(document.snapshot()), composition(original)),
+                    "shape undo restores document");
+        test.expect(stack.redo().changed() &&
+                        hasSameTruth(composition(document.snapshot()), composition(created)),
+                    "shape redo retains identities and parameters");
+    }
+}
+
 void testAddSolidLayerBuildsOneCanonicalTopology(TestContext& test) {
     Document document(makeProject());
     CommandStack stack(document);
@@ -544,6 +565,7 @@ void testAddSolidLayerRejectsInvalidInputs(TestContext& test) {
 int main() {
     bloom::commands::test::TestContext test;
     try {
+        bloom::commands::test::testShapeLayers(test);
         bloom::commands::test::testAddTextLayerBuildsOneCanonicalTopology(test);
         bloom::commands::test::testAddTextLayerRejectsInvalidInputs(test);
         bloom::commands::test::testCompositionFormatCommand(test);

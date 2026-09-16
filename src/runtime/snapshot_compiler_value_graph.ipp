@@ -76,7 +76,7 @@ compiledValueFrom(const document::ParameterValue& value) {
     return std::visit(
         [](const auto& held) -> std::optional<runtime::CompiledValue> {
             using Held = std::decay_t<decltype(held)>;
-            if constexpr (std::is_same_v<Held, core::RationalTime>) {
+            if constexpr (std::is_same_v<Held, core::RationalTime> || std::is_same_v<Held, document::PathValue>) {
                 return std::nullopt;
             } else {
                 return runtime::CompiledValue{held};
@@ -477,6 +477,7 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
         return runtime::CompiledValueKernel{runtime::CompiledValueUtility{
             descriptor->kernel, std::move(operands), std::move(selectors)}};
     }
+    case runtime::NodeLoweringKind::Shape:
     case runtime::NodeLoweringKind::Solid:
     case runtime::NodeLoweringKind::ImageSource:
     case runtime::NodeLoweringKind::AudioSource:

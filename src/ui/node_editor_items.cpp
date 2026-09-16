@@ -6,6 +6,7 @@
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <memory>
+#include <numbers>
 
 namespace bloom::ui {
 kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
@@ -103,6 +104,32 @@ QString displayTypeName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Loop Mode");
     if (typeId == "colorSpace")
         return QCoreApplication::translate("node_editor", "Color Space");
+    if (typeId == "cornerRadius")
+        return QCoreApplication::translate("node_editor", "Corner Radius");
+    if (typeId == "innerRatio")
+        return QCoreApplication::translate("node_editor", "Inner Ratio");
+    if (typeId == "lineStart")
+        return QCoreApplication::translate("node_editor", "Line Start");
+    if (typeId == "lineEnd")
+        return QCoreApplication::translate("node_editor", "Line End");
+    if (typeId == "fillEnabled")
+        return QCoreApplication::translate("node_editor", "Fill");
+    if (typeId == "fillColor")
+        return QCoreApplication::translate("node_editor", "Fill Color");
+    if (typeId == "strokeEnabled")
+        return QCoreApplication::translate("node_editor", "Stroke");
+    if (typeId == "strokeColor")
+        return QCoreApplication::translate("node_editor", "Stroke Color");
+    if (typeId == "strokeWidth")
+        return QCoreApplication::translate("node_editor", "Stroke Width");
+    if (typeId == "strokeAlign")
+        return QCoreApplication::translate("node_editor", "Stroke Align");
+    if (typeId == "strokeJoin")
+        return QCoreApplication::translate("node_editor", "Stroke Join");
+    if (typeId == "strokeCap")
+        return QCoreApplication::translate("node_editor", "Stroke Cap");
+    if (typeId == "fillRule")
+        return QCoreApplication::translate("node_editor", "Fill Rule");
     QString name = QString::fromUtf8(typeId.data(), static_cast<qsizetype>(typeId.size()));
     if (name.startsWith(QStringLiteral("bloom."))) {
         name.remove(0, 6);
@@ -122,6 +149,8 @@ QString displayTypeName(const std::string_view typeId) {
 // source" names the implementation, "Solid" names the thing. Four built-ins are therefore named
 // here. Type ids are untouched -- this is vocabulary, not identity.
 QString nodeTypeDisplayName(const std::string_view typeId) {
+    if (typeId == document::kShapeSourceNodeType)
+        return QCoreApplication::translate("node_editor", "Shape");
     if (typeId == "bloom.image-source")
         return QCoreApplication::translate("node_editor", "Image");
     if (typeId == "bloom.audio-source")
@@ -246,6 +275,9 @@ QString parameterText(const document::ParameterRecord& parameter) {
                 return exactColorText(value);
             } else if constexpr (std::is_same_v<Value, std::string>) {
                 return QString::fromStdString(value).left(24);
+            } else if constexpr (std::is_same_v<Value, document::PathValue>) {
+                return QCoreApplication::translate("node_editor", "%1 anchors")
+                    .arg(value.anchors.size());
             } else {
                 return QStringLiteral("%1/%2").arg(value.numerator()).arg(value.denominator());
             }
@@ -367,6 +399,50 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
         return;
     }
     painter->setOpacity(layout_.muted ? 0.5 : 1.0);
+    if (shapeSource_) {
+        const QRectF cell(
+            kCardPadding, parameterRowsTop_ - kit::px(kit::Size::ImageThumbnail) + kCardPadding,
+            width_ - 2 * kCardPadding, kit::px(kit::Size::ImageThumbnail) - 2 * kCardPadding);
+        painter->fillRect(cell, kit::color(kit::Color::SurfaceSunken));
+        const auto inset = kCardPadding + kCardPadding;
+        const auto side = cell.height() - inset;
+        const QRectF icon(cell.center() - QPointF(side / 2, side / 2), QSizeF(side, side));
+        QPainterPath path;
+        if (shapeKind_ == document::ShapeKind::Rectangle)
+            path.addRect(icon);
+        else if (shapeKind_ == document::ShapeKind::Ellipse)
+            path.addEllipse(icon);
+        else if (shapeKind_ == document::ShapeKind::Line) {
+            path.moveTo(icon.bottomLeft());
+            path.lineTo(icon.topRight());
+        } else if (shapeKind_ == document::ShapeKind::Path) {
+            path.moveTo(icon.bottomLeft());
+            path.cubicTo(icon.topLeft(), icon.bottomRight(), icon.topRight());
+        } else {
+            const int count = shapeKind_ == document::ShapeKind::Triangle ? 3
+                              : shapeKind_ == document::ShapeKind::Star   ? 10
+                                                                          : 5;
+            for (int index = 0; index < count; ++index) {
+                const double angle = -std::numbers::pi / 2 + 2 * std::numbers::pi * index / count;
+                const double radius =
+                    side / 2 * (shapeKind_ == document::ShapeKind::Star && index % 2 ? 0.45 : 1.0);
+                const auto point =
+                    icon.center() + QPointF(std::cos(angle) * radius, std::sin(angle) * radius);
+                if (index == 0)
+                    path.moveTo(point);
+                else
+                    path.lineTo(point);
+            }
+            path.closeSubpath();
+        }
+        kit::applyHairlinePen(*painter, kit::color(kit::Color::Foreground));
+        painter->setBrush(shapeKind_ == document::ShapeKind::Line ||
+                                  shapeKind_ == document::ShapeKind::Path
+                              ? Qt::NoBrush
+                              : QBrush(kit::color(kit::Color::Foreground)));
+        painter->drawPath(path);
+        painter->setBrush(Qt::NoBrush);
+    }
     if (imageSource_ || audioSource_) {
         const QRectF cell(kCardPadding, kCardHeaderHeight + kCardPadding, width_ - 2 * kCardPadding,
                           kit::px(kit::Size::ImageThumbnail) - 2 * kCardPadding);

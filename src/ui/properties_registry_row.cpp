@@ -21,8 +21,22 @@
 #include <memory>
 
 namespace bloom::ui {
-PropertiesRowVisibility propertiesRowVisibility(const std::string_view role,
-                                                const std::string_view schemaKey) noexcept {
+document::ShapeKind nodeShapeKind(const document::Composition& composition,
+                                  const document::NodeRecord& node) {
+    for (const auto& binding : node.parameters)
+        if (binding.role == "kind") {
+            const auto* p = composition.parameters().find(binding.parameterId);
+            const auto* c = p ? std::get_if<document::ConstantValueSource>(&p->source) : nullptr;
+            if (const auto* kind = c ? std::get_if<std::int64_t>(&c->value) : nullptr)
+                return static_cast<document::ShapeKind>(*kind);
+        }
+    return document::ShapeKind::Rectangle;
+}
+PropertiesRowVisibility
+propertiesRowVisibility(const std::string_view role, const std::string_view schemaKey,
+                        const std::optional<document::ShapeKind> shape) noexcept {
+    if (shape && !document::shapeRoleVisible(*shape, role))
+        return PropertiesRowVisibility::Hidden;
     // These are presentation metadata, not authored controls. Keep this classification in the UI
     // registry mapping: the document vocabulary remains the durable source of truth, while the
     // Properties surface decides which declared values are meaningful to an artist.
@@ -66,7 +80,11 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
     diamond_->setParameterId(parameter_);
 
     const auto items = propertiesSelectorItems(definition_.schemaKey);
-    if (definition_.schemaKey == document::kAudioLevelParameterSchemaKey) {
+    if (definition_.valueKind == document::ParameterValueKind::Path) {
+        auto* summary = new kit::KLabel(controls);
+        summary->setObjectName("propertiesPathSummary");
+        layout->addWidget(summary);
+    } else if (definition_.schemaKey == document::kAudioLevelParameterSchemaKey) {
         slider_ = new kit::KSlider(controls);
         slider_->setObjectName(QStringLiteral("propertiesAudioLevelSlider"));
         slider_->setAccessibleName(label);
@@ -243,6 +261,14 @@ bool PropertiesRegistryRow::eventFilter(QObject* watched, QEvent* event) {
 void PropertiesRegistryRow::refresh() {
     refreshing_ = true;
     const auto* composition = session_.composition();
+    const auto* node = composition ? composition->graph().findNode(node_) : nullptr;
+    const bool hidden =
+        propertiesRowVisibility(definition_.role, definition_.schemaKey,
+                                node && node->typeId == document::kShapeSourceNodeType
+                                    ? std::optional(nodeShapeKind(*composition, *node))
+                                    : std::nullopt) == PropertiesRowVisibility::Hidden;
+    setProperty("roleHidden", hidden);
+    setVisible(!hidden);
     const auto* parameter = composition ? composition->parameters().find(parameter_) : nullptr;
     const bool editable = parameter && displayScale() != 0.0 && !composition->nodeLocked(node_) &&
                           !std::holds_alternative<document::DriverBindingSource>(parameter->source);
@@ -264,6 +290,11 @@ void PropertiesRegistryRow::refresh() {
         auto value = definition_.defaultValue;
         if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source))
             value = constant->value;
+        if (const auto* path = std::get_if<document::PathValue>(&value))
+            if (auto* summary = findChild<kit::KLabel*>("propertiesPathSummary"))
+                summary->setText(tr("%1 anchors · %2")
+                                     .arg(path->anchors.size())
+                                     .arg(path->closed ? tr("Closed") : tr("Open")));
         if (const auto scalar = session_.effectiveScalarValue(parameter_))
             value = *scalar;
         if (const auto vector = session_.effectiveVec2Value(parameter_))

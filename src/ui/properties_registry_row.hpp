@@ -3,6 +3,8 @@
 #include <array>
 #include <bloom/document/asset.hpp>
 #include <bloom/document/node_definition_registry.hpp>
+#include <bloom/document/project.hpp>
+#include <bloom/document/shape.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 class QLineEdit;
@@ -18,6 +20,8 @@ void refreshAudioAssetSelector(kit::KDropdown& selector, const CompositionSessio
                                const QString& stored);
 void resetPropertiesParameter(CompositionSession& session, document::ParameterId parameter);
 void jumpToPropertiesNode(CompositionSession& session, document::NodeId node, QWidget* panel);
+[[nodiscard]] document::ShapeKind nodeShapeKind(const document::Composition& composition,
+                                                const document::NodeRecord& node);
 class KeyframeDiamond;
 namespace kit {
 class KColorChip;
@@ -28,8 +32,9 @@ class KSlider;
 } // namespace kit
 enum class PropertiesRowControl : std::uint8_t { Automatic, SegmentedEnum, Stepper };
 enum class PropertiesRowVisibility : std::uint8_t { Visible, Hidden };
-[[nodiscard]] PropertiesRowVisibility propertiesRowVisibility(std::string_view role,
-                                                              std::string_view schemaKey) noexcept;
+[[nodiscard]] PropertiesRowVisibility
+propertiesRowVisibility(std::string_view role, std::string_view schemaKey,
+                        std::optional<document::ShapeKind> shape = std::nullopt) noexcept;
 [[nodiscard]] PropertiesRowControl propertiesRowControl(std::string_view schemaKey);
 QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view schemaKey);
 class PropertiesRegistryRow final : public QWidget {

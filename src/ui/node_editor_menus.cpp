@@ -25,6 +25,54 @@
 namespace bloom::ui {
 using namespace node_editor;
 namespace {
+// A kind preset delegates creation and parameter writes to commands inside one undo entry.
+class AddShapeMenuNode final : public commands::Operation {
+  public:
+    AddShapeMenuNode(document::CompositionId composition, document::ShapeKind kind,
+                     document::Vec2d position, std::optional<document::InputPortRef> input,
+                     std::optional<document::OutputPortRef> output)
+        : composition_(composition), kind_(kind),
+          add_(composition, std::string(document::kShapeSourceNodeType), position, std::move(input),
+               std::move(output)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.node.add-shape-at-cursor";
+    }
+    [[nodiscard]] commands::OperationResult apply(document::Draft& draft) const override {
+        auto result = add_.apply(draft);
+        if (result.status == commands::OperationStatus::Rejected)
+            return result;
+        for (const auto& output : result.outputs) {
+            const auto* id = std::get_if<document::ParameterId>(&output.id);
+            if (!id)
+                continue;
+            std::optional<document::ParameterValue> value;
+            if (output.name == "parameter.kind")
+                value = static_cast<std::int64_t>(kind_);
+            else if (kind_ == document::ShapeKind::Line) {
+                if (output.name == "parameter.fillEnabled")
+                    value = false;
+                else if (output.name == "parameter.strokeEnabled")
+                    value = true;
+                else if (output.name == "parameter.strokeColor")
+                    value = core::Color4d{1, 1, 1, 1};
+            }
+            if (value) {
+                const auto changed = commands::SetParameterSource(
+                                         composition_, *id, document::ConstantValueSource{*value})
+                                         .apply(draft);
+                if (changed.status == commands::OperationStatus::Rejected)
+                    return changed;
+            }
+        }
+        return result;
+    }
+
+  private:
+    document::CompositionId composition_;
+    document::ShapeKind kind_;
+    AddEditorNode add_;
+};
+
 document::NodeLayoutRecord layoutFor(const document::Composition& composition,
                                      const document::NodeId id) {
     const auto found = composition.nodeLayout().find(id);
@@ -376,6 +424,30 @@ void NodeGraphEditor::populateAddMenu(QMenu* menu,
         sectionMenu->setObjectName(QStringLiteral("nodeAddCategoryMenu.") +
                                    nodeCategoryName(category));
         for (const auto* candidate : section) {
+            if (candidate->key.typeId == document::kShapeSourceNodeType) {
+                for (std::int64_t index = 0; index <= 6; ++index) {
+                    const auto kind = static_cast<document::ShapeKind>(index);
+                    auto* item = sectionMenu->addAction(
+                        QString::fromUtf8(document::shapeKindName(kind).data()));
+                    item->setObjectName(QStringLiteral("nodeAddShape.%1").arg(index));
+                    item->setEnabled(scene_->canSubmit() && session_.composition());
+                    connect(item, &QAction::triggered, this, [this, kind] {
+                        commands::Transaction transaction("Add Node", addRevision_);
+                        transaction.emplace<AddShapeMenuNode>(
+                            session_.compositionId(), kind,
+                            document::Vec2d{addPosition_.x(), addPosition_.y()}, addInput_,
+                            addOutput_);
+                        const auto result = scene_->submit(std::move(transaction));
+                        if (const auto id = result.outputId<document::NodeId>("editorNode");
+                            result.succeeded() && id)
+                            session_.selectNode(*id);
+                        view_->setFocus(Qt::PopupFocusReason);
+                    });
+                    if (recordInto != nullptr)
+                        recordInto->emplace_back(item, candidate->key.typeId);
+                }
+                continue;
+            }
             auto* item = sectionMenu->addAction(nodeTypeDisplayName(candidate->key.typeId));
             item->setObjectName(addActionName(candidate->key.typeId));
             if (scene_->canSubmit()) {

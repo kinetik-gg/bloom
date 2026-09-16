@@ -225,6 +225,67 @@ using document::Vec3d;
         out = value;
         return true;
     }
+    if (kindText == "path" && state.documentMinor < 14) {
+        state.fail(DocumentDecodeError::InvalidConstantValueKind, joinPath(path, "kind"));
+        return false;
+    }
+    if (kindText == "path") {
+        static constexpr std::array<std::string_view, 3> keys{"kind", "anchors", "closed"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        document::PathValue value;
+        if (members[1]->kind() != JsonValueKind::Array ||
+            members[1]->arrayElements().size() > document::kMaximumPathAnchors) {
+            state.fail(DocumentDecodeError::InvalidConstantValueKind, joinPath(path, "anchors"));
+            return false;
+        }
+        const auto point = [&](const JsonValue& object, const std::string& where, Vec2d& outPoint) {
+            static constexpr std::array<std::string_view, 2> xy{"x", "y"};
+            std::vector<const JsonValue*> coordinates;
+            if (object.kind() == JsonValueKind::Object &&
+                object.objectMembers().size() > xy.size()) {
+                state.fail(DocumentDecodeError::UnknownMember,
+                           joinPath(where, object.objectMembers()[xy.size()].key()));
+                return false;
+            }
+            return matchOrderedMembers(object, xy, false, state, where, coordinates) &&
+                   decodeFloat64Member(*coordinates[0], state, joinPath(where, "x"), outPoint.x) &&
+                   decodeFloat64Member(*coordinates[1], state, joinPath(where, "y"), outPoint.y);
+        };
+        for (const auto& anchor : members[1]->arrayElements()) {
+            std::vector<std::string_view> anchorKeys{"point"};
+            if (anchor.findMember("inHandle"))
+                anchorKeys.push_back("inHandle");
+            if (anchor.findMember("outHandle"))
+                anchorKeys.push_back("outHandle");
+            std::vector<const JsonValue*> parts;
+            const auto where =
+                joinPath(path, "anchors") + "/" + std::to_string(value.anchors.size());
+            if (anchor.kind() == JsonValueKind::Object &&
+                anchor.objectMembers().size() > anchorKeys.size()) {
+                state.fail(DocumentDecodeError::UnknownMember,
+                           joinPath(where, anchor.objectMembers()[anchorKeys.size()].key()));
+                return false;
+            }
+            if (!matchOrderedMembers(anchor, anchorKeys, false, state, where, parts))
+                return false;
+            document::PathAnchor decoded;
+            if (!point(*parts[0], joinPath(where, "point"), decoded.point))
+                return false;
+            for (std::size_t index = 1; index < parts.size(); ++index) {
+                Vec2d handle;
+                if (!point(*parts[index], joinPath(where, anchorKeys[index]), handle))
+                    return false;
+                (anchorKeys[index] == "inHandle" ? decoded.inHandle : decoded.outHandle) = handle;
+            }
+            value.anchors.push_back(decoded);
+        }
+        if (!decodeBooleanMember(*members[2], state, joinPath(path, "closed"), value.closed))
+            return false;
+        out = std::move(value);
+        return true;
+    }
     if (kindText == "color4") {
         static constexpr std::array<std::string_view, 5> keys{"kind", "red", "green", "blue",
                                                               "alpha"};

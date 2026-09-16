@@ -482,7 +482,7 @@ constexpr std::string_view kMinimalGraphJson =
 [[nodiscard]] std::string documentJson(const std::string_view idAllocationJson,
                                        const std::string_view extensionsJson) {
     std::string result =
-        R"({"schemaVersion":{"major":1,"minor":13},"project":{"id":"1","name":"Untitled",)"
+        R"({"schemaVersion":{"major":1,"minor":14},"project":{"id":"1","name":"Untitled",)"
         R"("colorSettings":)";
     result += defaultColorSettingsJson();
     result += R"(,"compositions":[)";

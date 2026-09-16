@@ -197,14 +197,14 @@ identity. Full curve ownership, extrapolation, commands, diagnostics, and the po
 rational conversion contract are defined in
 [`animation-and-time.md`](animation-and-time.md).
 
-## CPU Image Primitive Vocabulary Semantics Version 5
+## CPU Image Primitive Vocabulary Semantics Version 6
 
 `bloom_render` now provides the allocation-free CPU reference row kernels used by the first
-composition evaluator. Their semantics version is `5`; the evaluator and process-frame cache
+composition evaluator. Their semantics version is `6`; the evaluator and process-frame cache
 identity record that version explicitly. Version 3 added the text coverage kernel and the glyph
 rasterizer below; version 4 replaced the translate-only layer resample with the affine one described
 under "Layer Transform Resampling"; version 5 added the per-mode blend kernel described under
-"Blending". One number covers them all, deliberately: neither the rasterizer, the resampler, nor the
+"Blending"; version 6 adds the path coverage and stroke outlines below. One number covers them all: neither the rasterizer, the resampler, nor the
 blend kernel carries a second semantics version that could drift out of the identity a published
 frame records.
 
@@ -371,6 +371,41 @@ unchanged: removing the compatibility operands and the placement selector change
 built, not what a current plan evaluates to. Existing pixel and semantic identity goldens are not
 regenerated.
 
+### Path coverage
+
+`src/render/path_raster.cpp` owns the Qt-free path reference primitive. Coordinates stay in
+full-resolution author space. Cubic subdivision bounds deviation and control-polygon excess to
+1/32 of an output pixel using the larger per-axis proxy scale. Subdivision is capped at depth 20
+and generated geometry at 262,144 points; pathological geometry fails with a diagnostic. The
+reference evaluator checks the floating-point environment before invoking these kernels.
+
+Coverage is deterministic 4×4 centre sampling, with half-open scanline crossings and winding or
+parity accumulation. The byte is `(coveredSamples * 255 + 8) / 16`, a linear area fraction.
+Analytic integration is deliberately deferred: the fixed grid gives a small, independently
+verifiable CPU contract. Rectangle corners and ellipses use cubic quarter arcs; ellipses use four
+cubics with kappa 0.5522847498307936. Polygon corner radii use tangent circular arcs represented by
+cubics, constrained to half the adjacent edge lengths. Polygon and Star extrema are fitted to
+the authored bounding box.
+
+A stroke builds consistently wound outline polygons for segment strips, joins and caps, then fills
+their union. Miter joins have a fixed limit of four half-widths and fall back to Bevel; Round joins
+and caps flatten to the same tolerance. Inside and Outside closed strokes use a full-width outline
+on each side and intersect coverage samples with the fill region or its complement. This defines
+alignment even at self-crossings under either fill rule. Open strokes use Center. Degenerate
+zero-length paths have no coverage. Bounds include visible stroke extents; Inside uses the path
+bounds. Fill and stroke share `coverageSolidRow`, with stroke composited source-over afterwards.
+
+Flattening, outline construction and coverage scanlines check cancellation. Evaluation reports the
+normal operation progress and accounts for concurrent coverage/stroke rows before allocating the
+content-sized process image. Empty paths are successful empty images. The reference tests compare
+square, circle and five-point-star coverage with independent geometric predicates, and pin cap,
+alignment, fill-rule, proxy and cancellation behavior. Runtime tests pin rectangle, circle, star,
+stroked-line and even-odd-path pixels and animation.
+
+SHAPE-1 advances image primitive semantics 5 → 6 and evaluator semantics 6 → 7. Plan semantics stay
+4 and animation semantics stay 2. The independent output-identity oracle reproduces the prior
+identity goldens before deriving the replacements; existing pixel goldens remain unchanged.
+
 ## Primitive Families
 
 | Family | Owner | Examples | Priority |
@@ -381,6 +416,7 @@ regenerated.
 | Image composition | `src/render` | fill, copy, premultiply, unpremultiply, source-over, blend | First pixels |
 | Sampling and spatial | `src/render` | nearest/bilinear sampling, affine warp, crop, resize, borders | First pixels |
 | Channels and masks | `src/render` | extract/combine/copy channels, coverage math, morphology | Essential compositor |
+| Path coverage | `src/render` | bounded cubic flattening, winding/parity coverage, filled stroke outlines | Built |
 | Text coverage | `src/render` | glyph outline rasterization to 8-bit area coverage, coverage-scaled solid composition | First pixels |
 | Neighborhood filters | `src/render` | blur, sharpen, convolution, halo computation | Essential compositor |
 | Reduction and analysis | `src/render` | bounds, histogram, statistics, tracking inputs | Advanced |
@@ -415,7 +451,7 @@ canonicalizes RGB to exact zero. A qualified OCIO config must resolve that exact
 operation that needs an OCIO transform; a matching alias, role, or display name is insufficient.
 
 The live `ColorEncoding::LinearRec709Scene`, `EvaluationColorIntent::LinearRec709Scene`, CPU image
-primitive semantics version `5`, CPU evaluator semantics version `5`, and reference display-mapper
+primitive semantics version `6`, CPU evaluator semantics version `7`, and reference display-mapper
 semantics version `2` implement this process identity. They supersede the scaffold's ambiguous
 reference-linear naming; cache identity rejects the older semantic versions rather than treating
 the rename as metadata-only.
@@ -551,8 +587,9 @@ on playback cache hits without evaluation.
 
 ### Current Compiled Bounds Contract
 
-Compiled Solid dimensions and Text layout operands are required. Layer transforms always place the
+Compiled Solid dimensions, Text layout operands and Shape geometry operands are required. Shape
+bounds include the enabled fill and stroke. Layer transforms always place the
 local-bounds anchor at the authored position, and Merge always unions its inputs' bounds. Plans
 carry no historical evaluation selector. Unsupported document node versions are rejected before
-compilation. Removing compatibility paths does not change current pixels: plan semantics remains 3,
-animation sampling 2, evaluator 5, and render primitives 5.
+compilation. Current identity uses plan semantics 4, animation sampling 2, evaluator 7, and render
+primitives 6. SHAPE-1 adds shape pixels while preserving all existing source pixel goldens.

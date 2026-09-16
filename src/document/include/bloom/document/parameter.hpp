@@ -160,6 +160,21 @@ struct Vec2d {
     friend bool operator==(const Vec2d&, const Vec2d&) = default;
 };
 
+// Handles are absolute author-space coordinates. Empty and open paths are valid.
+inline constexpr std::size_t kMaximumPathAnchors = 4096;
+struct PathAnchor {
+    Vec2d point;
+    std::optional<Vec2d> inHandle;
+    std::optional<Vec2d> outHandle;
+    friend bool operator==(const PathAnchor&, const PathAnchor&) = default;
+};
+struct PathValue {
+    std::vector<PathAnchor> anchors;
+    bool closed = false;
+    [[nodiscard]] bool isValid() const noexcept;
+    friend bool operator==(const PathValue&, const PathValue&) = default;
+};
+
 // The third authoring vector width (task S7). A genuinely new authoring type rather than a reuse of
 // Vec2d or Color4d: a Color is not a Vec4 under
 // docs/architecture/evaluation-primitives.md's Type Binding rule, and by the same reasoning a
@@ -191,8 +206,9 @@ inline constexpr std::int64_t kDefaultBlendModeValue =
 // another. A schema key that satisfies none of them is constant-only, which after task S5 is
 // exactly the text CONTENT schema (a String has no interpolation) and every unregistered key.
 [[nodiscard]] constexpr bool isVec2AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
-    return schemaKey == kPositionParameterSchemaKey || schemaKey == kAnchorParameterSchemaKey ||
-           schemaKey == kScaleParameterSchemaKey || schemaKey == kVector2ValueParameterSchemaKey;
+    return schemaKey == "bloom.shape.size" || schemaKey == kPositionParameterSchemaKey ||
+           schemaKey == kAnchorParameterSchemaKey || schemaKey == kScaleParameterSchemaKey ||
+           schemaKey == kVector2ValueParameterSchemaKey;
 }
 
 [[nodiscard]] constexpr bool isVec3AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -201,8 +217,8 @@ inline constexpr std::int64_t kDefaultBlendModeValue =
 
 [[nodiscard]] constexpr bool
 isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
-    return schemaKey == kOpacityParameterSchemaKey || schemaKey == kRotationParameterSchemaKey ||
-           schemaKey == kTextSizeParameterSchemaKey ||
+    return schemaKey == "bloom.shape.stroke-width" || schemaKey == kOpacityParameterSchemaKey ||
+           schemaKey == kRotationParameterSchemaKey || schemaKey == kTextSizeParameterSchemaKey ||
            schemaKey == kScalarValueParameterSchemaKey ||
            schemaKey == kSolidWidthParameterSchemaKey ||
            schemaKey == kSolidHeightParameterSchemaKey ||
@@ -221,7 +237,8 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 // String stay constant-or-driven: each would need a separate discrete interpolation contract.
 [[nodiscard]] constexpr bool
 isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
-    return schemaKey == kSolidColorParameterSchemaKey ||
+    return schemaKey == "bloom.shape.fill-color" || schemaKey == "bloom.shape.stroke-color" ||
+           schemaKey == kSolidColorParameterSchemaKey ||
            schemaKey == kTextColorParameterSchemaKey || schemaKey == kColorValueParameterSchemaKey;
 }
 
@@ -250,6 +267,8 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 // is checked separately by each caller because the diagnostic it produces differs.
 [[nodiscard]] constexpr bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
                                                         const double value) noexcept {
+    if (schemaKey == "bloom.shape.stroke-width")
+        return value >= 0.0;
     if (schemaKey == kSolidWidthParameterSchemaKey || schemaKey == kSolidHeightParameterSchemaKey)
         return value >= 1.0;
     if (schemaKey == kAudioLevelParameterSchemaKey)
@@ -266,7 +285,7 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 }
 
 using ParameterValue = std::variant<bool, std::int64_t, double, Vec2d, Vec3d, core::Color4d,
-                                    std::string, core::RationalTime>;
+                                    std::string, core::RationalTime, PathValue>;
 
 struct ConstantValueSource {
     ParameterValue value;

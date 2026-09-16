@@ -1057,3 +1057,33 @@ is refused at release, before any transaction is built, with a message naming th
 of the generic connection-refused text `graph.addEdge` would otherwise produce. `DisconnectInput`
 removes a slot only once neither edge remains, so removing just the audio link off an otherwise-fed
 Layer leaves its image row exactly where it was.
+
+## Shape Sources
+
+`bloom.shape-source` v1 is one Sources node with an `image` output. Its `kind` Integer selects
+Rectangle (0), Ellipse (1), Triangle (2), Polygon (3), Star (4), Line (5), or Path (6).
+A circle is an ellipse with equal size components. All kinds share fill and stroke parameters;
+kind-specific controls are hidden through the row-visibility mapping. `AddShapeLayer(composition,
+kind)` creates the source, Layer Output and ordered Merge slot in one undoable transaction.
+The session offers structured shape layers. The canvas Sources menu offers each kind as a
+standalone source preset in one undo step, preserving the canvas Add contract. The node card
+carries a compact kind preview.
+Viewer drawing and manipulation tools are a separate delivery.
+
+`size` is a nonnegative pixel bounding box for the five closed parametric kinds. Polygon and Star
+have 3–64 points; Star's `innerRatio` is in [0,1]. Rectangle and Polygon accept a nonnegative
+`cornerRadius`, limited by adjacent edges. Line uses `lineStart` and `lineEnd`. Path carries bounded
+absolute anchors and optional absolute cubic handles. Open paths fill with an implicit closing
+edge; Line never fills. An empty path produces no image.
+
+`fillEnabled`, `fillColor`, `strokeEnabled`, `strokeColor`, and `strokeWidth` apply to every kind.
+New lines start with fill off and a white stroke on. Stroke alignment maps Center/Inside/Outside
+to 0/1/2, joins map Miter/Round/Bevel to 0/1/2, caps map Butt/Round/Square to 0/1/2, and fill rules
+map NonZero/EvenOdd to 0/1. Open strokes always use centre alignment. Size, fill/stroke colors and
+stroke width are animatable and expose optional typed driver sockets; all other v1 controls are
+inline constants. A Path has neither a socket nor an animation curve.
+
+The immutable plan owns `CompiledShape` and derives content bounds, including stroke, at evaluation
+time. Its data window contains that content even outside the composition display window. Fill
+coverage colors the image, then stroke coverage composites source-over in premultiplied scene
+linear space. The Qt-free CPU implementation is the common Linux, macOS and Windows path.

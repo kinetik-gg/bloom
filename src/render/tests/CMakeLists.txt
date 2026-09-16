@@ -25,3 +25,9 @@ bloom_add_test(
     COMMAND bloom_render_text_raster_test
     LABELS unit primitives text
 )
+
+add_executable(bloom_render_path_raster_test path_raster_test.cpp)
+target_link_libraries(bloom_render_path_raster_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_path_raster_test)
+bloom_enable_strict_floating_point(bloom_render_path_raster_test)
+bloom_add_test(NAME bloom.render.path_raster COMMAND bloom_render_path_raster_test LABELS unit primitives)

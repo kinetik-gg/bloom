@@ -1,5 +1,6 @@
 #pragma once
 #include <bloom/commands/asset_operations.hpp>
+#include <bloom/document/shape.hpp>
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/layer_operations.hpp>
@@ -51,6 +52,18 @@ inline constexpr std::string_view kAddSolidLayerLayerToStackEdgeOutput = "layerT
 
 inline constexpr std::string_view kAddCompositionOutput = "composition";
 inline constexpr std::string_view kDuplicateCompositionOutput = "composition";
+
+class AddShapeLayer final : public Operation {
+  public:
+    AddShapeLayer(document::CompositionId composition, document::ShapeKind kind)
+        : composition_(composition), kind_(kind) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId composition_;
+    document::ShapeKind kind_;
+};
 
 class AddSolidLayer final : public Operation {
   public:

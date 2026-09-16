@@ -51,6 +51,9 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                 using Step = std::decay_t<decltype(step)>;
                 if constexpr (std::is_same_v<Step, CompiledSolid>)
                     return parameter(step.color) || parameter(step.width) || parameter(step.height);
+                else if constexpr (std::is_same_v<Step, CompiledShape>)
+                    return parameter(step.size) || parameter(step.fillColor) ||
+                           parameter(step.strokeColor) || parameter(step.strokeWidth);
                 else if constexpr (std::is_same_v<Step, CompiledImageSource>)
                     return step.asset && step.asset->kind == document::AssetKind::Sequence;
                 else if constexpr (std::is_same_v<Step, CompiledText>)
