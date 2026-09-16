@@ -666,3 +666,13 @@ RAM-preview frame budget. Drag overrides bypass lookup and insertion. Per-frame 
 available from the process frame; no status-bar UI is added. Cache retention never changes the
 pixel reference or semantic identity versions. See [Operation memoization](evaluation-primitives.md#operation-memoization)
 for the complete key, ownership, concurrency and budget contract.
+
+## Animated Parent Transforms And Bounds
+
+A layer samples its own position, anchor, scale and rotation at composition time, then composes
+its local matrix with its parent's resolved matrix. This continues through the ancestor chain.
+Animated and driven parent values therefore move the child's evaluated content bounds, anchor and
+viewer overlay polygon at the same time as its pixels. Cache dependencies include the resolved
+parent transform; changing an ancestor cannot reuse stale child geometry or imagery. Parent opacity,
+enabled/solo state and time range do not suppress or fade children. The child's own range and opacity
+continue to apply independently.

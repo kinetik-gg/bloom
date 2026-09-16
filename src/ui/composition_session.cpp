@@ -882,6 +882,50 @@ CompositionSession::blendModeForLayer(const document::LayerId layerId) const noe
     return stored == nullptr ? std::nullopt : core::blendModeFromStoredValue(*stored);
 }
 
+std::optional<document::LayerId> CompositionSession::parentOf(document::LayerId layer) const {
+    const auto* current = composition();
+    const auto* boundary = current ? current->graph().findLayer(layer) : nullptr;
+    return boundary ? boundary->parent : std::nullopt;
+}
+
+std::vector<document::LayerId> CompositionSession::childrenOf(document::LayerId layer) const {
+    std::vector<document::LayerId> children;
+    if (const auto* current = composition()) {
+        for (const auto& boundary : current->graph().layerOutputs())
+            if (boundary.parent == layer)
+                children.push_back(boundary.layerId);
+    }
+    return children;
+}
+
+std::vector<document::LayerId> CompositionSession::candidateParents(document::LayerId layer) const {
+    const auto* current = composition();
+    if (!current || !current->graph().findLayer(layer))
+        return {};
+    std::set<document::LayerId> excluded{layer};
+    std::vector<document::LayerId> pending{layer};
+    while (!pending.empty()) {
+        const auto parent = pending.back();
+        pending.pop_back();
+        for (const auto child : childrenOf(parent))
+            if (excluded.insert(child).second)
+                pending.push_back(child);
+    }
+    std::vector<document::LayerId> candidates;
+    for (const auto& boundary : current->graph().layerOutputs())
+        if (!excluded.contains(boundary.layerId))
+            candidates.push_back(boundary.layerId);
+    return candidates;
+}
+
+bool CompositionSession::setLayerParent(document::LayerId layer,
+                                        std::optional<document::LayerId> parent) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    commands::Transaction transaction("Set Layer Parent", snapshot_.revision());
+    transaction.emplace<commands::SetLayerParent>(compositionId_, layer, parent);
+    return execute(std::move(transaction));
+}
+
 bool CompositionSession::setLayerBlendMode(const document::LayerId layerId,
                                            const core::BlendMode mode) {
     Q_ASSERT(QThread::currentThread() == thread());

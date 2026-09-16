@@ -110,12 +110,47 @@ void multiSelection() {
     expect(session.selectedNodes().empty() && session.selection() == ui::CompositionSelection{},
            "rebind clears the complete set atomically");
 }
+void parenting() {
+    auto project =
+        document::makeNewProject("Parenting", "Main", core::RationalTime::fromInteger(10));
+    const auto compositionId = project.initialCompositionId;
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, compositionId);
+    std::vector<document::LayerId> layers;
+    for (const auto* name : {"Grandparent", "Parent", "Child", "Sibling"}) {
+        if (!session.addSolidLayer(QString::fromLatin1(name), {1, 0, 0, 1}))
+            throw std::logic_error("parenting layer fixture");
+        layers.push_back(*session.selection().contextualLayer);
+    }
+    expect(session.setLayerParent(layers[1], layers[0]) &&
+               session.setLayerParent(layers[2], layers[1]),
+           "session issues parent commands");
+    expect(session.parentOf(layers[2]) == layers[1] &&
+               session.childrenOf(layers[0]) == std::vector{layers[1]},
+           "session exposes immediate links");
+    expect(session.candidateParents(layers[0]) == std::vector{layers[3]},
+           "candidate parents exclude all descendants and self");
+    expect(session.candidateParents(layers[2]).size() == 3,
+           "ancestors and unrelated layers are candidate parents");
+    expect(!session.setLayerParent(layers[0], layers[2]), "session rejects parent cycle");
+    expect(session.setLayerParent(layers[2], std::nullopt) && !session.parentOf(layers[2]),
+           "session clears parent through command");
+    expect(session.undo() && session.parentOf(layers[2]) == layers[1], "parent edit undoes");
+    expect(session.redo() && !session.parentOf(layers[2]), "parent edit redoes");
+    const auto unknown = document::LayerId::fromRaw(999999);
+    expect(!session.parentOf(unknown) && session.childrenOf(unknown).empty() &&
+               session.candidateParents(unknown).empty(),
+           "unknown layer accessors are empty");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         multiSelection();
+        parenting();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
