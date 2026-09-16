@@ -12,6 +12,7 @@
 #include <bloom/core/color.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/shape.hpp>
 
 #include <QCoreApplication>
 #include <QMouseEvent>
@@ -123,6 +124,15 @@ bool addDefaultTextLayer(CompositionSession& session) {
                                              document::kTextSourceNodeSchemaVersion);
     return session.addTextLayer(TimelineEditor::tr("Text %1").arg(layerNumber),
                                 TimelineEditor::tr("Text"));
+}
+
+// One "Add <shape>" gesture, two entry points (the viewer's Add menu, the Timeline's Add menu):
+// same command (CompositionSession::addShapeLayer(), commands::AddShapeLayer) the node editor's Add
+// menu already dispatches to for its own bare-node shape entries -- SHAPEFIX-1, deliverable 2. The
+// layer lands at the composition centre with the shape's default size and is selected afterward,
+// exactly like addDefaultSolidLayer()/addDefaultTextLayer() above.
+bool addDefaultShapeLayer(CompositionSession& session, const document::ShapeKind kind) {
+    return session.addShapeLayer(kind);
 }
 
 namespace {

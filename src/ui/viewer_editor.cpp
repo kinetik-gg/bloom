@@ -25,6 +25,7 @@
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/shape.hpp>
 #include <bloom/render/display_buffer.hpp>
 #include <bloom/render/image_types.hpp>
 
@@ -858,6 +859,14 @@ void ViewerEditor::buildHeader() {
             [this] { (void)addDefaultSolidLayer(session_); });
     connect(addMenu->addAction(tr("Text")), &QAction::triggered, this,
             [this] { (void)addDefaultTextLayer(session_); });
+    for (std::int64_t index = 0; index <= 6; ++index) {
+        const auto kind = static_cast<document::ShapeKind>(index);
+        auto* shapeAction =
+            addMenu->addAction(QString::fromUtf8(document::shapeKindName(kind).data()));
+        shapeAction->setObjectName(QStringLiteral("viewerAddShape.%1").arg(index));
+        connect(shapeAction, &QAction::triggered, this,
+                [this, kind] { (void)addDefaultShapeLayer(session_, kind); });
+    }
     bar->addMenuButton(tr("Add"), addMenu, "viewerAddMenuButton");
     viewerViewMenu_->addMenu(compositionMenu)->setText(tr("Composition"));
     bar->addStretch();

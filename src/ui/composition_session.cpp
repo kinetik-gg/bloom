@@ -40,9 +40,11 @@ struct SessionColorConverterState final {
 
 kit::KColorConverter CompositionSession::colorConverter(const std::string_view schemaKey) {
     static_assert(document::kSolidColorEncoding == "bloom.reference.linear-srgb");
-    if (schemaKey != document::kSolidColorParameterSchemaKey &&
-        schemaKey != document::kTextColorParameterSchemaKey &&
-        schemaKey != document::kColorValueParameterSchemaKey &&
+    // Every Color4d-valued schema -- including the shape source's fillColor/strokeColor and any
+    // future colour parameter added to isColor4AnimatableSchemaKey() -- authors straight RGBA in
+    // this one reference-linear-sRGB encoding, plus the constant-or-driven colour operand. A schema
+    // key outside that set is genuinely unknown and fails closed, exactly as before.
+    if (!document::isColor4AnimatableSchemaKey(schemaKey) &&
         schemaKey != document::kColorOperandParameterSchemaKey)
         return {};
     if (!colorConverterState_) {
