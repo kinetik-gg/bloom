@@ -1,5 +1,6 @@
 #include "cpu_composition_evaluator_support.hpp"
 #include "image_source.hpp"
+#include "layer_parent_transform.hpp"
 #include "operation_key.hpp"
 
 #include <bloom/core/rational_time.hpp>
@@ -345,6 +346,15 @@ enum class ScalarDomain : std::uint8_t {
                            std::holds_alternative<CompiledLayerOutput>(input) ||
                            std::holds_alternative<CompiledMerge>(input);
                 };
+                if (layer.parent && (layer.parent->value() >= index ||
+                                     !std::holds_alternative<CompiledLayerOutput>(
+                                         plan.operations()[layer.parent->value()]))) {
+                    failure = diagnostic(
+                        EvaluationDiagnosticCode::InvalidPlan,
+                        "Layer parent must name an earlier Layer Output", {},
+                        subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
+                    return false;
+                }
                 if (!sourcesAnImage()) {
                     failure = diagnostic(
                         EvaluationDiagnosticCode::InvalidPlan,
@@ -1471,6 +1481,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         };
         std::shared_ptr<const render::Rgba32fImage> processImage;
         std::vector<std::string> contentHashes(plan->operations().size());
+        std::vector<detail::LayerMatrix> layerMatrices(plan->operations().size());
 
         for (std::size_t index = 0; index < plan->operations().size(); ++index) {
             if (cancellation.isCancellationRequested()) {
@@ -1494,6 +1505,25 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                              operationSubject,
                                              selectedImage->warning,
                                              {}});
+            }
+            // Resolve authored transforms even when a parent's pixels are cached, empty, or
+            // outside its range. Parenting inherits neither visibility nor opacity.
+            if (const auto* layer = std::get_if<CompiledLayerOutput>(&plan->operations()[index])) {
+                const auto position = detail::resolveParameter(layer->position, *plan, resolved);
+                const auto anchor = detail::resolveParameter(layer->anchor, *plan, resolved);
+                const auto scale = detail::resolveParameter(layer->scale, *plan, resolved);
+                const auto rotation = detail::resolveParameter(layer->rotation, *plan, resolved);
+                if (!position || !anchor || !scale || !rotation)
+                    return EvaluationResult::failed(
+                        diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                                   "Layer transform could not be resolved", {}, operationSubject));
+                const auto centre = bounds[layer->input.value()].output.centre();
+                auto matrix = detail::LayerMatrix::authored(
+                    position->value, {centre.x + anchor->value.x, centre.y + anchor->value.y},
+                    scale->value, rotation->value);
+                if (layer->parent)
+                    matrix = layerMatrices[layer->parent->value()].times(matrix);
+                layerMatrices[index] = matrix;
             }
             detail::OperationKey key;
             if (cache) {
@@ -1552,6 +1582,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             parameter(step.color);
                         } else if constexpr (std::is_same_v<Step, CompiledLayerOutput>) {
 
+                            if (step.parent) {
+                                const auto& parent = layerMatrices[step.parent->value()];
+                                for (const auto value :
+                                     {parent.a, parent.b, parent.c, parent.d, parent.x, parent.y})
+                                    key.add(value);
+                            }
                             parameter(step.position);
                             parameter(step.anchor);
                             parameter(step.scale);
@@ -2039,15 +2075,35 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                     "Layer transform parameters are not evaluable");
                                 return;
                             }
+                            std::optional<detail::ParentedLayerTransform> parented;
+                            if (layer.parent) {
+                                parented.emplace(layerMatrices[index],
+                                                 sourceDescriptor->dataWindow(),
+                                                 resolved.horizontalScale, resolved.verticalScale,
+                                                 static_cast<float>(opacity->value));
+                                if (!parented->finite()) {
+                                    operationFailure = diagnostic(
+                                        EvaluationDiagnosticCode::InvalidParameter,
+                                        "Parented transform exceeds the supported numeric range",
+                                        {}, operationSubject);
+                                    return;
+                                }
+                                if (!parented->invertible())
+                                    return;
+                            }
+                            const auto forward = [&](double x, double y) {
+                                return parented ? parented->forwardMap(x, y)
+                                                : transform.value()->forwardMap(x, y);
+                            };
                             // Local content remains available outside the composition so a parent
                             // transform can bring it back.
                             const auto sourceWindow = sourceDescriptor->dataWindow();
                             const auto map = [&](const document::Vec2d point) {
-                                const auto mapped = transform.value()->forwardMap(
-                                    point.x * resolved.horizontalScale - 0.5 -
-                                        static_cast<double>(sourceWindow.originX()),
-                                    point.y * resolved.verticalScale - 0.5 -
-                                        static_cast<double>(sourceWindow.originY()));
+                                const auto mapped =
+                                    forward(point.x * resolved.horizontalScale - 0.5 -
+                                                static_cast<double>(sourceWindow.originX()),
+                                            point.y * resolved.verticalScale - 0.5 -
+                                                static_cast<double>(sourceWindow.originY()));
                                 return document::Vec2d{(mapped.x + 0.5) / resolved.horizontalScale,
                                                        (mapped.y + 0.5) / resolved.verticalScale};
                             };
@@ -2068,10 +2124,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             constexpr double limit = 16777214.0;
                             const double right = sourceWindow.extent().width();
                             const double bottom = sourceWindow.extent().height();
-                            const std::array support{transform.value()->forwardMap(-1.0, -1.0),
-                                                     transform.value()->forwardMap(right, -1.0),
-                                                     transform.value()->forwardMap(right, bottom),
-                                                     transform.value()->forwardMap(-1.0, bottom)};
+                            const std::array support{forward(-1.0, -1.0), forward(right, -1.0),
+                                                     forward(right, bottom), forward(-1.0, bottom)};
                             for (const auto point : support) {
                                 if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
                                     std::abs(point.x) > limit || std::abs(point.y) > limit) {
@@ -2087,7 +2141,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             const auto workingWindow = render::ImageWindow::create(
                                 -16777216, -16777216, 33554432, 33554432);
                             const auto layerWindow =
-                                transform.value()->supportBounds(*workingWindow.value());
+                                parented ? parented->supportBounds(*workingWindow.value())
+                                         : transform.value()->supportBounds(*workingWindow.value());
                             if (!layerWindow.has_value()) {
                                 reportProgress(progress,
                                                {.stage = EvaluationProgressStage::Operation,
@@ -2121,7 +2176,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             const auto outputWindow = *layerWindow;
                             const auto outcome = runRowBandPass(
                                 rowBands, cancellation, height, outputWindow.originY(),
-                                [&image, &source, &layerTransform, outputWindow,
+                                [&image, &source, &layerTransform, &parented, outputWindow,
                                  &operationSubject](const std::int64_t y) -> RowFailure {
                                     auto outputRow = image.row(y);
                                     if (!outputRow) {
@@ -2129,9 +2184,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                             *outputRow.error(), operationSubject,
                                             "Layer output row could not be addressed");
                                     }
-                                    if (const auto rowStatus = render::layerTransformBilinearRow(
-                                            source, outputWindow, y, layerTransform,
-                                            *outputRow.value())) {
+                                    if (const auto rowStatus =
+                                            parented ? parented->row(source, outputWindow, y,
+                                                                     *outputRow.value())
+                                                     : render::layerTransformBilinearRow(
+                                                           source, outputWindow, y, layerTransform,
+                                                           *outputRow.value())) {
                                         return imageDiagnostic(
                                             *rowStatus, operationSubject,
                                             "Layer transform could not be evaluated");

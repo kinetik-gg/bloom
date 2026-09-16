@@ -15,6 +15,8 @@
 namespace bloom::output::test {
 
 namespace {
+// Plan grammar 4 adds the Layer Output parent reference. Identity digests are independently
+// derived for plan 4, animation 2, evaluator 6 and primitives 5; pixel digests are unchanged.
 
 using Code = OutputFacetStableCodeV1;
 using Facet = OutputFacetIdV1;
@@ -110,7 +112,7 @@ void testNominalPresetsAndDigestGoldens(Expectations& expectations) {
     expectations.expect(
         pngDigest && pngDigest.preimageByteCount() == 1922 &&
             hasDigest(pngDigest.digest(),
-                      "326f8f7866f1efc61eb7de0ee4c4ce74f381854d58d87f0ec6d126766f1849b6"),
+                      "1cc8777d68ee48ea8fdca54b73ea2c9443c38e2604fe8d1afd5ba720e01b7263"),
         "the analyzer-produced PNG report preserves the independent digest golden");
 
     auto exrInputValue = exrInput(descriptor());
@@ -138,7 +140,7 @@ void testNominalPresetsAndDigestGoldens(Expectations& expectations) {
     expectations.expect(
         exrDigest && exrDigest.preimageByteCount() == 1485 &&
             hasDigest(exrDigest.digest(),
-                      "2efb92af54b08374d558c02dfe4dc28453c9a0d9a4f2bc5c9e947be87dff45c9"),
+                      "a1825f8660668568193e177d18d365e38e73caa0763a40c7ac4fbcbad7b25b4b"),
         "the analyzer-produced EXR report preserves the independent digest golden");
 }
 

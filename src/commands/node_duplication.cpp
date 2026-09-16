@@ -158,6 +158,12 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
         layerIds.emplace(boundary.layerId, *layerId);
         outputs.push_back({"layer." + std::to_string(boundary.layerId.value()), *layerId});
     }
+    for (const auto& [originalId, copyId] : layerIds) {
+        const auto parent = original.graph().findLayer(originalId)->parent;
+        graph.findLayer(copyId)->parent = parent && layerIds.contains(*parent)
+                                              ? std::optional{layerIds.at(*parent)}
+                                              : std::nullopt;
+    }
     for (const auto& stack : original.graph().merges()) {
         const bool copyStack = nodeIds.contains(stack.nodeId());
         const auto targetId = copyStack ? nodeIds.at(stack.nodeId()) : stack.nodeId();

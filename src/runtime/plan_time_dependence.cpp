@@ -63,10 +63,10 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                 // it is a property of the LAYER, so the layer's operation is what varies with time
                 // -- and the stack's own dependence already follows its inputs.
                 else if constexpr (std::is_same_v<Step, CompiledLayerOutput>)
-                    return input(step.input) || parameter(step.position) ||
-                           parameter(step.anchor) || parameter(step.scale) ||
-                           parameter(step.rotation) || parameter(step.opacity) ||
-                           driven(step.drivenBlendMode);
+                    return input(step.input) || (step.parent && input(*step.parent)) ||
+                           parameter(step.position) || parameter(step.anchor) ||
+                           parameter(step.scale) || parameter(step.rotation) ||
+                           parameter(step.opacity) || driven(step.drivenBlendMode);
                 else if constexpr (std::is_same_v<Step, CompiledMerge>)
                     return std::ranges::any_of(
                         step.entries, [&](const auto& entry) { return input(entry.input); });

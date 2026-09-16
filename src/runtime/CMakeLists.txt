@@ -62,6 +62,7 @@ target_sources(
         operation_cache.cpp
         image_source.cpp
         image_source.hpp
+        layer_parent_transform.hpp
         operation_key.hpp
         animation_sampling.cpp
         cpu_composition_evaluator.cpp

@@ -97,10 +97,40 @@ Only Output and the Merge directly feeding it are protected from removal. Other 
 added, duplicated, disconnected or deleted through ordinary commands. There is no secondary layer
 list or generated Merge chain to synchronize. Composition-as-source is deferred.
 
-Plan semantics is 3: `CompiledMergeInput` admits an absent Layer identity and a plain image
-operation, changing the previous Layer-only operand grammar. Evaluator and primitive versions
-remain 5 because existing pixel behavior is unchanged. Output identity goldens are independently
-re-derived for plan 3, animation 2, evaluator 5 and primitives 5.
+Plan semantics is 4: `CompiledMergeInput` admits an absent Layer identity and a plain image
+operation, changing the previous Layer-only operand grammar. Layer Output also carries an optional
+parent operation index. Evaluator semantics remains 6 and
+primitive semantics remains 5; existing unparented pixel behavior is unchanged. Output identities
+use plan 4, animation 2, evaluator 6 and primitives 5.
+
+### Transform Parenting
+
+A Layer Output may name another layer of the same composition as its `parent`. Parent links form
+an acyclic hierarchy independently of Merge membership and stack order. A layer cannot parent itself
+or name a missing or foreign layer. Cycles that combine parent links with image or parameter-driver
+dependencies are also refused before publication. Children retain their authored values when a parent changes.
+With no parent, those values place the layer in composition space; with a parent, they place it in
+that parent's local coordinate space. For column-vector affine matrices:
+
+```
+childWorld = parentWorld * childLocal
+```
+
+Each local matrix applies position, anchor, scale and rotation using the local content-bounds rule
+below. Ancestor transforms compose transitively, retaining shear from nonuniform scales and
+rotations. Opacity, blend mode, enabled, solo and time range are not inherited. An empty, disabled,
+unconnected or out-of-range parent still contributes its authored transform. Empty parent content
+uses a zero bounds centre. A collapsed ancestor transform collapses its children.
+
+The compiler evaluates parents before children while preserving the authored Merge order. Bounds,
+anchor positions and overlay polygons use the same composed matrix as pixels. Resampling occurs once
+per child placement. Parent values participate in cache dependencies even if the parent draws nothing.
+
+Parent changes are undoable commands. Deleting or dissolving a parent clears its children's links in
+the same transaction. Copying selected nodes retains a parent only if that parent is also copied,
+then remaps the reference; duplicating a composition remaps the complete hierarchy. Splitting a layer
+retains its parent space on both temporal halves. Session queries expose direct parents and children;
+parent candidates are all other composition layers except the selected layer's descendants.
 
 ### Local Content Bounds And Layer Transform
 
@@ -142,7 +172,7 @@ produce diagnostics when a requested image cannot be represented or allocated.
 Solid v2, Text v2, Layer v4, and Merge v2 are the only built-in definitions for these kinds.
 Every layer uses this local-bounds contract. Project I/O rejects an unsupported node version with
 `UnsupportedNodeVersion`, naming the kind and version; it never injects parameters, rewrites node
-versions, or converts placement. The document schema floor is 1.12.
+versions, or converts placement. The document schema floor is 1.13.
 
 ### Blending
 
@@ -326,7 +356,7 @@ The first document/runtime slice should prove:
 6. Save and reopen stable IDs, order, parameter source, animation, and graph connectivity.
 7. Compile one immutable snapshot and render the same result through the canonical evaluation path.
 
-Full effects, masks, mattes, parenting, folders and groups, nested compositions, arbitrary
+Full effects, masks, mattes, folders and groups, nested compositions, arbitrary
 graph-to-layer conversion and multi-selection editor gestures remain deferred. Their contracts are
 reserved here so the first proof does not create incompatible shortcuts.
 

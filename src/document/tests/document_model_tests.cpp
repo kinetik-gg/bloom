@@ -799,10 +799,41 @@ void testMultipleMerges(ExpectationContext& expectations) {
                         "deletion preserves graph validity");
 }
 
+void testLayerParenting(ExpectationContext& expectations) {
+    auto project = validProject();
+    auto* composition = project.findComposition(id<CompositionId>(4));
+    auto& graph = composition->graph();
+    auto* child = graph.findLayer(id<LayerId>(20));
+    auto* parent = graph.findLayer(id<LayerId>(21));
+    child->parent = parent->layerId;
+    expectations.expect(graph.validate(composition->parameters()).ok(),
+                        "same-composition parent is valid");
+    parent->parent = child->layerId;
+    expectations.expect(!graph.validate(composition->parameters()).ok(), "parent cycle rejected");
+    parent->parent.reset();
+    child->parent = child->layerId;
+    expectations.expect(!graph.validate(composition->parameters()).ok(), "self-parent rejected");
+    child->parent = id<LayerId>(999);
+    expectations.expect(!graph.validate(composition->parameters()).ok(),
+                        "unknown or foreign parent rejected");
+    child->parent.reset();
+    expectations.expect(graph.validate(composition->parameters()).ok(), "no parent remains valid");
+    expectations.expect(graph.eraseEdge(id<EdgeId>(52)) &&
+                            graph.addEdge({id<EdgeId>(1000),
+                                           {child->nodeId, "image"},
+                                           NodeInputRef{parent->nodeId, "image"}}),
+                        "parent image can consume the child before a parent link exists");
+    child->parent = parent->layerId;
+    expectations.expect(
+        hasIssue(graph.validate(composition->parameters()), ValidationCode::GraphCycle),
+        "combined parent and image dependency cycle is refused before publication");
+}
+
 } // namespace
 
 int main() try {
     ExpectationContext expectations;
+    testLayerParenting(expectations);
     testMultipleMerges(expectations);
     testRationalTime(expectations);
     testIdsAndParameters(expectations);

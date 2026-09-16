@@ -28,6 +28,37 @@ OperationResult invalidRange() {
         "Layer range must satisfy 0 <= in < out <= duration on composition frames");
 }
 } // namespace
+std::string_view SetLayerParent::typeId() const noexcept { return "bloom.layer.set-parent"; }
+OperationResult SetLayerParent::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(composition_);
+    auto* layer = composition ? composition->graph().findLayer(layer_) : nullptr;
+    if (!layer)
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Layer must exist in the target composition");
+    if (layer->locked)
+        return OperationResult::rejected(OperationIssueCode::InvalidValue, "Layer is locked");
+    auto ancestor = parent_;
+    std::size_t remaining = composition->graph().layerOutputs().size();
+    while (ancestor) {
+        if (*ancestor == layer_ || remaining-- == 0)
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Layer parenting would create a cycle");
+        const auto* parent = composition->graph().findLayer(*ancestor);
+        if (!parent)
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Parent must be a layer in the same composition");
+        ancestor = parent->parent;
+    }
+    if (layer->parent == parent_)
+        return OperationResult::noChange();
+    const auto previous = layer->parent;
+    layer->parent = parent_;
+    if (const auto failure = detail::validateGraph(*composition)) {
+        layer->parent = previous;
+        return *failure;
+    }
+    return OperationResult::applied();
+}
 std::string_view SetLayerRange::typeId() const noexcept { return "bloom.layer.set-range"; }
 OperationResult SetLayerRange::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
@@ -72,6 +103,7 @@ OperationResult SplitLayerAtTime::apply(document::Draft& draft) const {
     if (!copy)
         return detail::invalidTarget();
     composition->graph().findLayer(layer_)->outPoint = *time;
+    copy->parent = original.parent;
     copy->inPoint = *time;
     copy->outPoint = original.outPoint;
     duplicated.outputs.push_back({"layer", copyId});

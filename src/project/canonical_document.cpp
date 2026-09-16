@@ -1350,6 +1350,8 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
             if (!state.ok(writer.endArray()))
                 return false;
         }
+        if (boundary.parent && !emitNamedId(state, "parent", boundary.parent->value()))
+            return false;
         if (!emitRetainedTrailing(state)) {
             return false;
         }

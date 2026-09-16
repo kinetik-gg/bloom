@@ -464,7 +464,10 @@ void testDissolveParticipatingLayer(TestContext& test) {
         throw std::logic_error("connect participating layer input");
     const auto slotsBefore =
         composition(fixture.document.snapshot()).graph().layerStack().entries().size();
+    (void)apply<SetLayerParent>(fixture, kSecondLayerId, kFirstLayerId);
     exercise<DissolveNode>(test, fixture, kFirstLayerNodeId);
+    test.expect(!composition(fixture.document.snapshot()).graph().findLayer(kSecondLayerId)->parent,
+                "dissolving a parent clears child links and restores them on undo");
     const auto& after = composition(fixture.document.snapshot());
     test.expect(after.graph().findNode(kFirstLayerNodeId) == nullptr &&
                     after.graph().layerStack().entries().size() == slotsBefore - 1 &&
@@ -869,12 +872,59 @@ void testNodeGroups(TestContext& test) {
     test.expect(groups().empty(), "removing a group's last node removes the group");
 }
 
+void testParentCommands(TestContext& test) {
+    Fixture mixed;
+    test.expect(apply<ConnectPorts>(mixed, OutputPortRef{kFirstLayerNodeId, "image"},
+                                    InputPortRef{NodeInputRef{kSecondLayerNodeId, "image"}})
+                    .changed(),
+                "mixed cycle fixture");
+    refuse<SetLayerParent>(test, mixed, OperationIssueCode::GraphCycle, kFirstLayerId,
+                           kSecondLayerId);
+    Fixture fixture;
+    const auto parent = [&] {
+        return composition(fixture.document.snapshot()).graph().findLayer(kFirstLayerId)->parent;
+    };
+    (void)exercise<SetLayerParent>(test, fixture, kFirstLayerId, kSecondLayerId);
+    test.expect(parent() == kSecondLayerId, "set parent survives undo and redo");
+    test.expect(apply<SetLayerParent>(fixture, kFirstLayerId, kSecondLayerId).status ==
+                    CommandStatus::NoChange,
+                "same parent is a no-op");
+    refuse<SetLayerParent>(test, fixture, OperationIssueCode::InvalidValue, kSecondLayerId,
+                           kFirstLayerId);
+    refuse<SetLayerParent>(test, fixture, OperationIssueCode::InvalidValue, kFirstLayerId,
+                           kFirstLayerId);
+    refuse<SetLayerParent>(test, fixture, OperationIssueCode::InvalidValue, kFirstLayerId,
+                           LayerId::fromRaw(999));
+    refuse<SetLayerParent>(test, fixture, OperationIssueCode::InvalidValue, LayerId::fromRaw(999),
+                           std::nullopt);
+    const auto single =
+        exercise<DuplicateNodes>(test, fixture, std::set<NodeId>{kFirstLayerNodeId}, Vec2d{});
+    const auto singleId = single.outputId<LayerId>("layer.30");
+    test.expect(singleId &&
+                    !composition(fixture.document.snapshot()).graph().findLayer(*singleId)->parent,
+                "duplicating child alone clears parent");
+    const auto pair = exercise<DuplicateNodes>(
+        test, fixture, std::set<NodeId>{kFirstLayerNodeId, kSecondLayerNodeId}, Vec2d{});
+    const auto childId = pair.outputId<LayerId>("layer.30");
+    const auto parentId = pair.outputId<LayerId>("layer.31");
+    test.expect(childId && parentId &&
+                    composition(fixture.document.snapshot()).graph().findLayer(*childId)->parent ==
+                        parentId,
+                "duplicating pair remaps parent");
+    (void)exercise<RemoveNodes>(test, fixture, std::set<NodeId>{kSecondLayerNodeId});
+    test.expect(!parent(), "deleting parent clears child link and undoes atomically");
+    (void)exercise<SetLayerParent>(test, fixture, kFirstLayerId, parentId);
+    (void)exercise<SetLayerParent>(test, fixture, kFirstLayerId, std::nullopt);
+    test.expect(!parent(), "unparent command survives undo and redo");
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
 int main() {
     bloom::commands::test::TestContext test;
     try {
+        bloom::commands::test::testParentCommands(test);
         bloom::commands::test::testMultipleMergeCommands(test);
         bloom::commands::test::testMergeSlotSharesContentAndAudioRoles(test);
         bloom::commands::test::testLayerToggles(test);

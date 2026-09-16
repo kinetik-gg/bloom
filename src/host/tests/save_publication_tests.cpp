@@ -233,7 +233,9 @@ void withDocumentInput(
     bloom::document::Document document{std::move(newProject.project)};
     const auto snapshot = document.snapshot();
     const auto colorSettings = neutralColorSettings();
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 12}, .requirements = {}};
+    const CanonicalManifestV1 manifest{
+        .documentSchemaVersion = bloom::project::kCanonicalManifestDocumentSchemaVersionV1,
+        .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
     use(manifest, documentInput);
 }
@@ -292,8 +294,9 @@ void withBulkDocumentInput(
          .capabilityId = "vendor.bulk.cap",
          .schemaVersion = {1, 0},
          .providedNodeTypeIds = {}}};
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 12},
-                                       .requirements = requirements};
+    const CanonicalManifestV1 manifest{
+        .documentSchemaVersion = bloom::project::kCanonicalManifestDocumentSchemaVersionV1,
+        .requirements = requirements};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
     use(manifest, documentInput);
 }

@@ -137,7 +137,8 @@ enum class Step {
     SafeAreas,
     Images,
     Audio,
-    KeyframeHandles
+    KeyframeHandles,
+    LayerParenting
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -151,7 +152,7 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     // ran; its own source-version refusal (sourceVersionIs() below) is the whole guard.
     if (step == Step::AnimationBreadth || step == Step::ValueGraph || step == Step::LayerTimeline ||
         step == Step::Merges || step == Step::ContentBounds || step == Step::Audio ||
-        step == Step::KeyframeHandles)
+        step == Step::KeyframeHandles || step == Step::LayerParenting)
         return false;
     if (scope == Scope::Composition) {
         return value.findMember(step == Step::NodeLayout   ? "nodeLayout"
@@ -193,7 +194,8 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::SafeAreas        ? "{\"major\":1,\"minor\":8}"
                            : step == Step::Images           ? "{\"major\":1,\"minor\":10}"
                            : step == Step::Audio            ? "{\"major\":1,\"minor\":11}"
-                                                            : "{\"major\":1,\"minor\":12}");
+                           : step == Step::KeyframeHandles  ? "{\"major\":1,\"minor\":12}"
+                                                            : "{\"major\":1,\"minor\":13}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
                 return false;
@@ -333,6 +335,12 @@ MigrationStepOutcome migrateKeyframeHandlesV1_11(const JsonValue& root, std::pmr
                                                  Buffer& output) {
     if (!sourceVersionIs(root, "11") ||
         !transform(root, Scope::Root, Step::KeyframeHandles, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateLayerParentingV1_12(const JsonValue& root, std::pmr::memory_resource*,
+                                                Buffer& output) {
+    if (!sourceVersionIs(root, "12") || !transform(root, Scope::Root, Step::LayerParenting, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

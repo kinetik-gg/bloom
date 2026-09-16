@@ -304,6 +304,13 @@ bool CanonicalGraph::eraseNode(const NodeId id) {
         return edge.source.nodeId == id || destinationNode(edge.destination) == id;
     });
     std::erase_if(layerStacks_, [id](const auto& stack) { return stack.nodeId() == id; });
+    for (auto& child : layerOutputs_) {
+        if (child.parent) {
+            const auto* parent = findLayer(*child.parent);
+            if (parent && parent->nodeId == id)
+                child.parent.reset();
+        }
+    }
     std::erase_if(layerOutputs_, [id](const auto& boundary) { return boundary.nodeId == id; });
     std::erase_if(nodes_, [id](const auto& node) { return node.id == id; });
     return true;
@@ -405,12 +412,51 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
         }
     }
 
+    // Parent identities are local to this composition, independently of Merge membership.
+    std::unordered_set<LayerId> checkedParentChains;
+    for (const auto& boundary : layerOutputs_) {
+        if (checkedParentChains.contains(boundary.layerId))
+            continue;
+        const auto path = "layerOutputs[" + std::to_string(boundary.layerId.value()) + "].parent";
+        std::unordered_set<LayerId> ancestors{boundary.layerId};
+        auto parent = boundary.parent;
+        while (parent) {
+            if (checkedParentChains.contains(*parent))
+                break;
+            const auto found = boundariesByLayer.find(*parent);
+            if (found == boundariesByLayer.end()) {
+                result.add(ValidationCode::MissingReference, path,
+                           "Parent must be a layer in the same composition");
+                break;
+            }
+            if (!ancestors.insert(*parent).second) {
+                result.add(ValidationCode::InvalidLayerBoundary, path,
+                           "Layer parenting must not contain self-parenting or cycles");
+                break;
+            }
+            parent = found->second->parent;
+        }
+        checkedParentChains.insert(ancestors.begin(), ancestors.end());
+    }
+
     std::unordered_set<EdgeId> edgeIds;
     std::unordered_set<std::string> destinations;
     std::unordered_map<NodeId, std::vector<NodeId>> adjacency;
     std::unordered_map<NodeId, std::size_t> indegree;
     for (const auto& node : nodes_) {
         indegree.try_emplace(node.id, 0);
+    }
+
+    // Transform dependencies share the image/driver evaluation order. A mixed cycle is no more
+    // evaluable than a parent-only cycle, even when each relation is acyclic by itself.
+    for (const auto& boundary : layerOutputs_) {
+        const auto parent =
+            boundary.parent ? boundariesByLayer.find(*boundary.parent) : boundariesByLayer.end();
+        if (parent != boundariesByLayer.end() && indegree.contains(boundary.nodeId) &&
+            indegree.contains(parent->second->nodeId)) {
+            adjacency[parent->second->nodeId].push_back(boundary.nodeId);
+            ++indegree[boundary.nodeId];
+        }
     }
 
     for (const auto& edge : edges_) {

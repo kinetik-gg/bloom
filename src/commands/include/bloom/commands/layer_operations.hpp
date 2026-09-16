@@ -4,6 +4,19 @@
 #include <bloom/document/ids.hpp>
 
 namespace bloom::commands {
+class SetLayerParent final : public Operation {
+  public:
+    SetLayerParent(document::CompositionId composition, document::LayerId layer,
+                   std::optional<document::LayerId> parent)
+        : composition_(composition), layer_(layer), parent_(parent) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId composition_;
+    document::LayerId layer_;
+    std::optional<document::LayerId> parent_;
+};
 class SetLayerRange final : public Operation {
   public:
     SetLayerRange(document::CompositionId composition, document::LayerId layer,

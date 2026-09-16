@@ -327,6 +327,11 @@ class CompositionSession final : public QObject {
     // transaction, one undo step -- exactly the shape setSelectedSolidColor() uses, and for the
     // same reason: the schema is constant-only, so there is no keyframe branch. A mode already
     // equal to the one asked for commits nothing and returns true.
+    [[nodiscard]] std::optional<document::LayerId> parentOf(document::LayerId layer) const;
+    [[nodiscard]] std::vector<document::LayerId> childrenOf(document::LayerId layer) const;
+    [[nodiscard]] std::vector<document::LayerId> candidateParents(document::LayerId layer) const;
+    [[nodiscard]] bool setLayerParent(document::LayerId layer,
+                                      std::optional<document::LayerId> parent);
     [[nodiscard]] bool setLayerBlendMode(document::LayerId layerId, core::BlendMode mode);
     // The selection-driven form, for the Properties row and the Layer node card, which author
     // whatever the contextual layer is. Resolves the selection's layer and delegates to

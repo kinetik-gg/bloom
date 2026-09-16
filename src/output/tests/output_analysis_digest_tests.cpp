@@ -26,6 +26,8 @@
 #include <vector>
 
 namespace {
+// Plan grammar 4 adds the Layer Output parent reference. Identity digests are independently
+// derived for plan 4, animation 2, evaluator 6 and primitives 5; pixel digests are unchanged.
 
 namespace color = bloom::color;
 namespace core = bloom::core;
@@ -113,9 +115,9 @@ constexpr core::Sha256Digest::Bytes kRevisionBytes{
 // reproducing EVERY previously checked-in golden set byte for byte when fed its own version
 // numbers, the version-4 set this slice replaces included.
 constexpr std::string_view kExpectedExrDigest =
-    "2efb92af54b08374d558c02dfe4dc28453c9a0d9a4f2bc5c9e947be87dff45c9";
+    "a1825f8660668568193e177d18d365e38e73caa0763a40c7ac4fbcbad7b25b4b";
 constexpr std::string_view kExpectedPngDigest =
-    "326f8f7866f1efc61eb7de0ee4c4ce74f381854d58d87f0ec6d126766f1849b6";
+    "1cc8777d68ee48ea8fdca54b73ea2c9443c38e2604fe8d1afd5ba720e01b7263";
 
 class Expectations final {
   public:
