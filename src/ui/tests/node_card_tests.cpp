@@ -283,8 +283,10 @@ void testMergeRendersOneOrderedMultiInput() {
     for (auto* socket : card->sockets())
         if (socket->input.has_value())
             inputs.push_back(socket);
-    expect(inputs.size() == 1, "two layers are ONE port on Merge, not two repeated content rows");
-    if (inputs.size() != 1)
+    // Two pills, one per slot role (content, then audio): two layers never add rows.
+    expect(inputs.size() == 2, "two layers are ONE content port and ONE audio port on Merge, "
+                               "not repeated rows");
+    if (inputs.size() != 2)
         return;
     auto* pill = inputs.front();
     expect(pill->multiInput() && pill->orderedInputs().size() == entries.size(),
