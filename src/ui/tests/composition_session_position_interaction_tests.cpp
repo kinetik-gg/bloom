@@ -1,7 +1,7 @@
 // Tests for CompositionSession's direct-manipulation position interaction (docs/architecture/
 // animation-and-time.md, "Direct Manipulation And Preview Overrides"; issue #82, task D1).
 // Deliberately pure-session (QCoreApplication, no widgets, no preview pipeline) mirroring
-// composition_session_animation_tests.cpp's idiom: PositionInteractionMapping is supplied directly
+// composition_session_animation_tests.cpp's idiom: ViewerMapping is supplied directly
 // rather than sourced from a rendered frame, since only ViewerEditor is responsible for computing
 // it from real display geometry (covered separately by the viewer gesture tests).
 
@@ -68,8 +68,8 @@ void require(const bool condition, const std::string_view message) {
     return *format;
 }
 
-[[nodiscard]] ui::PositionInteractionMapping
-makeMapping(const QRectF& displayRect, const document::CompositionFormat compositionFormat) {
+[[nodiscard]] ui::ViewerMapping makeMapping(const QRectF& displayRect,
+                                            const document::CompositionFormat compositionFormat) {
     const auto window =
         render::ImageWindow::create(0, 0, compositionFormat.width(), compositionFormat.height());
     if (!window) {
@@ -80,7 +80,7 @@ makeMapping(const QRectF& displayRect, const document::CompositionFormat composi
     if (!descriptor) {
         fail("mapping fixture display descriptor must be valid");
     }
-    return ui::PositionInteractionMapping{
+    return ui::ViewerMapping{
         .displayRect = displayRect,
         .compositionFormat = compositionFormat,
         .resolution = runtime::CompositionFormatResolution{},

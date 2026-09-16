@@ -9,13 +9,60 @@
 #include <cmath>
 
 namespace bloom::ui {
-namespace {
-
-QPointF toScreen(const QRectF& displayRect, const QSize compositionSize,
-                 const document::Vec2d point) {
-    return {displayRect.left() + point.x * displayRect.width() / compositionSize.width(),
-            displayRect.top() + point.y * displayRect.height() / compositionSize.height()};
+QPointF ViewerMapping::toScreen(const document::Vec2d point) const {
+    return {displayRect.left() + point.x * displayRect.width() / compositionFormat.width(),
+            displayRect.top() + point.y * displayRect.height() / compositionFormat.height()};
 }
+
+document::Vec2d ViewerMapping::toComposition(const QPointF point) const {
+    return {(point.x() - displayRect.left()) * compositionFormat.width() / displayRect.width(),
+            (point.y() - displayRect.top()) * compositionFormat.height() / displayRect.height()};
+}
+
+std::array<QPointF, 8> viewerHandlePoints(const ViewerMapping& mapping,
+                                          const runtime::EvaluatedOperationBounds& bounds) {
+    std::array<QPointF, 8> points;
+    for (std::size_t i = 0; i < 4; ++i) {
+        points[i * 2] = mapping.toScreen(bounds.polygon[i]);
+        points[i * 2 + 1] = (points[i * 2] + mapping.toScreen(bounds.polygon[(i + 1) % 4])) / 2;
+    }
+    return points;
+}
+
+ViewerHit hitTestViewer(const ViewerMapping& mapping, const QPointF screenPoint,
+                        const std::span<const runtime::EvaluatedOperationBounds> topmostFirst,
+                        const std::span<const runtime::EvaluatedOperationBounds> selected) {
+    const auto near = [&](const QPointF point, const double radius) {
+        return std::hypot(point.x() - screenPoint.x(), point.y() - screenPoint.y()) <= radius;
+    };
+    for (const auto& bounds : selected) {
+        if (near(mapping.toScreen(bounds.anchor), kit::px(kit::Size::GizmoHandle)))
+            return {bounds.layerId, ViewerHitRegion::Anchor};
+        const auto handles = viewerHandlePoints(mapping, bounds);
+        for (std::size_t i = 0; i < handles.size(); ++i)
+            if (near(handles[i], kit::px(kit::Size::GizmoHandle) / 2.0))
+                return {bounds.layerId, ViewerHitRegion::Scale, static_cast<int>(i)};
+        QPolygonF polygon;
+        for (const auto point : bounds.polygon)
+            polygon << mapping.toScreen(point);
+        if (!polygon.containsPoint(screenPoint, Qt::OddEvenFill))
+            for (std::size_t i = 0; i < handles.size(); i += 2)
+                if (near(handles[i], kit::px(kit::Size::GizmoRotateZone)))
+                    return {bounds.layerId, ViewerHitRegion::Rotate, static_cast<int>(i)};
+    }
+    for (const auto& bounds : topmostFirst) {
+        if (!bounds.layerId.isValid() || bounds.output.empty())
+            continue;
+        QPolygonF polygon;
+        for (const auto point : bounds.polygon)
+            polygon << mapping.toScreen(point);
+        if (polygon.containsPoint(screenPoint, Qt::OddEvenFill))
+            return {bounds.layerId, ViewerHitRegion::Move};
+    }
+    return {};
+}
+
+namespace {
 
 QRectF insetRect(const QRectF& displayRect, const double percentage) {
     const qreal horizontal = displayRect.width() * (1.0 - percentage) * 0.5;
@@ -166,14 +213,18 @@ void paintSelectionBounds(QPainter& painter, const QRectF& displayRect, const QS
     for (const auto& bound : bounds) {
         QPolygonF polygon;
         for (const auto point : bound.polygon) {
-            polygon << toScreen(displayRect, compositionSize, point);
+            polygon << QPointF(
+                displayRect.left() + point.x * displayRect.width() / compositionSize.width(),
+                displayRect.top() + point.y * displayRect.height() / compositionSize.height());
         }
         painter.setPen(QPen(kit::color(kit::Color::Accent), 1.0));
         painter.setBrush(Qt::NoBrush);
         painter.drawPolygon(polygon);
         painter.setBrush(kit::color(kit::Color::Accent));
         painter.setPen(Qt::NoPen);
-        const auto anchor = toScreen(displayRect, compositionSize, bound.anchor);
+        const auto anchor = QPointF(
+            displayRect.left() + bound.anchor.x * displayRect.width() / compositionSize.width(),
+            displayRect.top() + bound.anchor.y * displayRect.height() / compositionSize.height());
         painter.drawEllipse(anchor, 3.0, 3.0);
     }
 }

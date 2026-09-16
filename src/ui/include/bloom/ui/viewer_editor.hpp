@@ -232,10 +232,11 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     // this widget's current geometry. Returns std::nullopt when there is no current-composition
     // frame to map from -- a stale frame from another composition (or an older revision) is never
     // a mapping source.
-    [[nodiscard]] std::optional<PositionInteractionMapping> currentMapping() const;
+    [[nodiscard]] std::optional<ViewerMapping> currentMapping() const;
     // True while a gesture is active AND the freshly recomputed mapping still matches the one
     // frozen at gesture begin.
     [[nodiscard]] bool mappingStillValid() const;
+    [[nodiscard]] ViewerHit hitAt(const ViewerMapping& mapping, QPointF point) const;
     void endDrag(bool commit);
 
     struct DisplayGeometry final {
@@ -296,7 +297,7 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     CompositionPreviewController& previewController_;
     bool dragActive_ = false;
     QPointF dragOrigin_;
-    std::optional<PositionInteractionMapping> activeMapping_;
+    std::optional<ViewerMapping> activeMapping_;
 
     // Zoom/pan (decision 2).
     ViewTransform transform_;

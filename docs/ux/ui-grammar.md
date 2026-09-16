@@ -168,6 +168,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | --- | --- | --- |
 | `TimelineNameDefault` | 280 | Timeline default name column |
 | `TimelineLeftColumn` | 576 | Four 24px toggles + name + two 100px dropdown columns |
+| `GizmoHandle / GizmoRotateZone` | 8 / 16 | Viewer transform handles / outside-corner rotation radius |
 | `ViewerWorkPadding` | 48 | Padded image work area |
 | `ToolColumnWidth` | 32 | Exclusive tool column |
 | `ViewerChannelWidth` | 80 | Channel dropdown |

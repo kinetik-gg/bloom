@@ -15,6 +15,7 @@
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/ui/kit/color.hpp>
+#include <bloom/ui/viewer_overlays.hpp>
 
 #include <QObject>
 #include <QRectF>
@@ -72,37 +73,6 @@ struct CompositionSelection {
     std::vector<KeyframeSelection> keyframes{};
 
     friend bool operator==(const CompositionSelection&, const CompositionSelection&) = default;
-};
-
-// docs/architecture/animation-and-time.md, "Direct Manipulation And Preview Overrides": gesture
-// begin freezes "a non-empty mapping rectangle, composition format, proxy, pixel aspect, and
-// display descriptor for the current composition". The Viewer is the only owner of screen/display
-// geometry, so it computes this snapshot and hands it to
-// CompositionSession::beginPositionInteraction; the session freezes it into the session-only
-// PositionInteraction and never recomputes it.
-struct PositionInteractionMapping final {
-    // The frozen composition display rectangle (already accounts for proxy scaling and pixel
-    // aspect). Before task U3 (issue #119) this was always fitDisplayRect()'s fit-to-window
-    // rectangle; ViewerEditor now derives it from the Viewer's own active zoom/pan ViewTransform at
-    // gesture begin (viewTransformedDisplayRect() in viewer_editor.cpp) -- fitDisplayRect() exactly
-    // when the transform is in Fit mode, or the actively zoomed/panned rectangle otherwise. The
-    // freeze contract here is unchanged: this struct still doesn't know or care which geometry
-    // source produced the rectangle, only that it was non-empty and is now frozen.
-    QRectF displayRect;
-    // The frozen composition format; its width/height are the "compositionWidth"/
-    // "compositionHeight" of the displacement formulas.
-    document::CompositionFormat compositionFormat;
-    // The frozen proxy factor, if any (today always CompositionFormatResolution{} -- no proxy
-    // pipeline exists yet).
-    runtime::EvaluationResolution resolution;
-    // The frozen pixel aspect of the displayed frame.
-    core::PixelAspectRatio pixelAspect;
-    // The frozen display descriptor identity (extent, pixel aspect, and packed layout) used to
-    // detect format/proxy/pixel-aspect/descriptor changes.
-    render::ReferenceDisplayBufferDescriptor displayDescriptor;
-
-    friend bool operator==(const PositionInteractionMapping&,
-                           const PositionInteractionMapping&) = default;
 };
 
 // Typed rejection for CompositionSession::beginPositionInteraction (docs/architecture/
@@ -216,7 +186,7 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool setComposition(document::CompositionId compositionId);
     [[nodiscard]] bool setCurrentTime(core::RationalTime time);
     void clearSelection();
-    void selectLayer(document::LayerId layerId);
+    void selectLayer(document::LayerId layerId, bool extend = false);
     [[nodiscard]] const document::LayerStack* timelineMerge() const noexcept;
     void selectNode(document::NodeId nodeId);
     [[nodiscard]] document::WorkArea workArea() const noexcept;
@@ -506,7 +476,7 @@ class CompositionSession final : public QObject {
     // freezes `mapping` and the base value/revision/time. Returns the typed rejection, or
     // std::nullopt on success.
     [[nodiscard]] std::optional<PositionInteractionRejection>
-    beginPositionInteraction(PositionInteractionMapping mapping);
+    beginPositionInteraction(ViewerMapping mapping);
     // Recomputes the override from the frozen base value plus the TOTAL gesture displacement
     // (never a chain of already-rounded intermediates). No-op if no interaction is active.
     void updatePositionInteraction(double screenDx, double screenDy);
@@ -659,7 +629,7 @@ class CompositionSession final : public QObject {
         core::RationalTime time;
         document::Vec2d baseValue;
         document::Vec2d currentOverride;
-        PositionInteractionMapping mapping;
+        ViewerMapping mapping;
     };
 
     // Pointers, not references (task U1, issue #72): rebind() must be able to atomically retarget

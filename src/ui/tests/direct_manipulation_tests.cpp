@@ -42,6 +42,7 @@
 #include <QSize>
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
@@ -188,7 +189,7 @@ void reachQuiescence(bloom::ui::CompositionPreviewController& controller,
 // docs/architecture/animation-and-time.md: the fitted display rectangle a real gesture would use is
 // ViewerEditor's job (covered by the gesture tests below); here a manually built mapping is enough
 // to prove the CONTROLLER threads whatever the session reports.
-bloom::ui::PositionInteractionMapping makeMapping(const bloom::document::CompositionFormat format) {
+bloom::ui::ViewerMapping makeMapping(const bloom::document::CompositionFormat format) {
     using namespace bloom;
     const auto window = render::ImageWindow::create(0, 0, format.width(), format.height());
     if (!window) {
@@ -199,7 +200,7 @@ bloom::ui::PositionInteractionMapping makeMapping(const bloom::document::Composi
     if (!descriptor) {
         std::abort();
     }
-    return ui::PositionInteractionMapping{
+    return ui::ViewerMapping{
         .displayRect = QRectF(0.0, 0.0, 200.0, 100.0),
         .compositionFormat = format,
         .resolution = runtime::CompositionFormatResolution{},
@@ -703,6 +704,46 @@ void testDragAtNonIdentityZoomAndPanLandsExactlyUnderCursor(Expectations& expect
                         "quiescence");
 }
 
+void testPickingAtZoomAndPan(Expectations& expectations) {
+    using namespace bloom;
+    GestureFixture fixture(makeTestProject("Picking"));
+    expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Bottom"), {1, 0, 0, 1}),
+                        "add bottom layer");
+    expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Top"), {0, 1, 0, 1}),
+                        "add top layer");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "picking frame ready");
+    fixture.viewer.setZoomActualSize();
+    sendMouse(fixture.viewer, QEvent::MouseButtonPress, {100, 100}, Qt::MiddleButton,
+              Qt::MiddleButton);
+    sendMouse(fixture.viewer, QEvent::MouseMove, {125, 110}, Qt::NoButton, Qt::MiddleButton);
+    sendMouse(fixture.viewer, QEvent::MouseButtonRelease, {125, 110}, Qt::MiddleButton,
+              Qt::NoButton);
+    fixture.session.clearSelection();
+    const auto top = fixture.session.timelineMerge()->entries().front().layerId;
+    const auto revision = fixture.session.snapshot().revision();
+    sendPress(fixture.viewer, {210, 155});
+    sendRelease(fixture.viewer, {210, 155});
+    expectations.expect(fixture.session.selection().primary == ui::SelectionTarget{top},
+                        "click picks the topmost overlapping layer at actual zoom and pan");
+    expectations.expect(fixture.session.snapshot().revision() == revision,
+                        "selection is session only");
+    fixture.viewer.setZoomFit();
+    const auto display = expectedDisplayRect(fixture.viewer, fixture.controller);
+    const auto empty = QPointF(display.center().x(), display.top() - 10);
+    sendPress(fixture.viewer, empty);
+    sendRelease(fixture.viewer, empty);
+    expectations.expect(fixture.session.selectedNodes().empty(),
+                        "empty canvas click clears selection");
+    const auto mapping = makeMapping(wideFormat());
+    const document::Vec2d point{127.5, 223.25};
+    const auto roundTrip = mapping.toComposition(mapping.toScreen(point));
+    expectations.expect(std::abs(roundTrip.x - point.x) < 1e-9 &&
+                            std::abs(roundTrip.y - point.y) < 1e-9,
+                        "mapping round trip");
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+}
+
 void testDragOnEmptyOrUnselectedDoesNothing(Expectations& expectations) {
     using namespace bloom;
     GestureFixture fixture(makeTestProject("Viewer Drag Unselected Test"));
@@ -822,6 +863,7 @@ int main(int argc, char** argv) {
     testDragMovesSelectedSolidLayerCommitsAndUndoes(expectations);
     testDragAtNonIdentityZoomLandsExactlyUnderCursor(expectations);
     testDragAtNonIdentityZoomAndPanLandsExactlyUnderCursor(expectations);
+    testPickingAtZoomAndPan(expectations);
     testDragOnEmptyOrUnselectedDoesNothing(expectations);
     testMidDragResizeCancelsWithNoCommitAndNoOverrideLeft(expectations);
     testEscapeCancelsMidDrag(expectations);

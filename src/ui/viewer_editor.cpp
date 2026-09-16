@@ -1333,6 +1333,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     // StrongFocus lets a press-to-drag gesture also receive the Escape key that cancels it, and
     // lets the widget receive Space/Z/F without a prior click.
     setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true);
 
     playback_ = &previewController.playbackController();
     buildHeader();
@@ -1944,7 +1945,7 @@ void ViewerEditor::updatePreviewAccessibility() {
         tr("%1. %2. %3").arg(preview.message, frameDescription, colorStateDescription));
 }
 
-std::optional<PositionInteractionMapping> ViewerEditor::currentMapping() const {
+std::optional<ViewerMapping> ViewerEditor::currentMapping() const {
     const auto& preview = previewController_.state();
     const PreparedPreviewFrameHandle& frameHandle = preview.frame;
     if (frameHandle == nullptr) {
@@ -1963,7 +1964,7 @@ std::optional<PositionInteractionMapping> ViewerEditor::currentMapping() const {
     }
     // The gesture-mapping geometry is alternative-agnostic (design decision 2): a qualified frame's
     // window/pixel-aspect maps a drag gesture exactly the way a reference frame's does. The frozen
-    // PositionInteractionMapping::displayDescriptor stays a
+    // ViewerMapping::displayDescriptor stays a
     // render::ReferenceDisplayBufferDescriptor purely as a geometry/change-detection value here
     // (extent, pixel aspect, packed layout) -- never as a claim that the underlying pixels are the
     // unqualified reference product; a qualified frame's isOcioQualified() bit lives on
@@ -1986,7 +1987,7 @@ std::optional<PositionInteractionMapping> ViewerEditor::currentMapping() const {
     // and a pan offset maps screen deltas against the geometry the user actually SEES, and lands
     // exactly under the cursor. Freeze semantics are unchanged: this is still computed once here,
     // handed to CompositionSession::beginPositionInteraction(), and frozen there for the gesture's
-    // duration; PositionInteractionMapping's own equality (already comparing displayRect) is what
+    // duration; ViewerMapping's own equality (already comparing displayRect) is what
     // makes mappingStillValid() correctly invalidate a gesture if transform_ changes mid-drag, with
     // zero additional invalidation code needed (mousePressEvent()/wheelEvent() additionally refuse
     // to start a NEW zoom/pan while dragActive_, so this only matters as a defensive backstop).
@@ -1999,13 +2000,30 @@ std::optional<PositionInteractionMapping> ViewerEditor::currentMapping() const {
     if (displayRect.isEmpty()) {
         return std::nullopt;
     }
-    return PositionInteractionMapping{
+    return ViewerMapping{
         .displayRect = displayRect,
         .compositionFormat = composition->format(),
         .resolution = frameHandle->desiredIdentity().resolution,
         .pixelAspect = descriptor.pixelAspect(),
         .displayDescriptor = descriptor,
     };
+}
+
+ViewerHit ViewerEditor::hitAt(const ViewerMapping& mapping, const QPointF point) const {
+    std::vector<runtime::EvaluatedOperationBounds> ordered;
+    const auto& frame = previewController_.state().frame;
+    if (!frame)
+        return {};
+    const auto bounds = frame->evaluatedBounds();
+    if (const auto* stack = session_.timelineMerge()) {
+        for (const auto& entry : stack->entries()) {
+            const auto found = std::ranges::find(bounds, entry.layerId,
+                                                 &runtime::EvaluatedOperationBounds::layerId);
+            if (found != bounds.end())
+                ordered.push_back(*found);
+        }
+    }
+    return hitTestViewer(mapping, point, ordered, previewController_.selectedLayerBounds());
 }
 
 bool ViewerEditor::mappingStillValid() const {
@@ -2090,16 +2108,23 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
         return;
     }
 
-    if (event->button() != Qt::LeftButton ||
-        !std::holds_alternative<document::LayerId>(session_.selection().primary)) {
+    if (event->button() != Qt::LeftButton || tool_ != Tool::Select || dragActive_) {
         QWidget::mousePressEvent(event);
         return;
     }
+    setFocus(Qt::MouseFocusReason);
     auto mapping = currentMapping();
-    if (!mapping.has_value()) {
+    if (!mapping.has_value() || !canvasRect().contains(event->position())) {
         QWidget::mousePressEvent(event);
         return;
     }
+    const auto hit = hitAt(*mapping, event->position());
+    if (hit.region == ViewerHitRegion::Empty) {
+        session_.clearSelection();
+        event->accept();
+        return;
+    }
+    session_.selectLayer(hit.layerId, event->modifiers().testFlag(Qt::ShiftModifier));
     if (session_.beginPositionInteraction(*mapping).has_value()) {
         // Typed rejection (no selection, no resolvable/animated-without-a-key/driven position, or
         // an empty mapping): the drag simply never starts. No cursor/handle art communicates this
@@ -2125,6 +2150,40 @@ void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
     if (!dragActive_) {
+        if (tool_ == Tool::Select) {
+            const auto mapping = currentMapping();
+            const auto hit = mapping ? hitAt(*mapping, event->position()) : ViewerHit{};
+            switch (hit.region) {
+            case ViewerHitRegion::Move:
+                setCursor(Qt::SizeAllCursor);
+                break;
+            case ViewerHitRegion::Anchor:
+                setCursor(Qt::CrossCursor);
+                break;
+            case ViewerHitRegion::Rotate:
+                setCursor(Qt::OpenHandCursor);
+                break;
+            case ViewerHitRegion::Scale:
+                switch (hit.handle % 4) {
+                case 0:
+                    setCursor(Qt::SizeFDiagCursor);
+                    break;
+                case 1:
+                    setCursor(Qt::SizeVerCursor);
+                    break;
+                case 2:
+                    setCursor(Qt::SizeBDiagCursor);
+                    break;
+                default:
+                    setCursor(Qt::SizeHorCursor);
+                    break;
+                }
+                break;
+            case ViewerHitRegion::Empty:
+                unsetCursor();
+                break;
+            }
+        }
         QWidget::mouseMoveEvent(event);
         return;
     }

@@ -296,7 +296,7 @@ void CompositionSession::clearSelection() {
     emit selectionChanged();
 }
 
-void CompositionSession::selectLayer(const document::LayerId layerId) {
+void CompositionSession::selectLayer(const document::LayerId layerId, const bool extend) {
     Q_ASSERT(QThread::currentThread() == thread());
     const auto boundary = boundaryNodeForLayer(layerId);
     if (!boundary.has_value()) {
@@ -304,7 +304,8 @@ void CompositionSession::selectLayer(const document::LayerId layerId) {
         return;
     }
     CompositionSelection next{.primary = layerId, .contextualLayer = layerId};
-    const std::set<document::NodeId> nextNodes{*boundary};
+    auto nextNodes = extend ? selectedNodes_ : std::set<document::NodeId>{};
+    nextNodes.insert(*boundary);
     if (selection_ != next || selectedNodes_ != nextNodes) {
         selection_ = next;
         selectedNodes_ = nextNodes;
@@ -1204,7 +1205,7 @@ CompositionSession::positionInteractionOverride() const {
 }
 
 std::optional<PositionInteractionRejection>
-CompositionSession::beginPositionInteraction(PositionInteractionMapping mapping) {
+CompositionSession::beginPositionInteraction(ViewerMapping mapping) {
     Q_ASSERT(QThread::currentThread() == thread());
     // A stray second begin (should not happen given the Viewer is the sole caller) restarts state
     // cleanly rather than layering interactions.
