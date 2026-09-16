@@ -61,6 +61,7 @@ class KColorPicker final : public QWidget {
     // Opens as a top-level Qt::Popup positioned below `anchor`, SurfaceRaised + Elevation::Dialog
     // per decision 3. The same popup instance is reused across opens (KColorChip owns one).
     void openBelow(const QWidget& anchor);
+    void cancelEdit();
 
     [[nodiscard]] QRectF svSquareRect() const noexcept;
     [[nodiscard]] QRectF hueBarRect() const noexcept;
@@ -95,17 +96,27 @@ class KColorPicker final : public QWidget {
     // never eased or throttled (visual-language.md's Motion::None rule), so the value the signal
     // carries is always exactly where the pointer or field is right now.
     void colorChanged(const KColor& color);
+    void editStarted();
+    void editFinished();
+    void editCancelled();
 
   protected:
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
     enum class DragRegion : std::uint8_t { None, SvSquare, Hue, Alpha };
 
     void layoutRegions();
+    void beginEdit();
+    void finishEdit();
+    bool editing_ = false;
+    KColor editBase_{};
     void buildChrome();
     void rebuildFormSelector();
     void rebuildChannelFields();

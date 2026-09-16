@@ -483,13 +483,13 @@ void editingAValueKeepsTheSelection(App& app, const document::NodeId layer,
            "the other selected card is still selected after the edit");
 }
 
-// An edit in flight has to survive the snapshot changes other surfaces produce while it is open --
-// the card is reconciled in place on every one of them.
-void anEditSurvivesAnUnrelatedSnapshotChange(App& app, const document::NodeId layer) {
+// A live edit is frozen at its original time and revision; changing either cancels it.
+void aTimeChangeCancelsAnUnfinishedEdit(App& app, const document::NodeId layer) {
     auto* anchorX = field(app, layer, QStringLiteral("nodeAnchorXEditor"));
     if (anchorX == nullptr) {
         return;
     }
+    const auto before = vec2Of(app, layer, document::kAnchorParameterRole);
     click(app, anchorX);
     type(app, QStringLiteral("12"));
     // Something else edits the document while the cell is open.
@@ -497,13 +497,10 @@ void anEditSurvivesAnUnrelatedSnapshotChange(App& app, const document::NodeId la
     QCoreApplication::processEvents();
     app.addByType(document::kScalarValueNodeType, {-900.0, 900.0});
     QCoreApplication::processEvents();
-    expect(anchorX->isEditing(), "an unrelated document change does not close an open cell editor");
-    expect(anchorX->lineEdit() != nullptr && anchorX->lineEdit()->text() == QStringLiteral("12"),
-           "an unrelated document change does not clobber what is being typed");
-    key(app, Qt::Key_Return);
-    const auto stored = vec2Of(app, layer, document::kAnchorParameterRole);
-    expect(stored.has_value() && closeTo(static_cast<float>(stored->x), 12.0),
-           "the typed value still commits afterwards");
+    expect(!anchorX->isEditing() && !app.session.valueEditActive(),
+           "changing time cancels the old field interaction");
+    expect(vec2Of(app, layer, document::kAnchorParameterRole) == before,
+           "time/revision invalidation does not commit the unfinished value");
 }
 
 void valueNodeCards(App& app) {
@@ -618,7 +615,7 @@ int main(int argc, char** argv) {
         operandDropdownCommits(app, math);
         mathOperandCells(app, math);
         canvasHoldsStillDuringAnEdit(app, *layerNode);
-        anEditSurvivesAnUnrelatedSnapshotChange(app, *layerNode);
+        aTimeChangeCancelsAnUnfinishedEdit(app, *layerNode);
         editingAValueKeepsTheSelection(app, *layerNode, math);
         textCardRows(app);
         valueNodeCards(app);

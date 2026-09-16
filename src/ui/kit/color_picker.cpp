@@ -7,11 +7,14 @@
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
+#include <QHideEvent>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QLinearGradient>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
+#include <QSignalBlocker>
 
 #include <algorithm>
 #include <array>
@@ -135,6 +138,9 @@ void KColorPicker::buildChrome() {
         field = new KValueField(this);
         field->setSingleStep(1.0);
         field->setDecimals(0);
+        connect(field, &KValueField::editStarted, this, &KColorPicker::beginEdit);
+        connect(field, &KValueField::editFinished, this, &KColorPicker::finishEdit);
+        connect(field, &KValueField::editCancelled, this, &KColorPicker::cancelEdit);
         connect(field, &KValueField::valueChanged, this,
                 [this](double) { onChannelFieldEdited(); });
     }
@@ -145,7 +151,17 @@ void KColorPicker::buildChrome() {
     hexField_->setAlignment(Qt::AlignCenter);
     hexField_->setStyleSheet(hexFieldStyleSheet());
     hexField_->setAccessibleName(tr("Hex color"));
-    connect(hexField_, &QLineEdit::editingFinished, this, &KColorPicker::onHexFieldEdited);
+    hexField_->installEventFilter(this);
+    connect(hexField_, &QLineEdit::textEdited, this, [this] {
+        if (KColor::fromHex(hexField_->text(), alpha_)) {
+            beginEdit();
+            onHexFieldEdited();
+        }
+    });
+    connect(hexField_, &QLineEdit::editingFinished, this, [this] {
+        onHexFieldEdited();
+        finishEdit();
+    });
 
     swatchRow_ = new KColorSwatchRow(this);
     swatchRow_->setRecentColorStore(&defaultRecentColorStore_);
@@ -287,7 +303,11 @@ void KColorPicker::refreshChannelFields() {
     updatingChrome_ = false;
 }
 
-void KColorPicker::refreshHexField() { hexField_->setText(currentColor().toHex(alpha_ < 1.0F)); }
+void KColorPicker::refreshHexField() {
+    if (editing_ && hexField_->hasFocus())
+        return;
+    hexField_->setText(currentColor().toHex(alpha_ < 1.0F));
+}
 
 void KColorPicker::refreshSwatchPreview() { swatchRow_->setCurrentColor(currentColor()); }
 
@@ -451,7 +471,8 @@ void KColorPicker::onChannelFieldEdited() {
         break;
     }
     }
-    commitToRecents();
+    if (!editing_)
+        commitToRecents();
 }
 
 void KColorPicker::onHexFieldEdited() {
@@ -460,17 +481,20 @@ void KColorPicker::onHexFieldEdited() {
         // An unparsable entry reverts to the last valid text rather than silently doing nothing:
         // the artist gets their eye told the edit did not take, instead of a field that looks
         // committed but is not.
+        cancelEdit();
         refreshHexField();
         return;
     }
     const auto hsva = parsed->toHsva();
     applyHsva(hsva[0], hsva[1], hsva[2], hsva[3]);
-    commitToRecents();
+    if (!editing_)
+        commitToRecents();
 }
 
 void KColorPicker::onSwatchActivated(const KColor& swatchColor) {
+    beginEdit();
     setColor(swatchColor);
-    commitToRecents();
+    finishEdit();
 }
 
 void KColorPicker::onEyedropperToggled(const bool active) {
@@ -482,8 +506,9 @@ void KColorPicker::onEyedropperToggled(const bool active) {
 }
 
 void KColorPicker::onColorSampled(const KColor& sampledColor) {
+    beginEdit();
     setColor(sampledColor);
-    commitToRecents();
+    finishEdit();
     eyedropperButton_->setChecked(false);
 }
 
@@ -563,6 +588,7 @@ void KColorPicker::mousePressEvent(QMouseEvent* event) {
         QWidget::mousePressEvent(event);
         return;
     }
+    beginEdit();
     updateDragFromPoint(pos);
     event->accept();
 }
@@ -579,11 +605,66 @@ void KColorPicker::mouseMoveEvent(QMouseEvent* event) {
 void KColorPicker::mouseReleaseEvent(QMouseEvent* event) {
     if (dragRegion_ != DragRegion::None) {
         dragRegion_ = DragRegion::None;
-        commitToRecents();
+        finishEdit();
         event->accept();
         return;
     }
     QWidget::mouseReleaseEvent(event);
+}
+
+void KColorPicker::beginEdit() {
+    if (!editing_) {
+        editing_ = true;
+        editBase_ = sourceColor_;
+        Q_EMIT editStarted();
+    }
+}
+
+void KColorPicker::finishEdit() {
+    if (editing_) {
+        editing_ = false;
+        refreshHexField();
+        commitToRecents();
+        Q_EMIT editFinished();
+    }
+}
+
+void KColorPicker::cancelEdit() {
+    if (!editing_)
+        return;
+    editing_ = false;
+    dragRegion_ = DragRegion::None;
+    {
+        const QSignalBlocker blocker(this);
+        for (auto* field : channelFields_)
+            field->cancelEdit();
+        setColor(editBase_);
+    }
+    Q_EMIT editCancelled();
+}
+
+void KColorPicker::keyPressEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Escape) {
+        cancelEdit();
+        close();
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+void KColorPicker::hideEvent(QHideEvent* event) {
+    finishEdit();
+    QWidget::hideEvent(event);
+}
+
+bool KColorPicker::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == hexField_ && event->type() == QEvent::KeyPress &&
+        static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
+        cancelEdit();
+        return true;
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void KColorPicker::paintEvent(QPaintEvent* event) {

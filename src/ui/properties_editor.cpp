@@ -1,4 +1,5 @@
 #include "node_editor_items.hpp"
+#include "properties_value_edits.hpp"
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <memory>
@@ -218,6 +219,8 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     bindCommits();
 
     connect(&session_, &CompositionSession::snapshotChanged, this, &PropertiesEditor::rebuild);
+    connect(&session_, &CompositionSession::liveValueChanged, this,
+            &PropertiesEditor::refreshLiveValues);
     connect(&session_, &CompositionSession::compositionChanged, this, &PropertiesEditor::rebuild);
     connect(&session_, &CompositionSession::selectionChanged, this, &PropertiesEditor::rebuild);
     connect(&session_, &CompositionSession::currentTimeChanged, this,
@@ -309,14 +312,39 @@ bool PropertiesEditor::eventFilter(QObject* watched, QEvent* event) {
                 document::ParameterId::fromRaw(text->property("parameterId").toULongLong()),
                 text->toPlainText().toStdString(), tr("Set Text"));
     }
-    if (event->type() == QEvent::MouseButtonRelease && !rebuilding_) {
-        if (watched == opacitySlider_) {
-            commitOpacityFromControls();
-        } else if (watched == rotationSlider_) {
-            commitRotationFromControls();
+    if (!rebuilding_ && (watched == opacitySlider_ || watched == rotationSlider_)) {
+        const auto role = watched == opacitySlider_ ? document::kOpacityParameterRole
+                                                    : document::kRotationParameterRole;
+        const auto* parameter = session_.parameterForSelection(role);
+        if (parameter && event->type() == QEvent::MouseButtonPress)
+            (void)session_.beginValueEdit(parameter->id);
+        if (parameter && session_.isValueEditing(parameter->id)) {
+            if (event->type() == QEvent::MouseButtonRelease || event->type() == QEvent::FocusOut)
+                (void)session_.commitValueEdit();
+            else if (event->type() == QEvent::KeyPress &&
+                     static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
+                session_.cancelValueEdit();
+                return true;
+            }
         }
     }
     return QWidget::eventFilter(watched, event);
+}
+
+void PropertiesEditor::refreshLiveValues() {
+    if (rebuilding_)
+        return;
+    rebuilding_ = true;
+    configurePosition();
+    configureAnchor();
+    configureScale();
+    configureRotation();
+    configureOpacity();
+    configureSolidColor();
+    configureTextSource();
+    configureRegistryRows();
+    configureUpstream();
+    rebuilding_ = false;
 }
 
 void PropertiesEditor::rebuild() {
@@ -446,6 +474,13 @@ void PropertiesEditor::configureMergeInputs() {
             for (const auto& binding : source->parameters)
                 if (binding.role == document::kOpacityParameterRole)
                     opacityId = binding.parameterId;
+        properties::bindValueEdit(session_, *opacity, [opacityId] { return opacityId; });
+        connect(&session_, &CompositionSession::liveValueChanged, opacity,
+                [this, opacity, opacityId] {
+                    const QSignalBlocker blocker(opacity);
+                    if (const auto value = session_.effectiveScalarValue(opacityId))
+                        opacity->setValue(*value * 100);
+                });
         opacity->setProperty("parameterId",
                              QVariant::fromValue(static_cast<qulonglong>(opacityId.value())));
         const auto value = opacityId.isValid() ? session_.effectiveScalarValue(opacityId)

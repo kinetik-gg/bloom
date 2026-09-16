@@ -1,6 +1,7 @@
 #include "timeline_property_rows.hpp"
 #include "node_editor_items.hpp"
 #include "properties_registry_row.hpp"
+#include "properties_value_edits.hpp"
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLayoutItem>
@@ -285,6 +286,26 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
             if (!binding_)
                 commitValues(i);
         });
+        properties::bindValueEdit(
+            session_, *field, [this] { return entry_.parameterId; },
+            [this, i]() -> std::optional<document::AnimationComponent> {
+                if (entry_.component)
+                    return entry_.component;
+                if (session_.effectiveColorValue(entry_.parameterId)) {
+                    const std::array channels{
+                        document::AnimationComponent::Red, document::AnimationComponent::Green,
+                        document::AnimationComponent::Blue, document::AnimationComponent::Alpha};
+                    return channels[i];
+                }
+                if (session_.effectiveVec2Value(entry_.parameterId) ||
+                    session_.effectiveVec3Value(entry_.parameterId)) {
+                    const std::array axes{
+                        document::AnimationComponent::X, document::AnimationComponent::Y,
+                        document::AnimationComponent::Z, document::AnimationComponent::Z};
+                    return axes[i];
+                }
+                return std::nullopt;
+            });
     }
     blending_->setObjectName("timelinePropertyBlending");
     for (auto mode : core::kBlendModes)
@@ -302,6 +323,11 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
                                              tr("Set Parameter"));
     });
     color_->setObjectName("timelinePropertyColor");
+    properties::bindValueEdit(session_, *color_, [this] { return entry_.parameterId; });
+    connect(&session_, &CompositionSession::liveValueChanged, this, [this] {
+        if (!binding_ && entry_.parameterId.isValid())
+            bind(entry_);
+    });
     // Task DRIVE-1's read-only display for a driven parameter. It occupies the value columns the
     // editors would have, so a driven row is the same row with a different thing in it.
     driven_ = new QWidget(this);

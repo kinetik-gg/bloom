@@ -822,3 +822,10 @@ bloom_enable_warnings(bloom_audio_transport_test)
 add_test(NAME bloom.ui.audio-transport COMMAND bloom_audio_transport_test)
 set_tests_properties(bloom.ui.audio-transport PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1")
+
+add_executable(bloom_live_value_edit_test live_value_edit_tests.cpp)
+target_include_directories(bloom_live_value_edit_test PRIVATE ..)
+target_link_libraries(bloom_live_value_edit_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+bloom_enable_warnings(bloom_live_value_edit_test)
+bloom_add_test(NAME bloom.ui.live-value-edit COMMAND bloom_live_value_edit_test
+    LABELS ui integration TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

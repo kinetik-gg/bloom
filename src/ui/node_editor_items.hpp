@@ -1,5 +1,6 @@
 #include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
+#include "properties_value_edits.hpp"
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
 #pragma once
@@ -223,6 +224,13 @@ class SocketItem final : public QGraphicsItem {
 class NodeItem final : public QGraphicsObject {
   public:
     NodeItem(const document::NodeId id, CompositionSession* session) : id_(id), session_(session) {
+        if (session_)
+            connect(session_, &CompositionSession::liveValueChanged, this, [this] {
+                const auto* composition = session_->composition();
+                const auto* node = composition ? composition->graph().findNode(id_) : nullptr;
+                if (node)
+                    refreshValues(*node, *composition);
+            });
         setData(kNodeItemKindRole, QStringLiteral("node"));
         setData(kNodeStableIdRole, QVariant::fromValue<qulonglong>(id.value()));
         setFlags(ItemIsSelectable | ItemSendsGeometryChanges);
@@ -571,6 +579,17 @@ class NodeItem final : public QGraphicsObject {
         (void)session_->setSelectedTextSize(textSize_->value(), target());
     }
 
+    void bindColorEdit(kit::KColorChip* chip, const std::string_view role) {
+        if (session_)
+            properties::bindValueEdit(*session_, *chip, [this, role] {
+                const auto* composition = session_->composition();
+                const auto* node = composition ? composition->graph().findNode(id_) : nullptr;
+                const auto* parameter =
+                    node ? parameterForRole(*node, *composition, role) : nullptr;
+                return parameter ? parameter->id : document::ParameterId{};
+            });
+    }
+
     // One chip, two schemas: the role string is "color" for both a solid source and a text source
     // (see document::kTextColorParameterRole), so the card builds one control and dispatches on the
     // node's own type only to pick the honest undo label.
@@ -585,23 +604,27 @@ class NodeItem final : public QGraphicsObject {
                              : session_->setSelectedSolidColor(value, target()));
     }
 
-    // One rule for every numeric cell this card carries (ADR 0017: "Do not mutate the document on
-    // pointer motion. On release, commit exactly one typed document transaction"). A cell emits
-    // valueChanged for every pixel of a scrub, so binding a commit straight to it turned one drag
-    // into a drag's worth of undo entries, each one re-projecting every editor mid-gesture. The
-    // gesture's own boundary is what is bound here instead: nothing while the pointer is moving,
-    // exactly one command on release, and none at all for an abandoned scrub.
     template <typename Commit> void bindCell(kit::KValueField* field, Commit commit) {
+        if (session_)
+            properties::bindValueEdit(
+                *session_, *field,
+                [this, field] {
+                    const auto* composition = session_->composition();
+                    const auto* node = composition ? composition->graph().findNode(id_) : nullptr;
+                    const auto role = field->property("nodeParameterRole").toString().toStdString();
+                    const auto* parameter =
+                        node ? parameterForRole(*node, *composition, role) : nullptr;
+                    return parameter ? parameter->id : document::ParameterId{};
+                },
+                [this, field] {
+                    for (const auto& row : valueRows_)
+                        if (row.widget == field)
+                            return row.component;
+                    return std::optional<document::AnimationComponent>{};
+                });
         connect(field, &kit::KValueField::valueChanged, this, [this, commit] {
-            if (!scrubbing_) {
+            if (!refreshing_)
                 commit();
-            }
-        });
-        connect(field, &kit::KValueField::scrubStarted, this, [this] { scrubbing_ = true; });
-        connect(field, &kit::KValueField::scrubCancelled, this, [this] { scrubbing_ = false; });
-        connect(field, &kit::KValueField::scrubFinished, this, [this, commit] {
-            scrubbing_ = false;
-            commit();
         });
     }
 
@@ -822,6 +845,7 @@ class NodeItem final : public QGraphicsObject {
                 colorChip_->resize(colorChip_->sizeHint());
                 prepareField(colorChip_);
                 registerControlRole(colorChip_, document::kSolidColorParameterRole);
+                bindColorEdit(colorChip_, document::kSolidColorParameterRole);
                 connect(colorChip_, &kit::KColorChip::colorChanged, this,
                         [this](const kit::KColor& color) { commitColor(color); });
                 colorRowLabel_ = tr("Color");
@@ -975,6 +999,7 @@ class NodeItem final : public QGraphicsObject {
             row.color->setControlSize(kit::KColorChip::ControlSize::Compact);
             row.color->resize(row.color->sizeHint());
             prepareField(row.color);
+            bindColorEdit(row.color, role);
             registerControlRole(row.color, role);
             connect(row.color, &kit::KColorChip::colorChanged, this,
                     [commit](const kit::KColor&) { commit(); });
@@ -1166,10 +1191,11 @@ class NodeItem final : public QGraphicsObject {
     void refreshOperandRows(const document::Composition& composition) {
         for (const auto& row : operandRows_) {
             const auto* parameter = composition.parameters().find(row.parameterId);
-            const auto* constant =
-                parameter == nullptr
-                    ? nullptr
-                    : std::get_if<document::ConstantValueSource>(&parameter->source);
+            const auto live = session_ ? session_->liveValue(row.parameterId) : std::nullopt;
+            const auto* fallback =
+                parameter ? std::get_if<document::ConstantValueSource>(&parameter->source)
+                          : nullptr;
+            const auto* value = live ? &*live : fallback ? &fallback->value : nullptr;
             const QString tip = parameter == nullptr ? tr("This value is not exposed by this node")
                                                      : parameterSourceDescription(*parameter);
             const auto applyTip = [&tip](QWidget* widget) {
@@ -1184,7 +1210,7 @@ class NodeItem final : public QGraphicsObject {
             applyTip(row.text);
             applyTip(row.toggle);
             applyTip(row.selector);
-            if (constant == nullptr) {
+            if (value == nullptr) {
                 // An ANIMATED operand has no constant to read; its row shows the value sampled at
                 // the session time, exactly as a Properties row does (task FIX1, item G). A DRIVEN
                 // one shows nothing, because its widget is hidden anyway.
@@ -1193,10 +1219,10 @@ class NodeItem final : public QGraphicsObject {
             }
             if (row.selector != nullptr) {
                 if (row.kind == document::ParameterValueKind::String && session_)
-                    if (const auto* stored = std::get_if<std::string>(&constant->value))
+                    if (const auto* stored = std::get_if<std::string>(value))
                         refreshImageAssetSelector(*row.selector, *session_,
                                                   QString::fromStdString(*stored));
-                if (const auto* stored = std::get_if<std::int64_t>(&constant->value)) {
+                if (const auto* stored = std::get_if<std::int64_t>(value)) {
                     const QSignalBlocker blocker(row.selector);
                     for (int item = 0; item < row.selector->count(); ++item) {
                         if (row.selector->itemData(item).value<std::int64_t>() == *stored) {
@@ -1247,7 +1273,7 @@ class NodeItem final : public QGraphicsObject {
                         }
                     }
                 },
-                constant->value);
+                *value);
         }
     }
 
@@ -1762,7 +1788,6 @@ class NodeItem final : public QGraphicsObject {
     bool refreshing_ = false;
     // True between a cell's scrubStarted() and its scrubFinished()/scrubCancelled(). One flag for
     // the whole card, because a card has one pointer on it.
-    bool scrubbing_ = false;
     std::vector<std::string> builtRoles_;
     std::vector<ValueRow> valueRows_;
     std::map<QWidget*, kit::KPropertyRow*> propertyRows_;

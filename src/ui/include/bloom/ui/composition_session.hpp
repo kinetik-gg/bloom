@@ -437,6 +437,20 @@ class CompositionSession final : public QObject {
                                          document::ParameterValue value,
                                          const QString& commandLabel);
 
+    // Unfinished edits belong to the session. Matching setters update this live value until
+    // commit; no command, revision or key is created by begin/update/cancel.
+    [[nodiscard]] bool
+    beginValueEdit(document::ParameterId parameterId,
+                   std::optional<document::AnimationComponent> component = std::nullopt);
+    [[nodiscard]] bool updateValueEdit(document::ParameterValue value);
+    [[nodiscard]] bool commitValueEdit();
+    void cancelValueEdit();
+    [[nodiscard]] bool valueEditActive() const noexcept;
+    [[nodiscard]] bool isValueEditing(document::ParameterId parameterId) const noexcept;
+    [[nodiscard]] std::optional<document::ParameterValue>
+    liveValue(document::ParameterId parameterId) const;
+    [[nodiscard]] std::vector<runtime::SnapshotParameterOverride> valueEditOverrides() const;
+
     // Keyframe delete/move gestures (issue #84; docs/architecture/animation-and-time.md). Command
     // construction lives here, not in the widget -- the same "one place" precedent as
     // executePositionCommand(). Both are a no-op false with no transaction and the selection intact
@@ -517,6 +531,7 @@ class CompositionSession final : public QObject {
     // CompositionPreviewController consumes it to (re)build a preview request carrying the fresh
     // override.
     void transformInteractionChanged();
+    void liveValueChanged();
     // Task DRIVE-1: a fresh resolution of the composition's driven parameters has landed.
     void drivenValuesChanged();
 
@@ -638,6 +653,15 @@ class CompositionSession final : public QObject {
     std::vector<commands::KeyframePaste> keyframeClipboard_;
     std::set<document::NodeId> selectedNodes_;
     std::optional<TransformInteraction> transformInteraction_;
+    struct ValueEdit final {
+        document::Revision revision;
+        document::ParameterId parameter;
+        core::RationalTime time;
+        std::optional<document::AnimationComponent> component;
+        document::ParameterValue base;
+        document::ParameterValue value;
+    };
+    std::optional<ValueEdit> valueEdit_;
     // Task DRIVE-1's shared driver resolution. The evaluator is created on the first refresh that
     // finds a driven parameter and never before, so a composition with no drivers -- every existing
     // test fixture among them -- pays nothing at all for the capability. `drivenRequest_` is the

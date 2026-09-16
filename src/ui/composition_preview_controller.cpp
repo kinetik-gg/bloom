@@ -71,12 +71,20 @@ CompositionPreviewController::CompositionPreviewController(
             &CompositionPreviewController::handleCurrentTimeChanged);
     connect(&session_, &CompositionSession::transformInteractionChanged, this,
             &CompositionPreviewController::handleTransformInteractionChanged);
+    connect(&session_, &CompositionSession::liveValueChanged, this,
+            &CompositionPreviewController::handleLiveValueChanged);
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this,
             &CompositionPreviewController::consumeReadyResult);
     interactiveCadenceTimer_.setSingleShot(true);
     interactiveCadenceTimer_.setTimerType(Qt::PreciseTimer);
     connect(&interactiveCadenceTimer_, &QTimer::timeout, this,
             &CompositionPreviewController::flushCadence);
+    // Preview presentation must not wait for the Jobs monitor's 100 ms polling interval.
+    // This timer only runs while a worker is active; polling only takes a ready result.
+    completionPollTimer_.setInterval(4);
+    completionPollTimer_.setTimerType(Qt::PreciseTimer);
+    connect(&completionPollTimer_, &QTimer::timeout, this,
+            &CompositionPreviewController::consumeReadyResult);
     requestPreview(true, PreviewRequestKind::Visible);
 }
 
@@ -125,8 +133,8 @@ bool CompositionPreviewController::isShuttingDown() const noexcept { return shut
 
 bool CompositionPreviewController::backgroundWorkAllowed() const noexcept {
     return !shuttingDown_ && !active_.has_value() && !pending_.has_value() &&
-           !interactiveTimeChangeArmed_ && session_.transformInteractionOverrides().empty() &&
-           !ramPreviewProgress_.has_value();
+           !interactiveTimeChangeArmed_ && !session_.valueEditActive() &&
+           session_.transformInteractionOverrides().empty() && !ramPreviewProgress_.has_value();
 }
 
 PreviewFrameCache& CompositionPreviewController::frameCache() const noexcept {
@@ -223,6 +231,11 @@ void CompositionPreviewController::setDisplayedCompositionScale(const double sca
 void CompositionPreviewController::requestRefresh() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!shuttingDown_) {
+        if (session_.valueEditActive()) {
+            handleLiveValueChanged();
+            return;
+        }
+        valueEditPreviewActive_ = false;
         preparationEstimate_.reset();
         // Deliberately NOT from the cache: see requestPreview()'s `allowCachedFrame`.
         requestPreview(false, PreviewRequestKind::Visible, false);
@@ -269,9 +282,24 @@ void CompositionPreviewController::handleTransformInteractionChanged() {
                                                       : PreviewRequestKind::Visible);
 }
 
+void CompositionPreviewController::handleLiveValueChanged() {
+    if (shuttingDown_)
+        return;
+    if (session_.valueEditActive()) {
+        if (!valueEditPreviewActive_)
+            interactiveSubmissionClock_.invalidate();
+        valueEditPreviewActive_ = true;
+        requestPreview(false, PreviewRequestKind::Interactive, false);
+    } else if (valueEditPreviewActive_) {
+        valueEditPreviewActive_ = false;
+        requestPreview(false, PreviewRequestKind::Visible, false);
+    }
+}
+
 void CompositionPreviewController::beginInteractiveScrub() {
     Q_ASSERT(QThread::currentThread() == thread());
     interactiveTimeChangeArmed_ = true;
+    interactiveSubmissionClock_.invalidate();
     emit interactiveScrubStarted();
     emit foregroundWorkRequested();
 }
@@ -279,6 +307,7 @@ void CompositionPreviewController::beginInteractiveScrub() {
 void CompositionPreviewController::notifyScrubEnded() {
     Q_ASSERT(QThread::currentThread() == thread());
     interactiveTimeChangeArmed_ = false;
+    interactiveSubmissionClock_.invalidate();
     if (!interactiveCadenceTimer_.isActive()) {
         // Either nothing is pending, or the active-request gate is already holding the newest
         // pending request (it will submit once the active task reaches terminal) -- the gate is
@@ -357,6 +386,16 @@ void CompositionPreviewController::flushCadence() {
     if (!pending_.has_value() || active_.has_value()) {
         return;
     }
+    if (pending_->kind == PreviewRequestKind::Interactive &&
+        interactiveSubmissionClock_.isValid()) {
+        const auto remaining =
+            settings_.interactiveTrailingCadence.count() - interactiveSubmissionClock_.elapsed();
+        if (remaining > 0) {
+            interactiveCadenceTimer_.start(static_cast<int>(remaining));
+            return;
+        }
+    }
+    interactiveCadenceTimer_.stop();
     PendingRequest request = std::move(*pending_);
     pending_.reset();
     submitPreview(std::move(request), state_.frame);
@@ -481,6 +520,8 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
     std::vector<runtime::SnapshotParameterOverride> interactionOverride;
     if (kind == PreviewRequestKind::Interactive) {
         interactionOverride = session_.transformInteractionOverrides();
+        const auto values = session_.valueEditOverrides();
+        interactionOverride.insert(interactionOverride.end(), values.begin(), values.end());
     }
 
     // The RAM preview cache (docs/architecture/animation-and-time.md, "RAM preview"). A request
@@ -524,7 +565,12 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
                                   .interactionOverride = interactionOverride};
 
     if (active_.has_value()) {
-        active_->handle.cancel();
+        // Finish one live frame while coalescing newer pointer/text input. Cancelling every
+        // active frame starves presentation for as long as the artist keeps moving.
+        if (!active_->carriedInteractionOverride || interactionOverride.empty() ||
+            !liveSessionMatches(active_->desiredIdentity) ||
+            active_->desiredIdentity.time != desiredIdentity.time)
+            active_->handle.cancel();
         // The cancelled handle remains the admission gate until its terminal result is observed.
         // Cadence is irrelevant beneath this gate: it delays SUBMISSION, and this request cannot
         // submit before the active task reaches terminal regardless of kind or timer state.
@@ -538,24 +584,21 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
     }
 
     if (kind == PreviewRequestKind::Interactive) {
-        // No active task is gating submission, but the trailing cadence still is: hold this as the
-        // newest pending request (superseding any earlier one still waiting out the same window)
-        // and let the cadence timer -- or notifyScrubEnded()'s bypass -- perform the submission.
+        // The first request submits immediately. Only subsequent requests share the trailing
+        // window, always retaining the newest value.
         if (pending_.has_value()) {
             noteDroppedFrame();
         }
         pending_.emplace(std::move(pendingRequest));
         publishRendering(desiredIdentity, std::nullopt, std::move(retainedFrame));
-        if (!interactiveCadenceTimer_.isActive()) {
-            interactiveCadenceTimer_.start(
-                static_cast<int>(settings_.interactiveTrailingCadence.count()));
-        }
+        flushCadence();
         return;
     }
 
     // Visible bypasses the cadence entirely: any Interactive request still waiting out its window
     // is superseded immediately.
     interactiveCadenceTimer_.stop();
+    interactiveSubmissionClock_.invalidate();
     if (pending_.has_value()) {
         noteDroppedFrame();
     }
@@ -633,6 +676,9 @@ void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
                                               ? std::optional{submittedAt + playbackBudget_}
                                               : std::nullopt,
                       .playbackOutstanding = pendingRequest.kind == PreviewRequestKind::Playback});
+    if (pendingRequest.kind == PreviewRequestKind::Interactive)
+        interactiveSubmissionClock_.restart();
+    completionPollTimer_.start();
     publishRendering(desiredIdentity, taskId, std::move(retainedFrame));
     taskUiBridge_.wake();
 }
@@ -671,6 +717,7 @@ void CompositionPreviewController::publishRendering(runtime::PreviewRequestIdent
 }
 
 void CompositionPreviewController::cancelAndDetachActive() noexcept {
+    completionPollTimer_.stop();
     if (!active_.has_value()) {
         return;
     }

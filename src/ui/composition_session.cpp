@@ -27,6 +27,10 @@
 #include <vector>
 
 namespace bloom::ui {
+namespace {
+double* editedComponent(document::ParameterValue& value, document::AnimationComponent component);
+}
+
 struct SessionColorConverterState final {
     std::mutex mutex;
     std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> processor;
@@ -220,10 +224,12 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
     // The OLD document/command-stack are left untouched, but this session's own interaction state
     // targets them and must not survive the swap.
     transformInteraction_.reset();
+    valueEdit_.reset();
 
     // One coherent transition (docs/architecture/project-session.md, "Session Publication"):
     // observers must never see a new document paired with stale selection/time/history, so every
     // existing changed signal fires here, unconditionally, in this order.
+    emit liveValueChanged();
     emit snapshotChanged();
     emit compositionChanged();
     emit currentTimeChanged();
@@ -258,6 +264,7 @@ bool CompositionSession::setComposition(const document::CompositionId compositio
     // A composition switch cancels any active interaction (docs/architecture/animation-and-time.md,
     // "Direct Manipulation And Preview Overrides"): its frozen target/mapping belong to the OLD
     // composition.
+    cancelValueEdit();
     cancelTransformInteraction();
     compositionId_ = compositionId;
     const bool timeChanged = currentTime_ != core::RationalTime::fromInteger(0);
@@ -281,6 +288,7 @@ bool CompositionSession::setCurrentTime(const core::RationalTime time) {
     if (currentTime_ == time) {
         return false;
     }
+    cancelValueEdit();
     cancelTransformInteraction();
     currentTime_ = time;
     emit currentTimeChanged();
@@ -675,6 +683,8 @@ bool CompositionSession::setSelectionScalarParameter(const std::string_view role
         reportUnavailable(QStringLiteral("The selected object does not expose this parameter"));
         return false;
     }
+    if (isValueEditing(parameter->id))
+        return updateValueEdit(value);
     commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
     if (const auto* constantSource =
             std::get_if<document::ConstantValueSource>(&parameter->source)) {
@@ -716,6 +726,8 @@ bool CompositionSession::executePositionCommand(const document::ParameterId para
                                                 const core::RationalTime time,
                                                 const document::Vec2d value,
                                                 const QString& commandLabel) {
+    if (isValueEditing(parameterId))
+        return updateValueEdit(value);
     commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
     return appendParameterEdit(transaction, parameterId, time, value) &&
            executeTransaction(std::move(transaction)).succeeded();
@@ -748,6 +760,14 @@ bool CompositionSession::setParameterComponentValue(const document::ParameterId 
     const auto* parameter = current ? current->parameters().find(parameterId) : nullptr;
     if (!parameter || !std::isfinite(value)) {
         reportUnavailable(QStringLiteral("The component value is not available or finite"));
+        return false;
+    }
+    if (valueEdit_ && isValueEditing(parameterId)) {
+        auto next = valueEdit_->value;
+        if (auto* target = editedComponent(next, component)) {
+            *target = value;
+            return updateValueEdit(std::move(next));
+        }
         return false;
     }
     if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
@@ -831,6 +851,7 @@ bool CompositionSession::appendParameterEdit(commands::Transaction& transaction,
         [&](const auto& held) {
             using Held = std::decay_t<decltype(held)>;
             if constexpr (std::is_same_v<Held, double> || std::is_same_v<Held, document::Vec2d> ||
+                          std::is_same_v<Held, document::Vec3d> ||
                           std::is_same_v<Held, core::Color4d>) {
                 transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, animated->curveId,
                                                                  time, held);
@@ -850,6 +871,8 @@ bool CompositionSession::appendParameterEdit(commands::Transaction& transaction,
 bool CompositionSession::setParameterValue(const document::ParameterId parameterId,
                                            document::ParameterValue value,
                                            const QString& commandLabel) {
+    if (isValueEditing(parameterId))
+        return updateValueEdit(std::move(value));
     commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
     return appendParameterEdit(transaction, parameterId, currentTime_, std::move(value)) &&
            executeTransaction(std::move(transaction)).succeeded();
@@ -1060,6 +1083,8 @@ bool CompositionSession::setSelectionColorParameter(const std::string_view role,
         reportUnavailable(QStringLiteral("The selected object does not expose a color"));
         return false;
     }
+    if (isValueEditing(parameter->id))
+        return updateValueEdit(color);
     commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
     if (const auto* constantSource =
             std::get_if<document::ConstantValueSource>(&parameter->source)) {
@@ -1190,6 +1215,7 @@ bool CompositionSession::insertKeyframeAtTime(const document::AnimationCurveId c
 }
 
 #include "composition_session_transform.ipp"
+#include "composition_session_value_edit.ipp"
 
 bool CompositionSession::canUndo() const noexcept { return commandStack_->canUndo(); }
 
@@ -1240,6 +1266,8 @@ bool CompositionSession::handleResult(const commands::CommandResult& result) {
     const auto previousRevision = snapshot_.revision();
     snapshot_ = document_->snapshot();
     invalidateTransformInteractionOnStaleRevision();
+    if (valueEdit_ && valueEdit_->revision != snapshot_.revision())
+        cancelValueEdit();
 
     if (!result.succeeded()) {
         const auto message = statusMessage(result);
@@ -1434,6 +1462,18 @@ CompositionSession::effectiveParameterValue(const document::ParameterRecord* par
     if (parameter == nullptr) {
         return std::nullopt;
     }
+    if (valueEdit_ && isValueEditing(parameter->id))
+        return std::visit(
+            [](const auto& value) -> std::optional<ParameterSample> {
+                // A live edit can only sample the kinds a ParameterSample carries; a rational
+                // time or a shape path has no scalar/vector/colour/string projection.
+                if constexpr (std::is_constructible_v<ParameterSample,
+                                                      const std::decay_t<decltype(value)>&>)
+                    return ParameterSample(value);
+                else
+                    return std::nullopt;
+            },
+            valueEdit_->value);
     if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
         if (const auto* scalar = std::get_if<double>(&constant->value)) {
             return ParameterSample(*scalar);
@@ -1441,6 +1481,8 @@ CompositionSession::effectiveParameterValue(const document::ParameterRecord* par
         if (const auto* vector = std::get_if<document::Vec2d>(&constant->value)) {
             return ParameterSample(*vector);
         }
+        if (const auto* vector = std::get_if<document::Vec3d>(&constant->value))
+            return ParameterSample(*vector);
         if (const auto* color = std::get_if<core::Color4d>(&constant->value)) {
             return ParameterSample(*color);
         }

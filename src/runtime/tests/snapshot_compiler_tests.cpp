@@ -1409,6 +1409,113 @@ void testRequestScopedParameterOverrides(Expectations& expectations) {
                         "an accepted override lowers as a constant and omits its dormant curve");
 }
 
+void testLiveValueOverrideOwners(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+    auto project = makeProject(singleLayerOptions());
+    retypeFirstSourceToText(project, "Before", 24, {1, 1, 1, 1});
+    auto* composition = project.findComposition(kCompositionId);
+    std::uint64_t nextNode = 300, nextParameter = 600;
+    const auto add = [&](const std::string_view type) {
+        const auto* definition = registry.find(type, 1);
+        require(definition != nullptr, "live override fixture definition exists");
+        NodeRecord node{NodeId::fromRaw(nextNode++), std::string(type), {}, 1};
+        for (const auto& parameter : definition->parameters) {
+            const auto id = ParameterId::fromRaw(nextParameter++);
+            require(composition->parameters().insert(
+                        {id, parameter.schemaKey, ConstantValueSource{parameter.defaultValue}}),
+                    "live override fixture parameter inserts");
+            node.parameters.push_back({parameter.role, id});
+        }
+        require(composition->graph().addNode(node), "live override fixture node inserts");
+        return node;
+    };
+    const auto parameter = [](const NodeRecord& node, const std::string_view role) {
+        const auto found = std::ranges::find(node.parameters, role, &ParameterBinding::role);
+        require(found != node.parameters.end(), "live override fixture role exists");
+        return found->parameterId;
+    };
+    const auto drive = [&](const ParameterId id, const NodeRecord& node, std::string port) {
+        require(
+            composition->parameters().setSource(id, DriverBindingSource{node.id, std::move(port)}),
+            "live override fixture driver installs");
+    };
+    const auto scalar = add(kScalarValueNodeType);
+    const auto vector = add(kVector2ValueNodeType);
+    const auto color = add(kColorValueNodeType);
+    const auto integer = add(kIntegerValueNodeType);
+    const auto text = add(kStringValueNodeType);
+    const auto boolean = add(kBooleanValueNodeType);
+    const auto vector3 = add(kVector3ValueNodeType);
+    const auto separate = add(kSeparateXyzNodeType);
+    const auto choice = add(kScalarSwitchNodeType);
+    drive(kFirstOpacity, choice, "result");
+    drive(parameter(choice, "condition"), boolean, "value");
+    drive(parameter(choice, "ifFalse"), scalar, "value");
+    drive(parameter(choice, "ifTrue"), separate, "x");
+    drive(parameter(separate, "vector"), vector3, "value");
+    drive(kFirstPosition, vector, "value");
+    drive(kTextColor, color, "value");
+    drive(kFirstBlendMode, integer, "value");
+    drive(kFirstColor, text, "value");
+    require(project.validate().ok(), "all live override kinds form valid document truth");
+
+    const auto check = [&](const Project& before, const ParameterId id,
+                           const runtime::SnapshotParameterOverride& override) {
+        const auto preview = compile(before, registry, {override});
+        auto authored = before;
+        const auto value =
+            std::visit([](const auto& held) -> ParameterValue { return held; }, override.value);
+        require(authored.findComposition(kCompositionId)
+                    ->parameters()
+                    .setSource(id, ConstantValueSource{value}),
+                "reference edit installs");
+        const auto committed = compile(authored, registry);
+        expectations.expect(preview.plan && committed.plan,
+                            "every reachable owner and live value kind admits an override");
+        if (!preview.plan || !committed.plan) {
+            for (const auto& diagnostic : preview.diagnostics)
+                std::cerr << "Preview: " << diagnostic.summary << " " << diagnostic.detail << '\n';
+            for (const auto& diagnostic : committed.diagnostics)
+                std::cerr << "Authored: " << diagnostic.summary << " " << diagnostic.detail << '\n';
+            return;
+        }
+        const auto sample = [](const auto& plan) {
+            return runtime::evaluateValueGraph(plan->valueOperations(), plan->valueOutputCount(),
+                                               core::RationalTime::fromInteger(1),
+                                               plan->format().frameRate());
+        };
+        const auto live = sample(preview.plan), durable = sample(committed.plan);
+        expectations.expect(live.diagnostics.empty() && durable.diagnostics.empty() &&
+                                live.outputs == durable.outputs,
+                            "request-local values lower identically to authored constants");
+    };
+    const std::array<runtime::SnapshotParameterOverride, 7> overrides{{
+        {{}, parameter(scalar, "value"), 0.7},
+        {{}, parameter(vector, "value"), Vec2d{9, 11}},
+        {{}, parameter(vector3, "value"), Vec3d{0.6, 0.4, 0.2}},
+        {{}, parameter(color, "value"), core::Color4d{0.2, 0.4, 0.6, 1}},
+        {{}, parameter(integer, "value"), std::int64_t{1}},
+        {{}, parameter(boolean, "value"), true},
+        {{}, parameter(text, "value"), std::string("Live")},
+    }};
+    for (const auto& override : overrides)
+        check(project, override.parameterId, override);
+    auto math = makeTimeDrivenOpacityChain();
+    check(math.project, ParameterId::fromRaw(51), {{}, ParameterId::fromRaw(51), 0.7});
+    const auto utility = add("bloom.scalar-to-string");
+    drive(kFirstColor, utility, "result");
+    const auto operand = utility.parameters.front().parameterId;
+    check(project, operand, {{}, operand, 42.0});
+    const auto driven = compile(project, registry, {{{}, parameter(choice, "ifFalse"), 0.5}});
+    expectations.expect(
+        driven.status == runtime::SnapshotCompileStatus::Unsupported &&
+            hasDiagnostic(driven, runtime::CompileDiagnosticCode::UnsupportedParameterOverride),
+        "a reachable utility's driven source cannot be overridden");
+}
+
 void testOverrideVectorKindsAndLimits(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
     populateRegistry(registry);
@@ -1648,6 +1755,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 int main() {
     Expectations expectations;
     try {
+        testLiveValueOverrideOwners(expectations);
         testOverrideVectorKindsAndLimits(expectations);
         testLayerFlagsAndRangeLowering(expectations);
         testMuteKindsAndPixels(expectations);

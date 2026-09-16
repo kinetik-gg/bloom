@@ -2,7 +2,10 @@
 
 // Complete, not forward-declared: bindCell() below binds a cell's own gesture signals, which needs
 // the type rather than just its name.
+#include <bloom/document/animation.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <functional>
+#include <optional>
 
 #include <QWidget>
 #include <bloom/ui/editor_area.hpp>
@@ -62,26 +65,10 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     void configureMergeInputs();
     QWidget* mergeInputsPanel_ = nullptr;
     kit::KSection* mergeSection_ = nullptr;
-    // Binds one numeric row's commit to the CELL's own gesture boundary rather than to every value
-    // it passes through. ADR 0017: a drag does not mutate the document on pointer motion, and one
-    // completed gesture is one undo step -- so a scrub publishes nothing until it is released, and
-    // an abandoned one publishes nothing at all. `rebuilding_` still guards the projection's own
-    // writes, exactly as it did.
-    template <typename Commit> void bindCell(kit::KValueField* field, Commit commit) {
-        connect(field, &kit::KValueField::valueChanged, this, [this, commit] {
-            if (!rebuilding_ && !scrubbing_) {
-                commit();
-            }
-        });
-        connect(field, &kit::KValueField::scrubStarted, this, [this] { scrubbing_ = true; });
-        connect(field, &kit::KValueField::scrubCancelled, this, [this] { scrubbing_ = false; });
-        connect(field, &kit::KValueField::scrubFinished, this, [this, commit] {
-            scrubbing_ = false;
-            if (!rebuilding_) {
-                commit();
-            }
-        });
-    }
+    void bindCell(kit::KValueField* field, std::string_view role,
+                  std::optional<document::AnimationComponent> component,
+                  const std::function<void()>& change);
+    void refreshLiveValues();
 
     // Task PROPS-1, deliverable 1: the section construction, split out of one constructor that had
     // grown past four hundred lines. Each appends exactly one kit::KSection to `layout`.
@@ -202,7 +189,6 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     bool rebuilding_ = false;
     // True between a cell's scrubStarted() and its scrubFinished()/scrubCancelled(). One flag for
     // the panel, because the panel has one pointer on it.
-    bool scrubbing_ = false;
 };
 
 } // namespace bloom::ui

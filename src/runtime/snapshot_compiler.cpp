@@ -691,15 +691,7 @@ class CompilePass final {
                    "Overrides may affect only parameters on the requested output path.");
             return;
         }
-        const bool editableOwner =
-            ownerDefinition->category == runtime::NodeCategory::Sources ||
-            ownerDefinition->lowering == runtime::NodeLoweringKind::LayerOutput;
         const auto kind = parameterDefinition->valueKind;
-        const bool supported = parameterDefinition->supportsAnimation ||
-                               kind == runtime::ParameterValueKind::String ||
-                               kind == runtime::ParameterValueKind::Integer ||
-                               kind == runtime::ParameterValueKind::Boolean ||
-                               kind == runtime::ParameterValueKind::Color4d;
         document::ParameterValue value =
             std::visit([](const auto& entry) -> document::ParameterValue { return entry; },
                        parameterOverride.value);
@@ -708,11 +700,10 @@ class CompilePass final {
             if (integer && (*integer == 0 || *integer == 1))
                 value = *integer != 0;
         }
-        if (!editableOwner || !supported ||
-            parameter->schemaKey != parameterDefinition->schemaKey || !hasValueKind(value, kind)) {
+        if (parameter->schemaKey != parameterDefinition->schemaKey || !hasValueKind(value, kind)) {
             reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
                    "Parameter override type does not match its target",
-                   "Overrides require a compatible source or Layer parameter.");
+                   "Overrides require a compatible reachable parameter.");
             return;
         }
         document::ParameterRecord replacement{parameter->id, parameter->schemaKey,

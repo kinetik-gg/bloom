@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-15
+Updated: 2026-09-16
 
 ## Purpose And Ownership
 
@@ -354,11 +354,14 @@ Current time is an evaluation-request input, not a persistent preview setting. E
 immediately advances the desired request generation. Scrub and direct manipulation use
 `Interactive` priority; discrete typed time entry, key selection, and document refresh use
 `Visible`. Playback serves cached frames immediately, admits predicted fast misses at `Visible`,
-and skips other misses as described under **Playback never blocks**. The controller uses an injectable 16 ms trailing cadence for pointer storms and retains
+and skips other misses as described under **Playback never blocks**. The first Interactive request
+submits immediately. Subsequent pointer storms use an injectable 16 ms trailing cadence and retain
 at most one active request handle plus one newest pending request per preview owner. A superseded
 active request is cancelled but remains active until terminal; only then may the pending request be
-submitted. Scrub end bypasses the trailing delay but does not violate that active-request gate.
-Scheduler coalescing and stale-result rejection remain lower-level backstops.
+submitted. Live parameter overrides at the same revision and time finish the active frame so
+continuous input can still display progress. Scrub end bypasses the trailing delay but does not
+violate that active-request gate. Scheduler coalescing and stale-result rejection remain
+lower-level backstops.
 
 `CompositionSelection` owns a collection of stable `(AnimationCurveId, KeyframeId, Component?)`
 addresses and one primary key with a contextual layer. Shift-click and box selection update that shared
@@ -496,7 +499,7 @@ frame excluded; a range edit cancels an active cache run through the ordinary re
 ### Background caching
 
 A session-owned background renderer fills the same preview cache while no foreground preview,
-interactive scrub, position override, pointer drag, or explicit RAM Preview is active. It starts at
+interactive scrub, parameter override, pointer drag, or explicit RAM Preview is active. It starts at
 the playhead, then visits the next frame, previous frame, and progressively farther frames in both
 directions. During playback it visits frames forward from the moving playhead, wrapping at the
 composition end. An in-flight frame remains useful when playback advances; the next request is
@@ -570,7 +573,7 @@ frames contribute nothing. The counter is a count, not a measured frame rate.
 footer says nothing; during one it reports zero explicitly. Ordinary scrubbing while stopped does
 not affect the count.
 
-## Direct Manipulation
+## Direct Manipulation And Preview Overrides
 
 The Select tool picks the topmost evaluated Layer polygon under the pointer in authored stack
 order. Shift-click extends the shared selection; an empty canvas click clears it. The header object
@@ -611,21 +614,23 @@ The preview channel is session-only and reusable by future shape/text interactio
 
 ```text
 SnapshotCompileRequest.parameterOverrides = [ // at most eight distinct parameters
-  { sourceRevision, parameterId, value: double | Vec2d | Color4d | int64 | string }
+  { sourceRevision, parameterId, value: double | Vec2d | Vec3d | Color4d | int64 | bool | string }
 ]
 ```
 
 Admission checks the captured revision, target existence, reachability and unique ownership, then
-registered schema, kind and value domain. Source and Layer nodes accept animatable parameters or
-constant String, Integer, Boolean and Color4d parameters. Boolean values use integer zero/one;
-other integers are refused for Boolean targets. Duplicate targets, a ninth override and driven
-sources are refused. A driver is never hidden or disconnected by this channel.
+registered schema, kind and value domain. Every reachable node owner participates, including
+Source, Layer, Value, Math and utility nodes. Boolean values are typed booleans; legacy integer
+zero/one overrides remain accepted, while other integers are refused for Boolean targets. Duplicate
+targets, a ninth override and driven sources are refused. A driver is never hidden or disconnected by this channel.
 
 Accepted overrides become request-local constant records read by the shared lowering functions,
 including all source operand kinds. Their dormant curves are omitted. The immutable document is
 unchanged; compiled plan and operation caches bypass overridden requests. Preview controller and
-pipeline carry the complete vector only on armed Interactive requests, using the existing 16 ms
-cadence and cancellation/newest-request policy. Release or cancellation removes the vector.
+pipeline carry the complete vector only on Interactive requests. The first request is immediate;
+subsequent requests retain the 16 ms cadence and one-active/one-newest admission policy. Release
+or cancellation removes the vector. Completed previews are consumed independently of the slower
+Jobs monitor polling interval.
 
 Release writes every changed parameter through the common constant/keyframe/driven command branch
 in **one** transaction: `Move Layer`, `Scale Layer`, `Rotate Layer` or `Move Anchor`. Constants are
@@ -640,7 +645,38 @@ preview completion. Delete removes the selected layers through the existing Remo
 in one transaction. All bindings and geometry use Qt's portable input and painting surfaces on
 Linux, macOS and Windows.
 
+### Value Edits
+
+`CompositionSession::beginValueEdit(parameterId, optionalComponent)` captures the revision, exact
+session time and sampled base value. `updateValueEdit(value)` validates and publishes a session-only
+value through the same request override channel. `liveValue(parameterId)` and the typed effective
+readers return that value immediately; Properties, node cards and timeline rows refresh from
+`liveValueChanged`, independently of preview completion. Matching typed setters stage their values
+while an edit is active, preserving each surface's units and colour conversion.
+
+Numeric typing publishes every valid finite change; incomplete text leaves the last valid preview
+visible. Horizontal scrubbing and arrow steps use the same seam. Release, Enter or focus-out calls
+`commitValueEdit()` once; Escape calls `cancelValueEdit()` and restores the base with no transaction.
+A component field keys only its component. Linked vector controls and the colour picker edit the
+whole value. Animated values keep their curves and author at the captured exact time. Zero-change,
+cancelled, stale, time-switched and composition-switched edits create no history. Driven and locked
+parameters refuse live authoring. Discrete enum choices remain one immediate command per choice.
+
+Value and viewer-transform overrides share the existing Full/Half/Quarter/Auto resolution policy.
+Auto follows the fitted viewer scale, using the same proxy mapping as viewer manipulation.
+Completed live frames can be presented while newer input is coalesced, so continuous motion does
+not starve feedback. Committing always requests the configured resolution and reference quality.
+These request-only choices never change durable state, compiled-plan grammar, semantics versions
+or committed pixels. Override plans and frames remain excluded from revision caches.
+
 ## Required Verification
+
+- live numeric and colour edits request Interactive overrides before any transaction, refresh peer
+  surfaces, commit one history entry, and cancel without history
+- the first Interactive request submits immediately; completed live frames present during continuous
+  input and meet a generous offscreen latency bound independently of Jobs monitor polling
+- reachable Source, Layer, Value, Math and utility owners accept each supported override kind, while
+  driven sources remain refused and request-local lowering matches authored constants
 
 - exact ordering and interval selection at extreme normalized rationals
 - binary64 factor rounding at extreme representable ratios and halfway ties; subnormal key
