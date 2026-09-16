@@ -44,10 +44,14 @@
 #include <QPainter>
 #include <QPoint>
 #include <QRectF>
+#include <QScrollArea>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QToolButton>
+#include <QVBoxLayout>
 #include <QWheelEvent>
+#include <bloom/ui/kit/section.hpp>
+#include <bloom/ui/properties_editor.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -57,6 +61,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -1681,6 +1686,8 @@ void testViewerOverlayPixelsFollowTransformAndThreshold(Expectations& expectatio
         "anchor has priority over layer interior");
 }
 
+#include "viewer_tools_tests.ipp"
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1693,6 +1700,13 @@ int main(int argc, char** argv) {
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     Expectations expectations;
     testToolColumnUsesViewGestures(expectations);
+    try {
+        testCreationTools(expectations);
+        testPenTools(expectations);
+        testTextTool(expectations);
+    } catch (const std::exception& error) {
+        expectations.expect(false, error.what());
+    }
     testSelectedBoundsOverlayPixels(expectations);
     testResolutionDropdownPersistsAndMovesWithFooter(expectations);
     testAutoFollowsFitResize(expectations);

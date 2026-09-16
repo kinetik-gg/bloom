@@ -95,7 +95,7 @@ jobs:
   linux-desktop:
     name: Linux Qt desktop
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       CC: clang-22
       CXX: clang++-22

@@ -84,3 +84,10 @@ instead of that diamond plus one more per component field; its expanded X and Y 
 own one diamond each, unchanged. Both full-window captures were visually inspected for the new
 staircase indent and the corrected diamond count. Comparison tolerances and full-image coverage are
 unchanged; process/output identity goldens are unchanged.
+
+SHAPE-2 approval (2026-09-17, Qt 6.8.3): the viewer column now contains ten enabled tools.
+Text, Rectangle and Pen use enabled ink; Ellipse, Polygon, Star and Line add SVG glyphs,
+and Pen moves below them. Both references were regenerated with `--update-goldens` at DPR 1
+and 1.5 and visually inspected. Against the previous references, changes are confined to the
+tool column: (8,166)–(40,356) at DPR 1 and (12,250)–(60,534) at DPR 1.5. Window geometry,
+composition pixels and all other panels are unchanged. Rendering identity goldens are unchanged.

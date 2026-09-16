@@ -49,12 +49,18 @@
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QResizeEvent>
+#include <QScrollArea>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QStackedLayout>
+#include <QTimer>
 #include <QToolButton>
 #include <QWheelEvent>
+#include <bloom/render/path_raster.hpp>
+#include <bloom/ui/kit/section.hpp>
+#include <numbers>
 
 #include <algorithm>
 #include <array>
@@ -1339,38 +1345,58 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     auto* tools = new kit::KToolColumn(this);
     toolColumn_ = tools;
     tools->setObjectName("viewerToolColumn");
-    auto* select = tools->addTool(kit::IconId::Select, tr("Select and move"), "viewerSelectTool");
-    auto* hand = tools->addTool(kit::IconId::Pan, tr("Hand: drag to pan"), "viewerHandTool");
-    auto* zoom = tools->addTool(
-        kit::IconId::Zoom, tr("Zoom: click to zoom in; Alt-click to zoom out"), "viewerZoomTool");
-    tools->addTool(kit::IconId::Text, tr("Text tool is not available yet; use Add Text"),
-                   "viewerTextTool", false);
-    tools->addTool(kit::IconId::Rectangle, tr("Rectangle tool is not available yet"),
-                   "viewerRectangleTool", false);
-    tools->addTool(kit::IconId::Pen, tr("Pen tool is not available yet"), "viewerPenTool", false);
-    select->setChecked(true);
-    connect(select, &QToolButton::clicked, this, [this] {
-        tool_ = Tool::Select;
-        updatePanCursor();
-    });
-    connect(hand, &QToolButton::clicked, this, [this] {
-        tool_ = Tool::Hand;
-        updatePanCursor();
-    });
-    connect(zoom, &QToolButton::clicked, this, [this] {
-        tool_ = Tool::Zoom;
-        updatePanCursor();
-    });
+    const auto addTool = [this, tools](Tool tool, kit::IconId icon, const QString& tip,
+                                       const char* name) {
+        auto* button = tools->addTool(icon, tip, name);
+        button->setProperty("viewerTool", static_cast<int>(tool));
+        connect(button, &QToolButton::clicked, this, [this, tool] { selectTool(tool); });
+        button->setChecked(tool == Tool::Select);
+    };
+    addTool(Tool::Select, kit::IconId::Select, tr("Select and move (V)"), "viewerSelectTool");
+    addTool(Tool::Hand, kit::IconId::Pan, tr("Hand: drag to pan (H)"), "viewerHandTool");
+    addTool(Tool::Zoom, kit::IconId::Zoom, tr("Zoom: click to zoom in; Alt-click to zoom out (Z)"),
+            "viewerZoomTool");
+    addTool(Tool::Text, kit::IconId::Text, tr("Text: click to place and edit in Properties (T)"),
+            "viewerTextTool");
+    addTool(Tool::Rectangle, kit::IconId::Rectangle,
+            tr("Rectangle: drag; Shift constrains; Alt draws from centre (R)"),
+            "viewerRectangleTool");
+    addTool(Tool::Ellipse, kit::IconId::Ellipse,
+            tr("Ellipse: drag; Shift makes a circle; Alt draws from centre (E)"),
+            "viewerEllipseTool");
+    addTool(Tool::Polygon, kit::IconId::Polygon,
+            tr("Polygon: drag a five-sided polygon; Shift constrains; Alt draws from centre"),
+            "viewerPolygonTool");
+    addTool(Tool::Star, kit::IconId::Star,
+            tr("Star: drag a five-point star; Shift constrains; Alt draws from centre"),
+            "viewerStarTool");
+    addTool(Tool::Line, kit::IconId::Line,
+            tr("Line: drag; Shift snaps to 45 degrees; Alt draws from centre"), "viewerLineTool");
+    addTool(Tool::Pen, kit::IconId::Pen,
+            tr("Pen: click anchors; drag handles; click first to close; Enter finishes; Escape "
+               "cancels (P)"),
+            "viewerPenTool");
     tools->adjustSize();
     tools->move(0, 0);
 
-    setMinimumSize(kit::px(kit::Size::ViewerMinWidth), kit::px(kit::Size::ViewerMinHeight));
+    setMinimumSize(kit::px(kit::Size::ViewerMinWidth),
+                   std::max(kit::px(kit::Size::ViewerMinHeight),
+                            tools->sizeHint().height() + kit::px(kit::Size::Control)));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     // StrongFocus lets a press-to-drag gesture also receive the Escape key that cancels it, and
     // lets the widget receive Space/Z/F without a prior click.
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
 
+    connect(&session_, &CompositionSession::snapshotChanged, this, [this] { cancelCreation(); });
+    connect(&session_, &CompositionSession::compositionChanged, this, [this] { cancelCreation(); });
+    connect(&session_, &CompositionSession::currentTimeChanged, this, [this] { cancelCreation(); });
+    connect(&session_, &CompositionSession::selectionChanged, this, [this] {
+        cancelPathDrag();
+        selectedAnchor_.reset();
+        update();
+    });
+    connect(&session_, &CompositionSession::liveValueChanged, this, [this] { update(); });
     playback_ = &previewController.playbackController();
     buildHeader();
     buildFooter(ramPreview);
@@ -1460,7 +1486,10 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     updateOverlayActions();
 }
 
-ViewerEditor::~ViewerEditor() { QObject::disconnect(focusConnection_); }
+ViewerEditor::~ViewerEditor() {
+    cancelCreation();
+    QObject::disconnect(focusConnection_);
+}
 
 // Everything the transport needs that is not the construction of its buttons: the shared
 // PlaybackController, the RAM preview command, the four frame-stepping QActions, and the
@@ -1829,6 +1858,9 @@ void ViewerEditor::updatePreviewResolution() {
 }
 
 bool ViewerEditor::event(QEvent* event) {
+    if (event->type() == QEvent::UngrabMouse || event->type() == QEvent::WindowDeactivate ||
+        event->type() == QEvent::Hide || event->type() == QEvent::DevicePixelRatioChange)
+        cancelCreation();
     if (dragActive_ && (event->type() == QEvent::UngrabMouse ||
                         event->type() == QEvent::WindowDeactivate || event->type() == QEvent::Hide))
         endDrag(false);
@@ -1966,6 +1998,9 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
             }
         }
     }
+
+    paintCreation(painter);
+    paintPathTools(painter);
 
     // Readiness and diagnostics remain in the status bar. Selection geometry is derived from
     // the delivered process frame and painted in screen space above the composition.
@@ -2119,6 +2154,18 @@ void ViewerEditor::beginPan(const Qt::MouseButton button, const QPointF screenPo
     updatePanCursor();
 }
 
+void ViewerEditor::selectTool(const Tool tool) {
+    cancelCreation();
+    if (dragActive_)
+        endDrag(false);
+    tool_ = tool;
+    for (auto* button : toolColumn_->findChildren<QToolButton*>())
+        button->setChecked(button->property("viewerTool").toInt() == static_cast<int>(tool));
+    updatePanCursor();
+    setFocus(Qt::ShortcutFocusReason);
+    update();
+}
+
 void ViewerEditor::updatePanCursor() {
     if (panActive_) {
         setCursor(Qt::ClosedHandCursor);
@@ -2133,6 +2180,12 @@ void ViewerEditor::updatePanCursor() {
 }
 
 void ViewerEditor::mousePressEvent(QMouseEvent* event) {
+    if (textPress(event))
+        return;
+    if (pathPress(event))
+        return;
+    if (creationPress(event))
+        return;
     if (dragActive_ && event->button() == Qt::RightButton) {
         endDrag(false);
         event->accept();
@@ -2214,6 +2267,10 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
 }
 
 void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
+    if (pathMove(event))
+        return;
+    if (creationMove(event))
+        return;
     if (panActive_) {
         transform_ = panBaseTransform_;
         transform_.pan += (event->position() - panOrigin_);
@@ -2275,6 +2332,10 @@ void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
+    if (pathRelease(event))
+        return;
+    if (creationRelease(event))
+        return;
     if (panActive_ && event->button() == panButton_) {
         panActive_ = false;
         panButton_ = Qt::NoButton;
@@ -2298,7 +2359,7 @@ void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void ViewerEditor::wheelEvent(QWheelEvent* event) {
-    if (dragActive_ || panActive_) {
+    if (dragActive_ || panActive_ || creation_) {
         event->ignore();
         return;
     }
@@ -2317,6 +2378,42 @@ void ViewerEditor::wheelEvent(QWheelEvent* event) {
 }
 
 void ViewerEditor::keyPressEvent(QKeyEvent* event) {
+    if (pathKey(event))
+        return;
+    if (!dragActive_ && !panActive_ && event->modifiers() == Qt::NoModifier) {
+        std::optional<Tool> next;
+        switch (event->key()) {
+        case Qt::Key_V:
+        case Qt::Key_Escape:
+            next = Tool::Select;
+            break;
+        case Qt::Key_H:
+            next = Tool::Hand;
+            break;
+        case Qt::Key_Z:
+            next = Tool::Zoom;
+            break;
+        case Qt::Key_R:
+            next = Tool::Rectangle;
+            break;
+        case Qt::Key_E:
+            next = Tool::Ellipse;
+            break;
+        case Qt::Key_P:
+            next = Tool::Pen;
+            break;
+        case Qt::Key_T:
+            next = Tool::Text;
+            break;
+        default:
+            break;
+        }
+        if (next) {
+            selectTool(*next);
+            event->accept();
+            return;
+        }
+    }
     if (dragActive_ && event->key() == Qt::Key_Escape) {
         endDrag(false);
         event->accept();
@@ -2387,6 +2484,7 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
 }
 
 void ViewerEditor::resizeEvent(QResizeEvent* event) {
+    cancelCreation();
     QWidget::resizeEvent(event);
     if (dragActive_) {
         endDrag(false);
@@ -2438,5 +2536,8 @@ void ViewerEditor::contextMenuEvent(QContextMenuEvent* event) {
     });
     menu.exec(event->globalPos());
 }
+
+#include "viewer_tools.ipp"
+#include "viewer_tools_path.ipp"
 
 } // namespace bloom::ui

@@ -83,6 +83,10 @@ const auto& iconAssets() {
         {IconId::AlignCenter, QLatin1StringView("text-align-center")},
         {IconId::AlignRight, QLatin1StringView("text-align-right")},
         {IconId::Rectangle, QLatin1StringView("rectangle")},
+        {IconId::Ellipse, QLatin1StringView("ellipse")},
+        {IconId::Polygon, QLatin1StringView("polygon")},
+        {IconId::Star, QLatin1StringView("star")},
+        {IconId::Line, QLatin1StringView("line")},
         {IconId::Pen, QLatin1StringView("pen-nib")},
         {IconId::NewFolder, QLatin1StringView("folder-simple-plus")},
         {IconId::Import, QLatin1StringView("download-simple")},
@@ -187,6 +191,15 @@ QString iconResourcePath(const IconId id, const IconWeight weight) {
     const auto* const asset = std::ranges::find(iconAssets(), id, &IconAsset::id);
     if (asset == iconAssets().end()) {
         return {};
+    }
+    if (id == IconId::Ellipse || id == IconId::Polygon || id == IconId::Star ||
+        id == IconId::Line) {
+        const auto* const suffix = weight == IconWeight::Fill   ? "fill"
+                                   : weight == IconWeight::Bold ? "bold"
+                                                                : "regular";
+        return QStringLiteral(":/bloom/kit/shape-icons/%1-%2.svg")
+            .arg(asset->upstreamName)
+            .arg(QLatin1StringView(suffix));
     }
     // Task VIEW-1: all three vendored weights are now COMPLETE subsets (48 ids each), so this is a
     // total mapping rather than the five-id Bold exception it used to carry. IconRole::Chrome asks

@@ -53,16 +53,26 @@ inline constexpr std::string_view kAddSolidLayerLayerToStackEdgeOutput = "layerT
 inline constexpr std::string_view kAddCompositionOutput = "composition";
 inline constexpr std::string_view kDuplicateCompositionOutput = "composition";
 
+struct ShapeLayerGeometry {
+    std::optional<document::Vec2d> position;
+    std::optional<document::Vec2d> size;
+    std::optional<document::Vec2d> lineStart;
+    std::optional<document::Vec2d> lineEnd;
+    std::optional<document::PathValue> path;
+};
+
 class AddShapeLayer final : public Operation {
   public:
-    AddShapeLayer(document::CompositionId composition, document::ShapeKind kind)
-        : composition_(composition), kind_(kind) {}
+    AddShapeLayer(document::CompositionId composition, document::ShapeKind kind,
+                  ShapeLayerGeometry geometry = {})
+        : composition_(composition), kind_(kind), geometry_(std::move(geometry)) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
 
   private:
     document::CompositionId composition_;
     document::ShapeKind kind_;
+    ShapeLayerGeometry geometry_;
 };
 
 class AddSolidLayer final : public Operation {

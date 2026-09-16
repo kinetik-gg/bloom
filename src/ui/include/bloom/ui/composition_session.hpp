@@ -1,4 +1,5 @@
 #pragma once
+#include <bloom/commands/operations.hpp>
 #include <bloom/document/shape.hpp>
 
 #include <bloom/commands/animation_operations.hpp>
@@ -257,13 +258,15 @@ class CompositionSession final : public QObject {
     [[nodiscard]] std::optional<core::BlendMode>
     blendModeForLayer(document::LayerId layerId) const noexcept;
 
-    [[nodiscard]] bool addShapeLayer(document::ShapeKind kind);
+    [[nodiscard]] bool addShapeLayer(document::ShapeKind kind,
+                                     commands::ShapeLayerGeometry geometry = {});
     [[nodiscard]] bool addSolidLayer(const QString& name, core::Color4d color);
     // `size` is the em size in pixels and `color` a straight reference-linear-sRGB authoring value;
     // both default to the registered text schema's own defaults.
     [[nodiscard]] bool addTextLayer(const QString& name, const QString& text,
                                     double size = document::kDefaultTextSizePixels,
-                                    core::Color4d color = core::Color4d{1.0, 1.0, 1.0, 1.0});
+                                    core::Color4d color = core::Color4d{1.0, 1.0, 1.0, 1.0},
+                                    std::optional<document::Vec2d> position = {});
     [[nodiscard]] bool setSelectedPosition(double x, double y, AuthoringTarget target = {});
     // The rest of the Layer Output transform. Anchor and scale are authored exactly as position is
     // (full-resolution composition pixels for the anchor, a unitless factor for the scale),
@@ -446,6 +449,8 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool commitValueEdit();
     void cancelValueEdit();
     [[nodiscard]] bool valueEditActive() const noexcept;
+    [[nodiscard]] bool beginPathEdit(document::ParameterId parameter);
+    [[nodiscard]] bool updatePathEdit(document::PathValue path, document::Vec2d centreDelta);
     [[nodiscard]] bool isValueEditing(document::ParameterId parameterId) const noexcept;
     [[nodiscard]] std::optional<document::ParameterValue>
     liveValue(document::ParameterId parameterId) const;
@@ -660,6 +665,12 @@ class CompositionSession final : public QObject {
         std::optional<document::AnimationComponent> component;
         document::ParameterValue base;
         document::ParameterValue value;
+        struct PathAnchorEdit {
+            document::ParameterId parameter;
+            document::Vec2d base;
+            document::Vec2d value;
+        };
+        std::optional<PathAnchorEdit> anchor{};
     };
     std::optional<ValueEdit> valueEdit_;
     // Task DRIVE-1's shared driver resolution. The evaluator is created on the first refresh that

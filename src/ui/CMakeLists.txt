@@ -90,6 +90,25 @@ bloom_enable_warnings(bloom_ui_kit)
 # qt_add_resources() on a static library routes the generated resource translation unit through its
 # own object library and propagates the objects to consumers, so the icon data is never dropped by
 # static-library dead-stripping the way a plain Q_INIT_RESOURCE would risk.
+# Bloom-authored shape tool glyphs use the same SVG renderer and state tints.
+qt_add_resources(bloom_ui_kit "shape_tool_icons"
+    PREFIX "/bloom/kit/shape-icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/kit/icons"
+    FILES
+        kit/icons/ellipse-regular.svg
+        kit/icons/ellipse-bold.svg
+        kit/icons/ellipse-fill.svg
+        kit/icons/polygon-regular.svg
+        kit/icons/polygon-bold.svg
+        kit/icons/polygon-fill.svg
+        kit/icons/star-regular.svg
+        kit/icons/star-bold.svg
+        kit/icons/star-fill.svg
+        kit/icons/line-regular.svg
+        kit/icons/line-bold.svg
+        kit/icons/line-fill.svg
+)
+
 qt_add_resources(bloom_ui_kit "kinetik_icons"
     PREFIX "/bloom/kit"
     BASE "kit/third_party"
