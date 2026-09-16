@@ -575,6 +575,9 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Animation could not be attached to the parameter");
     }
+    if (componentCount > 1)
+        static_cast<void>(
+            composition->animationCurves().synchronizeCompatibilityProjection(*curveId));
     std::vector<OperationOutput> outputs{
         {std::string(kAnimationCurveOutput), DurableObjectId{*curveId}}};
     for (const auto keyframeId : keyframeIds)
@@ -1086,6 +1089,8 @@ OperationResult SetKeyframeAtTimeForParameterComponent::apply(document::Draft& d
         if (!composition->animationCurves().updateKeyframe(source->curveId, component_, updated))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Component keyframe could not be updated");
+        static_cast<void>(
+            composition->animationCurves().synchronizeCompatibilityProjection(source->curveId));
         return OperationResult::applied(keyframeOutput(id));
     }
 
@@ -1099,6 +1104,8 @@ OperationResult SetKeyframeAtTimeForParameterComponent::apply(document::Draft& d
         return OperationResult::rejected(OperationIssueCode::InvalidOrder,
                                          "A component keyframe already exists at the exact time");
     }
+    static_cast<void>(
+        composition->animationCurves().synchronizeCompatibilityProjection(source->curveId));
     return OperationResult::applied(keyframeOutput(*id));
 }
 
@@ -1167,6 +1174,8 @@ OperationResult DeleteKeyframe::apply(document::Draft& draft) const {
         if (!composition->animationCurves().eraseKeyframe(curveId_, *component_, keyframeId_))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Component keyframe could not be deleted");
+        static_cast<void>(
+            composition->animationCurves().synchronizeCompatibilityProjection(curveId_));
         return OperationResult::applied(keyframeOutput(keyframeId_));
     }
     if (grouped) {
