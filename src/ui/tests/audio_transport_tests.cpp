@@ -124,7 +124,7 @@ int run(int argc, char** argv) {
             const auto buffer = fixture.assets->audioBuffer(description.assetId);
             if (buffer == nullptr)
                 continue;
-            clips.push_back({.buffer = *buffer,
+            clips.push_back({.buffer = buffer,
                              .startTime = description.startTime,
                              .level = static_cast<float>(description.level),
                              .muted = description.muted,

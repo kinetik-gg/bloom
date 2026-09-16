@@ -72,7 +72,10 @@ class MiniaudioBackend final : public Backend {
 [[nodiscard]] std::unique_ptr<Backend> makeMiniaudioBackend();
 
 struct AudioClip final {
-    AudioBuffer buffer;
+    // Null means "no sample": the clip contributes silence. Shared so the engine never
+    // deep-copies decoded audio (a shared decode can be tens of megabytes) -- callers hand in
+    // the same AssetController-owned buffer that feeds every clip built from that asset.
+    std::shared_ptr<const AudioBuffer> buffer;
     core::RationalTime startTime{};
     float level = 1.0F;
     bool muted = false;
