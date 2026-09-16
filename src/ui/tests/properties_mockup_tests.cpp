@@ -114,8 +114,9 @@ void run() {
         return;
     auto* xRow = row(positionX);
     auto* opacityRow = row(opacity);
-    auto* positionDiamond = xRow->findChild<ui::KeyframeDiamond*>();
-    auto* opacityDiamond = opacityRow->findChild<ui::KeyframeDiamond*>();
+    auto* positionDiamond = xRow->findChild<ui::KeyframeDiamond*>("propertiesKeyframeIndicator");
+    auto* opacityDiamond =
+        opacityRow->findChild<ui::KeyframeDiamond*>("propertiesKeyframeIndicator");
     expect(xIn(positionX, panel) == xIn(opacityRow->findChild<ui::kit::KSlider*>(), panel),
            "control columns start at the same x");
     expect(xIn(positionDiamond, panel) == xIn(opacityDiamond, panel), "keyframe columns align");
@@ -263,7 +264,20 @@ void run() {
         return count;
     };
     expect(amberPixels(keyed) > amberPixels(between) && amberPixels(between) > amberPixels(unkeyed),
-           "keyed diamond is filled amber, between-key diamond is half, unkeyed is outline");
+           "keyed diamond is filled gold, between keys is a gold outline, constant is muted");
+    expect(
+        session.toggleKeyframe(document::kPositionParameterRole, document::AnimationComponent::X),
+        "key only position X");
+    idle(*positionDiamond);
+    const auto partial = positionDiamond->grab().toImage();
+    expect(session.toggleKeyframe(document::kPositionParameterRole), "complete the position key");
+    idle(*positionDiamond);
+    const auto full = positionDiamond->grab().toImage();
+    (void)session.setCurrentTime(core::RationalTime::fromInteger(2));
+    idle(*positionDiamond);
+    const auto outline = positionDiamond->grab().toImage();
+    expect(amberPixels(full) > amberPixels(partial) && amberPixels(partial) > amberPixels(outline),
+           "parameter diamond distinguishes all, some and no keyed components");
     expect(session.addTextLayer("Text", "Hello", 72, {1, 1, 1, 1}), "create Text fixture");
     settle();
     auto* font = panel->findChild<ui::kit::KDropdown*>("textFontName");

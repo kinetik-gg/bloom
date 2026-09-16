@@ -1648,6 +1648,27 @@ KeyframeDiamondState CompositionSession::keyframeDiamondState(const std::string_
     return diamondStateFor(parameterForSelection(role));
 }
 
+KeyframeParameterState
+CompositionSession::keyframeParameterState(const std::string_view role) const {
+    const auto* parameter = parameterForSelection(role);
+    return parameter ? keyframeParameterState(parameter->id, currentTime_)
+                     : KeyframeParameterState::Unsupported;
+}
+
+KeyframeDiamondState
+CompositionSession::keyframeDiamondState(const std::string_view role,
+                                         const document::AnimationComponent component) const {
+    const auto* parameter = parameterForSelection(role);
+    return parameter ? keyframeDiamondState(parameter->id, component, currentTime_)
+                     : KeyframeDiamondState::Unsupported;
+}
+
+bool CompositionSession::toggleKeyframe(const std::string_view role,
+                                        const document::AnimationComponent component) {
+    const auto* parameter = parameterForSelection(role);
+    return parameter && toggleKeyframe(parameter->id, component, currentTime_);
+}
+
 KeyframeDiamondState CompositionSession::keyframeDiamondStateForParameter(
     const document::ParameterId parameterId) const {
     const auto* current = composition();
@@ -1874,6 +1895,7 @@ bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* para
                 using Value = std::decay_t<decltype(value)>;
                 if constexpr (std::is_same_v<Value, double> ||
                               std::is_same_v<Value, document::Vec2d> ||
+                              std::is_same_v<Value, document::Vec3d> ||
                               std::is_same_v<Value, core::Color4d>) {
                     transaction.emplace<commands::SetKeyframeAtTimeForParameter>(
                         compositionId_, parameterId, currentTime_, value);
@@ -1900,7 +1922,8 @@ bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* para
     const auto existing = keyframeAtExactTime(*parameter, currentTime_);
 
     // --- animated, no key here -> insert one at the exactly sampled value ----------------------
-    if (!existing.has_value()) {
+    if (!existing.has_value() ||
+        keyframeParameterState(parameterId, currentTime_) == KeyframeParameterState::Some) {
         const auto sample = sampleParameterValue(*parameter, currentTime_);
         if (!sample.has_value()) {
             reportUnavailable(QStringLiteral("The animation curve could not be sampled here"));

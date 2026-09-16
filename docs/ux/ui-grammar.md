@@ -359,3 +359,8 @@ New Composition and the composition Properties section expose a `KColorChip` Bac
 Viewer Solid mode paints that authored RGBA colour, initially opaque black. Black, White and
 Checkerboard remain session choices. This viewer background does not alter composition pixels
 or export alpha.
+
+Keyframe diamonds have four forms: a muted outline for a constant, a gold outline for an animated
+parameter with no key at the playhead, a gold half fill when some components are keyed there, and
+a gold fill when all components are keyed there. A component diamond uses the same forms except
+half fill, and toggles only that component. Parameter diamonds toggle all components together.

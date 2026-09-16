@@ -271,6 +271,11 @@ void testComponentDiamondsAndSelections() {
     ui::CompositionSession session(document, stack, compositionId);
 
     const auto exactTime = time(2);
+    session.selectLayer(ids.layer);
+    require(session.setCurrentTime(exactTime), "set component test time");
+    require(session.keyframeParameterState(document::kPositionParameterRole) ==
+                ui::KeyframeParameterState::None,
+            "role parameter state starts empty");
     require(session.keyframeDiamondState(ids.position, document::AnimationComponent::X,
                                          exactTime) == ui::KeyframeDiamondState::Constant,
             "a constant vector component reports the constant diamond state");
@@ -302,6 +307,22 @@ void testComponentDiamondsAndSelections() {
     require(session.keyframeParameterState(ids.position, exactTime) ==
                 ui::KeyframeParameterState::All,
             "the aggregate parameter state becomes All when every component is keyed");
+    session.selectLayer(ids.layer);
+    require(session.keyframeDiamondState(document::kPositionParameterRole,
+                                         document::AnimationComponent::Y) ==
+                ui::KeyframeDiamondState::AnimatedWithKey,
+            "role component state resolves the selected layer");
+    require(
+        session.toggleKeyframe(document::kPositionParameterRole, document::AnimationComponent::Y),
+        "role component toggle removes only Y");
+    require(session.keyframeParameterState(document::kPositionParameterRole) ==
+                ui::KeyframeParameterState::Some,
+            "role aggregate becomes partially keyed");
+    require(session.toggleKeyframe(document::kPositionParameterRole),
+            "partial parameter click fills missing components");
+    require(session.keyframeParameterState(document::kPositionParameterRole) ==
+                ui::KeyframeParameterState::All,
+            "partial parameter click keeps X and adds Y");
     const auto effective = session.effectiveVec2Value(ids.position);
     require(effective.has_value() && *effective == document::Vec2d{10.0, 20.0},
             "component animation keeps the unchanged effective vector value");

@@ -162,10 +162,18 @@ void KeyframeDiamond::setParameterId(const document::ParameterId parameterId) {
     refresh();
 }
 
+void KeyframeDiamond::setComponent(std::optional<document::AnimationComponent> component) {
+    component_ = component;
+    refresh();
+}
+
 void KeyframeDiamond::refresh() {
-    const auto next = parameterId_.has_value()
-                          ? session_.keyframeDiamondStateForParameter(*parameterId_)
-                          : session_.keyframeDiamondState(role_);
+    const auto next =
+        component_ ? (parameterId_ ? session_.keyframeDiamondState(*parameterId_, *component_,
+                                                                   session_.currentTime())
+                                   : session_.keyframeDiamondState(role_, *component_))
+        : parameterId_.has_value() ? session_.keyframeDiamondStateForParameter(*parameterId_)
+                                   : session_.keyframeDiamondState(role_);
     const bool visible = next != KeyframeDiamondState::Unsupported;
     // A parameter this gesture cannot key shows no diamond at all rather than an inert one: an
     // unclickable affordance is a worse lie than an absent one. setVisible() (not setEnabled()) so
@@ -186,12 +194,20 @@ void KeyframeDiamond::refresh() {
         setToolTip(QStringLiteral("Key at this time — click to remove it"));
         break;
     }
-    if (state_ != next) {
-        state_ = next;
-        setIndicator(next != KeyframeDiamondState::Constant,
-                     next == KeyframeDiamondState::AnimatedWithKey);
-        update();
+    state_ = next;
+    auto fill = next == KeyframeDiamondState::AnimatedWithKey ? Fill::Full : Fill::None;
+    if (!component_) {
+        const auto aggregate =
+            parameterId_ ? session_.keyframeParameterState(*parameterId_, session_.currentTime())
+                         : session_.keyframeParameterState(role_);
+        fill = aggregate == KeyframeParameterState::All    ? Fill::Full
+               : aggregate == KeyframeParameterState::Some ? Fill::Half
+                                                           : Fill::None;
+        if (aggregate == KeyframeParameterState::Some)
+            setToolTip(
+                QStringLiteral("Some components keyed — click to key all components at this time"));
     }
+    setIndicator(next != KeyframeDiamondState::Constant, fill);
 }
 
 void KeyframeDiamond::mousePressEvent(QMouseEvent* event) {
@@ -204,8 +220,13 @@ void KeyframeDiamond::mousePressEvent(QMouseEvent* event) {
     // surface rebuilds off snapshotChanged() and calls refresh() again. A parameter-bound diamond
     // deliberately does NOT select its node first -- the gesture needs no selection, so clicking a
     // key on one card cannot silently retarget the Properties panel.
-    (void)(parameterId_.has_value() ? session_.toggleKeyframeForParameter(*parameterId_)
-                                    : session_.toggleKeyframe(role_));
+    if (component_)
+        (void)(parameterId_
+                   ? session_.toggleKeyframe(*parameterId_, *component_, session_.currentTime())
+                   : session_.toggleKeyframe(role_, *component_));
+    else
+        (void)(parameterId_ ? session_.toggleKeyframeForParameter(*parameterId_)
+                            : session_.toggleKeyframe(role_));
     event->accept();
 }
 

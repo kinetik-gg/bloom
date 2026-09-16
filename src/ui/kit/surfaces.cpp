@@ -5,9 +5,8 @@
 namespace bloom::ui::kit {
 void KDiamond::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    const auto tint = animated_ || underMouse()
-                          ? color(Color::Keyframe)
-                          : withOpacity(color(Color::Muted), kDisabledOpacity);
+    const auto tint =
+        animated_ ? color(Color::Keyframe) : withOpacity(color(Color::Muted), kDisabledOpacity);
     // Include the scene transform as well as the paint device DPR. Resolve vertices and stroke in
     // device pixels: no cached pixmap is resampled when the canvas zoom changes.
     const auto transform = painter.deviceTransform();
@@ -22,9 +21,9 @@ void KDiamond::paintEvent(QPaintEvent*) {
     const auto localDiamond = inverse.map(diamond);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setPen(QPen(tint, stroke / scale, Qt::SolidLine, Qt::SquareCap, Qt::MiterJoin));
-    painter.setBrush(keyed_ ? QBrush(tint) : Qt::NoBrush);
+    painter.setBrush(fill_ == Fill::Full ? QBrush(tint) : Qt::NoBrush);
     painter.drawPolygon(localDiamond);
-    if (animated_ && !keyed_) {
+    if (animated_ && fill_ == Fill::Half) {
         painter.setClipRect(
             inverse.mapRect(QRectF(snapped.x() - radius - stroke, snapped.y() - radius - stroke,
                                    radius + stroke, 2 * (radius + stroke))));

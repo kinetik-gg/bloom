@@ -345,6 +345,11 @@ class CompositionSession final : public QObject {
     // What the diamond for `role` on the CURRENT selection should paint, at the current session
     // time. Pure projection: no command, no mutation, nothing cached.
     [[nodiscard]] KeyframeDiamondState keyframeDiamondState(std::string_view role) const;
+    [[nodiscard]] KeyframeParameterState keyframeParameterState(std::string_view role) const;
+    [[nodiscard]] KeyframeDiamondState
+    keyframeDiamondState(std::string_view role, document::AnimationComponent component) const;
+    [[nodiscard]] bool toggleKeyframe(std::string_view role,
+                                      document::AnimationComponent component);
     // The same question keyed by PARAMETER rather than by the current selection's role. This is the
     // primitive; the role overload above resolves the role against the selection and delegates. The
     // node canvas needs this one: a card paints the diamond for ITS OWN node's parameter, which is
