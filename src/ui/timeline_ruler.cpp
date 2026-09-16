@@ -1066,11 +1066,22 @@ void TimelineKeyframePanel::setGridEntries(const std::vector<TimelineLayerEntry>
     }
     // An empty Qt mask means unmasked; hide instead so collapsed layer bars retain input.
     setMask(mask);
+    const bool shown = !rows_.empty() && keysVisible_;
     if (parentWidget()) {
         parentWidget()->setMask(mask);
-        parentWidget()->setVisible(!rows_.empty());
+        parentWidget()->setVisible(shown);
     }
-    setVisible(!rows_.empty());
+    setVisible(shown);
+}
+
+void TimelineKeyframePanel::setKeysVisible(const bool visible) {
+    if (keysVisible_ == visible)
+        return;
+    keysVisible_ = visible;
+    const bool shown = !rows_.empty() && keysVisible_;
+    if (parentWidget())
+        parentWidget()->setVisible(shown);
+    setVisible(shown);
 }
 
 void TimelineKeyframePanel::rebuild() {

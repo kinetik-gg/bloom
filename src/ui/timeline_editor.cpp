@@ -48,6 +48,7 @@
 #include <QPen>
 #include <QResizeEvent>
 #include <QScrollBar>
+#include <QSettings>
 #include <QSize>
 #include <QToolButton>
 #include <QToolTip>
@@ -1038,6 +1039,8 @@ void TimelineLaneRegion::setEntries(std::vector<TimelineLayerEntry> entries) {
         keyframeArea_->setObjectName("timelineKeyframeArea");
         keyframePanel_ = new TimelineKeyframePanel(session_, keyframeArea_);
         keyframePanel_->setRuler(ruler_);
+        keyframePanel_->setSnappingEnabled(snapping_);
+        keyframePanel_->setKeysVisible(keyframesVisible_);
         keyframePanel_->setGridEntries({}, 0);
         keyframeArea_->setGeometry(rect());
         keyframePanel_->setGeometry(rect());
@@ -1058,6 +1061,49 @@ void TimelineLaneRegion::setScrollOffset(const int offset) {
     if (keyframePanel_)
         keyframePanel_->setGridEntries(entries_, scrollOffset_);
     update();
+}
+
+void TimelineEditor::applyHeaderToggleGlyph(QToolButton* button, const bool checked) {
+    if (button == nullptr)
+        return;
+    const auto iconId = button == snappingButton_      ? kit::IconId::Snap
+                        : button == graphEditorButton_ ? kit::IconId::Graph
+                                                       : kit::IconId::Keyframe;
+    button->setIcon(kit::icon(iconId, kit::IconRole::Chrome,
+                              !button->isEnabled() ? kit::Color::Faint
+                              : checked            ? kit::Color::Accent
+                                                   : kit::Color::Foreground));
+}
+
+void TimelineEditor::setKeyframesVisible(const bool visible) {
+    keyframesVisible_ = visible;
+    QSettings().setValue(QStringLiteral("timeline/keyframes-visible"), visible);
+    applyHeaderToggleGlyph(keyframesVisibleButton_, visible);
+    if (lanes_ != nullptr)
+        lanes_->setKeyframesVisible(visible);
+}
+
+void TimelineEditor::setSnappingEnabled(const bool enabled) {
+    snapping_ = enabled;
+    QSettings().setValue(QStringLiteral("timeline/snapping"), enabled);
+    applyHeaderToggleGlyph(snappingButton_, enabled);
+    if (lanes_ != nullptr)
+        lanes_->setSnappingEnabled(enabled);
+}
+
+void TimelineLaneRegion::setKeyframesVisible(const bool visible) {
+    if (keyframesVisible_ == visible)
+        return;
+    keyframesVisible_ = visible;
+    if (keyframePanel_)
+        keyframePanel_->setKeysVisible(visible);
+    update();
+}
+
+void TimelineLaneRegion::setSnappingEnabled(const bool enabled) {
+    snapping_ = enabled;
+    if (keyframePanel_)
+        keyframePanel_->setSnappingEnabled(enabled);
 }
 
 std::optional<QRect> TimelineLaneRegion::clipBarRect(const int row) const {
@@ -1096,7 +1142,10 @@ std::optional<QRect> TimelineLaneRegion::clipBarRect(const int row) const {
 
 std::vector<core::RationalTime> TimelineLaneRegion::keySummaryTimes(int row) const {
     std::set<core::RationalTime> times;
-    if (row < 0 || row >= static_cast<int>(entries_.size()))
+    // Hidden keys are hidden from the HIT TEST too, because this one answer is what both the
+    // painter and the summary-glyph click read. An affordance nobody can see must not be one
+    // anybody can hit.
+    if (!keyframesVisible_ || row < 0 || row >= static_cast<int>(entries_.size()))
         return {};
     const auto& entry = entries_[static_cast<std::size_t>(row)];
     const auto* composition = session_.composition();
@@ -1480,18 +1529,33 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
         button->setEnabled(enabled);
         button->setAutoRaise(true);
         button->setIcon(kit::icon(iconId, kit::IconRole::Chrome,
-                                  enabled ? kit::Color::Foreground : kit::Color::Faint));
+                                  !enabled              ? kit::Color::Faint
+                                  : button->isChecked() ? kit::Color::Accent
+                                                        : kit::Color::Foreground));
         button->setIconSize(QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium)));
         button->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
         addTool(button);
+        return button;
     };
-    addHeaderToggle(QStringLiteral("timelineKeyframesVisibleButton"), tr("Show keyframes"),
-                    kit::IconId::Keyframe, true, true);
-    addHeaderToggle(QStringLiteral("timelineGraphEditorButton"),
-                    tr("Graph editor is available when a graph exists"), kit::IconId::Graph, false,
-                    false);
-    addHeaderToggle(QStringLiteral("timelineSnappingButton"), tr("Snap edits to frames"),
-                    kit::IconId::Snap, true, true);
+    // The persisted state is read ONCE, here, and then applied through the same setters the click
+    // handlers use, so a restored session and a clicked toggle cannot take different paths.
+    const QSettings settings;
+    keyframesVisible_ = settings.value(QStringLiteral("timeline/keyframes-visible"), true).toBool();
+    snapping_ = settings.value(QStringLiteral("timeline/snapping"), true).toBool();
+    keyframesVisibleButton_ =
+        addHeaderToggle(QStringLiteral("timelineKeyframesVisibleButton"), tr("Show keyframes"),
+                        kit::IconId::Keyframe, keyframesVisible_, true);
+    graphEditorButton_ = addHeaderToggle(
+        QStringLiteral("timelineGraphEditorButton"),
+        tr("Graph editor is available when a graph exists"), kit::IconId::Graph,
+        settings.value(QStringLiteral("timeline/graph-editor"), false).toBool(), false);
+    snappingButton_ =
+        addHeaderToggle(QStringLiteral("timelineSnappingButton"), tr("Snap edits to frames"),
+                        kit::IconId::Snap, snapping_, true);
+    connect(keyframesVisibleButton_, &QToolButton::toggled, this,
+            [this](const bool checked) { setKeyframesVisible(checked); });
+    connect(snappingButton_, &QToolButton::toggled, this,
+            [this](const bool checked) { setSnappingEnabled(checked); });
     ruler_ = new TimelineRuler(session_, previewController, this);
     ruler_->setFixedHeight(kit::px(kit::Size::HeaderRow) - workArea_->height());
     ruler_->setTimecodeLabels(timecodeFormat_);
@@ -1547,6 +1611,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     bodyLayout->setSpacing(0);
     stack_ = new TimelineLayerStack(session_, *scrollBar_, body);
     lanes_ = new TimelineLaneRegion(session_, *ruler_, *scrollBar_, body);
+    lanes_->setKeyframesVisible(keyframesVisible_);
+    lanes_->setSnappingEnabled(snapping_);
     const auto toggleExpansion = [this](document::LayerId layer) {
         if (!expandedLayers_.erase(layer))
             expandedLayers_.insert(layer);

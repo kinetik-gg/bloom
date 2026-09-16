@@ -170,7 +170,11 @@ void TimelineKeyframePanel::mouseMoveEvent(QMouseEvent* event) {
                            axis->secondsForPixel(event->position().x()) -
                            axis->secondsForPixel(press_.x());
     snapGuide_.reset();
-    if (!event->modifiers().testFlag(Qt::ShiftModifier)) {
+    // Lane snapping is the header toggle AND the momentary Shift override, in one place, so the
+    // guide search and the frame quantization below can never disagree about whether this drag
+    // snaps.
+    const bool snapping = snapping_ && !event->modifiers().testFlag(Qt::ShiftModifier);
+    if (snapping) {
         auto targets = std::vector<core::RationalTime>{
             session_.currentTime(), session_.workArea().start, session_.workArea().end};
         if (const auto* composition = session_.composition())
@@ -196,7 +200,7 @@ void TimelineKeyframePanel::mouseMoveEvent(QMouseEvent* event) {
         if (snapGuide_)
             targetSeconds = snapGuide_->toSeconds();
     }
-    if (event->modifiers().testFlag(Qt::ShiftModifier) && !stretchAnchor_) {
+    if (!snapping && !stretchAnchor_) {
         const auto [first, last] =
             std::minmax_element(gestureData_.begin(), gestureData_.end(),
                                 [](const auto& a, const auto& b) { return a.time < b.time; });

@@ -239,6 +239,14 @@ class TimelineKeyframePanel final : public QWidget {
     void paintGridOverlay(QPainter& painter, const QWidget& row) const;
     [[nodiscard]] bool gridMode() const noexcept { return gridMode_; }
     void setRuler(TimelineRuler& ruler);
+    // Lane snapping is `snapping && !Shift`: the header toggle says whether a drag snaps at all,
+    // and Shift remains the momentary override it has always been. With snapping off a drag keeps
+    // the sub-frame time the pointer names, exactly as a Shift-drag does today.
+    void setSnappingEnabled(bool enabled) noexcept { snapping_ = enabled; }
+    [[nodiscard]] bool snappingEnabled() const noexcept { return snapping_; }
+    // Whether the key lanes are shown at all. The decision lives here, beside the only code that
+    // decides a row's visibility, so a rebuild cannot quietly reveal lanes the header says are off.
+    void setKeysVisible(bool visible);
 
   protected:
     void keyPressEvent(QKeyEvent* event) override;
@@ -270,6 +278,8 @@ class TimelineKeyframePanel final : public QWidget {
     QPointF press_;
     std::optional<LaneKey> pressed_;
     bool dragging_ = false, boxing_ = false, copying_ = false;
+    bool snapping_ = true;
+    bool keysVisible_ = true;
     std::optional<core::RationalTime> stretchAnchor_;
     document::Revision gestureRevision_{};
     std::vector<KeyframeSelection> gestureKeys_;

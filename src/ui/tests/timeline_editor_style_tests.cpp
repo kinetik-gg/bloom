@@ -1967,6 +1967,78 @@ void testIntegratedKeyGestures(Expectations& expectations) {
     finishFixture(fixture);
 }
 
+// GRAPH-1, D4: the three header toggles are members with persisted state, and each one actually
+// governs what it claims to. The graph toggle is still disabled here -- the feature it would claim
+// does not exist yet, and an enabled control that does nothing is the one thing the grammar's
+// no-placeholder rule forbids.
+void testHeaderTogglesArePersistedAndLive(Expectations& expectations) {
+    using namespace bloom;
+    QSettings settings;
+    settings.setValue(QStringLiteral("timeline/keyframes-visible"), false);
+    settings.setValue(QStringLiteral("timeline/snapping"), false);
+    SessionFixture fixture(makeTestProject("Header toggles"));
+    auto& session = fixture.session;
+    (void)session.addSolidLayer("Keys", {0.2, 0.3, 0.4, 1});
+    const auto opacity = session.parameterForSelection(document::kOpacityParameterRole)->id;
+    expectations.expect(session.pasteKeyframes({{opacity, time(1), 0.2}, {opacity, time(5), 0.8}},
+                                               session.snapshot().revision()),
+                        "the toggle fixture seeds two keys");
+    ui::TimelineEditor editor(session, fixture.controller);
+    editor.resize(1600, 700);
+    editor.show();
+    QCoreApplication::processEvents();
+
+    auto* keys = editor.findChild<QToolButton*>("timelineKeyframesVisibleButton");
+    auto* graph = editor.findChild<QToolButton*>("timelineGraphEditorButton");
+    auto* snap = editor.findChild<QToolButton*>("timelineSnappingButton");
+    if (keys == nullptr || graph == nullptr || snap == nullptr)
+        throw std::runtime_error("Missing timeline header toggles");
+    expectations.expect(!keys->isChecked() && !snap->isChecked() && keys->isEnabled() &&
+                            snap->isEnabled(),
+                        "the persisted state is restored onto the live toggles");
+    expectations.expect(!graph->isEnabled(),
+                        "the graph toggle stays disabled until the graph editor exists");
+
+    expectations.expect(editor.laneRegionForTest()->keySummaryTimes(0).empty(),
+                        "keys off also hides a collapsed layer's summary glyphs, so the painter "
+                        "and the summary hit test cannot disagree");
+    keys->setChecked(true);
+    QCoreApplication::processEvents();
+    expectations.expect(
+        editor.laneRegionForTest()->keySummaryTimes(0) ==
+                std::vector<core::RationalTime>{time(1), time(5)} &&
+            QSettings().value(QStringLiteral("timeline/keyframes-visible")).toBool(),
+        "turning keys back on restores the summary and persists the choice");
+
+    // Expand the layer so parameter lanes exist at all, then prove the keys toggle governs them.
+    const auto axis = editor.rulerForTest()->axisForWidth(editor.laneRegionForTest()->width());
+    if (!axis)
+        throw std::runtime_error("Missing lane axis");
+    sendMouse(*editor.laneRegionForTest(), QEvent::MouseButtonPress, axis->pixelForTime(time(1)),
+              ui::kTimelineRowHeight / 2.0);
+    sendMouse(*editor.laneRegionForTest(), QEvent::MouseButtonRelease, axis->pixelForTime(time(1)),
+              ui::kTimelineRowHeight / 2.0);
+    QCoreApplication::processEvents();
+    auto* panel = editor.findChild<ui::TimelineKeyframePanel*>("timelineKeyframePanel");
+    if (panel == nullptr)
+        throw std::runtime_error("Missing keyframe panel");
+    expectations.expect(panel->isVisible() && !panel->snappingEnabled(),
+                        "the expanded key lanes are shown, and snapping off reached the gestures");
+    keys->setChecked(false);
+    QCoreApplication::processEvents();
+    expectations.expect(
+        !panel->isVisible() &&
+            !QSettings().value(QStringLiteral("timeline/keyframes-visible")).toBool(),
+        "and turning keys off hides the key lanes and persists that too");
+    snap->setChecked(true);
+    QCoreApplication::processEvents();
+    expectations.expect(panel->snappingEnabled() &&
+                            QSettings().value(QStringLiteral("timeline/snapping")).toBool(),
+                        "the snapping toggle reaches the lane gestures and persists too");
+    settings.remove(QStringLiteral("timeline/keyframes-visible"));
+    settings.remove(QStringLiteral("timeline/snapping"));
+}
+
 void testOutputMergeRows(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Merge Timeline"));
@@ -2055,6 +2127,7 @@ int main(int argc, char** argv) {
     Expectations expectations;
     try {
         testOutputMergeRows(expectations);
+        testHeaderTogglesArePersistedAndLive(expectations);
         testRulerAndLanesShareTheLaneRegionOrigin(expectations);
         testHeaderSplitInEditorArea(expectations);
         testTimeViewportGestures(expectations);

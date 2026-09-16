@@ -99,6 +99,12 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
     void selectAllLayers();
     void deleteSelectedLayers();
     void setTimecodeFormat(bool timecode);
+    // The three header toggles. Each persists under its own QSettings key, is applied to the
+    // widgets it governs, and re-tints its own glyph -- there is no third place that decides what
+    // "on" looks like.
+    void setKeyframesVisible(bool visible);
+    void setSnappingEnabled(bool enabled);
+    void applyHeaderToggleGlyph(QToolButton* button, bool checked);
     void showEvent(QShowEvent* event) override;
     void updateScrollRange();
 
@@ -116,6 +122,11 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
     QAction* framesAction_ = nullptr;
     QAction* timecodeAction_ = nullptr;
     bool timecodeFormat_ = false;
+    QToolButton* keyframesVisibleButton_ = nullptr;
+    QToolButton* graphEditorButton_ = nullptr;
+    QToolButton* snappingButton_ = nullptr;
+    bool keyframesVisible_ = true;
+    bool snapping_ = true;
     TimelineWorkAreaRow* workArea_ = nullptr;
     TimelineColumnHeaders* columnHeaders_ = nullptr;
     TimelineRuler* ruler_ = nullptr;
@@ -225,6 +236,12 @@ class TimelineLaneRegion final : public QWidget {
     // "the bar spans the composition range on its own lane".
     [[nodiscard]] std::optional<QRect> clipBarRect(int row) const;
     [[nodiscard]] std::vector<core::RationalTime> keySummaryTimes(int row) const;
+    // Hiding keys hides BOTH surfaces that show them: the per-parameter key lanes and the
+    // collapsed layer rows' summary glyphs. Showing one without the other would make a collapsed
+    // layer claim keys the expanded rows no longer draw.
+    void setKeyframesVisible(bool visible);
+    [[nodiscard]] bool keyframesVisible() const noexcept { return keyframesVisible_; }
+    void setSnappingEnabled(bool enabled);
 
   Q_SIGNALS:
     void expansionRequested(document::LayerId layer);
@@ -250,6 +267,8 @@ class TimelineLaneRegion final : public QWidget {
     };
     std::optional<RangeDrag> drag_{};
     std::optional<core::RationalTime> guide_{};
+    bool keyframesVisible_ = true;
+    bool snapping_ = true;
     CompositionSession& session_;
     // Scrubbing a lane goes through the ruler's own scrub path, not a second copy of it.
     TimelineRuler& ruler_;
