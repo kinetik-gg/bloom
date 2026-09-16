@@ -1882,9 +1882,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                       lineHeight->value,
                                       letterSpacing->value * resolved.horizontalScale, true};
 
-                            auto coverage = render::TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
-                                content->value, *rasterParameters.value(), remainingPixelBudget(),
-                                layout);
+                            auto coverage = render::TextCoverageBitmap::rasterizeEmbeddedText(
+                                text.face, content->value, *rasterParameters.value(),
+                                remainingPixelBudget(), layout);
                             if (!coverage) {
                                 operationFailure =
                                     imageDiagnostic(*coverage.error(), operationSubject,

@@ -247,6 +247,7 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
     const auto contentParameterId = result.outputId<ParameterId>(kAddTextLayerTextParameterOutput);
     const auto sizeParameterId = result.outputId<ParameterId>(kAddTextLayerSizeParameterOutput);
     const auto colorParameterId = result.outputId<ParameterId>(kAddTextLayerColorParameterOutput);
+    const auto fontParameterId = result.outputId<ParameterId>(kAddTextLayerFontParameterOutput);
     const auto positionParameterId =
         result.outputId<ParameterId>(kAddTextLayerPositionParameterOutput);
     const auto anchorParameterId = result.outputId<ParameterId>(kAddTextLayerAnchorParameterOutput);
@@ -260,10 +261,10 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
     const auto textToLayerEdgeId = result.outputId<EdgeId>(kAddTextLayerTextToLayerEdgeOutput);
     const auto layerToStackEdgeId = result.outputId<EdgeId>(kAddTextLayerLayerToStackEdgeOutput);
     if (!layerId || !slotId || !textNodeId || !layerOutputNodeId || !contentParameterId ||
-        !sizeParameterId || !colorParameterId || !positionParameterId || !anchorParameterId ||
-        !scaleParameterId || !rotationParameterId || !opacityParameterId || !blendModeParameterId ||
-        !textToLayerEdgeId || !layerToStackEdgeId) {
-        test.fail("text branch should return all fifteen durable IDs");
+        !sizeParameterId || !colorParameterId || !fontParameterId || !positionParameterId ||
+        !anchorParameterId || !scaleParameterId || !rotationParameterId || !opacityParameterId ||
+        !blendModeParameterId || !textToLayerEdgeId || !layerToStackEdgeId) {
+        test.fail("text branch should return all sixteen durable IDs");
         return;
     }
     const std::array textParameters{
@@ -288,10 +289,10 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
     if (textNode)
         for (const auto& binding : textNode->parameters) {
             if (binding.role == "alignment" || binding.role == "line-height" ||
-                binding.role == "letter-spacing")
+                binding.role == "letter-spacing" || binding.role == "font")
                 expectedTextNode.parameters.push_back(binding);
         }
-    test.expect(expectedTextNode.parameters.size() == 6, "text declares typography parameters");
+    test.expect(expectedTextNode.parameters.size() == 7, "text declares typography parameters");
     test.expect(textNode != nullptr && *textNode == expectedTextNode,
                 "text source should bind content, size, and color in the registered order");
 
@@ -304,15 +305,21 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
     const ParameterRecord expectedColor{*colorParameterId,
                                         std::string(document::kTextColorParameterSchemaKey),
                                         ConstantValueSource{color}};
+    const ParameterRecord expectedFont{*fontParameterId,
+                                       std::string(document::kTextFontParameterSchemaKey),
+                                       ConstantValueSource{document::kDefaultTextFontValue}};
     const auto* content = value.parameters().find(*contentParameterId);
     const auto* size = value.parameters().find(*sizeParameterId);
     const auto* storedColor = value.parameters().find(*colorParameterId);
+    const auto* storedFont = value.parameters().find(*fontParameterId);
     test.expect(content != nullptr && *content == expectedContent,
                 "text content parameter should preserve exact schema and UTF-8 value");
     test.expect(size != nullptr && *size == expectedSize,
                 "text size parameter should preserve exact schema and em pixel value");
     test.expect(storedColor != nullptr && *storedColor == expectedColor,
                 "text color parameter should preserve exact schema and straight authoring value");
+    test.expect(storedFont != nullptr && *storedFont == expectedFont,
+                "text font parameter should preserve the DejaVu Sans default");
 
     const LayerOutputBoundary expectedBoundary{*layerOutputNodeId, *layerId, "Title",
                                                std::string(document::kLayerOutputOutputPort)};

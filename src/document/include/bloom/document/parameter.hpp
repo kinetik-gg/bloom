@@ -21,6 +21,16 @@ inline constexpr std::string_view kSolidWidthParameterSchemaKey = "bloom.solid.w
 inline constexpr std::string_view kSolidHeightParameterSchemaKey = "bloom.solid.height";
 inline constexpr std::string_view kTextParameterSchemaKey = "bloom.text.content";
 inline constexpr std::string_view kTextSizeParameterSchemaKey = "bloom.text.size";
+// Font: 0 = DejaVu Sans Book, 1 = Inter Regular, 2 = Inter Medium, 3 = Inter SemiBold. The
+// numeric mapping is kept here, in the document module, so persisted text values do not depend on
+// the render module's enum type or on a UI spelling.
+inline constexpr std::string_view kTextFontParameterSchemaKey = "bloom.text.font";
+inline constexpr std::int64_t kTextFontDejaVuSans = 0;
+inline constexpr std::int64_t kTextFontInterRegular = 1;
+inline constexpr std::int64_t kTextFontInterMedium = 2;
+inline constexpr std::int64_t kTextFontInterSemiBold = 3;
+inline constexpr std::int64_t kTextFontChoiceCount = 4;
+inline constexpr std::int64_t kDefaultTextFontValue = kTextFontDejaVuSans;
 // Alignment: 0 = Left, 1 = Center, 2 = Right. Line height is a positive em multiplier;
 // letter spacing is a finite number of full-resolution pixels between adjacent glyphs.
 inline constexpr std::string_view kTextAlignmentParameterSchemaKey = "bloom.text.alignment";

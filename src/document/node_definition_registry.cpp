@@ -110,11 +110,12 @@ template <typename Definition>
 [[nodiscard]] bool hasParameter(const NodeDefinition& definition, const std::size_t index,
                                 const std::string_view role, const std::string_view schemaKey,
                                 const ParameterValueKind valueKind,
-                                const bool supportsAnimation = false) noexcept {
+                                const bool supportsAnimation = false,
+                                const bool required = true) noexcept {
     return definition.parameters.size() > index && definition.parameters[index].role == role &&
            definition.parameters[index].schemaKey == schemaKey &&
            definition.parameters[index].valueKind == valueKind &&
-           definition.parameters[index].required &&
+           definition.parameters[index].required == required &&
            definition.parameters[index].supportsAnimation == supportsAnimation;
 }
 
@@ -164,12 +165,11 @@ template <typename Definition>
                             ParameterValueKind::Float64, true);
     case NodeLoweringKind::Text:
         // Parameter ORDER is part of the shape, like every other lowering here: content, then size,
-        // then color. The font is not a parameter -- this lowering has exactly one face
-        // (src/render's embedded DejaVu Sans), so a font parameter would promise a selection the
-        // renderer cannot honor.
+        // then color, layout, and finally the optional font binding. The optional binding keeps
+        // version-2 documents authored before FONT-1 valid; its definition default is DejaVu Sans.
         return hasCanonicalKey(definition, kTextSourceNodeType, kTextSourceNodeSchemaVersion) &&
                hasImageOutput(definition, kTextSourceOutputPort) &&
-               (definition.parameters.size() == 6 &&
+               (definition.parameters.size() == 7 &&
                 hasParameter(definition, 3, kTextAlignmentParameterRole,
                              kTextAlignmentParameterSchemaKey, ParameterValueKind::Integer) &&
                 hasParameter(definition, 4, kTextLineHeightParameterRole,
@@ -178,6 +178,8 @@ template <typename Definition>
                 hasParameter(definition, 5, kTextLetterSpacingParameterRole,
                              kTextLetterSpacingParameterSchemaKey, ParameterValueKind::Float64,
                              true)) &&
+               hasParameter(definition, 6, kTextFontParameterRole, kTextFontParameterSchemaKey,
+                            ParameterValueKind::Integer, false, false) &&
                hasParameter(definition, 0, kTextParameterRole, kTextParameterSchemaKey,
                             ParameterValueKind::String,
                             isAnimatableSchemaKey(kTextParameterSchemaKey)) &&
@@ -461,6 +463,8 @@ template <typename Definition>
         {std::string(kTextLineHeightParameterRole), SocketValueKind::Scalar, false});
     definition.inputs.push_back(
         {std::string(kTextLetterSpacingParameterRole), SocketValueKind::Scalar, false});
+    definition.inputs.push_back(
+        {std::string(kTextFontParameterRole), SocketValueKind::Integer, false});
     definition.parameters.push_back({std::string(kTextAlignmentParameterRole),
                                      std::string(kTextAlignmentParameterSchemaKey),
                                      ParameterValueKind::Integer, true, false, std::int64_t{0}});
@@ -470,6 +474,9 @@ template <typename Definition>
     definition.parameters.push_back({std::string(kTextLetterSpacingParameterRole),
                                      std::string(kTextLetterSpacingParameterSchemaKey),
                                      ParameterValueKind::Float64, true, true, 0.0});
+    definition.parameters.push_back(
+        {std::string(kTextFontParameterRole), std::string(kTextFontParameterSchemaKey),
+         ParameterValueKind::Integer, false, false, kDefaultTextFontValue});
     return definition;
 }
 

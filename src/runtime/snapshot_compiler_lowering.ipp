@@ -581,6 +581,7 @@ lowerText(const document::NodeRecord& node) {
     const auto* contentBinding = findParameterBinding(node, kTextParameterRole);
     const auto* sizeBinding = findParameterBinding(node, kTextSizeParameterRole);
     const auto* colorBinding = findParameterBinding(node, kTextColorParameterRole);
+    const auto* fontBinding = findParameterBinding(node, kTextFontParameterRole);
     const auto* content = parameterConstant<std::string>(contentBinding);
     // Task DRIVE-1: a driven content parameter holds no constant at all -- its source IS the driver
     // -- so the constant is absent exactly when the driver is present, and the lowering needs one
@@ -588,6 +589,15 @@ lowerText(const document::NodeRecord& node) {
     const auto drivenContent = drivenOutput(contentBinding, runtime::SocketValueKind::String);
     const auto size = compiledScalarParameter(sizeBinding);
     const auto color = compiledColorParameter(colorBinding);
+    const auto* storedFont = parameterConstant<std::int64_t>(fontBinding);
+    auto face = render::EmbeddedFace::DejaVuSans;
+    if (fontBinding != nullptr) {
+        if (storedFont == nullptr || *storedFont < 0 || *storedFont >= kTextFontChoiceCount) {
+            addTopologyFailure(node.id, "Validated text font could not be lowered.");
+            return std::nullopt;
+        }
+        face = static_cast<render::EmbeddedFace>(*storedFont);
+    }
     if (contentBinding == nullptr || sizeBinding == nullptr || colorBinding == nullptr ||
         (content == nullptr && !drivenContent.has_value()) || !size.has_value() ||
         !color.has_value()) {
@@ -619,7 +629,8 @@ lowerText(const document::NodeRecord& node) {
                                  *size,
                                  *color,
                                  layout,
-                                 drivenContent};
+                                 drivenContent,
+                                 face};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

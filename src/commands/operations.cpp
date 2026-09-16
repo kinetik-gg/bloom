@@ -291,8 +291,8 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
 
 // One parameter a source node owns: its node-local role, its global schema key, its initial value,
 // and the command-result output name the caller reads its freshly allocated ID back from. A solid
-// source has exactly one (color); a text source has three (content, size, color), in the order its
-// registered definition declares them.
+// source has exactly one (color); a text source has seven (content, size, color, alignment, line
+// height, letter spacing, font), in the order its registered definition declares them.
 struct StructuredSourceParameter {
     std::string_view role;
     std::string_view schemaKey;
@@ -661,7 +661,9 @@ OperationResult AddTextLayer::apply(document::Draft& draft) const {
           {document::kTextLineHeightParameterRole, document::kTextLineHeightParameterSchemaKey, 1.0,
            "lineHeightParameter"},
           {document::kTextLetterSpacingParameterRole,
-           document::kTextLetterSpacingParameterSchemaKey, 0.0, "letterSpacingParameter"}}},
+           document::kTextLetterSpacingParameterSchemaKey, 0.0, "letterSpacingParameter"},
+          {document::kTextFontParameterRole, document::kTextFontParameterSchemaKey,
+           document::kDefaultTextFontValue, kAddTextLayerFontParameterOutput}}},
         useCompositionCentre_
             ? document::Vec2d{static_cast<double>(composition->format().width()) / 2.0,
                               static_cast<double>(composition->format().height()) / 2.0}

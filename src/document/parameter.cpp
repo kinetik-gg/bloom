@@ -227,6 +227,10 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<std::int64_t>(&constant.value);
         return value && *value >= 0 && *value <= 2;
     }
+    if (schemaKey == kTextFontParameterSchemaKey) {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value && *value >= 0 && *value < kTextFontChoiceCount;
+    }
     if (schemaKey == kTextLineHeightParameterSchemaKey ||
         schemaKey == kTextLetterSpacingParameterSchemaKey) {
         const auto* value = std::get_if<double>(&constant.value);
