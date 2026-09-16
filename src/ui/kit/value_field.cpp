@@ -16,6 +16,7 @@
 #include <QPainter>
 #include <QPalette>
 #include <QResizeEvent>
+#include <QSignalBlocker>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -93,6 +94,12 @@ QLineEdit#kValueFieldEditor {
 )")));
     editor_->hide();
     editor_->installEventFilter(this);
+    connect(editor_, &QLineEdit::textEdited, this, [this](const QString& text) {
+        bool valid = false;
+        const double value = text.toDouble(&valid);
+        if (editing_ && valid && std::isfinite(value))
+            commitValue(value);
+    });
 }
 
 void KValueField::setCompact(const bool compact) {
@@ -163,13 +170,15 @@ void KValueField::setValue(const double value) {
     // See the header: a live scrub owns the cell. A projection that arrived mid-drag -- another
     // surface's edit, a time change -- would otherwise snap the number back under the pointer and
     // the rest of the gesture would carry on from the wrong base.
-    if (scrubbing_) {
+    if (scrubbing_ || editing_) {
         return;
     }
     commitValue(value);
 }
 
 void KValueField::commitValue(const double value) {
+    if (!std::isfinite(value))
+        return;
     const double clamped = std::clamp(value, minimum_, maximum_);
     if (clamped == value_) {
         return;
@@ -314,6 +323,7 @@ void KValueField::beginEdit() {
     if (editing_ || !isEnabled()) {
         return;
     }
+    beginInteraction();
     editing_ = true;
     layOutEditor();
     editor_->setText(compact_ ? QString::number(value_, 'g', 17) : displayedValue());
@@ -325,30 +335,61 @@ void KValueField::beginEdit() {
     update();
 }
 
-void KValueField::endEdit(const bool keep) {
-    if (!editing_) {
+void KValueField::beginInteraction() {
+    if (interactionActive_)
         return;
+    interactionBase_ = value_;
+    interactionActive_ = true;
+    Q_EMIT editStarted();
+}
+
+void KValueField::finishInteraction(const bool keep) {
+    if (!interactionActive_)
+        return;
+    interactionActive_ = false;
+    if (!keep) {
+        const QSignalBlocker blocker(this);
+        commitValue(interactionBase_);
     }
-    // Cleared first so the focus change the hide() below causes cannot re-enter this function.
+    if (keep)
+        Q_EMIT editFinished();
+    else
+        Q_EMIT editCancelled();
+}
+
+void KValueField::cancelEdit() {
+    const bool wasScrubbing = scrubbing_;
+    pressed_ = false;
+    scrubbing_ = false;
+    stepping_ = false;
     editing_ = false;
-    const QString typed = editor_->text();
     editor_->hide();
-    if (keep) {
-        bool parsed = false;
-        const double entered = typed.toDouble(&parsed);
-        if (parsed) {
-            commitValue(entered);
-        }
-        // Unparseable text is refused the way Esc is: the old value stays, rather than a typo
-        // silently becoming zero.
-    }
-    setFocus(Qt::OtherFocusReason);
+    finishInteraction(false);
+    if (wasScrubbing)
+        Q_EMIT scrubCancelled();
+    update();
+}
+
+void KValueField::endEdit(const bool keep) {
+    if (!editing_)
+        return;
+    editing_ = false;
+    bool parsed = false;
+    const double entered = editor_->text().toDouble(&parsed);
+    const bool accept = keep && parsed && std::isfinite(entered);
+    if (accept)
+        commitValue(entered);
+    editor_->hide();
+    finishInteraction(accept);
     update();
 }
 
 void KValueField::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton && isEnabled()) {
         if (stepper_ && event->position().x() >= width() - px(Size::PropertiesStepperWidth)) {
+            setFocus(Qt::MouseFocusReason);
+            stepping_ = true;
+            beginInteraction();
             stepBy(event->position().y() < height() / 2.0 ? 1 : -1);
             event->accept();
             return;
@@ -376,6 +417,7 @@ void KValueField::mouseMoveEvent(QMouseEvent* event) {
             return;
         }
         scrubbing_ = true;
+        beginInteraction();
         Q_EMIT scrubStarted();
     }
     // Measured from the press, not from the previous move: a scrub that wanders back to where it
@@ -385,6 +427,12 @@ void KValueField::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void KValueField::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton && stepping_) {
+        stepping_ = false;
+        finishInteraction(true);
+        event->accept();
+        return;
+    }
     if (event->button() != Qt::LeftButton || !pressed_) {
         QWidget::mouseReleaseEvent(event);
         return;
@@ -395,6 +443,7 @@ void KValueField::mouseReleaseEvent(QMouseEvent* event) {
     if (wasScrubbing) {
         // The one moment in the gesture at which a value is worth writing down.
         Q_EMIT scrubFinished();
+        finishInteraction(true);
     } else {
         // A press that never travelled is a click, and a click opens the editor.
         beginEdit();
@@ -410,7 +459,9 @@ void KValueField::wheelEvent(QWheelEvent* event) {
         QWidget::wheelEvent(event);
         return;
     }
+    beginInteraction();
     stepBy(event->angleDelta().y() > 0 ? 1 : -1);
+    finishInteraction(true);
     event->accept();
 }
 
@@ -447,6 +498,7 @@ bool KValueField::eventFilter(QObject* watched, QEvent* event) {
         auto* key = static_cast<QKeyEvent*>(event);
         if (key->key() == Qt::Key_Escape) {
             endEdit(false);
+            setFocus(Qt::OtherFocusReason);
             return true;
         }
         if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
@@ -455,6 +507,13 @@ bool KValueField::eventFilter(QObject* watched, QEvent* event) {
             // -- which would send it straight on to this field's own Return handler and reopen the
             // editor the commit just closed.
             endEdit(true);
+            setFocus(Qt::OtherFocusReason);
+            return true;
+        }
+        if (key->key() == Qt::Key_Up || key->key() == Qt::Key_Down) {
+            stepBy(key->key() == Qt::Key_Up ? 1 : -1);
+            editor_->setText(QString::number(value_, 'g', 17));
+            editor_->selectAll();
             return true;
         }
         if (key->key() == Qt::Key_Tab || key->key() == Qt::Key_Backtab) {
@@ -475,18 +534,22 @@ bool KValueField::eventFilter(QObject* watched, QEvent* event) {
 void KValueField::keyPressEvent(QKeyEvent* event) {
     switch (event->key()) {
     case Qt::Key_Up:
+        beginInteraction();
         stepBy(1);
         event->accept();
         return;
     case Qt::Key_Down:
+        beginInteraction();
         stepBy(-1);
         event->accept();
         return;
     case Qt::Key_PageUp:
+        beginInteraction();
         stepBy(10);
         event->accept();
         return;
     case Qt::Key_PageDown:
+        beginInteraction();
         stepBy(-10);
         event->accept();
         return;
@@ -494,17 +557,15 @@ void KValueField::keyPressEvent(QKeyEvent* event) {
     case Qt::Key_Enter:
         // The keyboard route into the text editor, for an artist who tabbed here rather than
         // clicking.
-        beginEdit();
+        if (interactionActive_)
+            finishInteraction(true);
+        else
+            beginEdit();
         event->accept();
         return;
     case Qt::Key_Escape:
-        if (scrubbing_) {
-            // Abandoning a scrub puts back exactly the value the press started from, and writes
-            // nothing: the gesture never produced a command to undo.
-            pressed_ = false;
-            scrubbing_ = false;
-            commitValue(pressValue_);
-            Q_EMIT scrubCancelled();
+        if (interactionActive_) {
+            cancelEdit();
             event->accept();
             return;
         }
@@ -513,6 +574,23 @@ void KValueField::keyPressEvent(QKeyEvent* event) {
         break;
     }
     QWidget::keyPressEvent(event);
+}
+
+void KValueField::keyReleaseEvent(QKeyEvent* event) {
+    if (!editing_ && !event->isAutoRepeat() &&
+        (event->key() == Qt::Key_Up || event->key() == Qt::Key_Down ||
+         event->key() == Qt::Key_PageUp || event->key() == Qt::Key_PageDown)) {
+        finishInteraction(true);
+        event->accept();
+        return;
+    }
+    QWidget::keyReleaseEvent(event);
+}
+
+void KValueField::focusOutEvent(QFocusEvent* event) {
+    if (!editing_ && !scrubbing_)
+        finishInteraction(true);
+    QWidget::focusOutEvent(event);
 }
 
 void KValueField::enterEvent(QEnterEvent* event) {
@@ -532,15 +610,7 @@ void KValueField::leaveEvent(QEvent* event) {
 void KValueField::changeEvent(QEvent* event) {
     if (event->type() == QEvent::EnabledChange && !isEnabled()) {
         hovered_ = false;
-        pressed_ = false;
-        const bool wasScrubbing = scrubbing_;
-        scrubbing_ = false;
-        endEdit(false);
-        if (wasScrubbing) {
-            // A cell disabled mid-drag loses its gesture; it must not leave a surface waiting for a
-            // release that will never arrive.
-            Q_EMIT scrubCancelled();
-        }
+        cancelEdit();
     }
     QWidget::changeEvent(event);
 }

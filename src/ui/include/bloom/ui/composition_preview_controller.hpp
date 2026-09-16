@@ -6,6 +6,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 
+#include <QElapsedTimer>
 #include <QObject>
 #include <QString>
 #include <QTimer>
@@ -39,9 +40,8 @@ struct CompositionPreviewSettings final {
     runtime::EvaluationQuality quality = runtime::EvaluationQuality::Reference;
     runtime::EvaluationColorIntent colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene;
     std::size_t pixelStorageByteLimit = kDefaultPreviewPixelStorageByteLimit;
-    // The injectable 16 ms trailing cadence for Interactive requests (pointer storms): a burst of
-    // Interactive requests inside this window coalesces to only the newest, submitted once the
-    // window elapses. Tests inject a tiny interval; production keeps the default.
+    // The first Interactive request is immediate. Subsequent requests inside this 16 ms window
+    // coalesce to the newest value; an active worker remains the admission gate.
     std::chrono::milliseconds interactiveTrailingCadence = std::chrono::milliseconds{16};
     // The RAM preview cache's memory budget, used only when this controller has to create its own
     // cache (see the constructor). The application reads it from QSettings.
@@ -222,6 +222,7 @@ class CompositionPreviewController final : public QObject {
     void handleCompositionChanged();
     void handleCurrentTimeChanged();
     void handleTransformInteractionChanged();
+    void handleLiveValueChanged();
     void consumeReadyResult();
     [[nodiscard]] static FrameFreshness
     freshnessFor(const PreparedPreviewFrameHandle& frame,
@@ -250,7 +251,10 @@ class CompositionPreviewController final : public QObject {
     std::optional<ActiveRequest> active_;
     std::optional<PendingRequest> pending_;
     QTimer interactiveCadenceTimer_;
+    QTimer completionPollTimer_;
+    QElapsedTimer interactiveSubmissionClock_;
     bool interactiveTimeChangeArmed_ = false;
+    bool valueEditPreviewActive_ = false;
     std::optional<RamPreviewProgress> ramPreviewProgress_;
     bool countingDroppedFrames_ = false;
     std::uint64_t droppedFrameCount_ = 0;

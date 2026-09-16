@@ -6,6 +6,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -374,11 +375,22 @@ void registryRows() {
             document::ParameterId::fromRaw(width->property("parameterId").toULongLong());
         const auto selection = session.selection().primary;
         const auto before = stack.size();
-        Q_EMIT field->scrubStarted();
-        field->setValue(731);
-        expect(stack.size() == before, "scrubbing publishes no intermediate commands");
-        Q_EMIT field->scrubFinished();
-        expect(stack.size() == before + 1 && session.effectiveScalarValue(parameter) == 731,
+        const QPoint start = field->rect().center();
+        const QPoint finish = start + QPoint(20, 0);
+        const double editedValue = field->value() + 20 * field->singleStep();
+        QMouseEvent press(QEvent::MouseButtonPress, start, field->mapToGlobal(start),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(field, &press);
+        QMouseEvent move(QEvent::MouseMove, finish, field->mapToGlobal(finish), Qt::NoButton,
+                         Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(field, &move);
+        expect(field->isScrubbing() && stack.size() == before &&
+                   session.effectiveScalarValue(parameter) == editedValue,
+               "scrubbing publishes a live value without intermediate commands");
+        QMouseEvent release(QEvent::MouseButtonRelease, finish, field->mapToGlobal(finish),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(field, &release);
+        expect(stack.size() == before + 1 && session.effectiveScalarValue(parameter) == editedValue,
                "scrub commits one exact parameter edit");
         expect(session.selection().primary == selection, "registry edit preserves selection");
         expect(session.undo(), "registry edit is undoable");

@@ -25,6 +25,7 @@ std::optional<TransformInteractionRejection>
 CompositionSession::beginTransformInteraction(TransformGesture gesture, ViewerMapping mapping,
                                               const TransformModifiers modifiers) {
     Q_ASSERT(QThread::currentThread() == thread());
+    cancelValueEdit();
     cancelTransformInteraction();
     const auto* layerId = std::get_if<document::LayerId>(&selection_.primary);
     if (!layerId)

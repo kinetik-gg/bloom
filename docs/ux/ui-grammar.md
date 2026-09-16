@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-15
+Updated: 2026-09-16
 
 Bloom's mechanical interface contract is owned here and implemented by `src/ui/kit`.
 [ADR 0021](../decisions/0021-ui-grammar.md) records its rationale and extension procedure.
@@ -394,3 +394,18 @@ New Composition and the composition Properties section expose a `KColorChip` Bac
 Viewer Solid mode paints that authored RGBA colour, initially opaque black. Black, White and
 Checkerboard remain session choices. This viewer background does not alter composition pixels
 or export alpha.
+
+## Live Value Editing
+
+A `KValueField` is a horizontal scrub handle, including its label. Drag past the platform drag
+threshold to change one single-step per logical pixel; Ctrl uses one tenth of that step and Shift
+uses ten times the step. A click opens an inline editor with the value selected. Valid numeric text,
+Up/Down and Page Up/Page Down changes update the session's live value and every visible readback
+immediately. Intermediate text such as a minus sign does not replace the last valid value.
+
+A pointer release or key release finishes a scrub/step; Enter, Tab and focus-out finish typing.
+One completed gesture is one undo entry. Escape restores the starting value without history.
+Properties, node cards and timeline fields use the same kit gesture signals. The active field keeps
+its text/caret or scrub base while peer fields show the live number. Colour-picker spatial drags and
+channel edits use the same live/commit/cancel boundary; closing an active picker accepts its edit.
+Preview rendering runs independently of these control readbacks.

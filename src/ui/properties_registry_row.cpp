@@ -1,6 +1,7 @@
 #include "properties_registry_row.hpp"
 #include "node_editor_items.hpp"
 #include "properties_sections.hpp"
+#include "properties_value_edits.hpp"
 #include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -89,6 +90,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         slider_->setObjectName(QStringLiteral("propertiesAudioLevelSlider"));
         slider_->setAccessibleName(label);
         slider_->setRange(0.0, 2.0);
+        slider_->installEventFilter(this);
         layout->addWidget(slider_);
         connect(slider_, &kit::KSlider::valueChanged, this, [this] { commit(); });
     } else if (propertiesRowControl(definition_.schemaKey) == PropertiesRowControl::SegmentedEnum) {
@@ -177,6 +179,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             count = 4;
             color_ = new kit::KColorChip(controls);
             color_->setObjectName("propertiesRegistryColor");
+            properties::bindValueEdit(session_, *color_, [this] { return parameter_; });
             connect(color_, &kit::KColorChip::colorChanged, this, [this](const kit::KColor& color) {
                 if (!refreshing_) {
                     (void)session_.setParameterValue(
@@ -220,16 +223,17 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
                     controls, parameter_));
             } else
                 layout->addWidget(field);
-            connect(field, &kit::KValueField::valueChanged, this, [this] {
-                if (!scrubbing_)
-                    commit();
-            });
-            connect(field, &kit::KValueField::scrubStarted, this, [this] { scrubbing_ = true; });
-            connect(field, &kit::KValueField::scrubCancelled, this, [this] { scrubbing_ = false; });
-            connect(field, &kit::KValueField::scrubFinished, this, [this] {
-                scrubbing_ = false;
-                commit();
-            });
+            properties::bindValueEdit(
+                session_, *field, [this] { return parameter_; },
+                [count, i, this] {
+                    if (count == 1)
+                        return std::optional<document::AnimationComponent>{};
+                    const auto first = color_ ? document::AnimationComponent::Red
+                                              : document::AnimationComponent::X;
+                    return std::optional(
+                        static_cast<document::AnimationComponent>(static_cast<int>(first) + i));
+                });
+            connect(field, &kit::KValueField::valueChanged, this, [this] { commit(); });
         }
     }
     if (color_) {
@@ -247,10 +251,18 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
     }
     if (multiline_)
         outer->addWidget(multiline_);
+    connect(&session_, &CompositionSession::liveValueChanged, this,
+            &PropertiesRegistryRow::refresh);
     refresh();
 }
 
 bool PropertiesRegistryRow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == slider_ && !refreshing_) {
+        if (event->type() == QEvent::MouseButtonPress)
+            (void)session_.beginValueEdit(parameter_);
+        else if (event->type() == QEvent::MouseButtonRelease && session_.isValueEditing(parameter_))
+            (void)session_.commitValueEdit();
+    }
     if (watched == multiline_ && event->type() == QEvent::FocusOut) {
         text_->setText(multiline_->toPlainText());
         commit();
@@ -290,6 +302,8 @@ void PropertiesRegistryRow::refresh() {
         auto value = definition_.defaultValue;
         if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source))
             value = constant->value;
+        if (const auto live = session_.liveValue(parameter_))
+            value = *live;
         if (const auto* path = std::get_if<document::PathValue>(&value))
             if (auto* summary = findChild<kit::KLabel*>("propertiesPathSummary"))
                 summary->setText(tr("%1 anchors · %2")

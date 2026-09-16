@@ -406,7 +406,11 @@ void testInteractiveCadenceCoalescesBurstAndVisibleBypasses(Expectations& expect
         expectations.expect(time.has_value(), "burst time fixture is valid");
         times.push_back(time.value_or(core::RationalTime{}));
     }
-    for (const auto& time : times) {
+    expectations.expect(session.setCurrentTime(times.front()), "first scrub time is accepted");
+    expectations.expect(
+        controller.state().taskId.has_value(),
+        "the first Interactive request is submitted synchronously without cadence delay");
+    for (const auto& time : times | std::views::drop(1)) {
         expectations.expect(session.setCurrentTime(time),
                             "each distinct burst time is accepted by the session");
     }
@@ -414,13 +418,14 @@ void testInteractiveCadenceCoalescesBurstAndVisibleBypasses(Expectations& expect
     expectations.expect(controller.state().desiredIdentity.has_value() &&
                             controller.state().desiredIdentity->time == times.back(),
                         "the desired identity advances immediately to the newest scrub time");
-    expectations.expect(invocationCount.load() == callsBeforeBurst,
-                        "no preparation call fires before the trailing cadence window elapses");
+    expectations.expect(invocationCount.load() <= callsBeforeBurst + 1,
+                        "the newest updates coalesce behind the first active request");
 
     expectations.expect(waitUntil([&] { return isReady(controller); }),
                         "the coalesced newest Interactive request completes");
-    expectations.expect(invocationCount.load() == callsBeforeBurst + 1,
-                        "the entire burst submits only once, for the newest request");
+    expectations.expect(invocationCount.load() >= callsBeforeBurst + 1 &&
+                            invocationCount.load() <= callsBeforeBurst + 2,
+                        "only the first and newest requests can invoke preparation");
     const auto interactiveSnapshot = snapshotForGeneration(scheduler, newestGeneration);
     expectations.expect(interactiveSnapshot.has_value() &&
                             interactiveSnapshot->priority == runtime::TaskPriority::Interactive,
@@ -502,11 +507,10 @@ void testDroppedFrameCountingIsArmedAndHonest(Expectations& expectations) {
                         "a coalesced burst counts the requests it discarded");
     expectations.expect(countChangedSignals > 1,
                         "and announces each one, so a footer never has to poll");
-    const auto burstCount = controller.droppedFrameCount();
-
     controller.notifyScrubEnded();
     expectations.expect(waitUntil([&] { return isReady(controller); }),
                         "the armed burst's newest request still completes");
+    const auto burstCount = controller.droppedFrameCount();
 
     // Disarming keeps the run's total readable but stops counting, so the surface can decide to
     // stop showing it without the number changing underneath.

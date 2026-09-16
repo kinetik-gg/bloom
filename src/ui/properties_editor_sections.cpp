@@ -18,6 +18,7 @@
 #include "composition_editor_support.hpp"
 #include "properties_anchor_grid.hpp"
 #include "properties_sections.hpp"
+#include "properties_value_edits.hpp"
 
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -354,6 +355,10 @@ void PropertiesEditor::buildSolidSection(QVBoxLayout* layout) {
         session_, document::kSolidColorParameterRole, rows, body, solidColorChip_,
         solidColorKeyframe_, {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_},
         "propertiesSolidColorExpand", "solidColorFieldGroup");
+    properties::bindValueEdit(session_, *solidColorChip_, [this] {
+        const auto* parameter = session_.parameterForSelection(document::kSolidColorParameterRole);
+        return parameter ? parameter->id : document::ParameterId{};
+    });
     connect(solidColorChip_, &kit::KColorChip::colorChanged, this,
             [this](const kit::KColor& color) {
                 if (!rebuilding_)
@@ -418,13 +423,16 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
                                                  .singleStep = 0.01,
                                                  .unit = {}},
                                                 body);
-        bindCell(textColorFields_[index], [this] {
-            if (const auto value =
-                    properties::colorFromFields(session_, document::kTextColorParameterSchemaKey,
-                                                {textColorFields_[0], textColorFields_[1],
-                                                 textColorFields_[2], textColorFields_[3]}))
-                (void)session_.setSelectedTextColor(*value);
-        });
+        bindCell(textColorFields_[index], document::kTextColorParameterRole,
+                 static_cast<document::AnimationComponent>(
+                     static_cast<std::size_t>(document::AnimationComponent::Red) + index),
+                 [this] {
+                     if (const auto value = properties::colorFromFields(
+                             session_, document::kTextColorParameterSchemaKey,
+                             {textColorFields_[0], textColorFields_[1], textColorFields_[2],
+                              textColorFields_[3]}))
+                         (void)session_.setSelectedTextColor(*value);
+                 });
     }
     (void)properties::addColorRow(
         session_, document::kTextColorParameterRole, rows, body, textColor_, textColorKeyframe_,
@@ -539,14 +547,30 @@ void PropertiesEditor::buildDocumentSection(QVBoxLayout* layout) {
     layout->addWidget(documentSection_);
 }
 
+void PropertiesEditor::bindCell(kit::KValueField* field, const std::string_view role,
+                                const std::optional<document::AnimationComponent> component,
+                                const std::function<void()>& change) {
+    properties::bindValueEdit(
+        session_, *field,
+        [this, role] {
+            const auto* parameter = session_.parameterForSelection(role);
+            return parameter ? parameter->id : document::ParameterId{};
+        },
+        [this, role, component] {
+            if ((role == document::kPositionParameterRole && positionLink_->isChecked()) ||
+                (role == document::kScaleParameterRole && scaleLink_->isChecked()))
+                return std::optional<document::AnimationComponent>{};
+            return component;
+        });
+    connect(field, &kit::KValueField::valueChanged, this, [this, change] {
+        if (!rebuilding_)
+            change();
+    });
+}
+
 void PropertiesEditor::bindCommits() {
-    // Every numeric row is bound through bindCell(), never straight to valueChanged: a cell emits
-    // that for every pixel of a scrub, and ADR 0017 is explicit that a drag does not mutate the
-    // document on pointer motion and that one completed gesture is one undo step.
-    //
-    // A linked paired row reads the CURRENT document value before it writes rather than caching one
-    // at build time: the other axis follows by the same delta (Position) or by the stored ratio
-    // (Scale), and both answers are only correct against the value the document actually holds now.
+    // Live changes use the same typed setters as discrete edits. The session holds them until
+    // the field's shared editFinished boundary commits one transaction.
     const auto commitPosition = [this](const bool fromX) {
         double x = positionX_->value();
         double y = positionY_->value();
@@ -562,14 +586,18 @@ void PropertiesEditor::bindCommits() {
         }
         (void)session_.setSelectedPosition(x, y);
     };
-    bindCell(positionX_, [commitPosition] { commitPosition(true); });
-    bindCell(positionY_, [commitPosition] { commitPosition(false); });
+    bindCell(positionX_, document::kPositionParameterRole, document::AnimationComponent::X,
+             [commitPosition] { commitPosition(true); });
+    bindCell(positionY_, document::kPositionParameterRole, document::AnimationComponent::Y,
+             [commitPosition] { commitPosition(false); });
 
     const auto commitAnchor = [this] {
         (void)session_.setSelectedAnchor(anchorX_->value(), anchorY_->value());
     };
-    bindCell(anchorX_, commitAnchor);
-    bindCell(anchorY_, commitAnchor);
+    bindCell(anchorX_, document::kAnchorParameterRole, document::AnimationComponent::X,
+             commitAnchor);
+    bindCell(anchorY_, document::kAnchorParameterRole, document::AnimationComponent::Y,
+             commitAnchor);
 
     const auto commitScale = [this](const bool fromX) {
         double x = scaleX_->value() / 100.0;
@@ -587,11 +615,15 @@ void PropertiesEditor::bindCommits() {
         }
         (void)session_.setSelectedScale(x, y);
     };
-    bindCell(scaleX_, [commitScale] { commitScale(true); });
-    bindCell(scaleY_, [commitScale] { commitScale(false); });
+    bindCell(scaleX_, document::kScaleParameterRole, document::AnimationComponent::X,
+             [commitScale] { commitScale(true); });
+    bindCell(scaleY_, document::kScaleParameterRole, document::AnimationComponent::Y,
+             [commitScale] { commitScale(false); });
 
-    bindCell(rotation_, [this] { commitRotationFromControls(); });
-    bindCell(opacity_, [this] { commitOpacityFromControls(); });
+    bindCell(rotation_, document::kRotationParameterRole, std::nullopt,
+             [this] { commitRotationFromControls(); });
+    bindCell(opacity_, document::kOpacityParameterRole, std::nullopt,
+             [this] { commitOpacityFromControls(); });
 
     const auto bindSlider = [this](kit::KSlider* slider, kit::KValueField* mirror, auto commit) {
         slider->installEventFilter(this);
@@ -601,9 +633,7 @@ void PropertiesEditor::bindCommits() {
             }
             const QSignalBlocker blocker(mirror);
             mirror->setValue(slider->value());
-            if (!slider->isDragging()) {
-                commit();
-            }
+            commit();
         });
     };
     bindSlider(opacitySlider_, opacity_, [this] { commitOpacityFromControls(); });
@@ -652,17 +682,26 @@ void PropertiesEditor::bindCommits() {
                 {solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_}))
             (void)session_.setSelectedSolidColor(*value);
     };
-    bindCell(solidColorRed_, commitSolidColor);
-    bindCell(solidColorGreen_, commitSolidColor);
-    bindCell(solidColorBlue_, commitSolidColor);
-    bindCell(solidColorAlpha_, commitSolidColor);
+    bindCell(solidColorRed_, document::kSolidColorParameterRole, document::AnimationComponent::Red,
+             commitSolidColor);
+    bindCell(solidColorGreen_, document::kSolidColorParameterRole,
+             document::AnimationComponent::Green, commitSolidColor);
+    bindCell(solidColorBlue_, document::kSolidColorParameterRole,
+             document::AnimationComponent::Blue, commitSolidColor);
+    bindCell(solidColorAlpha_, document::kSolidColorParameterRole,
+             document::AnimationComponent::Alpha, commitSolidColor);
 
     connect(textContent_, &QLineEdit::editingFinished, this, [this] {
         if (!rebuilding_) {
             (void)session_.setSelectedTextContent(textContent_->text());
         }
     });
-    bindCell(textSize_, [this] { (void)session_.setSelectedTextSize(textSize_->value()); });
+    bindCell(textSize_, document::kTextSizeParameterRole, std::nullopt,
+             [this] { (void)session_.setSelectedTextSize(textSize_->value()); });
+    properties::bindValueEdit(session_, *textColor_, [this] {
+        const auto* parameter = session_.parameterForSelection(document::kTextColorParameterRole);
+        return parameter ? parameter->id : document::ParameterId{};
+    });
     connect(textColor_, &kit::KColorChip::colorChanged, this, [this](const kit::KColor& color) {
         if (!rebuilding_) {
             (void)session_.setSelectedTextColor(

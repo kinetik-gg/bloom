@@ -29,6 +29,7 @@ void CompositionPreviewController::consumeReadyResult() {
 
     ActiveRequest completed = std::move(*active_);
     active_.reset();
+    completionPollTimer_.stop();
     if (shuttingDown_) {
         return;
     }
@@ -65,16 +66,22 @@ void CompositionPreviewController::consumeReadyResult() {
         }
     }
     if (pending_.has_value()) {
-        PendingRequest pendingRequest = std::move(*pending_);
-        pending_.reset();
-        // The completed frame is discarded unpublished in favour of the newer pending request: the
-        // work was done and the artist never saw it, which is exactly a dropped frame. Counted
-        // after the pending request is taken, so the optional is provably disengaged across the
-        // call.
-        if (!completed.playbackDeadline.has_value()) {
+        // A completed live frame is useful feedback even if input has advanced. Publish it as
+        // stale while the newest override is prepared; never cache it as committed truth.
+        const bool liveFrame = completed.carriedInteractionOverride &&
+                               !pending_->interactionOverride.empty() &&
+                               liveSessionMatches(completed.desiredIdentity) &&
+                               completed.desiredIdentity.time == pending_->desiredIdentity.time &&
+                               result->state() == runtime::TaskState::Succeeded &&
+                               prepared.has_value() && *prepared && (*prepared)->frame() &&
+                               (*prepared)->frame()->desiredIdentity() == completed.desiredIdentity;
+        if (liveFrame && prepared.has_value())
+            publishRendering(pending_->desiredIdentity, std::nullopt, (*prepared)->frame());
+        // A superseded result that was not shown counts as a dropped frame.
+        if (!liveFrame && !completed.playbackDeadline.has_value()) {
             noteDroppedFrame();
         }
-        submitPreview(std::move(pendingRequest), state_.frame);
+        flushCadence();
         return;
     }
     if (!isCurrent(completed)) {

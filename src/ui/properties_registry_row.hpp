@@ -64,6 +64,5 @@ class PropertiesRegistryRow final : public QWidget {
     QPlainTextEdit* multiline_ = nullptr;
     KeyframeDiamond* diamond_ = nullptr;
     bool refreshing_ = false;
-    bool scrubbing_ = false;
 };
 } // namespace bloom::ui

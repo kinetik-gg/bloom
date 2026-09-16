@@ -38,7 +38,10 @@ KColorChip::KColorChip(QWidget* parent) : QWidget(parent) {
     setCursor(Qt::PointingHandCursor);
 }
 
-KColorChip::~KColorChip() { delete picker_; }
+KColorChip::~KColorChip() {
+    cancelEdit();
+    delete picker_;
+}
 
 void KColorChip::setColorConverter(KColorConverter converter) {
     converter_ = std::move(converter);
@@ -94,6 +97,13 @@ void KColorChip::ensurePicker() {
     const QSignalBlocker blocker(picker_);
     picker_->setColor(color_);
     connect(picker_, &KColorPicker::colorChanged, this, &KColorChip::setColor);
+    connect(picker_, &KColorPicker::editStarted, this, &KColorChip::editStarted);
+    connect(picker_, &KColorPicker::editFinished, this, &KColorChip::editFinished);
+    connect(picker_, &KColorPicker::editCancelled, this, [this, picker = picker_] {
+        color_ = picker->color();
+        update();
+        Q_EMIT editCancelled();
+    });
 }
 
 KColorPicker* KColorChip::picker() {
@@ -110,6 +120,11 @@ void KColorChip::openPicker() {
     const QSignalBlocker blocker(picker_);
     picker_->setColor(color_);
     picker_->openBelow(*this);
+}
+
+void KColorChip::cancelEdit() {
+    if (picker_)
+        picker_->cancelEdit();
 }
 
 void KColorChip::closePicker() {

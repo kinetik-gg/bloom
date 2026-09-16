@@ -44,6 +44,7 @@ class KColorChip final : public QWidget {
 
     void openPicker();
     void closePicker();
+    void cancelEdit();
     [[nodiscard]] bool isPickerOpen() const;
 
     [[nodiscard]] State visualState() const;
@@ -53,6 +54,9 @@ class KColorChip final : public QWidget {
 
   Q_SIGNALS:
     void colorChanged(const KColor& color);
+    void editStarted();
+    void editFinished();
+    void editCancelled();
 
   protected:
     void paintEvent(QPaintEvent* event) override;

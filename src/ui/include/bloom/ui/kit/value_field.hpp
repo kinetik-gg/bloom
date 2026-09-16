@@ -87,6 +87,8 @@ class KValueField final : public QWidget {
     // is simply hidden when not editing.
     [[nodiscard]] bool isEditing() const noexcept;
     [[nodiscard]] QLineEdit* lineEdit() const noexcept;
+    [[nodiscard]] bool hasLiveEdit() const noexcept { return interactionActive_; }
+    void cancelEdit();
 
     [[nodiscard]] State visualState() const;
 
@@ -107,6 +109,9 @@ class KValueField final : public QWidget {
     // CELL now shows, which is not the same question as what should be written down -- see the
     // gesture boundary below.
     void valueChanged(double value);
+    void editStarted();
+    void editFinished();
+    void editCancelled();
 
     // The scrub gesture's own boundary (ADR 0017: "Do not mutate the document on pointer motion.
     // On release, commit exactly one typed document transaction... A zero-delta gesture commits
@@ -124,6 +129,8 @@ class KValueField final : public QWidget {
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void keyReleaseEvent(QKeyEvent* event) override;
+    void focusOutEvent(QFocusEvent* event) override;
     bool event(QEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
     void enterEvent(QEnterEvent* event) override;
@@ -138,6 +145,8 @@ class KValueField final : public QWidget {
     // `keep` commits what was typed; otherwise the value the field had before editing stays.
     void endEdit(bool keep);
     void layOutEditor();
+    void beginInteraction();
+    void finishInteraction(bool keep);
 
     bool compact_ = false;
     bool stepper_ = false;
@@ -160,6 +169,9 @@ class KValueField final : public QWidget {
 
     QLineEdit* editor_ = nullptr;
     bool editing_ = false;
+    bool interactionActive_ = false;
+    bool stepping_ = false;
+    double interactionBase_ = 0;
 };
 
 } // namespace bloom::ui::kit
