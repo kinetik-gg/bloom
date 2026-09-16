@@ -297,6 +297,24 @@ void testCancellationMidWrite(support::Expectations& expectations) {
     expectations.expect(scheduler.isQuiescent(), "cancellation fixture shuts down cleanly");
 }
 
+// Task FOLLOW-1: two concurrent processes (parallel ctest, two worktrees) sharing a scratch path
+// would delete each other's fixtures out from under them. mkdtemp's own six-character suffix, not
+// a per-process counter or a label hash, is what actually guarantees uniqueness -- pinned here by
+// constructing two instances with the SAME label in this one process and requiring distinct paths.
+void testScratchDirectoryIsolation(support::Expectations& expectations) {
+    const support::ScratchDirectory first("same-label");
+    const support::ScratchDirectory second("same-label");
+    expectations.expect(first.path() != second.path(),
+                        "two instances with the same label never share a path");
+    const std::string prefix = "bloom-output-exr-test-same-label-";
+    const auto suffixLength = [&](const std::filesystem::path& path) {
+        const auto name = path.filename().string();
+        return name.starts_with(prefix) ? name.size() - prefix.size() : std::string::npos;
+    };
+    expectations.expect(suffixLength(first.path()) == 6 && suffixLength(second.path()) == 6,
+                        "the path carries mkdtemp's six-character suffix after the label");
+}
+
 } // namespace
 
 int main() {
@@ -306,5 +324,6 @@ int main() {
     testNonPositiveOrNanPixelAspectRejected(expectations);
     testPixelAspectExactVersusApproximated(expectations);
     testCancellationMidWrite(expectations);
+    testScratchDirectoryIsolation(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

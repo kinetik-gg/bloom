@@ -319,25 +319,31 @@ struct PreparedSource final {
     return {frame, identityResult.identity(), analyzed.report()};
 }
 
-// RAII per-process scratch directory under the platform temp root, isolating this test binary's
-// staged artifacts from other parallel ctest processes. Best-effort cleanup on destruction.
+// RAII scratch directory under the platform temp root, isolating this test binary's staged
+// artifacts from other CONCURRENT processes (parallel ctest, two worktrees building the same
+// binary at once). A per-process counter starting at 0 in each process, combined with a plain
+// hash of the label, could still collide between two such processes -- mkdtemp's own six-character
+// suffix is what actually makes the path unique, the same precedent
+// frame_export_publication_tests.cpp's TempDirectory already uses. The label stays in the
+// template's PREFIX purely so the directory name stays legible; it plays no role in the
+// uniqueness guarantee, so two instances constructed with the same label in the same process still
+// never share a path. Best-effort cleanup on destruction.
 class ScratchDirectory final {
   public:
     explicit ScratchDirectory(const std::string& label) {
-        static std::atomic<std::uint64_t> counter{0};
-        const auto suffix =
-            std::to_string(static_cast<unsigned long long>(std::hash<std::string>{}(label))) + "-" +
-            std::to_string(counter.fetch_add(1));
         std::error_code errorCode;
-        path_ =
-            std::filesystem::temp_directory_path(errorCode) / ("bloom-output-exr-test-" + suffix);
+        const auto root = std::filesystem::temp_directory_path(errorCode);
         if (errorCode) {
             std::abort();
         }
-        std::filesystem::create_directories(path_, errorCode);
-        if (errorCode) {
+        auto templatePath = (root / ("bloom-output-exr-test-" + label + "-XXXXXX")).string();
+        std::vector<char> buffer(templatePath.begin(), templatePath.end());
+        buffer.push_back('\0');
+        const auto* result = ::mkdtemp(buffer.data());
+        if (result == nullptr) {
             std::abort();
         }
+        path_ = result;
     }
     ScratchDirectory(const ScratchDirectory&) = delete;
     ScratchDirectory& operator=(const ScratchDirectory&) = delete;
@@ -349,6 +355,7 @@ class ScratchDirectory final {
     }
 
     [[nodiscard]] std::filesystem::path file(const std::string& name) const { return path_ / name; }
+    [[nodiscard]] const std::filesystem::path& path() const noexcept { return path_; }
 
   private:
     std::filesystem::path path_;
