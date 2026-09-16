@@ -175,8 +175,6 @@ int run(int argc, char** argv) {
         require(appliedClips == 1, "stage 7: engine still holds the clip");
     }
 
-    // Direct feeds: a Layer, and then an Audio source, wired straight into the composition's
-    // audio input are one-clip mixes rather than an unsupported preview.
     document::NodeId layerNode;
     document::NodeId sourceNode;
     document::NodeId outputNode;
@@ -189,6 +187,108 @@ int run(int argc, char** argv) {
     if (const auto& endpoint = fixture.session.composition()->graph().compositionOutput())
         outputNode = endpoint->nodeId;
     require(layerNode.isValid() && sourceNode.isValid() && outputNode.isValid(), "graph nodes");
+
+    // Task FOLLOW-1: hand-wiring an ordinary Layer's own audio output back onto Merge's audio pill
+    // -- ConnectPorts' audio-role sentinel, the same path the Merge card's new pill drives --
+    // reuses that Layer's existing (image) stack slot rather than opening a second one, and the
+    // compiled mix still comes out to exactly one clip. First detach the original AddAudioLayer
+    // slot so the count stays at one clip throughout; run before the "direct feeds" stages below
+    // rewire the composition's audio input away from the stack entirely.
+    {
+        const auto merge = fixture.session.composition()->graph().layerStack().nodeId();
+        const auto originalBoundaries = fixture.session.composition()->graph().layerOutputs();
+        const auto originalBoundary =
+            std::ranges::find_if(originalBoundaries, [&](const auto& candidate) {
+                return candidate.nodeId == layerNode;
+            });
+        require(originalBoundary != originalBoundaries.end(), "stage 10: original layer boundary");
+        const auto originalEntries = fixture.session.composition()->graph().layerStack().entries();
+        const auto originalEntry = std::ranges::find(originalEntries, originalBoundary->layerId,
+                                                     &document::LayerStackEntry::layerId);
+        require(originalEntry != originalEntries.end(), "stage 10: the audio layer has a slot");
+        const auto originalSlotId = originalEntry->slotId;
+
+        commands::Transaction detachAudio("Detach audio", fixture.session.snapshot().revision());
+        detachAudio.emplace<commands::DisconnectInput>(
+            fixture.session.compositionId(),
+            document::LayerStackInputRef{merge, originalSlotId,
+                                         std::string(document::kLayerStackAudioInputRole)});
+        require(fixture.session.executeTransaction(std::move(detachAudio)).succeeded(),
+                "stage 10: detach the audio-only slot's only edge");
+        require(fixture.session.composition()->graph().layerStack().find(originalSlotId) == nullptr,
+                "stage 10: a slot left with no edge at all is removed");
+
+        commands::Transaction addLayer("Content layer", fixture.session.snapshot().revision());
+        addLayer.emplace<commands::AddNode>(fixture.session.compositionId(),
+                                            std::string(document::kLayerOutputNodeType),
+                                            document::Vec2d{500.0, 500.0});
+        const auto addLayerResult = fixture.session.executeTransaction(std::move(addLayer));
+        require(addLayerResult.succeeded(), "stage 10: add an ordinary content Layer");
+        const auto contentLayerOutput =
+            addLayerResult.outputId<document::NodeId>(commands::kAddNodeOutput);
+        if (!contentLayerOutput.has_value())
+            throw std::runtime_error("stage 10: content layer id");
+        const document::NodeId contentLayer = *contentLayerOutput;
+
+        commands::Transaction feedAudio("Feed layer audio", fixture.session.snapshot().revision());
+        feedAudio.emplace<commands::ConnectPorts>(
+            fixture.session.compositionId(),
+            document::OutputPortRef{sourceNode, std::string(document::kAudioSourceOutputPort)},
+            document::NodeInputRef{contentLayer,
+                                   std::string(document::kLayerOutputAudioInputPort)});
+        require(fixture.session.executeTransaction(std::move(feedAudio)).succeeded(),
+                "stage 10: wire the decoded source into the Layer's own audio input");
+
+        commands::Transaction addContent("Content by hand", fixture.session.snapshot().revision());
+        addContent.emplace<commands::ConnectPorts>(
+            fixture.session.compositionId(),
+            document::OutputPortRef{contentLayer, std::string(document::kLayerOutputOutputPort)},
+            document::LayerStackInputRef{merge, document::LayerSlotId{},
+                                         std::string(document::kLayerStackContentInputRole)});
+        require(fixture.session.executeTransaction(std::move(addContent)).succeeded(),
+                "stage 10: hand-wire the Layer's own (empty) image onto Merge");
+        const auto boundaries = fixture.session.composition()->graph().layerOutputs();
+        const auto boundary = std::ranges::find_if(
+            boundaries, [&](const auto& candidate) { return candidate.nodeId == contentLayer; });
+        require(boundary != boundaries.end(), "stage 10: content layer boundary");
+        const auto entriesAfterContent =
+            fixture.session.composition()->graph().layerStack().entries();
+        const auto entryAfterContent = std::ranges::find(entriesAfterContent, boundary->layerId,
+                                                         &document::LayerStackEntry::layerId);
+        require(entryAfterContent != entriesAfterContent.end(), "stage 10: content slot exists");
+        const auto newSlotId = entryAfterContent->slotId;
+
+        commands::Transaction addAudio("Audio by hand", fixture.session.snapshot().revision());
+        addAudio.emplace<commands::ConnectPorts>(
+            fixture.session.compositionId(),
+            document::OutputPortRef{contentLayer,
+                                    std::string(document::kLayerOutputAudioOutputPort)},
+            document::LayerStackInputRef{merge, document::LayerSlotId{},
+                                         std::string(document::kLayerStackAudioInputRole)});
+        require(fixture.session.executeTransaction(std::move(addAudio)).succeeded(),
+                "stage 10: hand-wire the Layer's own audio onto Merge");
+        const auto entriesAfterAudio =
+            fixture.session.composition()->graph().layerStack().entries();
+        require(
+            std::ranges::count(entriesAfterAudio, boundary->layerId,
+                               &document::LayerStackEntry::layerId) == 1,
+            "stage 10: the audio edge reuses the content slot rather than opening a second one");
+        const auto entryAfterAudio = std::ranges::find(entriesAfterAudio, boundary->layerId,
+                                                       &document::LayerStackEntry::layerId);
+        require(entryAfterAudio != entriesAfterAudio.end() && entryAfterAudio->slotId == newSlotId,
+                "stage 10: same slot before and after the audio hand-wire");
+
+        require(audioPlaybackSession.refresh(), "stage 10: mix recompiles");
+        const auto& handWired = audioPlaybackSession.mix();
+        if (!handWired.has_value())
+            throw std::runtime_error("stage 10: hand-wired mix");
+        require(handWired->clips.size() == 1,
+                "stage 10: hand-wiring through the reused slot still compiles to one clip");
+        std::cout << "stage 10 ok: hand-wired reuse clips " << handWired->clips.size() << '\n';
+    }
+
+    // Direct feeds: a Layer, and then an Audio source, wired straight into the composition's
+    // audio input are one-clip mixes rather than an unsupported preview.
     const auto wire = [&](const document::NodeId from, const std::string_view port,
                           const char* label) {
         commands::Transaction connect(label, fixture.session.snapshot().revision());

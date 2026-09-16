@@ -993,3 +993,17 @@ The immutable compiled plan carries `CompiledAudioSource`, `CompiledAudioLayer`,
 resolves the source identity, rational start time, sampled level, mute and solo state without
 touching decoded samples, a device, or the filesystem. The UI/audio boundary resolves those asset
 IDs to bounded planar buffers and hands `AudioClip` values to `AudioEngine`.
+
+The Merge card exposes the stack's `audio` input as its own stack pill, below the content pill and
+built through the same `SocketItem` machinery: its ordered inputs are the slots that actually carry
+an audio edge (audio is optional per slot, unlike content, which every visible slot has), and its
+sentinel is the same "make a new slot here" `LayerStackInputRef` the content pill uses, with the
+audio role. `SocketItem::accepts()` matches a slot by role as well as by slot id, so a slot's
+content and audio edges draw onto their own pill. Dragging an output onto the audio pill wires by
+hand what `AddAudioLayer` already wires automatically: `ConnectPorts` attaches the edge to the
+source Layer's existing content slot when it has one, rather than opening a second row, so one
+Layer's image and audio share one stable stack row. A drag whose kind the target pill cannot carry
+is refused at release, before any transaction is built, with a message naming the mismatch instead
+of the generic connection-refused text `graph.addEdge` would otherwise produce. `DisconnectInput`
+removes a slot only once neither edge remains, so removing just the audio link off an otherwise-fed
+Layer leaves its image row exactly where it was.

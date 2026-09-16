@@ -138,6 +138,58 @@ void testMultipleMergeCommands(TestContext& test) {
     exercise<RemoveNodes>(test, fixture, std::set<NodeId>{*mergeId});
 }
 
+// Task FOLLOW-1: a slot may now carry both a content and an audio edge for the same Layer.
+// kFirstLayerNodeId already feeds kFirstSlotId's content edge (command_test_support's fixture
+// graph); hand-wiring its own audio output onto the audio-role sentinel must reuse that slot
+// rather than opening a second one, and disconnecting just the audio edge must leave the image
+// row exactly where it was -- only a slot left with neither edge is removed.
+void testMergeSlotSharesContentAndAudioRoles(TestContext& test) {
+    Fixture fixture;
+    const InputPortRef audioPill =
+        LayerStackInputRef{kLayerStackNodeId, {}, std::string(kLayerStackAudioInputRole)};
+    const auto audioSlot =
+        exercise<ConnectPorts>(
+            test, fixture,
+            OutputPortRef{kFirstLayerNodeId, std::string(kLayerOutputAudioOutputPort)}, audioPill)
+            .outputId<LayerSlotId>(kConnectPortsSlotOutput);
+    if (!audioSlot)
+        return;
+    test.expect(*audioSlot == kFirstSlotId,
+                "the hand-wired audio edge reuses the Layer's existing content slot");
+    auto snapshot = fixture.document.snapshot();
+    test.expect(composition(snapshot).graph().merge(kLayerStackNodeId)->entries().size() == 2,
+                "no second slot is opened for the same Layer");
+
+    exercise<DisconnectInput>(
+        test, fixture,
+        InputPortRef{LayerStackInputRef{kLayerStackNodeId, kFirstSlotId,
+                                        std::string(kLayerStackAudioInputRole)}});
+    snapshot = fixture.document.snapshot();
+    test.expect(composition(snapshot).graph().merge(kLayerStackNodeId)->find(kFirstSlotId) !=
+                        nullptr &&
+                    composition(snapshot).graph().merge(kLayerStackNodeId)->entries().size() == 2,
+                "removing just the audio edge leaves the Layer's image row in place");
+    const auto edgesAfterAudioDisconnect = composition(snapshot).graph().edges();
+    test.expect(std::ranges::any_of(edgesAfterAudioDisconnect,
+                                    [](const auto& edge) {
+                                        return edge.destination ==
+                                               InputPortRef(LayerStackInputRef{
+                                                   kLayerStackNodeId, kFirstSlotId,
+                                                   std::string(kLayerStackContentInputRole)});
+                                    }),
+                "the content edge itself survives the audio disconnect");
+
+    exercise<DisconnectInput>(
+        test, fixture,
+        InputPortRef{LayerStackInputRef{kLayerStackNodeId, kFirstSlotId,
+                                        std::string(kLayerStackContentInputRole)}});
+    snapshot = fixture.document.snapshot();
+    test.expect(composition(snapshot).graph().merge(kLayerStackNodeId)->find(kFirstSlotId) ==
+                        nullptr &&
+                    composition(snapshot).graph().merge(kLayerStackNodeId)->entries().size() == 1,
+                "a slot left with neither edge is removed, exactly as before");
+}
+
 void testLayerToggles(TestContext& test) {
     Fixture fixture;
     (void)exercise<SetWorkArea>(test, fixture, core::RationalTime::fromInteger(1),
@@ -824,6 +876,7 @@ int main() {
     bloom::commands::test::TestContext test;
     try {
         bloom::commands::test::testMultipleMergeCommands(test);
+        bloom::commands::test::testMergeSlotSharesContentAndAudioRoles(test);
         bloom::commands::test::testLayerToggles(test);
         bloom::commands::test::testLayerRanges(test);
         bloom::commands::test::testValidityQuery(test);

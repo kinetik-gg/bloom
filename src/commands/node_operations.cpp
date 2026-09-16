@@ -202,25 +202,47 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
             return candidate.nodeId == source_.nodeId;
         });
         const auto layerId = boundary == boundaries.end() ? document::LayerId{} : boundary->layerId;
-        const auto slotId = draft.ids().allocateLayerSlot();
+        // An audio edge shares its Layer's existing row rather than opening a second one: one slot
+        // per layer carries both roles (docs/architecture/layer-graph-model.md, Audio Sources And
+        // Layers). A content drop always opens a fresh row -- the image edge is what puts a Layer
+        // in the stack in the first place -- so this reuse applies only to the audio role.
+        const document::LayerStackEntry* existingSlot = nullptr;
+        if (slot->role == document::kLayerStackAudioInputRole && layerId.isValid()) {
+            const auto entries = stack->entries();
+            const auto found =
+                std::ranges::find(entries, layerId, &document::LayerStackEntry::layerId);
+            if (found != entries.end())
+                existingSlot = &*found;
+        }
+        document::LayerSlotId slotId;
+        if (existingSlot != nullptr) {
+            slotId = existingSlot->slotId;
+        } else {
+            const auto allocatedSlotId = draft.ids().allocateLayerSlot();
+            if (!allocatedSlotId)
+                return detail::exhaustedIds();
+            slotId = *allocatedSlotId;
+        }
         const auto edgeId = draft.ids().allocateEdge();
-        if (!slotId || !edgeId)
+        if (!edgeId)
             return detail::exhaustedIds();
-        if (!stack->append({*slotId, layerId}))
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Layer stack slot could not be inserted");
-        if (insertBefore_.has_value() && !stack->moveBefore(*slotId, insertBefore_))
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Layer stack slot could not be ordered");
+        if (existingSlot == nullptr) {
+            if (!stack->append({slotId, layerId}))
+                return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                 "Layer stack slot could not be inserted");
+            if (insertBefore_.has_value() && !stack->moveBefore(slotId, insertBefore_))
+                return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                 "Layer stack slot could not be ordered");
+        }
         if (!graph.addEdge({*edgeId, source_,
-                            document::LayerStackInputRef{slot->stackNodeId, *slotId, slot->role}},
+                            document::LayerStackInputRef{slot->stackNodeId, slotId, slot->role}},
                            registry_))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Layer stack connection could not be inserted");
         if (const auto failure = detail::validateGraph(*composition, registry_))
             return *failure;
         return OperationResult::applied(
-            {{std::string(kConnectPortsSlotOutput), *slotId}, {"edge", *edgeId}});
+            {{std::string(kConnectPortsSlotOutput), slotId}, {"edge", *edgeId}});
     }
     const auto* previous = detail::inputEdge(graph, destination_);
     if (previous && previous->source == source_)
@@ -300,15 +322,23 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
         auto* stack = graph.merge(slot->stackNodeId);
         if (!stack || stack->find(slot->slotId) == nullptr)
             return detail::invalidTarget();
-        // Detaching a stack slot's content REMOVES the slot (task FIX1, item B). A slot with
-        // nothing in it is not a shape the canonical graph admits -- every visible slot requires
-        // one typed content connection -- so "the slot" and "the link into it" are one thing to the
-        // artist and one thing here. The Layer node keeps its boundary and its LayerId, so
-        // reconnecting it is one gesture rather than a rebuild.
+        // Detaching a stack slot's ONLY remaining edge removes the slot (task FIX1, item B): a slot
+        // with nothing in it is not a shape the canonical graph admits, so "the slot" and "the link
+        // into it" are one thing to the artist and one thing here. A slot now carries up to two
+        // typed edges, content and audio (task FOLLOW-1) -- one Layer, one row, both roles -- so
+        // removing just the audio link from an otherwise-fed Layer must leave its image row exactly
+        // where it was; only a slot left with NEITHER edge is the shape this actually removes. The
+        // Layer node keeps its boundary and its LayerId regardless, so reconnecting is one gesture
+        // rather than a rebuild.
         const auto* edge = detail::inputEdge(graph, input_);
         if (edge != nullptr)
             (void)graph.eraseEdge(edge->id);
-        if (!stack->erase(slot->slotId))
+        const bool stillFed = std::ranges::any_of(graph.edges(), [&](const auto& candidate) {
+            const auto* other = std::get_if<document::LayerStackInputRef>(&candidate.destination);
+            return other != nullptr && other->stackNodeId == slot->stackNodeId &&
+                   other->slotId == slot->slotId;
+        });
+        if (!stillFed && !stack->erase(slot->slotId))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Layer stack slot could not be removed");
         if (const auto failure = detail::validateGraph(*composition, registry_))

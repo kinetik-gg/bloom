@@ -609,14 +609,15 @@ bool SocketItem::accepts(const document::InputPortRef& ref) const {
     if ((input.has_value() && *input == ref) ||
         std::ranges::find(orderedInputs_, ref) != orderedInputs_.end())
         return true;
-    // The stack pill stands for every role of every slot: a Layer's audio edge into a slot lands
-    // on the same pill as its content edge, so the artist can see that the audio is already routed.
+    // Merge now carries one stack pill per typed role (content, audio): a slot's content and audio
+    // edges land on their OWN pill, matched by role as well as by slot, so an audio edge never
+    // draws onto the content pill or vice versa.
     const auto* slot = std::get_if<document::LayerStackInputRef>(&ref);
     return slot != nullptr &&
            std::ranges::any_of(orderedInputs_, [&](const document::InputPortRef& candidate) {
                const auto* ordered = std::get_if<document::LayerStackInputRef>(&candidate);
                return ordered != nullptr && ordered->stackNodeId == slot->stackNodeId &&
-                      ordered->slotId == slot->slotId;
+                      ordered->slotId == slot->slotId && ordered->role == slot->role;
            });
 }
 
@@ -787,6 +788,29 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
         ordered.reserve(entries.size());
         for (const auto& slot : entries)
             ordered.push_back(document::LayerStackInputRef{node.id, slot.slotId, port.role});
+        auto* pill = new SocketItem(
+            node.id, QString::fromStdString(port.role), port.valueKind,
+            document::LayerStackInputRef{node.id, document::LayerSlotId{}, port.role}, std::nullopt,
+            this);
+        pill->setOrderedInputs(std::move(ordered));
+        sockets_.push_back(pill);
+    }
+    if (definition->audioLayerSlotInput && composition.graph().merge(node.id)) {
+        // Task FOLLOW-1: a second stack pill, below the content pill, for the audio transport the
+        // same stable slots carry (docs/architecture/layer-graph-model.md, Audio Sources And
+        // Layers). Unlike the content pill -- whose ordered inputs are every stack entry, because a
+        // visible slot always has a content edge -- audio is optional per slot, so this pill's
+        // ordered inputs are only the slots that actually carry an audio edge.
+        const auto& port = *definition->audioLayerSlotInput;
+        const auto entries = composition.graph().merge(node.id)->entries();
+        std::vector<document::InputPortRef> ordered;
+        for (const auto& slot : entries) {
+            const document::InputPortRef ref =
+                document::LayerStackInputRef{node.id, slot.slotId, port.role};
+            if (std::ranges::any_of(composition.graph().edges(),
+                                    [&](const auto& edge) { return edge.destination == ref; }))
+                ordered.push_back(ref);
+        }
         auto* pill = new SocketItem(
             node.id, QString::fromStdString(port.role), port.valueKind,
             document::LayerStackInputRef{node.id, document::LayerSlotId{}, port.role}, std::nullopt,
