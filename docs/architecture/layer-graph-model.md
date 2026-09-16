@@ -389,13 +389,16 @@ remain preservable. Existing ports are Image. Known incompatible socket kinds ar
 
 ### Text And Mute Lowering
 
-Text version 2 has six parameters in authoring order: content (String), size (Scalar em pixels,
+Text version 2 has seven parameters in authoring order: content (String), size (Scalar em pixels,
 default 72), color (straight Color4d, default opaque white), alignment (Integer: Left=0, Center=1,
-Right=2; default Left), line-height (positive Scalar em multiplier, default 1), and letter-spacing
-(Scalar pixels between adjacent glyphs, default 0). Size, color, line height and letter spacing are
-animatable. Content and alignment are discrete. The source uses the single embedded DejaVu Sans face;
-there is no font selector. Newlines start lines, CR is ignored for CRLF, and alignment places each
-line within the maximum line advance. Wrapping, shaping and bidi remain deferred.
+Right=2; default Left), line-height (positive Scalar em multiplier, default 1), letter-spacing
+(Scalar pixels between adjacent glyphs, default 0), and font (Integer: DejaVu Sans=0, Inter
+Regular=1, Inter Medium=2, Inter SemiBold=3; default DejaVu Sans). Size, color, line height and
+letter spacing are animatable. Content, alignment and font are discrete; font is non-animatable.
+The four faces are embedded in the Qt-free render module. A version-2 node authored before the font
+binding existed decodes with the definition's DejaVu Sans default. Newlines start lines, CR is
+ignored for CRLF, and alignment places each line within the maximum line advance. Wrapping, shaping
+and bidi remain deferred.
 
 Source rows are projected from the current registry in Nodes and Timeline. The color role
 is node-local and shared with Solid; the text color schema retains its distinct global identity.

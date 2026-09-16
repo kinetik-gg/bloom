@@ -53,8 +53,9 @@ Toggle on uses Fill; off uses Regular, centered in a ToggleCell column.
 `TypeRole` is the only font API. The interface family is pinned, bundled Inter
 (Regular, Medium, SemiBold; SIL OFL); Geist Mono remains the value face. Intake includes
 upstream release identity, digests computed from downloaded bytes, license and manifest.
-Render-module text-source DejaVu is independent and unchanged. `QFont(` outside the kit
-is a quality violation.
+Render-module text-source rendering embeds the same DejaVu Sans and Inter face files for deterministic
+CPU evaluation; it is independent of Qt's font database. `QFont(` outside the kit is a quality
+violation.
 
 ## Declared chrome and rows
 

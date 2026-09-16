@@ -968,6 +968,30 @@ void testReachabilityAndUnsupportedNodes(Expectations& expectations) {
                             interCompiledText->face == render::EmbeddedFace::InterSemiBold,
                         "lowering passes the selected Inter SemiBold face into CompiledText");
 
+    auto legacyText = makeProject(singleLayerOptions());
+    retypeFirstSourceToText(legacyText, "Title", 48.0, textColorValue);
+    auto* legacyComposition = legacyText.findComposition(kCompositionId);
+    auto* legacyNode = legacyComposition == nullptr
+                           ? nullptr
+                           : legacyComposition->graph().findNode(kFirstSolidNode);
+    expectations.expect(legacyComposition != nullptr && legacyNode != nullptr &&
+                            legacyComposition->parameters().erase(kTextFont) &&
+                            std::erase_if(legacyNode->parameters,
+                                          [](const auto& binding) {
+                                              return binding.role ==
+                                                     document::kTextFontParameterRole;
+                                          }) == 1,
+                        "an older Text v2 fixture can omit the new font binding");
+    const auto legacyResult = compile(std::move(legacyText), registry);
+    const auto* legacyCompiledText =
+        legacyResult.plan && !legacyResult.plan->operations().empty()
+            ? std::get_if<runtime::CompiledText>(&legacyResult.plan->operations().front())
+            : nullptr;
+    expectations.expect(legacyResult.status == runtime::SnapshotCompileStatus::Compiled &&
+                            legacyCompiledText != nullptr &&
+                            legacyCompiledText->face == render::EmbeddedFace::DejaVuSans,
+                        "an older Text v2 document defaults the missing face to DejaVu Sans");
+
     // A size the schema refuses never reaches the evaluator: the document rejects the value at
     // insertion, so there is no "valid document, unrenderable plan" state to lower.
     auto oversized = makeProject(singleLayerOptions());

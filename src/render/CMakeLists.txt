@@ -1,13 +1,13 @@
 # --- bloom_render_fonts: the Qt-free runtime font the CPU text path rasterizes -----------------
 #
-# Configure-time embed of the already-vendored DejaVu Sans Book face into a C++ byte array, mirroring
-# src/color/CMakeLists.txt's embed of the Bloom Neutral v1 OCIO config. src/render may not use Qt, and
-# an evaluator must not read media from the filesystem, so the bytes have to be a build-time constant
-# rather than a Qt resource or a runtime file open. No second copy of the font is checked in: this
-# reads the exact same file src/ui registers with Qt, whose provenance and per-file SHA-256 are
-# recorded in src/ui/kit/third_party/dejavu-sans/provenance.md. Reading one checked-in asset at
-# configure time is not a module dependency -- no src/render translation unit includes a src/ui
-# header, and bloom_render links nothing from src/ui.
+# Configure-time embed of the already-vendored DejaVu Sans Book and Inter faces into C++ byte arrays,
+# mirroring src/color/CMakeLists.txt's embed of the Bloom Neutral v1 OCIO config. src/render may not
+# use Qt, and an evaluator must not read media from the filesystem, so the bytes have to be build-time
+# constants rather than a Qt resource or a runtime file open. No second copy of a font is checked in:
+# this reads the exact same files src/ui registers with Qt, whose provenance and per-file SHA-256 are
+# recorded in their third-party provenance records. Reading checked-in assets at configure time is not
+# a module dependency -- no src/render translation unit includes a src/ui header, and bloom_render
+# links nothing from src/ui.
 set(bloom_embedded_face_names DejaVuSans InterRegular InterMedium InterSemiBold)
 set(
     bloom_embedded_face_assets
