@@ -597,14 +597,15 @@ CompositionSession::constantStringValue(const document::ParameterId parameterId)
     return value == nullptr ? std::nullopt : std::optional<QString>(QString::fromStdString(*value));
 }
 
-bool CompositionSession::addShapeLayer(const document::ShapeKind kind) {
+bool CompositionSession::addShapeLayer(const document::ShapeKind kind,
+                                       commands::ShapeLayerGeometry geometry) {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!composition()) {
         reportUnavailable(tr("No composition is available for the new shape"));
         return false;
     }
     commands::Transaction transaction("Add Shape Layer", snapshot_.revision());
-    transaction.emplace<commands::AddShapeLayer>(compositionId_, kind);
+    transaction.emplace<commands::AddShapeLayer>(compositionId_, kind, std::move(geometry));
     const auto result = commandStack_->execute(std::move(transaction));
     if (!handleResult(result))
         return false;
@@ -635,7 +636,8 @@ bool CompositionSession::addSolidLayer(const QString& name, const core::Color4d 
 }
 
 bool CompositionSession::addTextLayer(const QString& name, const QString& text, const double size,
-                                      const core::Color4d color) {
+                                      const core::Color4d color,
+                                      const std::optional<document::Vec2d> position) {
     Q_ASSERT(QThread::currentThread() == thread());
     const auto* current = composition();
     if (current == nullptr) {
@@ -643,9 +645,9 @@ bool CompositionSession::addTextLayer(const QString& name, const QString& text, 
         return false;
     }
     commands::Transaction transaction("Add Text Layer", snapshot_.revision());
-    transaction.emplace<commands::AddTextLayer>(compositionId_, name.toStdString(),
-                                                text.toStdString(), compositionCenter(*current),
-                                                1.0, size, color);
+    transaction.emplace<commands::AddTextLayer>(
+        compositionId_, name.toStdString(), text.toStdString(),
+        position.value_or(compositionCenter(*current)), 1.0, size, color);
     const auto result = commandStack_->execute(std::move(transaction));
     const auto layerId = result.outputId<document::LayerId>(commands::kAddTextLayerLayerOutput);
     if (!handleResult(result)) {
@@ -1462,6 +1464,8 @@ CompositionSession::effectiveParameterValue(const document::ParameterRecord* par
     if (parameter == nullptr) {
         return std::nullopt;
     }
+    if (valueEdit_ && valueEdit_->anchor && valueEdit_->anchor->parameter == parameter->id)
+        return ParameterSample(valueEdit_->anchor->value);
     if (valueEdit_ && isValueEditing(parameter->id))
         return std::visit(
             [](const auto& value) -> std::optional<ParameterSample> {

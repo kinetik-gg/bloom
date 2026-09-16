@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-09-16
+Updated: 2026-09-17
 
 ## Purpose
 
@@ -1068,7 +1068,26 @@ kind)` creates the source, Layer Output and ordered Merge slot in one undoable t
 The session offers structured shape layers. The canvas Sources menu offers each kind as a
 standalone source preset in one undo step, preserving the canvas Add contract. The node card
 carries a compact kind preview.
-Viewer drawing and manipulation tools are a separate delivery.
+Viewer Rectangle, Ellipse, Polygon, Star and Line tools freeze `ViewerMapping` at press and keep
+only an outline until release. `AddShapeLayer` accepts optional initial position, size, endpoints
+and Path geometry; validation, source/Layer/slot creation and initial values publish in one
+transaction. A 100 × 50 drag from (10,20) to (110,70) stores size (100,50) and Layer position
+(60,45), because position names the content centre. Shift makes squares/circles, keeps polygons/stars regular, or snaps line angle
+to 45-degree steps; Alt uses the press point as centre. Polygon and Star keep the schema default
+of five points, editable afterward in Properties. A click uses the documented viewer default size.
+
+Pen drafts retain composition-space anchors and absolute handles in session state. Closing or
+finishing creates one Path layer with its position at the path bounds centre. Open pen paths start
+with fill off and a white stroke on; closed paths retain the normal shape fill default. Selected
+Path anchors and handles edit through the session override channel, with one undo entry per drag
+or anchor deletion. The tool adjusts the Layer anchor offset as the path bounds centre changes,
+keeping the existing local-to-world mapping stable during authoring. Path source data stays a
+constant; these gestures do not introduce path animation.
+
+Text clicks call `AddTextLayer` with the mapped composition position in the same creation command,
+select the result, and focus the existing Properties text field. Text box editing is independent
+of this placement tool. Creation, previews and picking share the Qt viewer input/mapping path on
+Linux, macOS and Windows; rasterisation remains on the portable CPU worker.
 
 `size` is a nonnegative pixel bounding box for the five closed parametric kinds. Polygon and Star
 have 3–64 points; Star's `innerRatio` is in [0,1]. Rectangle and Polygon accept a nonnegative

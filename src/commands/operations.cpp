@@ -534,13 +534,18 @@ OperationResult AddShapeLayer::apply(document::Draft& draft) const {
         return invalidComposition(composition_);
     if (kind_ < document::ShapeKind::Rectangle || kind_ > document::ShapeKind::Path)
         return OperationResult::rejected(OperationIssueCode::InvalidValue, "Unknown shape kind");
+    if (geometry_.position &&
+        (!std::isfinite(geometry_.position->x) || !std::isfinite(geometry_.position->y)))
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Shape position must be finite");
     const auto definition = document::shapeDefinition();
     StructuredLayerDescriptor descriptor{document::kShapeSourceNodeType, 1, "image", {}};
     for (const auto& parameter : definition.parameters) {
         auto value = parameter.defaultValue;
         if (parameter.role == "kind")
             value = static_cast<std::int64_t>(kind_);
-        if (kind_ == document::ShapeKind::Line) {
+        if (kind_ == document::ShapeKind::Line ||
+            (kind_ == document::ShapeKind::Path && geometry_.path && !geometry_.path->closed)) {
             if (parameter.role == "fillEnabled")
                 value = false;
             if (parameter.role == "strokeEnabled")
@@ -548,13 +553,25 @@ OperationResult AddShapeLayer::apply(document::Draft& draft) const {
             if (parameter.role == "strokeColor")
                 value = core::Color4d{1, 1, 1, 1};
         }
+        if (parameter.role == "size" && geometry_.size)
+            value = *geometry_.size;
+        if (parameter.role == "lineStart" && geometry_.lineStart)
+            value = *geometry_.lineStart;
+        if (parameter.role == "lineEnd" && geometry_.lineEnd)
+            value = *geometry_.lineEnd;
+        if (parameter.role == "path" && geometry_.path)
+            value = *geometry_.path;
+        if (!document::shapeConstantMatchesSchema(parameter.schemaKey, value))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Invalid shape geometry");
         descriptor.sourceParameters.push_back(
             {parameter.role, parameter.schemaKey, std::move(value), parameter.role});
     }
     return addStructuredLayer(
         draft, *composition, std::string(document::shapeKindName(kind_)), descriptor,
-        {static_cast<double>(composition->format().width()) / 2.0,
-         static_cast<double>(composition->format().height()) / 2.0},
+        geometry_.position.value_or(
+            document::Vec2d{static_cast<double>(composition->format().width()) / 2.0,
+                            static_cast<double>(composition->format().height()) / 2.0}),
         1.0,
         {"layer", "slot", "shapeNode", "layerOutputNode", "positionParameter", "anchorParameter",
          "scaleParameter", "rotationParameter", "opacityParameter", "blendModeParameter",

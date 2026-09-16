@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-16
+Updated: 2026-09-17
 
 Bloom's mechanical interface contract is owned here and implemented by `src/ui/kit`.
 [ADR 0021](../decisions/0021-ui-grammar.md) records its rationale and extension procedure.
@@ -85,12 +85,40 @@ and reports unavailable colour state when no preview controller exists. Readines
 use muted ink; a colour-state failure remains explicit. `UiSmall` preserves mixed case with
 natural tracking. `KSurface` owns neutral surface backgrounds.
 
-`KToolColumn` owns the exclusive vertical arrangement of `KIconToggle` choices. The viewer
-exposes Select, Hand and Zoom; Text, Rectangle and Pen remain disabled with honest tooltips.
-Hand uses the existing pan mapping; Zoom clicks zoom about the pointer, with Alt-click reversing
-the direction. Select retains the command-backed position gesture. Middle-button pan and
-existing keyboard zoom remain available. A tool selection is UI state and never authors a node.
-Tool glyphs use the same DPR-exact SVG path as other kit controls.
+`KToolColumn` owns ten enabled, exclusive `KIconToggle` choices. Select (V), Hand (H), Zoom (Z),
+Text (T), Rectangle (R), Ellipse (E), Polygon, Star, Line and Pen (P) are viewer-local tools.
+Hand pans; Zoom clicks zoom about the pointer, with Alt-click reversing the direction. Middle-button
+pan and keyboard zoom remain available. Escape cancels unfinished creation and returns to Select;
+after creation it also returns to Select. Choosing a tool alone never authors a node.
+
+Rectangle, Ellipse, Polygon, Star and Line draw a live Accent outline on press-drag. Shift constrains
+rectangles and ellipses to equal sides, keeps polygons and stars regular, or snaps a line to 45-degree steps; Alt draws from the press point
+as centre. Polygon and Star start with five points. A click creates a 100 × 100 composition-pixel
+shape, or a 100-pixel horizontal line, centred on the click. Release creates and selects the layer
+with one undo entry. The selection gizmo appears with the evaluated frame.
+
+Pen clicks append straight anchors; dragging an anchor during creation sets symmetric cubic
+handles. Clicking the first anchor closes a path with at least three anchors; Enter finishes an
+open path with at least two. Escape discards the draft. Selected Path layers display screen-sized
+anchor squares and handle circles. Dragging edits the live path, Alt moves a handle independently,
+and Delete removes the selected anchor. Text clicks create a layer and focus its text field in
+Properties, expanding and scrolling the containing section. There is no canvas text editing here.
+
+All glyphs use the DPR-exact SVG renderer and kit state tints. Rectangle, Pen and Text retain their
+Phosphor assets; the four added shape glyphs are Bloom-authored SVG paths.
+
+| Tool icon | Glyph | Shortcut |
+| --- | --- | --- |
+| Select | cursor | V |
+| Hand | hand | H |
+| Zoom | magnifying-glass | Z |
+| Rectangle | rectangle | R |
+| Ellipse | ellipse | E |
+| Polygon | pentagon | Column only |
+| Star | five-point star | Column only |
+| Line | diagonal line | Column only |
+| Pen | pen-nib | P |
+| Text | text-t | T |
 
 The viewer surrounds its composition with `Color::Canvas` (`#131313`) and uses
 `Color::CompositionFrame` (`#454545`) at `kCompositionFrameWidth` (1 logical pixel) for the
@@ -221,11 +249,12 @@ The [validation map and capture contract](grammar1-validation.md) identify enfor
 ## Automation additions
 
 Existing object names remain stable. New names are `viewerToolColumn`, `viewerSelectTool`,
-`viewerHandTool`, `viewerZoomTool`, `viewerTextTool`, `viewerRectangleTool`, `viewerPenTool`,
+`viewerHandTool`, `viewerZoomTool`, `viewerTextTool`, `viewerRectangleTool`, `viewerEllipseTool`,
+`viewerPolygonTool`, `viewerStarTool`, `viewerLineTool`, `viewerPenTool`,
 and `nodeReadOnlyValue`. Node row widgets expose `nodeParameterRole` and
 `nodeParameterRowPitch` for geometry audits; list headings expose `headerRow`.
 
-The metric audit covers the status line, six tools, card/control containment and socket-row
+The metric audit covers the status line, ten enabled tools, card/control containment and socket-row
 alignment at DPR 1, 1.5 and 2. It also verifies the timeline menu set remains expanded at
 1600 and 1920 logical-pixel window widths. Whole-window references and final captures run at
 DPR 1 and 1.5. Changed geometry tests use the viewer's real padded mapping.

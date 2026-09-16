@@ -79,7 +79,7 @@ void testEveryIconIdRendersAtEverySizeInEveryWeight(Expectations& expectations) 
     expectations.expect(rendered == static_cast<int>(kit::iconIds().size()) * 9,
                         "every id was rendered at all three sizes in all three weights");
     // The four media footer/kind glyphs extend the curated vocabulary by four.
-    expectations.expect(kit::iconIds().size() >= 30 && kit::iconIds().size() <= 64,
+    expectations.expect(kit::iconIds().size() >= 30 && kit::iconIds().size() <= 68,
                         "the curated vocabulary stays a curated vocabulary");
 }
 

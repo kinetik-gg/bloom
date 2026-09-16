@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-16
+Updated: 2026-09-17
 
 ## Purpose And Ownership
 
@@ -614,7 +614,7 @@ The preview channel is session-only and reusable by future shape/text interactio
 
 ```text
 SnapshotCompileRequest.parameterOverrides = [ // at most eight distinct parameters
-  { sourceRevision, parameterId, value: double | Vec2d | Vec3d | Color4d | int64 | bool | string }
+  { sourceRevision, parameterId, value: double | Vec2d | Vec3d | Color4d | int64 | bool | string | PathValue }
 ]
 ```
 
@@ -644,6 +644,21 @@ transaction and samples current authored ancestor transforms so repeated keys do
 preview completion. Delete removes the selected layers through the existing RemoveNodes command
 in one transaction. All bindings and geometry use Qt's portable input and painting surfaces on
 Linux, macOS and Windows.
+
+### Path Gestures
+
+Path overrides carry the document's bounded `PathValue` (anchors, optional absolute cubic handles,
+and closed flag). They obey the same revision, ownership, reachability, kind and domain checks as
+other overrides, and bypass frame/plan caches. Path is a constant authoring kind, without a curve.
+`liveValue` includes Path values while numeric effective readers retain their existing kinds.
+
+Pen creation holds only a session draft and screen-space outline until close or Enter. A selected
+Path anchor/handle drag freezes the evaluated local-to-composition transform and the viewer mapping.
+It stages the complete Path through the value-edit seam; the Layer anchor offset compensates for
+changes to the geometric bounds centre. Path and compensation commit in one transaction. Alt breaks
+handle symmetry; Delete removes the selected anchor in one transaction. Escape, capture loss,
+window deactivation, resize, selection, revision, composition and time changes cancel the gesture.
+No rasterisation, media I/O or evaluation runs on the pointer event path.
 
 ### Value Edits
 

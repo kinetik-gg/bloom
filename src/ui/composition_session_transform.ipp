@@ -260,7 +260,7 @@ bool CompositionSession::commitTransformInteraction() {
         const auto* parameter = composition()->parameters().find(override.parameterId);
         if (!parameter)
             return finish(false);
-        const auto before = effectiveParameterValue(parameter);
+        const auto before = liveValue(parameter->id);
         const bool same =
             before && std::visit(
                           [&](const auto& value) {

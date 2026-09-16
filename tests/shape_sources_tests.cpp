@@ -6,6 +6,7 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <stdexcept>
 using namespace bloom;
@@ -156,11 +157,71 @@ void animation() {
                alpha(shape.evaluate(core::RationalTime::fromInteger(1)), 1, 1) == 1,
            "animated size changes pixels");
 }
+void creationAndPathOverrides() {
+    auto initial = document::makeNewProject("Creation", "Main", core::RationalTime::fromInteger(2),
+                                            testFormat());
+    document::Document document(std::move(initial.project));
+    commands::CommandStack stack(document);
+    const document::PathValue triangle{{{{2, 2}, {}, {}}, {{6, 2}, {}, {}}, {{4, 6}, {}, {}}},
+                                       true};
+    commands::ShapeLayerGeometry geometry;
+    geometry.position = document::Vec2d{4, 4};
+    geometry.path = triangle;
+    commands::Transaction add("Draw Path", document.snapshot().revision());
+    add.emplace<commands::AddShapeLayer>(initial.initialCompositionId, document::ShapeKind::Path,
+                                         geometry);
+    const auto created = stack.execute(std::move(add));
+    expect(created.changed() && stack.size() == 1,
+           "path creation and geometry are one transaction");
+    const auto pathId = created.outputId<document::ParameterId>("path");
+    if (!pathId)
+        throw std::runtime_error("missing created path");
+    const auto snapshot = document.snapshot();
+    const auto* composition = snapshot.project().findComposition(initial.initialCompositionId);
+    expect(std::get<document::ConstantValueSource>(composition->parameters().find(*pathId)->source)
+                   .value == document::ParameterValue(triangle),
+           "creation stores complete path value");
+    runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    auto edited = triangle;
+    edited.anchors.front().point = {1, 2};
+    const auto preview = compiler.compile(
+        {snapshot, initial.initialCompositionId, {{snapshot.revision(), *pathId, edited}}}, {});
+    expect(preview.plan != nullptr, "Path override admitted on reachable shape source");
+    expect(std::get<document::ConstantValueSource>(composition->parameters().find(*pathId)->source)
+                   .value == document::ParameterValue(triangle),
+           "Path override does not mutate snapshot");
+    auto invalid = edited;
+    invalid.anchors.front().point.x = std::numeric_limits<double>::infinity();
+    expect(!compiler
+                .compile({snapshot,
+                          initial.initialCompositionId,
+                          {{snapshot.revision(), *pathId, invalid}}},
+                         {})
+                .plan,
+           "nonfinite Path override refused");
+    expect(!compiler
+                .compile(
+                    {snapshot, initial.initialCompositionId, {{snapshot.revision(), *pathId, 1.0}}},
+                    {})
+                .plan,
+           "wrong override kind refused for path");
+    expect(stack.undo().changed(), "one undo removes drawn path");
+    expect(stack.redo().changed(), "one redo restores drawn path");
+    const auto count = stack.size();
+    commands::ShapeLayerGeometry invalidGeometry;
+    invalidGeometry.size = document::Vec2d{-1, 10};
+    commands::Transaction bad("Invalid shape", document.snapshot().revision());
+    bad.emplace<commands::AddShapeLayer>(initial.initialCompositionId,
+                                         document::ShapeKind::Rectangle, invalidGeometry);
+    expect(!stack.execute(std::move(bad)).succeeded() && stack.size() == count,
+           "invalid initial shape geometry is rejected atomically");
+}
 } // namespace
 int main() {
     try {
         pixelsAndBounds();
         animation();
+        creationAndPathOverrides();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

@@ -12,6 +12,7 @@
 #include <QPointF>
 #include <QRectF>
 #include <QString>
+#include <QTransform>
 #include <QWidget>
 
 #include <cstdint>
@@ -300,7 +301,51 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
 
     // Zoom/pan (decision 2).
     ViewTransform transform_;
-    enum class Tool { Select, Hand, Zoom };
+    enum class Tool { Select, Hand, Zoom, Rectangle, Ellipse, Polygon, Star, Line, Pen, Text };
+    void selectTool(Tool tool);
+    struct CreationGesture {
+        ViewerMapping mapping;
+        document::Revision revision;
+        core::RationalTime time;
+        document::CompositionId composition;
+        QPointF origin;
+        QPointF pointer;
+        Qt::KeyboardModifiers modifiers;
+    };
+    std::optional<CreationGesture> creation_;
+    [[nodiscard]] bool creationValid() const;
+    [[nodiscard]] document::ShapeKind creationKind() const;
+    [[nodiscard]] commands::ShapeLayerGeometry creationGeometry() const;
+    bool creationPress(QMouseEvent* event);
+    bool textPress(QMouseEvent* event);
+    bool creationMove(QMouseEvent* event);
+    bool creationRelease(QMouseEvent* event);
+    void cancelCreation();
+    void paintCreation(QPainter& painter) const;
+    document::PathValue penPath_;
+    bool penDown_ = false;
+    struct PathSelection {
+        document::ParameterId parameter;
+        document::PathValue path;
+        QTransform toWorld;
+    };
+    struct PathDrag {
+        CreationGesture gesture;
+        PathSelection selection;
+        QPointF origin;
+        std::size_t index;
+        int part; // 0 anchor, 1 incoming handle, 2 outgoing handle
+    };
+    std::optional<PathDrag> pathDrag_;
+    std::optional<std::pair<document::ParameterId, std::size_t>> selectedAnchor_;
+    [[nodiscard]] std::optional<PathSelection> selectedPath() const;
+    bool pathPress(QMouseEvent* event);
+    bool pathMove(QMouseEvent* event);
+    bool pathRelease(QMouseEvent* event);
+    bool pathKey(QKeyEvent* event);
+    void cancelPathDrag();
+    void finishPen(bool closed);
+    void paintPathTools(QPainter& painter) const;
     Tool tool_ = Tool::Select;
     QWidget* toolColumn_ = nullptr;
     bool panActive_ = false;

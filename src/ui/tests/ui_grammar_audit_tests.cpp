@@ -198,16 +198,13 @@ int run(int argc, char** argv) {
     expect(zoomDropdown->width() >= zoomDropdown->minimumSizeHint().width(), zoomDropdown,
            "E21 zoom fits widest item plus chevron");
     const auto choices = tools->findChildren<kit::KIconToggle*>();
-    expect(choices.size() == 6, tools, "six tool choices");
+    expect(choices.size() == 10, tools, "ten enabled tool choices");
     for (auto* choice : choices) {
+        expect(choice->isEnabled(), choice, "viewer tools enabled");
         expect(choice->height() == kit::px(kit::Size::ToggleCell) && !choice->toolTip().isEmpty(),
                choice, "tool extent and help");
         expect(tools->rect().contains(choice->geometry()), choice, "tool stays inside column");
     }
-    expect(!tools->findChild<kit::KIconToggle*>("viewerTextTool")->isEnabled() &&
-               !tools->findChild<kit::KIconToggle*>("viewerRectangleTool")->isEnabled() &&
-               !tools->findChild<kit::KIconToggle*>("viewerPenTool")->isEnabled(),
-           tools, "unsupported authoring tools disabled");
     int cards = 0, fields = 0, alignedSockets = 0;
     for (auto* view : fixture.window->findChildren<QGraphicsView*>()) {
         if (!view->scene())
