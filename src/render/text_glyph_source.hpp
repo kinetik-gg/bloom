@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/render/embedded_fonts.hpp>
+
 #include <cstdint>
 #include <span>
 
@@ -10,12 +12,11 @@
 // withheld, and Bloom's own text layout code (text_raster.cpp) stays under the full strict-warning
 // and clang-tidy profile while calling through these declarations.
 //
-// The font is a singleton by design. bloom.text-source has no font parameter -- the document schema
-// names no font at all -- so there is exactly one immutable face, the embedded DejaVu Sans payload
-// from bloom/render/embedded_fonts.hpp, parsed once on first use. Every function below is a pure
-// read of that parsed face: no function mutates shared state after initialization, and the glyf
-// outline path stb uses for this face copies its own working buffers, so concurrent evaluation on
-// task threads is safe.
+// The face registry is immutable after each entry's first-use initialization. Every embedded face
+// is parsed lazily once, with one thread-safe once flag per face, from the payload selected by
+// bloom/render/embedded_fonts.hpp. Every function below is then a pure read of that parsed face:
+// no function mutates shared state after initialization, and the glyf outline path stb uses for
+// these faces copies its own working buffers, so concurrent evaluation on task threads is safe.
 //
 // Units: `glyph` is a glyph index in the embedded face, never a Unicode scalar. Horizontal metrics
 // and kerning are in unscaled font design units; scale factors and bitmap boxes are in pixels.
@@ -46,34 +47,37 @@ struct GlyphBitmapBox final {
 // False only if the embedded font bytes do not parse, which is a build-integrity failure (the bytes
 // are a digest-recorded compile-time constant), never a document or user error. Every other
 // function here returns zeroed/empty results in that state rather than reading an unparsed face.
-[[nodiscard]] bool embeddedFontIsParsed() noexcept;
+[[nodiscard]] bool embeddedFontIsParsed(EmbeddedFace face) noexcept;
 
 // The scale that maps font design units to `pixelSize` pixels per em -- the ordinary "font size in
 // pixels" convention. Zero when the face did not parse or `pixelSize` is not finite and positive.
-[[nodiscard]] float embeddedFontScaleForEmPixelSize(double pixelSize) noexcept;
+[[nodiscard]] float embeddedFontScaleForEmPixelSize(EmbeddedFace face, double pixelSize) noexcept;
 
-[[nodiscard]] FontVerticalMetrics embeddedFontVerticalMetrics() noexcept;
+[[nodiscard]] FontVerticalMetrics embeddedFontVerticalMetrics(EmbeddedFace face) noexcept;
 
 // Glyph index for a Unicode scalar, or 0 (.notdef) when the face has no coverage for it. 0 is a
 // real, renderable glyph in this face, so an unsupported codepoint draws the missing-glyph box
 // rather than disappearing or reading out of range.
-[[nodiscard]] int embeddedFontGlyphIndex(char32_t codepoint) noexcept;
+[[nodiscard]] int embeddedFontGlyphIndex(EmbeddedFace face, char32_t codepoint) noexcept;
 
-[[nodiscard]] GlyphHorizontalMetrics embeddedFontGlyphHorizontalMetrics(int glyph) noexcept;
+[[nodiscard]] GlyphHorizontalMetrics embeddedFontGlyphHorizontalMetrics(EmbeddedFace face,
+                                                                        int glyph) noexcept;
 
 // Kerning adjustment in design units for the ordered pair, 0 when the face has no kern pair.
-[[nodiscard]] int embeddedFontGlyphKernAdvance(int leftGlyph, int rightGlyph) noexcept;
+[[nodiscard]] int embeddedFontGlyphKernAdvance(EmbeddedFace face, int leftGlyph,
+                                               int rightGlyph) noexcept;
 
 // `shiftX`/`shiftY` are the sub-pixel fractions of the pen position, in [0, 1).
-[[nodiscard]] GlyphBitmapBox embeddedFontGlyphBitmapBox(int glyph, float scaleX, float scaleY,
-                                                        float shiftX, float shiftY) noexcept;
+[[nodiscard]] GlyphBitmapBox embeddedFontGlyphBitmapBox(EmbeddedFace face, int glyph, float scaleX,
+                                                        float scaleY, float shiftX,
+                                                        float shiftY) noexcept;
 
 // Rasterizes `glyph` into `output` as 8-bit coverage, `width` columns by `height` rows with
 // `strideBytes` between rows. Writes nothing when the span is too small for that geometry, when the
 // geometry is non-positive, or when the face did not parse. Existing bytes in the covered rectangle
 // are overwritten, not blended: the caller owns combining overlapping glyphs.
-void embeddedFontRasterizeGlyph(std::span<std::uint8_t> output, int width, int height,
-                                int strideBytes, float scaleX, float scaleY, float shiftX,
-                                float shiftY, int glyph) noexcept;
+void embeddedFontRasterizeGlyph(EmbeddedFace face, std::span<std::uint8_t> output, int width,
+                                int height, int strideBytes, float scaleX, float scaleY,
+                                float shiftX, float shiftY, int glyph) noexcept;
 
 } // namespace bloom::render::detail

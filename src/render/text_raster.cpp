@@ -73,21 +73,24 @@ std::span<const std::uint8_t> TextCoverageBitmap::row(const std::uint32_t y) con
     return std::span<const std::uint8_t>(coverage_).subspan(offset, width_);
 }
 
-ImageResult<TextCoverageBitmap> TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
-    const std::string_view utf8Content, const TextRasterParameters parameters,
-    const std::size_t coverageByteLimit, const TextLayoutOptions layout) {
+ImageResult<TextCoverageBitmap> TextCoverageBitmap::rasterizeEmbeddedText(
+    const EmbeddedFace face, const std::string_view utf8Content,
+    const TextRasterParameters parameters, const std::size_t coverageByteLimit,
+    const TextLayoutOptions layout) {
     if (!core::isValidUtf8(utf8Content) || !std::isfinite(layout.lineHeight) ||
         layout.lineHeight <= 0.0 || !std::isfinite(layout.letterSpacing) ||
         layout.alignment > TextAlignment::Right) {
         return ImageResult<TextCoverageBitmap>::failure(
             codeError(ImageErrorCode::InvalidParameter));
     }
-    if (!detail::embeddedFontIsParsed()) {
+    if (!detail::embeddedFontIsParsed(face)) {
         return ImageResult<TextCoverageBitmap>::failure(codeError(ImageErrorCode::InvalidState));
     }
 
-    const auto scaleX = detail::embeddedFontScaleForEmPixelSize(parameters.horizontalPixelSize());
-    const auto scaleY = detail::embeddedFontScaleForEmPixelSize(parameters.verticalPixelSize());
+    const auto scaleX =
+        detail::embeddedFontScaleForEmPixelSize(face, parameters.horizontalPixelSize());
+    const auto scaleY =
+        detail::embeddedFontScaleForEmPixelSize(face, parameters.verticalPixelSize());
     if (scaleX <= 0.0F || scaleY <= 0.0F) {
         return ImageResult<TextCoverageBitmap>::failure(
             codeError(ImageErrorCode::InvalidParameter));
@@ -97,7 +100,7 @@ ImageResult<TextCoverageBitmap> TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
     // is spent on the horizontal pen position only: a per-glyph vertical sub-pixel shift would make
     // the same string rasterize differently depending on where the line happened to start, which is
     // the opposite of what a reproducible reference path needs.
-    const auto vertical = detail::embeddedFontVerticalMetrics();
+    const auto vertical = detail::embeddedFontVerticalMetrics(face);
     const auto baselineRow = static_cast<std::int64_t>(
         std::lround(static_cast<double>(vertical.ascent) * static_cast<double>(scaleY)));
     if (!withinCoordinateBound(baselineRow)) {
@@ -123,16 +126,16 @@ ImageResult<TextCoverageBitmap> TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
         }
         if (layout.multiline && scalar.value == U'\r')
             continue;
-        const auto glyph = detail::embeddedFontGlyphIndex(scalar.value);
+        const auto glyph = detail::embeddedFontGlyphIndex(face, scalar.value);
         auto& width = lineWidths.back();
         if (measurePrevious >= 0)
-            width +=
-                static_cast<double>(detail::embeddedFontGlyphKernAdvance(measurePrevious, glyph)) *
-                    static_cast<double>(scaleX) +
-                layout.letterSpacing;
-        width +=
-            static_cast<double>(detail::embeddedFontGlyphHorizontalMetrics(glyph).advanceWidth) *
-            static_cast<double>(scaleX);
+            width += static_cast<double>(
+                         detail::embeddedFontGlyphKernAdvance(face, measurePrevious, glyph)) *
+                         static_cast<double>(scaleX) +
+                     layout.letterSpacing;
+        width += static_cast<double>(
+                     detail::embeddedFontGlyphHorizontalMetrics(face, glyph).advanceWidth) *
+                 static_cast<double>(scaleX);
         if (!std::isfinite(width) || std::abs(width) > static_cast<double>(kCoordinateBound))
             return ImageResult<TextCoverageBitmap>::failure(
                 codeError(ImageErrorCode::ArithmeticOverflow));
@@ -175,10 +178,11 @@ ImageResult<TextCoverageBitmap> TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
         }
         if (layout.multiline && scalar.value == U'\r')
             continue;
-        const auto glyph = detail::embeddedFontGlyphIndex(scalar.value);
+        const auto glyph = detail::embeddedFontGlyphIndex(face, scalar.value);
         if (previousGlyph >= 0) {
             pen += layout.letterSpacing;
-            pen += static_cast<double>(detail::embeddedFontGlyphKernAdvance(previousGlyph, glyph)) *
+            pen += static_cast<double>(
+                       detail::embeddedFontGlyphKernAdvance(face, previousGlyph, glyph)) *
                    static_cast<double>(scaleX);
         }
         if (!std::isfinite(pen) ||
@@ -190,7 +194,7 @@ ImageResult<TextCoverageBitmap> TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
         const auto penColumn = static_cast<std::int64_t>(std::floor(pen));
         const auto shiftX = static_cast<float>(pen - static_cast<double>(penColumn));
         const GlyphBitmapBox box =
-            detail::embeddedFontGlyphBitmapBox(glyph, scaleX, scaleY, shiftX, 0.0F);
+            detail::embeddedFontGlyphBitmapBox(face, glyph, scaleX, scaleY, shiftX, 0.0F);
         if (box.right > box.left && box.bottom > box.top) {
             const auto left = penColumn + static_cast<std::int64_t>(box.left);
             const auto top = lineRow + baselineRow + static_cast<std::int64_t>(box.top);
@@ -209,7 +213,8 @@ ImageResult<TextCoverageBitmap> TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
             maximumBottom = std::max(maximumBottom, bottom);
         }
 
-        pen += static_cast<double>(detail::embeddedFontGlyphHorizontalMetrics(glyph).advanceWidth) *
+        pen += static_cast<double>(
+                   detail::embeddedFontGlyphHorizontalMetrics(face, glyph).advanceWidth) *
                static_cast<double>(scaleX);
         previousGlyph = glyph;
     }
@@ -252,7 +257,7 @@ ImageResult<TextCoverageBitmap> TextCoverageBitmap::rasterizeEmbeddedDejaVuSans(
             return ImageResult<TextCoverageBitmap>::failure(
                 ImageError::allocationFailure(glyphBytes));
         }
-        detail::embeddedFontRasterizeGlyph(glyphCoverage, placement.width, placement.height,
+        detail::embeddedFontRasterizeGlyph(face, glyphCoverage, placement.width, placement.height,
                                            placement.width, scaleX, scaleY, placement.shiftX, 0.0F,
                                            placement.glyph);
 

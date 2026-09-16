@@ -2,9 +2,11 @@
 
 #include <bloom/render/embedded_fonts.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 
 // The ONE translation unit in this repository that instantiates stb_truetype. Everything in this
 // file exists to keep that instantiation here:
@@ -33,104 +35,127 @@ namespace bloom::render::detail {
 namespace {
 
 struct ParsedFont final {
+    std::once_flag once;
     stbtt_fontinfo info{};
     bool parsed = false;
 };
 
-// Parsed once, on first use, from the embedded constant. Function-local static initialization is
-// thread-safe, and nothing mutates `info` afterwards, so concurrent readers on task threads are
-// safe (this face is glyf-outlined, and stb's glyf path copies its own working buffers).
-[[nodiscard]] const ParsedFont& parsedFont() noexcept {
-    static const ParsedFont font = [] {
-        ParsedFont result;
-        const auto bytes = embeddedDejaVuSansTrueTypeBytes();
+[[nodiscard]] constexpr std::size_t faceIndex(const EmbeddedFace face) noexcept {
+    switch (face) {
+    case EmbeddedFace::DejaVuSans:
+        return 0;
+    case EmbeddedFace::InterRegular:
+        return 1;
+    case EmbeddedFace::InterMedium:
+        return 2;
+    case EmbeddedFace::InterSemiBold:
+        return 3;
+    }
+    return 4;
+}
+
+// Each registry entry is parsed once, on first use, from its embedded constant. call_once supplies
+// the synchronization for the info and parsed flag; after it returns, readers never mutate either.
+[[nodiscard]] const ParsedFont* parsedFont(const EmbeddedFace face) noexcept {
+    const auto index = faceIndex(face);
+    if (index >= 4) {
+        return nullptr;
+    }
+    static std::array<ParsedFont, 4> fonts;
+    auto& font = fonts[index];
+    std::call_once(font.once, [&font, face] {
+        const auto bytes = embeddedFaceBytes(face);
         if (bytes.empty()) {
-            return result;
+            return;
         }
         const auto* data = bytes.data();
         const int offset = stbtt_GetFontOffsetForIndex(data, 0);
-        if (offset < 0) {
-            return result;
+        if (offset >= 0) {
+            font.parsed = stbtt_InitFont(&font.info, data, offset) != 0;
         }
-        result.parsed = stbtt_InitFont(&result.info, data, offset) != 0;
-        return result;
-    }();
-    return font;
+    });
+    return &font;
 }
 
 } // namespace
 
-bool embeddedFontIsParsed() noexcept { return parsedFont().parsed; }
+bool embeddedFontIsParsed(const EmbeddedFace face) noexcept {
+    const auto* font = parsedFont(face);
+    return font != nullptr && font->parsed;
+}
 
-float embeddedFontScaleForEmPixelSize(const double pixelSize) noexcept {
-    const auto& font = parsedFont();
-    if (!font.parsed || !std::isfinite(pixelSize) || pixelSize <= 0.0) {
+float embeddedFontScaleForEmPixelSize(const EmbeddedFace face, const double pixelSize) noexcept {
+    const auto* font = parsedFont(face);
+    if (font == nullptr || !font->parsed || !std::isfinite(pixelSize) || pixelSize <= 0.0) {
         return 0.0F;
     }
-    return stbtt_ScaleForMappingEmToPixels(&font.info, static_cast<float>(pixelSize));
+    return stbtt_ScaleForMappingEmToPixels(&font->info, static_cast<float>(pixelSize));
 }
 
-FontVerticalMetrics embeddedFontVerticalMetrics() noexcept {
-    const auto& font = parsedFont();
+FontVerticalMetrics embeddedFontVerticalMetrics(const EmbeddedFace face) noexcept {
+    const auto* font = parsedFont(face);
     FontVerticalMetrics metrics;
-    if (!font.parsed) {
+    if (font == nullptr || !font->parsed) {
         return metrics;
     }
-    stbtt_GetFontVMetrics(&font.info, &metrics.ascent, &metrics.descent, &metrics.lineGap);
+    stbtt_GetFontVMetrics(&font->info, &metrics.ascent, &metrics.descent, &metrics.lineGap);
     return metrics;
 }
 
-int embeddedFontGlyphIndex(const char32_t codepoint) noexcept {
-    const auto& font = parsedFont();
-    if (!font.parsed) {
+int embeddedFontGlyphIndex(const EmbeddedFace face, const char32_t codepoint) noexcept {
+    const auto* font = parsedFont(face);
+    if (font == nullptr || !font->parsed) {
         return 0;
     }
-    return stbtt_FindGlyphIndex(&font.info, static_cast<int>(codepoint));
+    return stbtt_FindGlyphIndex(&font->info, static_cast<int>(codepoint));
 }
 
-GlyphHorizontalMetrics embeddedFontGlyphHorizontalMetrics(const int glyph) noexcept {
-    const auto& font = parsedFont();
+GlyphHorizontalMetrics embeddedFontGlyphHorizontalMetrics(const EmbeddedFace face,
+                                                          const int glyph) noexcept {
+    const auto* font = parsedFont(face);
     GlyphHorizontalMetrics metrics;
-    if (!font.parsed) {
+    if (font == nullptr || !font->parsed) {
         return metrics;
     }
-    stbtt_GetGlyphHMetrics(&font.info, glyph, &metrics.advanceWidth, &metrics.leftSideBearing);
+    stbtt_GetGlyphHMetrics(&font->info, glyph, &metrics.advanceWidth, &metrics.leftSideBearing);
     return metrics;
 }
 
-int embeddedFontGlyphKernAdvance(const int leftGlyph, const int rightGlyph) noexcept {
-    const auto& font = parsedFont();
-    if (!font.parsed) {
+int embeddedFontGlyphKernAdvance(const EmbeddedFace face, const int leftGlyph,
+                                 const int rightGlyph) noexcept {
+    const auto* font = parsedFont(face);
+    if (font == nullptr || !font->parsed) {
         return 0;
     }
-    return stbtt_GetGlyphKernAdvance(&font.info, leftGlyph, rightGlyph);
+    return stbtt_GetGlyphKernAdvance(&font->info, leftGlyph, rightGlyph);
 }
 
-GlyphBitmapBox embeddedFontGlyphBitmapBox(const int glyph, const float scaleX, const float scaleY,
+GlyphBitmapBox embeddedFontGlyphBitmapBox(const EmbeddedFace face, const int glyph,
+                                          const float scaleX, const float scaleY,
                                           const float shiftX, const float shiftY) noexcept {
-    const auto& font = parsedFont();
+    const auto* font = parsedFont(face);
     GlyphBitmapBox box;
-    if (!font.parsed) {
+    if (font == nullptr || !font->parsed) {
         return box;
     }
-    stbtt_GetGlyphBitmapBoxSubpixel(&font.info, glyph, scaleX, scaleY, shiftX, shiftY, &box.left,
+    stbtt_GetGlyphBitmapBoxSubpixel(&font->info, glyph, scaleX, scaleY, shiftX, shiftY, &box.left,
                                     &box.top, &box.right, &box.bottom);
     return box;
 }
 
-void embeddedFontRasterizeGlyph(const std::span<std::uint8_t> output, const int width,
-                                const int height, const int strideBytes, const float scaleX,
-                                const float scaleY, const float shiftX, const float shiftY,
-                                const int glyph) noexcept {
-    const auto& font = parsedFont();
-    if (!font.parsed || width <= 0 || height <= 0 || strideBytes < width) {
+void embeddedFontRasterizeGlyph(const EmbeddedFace face, const std::span<std::uint8_t> output,
+                                const int width, const int height, const int strideBytes,
+                                const float scaleX, const float scaleY, const float shiftX,
+                                const float shiftY, const int glyph) noexcept {
+    const auto* font = parsedFont(face);
+    if (font == nullptr || !font->parsed || width <= 0 || height <= 0 || strideBytes < width) {
         return;
     }
     const auto required = static_cast<std::size_t>(strideBytes) * static_cast<std::size_t>(height);
     if (output.size() < required) {
         return;
     }
-    stbtt_MakeGlyphBitmapSubpixel(&font.info, output.data(), width, height, strideBytes, scaleX,
+    stbtt_MakeGlyphBitmapSubpixel(&font->info, output.data(), width, height, strideBytes, scaleX,
                                   scaleY, shiftX, shiftY, glyph);
 }
 

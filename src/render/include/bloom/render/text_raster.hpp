@@ -1,6 +1,7 @@
 #ifndef BLOOM_RENDER_TEXT_RASTER_HPP
 #define BLOOM_RENDER_TEXT_RASTER_HPP
 
+#include <bloom/render/embedded_fonts.hpp>
 #include <bloom/render/image_types.hpp>
 
 #include <cstddef>
@@ -79,15 +80,16 @@ class TextCoverageBitmap final {
     // whose glyphs are all blank (a run of spaces). Never an error.
     [[nodiscard]] static TextCoverageBitmap empty() noexcept { return {}; }
 
-    // Rasterizes `utf8Content` with the single embedded DejaVu Sans face
-    // (bloom/render/embedded_fonts.hpp). Fails with InvalidParameter for content that is not
-    // well-formed UTF-8, InvalidState if the embedded font does not parse (a build-integrity
+    // Rasterizes `utf8Content` with the selected embedded face (bloom/render/embedded_fonts.hpp).
+    // Fails with InvalidParameter for content that is not well-formed UTF-8, InvalidState if the
+    // embedded font does not parse (a build-integrity
     // failure), ArithmeticOverflow if the line's extent cannot be represented, and
     // PixelStorageBudgetExceeded if the coverage bitmap would need more than `coverageByteLimit`
     // bytes -- checked from the computed extent BEFORE any storage is allocated or any glyph drawn.
     [[nodiscard]] static ImageResult<TextCoverageBitmap>
-    rasterizeEmbeddedDejaVuSans(std::string_view utf8Content, TextRasterParameters parameters,
-                                std::size_t coverageByteLimit, TextLayoutOptions layout = {});
+    rasterizeEmbeddedText(EmbeddedFace face, std::string_view utf8Content,
+                          TextRasterParameters parameters, std::size_t coverageByteLimit,
+                          TextLayoutOptions layout = {});
 
     [[nodiscard]] bool hasCoverage() const noexcept { return !coverage_.empty(); }
     [[nodiscard]] std::int64_t originX() const noexcept { return originX_; }

@@ -51,6 +51,9 @@ Copyright 2016 The Inter Project Authors (<https://rsms.me/inter/>). Licensed un
 SIL Open Font License 1.1; complete text: `src/ui/kit/third_party/inter/LICENSE`.
 Bloom bundles unmodified Regular, Medium and SemiBold static TTFs from release `v4.1`.
 The manifest and provenance beside the files record computed archive and file digests.
+The render module embeds those same three vendored TTFs at configure time for its Qt-free CPU text
+rasterizer; it does not read font files at runtime or use Qt's font database. The embedded payloads
+are guarded by per-face byte-count assertions in `src/render/CMakeLists.txt`.
 
 ### Geist Mono
 

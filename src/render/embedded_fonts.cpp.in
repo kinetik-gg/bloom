@@ -1,8 +1,7 @@
-// GENERATED FILE -- produced by src/render/CMakeLists.txt at CMake configure time from
-// src/ui/kit/third_party/dejavu-sans/DejaVuSans.ttf. Do not edit; the source of truth is the
-// checked-in, digest-recorded asset (src/ui/kit/third_party/dejavu-sans/provenance.md). It lives
-// under the build tree, never the source tree, and is the only translation unit of the
-// bloom_render_fonts object library.
+// GENERATED FILE -- produced by src/render/CMakeLists.txt at CMake configure time from the
+// checked-in, digest-recorded face assets. Do not edit; the source of truth is the vendored files
+// and their provenance records. This lives under the build tree, never the source tree, and is the
+// only translation unit of the bloom_render_fonts object library.
 
 #include <bloom/render/embedded_fonts.hpp>
 
@@ -10,17 +9,41 @@ namespace bloom::render {
 namespace {
 
 constexpr std::uint8_t kDejaVuSansTrueTypeBytes[] = {
-@BLOOM_DEJAVU_SANS_PAYLOAD_BYTES@
+@BLOOM_DEJAVUSANS_PAYLOAD_BYTES@
+};
+constexpr std::uint8_t kInterRegularTrueTypeBytes[] = {
+@BLOOM_INTERREGULAR_PAYLOAD_BYTES@
+};
+constexpr std::uint8_t kInterMediumTrueTypeBytes[] = {
+@BLOOM_INTERMEDIUM_PAYLOAD_BYTES@
+};
+constexpr std::uint8_t kInterSemiBoldTrueTypeBytes[] = {
+@BLOOM_INTERSEMIBOLD_PAYLOAD_BYTES@
 };
 
-static_assert(sizeof(kDejaVuSansTrueTypeBytes) == @BLOOM_DEJAVU_SANS_BYTE_COUNT@,
+static_assert(sizeof(kDejaVuSansTrueTypeBytes) == @BLOOM_DEJAVUSANS_BYTE_COUNT@,
               "the embedded DejaVu Sans payload lost bytes between CMake and the compiler");
+static_assert(sizeof(kInterRegularTrueTypeBytes) == @BLOOM_INTERREGULAR_BYTE_COUNT@,
+              "the embedded Inter Regular payload lost bytes between CMake and the compiler");
+static_assert(sizeof(kInterMediumTrueTypeBytes) == @BLOOM_INTERMEDIUM_BYTE_COUNT@,
+              "the embedded Inter Medium payload lost bytes between CMake and the compiler");
+static_assert(sizeof(kInterSemiBoldTrueTypeBytes) == @BLOOM_INTERSEMIBOLD_BYTE_COUNT@,
+              "the embedded Inter SemiBold payload lost bytes between CMake and the compiler");
 
 } // namespace
 
-std::span<const std::uint8_t> embeddedDejaVuSansTrueTypeBytes() noexcept {
-    return std::span<const std::uint8_t>(kDejaVuSansTrueTypeBytes,
-                                         sizeof(kDejaVuSansTrueTypeBytes));
+std::span<const std::uint8_t> embeddedFaceBytes(const EmbeddedFace face) noexcept {
+    switch (face) {
+    case EmbeddedFace::DejaVuSans:
+        return {kDejaVuSansTrueTypeBytes, sizeof(kDejaVuSansTrueTypeBytes)};
+    case EmbeddedFace::InterRegular:
+        return {kInterRegularTrueTypeBytes, sizeof(kInterRegularTrueTypeBytes)};
+    case EmbeddedFace::InterMedium:
+        return {kInterMediumTrueTypeBytes, sizeof(kInterMediumTrueTypeBytes)};
+    case EmbeddedFace::InterSemiBold:
+        return {kInterSemiBoldTrueTypeBytes, sizeof(kInterSemiBoldTrueTypeBytes)};
+    }
+    return {};
 }
 
 } // namespace bloom::render
