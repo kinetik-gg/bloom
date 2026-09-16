@@ -121,7 +121,10 @@ void parenting() {
     for (const auto* name : {"Grandparent", "Parent", "Child", "Sibling"}) {
         if (!session.addSolidLayer(QString::fromLatin1(name), {1, 0, 0, 1}))
             throw std::logic_error("parenting layer fixture");
-        layers.push_back(*session.selection().contextualLayer);
+        const auto selected = session.selection().contextualLayer;
+        if (!selected)
+            throw std::logic_error("parenting layer selection fixture");
+        layers.push_back(*selected);
     }
     expect(session.setLayerParent(layers[1], layers[0]) &&
                session.setLayerParent(layers[2], layers[1]),

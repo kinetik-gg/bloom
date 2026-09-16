@@ -818,6 +818,15 @@ void testLayerParenting(ExpectationContext& expectations) {
                         "unknown or foreign parent rejected");
     child->parent.reset();
     expectations.expect(graph.validate(composition->parameters()).ok(), "no parent remains valid");
+    expectations.expect(graph.eraseEdge(id<EdgeId>(52)) &&
+                            graph.addEdge({id<EdgeId>(1000),
+                                           {child->nodeId, "image"},
+                                           NodeInputRef{parent->nodeId, "image"}}),
+                        "parent image can consume the child before a parent link exists");
+    child->parent = parent->layerId;
+    expectations.expect(
+        hasIssue(graph.validate(composition->parameters()), ValidationCode::GraphCycle),
+        "combined parent and image dependency cycle is refused before publication");
 }
 
 } // namespace

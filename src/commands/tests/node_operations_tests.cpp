@@ -464,7 +464,10 @@ void testDissolveParticipatingLayer(TestContext& test) {
         throw std::logic_error("connect participating layer input");
     const auto slotsBefore =
         composition(fixture.document.snapshot()).graph().layerStack().entries().size();
+    (void)apply<SetLayerParent>(fixture, kSecondLayerId, kFirstLayerId);
     exercise<DissolveNode>(test, fixture, kFirstLayerNodeId);
+    test.expect(!composition(fixture.document.snapshot()).graph().findLayer(kSecondLayerId)->parent,
+                "dissolving a parent clears child links and restores them on undo");
     const auto& after = composition(fixture.document.snapshot());
     test.expect(after.graph().findNode(kFirstLayerNodeId) == nullptr &&
                     after.graph().layerStack().entries().size() == slotsBefore - 1 &&
@@ -870,6 +873,13 @@ void testNodeGroups(TestContext& test) {
 }
 
 void testParentCommands(TestContext& test) {
+    Fixture mixed;
+    test.expect(apply<ConnectPorts>(mixed, OutputPortRef{kFirstLayerNodeId, "image"},
+                                    InputPortRef{NodeInputRef{kSecondLayerNodeId, "image"}})
+                    .changed(),
+                "mixed cycle fixture");
+    refuse<SetLayerParent>(test, mixed, OperationIssueCode::GraphCycle, kFirstLayerId,
+                           kSecondLayerId);
     Fixture fixture;
     const auto parent = [&] {
         return composition(fixture.document.snapshot()).graph().findLayer(kFirstLayerId)->parent;

@@ -51,7 +51,12 @@ OperationResult SetLayerParent::apply(document::Draft& draft) const {
     }
     if (layer->parent == parent_)
         return OperationResult::noChange();
+    const auto previous = layer->parent;
     layer->parent = parent_;
+    if (const auto failure = detail::validateGraph(*composition)) {
+        layer->parent = previous;
+        return *failure;
+    }
     return OperationResult::applied();
 }
 std::string_view SetLayerRange::typeId() const noexcept { return "bloom.layer.set-range"; }

@@ -413,11 +413,16 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
     }
 
     // Parent identities are local to this composition, independently of Merge membership.
+    std::unordered_set<LayerId> checkedParentChains;
     for (const auto& boundary : layerOutputs_) {
+        if (checkedParentChains.contains(boundary.layerId))
+            continue;
         const auto path = "layerOutputs[" + std::to_string(boundary.layerId.value()) + "].parent";
         std::unordered_set<LayerId> ancestors{boundary.layerId};
         auto parent = boundary.parent;
         while (parent) {
+            if (checkedParentChains.contains(*parent))
+                break;
             const auto found = boundariesByLayer.find(*parent);
             if (found == boundariesByLayer.end()) {
                 result.add(ValidationCode::MissingReference, path,
@@ -431,6 +436,7 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
             }
             parent = found->second->parent;
         }
+        checkedParentChains.insert(ancestors.begin(), ancestors.end());
     }
 
     std::unordered_set<EdgeId> edgeIds;
@@ -439,6 +445,18 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
     std::unordered_map<NodeId, std::size_t> indegree;
     for (const auto& node : nodes_) {
         indegree.try_emplace(node.id, 0);
+    }
+
+    // Transform dependencies share the image/driver evaluation order. A mixed cycle is no more
+    // evaluable than a parent-only cycle, even when each relation is acyclic by itself.
+    for (const auto& boundary : layerOutputs_) {
+        const auto parent =
+            boundary.parent ? boundariesByLayer.find(*boundary.parent) : boundariesByLayer.end();
+        if (parent != boundariesByLayer.end() && indegree.contains(boundary.nodeId) &&
+            indegree.contains(parent->second->nodeId)) {
+            adjacency[parent->second->nodeId].push_back(boundary.nodeId);
+            ++indegree[boundary.nodeId];
+        }
     }
 
     for (const auto& edge : edges_) {
