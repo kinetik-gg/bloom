@@ -22,6 +22,7 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/painting.hpp>
+#include <bloom/ui/kit/split_handle.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <bloom/commands/operations.hpp>
@@ -62,6 +63,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <utility>
@@ -1547,12 +1549,31 @@ void TimelineLaneRegion::wheelEvent(QWheelEvent* event) {
 
 // ---------------------------------------------------------------------------------------------
 
+// task TL-FIX2. The property-row hierarchy's depth-1 (group) indent: a spacer width
+// TimelinePropertyRow inserts before its own KPropertyRow (see timeline_property_rows.cpp's
+// propertyRowIndent(), which adds one more Spacing::M step per depth beyond this). Chosen so that
+// once KPropertyRow's own leading-indicator layout (RowPadding, its ToggleCell-wide indicator, and
+// the XXS gap the property row's spacing puts before the label) is added on top, a depth-1 label
+// lands EXACTLY one Spacing::M step to the right of where the layer row's own name text starts --
+// so the full depth series (layer, group, parameter, component) indents by one consistent step
+// throughout, not just from group onward.
 int TimelineEditor::propertyNameIndent() {
-    return kNameCellX + kit::px(kit::Spacing::S) + kCellGap + kit::px(kit::Size::IconMedium) +
-           kit::px(kit::Spacing::L);
+    constexpr int kLayerNameX = kit::px(kit::Spacing::RowPadding) + kNameCellX +
+                                kit::px(kit::Spacing::XS) + kit::px(kit::Size::ToggleCell);
+    constexpr int kPropertyRowIndicatorPrefix = kit::px(kit::Spacing::RowPadding) +
+                                                kit::px(kit::Size::ToggleCell) +
+                                                kit::px(kit::Spacing::XXS);
+    return kLayerNameX + kit::px(kit::Spacing::M) - kPropertyRowIndicatorPrefix;
 }
 
 int TimelineEditor::layerColumnWidth() { return kLayerColumnWidthPx; }
+
+// task TL-FIX2: the floor a dragged split can shrink the layer table to -- the same four toggle
+// cells, the name column at its own documented minimum, and both 100px dropdown columns, still all
+// visible. Below this the table would have to start hiding columns, which dragging never does.
+int TimelineEditor::minLayerColumnWidth() const noexcept {
+    return kToggleColumnWidth + kNameCellMinWidth + 2 * kColumnWidth;
+}
 
 TimelineEditor::TimelineEditor(CompositionSession& session,
                                CompositionPreviewController& previewController, QWidget* parent)
@@ -1566,7 +1587,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     layout->setSpacing(0);
 
     createHeaderMenus();
-    chrome_.splitPosition = [] { return layerColumnWidth(); };
+    chrome_.splitPosition = [this] { return layerColumnWidth_; };
     chrome_.hosted = [this] {
         headerFallback_->hide();
         for (auto* action : actions())
@@ -1619,6 +1640,13 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     const QSettings settings;
     keyframesVisible_ = settings.value(QStringLiteral("timeline/keyframes-visible"), true).toBool();
     snapping_ = settings.value(QStringLiteral("timeline/snapping"), true).toBool();
+    // task TL-FIX2: the layer-table/lanes split, persisted the same way -- read once here, applied
+    // through the exact setter the drag handle uses, default the shipped width. Only min-clamped
+    // here: this widget has no real width() yet, so the "leave PanelMinWidth for the lanes" ceiling
+    // waits for showEvent(), where the panel's actual geometry is known.
+    layerColumnWidth_ = std::max(
+        minLayerColumnWidth(),
+        settings.value(QStringLiteral("timeline/layer-column-width"), layerColumnWidth()).toInt());
     keyframesVisibleButton_ =
         addHeaderToggle(QStringLiteral("timelineKeyframesVisibleButton"), tr("Show keyframes"),
                         kit::IconId::Keyframe, keyframesVisible_, true);
@@ -1653,10 +1681,10 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
                                                  this);
     chrome_.headerCanvas = headerRight_;
     headerFallback_ =
-        EditorArea::buildSplitChrome(headerMenus_, headerRight_, kLayerColumnWidthPx, this);
+        EditorArea::buildSplitChrome(headerMenus_, headerRight_, layerColumnWidth_, this);
     auto* transportRow = EditorArea::buildCanvasChrome(
         {"timelineNavigatorRow", "timelineNavigatorScrollGutter", nullptr,
-         new TimelineNavigator(*ruler_, this), kScrollGutterWidth, kLayerColumnWidthPx,
+         new TimelineNavigator(*ruler_, this), kScrollGutterWidth, layerColumnWidth_,
          "timelineNavigatorLeftCell"},
         this);
 
@@ -1678,7 +1706,10 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     rulerGutter->setObjectName("timelineRulerScrollGutter");
     rulerGutter->setFixedWidth(kScrollGutterWidth);
     columnHeaderLayout->addWidget(columnHeaders_);
-    columnHeaderLayout->addSpacing(kit::px(kit::Size::TimelineSeparator));
+    // task TL-FIX2: SplitHandle, matching the body divider below so the column headings' own
+    // divider continues it in one straight line rather than jogging at the body's taller,
+    // draggable handle.
+    columnHeaderLayout->addSpacing(kit::px(kit::Size::SplitHandle));
     columnHeaderLayout->addWidget(columnLanes, 1);
     columnHeaderLayout->addWidget(rulerGutter);
 
@@ -1689,6 +1720,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     bodyLayout->setContentsMargins(0, 0, 0, 0);
     bodyLayout->setSpacing(0);
     stack_ = new TimelineLayerStack(session_, *scrollBar_, body);
+    stack_->setMinimumWidth(layerColumnWidth_);
+    columnHeaders_->setMinimumWidth(layerColumnWidth_);
     lanes_ = new TimelineLaneRegion(session_, *ruler_, *scrollBar_, body);
     lanes_->setKeyframesVisible(keyframesVisible_);
     lanes_->setSnappingEnabled(snapping_);
@@ -1730,8 +1763,23 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     // stylesheet's hover growth happens INSIDE the reserved width and the lane region's own width
     // -- and therefore the time axis -- never moves under the pointer.
     gutterLayout->addWidget(scrollBar_, 0, Qt::AlignRight);
+    // task TL-FIX2: the layer-table/lanes divider becomes a drag handle here, in the one place
+    // both halves of the row grid actually meet -- see the class comment on TimelineLayerStack for
+    // why this stays two widgets rather than a QSplitter's own children.
+    splitHandle_ = new kit::KSplitHandle(Qt::Horizontal, body);
+    splitHandle_->setObjectName("timelineLayerColumnSplitHandle");
+    splitHandle_->setAccessibleName(tr("Resize the layer table"));
+    connect(splitHandle_, &kit::KSplitHandle::dragStarted, this,
+            [this] { dragStartColumnWidth_ = layerColumnWidth_; });
+    connect(splitHandle_, &kit::KSplitHandle::dragged, this, [this](const int delta) {
+        setLayerColumnWidth(dragStartColumnWidth_ + delta, /*persist=*/false);
+    });
+    connect(splitHandle_, &kit::KSplitHandle::dragFinished, this,
+            [this] { setLayerColumnWidth(layerColumnWidth_, /*persist=*/true); });
+    connect(splitHandle_, &kit::KSplitHandle::resetRequested, this,
+            [this] { setLayerColumnWidth(layerColumnWidth(), /*persist=*/true); });
     bodyLayout->addWidget(stack_);
-    bodyLayout->addSpacing(kit::px(kit::Size::TimelineSeparator));
+    bodyLayout->addWidget(splitHandle_);
     bodyLayout->addWidget(lanes_, 1);
     bodyLayout->addWidget(bodyGutter);
 
@@ -1763,6 +1811,32 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
 
     rebuild();
     updateHistoryActions();
+}
+
+// task TL-FIX2. The one place that ever assigns layerColumnWidth_, so every caller -- a live drag
+// frame, a completed drag, a reset, and the showEvent() re-clamp -- goes through the same clamp and
+// the same set of widgets, and can never leave one of them stale. The maximum (leave
+// Size::PanelMinWidth for the lanes) only applies once this widget's own width() is meaningful;
+// before the first show it is still 0, and the constructor's own load only floors against
+// minLayerColumnWidth() for exactly that reason.
+void TimelineEditor::setLayerColumnWidth(const int width, const bool persist) {
+    const int minWidth = minLayerColumnWidth();
+    const int maxWidth = this->width() > 0
+                             ? std::max(minWidth, this->width() - kit::px(kit::Size::PanelMinWidth))
+                             : std::numeric_limits<int>::max();
+    layerColumnWidth_ = std::clamp(width, minWidth, maxWidth);
+    stack_->setMinimumWidth(layerColumnWidth_);
+    columnHeaders_->setMinimumWidth(layerColumnWidth_);
+    if (chrome_.refreshSplit)
+        chrome_.refreshSplit();
+    if (auto* fallbackSplit = findChild<QWidget*>("timelineHeaderFallbackSplit"))
+        fallbackSplit->setFixedWidth(layerColumnWidth_);
+    if (auto* navigatorCell = findChild<QWidget*>("timelineNavigatorLeftCell"))
+        navigatorCell->setFixedWidth(layerColumnWidth_);
+    if (persist) {
+        QSettings settings;
+        settings.setValue(QStringLiteral("timeline/layer-column-width"), layerColumnWidth_);
+    }
 }
 
 void TimelineEditor::rebuild() {

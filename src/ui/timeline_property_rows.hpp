@@ -5,6 +5,7 @@
 #include <functional>
 
 class QLabel;
+class QSpacerItem;
 namespace bloom::ui {
 class KeyframeDiamond;
 namespace kit {
@@ -40,12 +41,14 @@ class TimelinePropertyRow final : public QWidget {
     CompositionSession& session_;
     TimelineLayerEntry entry_;
     QLabel* label_;
+    // task TL-FIX2: the row's OWN single diamond -- the aggregate tri-state diamond on a parameter
+    // row, or (bound with entry.component set) that one component's diamond on an expanded
+    // component row. There is never a second diamond in a value cell any more; see bind().
     KeyframeDiamond* diamond_;
     // Four colour channels, or the first two/three cells for a vector.
     std::array<kit::KValueField*, 4> fields_{};
     std::array<QWidget*, 4> cells_{};
     std::array<QLabel*, 4> components_{};
-    std::array<KeyframeDiamond*, 4> componentDiamonds_{};
     kit::KDropdown* blending_;
     kit::KDropdown* alignment_;
     kit::KColorChip* color_;
@@ -55,6 +58,10 @@ class TimelinePropertyRow final : public QWidget {
     kit::KButton* driverLink_ = nullptr;
     kit::KLabel* drivenValue_ = nullptr;
     kit::KIconButton* disclosure_ = nullptr;
+    // task TL-FIX2: the depth-driven indent before the row's own KPropertyRow -- see bind() and
+    // propertyRowIndent() in timeline_editor.cpp for the step and the label-width compensation that
+    // keeps every value column aligned regardless of depth.
+    QSpacerItem* indent_ = nullptr;
     bool binding_ = false;
 };
 } // namespace bloom::ui

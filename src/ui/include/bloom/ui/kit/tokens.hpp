@@ -216,6 +216,10 @@ enum class Size : int {
     TimelineColumn = 100,
     TimelineWorkArea = 10,
     TimelineSeparator = 2,
+    // task TL-FIX2: the layer-table/lanes divider's draggable hit zone -- wider than the hairline
+    // TimelineSeparator it replaces there, so the handle is easy to grab without widening the
+    // painted line itself. KSplitHandle paints a TimelineSeparator-width line centered in it.
+    SplitHandle = 6,
     TimelineChromeGutter = 32,
     TimelineWorkAreaHandle = 6,
     TimelineNavigatorThumb = 6,

@@ -68,6 +68,11 @@ struct EditorChromeSpec {
     EditorChromeRowSpec footer;
     QWidget* headerCanvas = nullptr;
     std::function<int()> splitPosition;
+    // task TL-FIX2: EditorArea fixes headerLeft_'s width to splitPosition() once, at rebuild time
+    // (see EditorArea::rebuildEditor()). A provider whose split moves later -- the timeline's
+    // draggable layer-table/lanes divider -- calls this (populated by EditorArea alongside
+    // headerCanvas) to re-apply the current splitPosition() without a full rebuild.
+    std::function<void()> refreshSplit;
     std::function<void()> hosted;
 };
 class EditorChromeProvider {

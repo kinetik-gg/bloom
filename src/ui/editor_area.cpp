@@ -449,10 +449,23 @@ void EditorArea::rebuildEditor(int editorIndex) {
             headerRight_ = spec.headerCanvas;
             headerRight_->setParent(header_);
             headerLeft_->setFixedWidth(spec.splitPosition());
+            // task TL-FIX2: the provider (the timeline) calls this after its own split moves --
+            // dragging the layer-table/lanes divider -- so headerLeft_ tracks it without a full
+            // rebuild. Captured by pointer/value, not by reference to `spec`: `spec` is a local
+            // reference to the provider's own live EditorChromeSpec, so the closure re-reads
+            // splitPosition() through the provider itself every time it runs, the same one that
+            // just moved.
+            spec.refreshSplit = [this, provider] {
+                if (headerLeft_)
+                    headerLeft_->setFixedWidth(provider->editorChrome().splitPosition());
+            };
             headerLayout_->setStretch(2, 0);
             const int inset = static_cast<int>(kit::kHairlineWidth);
             headerCellsLayout_->setContentsMargins(inset, 0, inset, 0);
-            headerCellsLayout_->addSpacing(kit::px(kit::Size::TimelineSeparator));
+            // task TL-FIX2: SplitHandle, not the hairline TimelineSeparator -- this gap continues
+            // the SAME divider the timeline's body widens into a draggable handle (see
+            // timeline_editor.cpp), and the ruler above must stay flush with the lanes below it.
+            headerCellsLayout_->addSpacing(kit::px(kit::Size::SplitHandle));
             headerCellsLayout_->addWidget(headerRight_, 1);
             headerLayout_->removeWidget(maximizeButton_);
             auto* gutter =

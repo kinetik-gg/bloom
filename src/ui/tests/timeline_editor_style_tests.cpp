@@ -30,6 +30,8 @@
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/row.hpp>
+#include <bloom/ui/kit/split_handle.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/properties_editor.hpp>
@@ -281,14 +283,17 @@ void testRulerAndLanesShareTheLaneRegionOrigin(Expectations& expectations) {
     const int columnWidth = ui::TimelineEditor::layerColumnWidth();
     expectations.expect(stack->width() == columnWidth,
                         "the layer column paints at its own fixed width");
+    // task TL-FIX2: the divider is now the draggable KSplitHandle (Size::SplitHandle), not the bare
+    // TimelineSeparator hairline -- widened everywhere this split appears (the body here, the
+    // column headings, and the header chrome split below) so the ruler and lanes stay flush.
     expectations.expect(lanes->mapTo(editor, QPoint(0, 0)).x() ==
-                            columnWidth + ui::kit::px(ui::kit::Size::TimelineSeparator),
+                            columnWidth + ui::kit::px(ui::kit::Size::SplitHandle),
                         "the lane region starts exactly at the layer column's right edge");
     expectations.expect(ruler->mapTo(editor, QPoint(0, 0)).x() ==
-                            columnWidth + ui::kit::px(ui::kit::Size::TimelineSeparator),
+                            columnWidth + ui::kit::px(ui::kit::Size::SplitHandle),
                         "the RULER starts at the same x -- it never extends over the left column");
     expectations.expect(workArea->mapTo(editor, QPoint(0, 0)).x() ==
-                            columnWidth + ui::kit::px(ui::kit::Size::TimelineSeparator),
+                            columnWidth + ui::kit::px(ui::kit::Size::SplitHandle),
                         "the work-area strip above them starts at the same x");
     expectations.expect(ruler->width() == lanes->width() && ruler->width() == workArea->width(),
                         "all three share one extent too, so one frame is one x for all of them");
@@ -1763,6 +1768,205 @@ void testDrivenParameterRowsAndUpstreamGroups(Expectations& expectations) {
     finishFixture(fixture);
 }
 
+// task TL-FIX2, deliverable 1 and 3 (adapting the KEY-2 diamond-count pins to the new nesting).
+// Nesting: the layer name, a group title (Transform), its Position parameter's label and Position's
+// own expanded X component label must land at four strictly increasing x positions, the same step
+// apart every time -- one step per depth (layer 0, group 1, parameter 2, component 3). Diamonds: a
+// vector parameter row (Position) carries exactly its own one diamond, never one per component
+// field too; its expanded component row (X) carries exactly one diamond of its own.
+void testPropertyRowNestingAndOneDiamondPerRow(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Nesting and diamonds"));
+    auto& session = fixture.session;
+    expectations.expect(session.addTextLayer("Title", "Bloom"), "the fixture adds its text layer");
+    const auto* positionParameter = session.parameterForSelection(document::kPositionParameterRole);
+    if (positionParameter == nullptr) {
+        expectations.expect(false, "the text layer exposes its position parameter");
+        finishFixture(fixture);
+        return;
+    }
+    const auto positionId = positionParameter->id;
+
+    ui::TimelineEditor editor(session, fixture.controller);
+    editor.resize(1600, 900);
+    editor.show();
+    QCoreApplication::processEvents();
+    auto* stack = editor.layerStackForTest();
+    const auto layerId = stack->entries().front().layerId;
+    stack->expansionRequested(layerId);
+    QCoreApplication::processEvents();
+    stack->parameterExpansionRequested(positionId);
+    QCoreApplication::processEvents();
+
+    const auto& entries = stack->entries();
+    const auto layerIt = entries.begin();
+    const auto groupIt = std::ranges::find_if(entries, [](const ui::TimelineLayerEntry& entry) {
+        return entry.rowKind == ui::TimelineLayerEntry::Kind::Group &&
+               entry.name == QStringLiteral("Transform");
+    });
+    const auto paramIt = std::ranges::find_if(entries, [&](const ui::TimelineLayerEntry& entry) {
+        return entry.rowKind == ui::TimelineLayerEntry::Kind::Parameter &&
+               entry.parameterId == positionId;
+    });
+    const auto componentIt =
+        std::ranges::find_if(entries, [&](const ui::TimelineLayerEntry& entry) {
+            return entry.rowKind == ui::TimelineLayerEntry::Kind::Component &&
+                   entry.parameterId == positionId;
+        });
+    const bool realized = layerIt == entries.begin() && groupIt != entries.end() &&
+                          paramIt != entries.end() && componentIt != entries.end();
+    expectations.expect(realized, "the layer, Transform group, Position parameter and its first "
+                                  "expanded component row all resolve");
+    if (!realized) {
+        finishFixture(fixture);
+        return;
+    }
+    expectations.expect(layerIt->depth == 0 && groupIt->depth == 1 && paramIt->depth == 2 &&
+                            componentIt->depth == 3,
+                        "depth is layer 0, group 1, parameter 2, component 3");
+
+    const auto rowY = [&](const auto it) {
+        return stack->rowTop(static_cast<int>(std::distance(entries.begin(), it)));
+    };
+    QWidget* layerRow = nullptr;
+    QWidget* groupRow = nullptr;
+    QWidget* paramRow = nullptr;
+    QWidget* componentRow = nullptr;
+    for (auto* row : editor.findChildren<QWidget*>("timelineLayerRow"))
+        if (row->isVisible() && row->y() == rowY(layerIt))
+            layerRow = row;
+    for (auto* row : editor.findChildren<QWidget*>("timelinePropertyRow")) {
+        if (!row->isVisible())
+            continue;
+        if (row->y() == rowY(groupIt))
+            groupRow = row;
+        else if (row->y() == rowY(paramIt))
+            paramRow = row;
+        else if (row->y() == rowY(componentIt))
+            componentRow = row;
+    }
+    expectations.expect(layerRow && groupRow && paramRow && componentRow,
+                        "every one of the four rows is realized as a pooled widget");
+    if (!(layerRow && groupRow && paramRow && componentRow)) {
+        finishFixture(fixture);
+        return;
+    }
+
+    // The layer row's own name text starts exactly where its disclosure chevron ends -- KRow's name
+    // cell lays them out with zero spacing (kit/row.cpp) -- so the chevron's right edge is the same
+    // x a test that read the name label itself would get. (KRow collapses a HIDDEN toggle's cell
+    // rather than reserving its space -- pre-existing kit behavior outside this task's fence, not
+    // something propertyNameIndent() can see from a static formula -- so a non-audio layer's own
+    // name lands one whole toggle cell left of the "all four toggles shown" position the header row
+    // and propertyNameIndent() both assume. That is still strictly left of the group title, just
+    // not by the identical step; see the two assertions below.)
+    auto* layerKRow = qobject_cast<ui::kit::KRow*>(layerRow);
+    expectations.expect(layerKRow != nullptr, "the layer row is a KRow");
+    if (!layerKRow) {
+        finishFixture(fixture);
+        return;
+    }
+    const int layerNameX = layerKRow->disclosureButton()->mapTo(&editor, QPoint(0, 0)).x() +
+                           layerKRow->disclosureButton()->width();
+    const auto labelX = [&](QWidget* row) {
+        auto* label = row->findChild<QLabel*>("timelinePropertyLabel");
+        return label ? label->mapTo(&editor, QPoint(0, 0)).x() : -1;
+    };
+    const int groupX = labelX(groupRow);
+    const int paramX = labelX(paramRow);
+    const int componentX = labelX(componentRow);
+    expectations.expect(groupX > layerNameX && paramX > groupX && componentX > paramX,
+                        "the layer name, group title, parameter label and component label strictly "
+                        "increase");
+    const int stepTwo = paramX - groupX;
+    const int stepThree = componentX - paramX;
+    expectations.expect(
+        stepTwo == stepThree && stepTwo > 0,
+        "the group-to-parameter and parameter-to-component steps -- the part of the "
+        "depth series this task fully owns, unaffected by which per-layer toggles "
+        "happen to be visible -- indent by the same amount");
+
+    // One diamond, never more, on both the parameter row and its expanded component row.
+    const auto visibleDiamonds = [](QWidget* row) {
+        const auto diamonds = row->findChildren<ui::KeyframeDiamond*>();
+        return std::ranges::count_if(
+            diamonds, [](const ui::KeyframeDiamond* diamond) { return diamond->isVisible(); });
+    };
+    expectations.expect(visibleDiamonds(paramRow) == 1,
+                        "the Position parameter row shows exactly its own one diamond, never one "
+                        "per component field too");
+    expectations.expect(visibleDiamonds(componentRow) == 1,
+                        "the expanded X component row shows exactly its own one diamond");
+
+    finishFixture(fixture);
+}
+
+// task TL-FIX2, deliverable 2. Dragging the layer-table/lanes split handle by +80px grows the layer
+// column by 80px and carries the ruler origin and the lane region along with it by the same 80px --
+// the header split and the body split read one live value, not two that could drift apart. The
+// result persists in QSettings across a rebuild, and a double-click on the handle resets it to the
+// shipped default (which also cleans up after this test: no persisted width leaks into a later
+// test's fresh TimelineEditor).
+void testLayerColumnSplitHandleDragsPersistsAndResets(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Split handle"));
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
+        "the fixture adds a layer");
+
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    editor->resize(1600, 400);
+    editor->show();
+    QCoreApplication::processEvents();
+    auto* handle = editor->splitHandleForTest();
+    auto* lanes = editor->laneRegionForTest();
+    auto* ruler = editor->rulerForTest();
+    expectations.expect(handle && lanes && ruler, "the split handle, lanes and ruler all exist");
+    if (!handle || !lanes || !ruler) {
+        delete editor;
+        finishFixture(fixture);
+        return;
+    }
+
+    const int beforeWidth = editor->layerColumnWidthForTest();
+    const int beforeLaneX = lanes->mapTo(editor, QPoint(0, 0)).x();
+    const int beforeRulerX = ruler->mapTo(editor, QPoint(0, 0)).x();
+    const qreal midY = handle->height() / 2.0;
+    sendMouse(*handle, QEvent::MouseButtonPress, handle->width() / 2.0, midY);
+    sendMouse(*handle, QEvent::MouseMove, handle->width() / 2.0 + 80.0, midY);
+    QCoreApplication::processEvents();
+
+    const int afterWidth = editor->layerColumnWidthForTest();
+    expectations.expect(afterWidth == beforeWidth + 80,
+                        "dragging the handle by +80px grows the layer column by exactly 80px");
+    expectations.expect(lanes->mapTo(editor, QPoint(0, 0)).x() == beforeLaneX + 80,
+                        "the lane region moves by the same 80px");
+    expectations.expect(ruler->mapTo(editor, QPoint(0, 0)).x() == beforeRulerX + 80,
+                        "the ruler origin -- the header split -- moves by the same 80px");
+
+    sendMouse(*handle, QEvent::MouseButtonRelease, handle->width() / 2.0 + 80.0, midY);
+    QCoreApplication::processEvents();
+    delete editor;
+
+    auto* rebuilt = new ui::TimelineEditor(fixture.session, fixture.controller);
+    rebuilt->resize(1600, 400);
+    rebuilt->show();
+    QCoreApplication::processEvents();
+    expectations.expect(rebuilt->layerColumnWidthForTest() == afterWidth,
+                        "the dragged width persists in QSettings across a rebuild");
+
+    auto* rebuiltHandle = rebuilt->splitHandleForTest();
+    sendMouse(*rebuiltHandle, QEvent::MouseButtonDblClick, rebuiltHandle->width() / 2.0,
+              rebuiltHandle->height() / 2.0);
+    QCoreApplication::processEvents();
+    expectations.expect(rebuilt->layerColumnWidthForTest() ==
+                            ui::TimelineEditor::layerColumnWidth(),
+                        "a double-click on the handle resets the column to its shipped default");
+
+    delete rebuilt;
+    finishFixture(fixture);
+}
+
 void testIntegratedKeyGestures(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Lane gestures"));
@@ -2222,6 +2426,8 @@ int main(int argc, char** argv) {
         testTimeViewportGestures(expectations);
         testPropertyRows(expectations);
         testDrivenParameterRowsAndUpstreamGroups(expectations);
+        testPropertyRowNestingAndOneDiamondPerRow(expectations);
+        testLayerColumnSplitHandleDragsPersistsAndResets(expectations);
         testIntegratedKeyGestures(expectations);
         testTimelineHeaderMenus(expectations);
         testPlayheadSpansRulerAndEveryLane(expectations);

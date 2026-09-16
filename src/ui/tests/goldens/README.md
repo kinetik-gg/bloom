@@ -72,3 +72,15 @@ device pixels; rotation hit regions sit outside the corners without adding persi
 Both complete captures were inspected for clear handles and unchanged panel/control layout.
 Comparison tolerances and full-image coverage are unchanged. Process/output identity goldens
 are unchanged; these controls are viewer overlays and never alter composition pixels.
+TL-FIX2 approval: both references are reapproved under Qt 6.8.3 with `--update-goldens` at DPR 1
+and 1.5 (automatic comparison against the prior references had stayed under tolerance -- the changed
+region is a real but small fraction of the full window -- so this is a deliberate re-approval of an
+intentional change, not a forced-through failure). Two fixes to the Background fixture's expanded
+timeline hierarchy: Object/Transform/Source and their parameter rows now NEST one step per depth
+(layer, group, parameter, component) instead of sitting flush with the layer row and each other, so
+Position's own X/Y rows land one step further right than Position itself, which lands one step right
+of Object/Transform. And Position -- a vector parameter -- now shows exactly its own one diamond
+instead of that diamond plus one more per component field; its expanded X and Y rows still show their
+own one diamond each, unchanged. Both full-window captures were visually inspected for the new
+staircase indent and the corrected diamond count. Comparison tolerances and full-image coverage are
+unchanged; process/output identity goldens are unchanged.
