@@ -7,6 +7,7 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
 #include <type_traits>
+#include <vector>
 
 namespace bloom::ui {
 namespace {
@@ -100,14 +101,22 @@ std::vector<commands::KeyframePaste> CompositionSession::selectedKeyframeData() 
                         for (const auto& key : component->keyframes)
                             if (key.id == address.keyframeId)
                                 result.push_back({*parameter, key.time, key.value,
-                                                  key.outgoingInterpolation, address.component});
+                                                  key.outgoingInterpolation, address.component,
+                                                  key.outgoingHandle, key.incomingHandle});
                     }
                     return;
                 }
                 for (const auto& key : curve.keyframes)
-                    if (key.id == address.keyframeId)
-                        result.push_back(
-                            {*parameter, key.time, key.value, key.outgoingInterpolation});
+                    if (key.id == address.keyframeId) {
+                        if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                            result.push_back({*parameter, key.time, key.value,
+                                              key.outgoingInterpolation, std::nullopt,
+                                              key.outgoingHandle, key.incomingHandle});
+                        } else {
+                            result.push_back(
+                                {*parameter, key.time, key.value, key.outgoingInterpolation});
+                        }
+                    }
             },
             *record);
     }
@@ -125,6 +134,88 @@ bool CompositionSession::moveKeyframes(std::vector<commands::KeyframeMove> keys,
     commands::Transaction transaction("Move Keyframes", revision);
     transaction.emplace<commands::MoveKeyframes>(compositionId_, std::move(keys));
     return execute(std::move(transaction));
+}
+bool CompositionSession::moveKeyframesAndValues(std::vector<commands::KeyframeMove> moves,
+                                                std::vector<commands::KeyframeValueEdit> values,
+                                                document::Revision revision) {
+    if (moves.empty() && values.empty())
+        return false;
+    const auto editable = [&](const document::AnimationCurveId curveId) {
+        const auto parameter = parameterForCurve(curveId);
+        return parameter.has_value() && editableParameter(*this, *parameter);
+    };
+    for (const auto& move : moves)
+        if (!editable(move.key.curveId)) {
+            reportUnavailable(tr("A keyframe target is missing or locked"));
+            return false;
+        }
+    for (const auto& value : values)
+        if (!editable(value.key.curveId)) {
+            reportUnavailable(tr("A keyframe target is missing or locked"));
+            return false;
+        }
+    commands::Transaction transaction("Move Keyframes", revision);
+    if (!moves.empty())
+        transaction.emplace<commands::MoveKeyframes>(compositionId_, std::move(moves));
+    if (!values.empty())
+        transaction.emplace<commands::SetKeyframeValues>(compositionId_, std::move(values));
+    return execute(std::move(transaction));
+}
+bool CompositionSession::setKeyframeHandles(std::vector<commands::KeyframeHandleEdit> edits,
+                                            document::Revision revision) {
+    if (edits.empty())
+        return false;
+    for (const auto& edit : edits) {
+        const auto parameter = parameterForCurve(edit.key.curveId);
+        if (!parameter || !editableParameter(*this, *parameter)) {
+            reportUnavailable(tr("A keyframe target is missing or locked"));
+            return false;
+        }
+    }
+    commands::Transaction transaction("Set Keyframe Handles", revision);
+    transaction.emplace<commands::SetKeyframeHandles>(compositionId_, std::move(edits));
+    return execute(std::move(transaction));
+}
+bool CompositionSession::resetSelectedKeyframeHandles() {
+    const auto* current = composition();
+    if (!current)
+        return false;
+    std::vector<commands::KeyframeHandleEdit> edits;
+    for (const auto& address : selection_.keyframes) {
+        const auto* record = current->animationCurves().find(address.curveId);
+        if (record == nullptr)
+            continue;
+        const auto* keyframes = std::visit(
+            [&](const auto& curve) -> const std::vector<document::ScalarKeyframe>* {
+                using Curve = std::decay_t<decltype(curve)>;
+                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                    return address.component.has_value() ? nullptr : &curve.keyframes;
+                } else {
+                    if (!address.component.has_value())
+                        return nullptr;
+                    const auto* component = curve.component(*address.component);
+                    return component == nullptr ? nullptr : &component->keyframes;
+                }
+            },
+            *record);
+        if (keyframes == nullptr)
+            continue;
+        const auto at =
+            std::ranges::find(*keyframes, address.keyframeId, &document::ScalarKeyframe::id);
+        if (at == keyframes->end())
+            continue;
+        const auto index = static_cast<std::size_t>(at - keyframes->begin());
+        commands::KeyframeHandleEdit edit{{address.curveId, address.keyframeId, address.component}};
+        if (index + 1 < keyframes->size())
+            edit.outgoing = document::KeyframeHandle{};
+        if (index > 0)
+            edit.incoming = document::KeyframeHandle{};
+        if (edit.outgoing.has_value() || edit.incoming.has_value())
+            edits.push_back(edit);
+    }
+    if (edits.empty())
+        return false;
+    return setKeyframeHandles(std::move(edits), snapshot_.revision());
 }
 bool CompositionSession::pasteKeyframes(const std::vector<commands::KeyframePaste>& keys,
                                         document::Revision revision) {

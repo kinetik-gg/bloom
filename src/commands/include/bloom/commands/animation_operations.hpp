@@ -10,6 +10,7 @@
 #include <optional>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 namespace bloom::commands {
 
@@ -386,6 +387,22 @@ struct KeyframePaste {
     std::variant<double, document::Vec2d, document::Vec3d, core::Color4d> value;
     document::KeyframeInterpolation interpolation = document::KeyframeInterpolation::Linear;
     std::optional<document::AnimationComponent> component{};
+    // Ease handles travel with a copied key, so paste and move reproduce the curve SHAPE and not
+    // only its times and values. A whole-value vector or colour paste leaves them at their defaults
+    // because such a key has no single scalar axis for a handle to offset.
+    document::KeyframeHandle outgoingHandle{};
+    document::KeyframeHandle incomingHandle{};
+};
+// One key's ease handles. An absent optional leaves that handle exactly as it is, so a gesture that
+// drags only one side does not have to restate the other.
+struct KeyframeHandleEdit {
+    KeyframeAddress key;
+    std::optional<document::KeyframeHandle> outgoing{};
+    std::optional<document::KeyframeHandle> incoming{};
+};
+struct KeyframeValueEdit {
+    KeyframeAddress key;
+    double value = 0.0;
 };
 class MoveKeyframes final : public Operation {
   public:
@@ -422,6 +439,39 @@ class SetKeyframesInterpolation final : public Operation {
     document::CompositionId composition_;
     std::vector<KeyframeAddress> keys_;
     document::KeyframeInterpolation interpolation_;
+};
+// Places one or both ease handles on addressed keys. A handle belongs to a SEGMENT, so writing one
+// forces that segment's LEFT key to Ease In-Out -- an outgoing handle is the key's own segment, an
+// incoming handle its predecessor's. The final key's outgoing handle and the first key's incoming
+// handle name no segment and are refused rather than silently dropped. Only scalar and component
+// addresses carry handles; a whole-value vector or colour address is refused for the same reason
+// the durable model gives those projections no handles.
+class SetKeyframeHandles final : public Operation {
+  public:
+    SetKeyframeHandles(document::CompositionId composition, std::vector<KeyframeHandleEdit> edits)
+        : composition_(composition), edits_(std::move(edits)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId composition_;
+    std::vector<KeyframeHandleEdit> edits_;
+};
+// Re-values addressed keys in place, preserving IDs, times and interpolation. Every value is
+// domain-checked against its parameter's OWN schema through the same predicate a constant and an
+// inserted key already use (opacity in [0, 1], text size positive and bounded, a colour alpha
+// component in [0, 1], a rotation anywhere on the real line), and the batch is all-or-nothing: one
+// refusal publishes nothing.
+class SetKeyframeValues final : public Operation {
+  public:
+    SetKeyframeValues(document::CompositionId composition, std::vector<KeyframeValueEdit> values)
+        : composition_(composition), values_(std::move(values)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId composition_;
+    std::vector<KeyframeValueEdit> values_;
 };
 class PasteKeyframes final : public Operation {
   public:

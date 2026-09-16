@@ -779,6 +779,122 @@ void testBatchKeyframeTransactions(TestContext& test) {
                 "a later paste collision rolls back earlier pasted keys");
 }
 
+void testKeyframeHandleAndValueOperations(TestContext& test) {
+    Document document(makeSourceProject());
+    CommandStack stack(document);
+    const auto execute = [&]<typename OperationType, typename... Args>(Args&&... args) {
+        Transaction transaction("Handle keys", document.snapshot().revision());
+        transaction.emplace<OperationType>(kCompositionId, std::forward<Args>(args)...);
+        return stack.execute(std::move(transaction));
+    };
+    const std::vector<KeyframePaste> seed{
+        {kOpacityId, time(0, 1), 0.25},
+        {kOpacityId, time(1, 1), 0.5},
+        {kOpacityId, time(2, 1), 0.75},
+        {kFirstPositionId, time(0, 1), document::Vec2d{3, 4}},
+        {kFirstPositionId, time(1, 1), document::Vec2d{5, 6}},
+    };
+    test.expect(execute.template operator()<PasteKeyframes>(seed).changed(),
+                "handle fixture seeds");
+    const auto seeded = document.snapshot();
+    const auto opacity = animationSource(seeded, kOpacityId);
+    const auto position = animationSource(seeded, kFirstPositionId);
+    const auto keys = scalarCurve(seeded, opacity).keyframes;
+    test.expect(keys.size() == 3, "the scalar fixture has three keys");
+    if (keys.size() != 3)
+        return;
+
+    const document::KeyframeHandle outgoing{0.25, 0.1};
+    const document::KeyframeHandle incoming{0.5, -0.1};
+    const auto beforeHandles = stack.size();
+    test.expect(execute.template operator()<SetKeyframeHandles>(
+                           std::vector<KeyframeHandleEdit>{{{opacity, keys[0].id}, outgoing, {}},
+                                                           {{opacity, keys[1].id}, {}, incoming}})
+                        .changed() &&
+                    stack.size() == beforeHandles + 1,
+                "handles on both ends of one segment are one transaction");
+    const auto shaped = document.snapshot();
+    const auto& shapedKeys = scalarCurve(shaped, opacity).keyframes;
+    test.expect(
+        shapedKeys[0].outgoingHandle == outgoing && shapedKeys[1].incomingHandle == incoming &&
+            shapedKeys[0].outgoingInterpolation == document::KeyframeInterpolation::EaseInOut,
+        "writing either handle of a segment forces that segment's LEFT key to Ease In-Out");
+    test.expect(document::isDefaultKeyframeHandle(shapedKeys[1].outgoingHandle) &&
+                    document::isDefaultKeyframeHandle(shapedKeys[2].incomingHandle),
+                "an absent optional leaves the other handle exactly as it was");
+    test.expect(stack.undo().changed() && scalarCurve(document.snapshot(), opacity).keyframes ==
+                                              scalarCurve(seeded, opacity).keyframes,
+                "one undo restores every handle, mode, id, time and value bit for bit");
+    test.expect(stack.redo().changed(), "the handle edit redoes");
+
+    const auto beforeRefusals = document.snapshot();
+    test.expect(execute.template operator()<SetKeyframeHandles>(
+                           std::vector<KeyframeHandleEdit>{{{opacity, keys[2].id}, outgoing, {}}})
+                            .status == CommandStatus::Rejected &&
+                    document.snapshot().revision() == beforeRefusals.revision(),
+                "the final key's outgoing handle names no segment and is refused");
+    test.expect(execute.template operator()<SetKeyframeHandles>(
+                           std::vector<KeyframeHandleEdit>{{{opacity, keys[0].id}, {}, incoming}})
+                        .status == CommandStatus::Rejected,
+                "the first key's incoming handle names no segment and is refused");
+    test.expect(execute
+                        .template operator()<SetKeyframeHandles>(std::vector<KeyframeHandleEdit>{
+                            {{opacity, keys[0].id}, document::KeyframeHandle{1.5, 0.0}, {}}})
+                        .status == CommandStatus::Rejected,
+                "a handle time outside [0, 1] is refused");
+    const auto vectorKey = vec2Curve(beforeRefusals, position).components[0].keyframes.front().id;
+    test.expect(execute.template operator()<SetKeyframeHandles>(
+                           std::vector<KeyframeHandleEdit>{{{position, vectorKey}, outgoing, {}}})
+                        .status == CommandStatus::Rejected,
+                "a vector address without a component names no scalar key and is refused");
+    test.expect(document.snapshot().revision() == beforeRefusals.revision(),
+                "no refusal published anything");
+
+    const auto beforeValues = stack.size();
+    test.expect(execute
+                        .template operator()<SetKeyframeValues>(std::vector<KeyframeValueEdit>{
+                            {{opacity, keys[0].id}, 0.125}, {{opacity, keys[1].id}, 0.875}})
+                        .changed() &&
+                    stack.size() == beforeValues + 1,
+                "re-valuing several keys is one transaction");
+    const auto revalued = document.snapshot();
+    const auto& revaluedKeys = scalarCurve(revalued, opacity).keyframes;
+    test.expect(revaluedKeys[0].value == 0.125 && revaluedKeys[1].value == 0.875 &&
+                    revaluedKeys[0].id == keys[0].id && revaluedKeys[0].time == keys[0].time &&
+                    revaluedKeys[0].outgoingHandle == outgoing,
+                "a value edit preserves id, exact time, interpolation and handles");
+    test.expect(execute
+                            .template operator()<SetKeyframeValues>(std::vector<KeyframeValueEdit>{
+                                {{opacity, keys[0].id}, 0.2}, {{opacity, keys[1].id}, 1.5}})
+                            .status == CommandStatus::Rejected &&
+                    scalarCurve(document.snapshot(), opacity).keyframes[0].value == 0.125,
+                "opacity's own [0, 1] domain refuses the WHOLE batch, publishing neither value");
+    test.expect(
+        execute
+                .template operator()<SetKeyframeValues>(std::vector<KeyframeValueEdit>{
+                    {{position, vectorKey, document::AnimationComponent::X}, 42.0}})
+                .changed() &&
+            vec2Curve(document.snapshot(), position).components[0].keyframes.front().value == 42.0,
+        "a component address re-values exactly its own component");
+    test.expect(
+        stack.undo().changed() &&
+            vec2Curve(document.snapshot(), position).components[0].keyframes.front().value == 3.0,
+        "and one undo restores it");
+
+    // Copy/paste carries the SHAPE: a pasted key reproduces the handles it was copied with.
+    const auto handled = scalarCurve(document.snapshot(), opacity).keyframes.front();
+    const std::vector<KeyframePaste> pasted{{kOpacityId, time(3, 1), handled.value,
+                                             handled.outgoingInterpolation, std::nullopt,
+                                             handled.outgoingHandle, handled.incomingHandle}};
+    test.expect(execute.template operator()<PasteKeyframes>(pasted).changed(),
+                "a handled key pastes");
+    const auto& afterPaste = scalarCurve(document.snapshot(), opacity).keyframes;
+    const auto placed = std::ranges::find(afterPaste, time(3, 1), &document::ScalarKeyframe::time);
+    test.expect(placed != afterPaste.end() && placed->outgoingHandle == handled.outgoingHandle &&
+                    placed->incomingHandle == handled.incomingHandle,
+                "the pasted key lands at its destination time with the handles it was copied with");
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -795,6 +911,7 @@ int main() {
         bloom::commands::test::testComponentKeyOperations(test);
         bloom::commands::test::testTextSizeAnimationRespectsItsSchemaDomain(test);
         bloom::commands::test::testSetKeyframeInterpolation(test);
+        bloom::commands::test::testKeyframeHandleAndValueOperations(test);
     } catch (const std::exception& error) {
         test.fail(std::string("unexpected test exception: ") + error.what());
     }
