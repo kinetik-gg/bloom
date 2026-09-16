@@ -1192,16 +1192,16 @@ bool CompositionSession::positionInteractionActive() const noexcept {
     return positionInteraction_.has_value();
 }
 
-std::optional<runtime::SnapshotParameterOverride>
+std::vector<runtime::SnapshotParameterOverride>
 CompositionSession::positionInteractionOverride() const {
     if (!positionInteraction_.has_value()) {
-        return std::nullopt;
+        return {};
     }
-    return runtime::SnapshotParameterOverride{
+    return {runtime::SnapshotParameterOverride{
         .sourceRevision = positionInteraction_->baseRevision,
         .parameterId = positionInteraction_->parameterId,
         .value = positionInteraction_->currentOverride,
-    };
+    }};
 }
 
 std::optional<PositionInteractionRejection>

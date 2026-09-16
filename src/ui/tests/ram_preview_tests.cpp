@@ -209,7 +209,7 @@ struct SessionFixture final {
         return [this](const document::Snapshot& snapshot,
                       const runtime::PreviewRequestIdentity& desiredIdentity,
                       const std::size_t pixelStorageByteLimit,
-                      const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+                      const std::vector<runtime::SnapshotParameterOverride>& interactionOverride,
                       runtime::TaskContext& context) {
             const auto ordinal = preparationCount.fetch_add(1);
             if (gateAtCall.has_value() && ordinal == *gateAtCall) {
@@ -320,9 +320,8 @@ void testCompiledPlanCacheCompilesOncePerRevision(Expectations& expectations) {
         compiler,
         {.snapshot = session.snapshot(),
          .compositionId = compositionId,
-         .parameterOverride = runtime::SnapshotParameterOverride{session.snapshot().revision(),
-                                                                 document::ParameterId{},
-                                                                 document::Vec2d{1.0, 1.0}}},
+         .parameterOverrides = {runtime::SnapshotParameterOverride{
+             session.snapshot().revision(), document::ParameterId{}, document::Vec2d{1.0, 1.0}}}},
         {});
     expectations.expect(cache.statistics().compiles == 3 && cache.size() == 2,
                         "an overridden request compiles directly and is never retained");

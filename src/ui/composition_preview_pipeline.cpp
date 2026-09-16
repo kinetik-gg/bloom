@@ -188,7 +188,7 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
                const document::Snapshot& snapshot,
                const runtime::PreviewRequestIdentity& desiredIdentity,
                const std::size_t pixelStorageByteLimit,
-               const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+               const std::vector<runtime::SnapshotParameterOverride>& interactionOverride,
                runtime::TaskContext& context) {
         using TaskResult = runtime::TaskResult<PreviewPreparationResultHandle>;
 
@@ -231,7 +231,7 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
         auto compileResult = planCache->compile(compiler,
                                                 {.snapshot = snapshot,
                                                  .compositionId = desiredIdentity.compositionId,
-                                                 .parameterOverride = interactionOverride},
+                                                 .parameterOverrides = interactionOverride},
                                                 context.cancellation());
         auto diagnostics = taskDiagnostics(compileResult);
 
@@ -265,7 +265,7 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
             .quality = desiredIdentity.quality,
             .colorIntent = desiredIdentity.colorIntent,
             .pixelStorageByteLimit = pixelStorageByteLimit,
-            .bypassOperationCache = interactionOverride.has_value(),
+            .bypassOperationCache = !interactionOverride.empty(),
         };
         auto evaluationResult = evaluator.evaluate(
             compileResult.plan, evaluationRequest, context.cancellation(),

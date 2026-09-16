@@ -89,7 +89,7 @@ parameterForRole(const bloom::document::Composition& composition,
     ui::CompositionPreviewController previewController(
         session, scheduler, taskUiBridge,
         [](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
-           const std::optional<runtime::SnapshotParameterOverride>&, runtime::TaskContext&) {
+           const std::vector<runtime::SnapshotParameterOverride>&, runtime::TaskContext&) {
             return runtime::TaskResult<ui::PreviewPreparationResultHandle>::cancelled();
         });
     ui::TimelineEditor timeline(session, previewController);

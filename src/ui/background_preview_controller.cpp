@@ -200,7 +200,7 @@ void BackgroundPreviewController::fillNextFrame() {
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<PreviewPreparationResultHandle>::cancelled();
                 }
-                return preparation(snapshot, identity, limit, std::nullopt, context);
+                return preparation(snapshot, identity, limit, {}, context);
             });
         if (!submission.accepted()) {
             --cursor_;

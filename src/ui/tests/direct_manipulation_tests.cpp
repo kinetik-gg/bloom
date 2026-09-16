@@ -234,19 +234,19 @@ void testControllerAttachesOverrideOnlyToArmedInteractiveRequests(Expectations& 
             const document::Snapshot& snapshot,
             const runtime::PreviewRequestIdentity& desiredIdentity,
             const std::size_t pixelStorageByteLimit,
-            const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+            const std::vector<runtime::SnapshotParameterOverride>& interactionOverride,
             runtime::TaskContext& context) mutable {
             {
                 std::scoped_lock lock(invocationMutex);
                 std::optional<document::Vec2d> value;
-                if (interactionOverride.has_value()) {
+                if (!interactionOverride.empty()) {
                     if (const auto* vector =
-                            std::get_if<document::Vec2d>(&interactionOverride->value)) {
+                            std::get_if<document::Vec2d>(&interactionOverride.front().value)) {
                         value = *vector;
                     }
                 }
                 invocations.push_back(
-                    {desiredIdentity.requestGeneration, interactionOverride.has_value(), value});
+                    {desiredIdentity.requestGeneration, !interactionOverride.empty(), value});
             }
             return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride,
                             context);
@@ -320,7 +320,7 @@ void testControllerAttachesOverrideOnlyToArmedInteractiveRequests(Expectations& 
     controller.notifyScrubEnded();
     expectations.expect(waitUntil([&] { return isReady(controller); }),
                         "the post-commit request reaches Ready");
-    expectations.expect(!session.positionInteractionOverride().has_value(),
+    expectations.expect(session.positionInteractionOverride().empty(),
                         "the override is gone after commit");
 
     reachQuiescence(controller, bridge, scheduler, expectations);
@@ -349,9 +349,9 @@ void testAdmissionRejectedOverrideSurfacesErrorWithoutKillingInteraction(
             const document::Snapshot& snapshot,
             const runtime::PreviewRequestIdentity& desiredIdentity,
             const std::size_t pixelStorageByteLimit,
-            const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+            const std::vector<runtime::SnapshotParameterOverride>& interactionOverride,
             runtime::TaskContext& context) mutable {
-            if (interactionOverride.has_value()) {
+            if (!interactionOverride.empty()) {
                 return runtime::TaskResult<ui::PreviewPreparationResultHandle>::failed(
                     {.code = "bloom.preview.test-override-rejected",
                      .severity = runtime::DiagnosticSeverity::Error,
@@ -586,9 +586,9 @@ void testDragAtNonIdentityZoomLandsExactlyUnderCursor(Expectations& expectations
     // Begin base: the frozen base value is exactly the pre-drag constant, unmoved, before any move
     // event lands.
     const auto beginOverride = fixture.session.positionInteractionOverride();
-    expectations.expect(beginOverride.has_value(), "the begun interaction carries an override");
-    if (beginOverride.has_value()) {
-        const auto* beginValue = std::get_if<document::Vec2d>(&beginOverride->value);
+    expectations.expect(!beginOverride.empty(), "the begun interaction carries an override");
+    if (!beginOverride.empty()) {
+        const auto* beginValue = std::get_if<document::Vec2d>(&beginOverride.front().value);
         expectations.expect(beginValue != nullptr && *beginValue == *base,
                             "the interaction's begin-base document-space position is the exact "
                             "unmoved pre-drag constant, regardless of zoom");
@@ -680,8 +680,8 @@ void testDragAtNonIdentityZoomAndPanLandsExactlyUnderCursor(Expectations& expect
                         "pressing on the zoomed+panned viewer with a selected layer begins the "
                         "interaction");
     const auto beginOverride = fixture.session.positionInteractionOverride();
-    if (beginOverride.has_value()) {
-        const auto* beginValue = std::get_if<document::Vec2d>(&beginOverride->value);
+    if (!beginOverride.empty()) {
+        const auto* beginValue = std::get_if<document::Vec2d>(&beginOverride.front().value);
         expectations.expect(beginValue != nullptr && *beginValue == *base,
                             "the interaction's begin-base document-space position is unaffected "
                             "by zoom or pan");
@@ -794,7 +794,7 @@ void testMidDragResizeCancelsWithNoCommitAndNoOverrideLeft(Expectations& expecta
     sendPress(fixture.viewer, QPointF(200.0, 150.0));
     sendMove(fixture.viewer, QPointF(230.0, 170.0));
     expectations.expect(fixture.session.positionInteractionActive() &&
-                            fixture.session.positionInteractionOverride().has_value(),
+                            !fixture.session.positionInteractionOverride().empty(),
                         "the interaction is live and overriding mid-drag");
 
     // resize() alone only updates geometry; QWidget may defer dispatching the resizeEvent()
@@ -807,7 +807,7 @@ void testMidDragResizeCancelsWithNoCommitAndNoOverrideLeft(Expectations& expecta
     QCoreApplication::sendEvent(&fixture.viewer, &resize);
     expectations.expect(!fixture.session.positionInteractionActive(),
                         "a mid-drag resize cancels the interaction");
-    expectations.expect(!fixture.session.positionInteractionOverride().has_value(),
+    expectations.expect(fixture.session.positionInteractionOverride().empty(),
                         "no override is left after the resize cancels it");
 
     // The release that follows is a no-op: the gesture already ended at the resize.

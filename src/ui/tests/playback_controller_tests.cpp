@@ -599,7 +599,7 @@ void testIntegrationPlaybackSkipsWhileForegroundGateIsBusy(Expectations& expecta
             const document::Snapshot& snapshot,
             const runtime::PreviewRequestIdentity& desiredIdentity,
             const std::size_t pixelStorageByteLimit,
-            const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+            const std::vector<runtime::SnapshotParameterOverride>& interactionOverride,
             runtime::TaskContext& context) mutable {
             if (invocationCount.fetch_add(1) == 0) {
                 firstRequest.enterAndWait();

@@ -470,7 +470,7 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool positionInteractionActive() const noexcept;
     // Sourced fresh by CompositionPreviewController's request path on every Interactive request
     // build while an interaction is armed; never cached across requests.
-    [[nodiscard]] std::optional<runtime::SnapshotParameterOverride>
+    [[nodiscard]] std::vector<runtime::SnapshotParameterOverride>
     positionInteractionOverride() const;
     // Validates the selected layer, a resolvable position parameter, and a non-empty mapping;
     // freezes `mapping` and the base value/revision/time. Returns the typed rejection, or

@@ -173,6 +173,8 @@ class CompilePass final {
 
     [[nodiscard]] const document::ParameterRecord*
     findParameter(const document::ParameterId parameterId) const noexcept {
+        if (const auto override = overrides_.find(parameterId); override != overrides_.end())
+            return &override->second;
         const auto parameter = parameters_.find(parameterId);
         return parameter == parameters_.end() ? nullptr : parameter->second;
     }
@@ -610,10 +612,25 @@ class CompilePass final {
     }
 
     void validateParameterOverride() {
-        if (!request_.parameterOverride.has_value()) {
+        if (request_.parameterOverrides.size() > 8) {
+            addFailure(runtime::CompileDiagnosticCode::InvalidParameterOverride,
+                       subject({}, "parameterOverrides"), "Too many parameter overrides",
+                       "A preview request accepts at most eight distinct overrides.");
             return;
         }
-        const auto& parameterOverride = *request_.parameterOverride;
+        std::unordered_set<document::ParameterId> seen;
+        for (const auto& override : request_.parameterOverrides) {
+            if (!seen.insert(override.parameterId).second) {
+                addFailure(runtime::CompileDiagnosticCode::InvalidParameterOverride,
+                           subject({}, "parameterOverrides"), "Duplicate parameter override",
+                           "A parameter may appear only once in a preview request.");
+                return;
+            }
+            validateOneOverride(override);
+        }
+    }
+
+    void validateOneOverride(const runtime::SnapshotParameterOverride& parameterOverride) {
         auto diagnosticSubject = subject({}, "parameterOverride");
         diagnosticSubject.parameterId = parameterOverride.parameterId;
         const auto reject = [&](const runtime::CompileDiagnosticCode code, std::string summary,
@@ -674,39 +691,37 @@ class CompilePass final {
                    "Overrides may affect only parameters on the requested output path.");
             return;
         }
-        // An override may target any animatable Layer Output parameter: the five transform values
-        // a scrub can move. The animatable set comes from the shared schema predicates rather than
-        // a second list here, so widening the schema widens scrubbing with it.
-        const bool isLayerOutput =
+        const bool editableOwner =
+            ownerDefinition->category == runtime::NodeCategory::Sources ||
             ownerDefinition->lowering == runtime::NodeLoweringKind::LayerOutput;
-        const bool isVec2Target =
-            isLayerOutput && document::isVec2AnimatableSchemaKey(parameterDefinition->schemaKey);
-        const bool isScalarTarget =
-            isLayerOutput && document::isScalarAnimatableSchemaKey(parameterDefinition->schemaKey);
-        const auto* scalar = std::get_if<double>(&parameterOverride.value);
-        const auto* vector = std::get_if<document::Vec2d>(&parameterOverride.value);
-        const bool kindMatches =
-            (isVec2Target && parameterDefinition->valueKind == runtime::ParameterValueKind::Vec2d &&
-             vector != nullptr) ||
-            (isScalarTarget &&
-             parameterDefinition->valueKind == runtime::ParameterValueKind::Float64 &&
-             scalar != nullptr);
-        if (parameter->schemaKey != parameterDefinition->schemaKey || !kindMatches) {
+        const auto kind = parameterDefinition->valueKind;
+        const bool supported = parameterDefinition->supportsAnimation ||
+                               kind == runtime::ParameterValueKind::String ||
+                               kind == runtime::ParameterValueKind::Integer ||
+                               kind == runtime::ParameterValueKind::Boolean ||
+                               kind == runtime::ParameterValueKind::Color4d;
+        document::ParameterValue value =
+            std::visit([](const auto& entry) -> document::ParameterValue { return entry; },
+                       parameterOverride.value);
+        if (kind == runtime::ParameterValueKind::Boolean) {
+            const auto* integer = std::get_if<std::int64_t>(&parameterOverride.value);
+            if (integer && (*integer == 0 || *integer == 1))
+                value = *integer != 0;
+        }
+        if (!editableOwner || !supported ||
+            parameter->schemaKey != parameterDefinition->schemaKey || !hasValueKind(value, kind)) {
             reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
                    "Parameter override type does not match its target",
-                   "Only typed Layer Output transform and opacity overrides are accepted.");
+                   "Overrides require a compatible source or Layer parameter.");
             return;
         }
-        // The scalar DOMAIN belongs to the schema, and the one gate is the shared
-        // document::isScalarWithinSchemaDomain() so an override and a keyframe are admitted on
-        // identical terms; a rotation override is finite and otherwise free.
-        if ((vector != nullptr && (!std::isfinite(vector->x) || !std::isfinite(vector->y))) ||
-            (scalar != nullptr &&
-             (!std::isfinite(*scalar) ||
-              !document::isScalarWithinSchemaDomain(parameterDefinition->schemaKey, *scalar)))) {
+        document::ParameterRecord replacement{parameter->id, parameter->schemaKey,
+                                              document::ConstantValueSource{std::move(value)}};
+        document::ParameterStore validation;
+        if (!validation.insert(replacement) || !validation.validate().ok()) {
             reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
                    "Parameter override value is outside its schema domain",
-                   "Every override must be finite, and opacity must also be within zero and one.");
+                   "Preview constants obey the same value domains as authored constants.");
             return;
         }
         if (std::holds_alternative<document::DriverBindingSource>(parameter->source)) {
@@ -715,7 +730,9 @@ class CompilePass final {
                            std::move(overrideSubject),
                            "Driven parameters cannot be overridden interactively",
                            "Disconnect or explicitly transition the driver before editing.");
+            return;
         }
+        overrides_.emplace(parameter->id, std::move(replacement));
     }
 
     void validateParameter(const document::NodeRecord& node,
@@ -856,6 +873,8 @@ class CompilePass final {
     const document::Composition* composition_ = nullptr;
     std::unordered_map<document::NodeId, const document::NodeRecord*> nodes_;
     std::unordered_map<document::ParameterId, const document::ParameterRecord*> parameters_;
+    // Request-local constant records make every lowering kind use the same override channel.
+    std::map<document::ParameterId, document::ParameterRecord> overrides_;
     std::vector<const document::NodeRecord*> reachableNodes_;
     std::vector<const document::EdgeRecord*> reachableEdges_;
     std::map<FixedInputKey, const document::EdgeRecord*> fixedInputEdges_;

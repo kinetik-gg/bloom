@@ -128,9 +128,9 @@ void testDisplacementMathNonSquareNegativeAndBaseTotal() {
 
     session.updatePositionInteraction(20.0, 10.0);
     const auto override1 = session.positionInteractionOverride();
-    require(override1.has_value(), "an active interaction always reports an override");
-    if (override1.has_value()) {
-        const auto* value1 = std::get_if<document::Vec2d>(&override1->value);
+    require(!override1.empty(), "an active interaction always reports an override");
+    if (!override1.empty()) {
+        const auto* value1 = std::get_if<document::Vec2d>(&override1.front().value);
         require(value1 != nullptr && value1->x == 100.0 + 20.0 / 200.0 * 1000.0 &&
                     value1->y == 10.0 + 10.0 / 100.0 * 100.0,
                 "compositionDx/Dy = screenDx/Dy / displayWidth/Height * compositionWidth/Height, "
@@ -140,9 +140,9 @@ void testDisplacementMathNonSquareNegativeAndBaseTotal() {
     // Negative displacement.
     session.updatePositionInteraction(-40.0, -5.0);
     const auto override2 = session.positionInteractionOverride();
-    require(override2.has_value(), "an active interaction always reports an override");
-    if (override2.has_value()) {
-        const auto* value2 = std::get_if<document::Vec2d>(&override2->value);
+    require(!override2.empty(), "an active interaction always reports an override");
+    if (!override2.empty()) {
+        const auto* value2 = std::get_if<document::Vec2d>(&override2.front().value);
         require(value2 != nullptr && value2->x == 100.0 + (-40.0) / 200.0 * 1000.0 &&
                     value2->y == 10.0 + (-5.0) / 100.0 * 100.0,
                 "negative screen displacement maps to negative composition displacement");
@@ -163,11 +163,10 @@ void testDisplacementMathNonSquareNegativeAndBaseTotal() {
     session.updatePositionInteraction(37.0, -13.0);
     const auto direct = session.positionInteractionOverride();
 
-    require(chained.has_value() && direct.has_value(),
-            "both restarted interactions report overrides");
-    if (chained.has_value() && direct.has_value()) {
-        const auto* chainedValue = std::get_if<document::Vec2d>(&chained->value);
-        const auto* directValue = std::get_if<document::Vec2d>(&direct->value);
+    require(!chained.empty() && !direct.empty(), "both restarted interactions report overrides");
+    if (!chained.empty() && !direct.empty()) {
+        const auto* chainedValue = std::get_if<document::Vec2d>(&chained.front().value);
+        const auto* directValue = std::get_if<document::Vec2d>(&direct.front().value);
         require(chainedValue != nullptr && directValue != nullptr && *chainedValue == *directValue,
                 "two updates land exactly where one combined update lands (base + TOTAL "
                 "displacement)");
@@ -205,10 +204,11 @@ void testBeginRejectionsAndFreezing() {
             "a selected layer with a resolvable position and a non-empty mapping begins");
     require(session.positionInteractionActive(), "begin leaves the interaction active");
     const auto freshOverride = session.positionInteractionOverride();
-    require(freshOverride.has_value() && freshOverride->parameterId == ids.position &&
-                freshOverride->sourceRevision == document.snapshot().revision() &&
-                std::get_if<document::Vec2d>(&freshOverride->value) != nullptr &&
-                *std::get_if<document::Vec2d>(&freshOverride->value) == document::Vec2d{1.0, 2.0},
+    require(!freshOverride.empty() && freshOverride.front().parameterId == ids.position &&
+                freshOverride.front().sourceRevision == document.snapshot().revision() &&
+                std::get_if<document::Vec2d>(&freshOverride.front().value) != nullptr &&
+                *std::get_if<document::Vec2d>(&freshOverride.front().value) ==
+                    document::Vec2d{1.0, 2.0},
             "a fresh begin's override starts at exactly the base value/revision/target");
     session.cancelPositionInteraction();
 }
@@ -291,9 +291,9 @@ void testAnimatedParameterSampledBaseInsertsKeyAtCurrentTimeAndUndoRemovesOnlyIt
             "an animated position with no exact key at the current time now begins (D1's "
             "relaxation), rather than refusing");
     const auto freshOverride = session.positionInteractionOverride();
-    require(freshOverride.has_value(), "an active interaction always reports an override");
-    if (freshOverride.has_value()) {
-        const auto* value = std::get_if<document::Vec2d>(&freshOverride->value);
+    require(!freshOverride.empty(), "an active interaction always reports an override");
+    if (!freshOverride.empty()) {
+        const auto* value = std::get_if<document::Vec2d>(&freshOverride.front().value);
         require(value != nullptr && *value == document::Vec2d{8.0, 14.0},
                 "begin freezes the exact Linear-interpolated base at the current time (halfway "
                 "between (3,4) and (13,24))");
@@ -454,7 +454,7 @@ void testCancelClearsState() {
 
     session.cancelPositionInteraction();
     require(!session.positionInteractionActive(), "cancel clears interaction state");
-    require(!session.positionInteractionOverride().has_value(), "cancel leaves no override");
+    require(session.positionInteractionOverride().empty(), "cancel leaves no override");
     require(session.snapshot().revision() == revisionBeforeCancel, "cancel creates no command");
     require(session.constantVec2Value(ids.position) == document::Vec2d{0.0, 0.0},
             "cancel never mutates project truth");

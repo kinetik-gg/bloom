@@ -31,7 +31,7 @@ CompiledPlanCache::compile(const runtime::SnapshotCompiler& compiler,
                            const runtime::CancellationToken& cancellation) {
     const auto projectId = request.snapshot.project().id();
     const auto revision = request.snapshot.revision();
-    if (request.parameterOverride.has_value()) {
+    if (!request.parameterOverrides.empty()) {
         // An overridden request's plan is not the revision's plan; it is this one gesture frame's.
         std::lock_guard lock(mutex_);
         ++statistics_.compiles;

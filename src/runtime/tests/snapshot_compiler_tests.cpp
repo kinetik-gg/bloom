@@ -384,10 +384,10 @@ void attachValueDriver(document::Project& project, const document::NodeId nodeId
 
 [[nodiscard]] runtime::SnapshotCompileResult
 compile(document::Project project, runtime::NodeDefinitionRegistry& registry,
-        std::optional<runtime::SnapshotParameterOverride> parameterOverride = std::nullopt) {
+        std::vector<runtime::SnapshotParameterOverride> parameterOverrides = {}) {
     document::Document document(std::move(project));
     runtime::SnapshotCompiler compiler(registry);
-    return compiler.compile({document.snapshot(), kCompositionId, parameterOverride},
+    return compiler.compile({document.snapshot(), kCompositionId, std::move(parameterOverrides)},
                             runtime::CancellationToken{});
 }
 
@@ -1310,11 +1310,11 @@ void testRequestScopedParameterOverrides(Expectations& expectations) {
     const auto base = compile(makeProject(singleLayerOptions()), registry);
     const runtime::SnapshotParameterOverride firstOverride{document::Revision{}, kFirstPosition,
                                                            document::Vec2d{12.5, -4.0}};
-    const auto first = compile(makeProject(singleLayerOptions()), registry, firstOverride);
+    const auto first = compile(makeProject(singleLayerOptions()), registry, {firstOverride});
     const auto second =
         compile(makeProject(singleLayerOptions()), registry,
-                runtime::SnapshotParameterOverride{document::Revision{}, kFirstPosition,
-                                                   document::Vec2d{12.5, -3.0}});
+                {runtime::SnapshotParameterOverride{document::Revision{}, kFirstPosition,
+                                                    document::Vec2d{12.5, -3.0}}});
     const auto* layer =
         first.plan == nullptr
             ? nullptr
@@ -1329,8 +1329,8 @@ void testRequestScopedParameterOverrides(Expectations& expectations) {
 
     const auto wrongRevision =
         compile(makeProject(singleLayerOptions()), registry,
-                runtime::SnapshotParameterOverride{document::Revision::fromRaw(1), kFirstPosition,
-                                                   document::Vec2d{0.0, 0.0}});
+                {runtime::SnapshotParameterOverride{document::Revision::fromRaw(1), kFirstPosition,
+                                                    document::Vec2d{0.0, 0.0}}});
     expectations.expect(
         wrongRevision.status == runtime::SnapshotCompileStatus::Failed &&
             hasDiagnostic(wrongRevision, runtime::CompileDiagnosticCode::InvalidParameterOverride),
@@ -1338,10 +1338,10 @@ void testRequestScopedParameterOverrides(Expectations& expectations) {
 
     const auto wrongKind =
         compile(makeProject(singleLayerOptions()), registry,
-                runtime::SnapshotParameterOverride{document::Revision{}, kFirstPosition, 0.5});
+                {runtime::SnapshotParameterOverride{document::Revision{}, kFirstPosition, 0.5}});
     const auto wrongDomain =
         compile(makeProject(singleLayerOptions()), registry,
-                runtime::SnapshotParameterOverride{document::Revision{}, kFirstOpacity, 1.5});
+                {runtime::SnapshotParameterOverride{document::Revision{}, kFirstOpacity, 1.5}});
     expectations.expect(
         wrongKind.status == runtime::SnapshotCompileStatus::Failed &&
             hasDiagnostic(wrongKind, runtime::CompileDiagnosticCode::InvalidParameterOverride) &&
@@ -1365,8 +1365,8 @@ void testRequestScopedParameterOverrides(Expectations& expectations) {
             "unreachable override fixture must remain valid document truth");
     const auto unreachable =
         compile(std::move(unreachableProject), registry,
-                runtime::SnapshotParameterOverride{document::Revision{}, unreachableParameter,
-                                                   document::Vec2d{3.0, 4.0}});
+                {runtime::SnapshotParameterOverride{document::Revision{}, unreachableParameter,
+                                                    document::Vec2d{3.0, 4.0}}});
     expectations.expect(
         unreachable.status == runtime::SnapshotCompileStatus::Failed &&
             hasDiagnostic(unreachable, runtime::CompileDiagnosticCode::InvalidParameterOverride),
@@ -1379,8 +1379,8 @@ void testRequestScopedParameterOverrides(Expectations& expectations) {
                       kFirstPosition);
     const auto driven =
         compile(std::move(drivenProject), registry,
-                runtime::SnapshotParameterOverride{document::Revision{}, kFirstPosition,
-                                                   document::Vec2d{3.0, 4.0}});
+                {runtime::SnapshotParameterOverride{document::Revision{}, kFirstPosition,
+                                                    document::Vec2d{3.0, 4.0}}});
     expectations.expect(
         driven.status == runtime::SnapshotCompileStatus::Unsupported &&
             hasDiagnostic(driven, runtime::CompileDiagnosticCode::UnsupportedParameterOverride),
@@ -1402,11 +1402,77 @@ void testRequestScopedParameterOverrides(Expectations& expectations) {
             "animated override fixture must remain valid document truth");
     const auto animated =
         compile(std::move(animatedProject), registry,
-                runtime::SnapshotParameterOverride{document::Revision{}, kFirstPosition,
-                                                   document::Vec2d{7.0, 8.0}});
+                {runtime::SnapshotParameterOverride{document::Revision{}, kFirstPosition,
+                                                    document::Vec2d{7.0, 8.0}}});
     expectations.expect(animated.status == runtime::SnapshotCompileStatus::Compiled &&
                             animated.plan && animated.plan->vec2Curves().empty(),
                         "an accepted override lowers as a constant and omits its dormant curve");
+}
+
+void testOverrideVectorKindsAndLimits(Expectations& expectations) {
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+    auto textProject = makeProject(singleLayerOptions());
+    retypeFirstSourceToText(textProject, "Before", 24.0, {1, 1, 1, 1});
+    const std::vector<runtime::SnapshotParameterOverride> overrides{
+        {{}, kFirstColor, std::string("After")},
+        {{}, kTextSize, 42.0},
+        {{}, kTextColor, core::Color4d{0.2, 0.3, 0.4, 0.5}},
+        {{}, kTextAlignment, std::int64_t{2}},
+        {{}, kFirstPosition, document::Vec2d{7, 9}}};
+    const auto result = compile(textProject, registry, overrides);
+    const auto* text =
+        result.plan ? std::get_if<runtime::CompiledText>(&result.plan->operations()[0]) : nullptr;
+    expectations.expect(text && text->content == "After" && text->layout.alignment == 2 &&
+                            std::get<double>(text->size.source) == 42.0 &&
+                            std::get<core::Color4d>(text->color.source) ==
+                                core::Color4d{0.2, 0.3, 0.4, 0.5},
+                        "one request lowers string, scalar, integer, colour and vector overrides");
+    auto duplicate = overrides;
+    duplicate.push_back(overrides.front());
+    expectations.expect(compile(textProject, registry, duplicate).status ==
+                            runtime::SnapshotCompileStatus::Failed,
+                        "duplicate parameter overrides are refused");
+    duplicate.resize(9, overrides.front());
+    expectations.expect(compile(textProject, registry, duplicate).status ==
+                            runtime::SnapshotCompileStatus::Failed,
+                        "more than eight overrides are refused");
+    expectations.expect(
+        compile(textProject, registry, {{{}, kTextAlignment, std::int64_t{99}}}).status ==
+            runtime::SnapshotCompileStatus::Failed,
+        "integer enum domain is checked");
+    auto imageProject = makeProject(singleLayerOptions());
+    auto* composition = imageProject.findComposition(kCompositionId);
+    auto* node = composition->graph().findNode(kFirstSolidNode);
+    const auto* definition = registry.find("bloom.source.image", 1);
+    require(definition != nullptr, "image definition exists");
+    node->typeId = definition->key.typeId;
+    node->schemaVersion = definition->key.schemaVersion;
+    node->parameters.clear();
+    document::ParameterId booleanId;
+    std::uint64_t raw = 500;
+    for (const auto& parameter : definition->parameters) {
+        const auto id = document::ParameterId::fromRaw(raw++);
+        require(
+            composition->parameters().insert(
+                {id, parameter.schemaKey, document::ConstantValueSource{parameter.defaultValue}}),
+            "insert image parameter");
+        node->parameters.push_back({parameter.role, id});
+        if (parameter.role == "premultiply")
+            booleanId = id;
+    }
+    const auto imageResult = compile(imageProject, registry, {{{}, booleanId, std::int64_t{0}}});
+    const auto* image =
+        imageResult.plan
+            ? std::get_if<runtime::CompiledImageSource>(&imageResult.plan->operations()[0])
+            : nullptr;
+    expectations.expect(image && !image->premultiply,
+                        "Boolean override lowers integer zero to false");
+    expectations.expect(
+        compile(imageProject, registry, {{{}, booleanId, std::int64_t{2}}}).status ==
+            runtime::SnapshotCompileStatus::Failed,
+        "Boolean overrides accept only zero or one");
 }
 
 [[nodiscard]] document::Project makeCancellationStressProject(const std::size_t edgeCount) {
@@ -1570,6 +1636,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 
 int main() {
     Expectations expectations;
+    testOverrideVectorKindsAndLimits(expectations);
     try {
         testLayerFlagsAndRangeLowering(expectations);
         testMuteKindsAndPixels(expectations);

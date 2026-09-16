@@ -163,7 +163,7 @@ void testShutdownAndCloseRouting(Expectations& expectations) {
     ui::CompositionPreviewController controller(
         session, scheduler, bridge,
         [&gate](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
-                const std::optional<runtime::SnapshotParameterOverride>&, runtime::TaskContext&) {
+                const std::vector<runtime::SnapshotParameterOverride>&, runtime::TaskContext&) {
             gate.enterAndWait();
             return runtime::TaskResult<ui::PreviewPreparationResultHandle>::cancelled();
         });
@@ -269,7 +269,7 @@ void testFileMenuQuitRoutesThroughShutdown(Expectations& expectations) {
     ui::CompositionPreviewController controller(
         session, scheduler, bridge,
         [](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
-           const std::optional<runtime::SnapshotParameterOverride>&, runtime::TaskContext&) {
+           const std::vector<runtime::SnapshotParameterOverride>&, runtime::TaskContext&) {
             return runtime::TaskResult<ui::PreviewPreparationResultHandle>::cancelled();
         });
     ui::ApplicationShutdownCoordinator shutdown(controller, bridge);
@@ -750,7 +750,7 @@ void testStuckShutdownDiagnosticLogsAfterFiveSeconds(Expectations& expectations)
     ui::CompositionPreviewController controller(
         session, scheduler, bridge,
         [&gate](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
-                const std::optional<runtime::SnapshotParameterOverride>&, runtime::TaskContext&) {
+                const std::vector<runtime::SnapshotParameterOverride>&, runtime::TaskContext&) {
             gate.enterAndWait();
             return runtime::TaskResult<ui::PreviewPreparationResultHandle>::cancelled();
         });
