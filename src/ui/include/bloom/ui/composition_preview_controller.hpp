@@ -54,13 +54,13 @@ struct CompositionPreviewSettings final {
 using PreviewPreparationResultHandle = runtime::PreviewPreparationResultHandle;
 // The fourth parameter carries the session's active-interaction override (docs/architecture/
 // animation-and-time.md, "Direct Manipulation And Preview Overrides"): populated only for
-// Interactive requests built while a position interaction is armed, std::nullopt otherwise. It
-// rides straight into SnapshotCompileRequest::parameterOverride in
+// Interactive requests built while a position interaction is armed, empty otherwise. It
+// rides straight into SnapshotCompileRequest::parameterOverrides in
 // makeCompositionPreviewPipeline().
 using PreviewPreparationFunction =
     std::function<runtime::TaskResult<PreviewPreparationResultHandle>(
         const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
-        const std::optional<runtime::SnapshotParameterOverride>&, runtime::TaskContext&)>;
+        const std::vector<runtime::SnapshotParameterOverride>&, runtime::TaskContext&)>;
 
 enum class PreviewActivity : std::uint8_t {
     Rendering,
@@ -206,7 +206,7 @@ class CompositionPreviewController final : public QObject {
         PreviewRequestKind kind = PreviewRequestKind::Visible;
         // Sourced fresh from the session at requestPreview() build time; never cached across
         // requests (docs/architecture/animation-and-time.md).
-        std::optional<runtime::SnapshotParameterOverride> interactionOverride;
+        std::vector<runtime::SnapshotParameterOverride> interactionOverride;
     };
 
     // `allowCachedFrame` is false for an explicit refresh: a refresh asks for the frame to be
@@ -221,7 +221,7 @@ class CompositionPreviewController final : public QObject {
                           PreparedPreviewFrameHandle retainedFrame);
     void handleCompositionChanged();
     void handleCurrentTimeChanged();
-    void handlePositionInteractionChanged();
+    void handleTransformInteractionChanged();
     void consumeReadyResult();
     [[nodiscard]] static FrameFreshness
     freshnessFor(const PreparedPreviewFrameHandle& frame,

@@ -64,3 +64,11 @@ component diamonds, node colour cards expose RGBA rows, and both Parent dropdown
 Both full-window captures were visually inspected for control containment and readable row alignment.
 Comparison tolerances and full-image coverage are unchanged; process/output identity goldens are
 unchanged.
+
+DM-1 approval: both whole-window references are reapproved under Qt 6.8.3 at DPR 1 and 1.5.
+The selected Background now shows eight Surface-filled, Accent-outlined scale handles and an
+anchor crosshair on its selection box. Cosmetic hairlines and handle vertices are aligned to
+device pixels; rotation hit regions sit outside the corners without adding persistent chrome.
+Both complete captures were inspected for clear handles and unchanged panel/control layout.
+Comparison tolerances and full-image coverage are unchanged. Process/output identity goldens
+are unchanged; these controls are viewer overlays and never alter composition pixels.

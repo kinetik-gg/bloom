@@ -106,6 +106,12 @@ The time readout defaults to `HH:MM:SS:FF`, honors `timeline/time-format`, accep
 non-drop timecode or an exact frame index, clamps to the composition, and rejects invalid
 fields without changing time. It uses nominal-rate timecode and exact rational frame mapping.
 
+Viewer selection bounds use Accent cosmetic hairlines snapped to device-pixel centres. Eight
+`GizmoHandle` squares use Surface fill and Accent outlines; the anchor uses a crosshair ring.
+`GizmoRotateZone` is the outside-corner hit radius. These dimensions remain in logical screen
+pixels as zoom, pan, proxy and pixel aspect change. The same ViewerMapping drives overlays and
+hit-testing. Selection geometry never enters process pixels or export.
+
 ## Node cards
 
 A card uses one `NodeTitleBand` row: its Title Case derived display name is left-aligned in Ui,
@@ -168,6 +174,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | --- | --- | --- |
 | `TimelineNameDefault` | 280 | Timeline default name column |
 | `TimelineLeftColumn` | 576 | Four 24px toggles + name + two 100px dropdown columns |
+| `GizmoHandle / GizmoRotateZone` | 8 / 16 | Viewer transform handles / outside-corner rotation radius |
 | `ViewerWorkPadding` | 48 | Padded image work area |
 | `ToolColumnWidth` | 32 | Exclusive tool column |
 | `ViewerChannelWidth` | 80 | Channel dropdown |

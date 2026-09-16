@@ -256,15 +256,25 @@ void testMergeAudioPill() {
         return;
     const auto slotId = entries.front().slotId;
 
-    auto* audioPill = findSocket(merge, true, document::SocketValueKind::Audio);
+    // Task CRASH-1: a SocketItem* is only valid until the next edit. Every submit ends in
+    // CompositionSession::rebind -> NodeGraphEditor::rebuild -> NodeGraphicsScene::setProjection ->
+    // NodeItem::refresh -> NodeItem::buildSockets, and buildSockets deletes every socket on the
+    // card before rebuilding it, so a pointer captured before a gesture dangles after it. Each
+    // gesture below therefore asks the card for its sockets again instead of reusing an earlier
+    // pointer: reusing one here read the freed item and, through QGraphicsItem's cached scene
+    // transform, wrote back into it. Locally the freed block happened to be idle and the suite
+    // still passed; on the CI runner the same write landed in a live allocation and took the whole
+    // binary down with SIGSEGV.
+    const auto* audioPill = findSocket(merge, true, document::SocketValueKind::Audio);
     expect(audioPill != nullptr, "the Merge card exposes a dedicated audio stack pill");
-    auto* layerAudioOutput = findSocket(layer, false, document::SocketValueKind::Audio);
+    const auto* layerAudioOutput = findSocket(layer, false, document::SocketValueKind::Audio);
     expect(layerAudioOutput != nullptr, "the Layer card carries an audio output socket");
     if (audioPill == nullptr || layerAudioOutput == nullptr)
         return;
 
+    const auto audioOutputScenePos = layerAudioOutput->scenePos();
     auto history = f.stack.size();
-    f.drag(layerAudioOutput->scenePos(), audioPill->scenePos());
+    f.drag(audioOutputScenePos, audioPill->scenePos());
     const auto afterAudioDrop = f.session.composition()->graph().edges();
     const auto audioEdge = std::ranges::find_if(afterAudioDrop, [&](const auto& edge) {
         return edge.destination ==
@@ -278,9 +288,19 @@ void testMergeAudioPill() {
            "dragging the Layer's audio output onto the audio pill attaches its edge to the "
            "Layer's own slot rather than opening a second one");
 
+    // The drop above published a projection, so `layerAudioOutput` and `audioPill` are both dead
+    // pointers from here on. Ask the card again -- the socket is a new object at the same place,
+    // which is exactly why the stale read stayed invisible until the heap underneath it changed.
+    const auto* liveAudioOutput = findSocket(layer, false, document::SocketValueKind::Audio);
+    expect(liveAudioOutput != nullptr && liveAudioOutput->scenePos() == audioOutputScenePos,
+           "the drop's projection rebuild replaces the Layer card's socket items in place, so the "
+           "next gesture starts from a fresh lookup rather than a pointer captured before it");
+    if (liveAudioOutput == nullptr)
+        return;
+
     history = f.stack.size();
     QSignalSpy refusals(&f.session, &CompositionSession::commandRejected);
-    f.drag(layerAudioOutput->scenePos(), f.socket(merge, true)->scenePos());
+    f.drag(liveAudioOutput->scenePos(), f.socket(merge, true)->scenePos());
     expect(f.stack.size() == history && refusals.size() == 1 &&
                refusals.constFirst().constFirst().toString() ==
                    QStringLiteral("An Audio output cannot feed the image stack"),

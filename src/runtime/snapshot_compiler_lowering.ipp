@@ -103,10 +103,6 @@
             if (cancelled()) {
                 return std::nullopt;
             }
-            if (request_.parameterOverride.has_value() &&
-                request_.parameterOverride->parameterId == binding.parameterId) {
-                continue;
-            }
             const auto* parameter = findParameter(binding.parameterId);
             const auto* source =
                 parameter == nullptr
@@ -366,7 +362,7 @@ lower(const std::vector<document::NodeId>& order) {
             std::move(curveTables->vec3), std::move(curveTables->color4),
             std::move(valueOperations_), valueOutputCount_,
             runtime::kCompiledCompositionPlanSemanticsVersion,
-            runtime::kAnimationSamplingSemanticsVersion, request_.parameterOverride.has_value(),
+            runtime::kAnimationSamplingSemanticsVersion, !request_.parameterOverrides.empty(),
             *audioMix});
 }
 
@@ -790,13 +786,6 @@ compiledScalarParameter(const document::ParameterBinding* binding) {
     if (parameter == nullptr) {
         return std::nullopt;
     }
-    if (request_.parameterOverride.has_value() &&
-        request_.parameterOverride->parameterId == parameter->id) {
-        const auto* value = std::get_if<double>(&request_.parameterOverride->value);
-        return value == nullptr
-                   ? std::nullopt
-                   : std::optional(runtime::CompiledScalarParameter{parameter->id, *value});
-    }
     if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
         const auto* value = std::get_if<double>(&constant->value);
         return value == nullptr
@@ -826,13 +815,6 @@ compiledVec2Parameter(const document::ParameterBinding* binding) {
     if (parameter == nullptr) {
         return std::nullopt;
     }
-    if (request_.parameterOverride.has_value() &&
-        request_.parameterOverride->parameterId == parameter->id) {
-        const auto* value = std::get_if<document::Vec2d>(&request_.parameterOverride->value);
-        return value == nullptr
-                   ? std::nullopt
-                   : std::optional(runtime::CompiledVec2Parameter{parameter->id, *value});
-    }
     if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
         const auto* value = std::get_if<document::Vec2d>(&constant->value);
         return value == nullptr
@@ -859,11 +841,6 @@ compiledColorParameter(const document::ParameterBinding* binding) {
     if (parameter == nullptr) {
         return std::nullopt;
     }
-    // Deliberately NO override branch: SnapshotParameterOverride::value is variant<double, Vec2d>,
-    // so no request can carry a colour override today (direct manipulation moves a position, not a
-    // colour). A colour alternative would be added there first, and this helper would grow the same
-    // branch its scalar/Vec2 siblings have -- inventing a dead one here would only claim a gesture
-    // that does not exist.
     if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
         const auto* value = std::get_if<core::Color4d>(&constant->value);
         return value == nullptr

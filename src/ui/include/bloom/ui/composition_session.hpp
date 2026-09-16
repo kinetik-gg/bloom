@@ -15,10 +15,12 @@
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/ui/kit/color.hpp>
+#include <bloom/ui/viewer_overlays.hpp>
 
 #include <QObject>
 #include <QRectF>
 #include <QString>
+#include <QTransform>
 
 #include <bloom/commands/result.hpp>
 
@@ -74,61 +76,27 @@ struct CompositionSelection {
     friend bool operator==(const CompositionSelection&, const CompositionSelection&) = default;
 };
 
-// docs/architecture/animation-and-time.md, "Direct Manipulation And Preview Overrides": gesture
-// begin freezes "a non-empty mapping rectangle, composition format, proxy, pixel aspect, and
-// display descriptor for the current composition". The Viewer is the only owner of screen/display
-// geometry, so it computes this snapshot and hands it to
-// CompositionSession::beginPositionInteraction; the session freezes it into the session-only
-// PositionInteraction and never recomputes it.
-struct PositionInteractionMapping final {
-    // The frozen composition display rectangle (already accounts for proxy scaling and pixel
-    // aspect). Before task U3 (issue #119) this was always fitDisplayRect()'s fit-to-window
-    // rectangle; ViewerEditor now derives it from the Viewer's own active zoom/pan ViewTransform at
-    // gesture begin (viewTransformedDisplayRect() in viewer_editor.cpp) -- fitDisplayRect() exactly
-    // when the transform is in Fit mode, or the actively zoomed/panned rectangle otherwise. The
-    // freeze contract here is unchanged: this struct still doesn't know or care which geometry
-    // source produced the rectangle, only that it was non-empty and is now frozen.
-    QRectF displayRect;
-    // The frozen composition format; its width/height are the "compositionWidth"/
-    // "compositionHeight" of the displacement formulas.
-    document::CompositionFormat compositionFormat;
-    // The frozen proxy factor, if any (today always CompositionFormatResolution{} -- no proxy
-    // pipeline exists yet).
-    runtime::EvaluationResolution resolution;
-    // The frozen pixel aspect of the displayed frame.
-    core::PixelAspectRatio pixelAspect;
-    // The frozen display descriptor identity (extent, pixel aspect, and packed layout) used to
-    // detect format/proxy/pixel-aspect/descriptor changes.
-    render::ReferenceDisplayBufferDescriptor displayDescriptor;
-
-    friend bool operator==(const PositionInteractionMapping&,
-                           const PositionInteractionMapping&) = default;
+struct TransformGesture final {
+    enum class Kind : std::uint8_t { Move, Scale, Rotate, Anchor };
+    Kind kind = Kind::Move;
+    int handle = 0;
+    QPointF origin{};
+    // Frozen evaluated local bounds and world polygon, from the current preview frame.
+    std::optional<runtime::EvaluatedOperationBounds> bounds{};
 };
 
-// Typed rejection for CompositionSession::beginPositionInteraction (docs/architecture/
-// animation-and-time.md, "Direct Manipulation And Preview Overrides").
-//
-// issue #86 (task E1) removed the former AnimatedWithoutExactKey rejection: the contract never
-// forbade beginning a gesture on an animated base without an exact key at the current time -- D1's
-// refusal was an implementation gap (CompositionSession had no synchronous access to runtime's
-// exact rational curve sampling). sampleParameterValue() now closes that gap by compiling the
-// parameter's curve (runtime::compileAnimationCurve()) and sampling it (runtime::
-// sampleAnimationCurve()) synchronously, so an animated position with no exact key at the current
-// time begins from the exact interpolated base instead of refusing. No other code referenced the
-// removed enumerator (verified: composition_session.cpp/.hpp and its own tests were the only
-// occurrences), so it was deleted rather than kept as a documented-unreachable value.
-enum class PositionInteractionRejection : std::uint8_t {
-    // No layer is the session's primary selection.
+struct TransformModifiers final {
+    bool shift = false;
+    bool alt = false;
+};
+
+enum class TransformInteractionRejection : std::uint8_t {
     NoLayerSelected,
     LockedLayer,
-    // The selected layer exposes no position parameter, its constant value does not match the
-    // Vec2d schema, or its animated curve fails to resolve/sample at the current session time.
-    NoResolvablePosition,
-    // The position parameter is bound to a driver; a gesture never disconnects a driven parameter
-    // silently, so it never begins on one.
+    NoResolvableTransform,
     DrivenParameter,
-    // The supplied mapping has an empty/degenerate display rectangle.
     EmptyMapping,
+    SingularTransform,
 };
 
 // One parameter's value, whatever kind it is: the three animatable value kinds a curve can carry
@@ -216,7 +184,7 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool setComposition(document::CompositionId compositionId);
     [[nodiscard]] bool setCurrentTime(core::RationalTime time);
     void clearSelection();
-    void selectLayer(document::LayerId layerId);
+    void selectLayer(document::LayerId layerId, bool extend = false);
     [[nodiscard]] const document::LayerStack* timelineMerge() const noexcept;
     void selectNode(document::NodeId nodeId);
     [[nodiscard]] document::WorkArea workArea() const noexcept;
@@ -476,7 +444,7 @@ class CompositionSession final : public QObject {
     // Reads the selected key's EXISTING value/interpolation from the current snapshot and passes
     // them unchanged with newTime (scalar vs Vec2d branch resolved once, here). A newTime exactly
     // equal to the key's current exact time commits nothing and returns true (docs/architecture/
-    // animation-and-time.md's zero-move precedent, mirrored from commitPositionInteraction()).
+    // animation-and-time.md's zero-move precedent, mirrored from commitTransformInteraction()).
     [[nodiscard]] bool moveSelectedKeyframe(core::RationalTime newTime);
     // Timeline insert gesture (issue #86, task E1): double-clicking a keyframe lane's row
     // BACKGROUND (never an existing key -- that hit-testing is the widget's job, same tolerance as
@@ -492,35 +460,17 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool insertKeyframeAtTime(document::AnimationCurveId curveId,
                                             core::RationalTime time);
 
-    // Direct viewer manipulation of the selected layer's position (docs/architecture/
-    // animation-and-time.md, "Direct Manipulation And Preview Overrides"; issue #82). Session-only,
-    // never persisted or undoable by itself: exactly one command transaction lands on
-    // commitPositionInteraction(). The Viewer owns the whole gesture -- press, move, release,
-    // Escape, and invalidation -- and is the only caller.
-    [[nodiscard]] bool positionInteractionActive() const noexcept;
-    // Sourced fresh by CompositionPreviewController's request path on every Interactive request
-    // build while an interaction is armed; never cached across requests.
-    [[nodiscard]] std::optional<runtime::SnapshotParameterOverride>
-    positionInteractionOverride() const;
-    // Validates the selected layer, a resolvable position parameter, and a non-empty mapping;
-    // freezes `mapping` and the base value/revision/time. Returns the typed rejection, or
-    // std::nullopt on success.
-    [[nodiscard]] std::optional<PositionInteractionRejection>
-    beginPositionInteraction(PositionInteractionMapping mapping);
-    // Recomputes the override from the frozen base value plus the TOTAL gesture displacement
-    // (never a chain of already-rounded intermediates). No-op if no interaction is active.
-    void updatePositionInteraction(double screenDx, double screenDy);
-    // Clears interaction state; creates no command. No-op if no interaction is active.
-    void cancelPositionInteraction();
-    // Called by the Viewer on resize/DPI/format/proxy/pixel-aspect/display-descriptor changes it
-    // detects; today identical to cancelPositionInteraction() (docs/architecture/
-    // animation-and-time.md: both "clear[ ] the override and create[ ] no command").
-    void invalidatePositionInteraction();
-    // Executes exactly one transaction through the same command surface as setSelectedPosition()
-    // (SetParameterSource for a constant source, SetKeyframeAtTime at the frozen time for an
-    // animated source), targeted at the frozen parameter/time rather than live selection. A stale
-    // base revision or a zero-displacement move commits nothing. Always clears interaction state.
-    [[nodiscard]] bool commitPositionInteraction();
+    // One session-only gesture; all touched parameters commit atomically at the frozen time.
+    [[nodiscard]] bool transformInteractionActive() const noexcept;
+    [[nodiscard]] std::vector<runtime::SnapshotParameterOverride>
+    transformInteractionOverrides() const;
+    [[nodiscard]] std::optional<TransformInteractionRejection>
+    beginTransformInteraction(TransformGesture gesture, ViewerMapping mapping,
+                              TransformModifiers modifiers = {});
+    void updateTransformInteraction(QPointF screenPoint, TransformModifiers modifiers = {});
+    void cancelTransformInteraction();
+    void invalidateTransformInteraction();
+    [[nodiscard]] bool commitTransformInteraction();
 
     // Node authoring (task N3): the ONE public submission seam for node-operation transactions
     // built by the node editor (MoveNodes, ConnectPorts, DuplicateNodes, ...). Executes exactly
@@ -564,7 +514,7 @@ class CompositionSession final : public QObject {
     // animation-and-time.md, "Direct Manipulation And Preview Overrides").
     // CompositionPreviewController consumes it to (re)build a preview request carrying the fresh
     // override.
-    void positionInteractionChanged();
+    void transformInteractionChanged();
     // Task DRIVE-1: a fresh resolution of the composition's driven parameters has landed.
     void drivenValuesChanged();
 
@@ -600,7 +550,7 @@ class CompositionSession final : public QObject {
     // The one command-selection decision for writing a position value (constant source ->
     // SetParameterSource; animation source -> SetKeyframeAtTime at `time`; driver source ->
     // rejected), executed as exactly one transaction. setSelectedPosition() calls this with its
-    // live-derived parameter/time; commitPositionInteraction() calls it with the FROZEN
+    // live-derived parameter/time; commitTransformInteraction() calls it with the FROZEN
     // parameter/time -- a single copy of the branch so the two callers cannot silently drift if the
     // command surface ever changes.
     [[nodiscard]] bool executePositionCommand(document::ParameterId parameterId,
@@ -612,7 +562,7 @@ class CompositionSession final : public QObject {
     // `time` via the existing runtime::sampleAnimationCurve() -- the SAME exact rational sampler
     // src/runtime uses everywhere else. Returns std::nullopt for a constant/driven source (those
     // callers keep their existing paths -- constantValue()/constantVec2Value(), the driven refusal
-    // branches) or if the curve fails to resolve/sample. Both beginPositionInteraction() (the
+    // branches) or if the curve fails to resolve/sample. Both beginTransformInteraction() (the
     // relaxed animated-base rule) and insertKeyframeAtTime() (the timeline insert gesture) call
     // this one place rather than each re-deriving the curve/sample logic.
     [[nodiscard]] std::optional<ParameterSample>
@@ -648,19 +598,29 @@ class CompositionSession final : public QObject {
     // Cancels an active position interaction whose frozen base revision no longer matches
     // snapshot_ (docs/architecture/animation-and-time.md: "snapshot changes that break the frozen
     // revision also cancel"). Called after handleResult() adopts a new snapshot.
-    void invalidatePositionInteractionOnStaleRevision();
+    void invalidateTransformInteractionOnStaleRevision();
 
     // Session-only, never persisted (docs/architecture/animation-and-time.md, "Direct
     // Manipulation And Preview Overrides"). Named after exactly what the contract freezes.
-    struct PositionInteraction final {
+    struct TransformInteraction final {
         document::Revision baseRevision;
-        document::ParameterId parameterId;
         document::LayerId layerId;
         core::RationalTime time;
-        document::Vec2d baseValue;
-        document::Vec2d currentOverride;
-        PositionInteractionMapping mapping;
+        ViewerMapping mapping;
+        TransformGesture gesture;
+        // position, anchor, scale, rotation, sampled once at time.
+        std::array<document::ParameterId, 4> parameters;
+        document::Vec2d position;
+        document::Vec2d anchor;
+        document::Vec2d scale;
+        double rotation = 0;
+        QTransform inverseParent;
+        std::vector<runtime::SnapshotParameterOverride> overrides;
     };
+
+    [[nodiscard]] bool appendParameterEdit(commands::Transaction& transaction,
+                                           document::ParameterId parameterId,
+                                           core::RationalTime time, document::ParameterValue value);
 
     // Pointers, not references (task U1, issue #72): rebind() must be able to atomically retarget
     // which document/command-stack this session projects after ProjectHost replaces the live
@@ -675,7 +635,7 @@ class CompositionSession final : public QObject {
     CompositionSelection selection_;
     std::vector<commands::KeyframePaste> keyframeClipboard_;
     std::set<document::NodeId> selectedNodes_;
-    std::optional<PositionInteraction> positionInteraction_;
+    std::optional<TransformInteraction> transformInteraction_;
     // Task DRIVE-1's shared driver resolution. The evaluator is created on the first refresh that
     // finds a driven parameter and never before, so a composition with no drivers -- every existing
     // test fixture among them -- pays nothing at all for the capability. `drivenRequest_` is the

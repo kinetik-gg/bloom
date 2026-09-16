@@ -69,8 +69,8 @@ CompositionPreviewController::CompositionPreviewController(
             &CompositionPreviewController::handleCompositionChanged);
     connect(&session_, &CompositionSession::currentTimeChanged, this,
             &CompositionPreviewController::handleCurrentTimeChanged);
-    connect(&session_, &CompositionSession::positionInteractionChanged, this,
-            &CompositionPreviewController::handlePositionInteractionChanged);
+    connect(&session_, &CompositionSession::transformInteractionChanged, this,
+            &CompositionPreviewController::handleTransformInteractionChanged);
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this,
             &CompositionPreviewController::consumeReadyResult);
     interactiveCadenceTimer_.setSingleShot(true);
@@ -125,7 +125,7 @@ bool CompositionPreviewController::isShuttingDown() const noexcept { return shut
 
 bool CompositionPreviewController::backgroundWorkAllowed() const noexcept {
     return !shuttingDown_ && !active_.has_value() && !pending_.has_value() &&
-           !interactiveTimeChangeArmed_ && !session_.positionInteractionOverride().has_value() &&
+           !interactiveTimeChangeArmed_ && session_.transformInteractionOverrides().empty() &&
            !ramPreviewProgress_.has_value();
 }
 
@@ -255,7 +255,7 @@ void CompositionPreviewController::handleCurrentTimeChanged() {
                                                       : PreviewRequestKind::Visible);
 }
 
-void CompositionPreviewController::handlePositionInteractionChanged() {
+void CompositionPreviewController::handleTransformInteractionChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (shuttingDown_) {
         return;
@@ -478,16 +478,16 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
 
     // Overrides ride ONLY Interactive requests from an active gesture (docs/architecture/
     // animation-and-time.md), and are read fresh here -- never cached across requests.
-    std::optional<runtime::SnapshotParameterOverride> interactionOverride;
+    std::vector<runtime::SnapshotParameterOverride> interactionOverride;
     if (kind == PreviewRequestKind::Interactive) {
-        interactionOverride = session_.positionInteractionOverride();
+        interactionOverride = session_.transformInteractionOverrides();
     }
 
     // The RAM preview cache (docs/architecture/animation-and-time.md, "RAM preview"). A request
     // whose key is cached is answered right here: no task, no coalescing, no cadence -- which is
     // what makes cached playback frame-accurate rather than best-effort. An overridden request is
     // never served from the cache, because its pixels are the gesture's, not the revision's.
-    if (allowCachedFrame && !interactionOverride.has_value()) {
+    if (allowCachedFrame && interactionOverride.empty()) {
         if (auto cached = frameCache_->take(desiredIdentity); cached != nullptr) {
             interactiveCadenceTimer_.stop();
             if (pending_.has_value()) {
@@ -627,7 +627,7 @@ void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
     active_.emplace(
         ActiveRequest{.handle = std::move(submission.handle),
                       .desiredIdentity = desiredIdentity,
-                      .carriedInteractionOverride = interactionOverride.has_value(),
+                      .carriedInteractionOverride = !interactionOverride.empty(),
                       .submittedAt = submittedAt,
                       .playbackDeadline = pendingRequest.kind == PreviewRequestKind::Playback
                                               ? std::optional{submittedAt + playbackBudget_}

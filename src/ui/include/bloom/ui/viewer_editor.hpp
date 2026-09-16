@@ -200,9 +200,9 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     bool event(QEvent* event) override;
     // Direct viewer manipulation of the selected layer's position (docs/architecture/
     // animation-and-time.md, "Direct Manipulation And Preview Overrides"; issue #82). press ->
-    // beginPositionInteraction (+ beginInteractiveScrub() arming so drag previews ride Interactive
-    // cadence); move -> updatePositionInteraction; release -> commit + disarm; Escape or a detected
-    // resize/format/proxy/pixel-aspect/display-descriptor change -> cancel + disarm. A
+    // beginTransformInteraction (+ beginInteractiveScrub() arming so drag previews ride Interactive
+    // cadence); move -> updateTransformInteraction; release -> commit + disarm; Escape or a
+    // detected resize/format/proxy/pixel-aspect/display-descriptor change -> cancel + disarm. A
     // middle-button press begins a PAN gesture instead
     // (decision 2) and never touches CompositionSession.
     void mousePressEvent(QMouseEvent* event) override;
@@ -232,10 +232,11 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     // this widget's current geometry. Returns std::nullopt when there is no current-composition
     // frame to map from -- a stale frame from another composition (or an older revision) is never
     // a mapping source.
-    [[nodiscard]] std::optional<PositionInteractionMapping> currentMapping() const;
+    [[nodiscard]] std::optional<ViewerMapping> currentMapping() const;
     // True while a gesture is active AND the freshly recomputed mapping still matches the one
     // frozen at gesture begin.
     [[nodiscard]] bool mappingStillValid() const;
+    [[nodiscard]] ViewerHit hitAt(const ViewerMapping& mapping, QPointF point) const;
     void endDrag(bool commit);
 
     struct DisplayGeometry final {
@@ -295,8 +296,7 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     CompositionSession& session_;
     CompositionPreviewController& previewController_;
     bool dragActive_ = false;
-    QPointF dragOrigin_;
-    std::optional<PositionInteractionMapping> activeMapping_;
+    std::optional<ViewerMapping> activeMapping_;
 
     // Zoom/pan (decision 2).
     ViewTransform transform_;

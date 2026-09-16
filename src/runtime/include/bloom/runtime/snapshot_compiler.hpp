@@ -68,7 +68,7 @@ struct CompileDiagnostic {
 struct SnapshotParameterOverride final {
     document::Revision sourceRevision;
     document::ParameterId parameterId;
-    std::variant<double, document::Vec2d> value;
+    std::variant<double, document::Vec2d, core::Color4d, std::int64_t, std::string> value;
 
     friend bool operator==(const SnapshotParameterOverride&,
                            const SnapshotParameterOverride&) = default;
@@ -77,7 +77,8 @@ struct SnapshotParameterOverride final {
 struct SnapshotCompileRequest {
     document::Snapshot snapshot;
     document::CompositionId compositionId;
-    std::optional<SnapshotParameterOverride> parameterOverride = std::nullopt;
+    // Admission limits this request-local channel to eight distinct parameters.
+    std::vector<SnapshotParameterOverride> parameterOverrides{};
 };
 
 struct SnapshotCompileResult {

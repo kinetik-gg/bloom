@@ -9,13 +9,60 @@
 #include <cmath>
 
 namespace bloom::ui {
-namespace {
-
-QPointF toScreen(const QRectF& displayRect, const QSize compositionSize,
-                 const document::Vec2d point) {
-    return {displayRect.left() + point.x * displayRect.width() / compositionSize.width(),
-            displayRect.top() + point.y * displayRect.height() / compositionSize.height()};
+QPointF ViewerMapping::toScreen(const document::Vec2d point) const {
+    return {displayRect.left() + point.x * displayRect.width() / compositionFormat.width(),
+            displayRect.top() + point.y * displayRect.height() / compositionFormat.height()};
 }
+
+document::Vec2d ViewerMapping::toComposition(const QPointF point) const {
+    return {(point.x() - displayRect.left()) / displayRect.width() * compositionFormat.width(),
+            (point.y() - displayRect.top()) / displayRect.height() * compositionFormat.height()};
+}
+
+std::array<QPointF, 8> viewerHandlePoints(const ViewerMapping& mapping,
+                                          const runtime::EvaluatedOperationBounds& bounds) {
+    std::array<QPointF, 8> points;
+    for (std::size_t i = 0; i < 4; ++i) {
+        points[i * 2] = mapping.toScreen(bounds.polygon[i]);
+        points[i * 2 + 1] = (points[i * 2] + mapping.toScreen(bounds.polygon[(i + 1) % 4])) / 2;
+    }
+    return points;
+}
+
+ViewerHit hitTestViewer(const ViewerMapping& mapping, const QPointF screenPoint,
+                        const std::span<const runtime::EvaluatedOperationBounds> topmostFirst,
+                        const std::span<const runtime::EvaluatedOperationBounds> selected) {
+    const auto near = [&](const QPointF point, const double radius) {
+        return std::hypot(point.x() - screenPoint.x(), point.y() - screenPoint.y()) <= radius;
+    };
+    for (const auto& bounds : selected) {
+        if (near(mapping.toScreen(bounds.anchor), kit::px(kit::Size::GizmoHandle)))
+            return {bounds.layerId, ViewerHitRegion::Anchor};
+        const auto handles = viewerHandlePoints(mapping, bounds);
+        for (std::size_t i = 0; i < handles.size(); ++i)
+            if (near(handles[i], kit::px(kit::Size::GizmoHandle) / 2.0))
+                return {bounds.layerId, ViewerHitRegion::Scale, static_cast<int>(i)};
+        QPolygonF polygon;
+        for (const auto point : bounds.polygon)
+            polygon << mapping.toScreen(point);
+        if (!polygon.containsPoint(screenPoint, Qt::OddEvenFill))
+            for (std::size_t i = 0; i < handles.size(); i += 2)
+                if (near(handles[i], kit::px(kit::Size::GizmoRotateZone)))
+                    return {bounds.layerId, ViewerHitRegion::Rotate, static_cast<int>(i)};
+    }
+    for (const auto& bounds : topmostFirst) {
+        if (!bounds.layerId.isValid() || bounds.output.empty())
+            continue;
+        QPolygonF polygon;
+        for (const auto point : bounds.polygon)
+            polygon << mapping.toScreen(point);
+        if (polygon.containsPoint(screenPoint, Qt::OddEvenFill))
+            return {bounds.layerId, ViewerHitRegion::Move};
+    }
+    return {};
+}
+
+namespace {
 
 QRectF insetRect(const QRectF& displayRect, const double percentage) {
     const qreal horizontal = displayRect.width() * (1.0 - percentage) * 0.5;
@@ -161,29 +208,50 @@ void paintPixelGrid(QPainter& painter, const QRectF& displayRect, const QSize co
     painter.restore();
 }
 
-void paintSelectionBounds(QPainter& painter, const QRectF& displayRect, const QSize compositionSize,
-                          std::span<const runtime::EvaluatedOperationBounds> bounds) {
+void paintSelectionBounds(QPainter& painter, const ViewerMapping& mapping,
+                          const std::span<const runtime::EvaluatedOperationBounds> bounds) {
+    const auto device = painter.deviceTransform();
+    const auto inverse = device.inverted();
+    const auto snap = [&](const QPointF point) {
+        const auto physical = device.map(point);
+        return inverse.map(QPointF(std::floor(physical.x()) + 0.5, std::floor(physical.y()) + 0.5));
+    };
+    QPen pen(kit::color(kit::Color::Accent), kit::px(kit::Size::Hairline));
+    pen.setCosmetic(true);
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    const double halfHandle = kit::px(kit::Size::GizmoHandle) / 2.0;
     for (const auto& bound : bounds) {
         QPolygonF polygon;
-        for (const auto point : bound.polygon) {
-            polygon << toScreen(displayRect, compositionSize, point);
-        }
-        painter.setPen(QPen(kit::color(kit::Color::Accent), 1.0));
+        for (const auto point : bound.polygon)
+            polygon << snap(mapping.toScreen(point));
+        painter.setPen(pen);
         painter.setBrush(Qt::NoBrush);
         painter.drawPolygon(polygon);
-        painter.setBrush(kit::color(kit::Color::Accent));
-        painter.setPen(Qt::NoPen);
-        const auto anchor = toScreen(displayRect, compositionSize, bound.anchor);
-        painter.drawEllipse(anchor, 3.0, 3.0);
+        painter.setBrush(kit::color(kit::Color::Surface));
+        for (const auto point : viewerHandlePoints(mapping, bound)) {
+            const auto topLeft = snap(point - QPointF(halfHandle, halfHandle));
+            const auto bottomRight = snap(point + QPointF(halfHandle, halfHandle));
+            painter.drawRect(QRectF(topLeft, bottomRight));
+        }
+        const auto anchor = snap(mapping.toScreen(bound.anchor));
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.drawEllipse(anchor, halfHandle, halfHandle);
+        painter.setRenderHint(QPainter::Antialiasing, false);
+        painter.drawLine(snap(anchor - QPointF(halfHandle, 0)),
+                         snap(anchor + QPointF(halfHandle, 0)));
+        painter.drawLine(snap(anchor - QPointF(0, halfHandle)),
+                         snap(anchor + QPointF(0, halfHandle)));
     }
 }
 
 } // namespace
 
-void paintViewerOverlays(QPainter& painter, const QRectF& canvasRect, const QRectF& displayRect,
-                         const QSize compositionSize, const double effectiveZoom,
-                         const ViewerOverlayOptions& options,
+void paintViewerOverlays(QPainter& painter, const QRectF& canvasRect, const ViewerMapping& mapping,
+                         const double effectiveZoom, const ViewerOverlayOptions& options,
                          const std::span<const runtime::EvaluatedOperationBounds> bounds) {
+    const auto& displayRect = mapping.displayRect;
+    const QSize compositionSize(static_cast<int>(mapping.compositionFormat.width()),
+                                static_cast<int>(mapping.compositionFormat.height()));
     if (displayRect.isEmpty() || compositionSize.width() <= 0 || compositionSize.height() <= 0) {
         return;
     }
@@ -203,7 +271,7 @@ void paintViewerOverlays(QPainter& painter, const QRectF& canvasRect, const QRec
     if (options.rulers) {
         paintRulers(painter, canvasRect, displayRect, compositionSize);
     }
-    paintSelectionBounds(painter, displayRect, compositionSize, bounds);
+    paintSelectionBounds(painter, mapping, bounds);
     painter.restore();
 }
 

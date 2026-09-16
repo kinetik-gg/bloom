@@ -219,7 +219,7 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
     selectedNodes_.clear();
     // The OLD document/command-stack are left untouched, but this session's own interaction state
     // targets them and must not survive the swap.
-    positionInteraction_.reset();
+    transformInteraction_.reset();
 
     // One coherent transition (docs/architecture/project-session.md, "Session Publication"):
     // observers must never see a new document paired with stale selection/time/history, so every
@@ -258,7 +258,7 @@ bool CompositionSession::setComposition(const document::CompositionId compositio
     // A composition switch cancels any active interaction (docs/architecture/animation-and-time.md,
     // "Direct Manipulation And Preview Overrides"): its frozen target/mapping belong to the OLD
     // composition.
-    cancelPositionInteraction();
+    cancelTransformInteraction();
     compositionId_ = compositionId;
     const bool timeChanged = currentTime_ != core::RationalTime::fromInteger(0);
     currentTime_ = core::RationalTime::fromInteger(0);
@@ -281,6 +281,7 @@ bool CompositionSession::setCurrentTime(const core::RationalTime time) {
     if (currentTime_ == time) {
         return false;
     }
+    cancelTransformInteraction();
     currentTime_ = time;
     emit currentTimeChanged();
     return true;
@@ -296,7 +297,7 @@ void CompositionSession::clearSelection() {
     emit selectionChanged();
 }
 
-void CompositionSession::selectLayer(const document::LayerId layerId) {
+void CompositionSession::selectLayer(const document::LayerId layerId, const bool extend) {
     Q_ASSERT(QThread::currentThread() == thread());
     const auto boundary = boundaryNodeForLayer(layerId);
     if (!boundary.has_value()) {
@@ -304,7 +305,8 @@ void CompositionSession::selectLayer(const document::LayerId layerId) {
         return;
     }
     CompositionSelection next{.primary = layerId, .contextualLayer = layerId};
-    const std::set<document::NodeId> nextNodes{*boundary};
+    auto nextNodes = extend ? selectedNodes_ : std::set<document::NodeId>{};
+    nextNodes.insert(*boundary);
     if (selection_ != next || selectedNodes_ != nextNodes) {
         selection_ = next;
         selectedNodes_ = nextNodes;
@@ -698,33 +700,9 @@ bool CompositionSession::executePositionCommand(const document::ParameterId para
                                                 const core::RationalTime time,
                                                 const document::Vec2d value,
                                                 const QString& commandLabel) {
-    Q_ASSERT(QThread::currentThread() == thread());
-    const auto* current = composition();
-    const auto* position = current == nullptr ? nullptr : current->parameters().find(parameterId);
-    if (position == nullptr) {
-        reportUnavailable(QStringLiteral("The selected object does not expose this parameter"));
-        return false;
-    }
-
     commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
-    if (const auto* constantSource =
-            std::get_if<document::ConstantValueSource>(&position->source)) {
-        if (std::get_if<document::Vec2d>(&constantSource->value) == nullptr) {
-            reportUnavailable(QStringLiteral("The parameter value does not match its schema"));
-            return false;
-        }
-        transaction.emplace<commands::SetParameterSource>(compositionId_, position->id,
-                                                          document::ConstantValueSource{value});
-    } else if (const auto* animationSource =
-                   std::get_if<document::AnimationCurveSource>(&position->source)) {
-        transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, animationSource->curveId,
-                                                         time, value);
-    } else {
-        reportUnavailable(
-            QStringLiteral("Disconnect the driven parameter before editing its value"));
-        return false;
-    }
-    return execute(std::move(transaction));
+    return appendParameterEdit(transaction, parameterId, time, value) &&
+           executeTransaction(std::move(transaction)).succeeded();
 }
 
 bool CompositionSession::setSelectionVec2Parameter(const std::string_view role, const double x,
@@ -809,9 +787,10 @@ bool CompositionSession::setParameterComponentValue(const document::ParameterId 
     return execute(std::move(transaction));
 }
 
-bool CompositionSession::setParameterValue(const document::ParameterId parameterId,
-                                           document::ParameterValue value,
-                                           const QString& commandLabel) {
+bool CompositionSession::appendParameterEdit(commands::Transaction& transaction,
+                                             const document::ParameterId parameterId,
+                                             const core::RationalTime time,
+                                             document::ParameterValue value) {
     Q_ASSERT(QThread::currentThread() == thread());
     const auto* current = composition();
     const auto* parameter = current == nullptr ? nullptr : current->parameters().find(parameterId);
@@ -819,11 +798,10 @@ bool CompositionSession::setParameterValue(const document::ParameterId parameter
         reportUnavailable(QStringLiteral("The selected object does not expose this parameter"));
         return false;
     }
-    commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
     if (std::holds_alternative<document::ConstantValueSource>(parameter->source)) {
         transaction.emplace<commands::SetParameterSource>(
             compositionId_, parameterId, document::ConstantValueSource{std::move(value)});
-        return execute(std::move(transaction));
+        return true;
     }
     const auto* animated = std::get_if<document::AnimationCurveSource>(&parameter->source);
     if (animated == nullptr) {
@@ -839,7 +817,7 @@ bool CompositionSession::setParameterValue(const document::ParameterId parameter
             if constexpr (std::is_same_v<Held, double> || std::is_same_v<Held, document::Vec2d> ||
                           std::is_same_v<Held, core::Color4d>) {
                 transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, animated->curveId,
-                                                                 currentTime_, held);
+                                                                 time, held);
                 return true;
             } else {
                 return false;
@@ -850,7 +828,15 @@ bool CompositionSession::setParameterValue(const document::ParameterId parameter
         reportUnavailable(QStringLiteral("This parameter's kind cannot carry a keyframe"));
         return false;
     }
-    return execute(std::move(transaction));
+    return true;
+}
+
+bool CompositionSession::setParameterValue(const document::ParameterId parameterId,
+                                           document::ParameterValue value,
+                                           const QString& commandLabel) {
+    commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
+    return appendParameterEdit(transaction, parameterId, currentTime_, std::move(value)) &&
+           executeTransaction(std::move(transaction)).succeeded();
 }
 
 bool CompositionSession::setSelectedAnchor(const double x, const double y,
@@ -1124,7 +1110,7 @@ bool CompositionSession::moveSelectedKeyframe(const core::RationalTime newTime) 
         }
         if (key->time == newTime) {
             // Zero effective change commits nothing (docs/architecture/animation-and-time.md's
-            // zero-move precedent -- mirrors commitPositionInteraction()'s zero-move branch).
+            // zero-move precedent -- mirrors commitTransformInteraction()'s zero-move branch).
             return true;
         }
         transaction.emplace<commands::UpdateScalarKeyframe>(compositionId_, keySelection->curveId,
@@ -1187,142 +1173,7 @@ bool CompositionSession::insertKeyframeAtTime(const document::AnimationCurveId c
     return true;
 }
 
-bool CompositionSession::positionInteractionActive() const noexcept {
-    return positionInteraction_.has_value();
-}
-
-std::optional<runtime::SnapshotParameterOverride>
-CompositionSession::positionInteractionOverride() const {
-    if (!positionInteraction_.has_value()) {
-        return std::nullopt;
-    }
-    return runtime::SnapshotParameterOverride{
-        .sourceRevision = positionInteraction_->baseRevision,
-        .parameterId = positionInteraction_->parameterId,
-        .value = positionInteraction_->currentOverride,
-    };
-}
-
-std::optional<PositionInteractionRejection>
-CompositionSession::beginPositionInteraction(PositionInteractionMapping mapping) {
-    Q_ASSERT(QThread::currentThread() == thread());
-    // A stray second begin (should not happen given the Viewer is the sole caller) restarts state
-    // cleanly rather than layering interactions.
-    cancelPositionInteraction();
-
-    const auto* layerId = std::get_if<document::LayerId>(&selection_.primary);
-    if (layerId == nullptr) {
-        return PositionInteractionRejection::NoLayerSelected;
-    }
-    const auto* position = parameterForSelection(document::kPositionParameterRole);
-    if (position == nullptr) {
-        return PositionInteractionRejection::NoResolvablePosition;
-    }
-
-    if (composition() && composition()->parameterLocked(position->id))
-        return PositionInteractionRejection::LockedLayer;
-    document::Vec2d baseValue{};
-    if (const auto* constantSource =
-            std::get_if<document::ConstantValueSource>(&position->source)) {
-        const auto* value = std::get_if<document::Vec2d>(&constantSource->value);
-        if (value == nullptr) {
-            return PositionInteractionRejection::NoResolvablePosition;
-        }
-        baseValue = *value;
-    } else if (std::holds_alternative<document::AnimationCurveSource>(position->source)) {
-        // D1's relaxation (issue #86, task E1; docs/architecture/animation-and-time.md): the base
-        // value for an animated position is its exact sampled value at the current session time,
-        // whether or not an exact key sits there. sampleParameterValue() compiles the curve
-        // (decision 1) and samples it (the existing runtime::sampleAnimationCurve()) synchronously.
-        const auto sample = sampleParameterValue(*position, currentTime_);
-        const auto* vector = sample.has_value() ? std::get_if<document::Vec2d>(&*sample) : nullptr;
-        if (vector == nullptr) {
-            return PositionInteractionRejection::NoResolvablePosition;
-        }
-        baseValue = *vector;
-    } else {
-        return PositionInteractionRejection::DrivenParameter;
-    }
-
-    if (mapping.displayRect.isEmpty()) {
-        return PositionInteractionRejection::EmptyMapping;
-    }
-
-    positionInteraction_ = PositionInteraction{.baseRevision = snapshot_.revision(),
-                                               .parameterId = position->id,
-                                               .layerId = *layerId,
-                                               .time = currentTime_,
-                                               .baseValue = baseValue,
-                                               .currentOverride = baseValue,
-                                               .mapping = mapping};
-    emit positionInteractionChanged();
-    return std::nullopt;
-}
-
-void CompositionSession::updatePositionInteraction(const double screenDx, const double screenDy) {
-    Q_ASSERT(QThread::currentThread() == thread());
-    if (!positionInteraction_.has_value()) {
-        return;
-    }
-
-    const auto& mapping = positionInteraction_->mapping;
-    const double displayWidth = mapping.displayRect.width();
-    const double displayHeight = mapping.displayRect.height();
-    if (displayWidth <= 0.0 || displayHeight <= 0.0) {
-        cancelPositionInteraction();
-        return;
-    }
-
-    // docs/architecture/animation-and-time.md: base value plus TOTAL gesture displacement, never a
-    // chain of already-rounded intermediates.
-    const double compositionWidth = static_cast<double>(mapping.compositionFormat.width());
-    const double compositionHeight = static_cast<double>(mapping.compositionFormat.height());
-    const double compositionDx = screenDx / displayWidth * compositionWidth;
-    const double compositionDy = screenDy / displayHeight * compositionHeight;
-    positionInteraction_->currentOverride =
-        document::Vec2d{positionInteraction_->baseValue.x + compositionDx,
-                        positionInteraction_->baseValue.y + compositionDy};
-    emit positionInteractionChanged();
-}
-
-void CompositionSession::cancelPositionInteraction() {
-    Q_ASSERT(QThread::currentThread() == thread());
-    if (!positionInteraction_.has_value()) {
-        return;
-    }
-    positionInteraction_.reset();
-    emit positionInteractionChanged();
-}
-
-void CompositionSession::invalidatePositionInteraction() { cancelPositionInteraction(); }
-
-bool CompositionSession::commitPositionInteraction() {
-    Q_ASSERT(QThread::currentThread() == thread());
-    if (!positionInteraction_.has_value()) {
-        return false;
-    }
-    const PositionInteraction interaction = *positionInteraction_;
-    positionInteraction_.reset();
-    emit positionInteractionChanged();
-
-    if (interaction.baseRevision != snapshot_.revision()) {
-        // The invalidation hooks below should already have cancelled a stale interaction; treat
-        // this defensively as a no-op rather than mutate against a revision the caller no longer
-        // recognizes.
-        return false;
-    }
-    if (interaction.currentOverride == interaction.baseValue) {
-        // A zero move commits nothing (docs/architecture/animation-and-time.md).
-        return true;
-    }
-
-    // Same command-selection decision as setSelectedPosition() (see executePositionCommand()),
-    // targeted at the FROZEN parameter/time rather than re-deriving from live selection (docs/
-    // architecture/animation-and-time.md: "On release, a constant position receives one
-    // set-constant transaction. An animated position updates the exact-time key or inserts one.").
-    return executePositionCommand(interaction.parameterId, interaction.time,
-                                  interaction.currentOverride, QStringLiteral("Move Layer"));
-}
+#include "composition_session_transform.ipp"
 
 bool CompositionSession::canUndo() const noexcept { return commandStack_->canUndo(); }
 
@@ -1372,7 +1223,7 @@ bool CompositionSession::execute(commands::Transaction&& transaction) {
 bool CompositionSession::handleResult(const commands::CommandResult& result) {
     const auto previousRevision = snapshot_.revision();
     snapshot_ = document_->snapshot();
-    invalidatePositionInteractionOnStaleRevision();
+    invalidateTransformInteractionOnStaleRevision();
 
     if (!result.succeeded()) {
         const auto message = statusMessage(result);
@@ -2174,10 +2025,10 @@ void CompositionSession::reportUnavailable(const QString& message) {
     emit commandRejected(message);
 }
 
-void CompositionSession::invalidatePositionInteractionOnStaleRevision() {
-    if (positionInteraction_.has_value() &&
-        positionInteraction_->baseRevision != snapshot_.revision()) {
-        cancelPositionInteraction();
+void CompositionSession::invalidateTransformInteractionOnStaleRevision() {
+    if (transformInteraction_.has_value() &&
+        transformInteraction_->baseRevision != snapshot_.revision()) {
+        cancelTransformInteraction();
     }
 }
 

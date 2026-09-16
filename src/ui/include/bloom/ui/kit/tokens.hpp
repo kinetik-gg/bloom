@@ -223,6 +223,8 @@ enum class Size : int {
     // handle's hairline.
     GraphValueAxis = 48,
     GraphHandleDot = 6,
+    GizmoHandle = 8,
+    GizmoRotateZone = 16,
     ScrollBar = 8,
     ScrollBarHover = 12,
     // task S1, item 3: the narrowest a QMenu popup may be, roughly half again the width Bloom's

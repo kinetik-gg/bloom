@@ -202,7 +202,7 @@ struct SessionFixture final {
         return [this](const document::Snapshot& snapshot,
                       const runtime::PreviewRequestIdentity& desiredIdentity,
                       const std::size_t pixelStorageByteLimit,
-                      const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+                      const std::vector<runtime::SnapshotParameterOverride>& interactionOverride,
                       runtime::TaskContext& context) {
             const auto ordinal = preparationCount.fetch_add(1);
             if (gateAtCall.has_value() && ordinal == *gateAtCall) {
@@ -267,7 +267,7 @@ void testOutwardOrderBudgetAndRestart(Expectations& expectations) {
     std::vector<core::RationalTime> order;
     auto prepare = [&](const document::Snapshot& snapshot,
                        const runtime::PreviewRequestIdentity& identity, std::size_t limit,
-                       const std::optional<runtime::SnapshotParameterOverride>& override,
+                       const std::vector<runtime::SnapshotParameterOverride>& override,
                        runtime::TaskContext& context) {
         {
             std::lock_guard lock(mutex);
@@ -325,7 +325,7 @@ void testYieldsAndKeepsCancelledHandleUntilTerminal(Expectations& expectations) 
     std::atomic<bool> cancelled = false;
     auto prepare = [&](const document::Snapshot& snapshot,
                        const runtime::PreviewRequestIdentity& identity, std::size_t limit,
-                       const std::optional<runtime::SnapshotParameterOverride>& override,
+                       const std::vector<runtime::SnapshotParameterOverride>& override,
                        runtime::TaskContext& context) {
         gate.enterAndWait();
         cancelled = context.isCancellationRequested();
@@ -379,7 +379,7 @@ void testPointerPressCancelsBeforePreviewChanges(Expectations& expectations) {
     std::atomic<bool> cancelled = false;
     auto prepare = [&](const document::Snapshot& snapshot,
                        const runtime::PreviewRequestIdentity& identity, std::size_t limit,
-                       const std::optional<runtime::SnapshotParameterOverride>& override,
+                       const std::vector<runtime::SnapshotParameterOverride>& override,
                        runtime::TaskContext& context) {
         gate.enterAndWait();
         cancelled = context.isCancellationRequested();
@@ -491,7 +491,7 @@ void testBackgroundFillsAheadWhilePlaying(Expectations& expectations) {
     std::vector<core::RationalTime> order;
     auto prepare = [&](const document::Snapshot& snapshot,
                        const runtime::PreviewRequestIdentity& identity, std::size_t limit,
-                       const std::optional<runtime::SnapshotParameterOverride>& override,
+                       const std::vector<runtime::SnapshotParameterOverride>& override,
                        runtime::TaskContext& context) {
         {
             std::lock_guard lock(mutex);

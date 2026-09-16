@@ -72,6 +72,42 @@
 namespace bloom::ui {
 namespace {
 
+// Keyboard steps use current authored ancestor linear transforms, so auto-repeat never waits
+// for the previous nudge's preview. Pivot translations do not affect displacement vectors.
+void nudgeViewerSelection(CompositionSession& session, const QPointF compositionDelta) {
+    const auto* layer = std::get_if<document::LayerId>(&session.selection().primary);
+    const auto position = session.effectiveVec2Value(document::kPositionParameterRole);
+    if (!layer || !position || !session.composition())
+        return;
+    QTransform parentWorld;
+    for (auto parent = session.parentOf(*layer); parent; parent = session.parentOf(*parent)) {
+        const auto boundary = session.boundaryNodeForLayer(*parent);
+        const auto* node = boundary ? session.composition()->graph().findNode(*boundary) : nullptr;
+        if (!node)
+            return;
+        const auto scaleBinding = std::ranges::find(node->parameters, document::kScaleParameterRole,
+                                                    &document::ParameterBinding::role);
+        const auto rotationBinding = std::ranges::find(
+            node->parameters, document::kRotationParameterRole, &document::ParameterBinding::role);
+        if (scaleBinding == node->parameters.end() || rotationBinding == node->parameters.end())
+            return;
+        const auto scale = session.effectiveVec2Value(scaleBinding->parameterId);
+        const auto rotation = session.effectiveScalarValue(rotationBinding->parameterId);
+        if (!scale || !rotation)
+            return;
+        QTransform local;
+        local.rotate(*rotation);
+        local.scale(scale->x, scale->y);
+        parentWorld *= local;
+    }
+    bool invertible = false;
+    const auto inverse = parentWorld.inverted(&invertible);
+    if (!invertible)
+        return;
+    const auto delta = inverse.map(compositionDelta);
+    (void)session.setSelectedPosition(position->x + delta.x(), position->y + delta.y());
+}
+
 // Wheel/menu zoom step (decision 2): each wheel notch or Zoom In/Out menu action multiplies the
 // current effective zoom by this factor (clamped into ViewTransform's [kMinZoom, kMaxZoom]). The
 // value itself moved to viewer_editor.hpp for task U4 (issue #123) so the Nodes canvas steps by
@@ -1333,6 +1369,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     // StrongFocus lets a press-to-drag gesture also receive the Escape key that cancels it, and
     // lets the widget receive Space/Z/F without a prior click.
     setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true);
 
     playback_ = &previewController.playbackController();
     buildHeader();
@@ -1792,6 +1829,9 @@ void ViewerEditor::updatePreviewResolution() {
 }
 
 bool ViewerEditor::event(QEvent* event) {
+    if (dragActive_ && (event->type() == QEvent::UngrabMouse ||
+                        event->type() == QEvent::WindowDeactivate || event->type() == QEvent::Hide))
+        endDrag(false);
     const bool handled = QWidget::event(event);
     if (event->type() == QEvent::DevicePixelRatioChange) {
         if (dragActive_) {
@@ -1907,11 +1947,20 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                                                           -kit::kCompositionFrameWidth));
                     if (geometry.has_value()) {
                         const auto bounds = previewController_.selectedLayerBounds();
-                        paintViewerOverlays(painter, frame, displayRect,
-                                            QSize(static_cast<int>(geometry->extent.width()),
-                                                  static_cast<int>(geometry->extent.height())),
-                                            effectiveZoom(displayRect, *geometry), overlayOptions_,
-                                            bounds);
+                        const auto descriptor = render::ReferenceDisplayBufferDescriptor::create(
+                            bufferView->displayWindow, bufferView->pixelAspect);
+                        if (descriptor && session_.composition()) {
+                            const ViewerMapping mapping{
+                                displayRect, session_.composition()->format(),
+                                displayedFrame->desiredIdentity().resolution,
+                                bufferView->pixelAspect, *descriptor.value()};
+                            painter.save();
+                            painter.setClipRect(contentRect());
+                            paintViewerOverlays(painter, frame, mapping,
+                                                effectiveZoom(displayRect, *geometry),
+                                                overlayOptions_, bounds);
+                            painter.restore();
+                        }
                     }
                 }
             }
@@ -1944,7 +1993,7 @@ void ViewerEditor::updatePreviewAccessibility() {
         tr("%1. %2. %3").arg(preview.message, frameDescription, colorStateDescription));
 }
 
-std::optional<PositionInteractionMapping> ViewerEditor::currentMapping() const {
+std::optional<ViewerMapping> ViewerEditor::currentMapping() const {
     const auto& preview = previewController_.state();
     const PreparedPreviewFrameHandle& frameHandle = preview.frame;
     if (frameHandle == nullptr) {
@@ -1954,7 +2003,8 @@ std::optional<PositionInteractionMapping> ViewerEditor::currentMapping() const {
     // mapping source (docs/architecture/animation-and-time.md, "Direct Manipulation And Preview
     // Overrides").
     if (frameHandle->desiredIdentity().compositionId != session_.compositionId() ||
-        frameHandle->desiredIdentity().sourceRevision != session_.snapshot().revision()) {
+        frameHandle->desiredIdentity().sourceRevision != session_.snapshot().revision() ||
+        frameHandle->desiredIdentity().time != session_.currentTime()) {
         return std::nullopt;
     }
     const auto* composition = session_.composition();
@@ -1963,7 +2013,7 @@ std::optional<PositionInteractionMapping> ViewerEditor::currentMapping() const {
     }
     // The gesture-mapping geometry is alternative-agnostic (design decision 2): a qualified frame's
     // window/pixel-aspect maps a drag gesture exactly the way a reference frame's does. The frozen
-    // PositionInteractionMapping::displayDescriptor stays a
+    // ViewerMapping::displayDescriptor stays a
     // render::ReferenceDisplayBufferDescriptor purely as a geometry/change-detection value here
     // (extent, pixel aspect, packed layout) -- never as a claim that the underlying pixels are the
     // unqualified reference product; a qualified frame's isOcioQualified() bit lives on
@@ -1985,8 +2035,8 @@ std::optional<PositionInteractionMapping> ViewerEditor::currentMapping() const {
     // Fit mode, or the actively zoomed/panned rectangle otherwise -- so a drag begun at zoom 200%
     // and a pan offset maps screen deltas against the geometry the user actually SEES, and lands
     // exactly under the cursor. Freeze semantics are unchanged: this is still computed once here,
-    // handed to CompositionSession::beginPositionInteraction(), and frozen there for the gesture's
-    // duration; PositionInteractionMapping's own equality (already comparing displayRect) is what
+    // handed to CompositionSession::beginTransformInteraction(), and frozen there for the gesture's
+    // duration; ViewerMapping's own equality (already comparing displayRect) is what
     // makes mappingStillValid() correctly invalidate a gesture if transform_ changes mid-drag, with
     // zero additional invalidation code needed (mousePressEvent()/wheelEvent() additionally refuse
     // to start a NEW zoom/pan while dragActive_, so this only matters as a defensive backstop).
@@ -1999,13 +2049,30 @@ std::optional<PositionInteractionMapping> ViewerEditor::currentMapping() const {
     if (displayRect.isEmpty()) {
         return std::nullopt;
     }
-    return PositionInteractionMapping{
+    return ViewerMapping{
         .displayRect = displayRect,
         .compositionFormat = composition->format(),
         .resolution = frameHandle->desiredIdentity().resolution,
         .pixelAspect = descriptor.pixelAspect(),
         .displayDescriptor = descriptor,
     };
+}
+
+ViewerHit ViewerEditor::hitAt(const ViewerMapping& mapping, const QPointF point) const {
+    std::vector<runtime::EvaluatedOperationBounds> ordered;
+    const auto& frame = previewController_.state().frame;
+    if (!frame)
+        return {};
+    const auto bounds = frame->evaluatedBounds();
+    if (const auto* stack = session_.timelineMerge()) {
+        for (const auto& entry : stack->entries()) {
+            const auto found = std::ranges::find(bounds, entry.layerId,
+                                                 &runtime::EvaluatedOperationBounds::layerId);
+            if (found != bounds.end())
+                ordered.push_back(*found);
+        }
+    }
+    return hitTestViewer(mapping, point, ordered, previewController_.selectedLayerBounds());
 }
 
 bool ViewerEditor::mappingStillValid() const {
@@ -2020,9 +2087,9 @@ void ViewerEditor::endDrag(const bool commit) {
     dragActive_ = false;
     activeMapping_.reset();
     if (commit) {
-        (void)session_.commitPositionInteraction();
+        (void)session_.commitTransformInteraction();
     } else {
-        session_.cancelPositionInteraction();
+        session_.cancelTransformInteraction();
     }
     // Reuses TimelineRuler's Interactive-cadence arming (docs/architecture/animation-and-time.md,
     // "Session Time And Scrubbing"): bypasses any remaining trailing delay and disarms it.
@@ -2066,6 +2133,13 @@ void ViewerEditor::updatePanCursor() {
 }
 
 void ViewerEditor::mousePressEvent(QMouseEvent* event) {
+    if (dragActive_ && event->button() == Qt::RightButton) {
+        endDrag(false);
+        event->accept();
+        return;
+    }
+    if (event->button() == Qt::LeftButton)
+        setFocus(Qt::MouseFocusReason);
     if (!dragActive_ && !panActive_) {
         if (const auto geometry = currentDisplayGeometry();
             geometry.has_value() && (event->button() == Qt::MiddleButton ||
@@ -2090,25 +2164,49 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
         return;
     }
 
-    if (event->button() != Qt::LeftButton ||
-        !std::holds_alternative<document::LayerId>(session_.selection().primary)) {
+    if (event->button() != Qt::LeftButton || tool_ != Tool::Select || dragActive_) {
         QWidget::mousePressEvent(event);
         return;
     }
+    setFocus(Qt::MouseFocusReason);
     auto mapping = currentMapping();
-    if (!mapping.has_value()) {
+    if (!mapping.has_value() || !contentRect().contains(event->position())) {
         QWidget::mousePressEvent(event);
         return;
     }
-    if (session_.beginPositionInteraction(*mapping).has_value()) {
-        // Typed rejection (no selection, no resolvable/animated-without-a-key/driven position, or
-        // an empty mapping): the drag simply never starts. No cursor/handle art communicates this
-        // in v1 -- the gesture itself is the whole slice.
-        QWidget::mousePressEvent(event);
+    const auto hit = hitAt(*mapping, event->position());
+    if (hit.region == ViewerHitRegion::Empty) {
+        session_.clearSelection();
+        event->accept();
+        return;
+    }
+    session_.selectLayer(hit.layerId, event->modifiers().testFlag(Qt::ShiftModifier));
+    const auto selected = previewController_.selectedLayerBounds();
+    const auto bounds =
+        std::ranges::find(selected, hit.layerId, &runtime::EvaluatedOperationBounds::layerId);
+    if (bounds == selected.end())
+        return;
+    auto kind = TransformGesture::Kind::Move;
+    switch (hit.region) {
+    case ViewerHitRegion::Scale:
+        kind = TransformGesture::Kind::Scale;
+        break;
+    case ViewerHitRegion::Rotate:
+        kind = TransformGesture::Kind::Rotate;
+        break;
+    case ViewerHitRegion::Anchor:
+        kind = TransformGesture::Kind::Anchor;
+        break;
+    default:
+        break;
+    }
+    if (session_.beginTransformInteraction({kind, hit.handle, event->position(), *bounds}, *mapping,
+                                           {event->modifiers().testFlag(Qt::ShiftModifier),
+                                            event->modifiers().testFlag(Qt::AltModifier)})) {
+        event->accept();
         return;
     }
     dragActive_ = true;
-    dragOrigin_ = event->position();
     activeMapping_ = mapping;
     setFocus(Qt::MouseFocusReason);
     previewController_.beginInteractiveScrub();
@@ -2125,6 +2223,40 @@ void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
     if (!dragActive_) {
+        if (tool_ == Tool::Select) {
+            const auto mapping = currentMapping();
+            const auto hit = mapping ? hitAt(*mapping, event->position()) : ViewerHit{};
+            switch (hit.region) {
+            case ViewerHitRegion::Move:
+                setCursor(Qt::SizeAllCursor);
+                break;
+            case ViewerHitRegion::Anchor:
+                setCursor(Qt::CrossCursor);
+                break;
+            case ViewerHitRegion::Rotate:
+                setCursor(Qt::OpenHandCursor);
+                break;
+            case ViewerHitRegion::Scale:
+                switch (hit.handle % 4) {
+                case 0:
+                    setCursor(Qt::SizeFDiagCursor);
+                    break;
+                case 1:
+                    setCursor(Qt::SizeVerCursor);
+                    break;
+                case 2:
+                    setCursor(Qt::SizeBDiagCursor);
+                    break;
+                default:
+                    setCursor(Qt::SizeHorCursor);
+                    break;
+                }
+                break;
+            case ViewerHitRegion::Empty:
+                unsetCursor();
+                break;
+            }
+        }
         QWidget::mouseMoveEvent(event);
         return;
     }
@@ -2136,8 +2268,9 @@ void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
     // Total displacement from the ORIGINAL press point, not from the previous move -- base value
     // plus TOTAL gesture displacement, never a chain of already-rounded intermediates (docs/
     // architecture/animation-and-time.md).
-    const QPointF delta = event->position() - dragOrigin_;
-    session_.updatePositionInteraction(delta.x(), delta.y());
+    session_.updateTransformInteraction(event->position(),
+                                        {event->modifiers().testFlag(Qt::ShiftModifier),
+                                         event->modifiers().testFlag(Qt::AltModifier)});
     event->accept();
 }
 
@@ -2153,7 +2286,14 @@ void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
         QWidget::mouseReleaseEvent(event);
         return;
     }
-    endDrag(true);
+    if (mappingStillValid()) {
+        session_.updateTransformInteraction(event->position(),
+                                            {event->modifiers().testFlag(Qt::ShiftModifier),
+                                             event->modifiers().testFlag(Qt::AltModifier)});
+        endDrag(true);
+    } else {
+        endDrag(false);
+    }
     event->accept();
 }
 
@@ -2183,6 +2323,47 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
         return;
     }
     if (!dragActive_ && !panActive_) {
+
+        if (event->modifiers() == Qt::NoModifier || event->modifiers() == Qt::ShiftModifier) {
+            if (event->key() == Qt::Key_Delete) {
+                std::set<document::NodeId> nodes;
+                for (const auto node : session_.selectedNodes())
+                    if (session_.layerForNode(node))
+                        nodes.insert(node);
+                if (!nodes.empty()) {
+                    commands::Transaction transaction("Delete Layers",
+                                                      session_.snapshot().revision());
+                    transaction.emplace<commands::RemoveNodes>(session_.compositionId(),
+                                                               std::move(nodes));
+                    (void)session_.executeTransaction(std::move(transaction));
+                }
+                event->accept();
+                return;
+            }
+            QPointF delta;
+            const double step = event->modifiers().testFlag(Qt::ShiftModifier) ? 10.0 : 1.0;
+            switch (event->key()) {
+            case Qt::Key_Left:
+                delta.setX(-step);
+                break;
+            case Qt::Key_Right:
+                delta.setX(step);
+                break;
+            case Qt::Key_Up:
+                delta.setY(-step);
+                break;
+            case Qt::Key_Down:
+                delta.setY(step);
+                break;
+            default:
+                break;
+            }
+            if (!delta.isNull()) {
+                nudgeViewerSelection(session_, delta);
+                event->accept();
+                return;
+            }
+        }
 
         // Ctrl+0 fits and Ctrl+1 is actual size, in this canvas and in the node canvas alike (task
         // S1, item 8). F and Z are retired in both: the Adobe-standard pair is what an artist

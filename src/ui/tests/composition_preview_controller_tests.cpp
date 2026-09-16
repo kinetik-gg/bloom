@@ -215,7 +215,7 @@ void testRevisionAndPanelSuppression(Expectations& expectations) {
             const document::Snapshot& snapshot,
             const runtime::PreviewRequestIdentity& desiredIdentity,
             const std::size_t pixelStorageByteLimit,
-            const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+            const std::vector<runtime::SnapshotParameterOverride>& interactionOverride,
             runtime::TaskContext& context) mutable {
             if (invocationCount.fetch_add(1) == 0) {
                 firstRequest.enterAndWait();
@@ -285,7 +285,7 @@ void testNewestPendingRequestGate(Expectations& expectations) {
             const document::Snapshot& snapshot,
             const runtime::PreviewRequestIdentity& desiredIdentity,
             const std::size_t pixelStorageByteLimit,
-            const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+            const std::vector<runtime::SnapshotParameterOverride>& interactionOverride,
             runtime::TaskContext& context) mutable {
             const int concurrent = inFlight.fetch_add(1) + 1;
             int previousMaximum = maximumInFlight.load();
@@ -387,7 +387,7 @@ void testInteractiveCadenceCoalescesBurstAndVisibleBypasses(Expectations& expect
             const document::Snapshot& snapshot,
             const runtime::PreviewRequestIdentity& desiredIdentity,
             const std::size_t pixelStorageByteLimit,
-            const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+            const std::vector<runtime::SnapshotParameterOverride>& interactionOverride,
             runtime::TaskContext& context) mutable {
             ++invocationCount;
             return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride,
@@ -547,7 +547,7 @@ void testActiveGateHoldsAndScrubEndBypassesRemainingCadence(Expectations& expect
             const document::Snapshot& snapshot,
             const runtime::PreviewRequestIdentity& desiredIdentity,
             const std::size_t pixelStorageByteLimit,
-            const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+            const std::vector<runtime::SnapshotParameterOverride>& interactionOverride,
             runtime::TaskContext& context) mutable {
             if (invocationCount.fetch_add(1) == 0) {
                 firstRequest.enterAndWait();
@@ -628,7 +628,7 @@ void testSameRevisionGenerationAndSelection(Expectations& expectations) {
             const document::Snapshot& snapshot,
             const runtime::PreviewRequestIdentity& desiredIdentity,
             const std::size_t pixelStorageByteLimit,
-            const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+            const std::vector<runtime::SnapshotParameterOverride>& interactionOverride,
             runtime::TaskContext& context) mutable {
             ++invocationCount;
             return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride,
@@ -716,7 +716,7 @@ void testLastGoodAndOutcomeMapping(Expectations& expectations) {
             const document::Snapshot& snapshot,
             const runtime::PreviewRequestIdentity& desiredIdentity,
             const std::size_t pixelStorageByteLimit,
-            const std::optional<runtime::SnapshotParameterOverride>& interactionOverride,
+            const std::vector<runtime::SnapshotParameterOverride>& interactionOverride,
             runtime::TaskContext& context) mutable {
             switch (outcome.load()) {
             case Outcome::Prepared:
@@ -1059,7 +1059,7 @@ void testResolutionPolicyAndRequestThresholds(Expectations& expectations) {
     ui::CompositionPreviewController controller(
         session, scheduler, bridge,
         [](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
-           const std::optional<runtime::SnapshotParameterOverride>&,
+           const std::vector<runtime::SnapshotParameterOverride>&,
            runtime::TaskContext&) { return PipelineResult::cancelled(); });
     expectations.expect(controller.resolutionDivisor() == 1, "unknown viewer geometry uses Full");
     controller.setDisplayedCompositionScale(0.25);
