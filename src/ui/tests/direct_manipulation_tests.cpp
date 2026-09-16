@@ -326,6 +326,114 @@ void testControllerAttachesOverrideOnlyToArmedInteractiveRequests(Expectations& 
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
 
+// Task CRASH-1 follow-up (the commit "bounce"): every viewer gesture commit used to flash the
+// layer back at its PRE-EDIT place for one frame before it landed at the committed one. The
+// mechanism is entirely in the ordering of CompositionSession::commitTransformInteraction(): it
+// cleared the interaction BEFORE it executed the transaction, so transformInteractionChanged()
+// reached the controller while the session still held the pre-edit revision. The request the
+// controller then built named that revision and carried no override -- and the RAM preview cache
+// holds exactly that frame, so it was published instantly, with no render to hide it behind.
+// This pins the contract the fix restores: from the commit onwards, no frame the viewer is shown
+// is a pre-edit-revision frame WITHOUT the gesture's override on it. The still-held override frame
+// is a pre-edit-revision frame too, and it is the correct thing to keep showing, which is why the
+// override is what separates the two rather than the revision alone.
+void testCommitNeverPresentsAPreEditFrame(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Commit Bounce");
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    const auto ids = addSolidLayer(document, commands, compositionId, document::Vec2d{10.0, 20.0});
+    ui::CompositionSession session(document, commands, compositionId);
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    PipelineFixture fixture;
+
+    std::mutex overrideMutex;
+    std::vector<std::pair<std::uint64_t, bool>> overrideByGeneration;
+    ui::CompositionPreviewController controller(
+        session, scheduler, bridge,
+        [&overrideMutex, &overrideByGeneration, pipeline = fixture.pipeline](
+            const document::Snapshot& snapshot,
+            const runtime::PreviewRequestIdentity& desiredIdentity,
+            const std::size_t pixelStorageByteLimit,
+            const std::vector<runtime::SnapshotParameterOverride>& interactionOverride,
+            runtime::TaskContext& context) mutable {
+            {
+                std::scoped_lock lock(overrideMutex);
+                overrideByGeneration.emplace_back(desiredIdentity.requestGeneration,
+                                                  !interactionOverride.empty());
+            }
+            return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride,
+                            context);
+        });
+    // Only a generation the pipeline actually ran can have carried an override; a frame the RAM
+    // cache answered from was rendered for some earlier request and is reported as override-less,
+    // which is exactly the verdict this test needs about it.
+    const auto carriedOverride = [&overrideMutex,
+                                  &overrideByGeneration](const std::uint64_t generation) {
+        std::scoped_lock lock(overrideMutex);
+        for (const auto& [seen, hadOverride] : overrideByGeneration) {
+            if (seen == generation) {
+                return hadOverride;
+            }
+        }
+        return false;
+    };
+
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "the pre-edit frame is ready, and so is in the RAM preview cache");
+    const auto preEditRevision = session.snapshot().revision();
+
+    session.selectLayer(ids.layer);
+    const auto mapping = makeMapping(wideFormat());
+    controller.beginInteractiveScrub();
+    expectations.expect(!session.beginTransformInteraction({}, mapping).has_value(),
+                        "the gesture begins on the selected layer");
+    session.updateTransformInteraction({40.0, 20.0});
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "the dragged override frame is on screen before the commit");
+
+    // Every frame the viewer is handed from here on, in order.
+    std::vector<std::pair<document::Revision, std::uint64_t>> presented;
+    QObject::connect(&controller, &ui::CompositionPreviewController::stateChanged, &controller,
+                     [&controller, &presented] {
+                         const auto& frame = controller.state().frame;
+                         if (frame != nullptr) {
+                             presented.emplace_back(frame->desiredIdentity().sourceRevision,
+                                                    frame->desiredIdentity().requestGeneration);
+                         }
+                     });
+
+    expectations.expect(session.commitTransformInteraction(), "the gesture commits");
+    controller.notifyScrubEnded();
+    const auto committedRevision = session.snapshot().revision();
+    expectations.expect(committedRevision != preEditRevision,
+                        "the commit published a new document revision");
+    expectations.expect(waitUntil([&] {
+                            return isReady(controller) && controller.state().frame != nullptr &&
+                                   controller.state().frame->desiredIdentity().sourceRevision ==
+                                       committedRevision;
+                        }),
+                        "a frame for the committed revision reaches the viewer");
+
+    bool bounced = false;
+    for (const auto& [revision, generation] : presented) {
+        if (revision == preEditRevision && !carriedOverride(generation)) {
+            bounced = true;
+        }
+    }
+    expectations.expect(!bounced,
+                        "no frame presented from the commit onwards is a pre-edit-revision frame "
+                        "without the gesture's override: the last override frame holds the picture "
+                        "until a frame for the committed revision replaces it");
+    expectations.expect(!session.transformInteractionActive() &&
+                            session.transformInteractionOverrides().empty(),
+                        "the interaction is released once the committed revision has been adopted");
+
+    reachQuiescence(controller, bridge, scheduler, expectations);
+}
+
 void testAdmissionRejectedOverrideSurfacesErrorWithoutKillingInteraction(
     Expectations& expectations) {
     using namespace bloom;
@@ -909,6 +1017,7 @@ int main(int argc, char** argv) {
     Expectations expectations;
     testControllerAttachesOverrideOnlyToArmedInteractiveRequests(expectations);
     testAdmissionRejectedOverrideSurfacesErrorWithoutKillingInteraction(expectations);
+    testCommitNeverPresentsAPreEditFrame(expectations);
     testDragMovesSelectedSolidLayerCommitsAndUndoes(expectations);
     testDragAtNonIdentityZoomLandsExactlyUnderCursor(expectations);
     testDragAtNonIdentityZoomAndPanLandsExactlyUnderCursor(expectations);

@@ -227,14 +227,30 @@ void CompositionSession::cancelTransformInteraction() {
 
 void CompositionSession::invalidateTransformInteraction() { cancelTransformInteraction(); }
 
+// The interaction stays ARMED for the whole of this call, and that ordering is the contract, not
+// an accident. Clearing it first emitted transformInteractionChanged() while snapshot_ was still
+// the PRE-EDIT revision, so CompositionPreviewController built its next request on that revision
+// with no override on it -- and the RAM preview cache, which holds exactly that frame, answered it
+// instantly. The artist saw the layer snap back to where the gesture started for one frame before
+// the committed frame arrived. Held armed, every request built from here on names the committed
+// revision, so the last override frame stays on screen until a frame for that revision replaces
+// it. handleResult() -> invalidateTransformInteractionOnStaleRevision() drops the interaction the
+// moment the new revision is adopted; `finish` drops it on every path that never gets that far
+// (a stale base, a refused edit, or a gesture that moved nothing), and is a no-op once it has.
 bool CompositionSession::commitTransformInteraction() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!transformInteraction_)
         return false;
-    auto state = std::move(*transformInteraction_);
-    cancelTransformInteraction();
+    // A copy, not a move: a moved-from interaction still reports has_value() while its overrides
+    // have been emptied, which is precisely the armed-but-override-less state this call must not
+    // put the preview controller in.
+    const auto state = *transformInteraction_;
+    const auto finish = [this](const bool committed) {
+        cancelTransformInteraction();
+        return committed;
+    };
     if (state.baseRevision != snapshot_.revision() || state.time != currentTime_)
-        return false;
+        return finish(false);
     constexpr std::array labels{"Move Layer", "Scale Layer", "Rotate Layer", "Move Anchor"};
     commands::Transaction transaction(labels[static_cast<std::size_t>(state.gesture.kind)],
                                       state.baseRevision);
@@ -242,7 +258,7 @@ bool CompositionSession::commitTransformInteraction() {
     for (const auto& override : state.overrides) {
         const auto* parameter = composition()->parameters().find(override.parameterId);
         if (!parameter)
-            return false;
+            return finish(false);
         const auto before = effectiveParameterValue(parameter);
         const bool same =
             before && std::visit(
@@ -257,8 +273,8 @@ bool CompositionSession::commitTransformInteraction() {
         auto value = std::visit([](const auto& held) -> document::ParameterValue { return held; },
                                 override.value);
         if (!appendParameterEdit(transaction, override.parameterId, state.time, std::move(value)))
-            return false;
+            return finish(false);
         changed = true;
     }
-    return !changed || executeTransaction(std::move(transaction)).changed();
+    return finish(!changed || executeTransaction(std::move(transaction)).changed());
 }
