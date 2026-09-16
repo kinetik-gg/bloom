@@ -58,6 +58,13 @@ namespace {
 
 using namespace bloom;
 
+QWidget* propertiesRowFor(QWidget* field) {
+    auto* row = field->parentWidget();
+    while (row && row->objectName() != QStringLiteral("propertiesRow"))
+        row = row->parentWidget();
+    return row;
+}
+
 class Expectations final {
   public:
     void expect(const bool condition, const std::string& message,
@@ -284,7 +291,7 @@ void testAnimatedParameterShowsGoldStaticShowsDim(Expectations& expectations) {
         return;
     }
     auto* opacityRow = opacityField->parentWidget();
-    auto* positionRow = positionField->parentWidget()->parentWidget();
+    auto* positionRow = propertiesRowFor(positionField);
     expectations.expect(opacityRow != nullptr && positionRow != nullptr, "rows resolve");
     if (opacityRow == nullptr || positionRow == nullptr) {
         return;
@@ -688,17 +695,16 @@ void testTransformRowsShowTheirOwnKeyframeIndicators(Expectations& expectations)
     if (anchorX == nullptr || scaleX == nullptr || rotation == nullptr) {
         return;
     }
-    // Each row is [label, indicator, value]; a paired X/Y row wraps its two fields in a group, so
-    // the row is one level further up than it is for the single rotation field.
-    const auto indicatorOf = [](QWidget* field, const bool paired) -> ui::KeyframeDiamond* {
-        auto* row = paired ? field->parentWidget()->parentWidget() : field->parentWidget();
+    // Component fields have their own diamond cells; resolve the owning parameter row by name.
+    const auto indicatorOf = [](QWidget* field) -> ui::KeyframeDiamond* {
+        auto* row = propertiesRowFor(field);
         return row == nullptr ? nullptr
                               : row->findChild<ui::KeyframeDiamond*>("propertiesKeyframeIndicator",
                                                                      Qt::FindDirectChildrenOnly);
     };
-    auto* anchorIndicator = indicatorOf(anchorX, true);
-    auto* scaleIndicator = indicatorOf(scaleX, true);
-    auto* rotationIndicator = indicatorOf(rotation, false);
+    auto* anchorIndicator = indicatorOf(anchorX);
+    auto* scaleIndicator = indicatorOf(scaleX);
+    auto* rotationIndicator = indicatorOf(rotation);
     expectations.expect(anchorIndicator != nullptr && scaleIndicator != nullptr &&
                             rotationIndicator != nullptr,
                         "every transform row carries its own keyframe indicator");
@@ -994,8 +1000,8 @@ void testLongLabelColumnElidesWhenNarrowAndKeepsTheFullNameAsATooltip(Expectatio
     if (positionField == nullptr) {
         return;
     }
-    // positionXEditor -> positionFieldGroup -> propertiesRow.
-    auto* row = positionField->parentWidget()->parentWidget();
+    // Resolve the parameter row above the component cell and field group.
+    auto* row = propertiesRowFor(positionField);
     expectations.expect(row != nullptr, "the Position row's container resolves");
     if (row == nullptr) {
         return;

@@ -123,7 +123,8 @@ void parentingBounds() {
     document::Document document(std::move(project.project));
     commands::CommandStack stack(document);
     ui::CompositionSession session(document, stack, compositionId);
-    if (!session.addSolidLayer("Parent", {1, 0, 0, 1}) || !session.setSelectedPosition(7, 9))
+    if (!session.addSolidLayer("Parent", {1, 0, 0, 1}) || !session.setSelectedPosition(7, 9) ||
+        !session.setSelectedAnchor(-16, -16))
         throw std::logic_error("parent bounds fixture");
     const auto parent = session.selection().contextualLayer;
     if (!session.addSolidLayer("Child", {0, 0, 1, 1}) || !session.setSelectedPosition(3, 4))
@@ -153,7 +154,7 @@ void parentingBounds() {
         throw std::logic_error("child bounds missing");
     };
     const auto before = evaluate();
-    expect(session.setLayerParent(*child, *parent), "choose parent through the session");
+    expect(session.setLayerParent(*child, parent), "choose parent through the session");
     const auto after = evaluate();
     expect(after.anchor == document::Vec2d{before.anchor.x + 7, before.anchor.y + 9} &&
                after.output.left == before.output.left + 7 &&

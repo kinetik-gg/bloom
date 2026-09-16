@@ -124,6 +124,19 @@ commands. Artists can rearrange those cards through the existing layout gesture.
 cubic spline with `NodeLinkHandleMin`; existing straight/angled preferences remain available.
 Every selected card, including the primary selection, uses an Accent outline.
 
+
+Keyframe diamonds have four forms: a muted outline for a constant, a gold outline for an animated
+parameter with no key at the playhead, a gold half fill when some components are keyed there, and
+a gold fill when all components are keyed there. A component diamond uses the same forms except
+half fill, and toggles only that component. Parameter diamonds toggle all components together.
+
+Properties and node cards retain aggregate parameter diamonds and place component diamonds after
+each vector field or RGBA channel. Timeline rows put component diamonds before numeric fields;
+the parameter disclosure expands individual X/Y/Z or R/G/B/A rows. Automation names are
+`propertiesComponentDiamond`, `nodeComponentKeyframeDiamond`, and `timelineComponentDiamond`.
+The timeline and Properties Parent dropdowns list None and eligible layer names, submit the shared
+parent command, and restore the authored choice on refusal.
+
 `KDiamond` owns the keyframe indicator's rendering; command dispatch stays in its session
 adapter. `KAnchorGrid` owns the nine-point visual grid, while its Properties adapter resolves
 bounds off the UI thread. `KListSurface` paints the common flat empty-row backdrop;
@@ -359,8 +372,3 @@ New Composition and the composition Properties section expose a `KColorChip` Bac
 Viewer Solid mode paints that authored RGBA colour, initially opaque black. Black, White and
 Checkerboard remain session choices. This viewer background does not alter composition pixels
 or export alpha.
-
-Keyframe diamonds have four forms: a muted outline for a constant, a gold outline for an animated
-parameter with no key at the playhead, a gold half fill when some components are keyed there, and
-a gold fill when all components are keyed there. A component diamond uses the same forms except
-half fill, and toggles only that component. Parameter diamonds toggle all components together.

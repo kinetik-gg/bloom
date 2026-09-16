@@ -132,6 +132,14 @@ then remaps the reference; duplicating a composition remaps the complete hierarc
 retains its parent space on both temporal halves. Session queries expose direct parents and children;
 parent candidates are all other composition layers except the selected layer's descendants.
 
+The timeline Parent column and Properties Parent row are live dropdowns. Both show None followed
+by the session's legal candidates, named by their layer display names and stored by stable layer ID.
+Selection submits `SetLayerParent` through the session; undo restores the previous link. Locked
+layers cannot edit parenting. Rejected dependency cycles preserve the old selection and report
+the command's reason in the application status line. The viewer overlay reads the evaluator's
+composed bounds and anchor, so changing a parent moves the child overlay together with its pixels.
+
+
 ### Local Content Bounds And Layer Transform
 
 Every image operation has local content bounds in full-resolution pixel-edge coordinates. Solid

@@ -416,8 +416,9 @@ void testBoxSelectSpansTwoComponentCurves() {
     const auto* position = session.parameterForSelection(document::kPositionParameterRole);
     if (position == nullptr)
         fail("the box fixture position parameter must resolve");
-    if (!session.pasteKeyframes({{position->id, time(1), document::Vec2d{1.0, 2.0}},
-                                 {position->id, time(5), document::Vec2d{3.0, 4.0}}},
+    const auto parameterId = position->id;
+    if (!session.pasteKeyframes({{parameterId, time(1), document::Vec2d{1.0, 2.0}},
+                                 {parameterId, time(5), document::Vec2d{3.0, 4.0}}},
                                 session.snapshot().revision()))
         fail("the box fixture keys must seed");
     fixture.expandAndShowGraph();
@@ -434,6 +435,20 @@ void testBoxSelectSpansTwoComponentCurves() {
     expect(selected.size() >= 4, "the box takes every key it covers, on every curve");
     expect(std::ranges::all_of(selected, [](const auto& key) { return key.component.has_value(); }),
            "and every selected component key carries its component, never the whole-value address");
+    ui::TimelineLayerEntry component;
+    component.rowKind = ui::TimelineLayerEntry::Kind::Component;
+    component.parameterId = parameterId;
+    component.component = document::AnimationComponent::Y;
+    fixture.view->setEntries({component});
+    expect(fixture.view->curves().size() == 1 &&
+               fixture.view->curves().front().component == document::AnimationComponent::Y,
+           "a component-only entry draws only its addressed graph curve");
+    auto aggregate = component;
+    aggregate.rowKind = ui::TimelineLayerEntry::Kind::Parameter;
+    aggregate.component.reset();
+    fixture.view->setEntries({aggregate, component});
+    expect(fixture.view->curves().size() == 2,
+           "expanded component entries do not duplicate graph curves");
 }
 
 // 7. Fit puts a wheel-zoomed viewport back on the curve.

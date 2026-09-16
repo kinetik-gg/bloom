@@ -133,6 +133,7 @@ void PropertiesEditor::buildObjectSection(QVBoxLayout* layout) {
         const auto selected = session_.parentOf(*layer);
         parent->setCurrentIndex(parent->findData(
             QVariant::fromValue(static_cast<qulonglong>(selected ? selected->value() : 0))));
+        parent->setToolTip(tr("Transform relative to another layer"));
     };
     connect(&session_, &CompositionSession::selectionChanged, parent, refreshParent);
     connect(&session_, &CompositionSession::snapshotChanged, parent, refreshParent);

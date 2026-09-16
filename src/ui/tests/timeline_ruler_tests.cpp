@@ -1,4 +1,4 @@
-#include "../timeline_property_rows.hpp"
+#include "timeline_property_rows.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -1294,8 +1294,10 @@ void testComponentRowsAndLaneSelections(Expectations& expectations) {
         std::ranges::count_if(fields,
                               [](auto* field) { return !field->parentWidget()->isHidden(); }) == 1,
         "component row binds one numeric cell");
+    if (fields.empty())
+        return;
     fields.front()->setValue(17.0);
-    expectations.expect(session.effectiveVec2Value(parameter)->x == 17.0,
+    expectations.expect(session.effectiveVec2Value(parameter).value_or(document::Vec2d{}).x == 17.0,
                         "component row commits through the component setter");
     ui::TimelineRuler ruler(session, fixture.controller);
     ui::TimelineKeyframePanel panel(session);

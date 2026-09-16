@@ -185,6 +185,7 @@ target_link_libraries(bloom_task_monitor_test PRIVATE bloom_ui)
 target_link_libraries(bloom_viewer_editor_test PRIVATE bloom_ui)
 target_link_libraries(bloom_timeline_frame_math_test PRIVATE bloom_ui)
 target_link_libraries(bloom_timeline_ruler_test PRIVATE bloom_ui)
+target_include_directories(bloom_timeline_ruler_test PRIVATE ..)
 target_link_libraries(bloom_timeline_graph_math_test PRIVATE bloom_ui)
 target_link_libraries(bloom_timeline_graph_view_test PRIVATE bloom_ui)
 # The graph editor's arithmetic is a PRIVATE header of src/ui (it has no public consumers), so

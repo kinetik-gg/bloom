@@ -127,11 +127,13 @@ double TimelineGraphView::bandHeight() const noexcept {
 
 void TimelineGraphView::setEntries(const std::vector<TimelineLayerEntry>& entries) {
     parameters_.clear();
-    for (const auto& entry : entries)
+    for (const auto& entry : entries) {
+        const auto lane = std::pair{entry.parameterId, entry.component};
         if ((entry.rowKind == TimelineLayerEntry::Kind::Parameter ||
              entry.rowKind == TimelineLayerEntry::Kind::Component) &&
-            std::ranges::find(parameters_, entry.parameterId) == parameters_.end())
-            parameters_.push_back(entry.parameterId);
+            std::ranges::find(parameters_, lane) == parameters_.end())
+            parameters_.push_back(lane);
+    }
     compiledValid_ = false;
     refreshCurves();
     update();
@@ -142,7 +144,7 @@ void TimelineGraphView::refreshCurves() {
     owners_.clear();
     const auto* composition = session_.composition();
     if (composition != nullptr) {
-        for (const auto parameterId : parameters_) {
+        for (const auto& [parameterId, selectedComponent] : parameters_) {
             const auto* parameter = composition->parameters().find(parameterId);
             const auto* source =
                 parameter != nullptr
@@ -157,15 +159,21 @@ void TimelineGraphView::refreshCurves() {
                 [&](const auto& curve) {
                     using Curve = std::decay_t<decltype(curve)>;
                     if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
-                        curves.push_back({curve.id, std::nullopt});
+                        const GraphCurveId id{curve.id, std::nullopt};
+                        if (!selectedComponent && std::ranges::find(curves, id) == curves.end())
+                            curves.push_back(id);
                     } else {
                         // Vector and colour keys are read from components[] ALWAYS. The legacy
                         // whole-value projection cannot answer "which axis is this key on", which
                         // is the only question a curve view asks.
                         for (const auto component : componentsOf<Curve>())
                             if (const auto* lane = curve.component(component);
-                                lane != nullptr && !lane->keyframes.empty())
-                                curves.push_back({curve.id, component});
+                                lane != nullptr && !lane->keyframes.empty() &&
+                                (!selectedComponent || selectedComponent == component)) {
+                                const GraphCurveId id{curve.id, component};
+                                if (std::ranges::find(curves, id) == curves.end())
+                                    curves.push_back(id);
+                            }
                     }
                 },
                 *record);

@@ -41,9 +41,7 @@ class TimelinePropertyRow final : public QWidget {
     TimelineLayerEntry entry_;
     QLabel* label_;
     KeyframeDiamond* diamond_;
-    // Three cells, because a Vector 3 parameter has three components and task DRIVE-1's upstream
-    // groups put one in the twirl-down: a row that showed two of them would be showing a value
-    // that is not the parameter's.
+    // Four colour channels, or the first two/three cells for a vector.
     std::array<kit::KValueField*, 4> fields_{};
     std::array<QWidget*, 4> cells_{};
     std::array<QLabel*, 4> components_{};

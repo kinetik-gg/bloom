@@ -1414,7 +1414,7 @@ class NodeItem final : public QGraphicsObject {
                 diamond->setParameterId(parameter ? parameter->id : document::ParameterId{});
                 diamond->refresh();
             }
-            if (row.component && parameter) {
+            if (row.component && parameter && session_) {
                 if (const auto color = session_->effectiveColorValue(parameter->id)) {
                     auto* field = qobject_cast<kit::KValueField*>(row.widget);
                     if (field) {

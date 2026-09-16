@@ -394,6 +394,7 @@ class TimelineLayerRow final : public kit::KRow {
         parentDropdown_->setCurrentIndex(parentDropdown_->findData(
             QVariant::fromValue(static_cast<qulonglong>(parent ? parent->value() : 0))));
         parentDropdown_->setEnabled(layer && !locked_);
+        parentDropdown_->setToolTip(TimelineEditor::tr("Transform relative to another layer"));
         parentDropdown_->show();
         blending_->setCurrentIndex(row >= 0 ? row : 0);
         blending_->setToolTip(mode.has_value()

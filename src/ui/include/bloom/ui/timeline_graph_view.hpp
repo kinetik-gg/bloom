@@ -130,7 +130,8 @@ class TimelineGraphView final : public QWidget {
     CompositionSession& session_;
     TimelineRuler& ruler_;
     std::vector<GraphCurveId> curves_;
-    std::vector<document::ParameterId> parameters_;
+    std::vector<std::pair<document::ParameterId, std::optional<document::AnimationComponent>>>
+        parameters_;
     // The parameter each drawn curve belongs to, resolved by the same walk that derived the curve
     // set, so an insert gesture never has to search the store a second time for a different answer.
     std::map<document::AnimationCurveId, document::ParameterId> owners_;

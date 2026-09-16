@@ -55,3 +55,12 @@ reads in Foreground ink rather than the muted Faint of a disabled one. That sing
 glyph is the whole difference: graph mode defaults OFF, so the fixture window still shows the key
 lanes, the same five panels, the same layout and the same type. Both DPR references are reapproved
 under Qt 6.8.3 with the existing comparison tolerance and full coverage.
+
+KEY-2 approval: both references are reapproved under Qt 6.8.3 with `--update-goldens` at DPR 1
+and 1.5. The Background fixture now keys only Position X and keys Opacity, exposing gold half-filled
+parameter, filled component and empty animated component diamonds alongside muted constants. Its
+Position disclosure opens separate X and Y rows and lanes. Properties and node cards show the new
+component diamonds, node colour cards expose RGBA rows, and both Parent dropdowns are enabled.
+Both full-window captures were visually inspected for control containment and readable row alignment.
+Comparison tolerances and full-image coverage are unchanged; process/output identity goldens are
+unchanged.
