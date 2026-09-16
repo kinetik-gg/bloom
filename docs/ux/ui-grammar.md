@@ -70,7 +70,7 @@ promoting the Properties layout into the kit. Timeline, assets and properties us
 shared row layouts.
 
 Painting outside the kit is limited to viewer canvas, node scene items, and timeline
-ruler, lanes, work area and navigator. Other surfaces compose kit widgets.
+ruler, lanes, graph editor, work area and navigator. Other surfaces compose kit widgets.
 
 ## Status and tool columns
 
@@ -166,6 +166,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `NodeSocketDot / NodeRerouteDot` | 8 / 10 | Scene port geometry |
 | `NodeLinkHandleMin` | 32 | Minimum spline tangent |
 | `NodeColumnGap / NodeRowGap` | 80 / 24 | Unplaced-node grid |
+| `GraphValueAxis / GraphHandleDot` | 48 / 6 | Graph editor value gutter / ease-handle dot |
 | `Hairline / SelectionEdge` | 1 / 2 | Pixel-edge arithmetic / scene selection outline |
 | `NodeGrid` | 16 | Node snap grid |
 | `PlayheadHalfWidth / PlayheadHeight` | 5 / 6 | Timeline playhead head |
@@ -220,6 +221,22 @@ Expanded RGBA rows use a blank-label KPropertyRow so controls align beneath the 
 Toggle and disclosure cells are ToggleCell squares (24); their glyphs are IconControl (20),
 with Regular off, Fill on, muted disabled and a neutral bordered box. Column headings use
 the same glyph size and pitch. KDiamond uses the Bold outline at every DPR.
+
+The timeline's graph editor REPLACES the key lanes rather than sitting beside them: in graph mode
+the lane region paints only its Surface backdrop and the curve view covers it, because two views of
+the same keys at once only make an artist ask which one they are editing. Its left gutter is
+`Size::GraphValueAxis` wide and carries the ACTIVE curve's value ticks -- the curve of the primary
+keyframe selection, else the one on the selected row, else the first -- and the gutter is painted
+over the curves so a line running off the left edge slides under the axis instead of colliding with
+its labels. A scalar curve strokes in `Color::Keyframe`; a component curve takes
+`Color::ComponentX/Y/Z/W`, which R/G/B/A borrow unchanged so one hue always means "the first
+component"; selection is Accent, which none of the five is. Ease handles are drawn only for a
+SELECTED key on an eased segment, as a hairline to a `Size::GraphHandleDot` dot. The graph toggle
+persists under `timeline/graph-editor`, and while it is on the keyframe-visibility toggle is
+disabled with the tooltip "Keys are always shown in the graph editor", because a curve whose keys
+are hidden is a picture of something nobody can edit. `timeline/keyframes-visible` and
+`timeline/snapping` persist the other two header toggles; keys off hides both the key lanes and a
+collapsed layer's summary glyphs, and lane snapping is `snapping && !Shift`.
 
 Timeline lanes use `LanePadding` (12) on both sides of their time axis. `TimelineSeparator` (2)
 is Background between the layer column and lanes, including the header split. All timeline rows

@@ -363,6 +363,8 @@ target_sources(
         timeline_editor_menus.cpp
         timeline_frame_math.cpp
         timeline_ruler.cpp
+        timeline_graph_math.cpp
+        timeline_graph_view.cpp
         timeline_keyframe_gestures.cpp
         timeline_work_area.cpp
         timeline_navigation.cpp
@@ -406,6 +408,7 @@ target_sources(
             include/bloom/ui/third_party_license_catalog.hpp
             include/bloom/ui/timeline_editor.hpp
             include/bloom/ui/timeline_frame_math.hpp
+            include/bloom/ui/timeline_graph_view.hpp
             include/bloom/ui/timeline_ruler.hpp
             include/bloom/ui/composition_commands.hpp
             include/bloom/ui/viewer_overlays.hpp

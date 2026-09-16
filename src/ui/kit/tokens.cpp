@@ -74,6 +74,12 @@ constexpr auto kColors = std::to_array<ColorEntry>({
     {Color::SocketVector, 0xC87AF0U},
     {Color::SocketString, 0xF0C93CU},
     {Color::SocketBoolean, 0xE0567BU},
+    // GRAPH-1 component curves: red, green, a light sky blue clearly lighter than Accent
+    // (0x0C8CE9) and AccentHover (0x3AA5F0), and a neutral for the fourth channel.
+    {Color::ComponentX, 0xE06C75U},
+    {Color::ComponentY, 0x8CC265U},
+    {Color::ComponentZ, 0x7FC4F5U},
+    {Color::ComponentW, 0xC9C9C9U},
 });
 
 // Darkest first. surfaceStep() walks exactly this ladder and nothing else.

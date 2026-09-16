@@ -35,6 +35,7 @@
 #include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
+#include <bloom/ui/timeline_graph_view.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
 
 #include <QAction>
@@ -1971,6 +1972,62 @@ void testIntegratedKeyGestures(Expectations& expectations) {
 // governs what it claims to. The graph toggle is still disabled here -- the feature it would claim
 // does not exist yet, and an enabled control that does nothing is the one thing the grammar's
 // no-placeholder rule forbids.
+// GRAPH-1, D5: the graph toggle is real now. Turning it on replaces the key lanes with the curve
+// view, and the keys toggle goes disabled with the honest reason, because a curve whose keys are
+// hidden is a picture of something nobody can edit.
+void testGraphEditorReplacesTheKeyLanes(Expectations& expectations) {
+    using namespace bloom;
+    QSettings settings;
+    settings.remove(QStringLiteral("timeline/graph-editor"));
+    SessionFixture fixture(makeTestProject("Graph toggle"));
+    auto& session = fixture.session;
+    (void)session.addSolidLayer("Curves", {0.2, 0.3, 0.4, 1});
+    const auto opacity = session.parameterForSelection(document::kOpacityParameterRole)->id;
+    expectations.expect(session.pasteKeyframes({{opacity, time(1), 0.2}, {opacity, time(5), 0.8}},
+                                               session.snapshot().revision()),
+                        "the graph fixture seeds two keys");
+    ui::TimelineEditor editor(session, fixture.controller);
+    editor.resize(1600, 700);
+    editor.show();
+    QCoreApplication::processEvents();
+    auto* graph = editor.findChild<QToolButton*>("timelineGraphEditorButton");
+    auto* keys = editor.findChild<QToolButton*>("timelineKeyframesVisibleButton");
+    auto* view = editor.laneRegionForTest()->graphViewForTest();
+    if (graph == nullptr || keys == nullptr || view == nullptr)
+        throw std::runtime_error("Missing graph editor widgets");
+    expectations.expect(graph->isEnabled() && !graph->isChecked() && !view->isVisible(),
+                        "the graph toggle is enabled and starts off");
+
+    // Expand the layer so the parameter rows -- and therefore the curves -- exist.
+    const auto axis = editor.rulerForTest()->axisForWidth(editor.laneRegionForTest()->width());
+    if (!axis)
+        throw std::runtime_error("Missing lane axis");
+    sendMouse(*editor.laneRegionForTest(), QEvent::MouseButtonPress, axis->pixelForTime(time(1)),
+              ui::kTimelineRowHeight / 2.0);
+    sendMouse(*editor.laneRegionForTest(), QEvent::MouseButtonRelease, axis->pixelForTime(time(1)),
+              ui::kTimelineRowHeight / 2.0);
+    QCoreApplication::processEvents();
+    graph->setChecked(true);
+    QCoreApplication::processEvents();
+    auto* panel = editor.findChild<ui::TimelineKeyframePanel*>("timelineKeyframePanel");
+    expectations.expect(view->isVisible() && panel != nullptr && !panel->isVisible(),
+                        "graph mode replaces the key lanes rather than sitting beside them");
+    expectations.expect(!keys->isEnabled() &&
+                            keys->toolTip() ==
+                                QStringLiteral("Keys are always shown in the graph editor"),
+                        "and the keys toggle goes disabled with the reason, not silently inert");
+    expectations.expect(QSettings().value(QStringLiteral("timeline/graph-editor")).toBool(),
+                        "the graph choice persists");
+    expectations.expect(!view->curves().empty() && view->activeCurve().has_value(),
+                        "the opacity curve is on the canvas and one curve is active");
+    graph->setChecked(false);
+    QCoreApplication::processEvents();
+    expectations.expect(!view->isVisible() && keys->isEnabled() &&
+                            keys->toolTip() == QStringLiteral("Show keyframes"),
+                        "leaving graph mode restores the lanes and the keys toggle");
+    settings.remove(QStringLiteral("timeline/graph-editor"));
+}
+
 void testHeaderTogglesArePersistedAndLive(Expectations& expectations) {
     using namespace bloom;
     QSettings settings;
@@ -1989,15 +2046,12 @@ void testHeaderTogglesArePersistedAndLive(Expectations& expectations) {
     QCoreApplication::processEvents();
 
     auto* keys = editor.findChild<QToolButton*>("timelineKeyframesVisibleButton");
-    auto* graph = editor.findChild<QToolButton*>("timelineGraphEditorButton");
     auto* snap = editor.findChild<QToolButton*>("timelineSnappingButton");
-    if (keys == nullptr || graph == nullptr || snap == nullptr)
+    if (keys == nullptr || snap == nullptr)
         throw std::runtime_error("Missing timeline header toggles");
     expectations.expect(!keys->isChecked() && !snap->isChecked() && keys->isEnabled() &&
                             snap->isEnabled(),
                         "the persisted state is restored onto the live toggles");
-    expectations.expect(!graph->isEnabled(),
-                        "the graph toggle stays disabled until the graph editor exists");
 
     expectations.expect(editor.laneRegionForTest()->keySummaryTimes(0).empty(),
                         "keys off also hides a collapsed layer's summary glyphs, so the painter "
@@ -2128,6 +2182,7 @@ int main(int argc, char** argv) {
     try {
         testOutputMergeRows(expectations);
         testHeaderTogglesArePersistedAndLive(expectations);
+        testGraphEditorReplacesTheKeyLanes(expectations);
         testRulerAndLanesShareTheLaneRegionOrigin(expectations);
         testHeaderSplitInEditorArea(expectations);
         testTimeViewportGestures(expectations);

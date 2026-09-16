@@ -5,6 +5,7 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/timeline_editor.hpp>
+#include <bloom/ui/timeline_graph_view.hpp>
 #include <memory>
 
 #include <bloom/ui/viewer_editor.hpp>
@@ -1023,6 +1024,7 @@ void TimelineLaneRegion::resizeEvent(QResizeEvent* event) {
     keyframePanel_->setGeometry(rect());
     if (keyframePanel_)
         keyframePanel_->setGridEntries(entries_, scrollOffset_);
+    syncKeyframeSurfaces();
 }
 
 int TimelineLaneRegion::contentHeight() const noexcept {
@@ -1044,12 +1046,37 @@ void TimelineLaneRegion::setEntries(std::vector<TimelineLayerEntry> entries) {
         keyframePanel_->setGridEntries({}, 0);
         keyframeArea_->setGeometry(rect());
         keyframePanel_->setGeometry(rect());
+        graphView_ = new TimelineGraphView(session_, ruler_, this);
+        graphView_->setGeometry(rect());
+        graphView_->setVisible(graphEditor_);
     }
     drag_.reset();
     guide_.reset();
     entries_ = std::move(entries);
     if (keyframePanel_)
         keyframePanel_->setGridEntries(entries_, scrollOffset_);
+    if (graphView_)
+        graphView_->setEntries(entries_);
+    syncKeyframeSurfaces();
+    update();
+}
+
+void TimelineLaneRegion::syncKeyframeSurfaces() {
+    if (keyframePanel_ != nullptr)
+        keyframePanel_->setKeysVisible(keyframesVisible_ && !graphEditor_);
+    if (graphView_ != nullptr) {
+        graphView_->setGeometry(rect());
+        graphView_->setVisible(graphEditor_);
+        if (graphEditor_)
+            graphView_->raise();
+    }
+}
+
+void TimelineLaneRegion::setGraphEditorEnabled(const bool enabled) {
+    if (graphEditor_ == enabled)
+        return;
+    graphEditor_ = enabled;
+    syncKeyframeSurfaces();
     update();
 }
 
@@ -1063,16 +1090,19 @@ void TimelineLaneRegion::setScrollOffset(const int offset) {
     update();
 }
 
+// The checked LOOK is the kit's own accent fill (ui-grammar.md, "Colour Surfaces": kit button
+// painters ink transport, loop, snap and keyframe toggles on that fill). All this re-derives is
+// the enabled/disabled ink, so a toggle that becomes unavailable says so in the same muted tone
+// every other chrome glyph uses.
 void TimelineEditor::applyHeaderToggleGlyph(QToolButton* button, const bool checked) {
+    Q_UNUSED(checked)
     if (button == nullptr)
         return;
     const auto iconId = button == snappingButton_      ? kit::IconId::Snap
                         : button == graphEditorButton_ ? kit::IconId::Graph
                                                        : kit::IconId::Keyframe;
     button->setIcon(kit::icon(iconId, kit::IconRole::Chrome,
-                              !button->isEnabled() ? kit::Color::Faint
-                              : checked            ? kit::Color::Accent
-                                                   : kit::Color::Foreground));
+                              button->isEnabled() ? kit::Color::Foreground : kit::Color::Faint));
 }
 
 void TimelineEditor::setKeyframesVisible(const bool visible) {
@@ -1081,6 +1111,23 @@ void TimelineEditor::setKeyframesVisible(const bool visible) {
     applyHeaderToggleGlyph(keyframesVisibleButton_, visible);
     if (lanes_ != nullptr)
         lanes_->setKeyframesVisible(visible);
+}
+
+void TimelineEditor::setGraphEditorEnabled(const bool enabled) {
+    graphEditor_ = enabled;
+    QSettings().setValue(QStringLiteral("timeline/graph-editor"), enabled);
+    applyHeaderToggleGlyph(graphEditorButton_, enabled);
+    if (keyframesVisibleButton_ != nullptr) {
+        // The graph editor always shows its keys -- a curve with the keys hidden is a picture of
+        // something nobody can edit -- so the keys toggle is disabled there, and says why.
+        keyframesVisibleButton_->setEnabled(!enabled);
+        keyframesVisibleButton_->setToolTip(
+            enabled ? tr("Keys are always shown in the graph editor") : tr("Show keyframes"));
+        keyframesVisibleButton_->setAccessibleName(keyframesVisibleButton_->toolTip());
+        applyHeaderToggleGlyph(keyframesVisibleButton_, keyframesVisible_);
+    }
+    if (lanes_ != nullptr)
+        lanes_->setGraphEditorEnabled(enabled);
 }
 
 void TimelineEditor::setSnappingEnabled(const bool enabled) {
@@ -1095,8 +1142,7 @@ void TimelineLaneRegion::setKeyframesVisible(const bool visible) {
     if (keyframesVisible_ == visible)
         return;
     keyframesVisible_ = visible;
-    if (keyframePanel_)
-        keyframePanel_->setKeysVisible(visible);
+    syncKeyframeSurfaces();
     update();
 }
 
@@ -1189,6 +1235,13 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event)
     QPainter painter(this);
     painter.fillRect(rect(), kit::color(kit::Color::SurfaceSunken));
+    if (graphEditor_) {
+        // In graph mode this region owns nothing but the backdrop: the curve view covers it and
+        // paints every row-shaped thing itself. Painting lanes underneath would be ink nobody can
+        // see and a second answer about where a key is.
+        painter.fillRect(rect(), kit::color(kit::Color::Surface));
+        return;
+    }
 
     for (int row = scrollOffset_ / kTimelineRowHeight;
          row <= (scrollOffset_ + height()) / kTimelineRowHeight; ++row) {
@@ -1529,9 +1582,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
         button->setEnabled(enabled);
         button->setAutoRaise(true);
         button->setIcon(kit::icon(iconId, kit::IconRole::Chrome,
-                                  !enabled              ? kit::Color::Faint
-                                  : button->isChecked() ? kit::Color::Accent
-                                                        : kit::Color::Foreground));
+                                  enabled ? kit::Color::Foreground : kit::Color::Faint));
         button->setIconSize(QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium)));
         button->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
         addTool(button);
@@ -1545,10 +1596,10 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     keyframesVisibleButton_ =
         addHeaderToggle(QStringLiteral("timelineKeyframesVisibleButton"), tr("Show keyframes"),
                         kit::IconId::Keyframe, keyframesVisible_, true);
-    graphEditorButton_ = addHeaderToggle(
-        QStringLiteral("timelineGraphEditorButton"),
-        tr("Graph editor is available when a graph exists"), kit::IconId::Graph,
-        settings.value(QStringLiteral("timeline/graph-editor"), false).toBool(), false);
+    graphEditor_ = settings.value(QStringLiteral("timeline/graph-editor"), false).toBool();
+    graphEditorButton_ =
+        addHeaderToggle(QStringLiteral("timelineGraphEditorButton"), tr("Show the graph editor"),
+                        kit::IconId::Graph, graphEditor_, true);
     snappingButton_ =
         addHeaderToggle(QStringLiteral("timelineSnappingButton"), tr("Snap edits to frames"),
                         kit::IconId::Snap, snapping_, true);
@@ -1556,6 +1607,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
             [this](const bool checked) { setKeyframesVisible(checked); });
     connect(snappingButton_, &QToolButton::toggled, this,
             [this](const bool checked) { setSnappingEnabled(checked); });
+    connect(graphEditorButton_, &QToolButton::toggled, this,
+            [this](const bool checked) { setGraphEditorEnabled(checked); });
     ruler_ = new TimelineRuler(session_, previewController, this);
     ruler_->setFixedHeight(kit::px(kit::Size::HeaderRow) - workArea_->height());
     ruler_->setTimecodeLabels(timecodeFormat_);
@@ -1613,6 +1666,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     lanes_ = new TimelineLaneRegion(session_, *ruler_, *scrollBar_, body);
     lanes_->setKeyframesVisible(keyframesVisible_);
     lanes_->setSnappingEnabled(snapping_);
+    setGraphEditorEnabled(graphEditor_);
     const auto toggleExpansion = [this](document::LayerId layer) {
         if (!expandedLayers_.erase(layer))
             expandedLayers_.insert(layer);
