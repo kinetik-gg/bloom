@@ -38,15 +38,15 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.11`.
+The container version remains `1.0`; the current document schema is `1.12`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
-The schemas use JSON Schema Draft 2020-12. Versioned artifacts through `1.10` remain checked as
-historical fixtures, with the current `1.11` contract also enforced by the canonical writer,
+The schemas use JSON Schema Draft 2020-12. Versioned artifacts through `1.11` remain checked as
+historical fixtures, with the current `1.12` contract also enforced by the canonical writer,
 decoder tests. The manifest artifact still requires container `1.0`; its document
-declaration follows the current document minor. Every historical artifact from `1.0` through `1.10`,
+declaration follows the current document minor. Every historical artifact from `1.0` through `1.11`,
 manifest and document, remains checked, and each version's checker validates what its own minor adds
 and then reduces the artifact to its predecessor so the older checks run unchanged.
 
@@ -541,7 +541,8 @@ Animation curve records are sorted by numeric `AnimationCurveId` and have one of
 }
 ```
 
-A scalar key has `id`, `time`, `value`, then `outgoingInterpolation`; a `vec2` key replaces `value`
+A scalar key has `id`, `time`, `value`, `outgoingInterpolation`, then the two OPTIONAL `1.12` ease
+handles described under **Ease Handles In Document 1.12**; a `vec2` key replaces `value`
 with an object containing `x`, then `y`; a `color4` key replaces it with an object containing `red`,
 `green`, `blue`, then `alpha` -- the same authoring order and straight-alpha meaning a constant
 `color4` parameter value already uses, with `alpha` confined to `[0, 1]`. Interpolation is exactly
@@ -722,7 +723,7 @@ Canonical ordering uses semantic values, never serialized decimal-string lexical
 Container and document versions use independent `{major, minor}` values:
 
 - unknown major versions are rejected without mutation
-- document 1.11 is the minimum loadable schema; earlier minors fail with
+- document 1.12 is the minimum loadable schema; earlier minors fail with
   `UnsupportedSchemaVersion`, without migration or mutation
 - a newer minor opens editable only when every unknown construct is additive, bounded, and
   provably preservable
@@ -786,7 +787,7 @@ schema-version path. Reconstruction applies the same registry validation to deco
 names the node ID. Old or future versions of a known kind are never silently upgraded, downgraded,
 or interpreted through another definition. No parameters or IDs are injected and no edges are dropped.
 
-The floor and canonical writer remain **1.11**. This removal changes acceptance, not encoding, so
+The floor and canonical writer are **1.12**. This removal changes acceptance, not encoding, so
 it adds no schema minor. The numbered historical migration ladder remains as a record and as
 independently tested schema transforms; archive loading does not run it for documents below the
 floor. The 1.6 → 1.7 step now only advances its schema number; Solid parameter injection and Layer
@@ -1082,7 +1083,7 @@ the new artifacts to 1.5 and run the complete historical ladder.
 ## Content Bounds Introduced In Document 1.7
 
 Solid v2 introduced explicit Scalar width and height. Text v2, Layer v4, and Merge v2 use local
-content bounds. These are now the only supported definitions; the current 1.11 schema includes
+content bounds. These are now the only supported definitions; the current 1.12 schema includes
 those contracts together with per-component animation, image assets, and audio. Documents carrying
 older node versions fail validation. There is no coordinate conversion or compatibility evaluator.
 
@@ -1151,7 +1152,7 @@ Import, relink, removal, layer placement and background editing use ordinary com
 
 Document `1.11` is an additive schema step. Migration `1.10 → 1.11` changes only the root minor
 version and preserves every existing object, ID, parameter source, graph edge, asset and authored
-value. The canonical writer and manifest declaration emit `1.11`, which is also the load floor.
+value. The canonical writer and manifest declaration emit `1.11`; the floor has since moved to `1.12`.
 Earlier documents are rejected; the numbered transform is retained only as historical schema bookkeeping.
 
 An Audio asset uses the same stable `AssetRecord` identity and project-relative `AssetLocator` as
@@ -1168,3 +1169,29 @@ audio ports described in [`layer-graph-model.md`](layer-graph-model.md); these a
 nodes and edges, not an opaque timeline extension. `AddAudioLayer` allocates and persists the source,
 boundary, slot and edge identities atomically. Existing image-only documents contain no audio
 edges and decode to the same image graph and pixels.
+
+## Ease Handles In Document 1.12
+
+Document `1.12` is an additive schema step. Migration `1.11 -> 1.12` changes only the root minor
+version; it adds no member, because every `1.11` key holds the default handle. The canonical writer
+and manifest declaration emit `1.12`, which is also the load floor. Earlier documents are rejected;
+the numbered transform is retained only as historical schema bookkeeping.
+
+A scalar keyframe and a component keyframe may each carry `outgoingHandle` and `incomingHandle`,
+in that order, after `outgoingInterpolation`. Each is a CLOSED object of `time` then `value`, both
+Float64: `time` is a fraction of the adjoining segment's duration measured from the key that owns
+the handle and is confined to `[0, 1]`; `value` is a finite offset from that key's own value. A
+handle outside that domain is `InvalidKeyframeHandle`, the same predicate the document store and
+the sampler apply, so a file can never carry a handle the model would refuse. The handle object is
+not a round-trip attachment point: an unknown member inside one is `UnknownMember`.
+
+Both members are OPTIONAL and are emitted ONLY when the handle is non-default -- the default being
+`time = 1/3` and `value = 0`, tested BITWISE. An existing document therefore re-encodes
+byte-identically apart from its declared minor, and no identity or sampling version moves; see
+[`animation-and-time.md`](animation-and-time.md), "Ease handles", for what the handles mean and why
+a default-handled key still samples bit-for-bit as it did. The legacy whole-value `vec2`, `vec3` and
+`color4` keyframe projections carry no handles.
+
+The document and manifest artifacts are `document-1.12.schema.json` and
+`manifest-1.12.schema.json`, whose `keyframeHandle-1.12` definition is referenced from the scalar
+and the three component keyframe definitions; the historical `1.11` artifacts remain unchanged.

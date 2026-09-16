@@ -24,12 +24,13 @@ namespace bloom::project {
 // that merely names a CanonicalDocumentV1.
 class RoundTripState;
 
-inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 11};
+inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 12};
 // The v1 expanded document.json resource limit from docs/architecture/project-format.md.
 inline constexpr std::size_t kCanonicalDocumentMaximumBytes = 268'435'456;
 // Deepest canonical document emission is nine containers (root through a vec2 keyframe value
-// object). The budget keeps manifest-style headroom over that fixed shape while still bounding
-// every write path.
+// object, or through a scalar keyframe's 1.12 ease-handle object, which sits at the same depth).
+// The budget keeps manifest-style headroom over that fixed shape while still bounding every write
+// path.
 inline constexpr std::size_t kCanonicalDocumentMaximumDepth = 12;
 inline constexpr std::size_t kCanonicalDocumentNoIndex = static_cast<std::size_t>(-1);
 

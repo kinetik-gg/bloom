@@ -474,13 +474,85 @@ using document::Vec3d;
     return false;
 }
 
+// The minor that DECLARES the ease-handle members. A file claiming an older minor that carries one
+// is a malformed file of that minor, not data to accept silently -- the same rule the
+// "ease-in-out" interpolation token follows.
+inline constexpr std::uint32_t kKeyframeHandleMinor = 12;
+
+// A handle object is CLOSED: exactly {time, value}, in that order, and nothing else. It is not a
+// collection element and carries no identity, so it is not a round-trip attachment point either;
+// an unknown member inside one is an error rather than something to preserve.
+[[nodiscard]] bool decodeKeyframeHandle(const JsonValue& node, DecodeState& state,
+                                        const std::string& path, document::KeyframeHandle& out) {
+    static constexpr std::array<std::string_view, 2> keys{"time", "value"};
+    if (node.kind() != JsonValueKind::Object) {
+        state.fail(DocumentDecodeError::WrongValueKind, path);
+        return false;
+    }
+    const auto members = node.objectMembers();
+    if (members.size() > keys.size()) {
+        state.fail(DocumentDecodeError::UnknownMember, joinPath(path, members[keys.size()].key()));
+        return false;
+    }
+    std::vector<const JsonValue*> values;
+    if (!matchOrderedMembers(node, keys, false, state, path, values)) {
+        return false;
+    }
+    document::KeyframeHandle handle;
+    if (!decodeFloat64Member(*values[0], state, joinPath(path, "time"), handle.time) ||
+        !decodeFloat64Member(*values[1], state, joinPath(path, "value"), handle.value)) {
+        return false;
+    }
+    if (!document::isValidKeyframeHandle(handle)) {
+        state.fail(DocumentDecodeError::InvalidKeyframeHandle, path);
+        return false;
+    }
+    out = handle;
+    return true;
+}
+
+// The two handle members are OPTIONAL and omitted whenever they are default, so the exact key list
+// a keyframe object is matched against depends on which of them it actually carries. Peeking at the
+// members in declared order keeps matchOrderedMembers' strict ordering, unknown-member and
+// round-trip-capture rules exactly as they are for every other object: an out-of-order or
+// unexpected member still fails, and a genuinely unknown trailing member is still captured.
+void appendPresentHandleKeys(const JsonValue& node, const DecodeState& state,
+                             const std::size_t knownCount, std::vector<std::string_view>& keys) {
+    if (state.documentMinor < kKeyframeHandleMinor || node.kind() != JsonValueKind::Object) {
+        return;
+    }
+    const auto members = node.objectMembers();
+    auto index = knownCount;
+    if (members.size() > index && members[index].key() == "outgoingHandle") {
+        keys.emplace_back("outgoingHandle");
+        ++index;
+    }
+    if (members.size() > index && members[index].key() == "incomingHandle") {
+        keys.emplace_back("incomingHandle");
+    }
+}
+
+[[nodiscard]] bool decodeHandleMembers(const std::vector<const JsonValue*>& members,
+                                       const std::vector<std::string_view>& keys,
+                                       const std::size_t knownCount, DecodeState& state,
+                                       const std::string& path, ScalarKeyframe& out) {
+    for (auto index = knownCount; index < keys.size(); ++index) {
+        auto& handle = keys[index] == "outgoingHandle" ? out.outgoingHandle : out.incomingHandle;
+        if (!decodeKeyframeHandle(*members[index], state, joinPath(path, keys[index]), handle)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // A keyframe is a collection element (identity: numeric KeyframeId); see decodeComposition's own
 // comment in document_decode.cpp for why a collection element's own trailing capture must be
 // deferred until its identity member is decoded.
 [[nodiscard]] bool decodeScalarKeyframe(const JsonValue& node, DecodeState& state,
                                         const std::string& path, ScalarKeyframe& out) {
-    static constexpr std::array<std::string_view, 4> keys{"id", "time", "value",
-                                                          "outgoingInterpolation"};
+    std::vector<std::string_view> keys{"id", "time", "value", "outgoingInterpolation"};
+    const auto knownCount = keys.size();
+    appendPresentHandleKeys(node, state, knownCount, keys);
     std::vector<const JsonValue*> members;
     std::vector<RetainedJsonMember> trailing;
     if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
@@ -519,7 +591,7 @@ using document::Vec3d;
     out.time = time;
     out.value = value;
     out.outgoingInterpolation = interpolation;
-    return true;
+    return decodeHandleMembers(members, keys, knownCount, state, path, out);
 }
 
 [[nodiscard]] bool decodeVec2Keyframe(const JsonValue& node, DecodeState& state,
@@ -667,8 +739,9 @@ template <std::size_t Count>
                                            const std::string& path,
                                            const std::array<AnimationComponent, Count>& allowed,
                                            AnimationComponent& component, ScalarKeyframe& out) {
-    static constexpr std::array<std::string_view, 5> keys{"id", "component", "time", "value",
-                                                          "outgoingInterpolation"};
+    std::vector<std::string_view> keys{"id", "component", "time", "value", "outgoingInterpolation"};
+    const auto knownCount = keys.size();
+    appendPresentHandleKeys(node, state, knownCount, keys);
     std::vector<const JsonValue*> members;
     std::vector<RetainedJsonMember> trailing;
     if (!matchOrderedMembers(node, keys, true, state, path, members, trailing))
@@ -703,7 +776,7 @@ template <std::size_t Count>
         state.roundTrip->attach(state.attachmentPath, std::move(trailing));
     component = *parsedComponent;
     out = ScalarKeyframe{id, time, value, interpolation};
-    return true;
+    return decodeHandleMembers(members, keys, knownCount, state, path, out);
 }
 
 template <std::size_t Count>

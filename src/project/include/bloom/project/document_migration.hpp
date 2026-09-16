@@ -170,6 +170,9 @@ migrateAnimationComponentsV1_8(const JsonValue& root, std::pmr::memory_resource*
 [[nodiscard]] MigrationStepOutcome migrateAudioV1_10(const JsonValue& root,
                                                      std::pmr::memory_resource* resource,
                                                      std::pmr::vector<char>& output);
+[[nodiscard]] MigrationStepOutcome migrateKeyframeHandlesV1_11(const JsonValue& root,
+                                                               std::pmr::memory_resource* resource,
+                                                               std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -181,7 +184,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 7}, {1, 8}, migrateViewerSafeAreasV1_7},
     MigrationStepDescriptor{{1, 8}, {1, 9}, migrateAnimationComponentsV1_8},
     MigrationStepDescriptor{{1, 9}, {1, 10}, migrateImagesV1_9},
-    MigrationStepDescriptor{{1, 10}, {1, 11}, migrateAudioV1_10}};
+    MigrationStepDescriptor{{1, 10}, {1, 11}, migrateAudioV1_10},
+    MigrationStepDescriptor{{1, 11}, {1, 12}, migrateKeyframeHandlesV1_11}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

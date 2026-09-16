@@ -66,6 +66,35 @@ document::ColorSettings neutralColorSettings() {
     return document::makeBloomNeutralColorSettingsV1(core::Sha256Digest::fromBytes(bytes));
 }
 
+// The one emitted handle object of that name, with canonical indentation squeezed out, so the
+// assertion pins the SHAPE and the exact numbers rather than the writer's current nesting depth.
+std::string handleObject(const std::string& text, const std::string_view name) {
+    const auto at = text.find('"' + std::string(name) + "\": {");
+    if (at == std::string::npos) {
+        return {};
+    }
+    const auto open = text.find('{', at);
+    const auto close = text.find('}', open);
+    if (open == std::string::npos || close == std::string::npos) {
+        return {};
+    }
+    std::string compact;
+    for (const char character : text.substr(open, close + 1 - open)) {
+        if (character != ' ' && character != '\n') {
+            compact.push_back(character);
+        }
+    }
+    return compact;
+}
+
+std::size_t occurrences(const std::string& text, const std::string_view needle) {
+    std::size_t count = 0;
+    for (auto at = text.find(needle); at != std::string::npos; at = text.find(needle, at + 1)) {
+        ++count;
+    }
+    return count;
+}
+
 core::RationalTime time(const std::int64_t numerator, const std::int64_t denominator) {
     const auto value = core::RationalTime::create(numerator, denominator);
     if (!value.has_value()) {
@@ -220,11 +249,17 @@ Authored authoredProject() {
             document::Color4AnimationCurve{*colorCurve, {}, std::move(colorComponents)})) {
         throw std::runtime_error("fixture colour curve");
     }
-    if (!composition.animationCurves().insert(document::ScalarAnimationCurve{
-            *scalarCurve,
-            {document::ScalarKeyframe{*thirdKey, time(0, 1), 0.25,
-                                      document::KeyframeInterpolation::EaseInOut},
-             document::ScalarKeyframe{*fourthKey, time(5, 3), 1.0}}})) {
+    // GRAPH-1, D2: the eased scalar segment also carries NON-DEFAULT ease handles on both of its
+    // ends, while every colour key keeps its defaults. That pairing is the whole point of the
+    // optional encoding: the handled keys must gain the two members, and the default ones must gain
+    // nothing at all.
+    document::ScalarKeyframe handledStart{*thirdKey, time(0, 1), 0.25,
+                                          document::KeyframeInterpolation::EaseInOut};
+    handledStart.outgoingHandle = {0.125, 0.5};
+    document::ScalarKeyframe handledEnd{*fourthKey, time(5, 3), 1.0};
+    handledEnd.incomingHandle = {0.875, -0.25};
+    if (!composition.animationCurves().insert(
+            document::ScalarAnimationCurve{*scalarCurve, {handledStart, handledEnd}})) {
         throw std::runtime_error("fixture scalar curve");
     }
     if (!composition.parameters().setSource(*colorParameter,
@@ -278,8 +313,14 @@ void roundTripAndReopen() {
            "and an eased key is written with the ease-in-out token");
     expect(text.find("\"red\"") != std::string::npos && text.find("\"alpha\"") != std::string::npos,
            "a colour key's value carries the same named channels a constant colour does");
-    expect(text.find("\"minor\": 11") != std::string::npos,
+    expect(text.find("\"minor\": 12") != std::string::npos,
            "both constructs declare the current document schema minor");
+    expect(handleObject(text, "outgoingHandle") == R"({"time":0.125,"value":0.5})" &&
+               handleObject(text, "incomingHandle") == R"({"time":0.875,"value":-0.25})",
+           "a non-default ease handle is written as a closed {time, value} object");
+    expect(occurrences(text, "\"outgoingHandle\"") == 1 &&
+               occurrences(text, "\"incomingHandle\"") == 1,
+           "and a default handle is written nowhere: ten default-handled keys add no member");
 
     auto openedResult = openProjectArchive(archive, {}, memory());
     expect(openedResult.outcome() == OpenArchiveOutcome::Opened,
@@ -288,7 +329,7 @@ void roundTripAndReopen() {
         return;
     }
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.schemaMinor == 11 && !opened.roundTrip,
+    expect(opened.schemaMinor == kCanonicalDocumentSchemaVersionV1.minor && !opened.roundTrip,
            "and is read as the current schema minor with nothing unknown to retain");
     const auto reopened = opened.document->snapshot();
     const auto* composition = reopened.project().findComposition(authored.compositionId);
@@ -309,6 +350,13 @@ void roundTripAndReopen() {
     expect(scalarCurve != nullptr && scalarCurve->keyframes.front().outgoingInterpolation ==
                                          document::KeyframeInterpolation::EaseInOut,
            "the decoded interior key really is Ease In-Out, not normalized to Linear");
+    expect(scalarCurve != nullptr &&
+               scalarCurve->keyframes.front().outgoingHandle ==
+                   document::KeyframeHandle{0.125, 0.5} &&
+               scalarCurve->keyframes.back().incomingHandle ==
+                   document::KeyframeHandle{0.875, -0.25} &&
+               document::isDefaultKeyframeHandle(scalarCurve->keyframes.front().incomingHandle),
+           "and its ease handles decode to the exact authored pair, the unwritten one defaulted");
 
     // Byte determinism: the second write of the reopened document must be the first write again.
     expect(archiveOf(reopened, opened.colorSettings) == archive,
@@ -325,11 +373,11 @@ std::vector<std::byte> legacyArchive(std::string& documentText) {
     const auto snapshot = unanimated.snapshot();
     documentText = documentTextOf(archiveOf(snapshot, settings));
 
-    const auto minor = documentText.find("\"minor\": 11");
+    const auto minor = documentText.find("\"minor\": 12");
     if (minor == std::string::npos) {
         throw std::logic_error("legacy minor anchor");
     }
-    documentText.replace(minor, std::string_view("\"minor\": 11").size(), "\"minor\": 2");
+    documentText.replace(minor, std::string_view("\"minor\": 12").size(), "\"minor\": 2");
 
     removeImageFields(documentText);
     const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 2}};
@@ -355,7 +403,7 @@ void migrationFromTwelve() {
                               : nullptr;
     expect(result.outcome() == OpenArchiveOutcome::Failed && failure &&
                failure->error == DocumentDecodeError::UnsupportedSchemaVersion,
-           "documents below the canonical 1.11 floor are refused without migration");
+           "documents below the canonical 1.12 floor are refused without migration");
 }
 
 // The additive-minor rule, in both directions: a file claiming a minor that PREDATES 1.3 may not
@@ -364,7 +412,7 @@ void minorGating() {
     const auto authored = authoredProject();
     const auto settings = neutralColorSettings();
     const auto baseline = documentTextOf(archiveOf(authored.document->snapshot(), settings));
-    const auto anchor = std::string_view("\"minor\": 11");
+    const auto anchor = std::string_view("\"minor\": 12");
     const auto minor = baseline.find(anchor);
     expect(minor != std::string::npos, "the animated fixture declares the current minor");
     if (minor == std::string::npos) {
@@ -393,12 +441,12 @@ void minorGating() {
                "and the refusal names the exact discriminator it could not accept");
     }
 
-    // Claiming 1.12 -- a minor NEWER than this build -- still decodes the colour curve, because the
+    // Claiming 1.13 -- a minor NEWER than this build -- still decodes the colour curve, because the
     // gate is "the minor that declares it or later", not "exactly 1.3". That is what makes 1.3's
     // additions additive rather than a one-version island.
     {
         auto text = baseline;
-        text.replace(minor, anchor.size(), "\"minor\": 12");
+        text.replace(minor, anchor.size(), "\"minor\": 13");
         auto dom = parseStrictJsonDom(test::toBytes(text), {}, memory());
         expect(static_cast<bool>(dom), "the 1.4-labelled document parses");
         if (!dom) {

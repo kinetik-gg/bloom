@@ -142,7 +142,7 @@ produce diagnostics when a requested image cannot be represented or allocated.
 Solid v2, Text v2, Layer v4, and Merge v2 are the only built-in definitions for these kinds.
 Every layer uses this local-bounds contract. Project I/O rejects an unsupported node version with
 `UnsupportedNodeVersion`, naming the kind and version; it never injects parameters, rewrites node
-versions, or converts placement. The document schema floor is 1.11.
+versions, or converts placement. The document schema floor is 1.12.
 
 ### Blending
 

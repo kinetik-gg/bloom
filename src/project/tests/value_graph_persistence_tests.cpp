@@ -241,7 +241,7 @@ void roundTripAndReopen() {
            "a driven parameter is written with the driver discriminator");
     expect(text.find("\"outputPort\": \"value\"") != std::string::npos,
            "and names the output port it reads");
-    expect(text.find("\"minor\": 11") != std::string::npos,
+    expect(text.find("\"minor\": 12") != std::string::npos,
            "both constructs declare the current document schema minor");
 
     auto openedResult = openProjectArchive(archive, {}, memory());
@@ -251,7 +251,7 @@ void roundTripAndReopen() {
         return;
     }
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.schemaMinor == 11 && !opened.roundTrip,
+    expect(opened.schemaMinor == kCanonicalDocumentSchemaVersionV1.minor && !opened.roundTrip,
            "and is read as the current schema minor with nothing unknown to retain");
     const auto reopened = opened.document->snapshot();
     const auto* composition = reopened.project().findComposition(authored.compositionId);
@@ -289,7 +289,7 @@ void minorGating() {
     const auto authored = authoredProject();
     const auto settings = neutralColorSettings();
     auto baseline = documentTextOf(archiveOf(authored.document->snapshot(), settings));
-    const auto anchor = std::string_view("\"minor\": 11");
+    const auto anchor = std::string_view("\"minor\": 12");
     const auto minor = baseline.find(anchor);
     expect(minor != std::string::npos, "the value-graph fixture declares the current minor");
     if (minor == std::string::npos) {
@@ -306,7 +306,7 @@ void minorGating() {
         return decodeDocumentEnvelope(dom.document()->root());
     };
 
-    // Claiming 1.3 -- a minor BELOW the 1.11 floor. The document is refused at the floor, before
+    // Claiming 1.3 -- a minor BELOW the 1.12 floor. The document is refused at the floor, before
     // any member of it is interpreted, so a construct 1.3 never declared can no more be read as
     // part of 1.3 than it could be silently migrated forward.
     {
@@ -323,7 +323,7 @@ void minorGating() {
     // gate is "the minor that declares it or later", not "exactly 1.4". That is what makes 1.4's
     // additions additive rather than a one-version island.
     {
-        const auto decoded = decodeClaiming("\"minor\": 12");
+        const auto decoded = decodeClaiming("\"minor\": 13");
         expect(
             decoded.outcome() == DocumentDecodeOutcome::Decoded &&
                 decoded.classification() == DocumentClassification::EditableWithRoundTrip,
