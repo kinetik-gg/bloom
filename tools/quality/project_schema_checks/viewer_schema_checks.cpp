@@ -154,6 +154,52 @@ void validateManifestSchemaV1_9(const json::Value& schema) {
     validateReferences(schema, schema);
 }
 
+void validateDocumentSchemaV1_12(const json::Value& schema) {
+    using namespace schema_detail;
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-document:1.12",
+                       "document id");
+    requireExact(schema.at("properties").at("schemaVersion"),
+                 R"({"$ref":"#/$defs/fixedVersion-1.12"})", "document version");
+    requireExact(schema.at("$defs").at("fixedVersion-1.12").at("properties").at("minor"),
+                 R"({"const":12})", "minor");
+    const auto& definitions = schema.at("$defs");
+    requireExact(
+        definitions.at("keyframeHandle-1.12"),
+        R"({"type":"object","required":["time","value"],"properties":{"time":{"type":"number","minimum":0,"maximum":1},"value":{"type":"number"}},"unevaluatedProperties":false})",
+        "closed ease handle");
+    // Both handles are OPTIONAL on every keyframe that can carry one -- a default handle is never
+    // written -- so they appear in `properties` and never in `required`.
+    for (const auto* name : {"scalarKeyframe-1.3", "vec2ComponentKeyframe-1.9",
+                             "vec3ComponentKeyframe-1.9", "color4ComponentKeyframe-1.9"}) {
+        const auto& properties = definitions.at(name).at("properties");
+        for (const auto* member : {"outgoingHandle", "incomingHandle"}) {
+            requireExact(properties.at(member), R"({"$ref":"#/$defs/keyframeHandle-1.12"})",
+                         "keyframe ease handle");
+        }
+        const auto& required = schema_detail::requireArray(
+            schema_detail::requireMember(definitions.at(name), "required", "keyframe"),
+            "keyframe required");
+        for (const auto& entry : required) {
+            if (entry.isString() &&
+                (entry.asString() == "outgoingHandle" || entry.asString() == "incomingHandle")) {
+                fail("an ease handle must never be a required keyframe member");
+            }
+        }
+    }
+    validateReferences(schema, schema);
+}
+
+void validateManifestSchemaV1_12(const json::Value& schema) {
+    using namespace schema_detail;
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-manifest:1.12",
+                       "manifest id");
+    requireExact(schema.at("$defs").at("document-1.0").at("properties").at("schemaVersion"),
+                 R"({"$ref":"#/$defs/fixedVersion-1.12"})", "manifest document version");
+    requireExact(schema.at("$defs").at("fixedVersion-1.12").at("properties").at("minor"),
+                 R"({"const":12})", "manifest minor");
+    validateReferences(schema, schema);
+}
+
 void validateDocumentSchemaV1_11(const json::Value& schema) {
     using namespace schema_detail;
     requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-document:1.11",

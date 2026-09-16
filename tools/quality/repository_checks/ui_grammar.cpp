@@ -71,7 +71,7 @@ std::vector<RepositoryFinding> uiGrammarViolations(const std::filesystem::path& 
                 const auto text = it->str();
                 // Exact canvas owners, never blanket file exemptions.
                 const std::regex canvas(
-                    R"((ViewerEditor|TimelineRuler|TimelineLaneRegion|TimelineWorkAreaRow|TimelineWorkAreaStrip|TimelineNavigator)::paintEvent)");
+                    R"((ViewerEditor|TimelineRuler|TimelineLaneRegion|TimelineGraphView|TimelineWorkAreaRow|TimelineWorkAreaStrip|TimelineNavigator)::paintEvent)");
                 if (std::regex_search(text, canvas))
                     continue;
                 const auto prefix = code.substr(0, offset);

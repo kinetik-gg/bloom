@@ -8,6 +8,7 @@
 
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/animation.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
 
@@ -31,6 +32,13 @@ struct CompiledScalarKeyframe final {
     core::RationalTime time;
     double value = 0.0;
     CompiledKeyframeInterpolation outgoingInterpolation = CompiledKeyframeInterpolation::Linear;
+    // The ease handles travel with the compiled key. They are the document's own value type rather
+    // than a mirrored copy: the interpolation enum is mirrored so a new document mode has to be
+    // mapped deliberately, but a handle is a pair of doubles with one definition of "default", and
+    // a second copy of that definition is exactly the drift the sampler's bitwise test cannot
+    // afford.
+    document::KeyframeHandle outgoingHandle{};
+    document::KeyframeHandle incomingHandle{};
 
     friend bool operator==(const CompiledScalarKeyframe&, const CompiledScalarKeyframe&) = default;
 };

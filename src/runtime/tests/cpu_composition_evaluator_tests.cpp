@@ -2025,6 +2025,7 @@ int main(int argc, char* argv[]) {
         testOperationCacheLifecycle(expectations);
         testOperationMemoization(expectations);
         testOperationTimeInvariance(expectations);
+        testEaseHandleChangeReachesAMemoizedFrame(expectations);
         testOperationDirtyPropagation(expectations);
         testNestedMergeEqualsFlat(expectations);
         testTextLayerIsComposedAtKnownGlyphPositions(expectations);

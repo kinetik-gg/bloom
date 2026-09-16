@@ -1,3 +1,4 @@
+#include "timeline_key_glyph.hpp"
 #include <QRegion>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/timeline_editor.hpp>
@@ -70,7 +71,6 @@ const int kKeyframeRowHeight = kTimelineRowHeight;
 // The honest work-area strip (decision 3): thin, using the smallest spacing token rather than an
 // invented pixel gap.
 const int kWorkAreaStripHeight = kit::px(kit::Size::TimelineWorkArea);
-constexpr qreal kKeyDiamondRadius = kit::kKeyDiamondRadius;
 constexpr qreal kKeyHitToleranceLogicalPixels = 6.0;
 // Minor ticks are a dense, purely visual grid (decision 3: "minors as subtle ticks"); majors are
 // re-derived per paint from the axis's OWN font metrics so adjacent labels can never collide (see
@@ -133,39 +133,6 @@ struct KeyEntry final {
     // glyph instead of one diamond for everything.
     document::KeyframeInterpolation outgoingInterpolation = document::KeyframeInterpolation::Linear;
 };
-
-// The glyph for one interpolation mode (task S5, item 2: "timeline keyframe glyph differs per
-// interpolation"). The shapes are the standard timeline vocabulary, and each one says what the
-// SEGMENT LEAVING the key does:
-//
-//   Linear     a diamond  -- the shape every key had before this task; a straight ramp out
-//   Hold       a square   -- a held step out, drawn with the same corner-to-corner extent
-//   EaseInOut  a circle   -- a rounded departure, matching the rounded ease it names
-//
-// Shape, not colour, carries the mode: the gold/Accent colour pair is already spoken for by
-// unselected/selected, and overloading it would make a selected Hold key indistinguishable from an
-// unselected eased one.
-void paintKeyGlyph(QPainter& painter, const QPointF center,
-                   const document::KeyframeInterpolation interpolation) {
-    switch (interpolation) {
-    case document::KeyframeInterpolation::Hold: {
-        const qreal half = kKeyDiamondRadius * 0.78;
-        painter.drawRect(QRectF(center.x() - half, center.y() - half, 2.0 * half, 2.0 * half));
-        return;
-    }
-    case document::KeyframeInterpolation::EaseInOut:
-        painter.drawEllipse(center, kKeyDiamondRadius * 0.92, kKeyDiamondRadius * 0.92);
-        return;
-    case document::KeyframeInterpolation::Linear:
-        break;
-    }
-    QPolygonF diamond;
-    diamond << QPointF(center.x(), center.y() - kKeyDiamondRadius)
-            << QPointF(center.x() + kKeyDiamondRadius, center.y())
-            << QPointF(center.x(), center.y() + kKeyDiamondRadius)
-            << QPointF(center.x() - kKeyDiamondRadius, center.y());
-    painter.drawPolygon(diamond);
-}
 
 [[nodiscard]] QString
 interpolationDisplayName(const document::KeyframeInterpolation interpolation) {
@@ -1066,11 +1033,22 @@ void TimelineKeyframePanel::setGridEntries(const std::vector<TimelineLayerEntry>
     }
     // An empty Qt mask means unmasked; hide instead so collapsed layer bars retain input.
     setMask(mask);
+    const bool shown = !rows_.empty() && keysVisible_;
     if (parentWidget()) {
         parentWidget()->setMask(mask);
-        parentWidget()->setVisible(!rows_.empty());
+        parentWidget()->setVisible(shown);
     }
-    setVisible(!rows_.empty());
+    setVisible(shown);
+}
+
+void TimelineKeyframePanel::setKeysVisible(const bool visible) {
+    if (keysVisible_ == visible)
+        return;
+    keysVisible_ = visible;
+    const bool shown = !rows_.empty() && keysVisible_;
+    if (parentWidget())
+        parentWidget()->setVisible(shown);
+    setVisible(shown);
 }
 
 void TimelineKeyframePanel::rebuild() {

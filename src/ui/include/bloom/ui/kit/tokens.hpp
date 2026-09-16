@@ -83,6 +83,14 @@ enum class Color : std::uint8_t {
     // Task S7. Integer reuses the existing SocketInteger token; the two vector widths share
     // SocketVector so they read as one family, and a Boolean needed its own.
     SocketBoolean,
+    // GRAPH-1: the graph editor's per-component curve strokes. X/Y/Z/W is the axis vocabulary and
+    // R/G/B/A borrows it unchanged, so one colour always means "the first component" whatever the
+    // parameter is. A scalar curve takes Keyframe; selection takes Accent; none of these four is
+    // either, so a curve can never be mistaken for a selection.
+    ComponentX,
+    ComponentY,
+    ComponentZ,
+    ComponentW,
 };
 
 // The four-step surface ladder, darkest first. "hover = surface + 1 step" and "pressed =
@@ -211,6 +219,10 @@ enum class Size : int {
     TimelineChromeGutter = 32,
     TimelineWorkAreaHandle = 6,
     TimelineNavigatorThumb = 6,
+    // GRAPH-1: the graph editor's left value-axis gutter, and the dot that terminates an ease
+    // handle's hairline.
+    GraphValueAxis = 48,
+    GraphHandleDot = 6,
     ScrollBar = 8,
     ScrollBarHover = 12,
     // task S1, item 3: the narrowest a QMenu popup may be, roughly half again the width Bloom's

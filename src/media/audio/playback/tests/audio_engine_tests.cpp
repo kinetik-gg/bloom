@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <string_view>
 #include <vector>
 
@@ -41,15 +42,17 @@ class Expectations final {
     return *result;
 }
 
-[[nodiscard]] AudioBuffer stereoBuffer(const std::vector<float>& left,
-                                       const std::vector<float>& right,
-                                       const std::uint32_t rate = 8) {
-    return AudioBuffer{rate, 2, left.size(), {left, right}};
+// Engine tests build clips through this small std::make_shared helper rather than deep-copying
+// an AudioBuffer per clip, matching how AssetController hands out shared decoded buffers.
+[[nodiscard]] std::shared_ptr<const AudioBuffer> stereoBuffer(const std::vector<float>& left,
+                                                              const std::vector<float>& right,
+                                                              const std::uint32_t rate = 8) {
+    return std::make_shared<const AudioBuffer>(AudioBuffer{rate, 2, left.size(), {left, right}});
 }
 
-[[nodiscard]] AudioBuffer monoBuffer(const std::vector<float>& samples,
-                                     const std::uint32_t rate = 8) {
-    return AudioBuffer{rate, 1, samples.size(), {samples}};
+[[nodiscard]] std::shared_ptr<const AudioBuffer> monoBuffer(const std::vector<float>& samples,
+                                                            const std::uint32_t rate = 8) {
+    return std::make_shared<const AudioBuffer>(AudioBuffer{rate, 1, samples.size(), {samples}});
 }
 
 void expectSamples(Expectations& expectations, const std::span<const float> actual,
@@ -170,6 +173,29 @@ void testPlaySeekStopKeepsFrameAndAudioClock(Expectations& expectations) {
                         "stop freezes the frame index and audio clock within one frame");
 }
 
+void testReplaceClipsSharesBufferWithoutCopy(Expectations& expectations) {
+    auto backend = std::make_unique<NullBackend>();
+    auto* capturedBackend = backend.get();
+    AudioEngine engine(std::move(backend), AudioEngine::Config{8, 1, 32});
+    const auto buffer = monoBuffer({1, 2, 3, 4, 5, 6, 7, 8});
+    const auto* planesData = buffer->planes.front().data();
+
+    std::vector<AudioClip> clips;
+    clips.push_back(AudioClip{buffer, time(0), 1.0F, false, false});
+    engine.replaceClips(std::move(clips));
+
+    expectations.expect(buffer.use_count() >= 2,
+                        "replaceClips retains the shared buffer instead of deep-copying it");
+    expectations.expect(buffer->planes.front().data() == planesData,
+                        "the shared buffer's planes are never copied");
+
+    expectations.expect(!engine.play(time(0)).has_value(), "playback starts with the shared clip");
+    expectations.expect(!engine.renderForTesting(8).has_value(),
+                        "engine renders through the shared clip");
+    expectSamples(expectations, capturedBackend->captured(), {1, 2, 3, 4, 5, 6, 7, 8},
+                  "the compiled mix still renders non-silent samples from the shared buffer");
+}
+
 } // namespace
 
 int main() {
@@ -178,5 +204,6 @@ int main() {
     testSoloMuteAndSeek(expectations);
     testRateAndClockMonotonicity(expectations);
     testPlaySeekStopKeepsFrameAndAudioClock(expectations);
+    testReplaceClipsSharesBufferWithoutCopy(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

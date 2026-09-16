@@ -53,8 +53,8 @@ using bloom::media::audio::playback::AudioStatus;
 
 [[nodiscard]] bool clipHasSample(const AudioClip& clip, const std::int64_t absoluteFrame,
                                  const std::uint32_t outputRate) noexcept {
-    if (clip.muted || clip.buffer.rate == 0 || clip.buffer.channels == 0 ||
-        clip.buffer.planes.size() != clip.buffer.channels) {
+    if (clip.muted || clip.buffer == nullptr || clip.buffer->rate == 0 ||
+        clip.buffer->channels == 0 || clip.buffer->planes.size() != clip.buffer->channels) {
         return false;
     }
     const auto startFrame = timeToFrames(clip.startTime, outputRate);
@@ -68,8 +68,8 @@ using bloom::media::audio::playback::AudioStatus;
     if (localFrame < 0) {
         return false;
     }
-    const auto sourceFrame = sourceFrameFor(localFrame, clip.buffer.rate, outputRate);
-    return sourceFrame < clip.buffer.frames && sourceFrame < clip.buffer.planes.front().size();
+    const auto sourceFrame = sourceFrameFor(localFrame, clip.buffer->rate, outputRate);
+    return sourceFrame < clip.buffer->frames && sourceFrame < clip.buffer->planes.front().size();
 }
 
 [[nodiscard]] AudioStatus errorStatus(const AudioErrorCode code) noexcept {
@@ -399,15 +399,15 @@ void AudioEngine::mixBlock(const std::uint64_t firstProducedFrame,
             }
             const auto clipStart = timeToFrames(clip.startTime, config_.rate);
             const auto localFrame = absoluteFrame - clipStart;
-            const auto sourceFrame = sourceFrameFor(localFrame, clip.buffer.rate, config_.rate);
+            const auto sourceFrame = sourceFrameFor(localFrame, clip.buffer->rate, config_.rate);
             for (std::size_t channel = 0; channel < config_.channels; ++channel) {
-                const auto sourceChannel = clip.buffer.channels == 1 ? std::size_t{0} : channel;
-                if (sourceChannel >= clip.buffer.planes.size() ||
-                    sourceFrame >= clip.buffer.planes[sourceChannel].size()) {
+                const auto sourceChannel = clip.buffer->channels == 1 ? std::size_t{0} : channel;
+                if (sourceChannel >= clip.buffer->planes.size() ||
+                    sourceFrame >= clip.buffer->planes[sourceChannel].size()) {
                     continue;
                 }
                 output[outputFrame * config_.channels + channel] +=
-                    clip.buffer.planes[sourceChannel][sourceFrame] * clip.level;
+                    clip.buffer->planes[sourceChannel][sourceFrame] * clip.level;
             }
         }
     }

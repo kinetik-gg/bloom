@@ -54,6 +54,52 @@ void testOperationMemoization(Expectations& expectations) {
     return publishPlan(std::move(definition));
 }
 
+// GRAPH-1, D1: a key's ease handle is part of what the curve means, so editing one has to reach the
+// pixels of an already-memoized frame. The two plans differ in nothing but the left key's outgoing
+// handle offset; sharing one evaluator makes the cache the thing under test rather than the
+// arithmetic.
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
+easedOpacityPlan(const double outgoingHandleValue) {
+    auto definition = oneSolidPlan()->copyDefinition();
+    std::get<runtime::CompiledLayerOutput>(definition.operations[1]).opacity.source =
+        runtime::ScalarCurveIndex::fromRaw(0);
+    runtime::CompiledScalarKeyframe start{document::KeyframeId::fromRaw(70),
+                                          core::RationalTime::fromInteger(0), 0.0,
+                                          runtime::CompiledKeyframeInterpolation::EaseInOut};
+    start.outgoingHandle.value = outgoingHandleValue;
+    const runtime::CompiledScalarKeyframe end{document::KeyframeId::fromRaw(71),
+                                              core::RationalTime::fromInteger(1), 1.0,
+                                              runtime::CompiledKeyframeInterpolation::Linear};
+    definition.scalarCurves.push_back({kOpacityCurve, {start, end}});
+    return std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
+}
+
+void testEaseHandleChangeReachesAMemoizedFrame(Expectations& expectations) {
+    const auto halfway = core::RationalTime::create(1, 2);
+    if (!halfway)
+        throw std::runtime_error("invalid halfway time");
+    runtime::CpuCompositionEvaluator evaluator;
+    const auto plain = easedOpacityPlan(bloom::document::kDefaultKeyframeHandleValue);
+    auto request = requestFor(*plain);
+    request.time = *halfway;
+    runtime::OperationCacheStatistics first;
+    const auto before = evaluator.evaluate(plain, request, {}, {}, nullptr, &first);
+    render::Rgba32f beforeSample = render::Rgba32f::transparent();
+    const auto* beforePixel = pixel(before, 0, 0, beforeSample);
+
+    const auto lifted = easedOpacityPlan(0.5);
+    auto liftedRequest = requestFor(*lifted);
+    liftedRequest.time = *halfway;
+    runtime::OperationCacheStatistics second;
+    const auto after = evaluator.evaluate(lifted, liftedRequest, {}, {}, nullptr, &second);
+    render::Rgba32f afterSample = render::Rgba32f::transparent();
+    const auto* afterPixel = pixel(after, 0, 0, afterSample);
+
+    expectations.expect(beforePixel != nullptr && afterPixel != nullptr && second.misses > 0 &&
+                            beforePixel->alpha() != afterPixel->alpha(),
+                        "editing an ease handle re-evaluates the memoized frame it changes");
+}
+
 void testOperationTimeInvariance(Expectations& expectations) {
     runtime::CpuCompositionEvaluator evaluator;
     const auto plan = memoizationFixture();

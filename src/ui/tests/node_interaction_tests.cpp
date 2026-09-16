@@ -77,7 +77,11 @@ void testLayoutSelectionAndSockets() {
     f.drag({145, 150}, {370, 290});
     expect(f.session.selectedNodes() == std::set{a},
            "box selection routes its complete set to session");
-    f.drag({400, 149}, {560, 340}, Qt::ShiftModifier);
+    // The box's right edge stays clear of the unplaced Merge card's own right edge: that card now
+    // carries the audio stack pill (task FOLLOW-1) one PropertyRow taller than before, which brings
+    // its bottom edge low enough to clip this box at its old width. Touching `a` and `b` only needs
+    // their LEFT edges, so narrowing the box keeps the gesture this test actually exercises.
+    f.drag({400, 149}, {500, 340}, Qt::ShiftModifier);
     expect(f.session.selectedNodes() == std::set{a, b}, "Shift box extends the selection");
     f.click({25, 680});
     expect(f.session.selectedNodes().empty(), "empty click clears all selection");
@@ -303,6 +307,7 @@ int main(int argc, char** argv) {
     try {
         bloom::ui::test::testLayoutSelectionAndSockets();
         bloom::ui::test::testConnectionsCutAndInsertion();
+        bloom::ui::test::testMergeAudioPill();
         bloom::ui::test::testSearchKeyboardAndMenus();
         bloom::ui::test::testHeaderMenusGridSnappingLinkStyleAndFooter();
     } catch (const std::exception& error) {

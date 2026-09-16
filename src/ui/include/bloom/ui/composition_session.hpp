@@ -238,6 +238,23 @@ class CompositionSession final : public QObject {
     [[nodiscard]] std::vector<commands::KeyframePaste> selectedKeyframeData() const;
     [[nodiscard]] bool moveKeyframes(std::vector<commands::KeyframeMove> keys,
                                      document::Revision revision);
+    // A graph-editor key drag moves keys in TIME and in VALUE at once. Both halves belong to one
+    // transaction and therefore one undo entry, because they are one gesture: an artist who drags a
+    // key diagonally and then undoes expects the key back where it started, not half-way. An empty
+    // list omits its operation rather than staging an empty batch, and a domain refusal on either
+    // half commits nothing at all.
+    [[nodiscard]] bool moveKeyframesAndValues(std::vector<commands::KeyframeMove> moves,
+                                              std::vector<commands::KeyframeValueEdit> values,
+                                              document::Revision revision);
+    // The ease-handle drag. One transaction; the command layer forces the shaped segment's left key
+    // to Ease In-Out and refuses the final key's outgoing and the first key's incoming handle.
+    [[nodiscard]] bool setKeyframeHandles(std::vector<commands::KeyframeHandleEdit> edits,
+                                          document::Revision revision);
+    // "Reset Handles" over the current selection: every selected key's handles return to their
+    // defaults, which ARE the canonical Ease In-Out shape -- so the reset also settles the affected
+    // segments on that mode. A key that owns no segment at all (the only key of its curve) is
+    // skipped rather than refused.
+    [[nodiscard]] bool resetSelectedKeyframeHandles();
     [[nodiscard]] bool pasteKeyframes(const std::vector<commands::KeyframePaste>& keys,
                                       document::Revision revision);
     [[nodiscard]] bool deleteSelectedKeyframes();

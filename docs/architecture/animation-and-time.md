@@ -122,8 +122,9 @@ result is a structured evaluation failure.
 
 ### Ease In-Out
 
-`EaseInOut` is a cubic Bezier ease with FIXED symmetric handles at `(1/3, 0)` and `(2/3, 1)`. Those
-x handles are what make it exact and allocation-free: a cubic Bezier whose x control points are
+`EaseInOut` is a cubic Bezier ease whose control points are the two keys' own handles, described
+under **Ease handles** below. Their DEFAULTS are the symmetric `(1/3, 0)` and `(2/3, 1)`, and those
+default x handles are what make the mode exact and allocation-free: a cubic Bezier whose x control points are
 `0, 1/3, 2/3, 1` has `x(s) == s` identically, so the exact rational interval factor IS the curve
 parameter and no root finding or iteration is needed. The eased factor is the closed-form polynomial
 `3t^2 - 2t^3` of that factor, which is exactly `ScalarPrimitive::Smoothstep` over the unit range --
@@ -137,6 +138,53 @@ segment's LEFT key decides its mode, so a `Hold` key is unaffected by an eased n
 `kAnimationSamplingSemanticsVersion` is `2`. It enters compiled-plan compatibility and cache
 identity alongside scalar, evaluator, and image primitive versions; it moved from `1` when
 `EaseInOut` and the `Color4Curve` table made sampling able to produce values version 1 could not.
+
+### Ease handles
+
+A scalar or component key carries two `KeyframeHandle{time, value}` records: an `outgoingHandle`
+governing the segment that starts at it and an `incomingHandle` governing the segment that ends at
+it. `time` is a fraction of THAT segment's duration measured from the key the handle belongs to;
+`value` is an offset from that key's own value. The defaults are `time = 1/3` and `value = 0`,
+which are exactly the fixed handles the pre-handle `EaseInOut` carried. The legacy whole-value
+`Vec2Keyframe`, `Vec3Keyframe` and `Color4Keyframe` projections get no handles at all: a whole-value
+key has no single scalar axis for an offset to move along.
+
+For segment `k_i -> k_{i+1}` with `Δt = t_{i+1} - t_i` and `EaseInOut` on the LEFT key, the curve is
+the cubic Bezier through
+
+```text
+P0 = (t_i,                          v_i)
+P1 = (t_i + out.time * Δt,          v_i + out.value)
+P2 = (t_{i+1} - in.time * Δt,       v_{i+1} + in.value)
+P3 = (t_{i+1},                      v_{i+1})
+```
+
+where `out` is the left key's outgoing handle and `in` the right key's incoming one. `Hold` and
+`Linear` ignore the handles their keys carry; the handles persist across a mode change so that
+returning to `EaseInOut` restores the shape the artist authored. A handle is valid exactly when its
+`value` is finite and its `time` lies in `[0, 1]`; the store, document validation and
+`validateForSampling` all ask the same predicate, so an out-of-range handle is refused rather than
+sampled at some request times and not others.
+
+Sampling branches on a BITWISE default test, not an arithmetic one:
+
+- Both handles of a segment bitwise default: the sampler takes the pre-handle path verbatim -- the
+  closed-form `Smoothstep` factor and the shared Mix. Every key written before handles existed lands
+  here, which is why `kAnimationSamplingSemanticsVersion` stays `2` and no identity golden moves.
+- Otherwise the segment is evaluated as the Bezier above. When both handle TIMES are bitwise
+  default the x cubic has control points `0, 1/3, 2/3, 1` and is the identity, so the exact rational
+  interval factor IS the curve parameter and no inversion happens; a value handle therefore has a
+  closed form (`0 -> 1` with `out.value = +1` is exactly `0.875` at the midpoint).
+- A non-default handle TIME needs `s` such that `x(s)` equals the interval factor. Handle times in
+  `[0, 1]` keep `x` monotone non-decreasing, and the inversion is a fixed 64-step bisection using
+  only `+ - * /` and comparisons in a fixed operation order, with no early exit and no tolerance.
+  It is therefore a pure function of its operands: two calls are bitwise equal, and `s` is monotone
+  in the request time. The sampler keeps its "no `libm`, no `long double`, no compiler-specific
+  extended integer" property.
+
+Compiled curves carry both handles on every compiled scalar and component key, and compilation
+copies them verbatim; a handle edit therefore changes the operand a memoized operation was keyed on
+and the frame is re-evaluated.
 
 ## Compiled Plan And Evaluation
 
@@ -569,6 +617,9 @@ modes remain deferred.
   binary64-subnormal interior factor
 - Hold/Linear/EaseInOut endpoints, extrapolation clamps, scalar/Vec2/Color4 sampling, the eased
   factor at the interval's exact thirds and midpoint, and non-finite mix failure
+- a default-handle eased curve sampling bit-for-bit as the pre-handle path at many rational times,
+  the value-handle closed form, a deterministic and monotone handle-time inversion, an out-of-range
+  handle time refused, and an ease-handle edit reaching an already memoized frame
 - curve/source/kind/ownership validation and project-global curve/key ID collisions
 - create/insert/update/delete/source-transition undo and redo with exact identities
 - snapshot/plan equality and cache identity for curve, time, and override changes
@@ -592,9 +643,8 @@ modes remain deferred.
 - a RAM preview of a twenty-four frame composition caching every frame, then playing all of them in
   order with nothing evaluated and no frame dropped, and its cancellation keeping what it cached
 
-Per-key Bezier tangents (handles an artist can drag -- `EaseInOut`'s handles are fixed), curve
-modifiers, procedural extrapolation, expression sampling, shared curves, playback audio sync,
-multi-layer transform gestures, and onion skinning are explicitly deferred.
+Curve modifiers, procedural extrapolation, expression sampling, shared curves, playback audio
+sync, multi-layer transform gestures, and onion skinning are explicitly deferred.
 
 ## Operation memoization
 

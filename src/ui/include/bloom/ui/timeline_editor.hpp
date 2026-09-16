@@ -3,6 +3,7 @@
 
 #include <bloom/ui/editor_area.hpp>
 
+#include <bloom/document/animation.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/media/audio/audio.hpp>
@@ -33,6 +34,7 @@ class CompositionSession;
 class TimelineColumnHeaders;
 class TimelineKeyframePanel;
 class TimelineLaneRegion;
+class TimelineGraphView;
 class TimelineLayerStack;
 class TimelineRuler;
 class TimelineWorkAreaRow;
@@ -55,6 +57,9 @@ struct TimelineLayerEntry final {
     enum class Kind { Layer, Group, Parameter };
     Kind rowKind = Kind::Layer;
     document::ParameterId parameterId{};
+    // The component this row addresses, for a vector or colour parameter split into per-component
+    // rows. Empty for every row this task produces; KEY-2 owns component lanes and fills it.
+    std::optional<document::AnimationComponent> component{};
     std::string role{};
     bool expanded = false;
     QString group{};
@@ -99,6 +104,13 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
     void selectAllLayers();
     void deleteSelectedLayers();
     void setTimecodeFormat(bool timecode);
+    // The three header toggles. Each persists under its own QSettings key, is applied to the
+    // widgets it governs, and re-tints its own glyph -- there is no third place that decides what
+    // "on" looks like.
+    void setKeyframesVisible(bool visible);
+    void setSnappingEnabled(bool enabled);
+    void setGraphEditorEnabled(bool enabled);
+    void applyHeaderToggleGlyph(QToolButton* button, bool checked);
     void showEvent(QShowEvent* event) override;
     void updateScrollRange();
 
@@ -116,6 +128,12 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
     QAction* framesAction_ = nullptr;
     QAction* timecodeAction_ = nullptr;
     bool timecodeFormat_ = false;
+    QToolButton* keyframesVisibleButton_ = nullptr;
+    QToolButton* graphEditorButton_ = nullptr;
+    QToolButton* snappingButton_ = nullptr;
+    bool keyframesVisible_ = true;
+    bool snapping_ = true;
+    bool graphEditor_ = false;
     TimelineWorkAreaRow* workArea_ = nullptr;
     TimelineColumnHeaders* columnHeaders_ = nullptr;
     TimelineRuler* ruler_ = nullptr;
@@ -225,6 +243,18 @@ class TimelineLaneRegion final : public QWidget {
     // "the bar spans the composition range on its own lane".
     [[nodiscard]] std::optional<QRect> clipBarRect(int row) const;
     [[nodiscard]] std::vector<core::RationalTime> keySummaryTimes(int row) const;
+    // Hiding keys hides BOTH surfaces that show them: the per-parameter key lanes and the
+    // collapsed layer rows' summary glyphs. Showing one without the other would make a collapsed
+    // layer claim keys the expanded rows no longer draw.
+    void setKeyframesVisible(bool visible);
+    [[nodiscard]] bool keyframesVisible() const noexcept { return keyframesVisible_; }
+    void setSnappingEnabled(bool enabled);
+    // In graph mode the curve view REPLACES the key lanes and this region paints only its own
+    // Surface backdrop behind it. Two views of the same keys at once would only leave the artist
+    // asking which one they are editing.
+    void setGraphEditorEnabled(bool enabled);
+    [[nodiscard]] bool graphEditorEnabled() const noexcept { return graphEditor_; }
+    [[nodiscard]] TimelineGraphView* graphViewForTest() const noexcept { return graphView_; }
 
   Q_SIGNALS:
     void expansionRequested(document::LayerId layer);
@@ -239,8 +269,10 @@ class TimelineLaneRegion final : public QWidget {
     void keyPressEvent(QKeyEvent* event) override;
 
   private:
+    void syncKeyframeSurfaces();
     QWidget* keyframeArea_ = nullptr;
     TimelineKeyframePanel* keyframePanel_ = nullptr;
+    TimelineGraphView* graphView_ = nullptr;
     struct RangeDrag {
         document::LayerId layer;
         document::Revision revision;
@@ -250,6 +282,9 @@ class TimelineLaneRegion final : public QWidget {
     };
     std::optional<RangeDrag> drag_{};
     std::optional<core::RationalTime> guide_{};
+    bool keyframesVisible_ = true;
+    bool snapping_ = true;
+    bool graphEditor_ = false;
     CompositionSession& session_;
     // Scrubbing a lane goes through the ruler's own scrub path, not a second copy of it.
     TimelineRuler& ruler_;

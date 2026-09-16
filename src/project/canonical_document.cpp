@@ -661,6 +661,27 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
     return state.ok(writer.endObject());
 }
 
+// A 1.12 ease handle is emitted ONLY when it is non-default. That is what keeps an existing
+// document byte-identical through a re-encode apart from its schema minor: every key written
+// before handles existed holds the bitwise default, so nothing new appears in its object.
+[[nodiscard]] bool emitKeyframeHandle(EmitState& state, const std::string_view name,
+                                      const bloom::document::KeyframeHandle& handle) noexcept {
+    if (bloom::document::isDefaultKeyframeHandle(handle)) {
+        return true;
+    }
+    auto& writer = state.writer;
+    return state.ok(writer.memberName(name)) && state.ok(writer.beginObject()) &&
+           state.ok(writer.memberName("time")) && state.ok(writer.float64Value(handle.time)) &&
+           state.ok(writer.memberName("value")) && state.ok(writer.float64Value(handle.value)) &&
+           state.ok(writer.endObject());
+}
+
+[[nodiscard]] bool emitKeyframeHandles(EmitState& state,
+                                       const bloom::document::ScalarKeyframe& key) noexcept {
+    return emitKeyframeHandle(state, "outgoingHandle", key.outgoingHandle) &&
+           emitKeyframeHandle(state, "incomingHandle", key.incomingHandle);
+}
+
 [[nodiscard]] bool
 emitInterpolation(EmitState& state,
                   const bloom::document::KeyframeInterpolation interpolation) noexcept {
@@ -705,6 +726,9 @@ emitInterpolation(EmitState& state,
         return false;
     }
     if (!emitInterpolation(state, key.outgoingInterpolation)) {
+        return false;
+    }
+    if (!emitKeyframeHandles(state, key)) {
         return false;
     }
     if (!emitRetainedTrailing(state)) {
@@ -803,8 +827,8 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
     }
     if (!state.ok(writer.memberName("value")) || !state.ok(writer.float64Value(key.value)) ||
         !state.ok(writer.memberName("outgoingInterpolation")) ||
-        !emitInterpolation(state, key.outgoingInterpolation) || !emitRetainedTrailing(state) ||
-        !state.ok(writer.endObject())) {
+        !emitInterpolation(state, key.outgoingInterpolation) || !emitKeyframeHandles(state, key) ||
+        !emitRetainedTrailing(state) || !state.ok(writer.endObject())) {
         return false;
     }
     return true;

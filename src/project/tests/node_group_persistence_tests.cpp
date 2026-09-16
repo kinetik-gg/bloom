@@ -122,7 +122,7 @@ void roundTripAndReopen() {
     if (openedResult.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.schemaMinor == 11 && !opened.roundTrip,
+    expect(opened.schemaMinor == kCanonicalDocumentSchemaVersionV1.minor && !opened.roundTrip,
            "a grouped project is written and read as the current schema minor");
     const auto reopened = opened.document->snapshot();
     const auto* composition = reopened.project().findComposition(authored.compositionId);
@@ -173,10 +173,10 @@ std::vector<std::byte> legacyArchive(std::string& documentText) {
         throw std::logic_error("legacy entries");
     const auto bytes = entries.document()->documentBytes();
     documentText.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    const auto minor = documentText.find("\"minor\": 11");
+    const auto minor = documentText.find("\"minor\": 12");
     if (minor == std::string::npos)
         throw std::logic_error("legacy minor anchor");
-    documentText.replace(minor, std::string_view("\"minor\": 11").size(), "\"minor\": 1");
+    documentText.replace(minor, std::string_view("\"minor\": 12").size(), "\"minor\": 1");
     removeImageFields(documentText);
     eraseMemberLine(documentText, "nodeGroups");
     eraseMemberLine(documentText, "nodeGroup");
@@ -203,7 +203,7 @@ void migrationFromSchema11() {
             : nullptr;
     expect(result.outcome() == OpenArchiveOutcome::Failed && failure &&
                failure->error == DocumentDecodeError::UnsupportedSchemaVersion,
-           "documents below the canonical 1.11 floor are refused without migration");
+           "documents below the canonical 1.12 floor are refused without migration");
 }
 
 void migrationDeterminismAndChain() {

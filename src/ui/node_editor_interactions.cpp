@@ -713,14 +713,35 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
         if (!target && gesture.output) {
             if (const auto* card = cardAt(*this, event->scenePos()))
                 for (const auto* socket : card->sockets())
-                    if (socket->multiInput()) {
+                    // Merge now carries two stack pills (content, audio): a body drop lands on
+                    // whichever one the dragged output's kind actually feeds, not just the first
+                    // multi-input pill the card happens to list.
+                    if (socket->multiInput() &&
+                        (socket->acceptsAnyKind() ||
+                         document::isAcceptedSocketConnection(gesture.linkKind, socket->kind))) {
                         target = socket;
                         bodyDrop = true;
                         break;
                     }
         }
-        if (target && target->draggable() &&
-            ((gesture.output && target->input) || (gesture.input && target->output))) {
+        // Task FOLLOW-1: release never used to re-check the kind rule against the exact pill it
+        // landed on, so dropping an Audio output on the content pill (or an Image output on the
+        // audio pill) committed a ConnectPorts transaction that graph.addEdge could only reject
+        // with a generic message. Refuse it HERE, before a doomed transaction is even built.
+        const bool kindWrong =
+            target != nullptr && target->multiInput() && !target->acceptsAnyKind() &&
+            !(gesture.output
+                  ? document::isAcceptedSocketConnection(gesture.linkKind, target->kind)
+                  : document::isAcceptedSocketConnection(target->kind, gesture.linkKind));
+        if (kindWrong) {
+            Q_EMIT session_->commandRejected(
+                target->kind == document::SocketValueKind::Audio
+                    ? QCoreApplication::translate("node_editor",
+                                                  "An Image output cannot feed the audio stack")
+                    : QCoreApplication::translate("node_editor",
+                                                  "An Audio output cannot feed the image stack"));
+        } else if (target && target->draggable() &&
+                   ((gesture.output && target->input) || (gesture.input && target->output))) {
             const auto input =
                 gesture.input.value_or(target->input.value_or(document::NodeInputRef{}));
             const auto output =

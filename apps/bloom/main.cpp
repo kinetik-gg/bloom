@@ -211,7 +211,7 @@ int main(int argc, char* argv[]) {
             const auto buffer = assetController.audioBuffer(description.assetId);
             if (buffer == nullptr)
                 continue;
-            clips.push_back({.buffer = *buffer,
+            clips.push_back({.buffer = buffer,
                              .startTime = description.startTime,
                              .level = static_cast<float>(description.level),
                              .muted = description.muted,

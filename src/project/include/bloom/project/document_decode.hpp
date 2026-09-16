@@ -245,6 +245,10 @@ enum class DocumentDecodeError : std::uint8_t {
     InvalidInterpolation,
     // An animation curve's final keyframe interpolation is not canonical "linear".
     FinalKeyframeNotLinear,
+    // (1.12) A keyframe's `outgoingHandle`/`incomingHandle` carries a time fraction outside
+    // [0, 1] or a non-finite value offset. The same predicate admits a handle into the document
+    // store and into the sampler, so a file can never carry a handle the model would refuse.
+    InvalidKeyframeHandle,
     // Graph nodes are not sorted by strictly ascending numeric NodeId.
     UnsortedNodes,
     // Two graph nodes declare the same numeric NodeId.

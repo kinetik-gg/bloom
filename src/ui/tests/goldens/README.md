@@ -49,3 +49,9 @@ tool strip and measured dropdowns; node titles and muted categories in one band,
 vector diamond columns and compact numeric precision. The selected Solid fixture exposes
 the same Object/Transform/Source structure in Timeline and Properties. Both DPR references
 are reapproved for these changes with the existing comparison tolerance and full coverage.
+
+GRAPH-1 approval: the timeline's graph-editor toggle is a real control now, so its header glyph
+reads in Foreground ink rather than the muted Faint of a disabled one. That single 16 px chrome
+glyph is the whole difference: graph mode defaults OFF, so the fixture window still shows the key
+lanes, the same five panels, the same layout and the same type. Both DPR references are reapproved
+under Qt 6.8.3 with the existing comparison tolerance and full coverage.

@@ -223,4 +223,68 @@ void testConnectionsCutAndInsertion() {
                "one undo restores the slot");
     }
 }
+
+// Task FOLLOW-1: the Merge card's second, audio-typed stack pill (docs/architecture/
+// layer-graph-model.md, Audio Sources And Layers). A Layer's own audio output -- the port the
+// existing AddAudioLayer wiring (asset_operations.cpp) already feeds from an Audio source -- shares
+// the Layer's existing stack row when dragged onto the pill by hand, rather than opening a second
+// one; dropped on the content pill instead, the release refuses the kind mismatch with a specific
+// message before any transaction is built.
+void testMergeAudioPill() {
+    Fixture f;
+    const auto merge = f.add(document::kLayerStackNodeType, {650, 300});
+    const auto layer = f.add(document::kLayerOutputNodeType, {100, 100});
+    const auto audioSource = f.add(document::kAudioSourceNodeType, {100, 400});
+
+    const auto findSocket = [&](const document::NodeId id, const bool input,
+                                document::SocketValueKind kind) -> node_editor::SocketItem* {
+        for (auto* candidate : f.card(id)->sockets())
+            if (candidate->input.has_value() == input && candidate->kind == kind)
+                return candidate;
+        return nullptr;
+    };
+    auto* layerAudioInput = findSocket(layer, true, document::SocketValueKind::Audio);
+    expect(layerAudioInput != nullptr, "the Layer card carries an audio input socket");
+    if (layerAudioInput == nullptr)
+        return;
+    f.drag(f.socket(audioSource, false)->scenePos(), layerAudioInput->scenePos());
+
+    f.drag(f.socket(layer, false)->scenePos(), f.socket(merge, true)->scenePos());
+    const auto entries = f.session.composition()->graph().merge(merge)->entries();
+    expect(entries.size() == 1, "the Layer's image edge opens its stack row");
+    if (entries.size() != 1)
+        return;
+    const auto slotId = entries.front().slotId;
+
+    auto* audioPill = findSocket(merge, true, document::SocketValueKind::Audio);
+    expect(audioPill != nullptr, "the Merge card exposes a dedicated audio stack pill");
+    auto* layerAudioOutput = findSocket(layer, false, document::SocketValueKind::Audio);
+    expect(layerAudioOutput != nullptr, "the Layer card carries an audio output socket");
+    if (audioPill == nullptr || layerAudioOutput == nullptr)
+        return;
+
+    auto history = f.stack.size();
+    f.drag(layerAudioOutput->scenePos(), audioPill->scenePos());
+    const auto afterAudioDrop = f.session.composition()->graph().edges();
+    const auto audioEdge = std::ranges::find_if(afterAudioDrop, [&](const auto& edge) {
+        return edge.destination ==
+                   document::InputPortRef(document::LayerStackInputRef{
+                       merge, slotId, std::string(document::kLayerStackAudioInputRole)}) &&
+               edge.source.nodeId == layer;
+    });
+    expect(audioEdge != afterAudioDrop.end() &&
+               f.session.composition()->graph().merge(merge)->entries().size() == 1 &&
+               f.stack.size() == history + 1,
+           "dragging the Layer's audio output onto the audio pill attaches its edge to the "
+           "Layer's own slot rather than opening a second one");
+
+    history = f.stack.size();
+    QSignalSpy refusals(&f.session, &CompositionSession::commandRejected);
+    f.drag(layerAudioOutput->scenePos(), f.socket(merge, true)->scenePos());
+    expect(f.stack.size() == history && refusals.size() == 1 &&
+               refusals.constFirst().constFirst().toString() ==
+                   QStringLiteral("An Audio output cannot feed the image stack"),
+           "an Audio output dropped on the content pill is refused at release with the kind "
+           "message and no history entry");
+}
 } // namespace bloom::ui::test

@@ -1762,6 +1762,144 @@ OperationResult SetKeyframesInterpolation::apply(document::Draft& draft) const {
     return publishCurves(*composition, std::move(edits));
 }
 
+namespace {
+// The scalar key sequence an address names, or null when the address does not name one. A scalar
+// curve is addressed without a component; a vector or colour curve only through one, because its
+// legacy whole-value projection carries neither handles nor an independently addressable value.
+template <typename Curve>
+[[nodiscard]] std::vector<document::ScalarKeyframe>*
+addressedKeyframes(Curve& curve, const std::optional<document::AnimationComponent> component) {
+    if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+        return component.has_value() ? nullptr : &curve.keyframes;
+    } else {
+        if (!component.has_value())
+            return nullptr;
+        auto* selected = curve.component(*component);
+        return selected == nullptr ? nullptr : &selected->keyframes;
+    }
+}
+
+[[nodiscard]] OperationResult wholeValueAddressRejected() {
+    return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                     "A whole-value keyframe address names no scalar component");
+}
+} // namespace
+
+std::string_view SetKeyframeHandles::typeId() const noexcept {
+    return "bloom.animation.set-keyframe-handles";
+}
+OperationResult SetKeyframeHandles::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(composition_);
+    if (!composition)
+        return invalidComposition(composition_);
+    std::vector<KeyframeAddress> addresses;
+    addresses.reserve(edits_.size());
+    for (const auto& edit : edits_) {
+        if ((edit.outgoing && !document::isValidKeyframeHandle(*edit.outgoing)) ||
+            (edit.incoming && !document::isValidKeyframeHandle(*edit.incoming)))
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidValue,
+                "Ease handle time must be within [0, 1] and its offset finite");
+        addresses.push_back(edit.key);
+    }
+    CurveEdits edits;
+    auto staged = stageKeys(*composition, addresses, edits);
+    if (staged.status == OperationStatus::Rejected)
+        return staged;
+    for (const auto& edit : edits_) {
+        auto outcome = std::visit(
+            [&](auto& curve) {
+                auto* keyframes = addressedKeyframes(curve, edit.key.component);
+                if (keyframes == nullptr)
+                    return wholeValueAddressRejected();
+                const auto at = std::ranges::find(*keyframes, edit.key.keyframeId,
+                                                  &document::ScalarKeyframe::id);
+                if (at == keyframes->end())
+                    return invalidKeyframe(edit.key.keyframeId);
+                const auto index = static_cast<std::size_t>(at - keyframes->begin());
+                if (edit.outgoing.has_value()) {
+                    if (index + 1 == keyframes->size())
+                        return OperationResult::rejected(
+                            OperationIssueCode::InvalidValue,
+                            "The final keyframe has no outgoing segment to shape");
+                    at->outgoingHandle = *edit.outgoing;
+                    at->outgoingInterpolation = document::KeyframeInterpolation::EaseInOut;
+                }
+                if (edit.incoming.has_value()) {
+                    if (index == 0)
+                        return OperationResult::rejected(
+                            OperationIssueCode::InvalidValue,
+                            "The first keyframe has no incoming segment to shape");
+                    at->incomingHandle = *edit.incoming;
+                    (*keyframes)[index - 1].outgoingInterpolation =
+                        document::KeyframeInterpolation::EaseInOut;
+                }
+                return OperationResult::applied();
+            },
+            edits.at(edit.key.curveId));
+        if (outcome.status == OperationStatus::Rejected)
+            return outcome;
+    }
+    return publishCurves(*composition, std::move(edits));
+}
+
+std::string_view SetKeyframeValues::typeId() const noexcept {
+    return "bloom.animation.set-keyframe-values";
+}
+OperationResult SetKeyframeValues::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(composition_);
+    if (!composition)
+        return invalidComposition(composition_);
+    std::vector<KeyframeAddress> addresses;
+    addresses.reserve(values_.size());
+    for (const auto& edit : values_)
+        addresses.push_back(edit.key);
+    CurveEdits edits;
+    auto staged = stageKeys(*composition, addresses, edits);
+    if (staged.status == OperationStatus::Rejected)
+        return staged;
+    // Admit the WHOLE batch before writing any of it: a value gesture over several curves either
+    // lands completely or leaves the document untouched, so a refusal cannot publish half a drag.
+    for (const auto& edit : values_) {
+        const bool admitted = std::visit(
+            [&](const auto& curve) {
+                using Curve = std::decay_t<decltype(curve)>;
+                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                    return !edit.key.component.has_value() &&
+                           validValueForCurve<Curve>(*composition, edit.key.curveId, edit.value);
+                } else {
+                    // A component's domain is the schema's own: only a colour alpha narrows, to
+                    // [0, 1], exactly as a pasted component key already is.
+                    return edit.key.component.has_value() && std::isfinite(edit.value) &&
+                           (*edit.key.component != document::AnimationComponent::Alpha ||
+                            (edit.value >= 0.0 && edit.value <= 1.0));
+                }
+            },
+            edits.at(edit.key.curveId));
+        if (!admitted)
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Keyframe value is outside its parameter's domain");
+    }
+    for (const auto& edit : values_) {
+        auto outcome = std::visit(
+            [&](auto& curve) {
+                auto* keyframes = addressedKeyframes(curve, edit.key.component);
+                if (keyframes == nullptr)
+                    return wholeValueAddressRejected();
+                const auto at = std::ranges::find(*keyframes, edit.key.keyframeId,
+                                                  &document::ScalarKeyframe::id);
+                if (at == keyframes->end())
+                    return invalidKeyframe(edit.key.keyframeId);
+                at->value = edit.value;
+                return OperationResult::applied();
+            },
+            edits.at(edit.key.curveId));
+        if (outcome.status == OperationStatus::Rejected)
+            return outcome;
+    }
+    return publishCurves(*composition, std::move(edits));
+}
+
 std::string_view PasteKeyframes::typeId() const noexcept {
     return "bloom.animation.paste-keyframes";
 }
@@ -1773,9 +1911,11 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
     std::set<document::AnimationCurveId> created;
     for (const auto& paste : keys_) {
         if (paste.time < core::RationalTime::fromInteger(0) ||
-            paste.time >= composition->duration() || !validInterpolation(paste.interpolation))
+            paste.time >= composition->duration() || !validInterpolation(paste.interpolation) ||
+            !document::isValidKeyframeHandle(paste.outgoingHandle) ||
+            !document::isValidKeyframeHandle(paste.incomingHandle))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "Invalid pasted key time or interpolation");
+                                             "Invalid pasted key time, interpolation or handle");
         const auto* parameter = composition->parameters().find(paste.parameterId);
         if (!parameter)
             return invalidParameter(paste.parameterId);
@@ -1822,7 +1962,8 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
                     const auto id = draft.ids().allocateKeyframe();
                     if (!id)
                         return exhaustedIds();
-                    curve.keyframes.push_back({*id, paste.time, *value, paste.interpolation});
+                    curve.keyframes.push_back({*id, paste.time, *value, paste.interpolation,
+                                               paste.outgoingHandle, paste.incomingHandle});
                     return OperationResult::applied();
                 } else if (paste.component.has_value()) {
                     auto* component = curve.component(*paste.component);
@@ -1841,7 +1982,8 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
                     const auto id = draft.ids().allocateKeyframe();
                     if (!id)
                         return exhaustedIds();
-                    component->keyframes.push_back({*id, paste.time, *value, paste.interpolation});
+                    component->keyframes.push_back({*id, paste.time, *value, paste.interpolation,
+                                                    paste.outgoingHandle, paste.incomingHandle});
                     return OperationResult::applied();
                 } else if constexpr (std::is_same_v<Curve, document::Vec2AnimationCurve>) {
                     const auto* value = std::get_if<document::Vec2d>(&paste.value);

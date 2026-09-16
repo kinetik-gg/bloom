@@ -136,7 +136,8 @@ enum class Step {
     ContentBounds,
     SafeAreas,
     Images,
-    Audio
+    Audio,
+    KeyframeHandles
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -149,7 +150,8 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     // A version-only step adds nothing, so there is no member whose presence could prove it already
     // ran; its own source-version refusal (sourceVersionIs() below) is the whole guard.
     if (step == Step::AnimationBreadth || step == Step::ValueGraph || step == Step::LayerTimeline ||
-        step == Step::Merges || step == Step::ContentBounds || step == Step::Audio)
+        step == Step::Merges || step == Step::ContentBounds || step == Step::Audio ||
+        step == Step::KeyframeHandles)
         return false;
     if (scope == Scope::Composition) {
         return value.findMember(step == Step::NodeLayout   ? "nodeLayout"
@@ -190,7 +192,8 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::ContentBounds    ? "{\"major\":1,\"minor\":7}"
                            : step == Step::SafeAreas        ? "{\"major\":1,\"minor\":8}"
                            : step == Step::Images           ? "{\"major\":1,\"minor\":10}"
-                                                            : "{\"major\":1,\"minor\":11}");
+                           : step == Step::Audio            ? "{\"major\":1,\"minor\":11}"
+                                                            : "{\"major\":1,\"minor\":12}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
                 return false;
@@ -320,6 +323,16 @@ MigrationStepOutcome migrateImagesV1_9(const JsonValue& root, std::pmr::memory_r
 MigrationStepOutcome migrateAudioV1_10(const JsonValue& root, std::pmr::memory_resource*,
                                        Buffer& output) {
     if (!sourceVersionIs(root, "10") || !transform(root, Scope::Root, Step::Audio, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+// A version-only step: 1.12 adds the two ease-handle members, both omitted whenever they hold
+// their default, and a 1.11 document has no non-default handle to write. The step exists so the
+// ladder has no hole, exactly as migrateAudioV1_10 does.
+MigrationStepOutcome migrateKeyframeHandlesV1_11(const JsonValue& root, std::pmr::memory_resource*,
+                                                 Buffer& output) {
+    if (!sourceVersionIs(root, "11") ||
+        !transform(root, Scope::Root, Step::KeyframeHandles, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

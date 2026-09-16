@@ -629,6 +629,90 @@ void testSteppingEveryFrameSamplesItsOwnExactValue() {
     }
 }
 
+// GRAPH-1, D3: the three session seams the graph editor drags through. The point of each is the
+// TRANSACTION shape -- one gesture, one history entry, one undo -- as much as the values.
+void testGraphEditorKeyframeSeams() {
+    auto newProject = document::makeNewProject("Graph Session", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    session.selectLayer(ids.layer);
+    require(session.toggleKeyframe(document::kOpacityParameterRole), "opacity animates");
+    require(session.setCurrentTime(time(4, 1)) &&
+                session.toggleKeyframe(document::kOpacityParameterRole),
+            "and gains a second key");
+    require(session.setCurrentTime(time(8, 1)) &&
+                session.toggleKeyframe(document::kOpacityParameterRole),
+            "and a third");
+
+    const auto* parameter = session.parameterForSelection(document::kOpacityParameterRole);
+    const auto* source = parameter == nullptr
+                             ? nullptr
+                             : std::get_if<document::AnimationCurveSource>(&parameter->source);
+    require(source != nullptr, "the graph fixture curve resolves");
+    const auto curveId = source->curveId;
+    const auto* curve = session.composition()->animationCurves().findScalar(curveId);
+    require(curve != nullptr && curve->keyframes.size() == 3, "with three keys");
+    const auto keys = curve->keyframes;
+
+    const auto historyBefore = stack.size();
+    require(session.moveKeyframesAndValues({{{curveId, keys[1].id}, time(5, 1)}},
+                                           {{{curveId, keys[1].id}, 0.25}},
+                                           session.snapshot().revision()),
+            "a diagonal key drag commits");
+    const auto* moved = session.composition()->animationCurves().findScalar(curveId);
+    require(moved != nullptr && moved->keyframes[1].time == time(5, 1) &&
+                moved->keyframes[1].value == 0.25 && moved->keyframes[1].id == keys[1].id,
+            "both halves of the drag land on the same key, which keeps its identity");
+    require(stack.size() == historyBefore + 1,
+            "and time and value together are exactly ONE history entry");
+    require(session.undo() &&
+                session.composition()->animationCurves().findScalar(curveId)->keyframes == keys,
+            "one undo restores the key's exact time, value, mode and handles");
+    require(session.redo(), "and the drag redoes");
+
+    // A domain refusal on the value half commits neither half.
+    const auto beforeRefusal = session.snapshot().revision();
+    require(!session.moveKeyframesAndValues({{{curveId, keys[0].id}, time(1, 1)}},
+                                            {{{curveId, keys[0].id}, 4.0}},
+                                            session.snapshot().revision()),
+            "an opacity outside [0, 1] refuses the whole gesture");
+    require(session.snapshot().revision() == beforeRefusal,
+            "and the refused gesture published nothing, not even the move");
+
+    const document::KeyframeHandle shaped{0.2, 0.4};
+    const auto beforeHandles = stack.size();
+    require(session.setKeyframeHandles({{{curveId, keys[0].id}, shaped, std::nullopt}},
+                                       session.snapshot().revision()),
+            "a handle drag commits");
+    const auto* handled = session.composition()->animationCurves().findScalar(curveId);
+    require(handled != nullptr && handled->keyframes[0].outgoingHandle == shaped &&
+                handled->keyframes[0].outgoingInterpolation ==
+                    document::KeyframeInterpolation::EaseInOut,
+            "placing a handle shapes and eases exactly its own segment");
+    require(stack.size() == beforeHandles + 1, "and is one history entry");
+
+    session.selectKeyframe(curveId, keys[0].id);
+    const auto copied = session.selectedKeyframeData();
+    require(copied.size() == 1 && copied.front().outgoingHandle == shaped,
+            "selected key data carries the handles, so copy/paste reproduces the curve shape");
+
+    require(session.resetSelectedKeyframeHandles(), "Reset Handles applies to the selection");
+    const auto* reset = session.composition()->animationCurves().findScalar(curveId);
+    require(reset != nullptr &&
+                document::isDefaultKeyframeHandle(reset->keyframes[0].outgoingHandle),
+            "and returns the handle to the default that IS the canonical ease");
+    require(session.undo() && session.composition()
+                                      ->animationCurves()
+                                      .findScalar(curveId)
+                                      ->keyframes[0]
+                                      .outgoingHandle == shaped,
+            "the reset is one undoable step");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -642,5 +726,6 @@ int main(int argc, char** argv) {
     testSelectedKeyframeInterpolation();
     testParameterKeyedGestureNeedsNoSelection();
     testSteppingEveryFrameSamplesItsOwnExactValue();
+    testGraphEditorKeyframeSeams();
     return 0;
 }

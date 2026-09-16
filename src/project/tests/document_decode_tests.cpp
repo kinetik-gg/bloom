@@ -92,7 +92,7 @@ constexpr std::uint64_t kGenerousOperationBudget = 8ULL << 20U; // 8 MiB: ample 
 // carry the current required composition members; rejection fixtures alter only their target.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":11})";
+constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":12})";
 constexpr std::string_view kValidDigest =
     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 
@@ -226,7 +226,7 @@ constexpr std::string_view kMinimalGraphJson =
 // skeleton builder rather than complicating every existing R2/R3 call site above.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":12})";
+constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":13})";
 
 [[nodiscard]] std::string
 documentWithCompositionFutureMinor(const std::string_view compositionJsonText) {
@@ -1284,6 +1284,83 @@ void testRejectsUnknownInterpolation(Expectations& expectations) {
         "an unrecognized interpolation spelling is rejected");
 }
 
+// 1.12 ease handles: optional, ordered after outgoingInterpolation, closed, and domain-checked on
+// exactly the terms the document store and the sampler use.
+void testKeyframeEaseHandles(Expectations& expectations) {
+    const std::string curves =
+        R"([{"id":"1","kind":"scalar","keyframes":[)"
+        R"({"id":"1","time":{"numerator":"0","denominator":"1"},"value":0.0,)"
+        R"("outgoingInterpolation":"ease-in-out","outgoingHandle":{"time":0.25,"value":2.5}},)"
+        R"({"id":"2","time":{"numerator":"1","denominator":"1"},"value":1.0,)"
+        R"("outgoingInterpolation":"linear","incomingHandle":{"time":0.75,"value":-1.5}}]}])";
+    const auto decoded = decodeText(documentWithComposition(
+        compositionWithInterior("[]", curves, std::string(kMinimalGraphJson))));
+    expectations.expect(static_cast<bool>(decoded) && decoded.value() != nullptr,
+                        "a keyframe carrying ease handles decodes successfully");
+    if (decoded.value() != nullptr) {
+        const auto& decodedCurves = decoded.value()->compositions.front().animationCurves;
+        const auto* scalar =
+            decodedCurves.empty()
+                ? nullptr
+                : std::get_if<bloom::document::ScalarAnimationCurve>(&decodedCurves.front());
+        expectations.expect(
+            scalar != nullptr && scalar->keyframes.size() == 2 &&
+                scalar->keyframes[0].outgoingHandle == bloom::document::KeyframeHandle{0.25, 2.5} &&
+                bloom::document::isDefaultKeyframeHandle(scalar->keyframes[0].incomingHandle) &&
+                scalar->keyframes[1].incomingHandle ==
+                    bloom::document::KeyframeHandle{0.75, -1.5} &&
+                bloom::document::isDefaultKeyframeHandle(scalar->keyframes[1].outgoingHandle),
+            "each handle decodes to its exact pair and an omitted one stays default");
+    }
+
+    const std::string outOfRange =
+        R"([{"id":"1","kind":"scalar","keyframes":[)"
+        R"({"id":"1","time":{"numerator":"0","denominator":"1"},"value":0.0,)"
+        R"("outgoingInterpolation":"linear","outgoingHandle":{"time":1.5,"value":0.0}}]}])";
+    expectDecodeFailure(expectations,
+                        documentWithComposition(compositionWithInterior(
+                            "[]", outOfRange, std::string(kMinimalGraphJson))),
+                        DocumentDecodeError::InvalidKeyframeHandle,
+                        "/project/compositions/0/animationCurves/0/keyframes/0/outgoingHandle",
+                        "a handle time outside [0, 1] is rejected at the member that carries it");
+
+    const std::string overflowing =
+        R"([{"id":"1","kind":"scalar","keyframes":[)"
+        R"({"id":"1","time":{"numerator":"0","denominator":"1"},"value":0.0,)"
+        R"("outgoingInterpolation":"linear","outgoingHandle":{"time":0.5,"value":1e400}}]}])";
+    expectDecodeFailure(
+        expectations,
+        documentWithComposition(
+            compositionWithInterior("[]", overflowing, std::string(kMinimalGraphJson))),
+        DocumentDecodeError::InvalidFloat64,
+        "/project/compositions/0/animationCurves/0/keyframes/0/outgoingHandle/value",
+        "a handle offset that overflows to infinity is refused as a float64, before the domain");
+
+    const std::string wrongOrder =
+        R"([{"id":"1","kind":"scalar","keyframes":[)"
+        R"({"id":"1","time":{"numerator":"0","denominator":"1"},"value":0.0,)"
+        R"("outgoingInterpolation":"linear","outgoingHandle":{"value":0.0,"time":0.5}}]}])";
+    expectDecodeFailure(
+        expectations,
+        documentWithComposition(
+            compositionWithInterior("[]", wrongOrder, std::string(kMinimalGraphJson))),
+        DocumentDecodeError::MemberOutOfOrder,
+        "/project/compositions/0/animationCurves/0/keyframes/0/outgoingHandle/value",
+        "a handle object keeps the canonical time-then-value member order");
+
+    const std::string extraMember =
+        R"([{"id":"1","kind":"scalar","keyframes":[)"
+        R"({"id":"1","time":{"numerator":"0","denominator":"1"},"value":0.0,)"
+        R"("outgoingInterpolation":"linear",)"
+        R"("outgoingHandle":{"time":0.5,"value":0.0,"zzz":1}}]}])";
+    expectDecodeFailure(expectations,
+                        documentWithComposition(compositionWithInterior(
+                            "[]", extraMember, std::string(kMinimalGraphJson))),
+                        DocumentDecodeError::UnknownMember,
+                        "/project/compositions/0/animationCurves/0/keyframes/0/outgoingHandle/zzz",
+                        "a handle object is closed: it is not an extension point");
+}
+
 void testAcceptsVec2AnimationCurve(Expectations& expectations) {
     // An unreferenced vec2 curve is valid wire shape at this decode layer: curve ownership by
     // exactly one parameter is a later document-construction invariant, not checked here.
@@ -2125,6 +2202,7 @@ int main() try {
     testRejectsDecreasingKeyframeTimes(expectations);
     testRejectsFinalKeyframeNotLinear(expectations);
     testRejectsUnknownInterpolation(expectations);
+    testKeyframeEaseHandles(expectations);
     testAcceptsVec2AnimationCurve(expectations);
 
     testRejectsUnsortedNodes(expectations);

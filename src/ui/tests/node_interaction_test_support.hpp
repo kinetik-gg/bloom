@@ -119,6 +119,8 @@ struct Fixture final {
 };
 void testLayoutSelectionAndSockets();
 void testConnectionsCutAndInsertion();
+// Task FOLLOW-1: the Merge card's second, audio-typed stack pill.
+void testMergeAudioPill();
 void testSearchKeyboardAndMenus();
 // Task NODES-1: header menus, grid snapping, link style, and the footer.
 void testHeaderMenusGridSnappingLinkStyleAndFooter();
