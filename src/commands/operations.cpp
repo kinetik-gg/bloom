@@ -192,6 +192,8 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
         auto boundary = sourceBoundary;
         boundary.nodeId = remap(ids->nodes, sourceBoundary.nodeId);
         boundary.layerId = remap(ids->layers, sourceBoundary.layerId);
+        if (sourceBoundary.parent)
+            boundary.parent = remap(ids->layers, *sourceBoundary.parent);
         if (!graph.addLayerOutput(std::move(boundary))) {
             return std::nullopt;
         }
