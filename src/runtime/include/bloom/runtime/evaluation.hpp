@@ -34,7 +34,7 @@ namespace bloom::runtime {
 // data window to its own transformed bounds rather than the whole composition. A frame identity
 // from before this change must not compare equal to one from after it, even where the pixels
 // coincide.
-inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 6;
+inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 7;
 
 enum class EvaluationQuality : std::uint8_t {
     Reference,

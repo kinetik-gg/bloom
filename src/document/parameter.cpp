@@ -1,4 +1,5 @@
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/shape.hpp>
 
 #include <bloom/core/utf8.hpp>
 #include <bloom/document/persisted_text.hpp>
@@ -20,6 +21,8 @@ namespace {
         [](const auto& valueSource) {
             using Source = std::decay_t<decltype(valueSource)>;
             if constexpr (std::is_same_v<Source, bloom::document::ConstantValueSource>) {
+                if (const auto* path = std::get_if<bloom::document::PathValue>(&valueSource.value))
+                    return path->isValid();
                 if (const auto* value = std::get_if<double>(&valueSource.value)) {
                     return std::isfinite(*value);
                 }
@@ -170,6 +173,8 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
 constantMatchesSchema(const std::string_view schemaKey,
                       const bloom::document::ConstantValueSource& constant) noexcept {
     using namespace bloom::document;
+    if (schemaKey.starts_with("bloom.shape."))
+        return shapeConstantMatchesSchema(schemaKey, constant.value);
     if (schemaKey == kSolidWidthParameterSchemaKey || schemaKey == kSolidHeightParameterSchemaKey) {
         const auto* value = std::get_if<double>(&constant.value);
         return value && std::isfinite(*value) && isScalarWithinSchemaDomain(schemaKey, *value);
@@ -255,6 +260,9 @@ constantMatchesSchema(const std::string_view schemaKey,
 
 [[nodiscard]] bool isValidSourceForSchema(const std::string_view schemaKey,
                                           const bloom::document::ParameterSource& source) {
+    if (schemaKey == "bloom.shape.path" &&
+        !std::holds_alternative<bloom::document::ConstantValueSource>(source))
+        return false;
     if (!isGenericallyValidSource(source)) {
         return false;
     }
@@ -278,6 +286,17 @@ constantMatchesSchema(const std::string_view schemaKey,
 } // namespace
 
 namespace bloom::document {
+
+bool PathValue::isValid() const noexcept {
+    const auto finite = [](const Vec2d point) {
+        return std::isfinite(point.x) && std::isfinite(point.y);
+    };
+    return anchors.size() <= kMaximumPathAnchors &&
+           std::ranges::all_of(anchors, [&](const PathAnchor& anchor) {
+               return finite(anchor.point) && (!anchor.inHandle || finite(*anchor.inHandle)) &&
+                      (!anchor.outHandle || finite(*anchor.outHandle));
+           });
+}
 
 const ParameterRecord* ParameterStore::find(const ParameterId id) const noexcept {
     const auto iterator = std::find_if(records_.begin(), records_.end(),

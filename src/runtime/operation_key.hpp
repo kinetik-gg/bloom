@@ -34,6 +34,18 @@ class OperationKey final {
             add(value.y);
             if constexpr (requires { value.z; })
                 add(value.z);
+        } else if constexpr (requires { value.anchors; }) {
+            add(value.closed);
+            add(value.anchors.size());
+            for (const auto& anchor : value.anchors) {
+                add(anchor.point);
+                add(anchor.inHandle.has_value());
+                if (anchor.inHandle)
+                    add(*anchor.inHandle);
+                add(anchor.outHandle.has_value());
+                if (anchor.outHandle)
+                    add(*anchor.outHandle);
+            }
         } else if constexpr (std::is_same_v<T, std::string>) {
             add(value.size());
             bytes_ += value;

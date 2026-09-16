@@ -233,7 +233,7 @@ void testDisplayBuilder(Expectations& expectations) {
 void testSolidAndParameters(Expectations& expectations) {
     using bloom::render::kCpuImagePrimitiveSemanticsVersion;
     // ADAPTED (blend modes): the Layer Stack stage folds through the blend kernel now.
-    expectations.expect(kCpuImagePrimitiveSemanticsVersion == 5,
+    expectations.expect(kCpuImagePrimitiveSemanticsVersion == 6,
                         "CPU image primitive semantics are explicitly versioned");
 
     const auto solid = solidPixelFromStraightLinearRec709Scene(Color4d{0.5, -2.0, 4.0, 0.25});

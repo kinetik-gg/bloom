@@ -314,4 +314,43 @@ void validateManifestSchemaV1_13(const json::Value& schema) {
     validateReferences(schema, schema);
 }
 
+void validateDocumentSchemaV1_14(const json::Value& schema) {
+    using namespace schema_detail;
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-document:1.14",
+                       "document id");
+    requireExact(schema.at("properties").at("schemaVersion"),
+                 R"({"$ref":"#/$defs/fixedVersion-1.14"})", "document version");
+    requireExact(schema.at("$defs").at("fixedVersion-1.14").at("properties").at("minor"),
+                 R"({"const":14})", "minor");
+    requireExact(
+        schema.at("$defs").at("pathValue-1.14"),
+        R"({"type":"object","required":["kind","anchors","closed"],"properties":{"kind":{"const":"path"},"anchors":{"type":"array","maxItems":4096,"items":{"$ref":"#/$defs/pathAnchor-1.14"}},"closed":{"type":"boolean"}},"unevaluatedProperties":true})",
+        "bounded path value");
+    requireExact(
+        schema.at("$defs").at("pathAnchor-1.14"),
+        R"({"type":"object","required":["point"],"properties":{"point":{"$ref":"#/$defs/pathPoint-1.14"},"inHandle":{"$ref":"#/$defs/pathPoint-1.14"},"outHandle":{"$ref":"#/$defs/pathPoint-1.14"}},"unevaluatedProperties":false})",
+        "closed path anchor");
+    requireExact(
+        schema.at("$defs").at("pathPoint-1.14"),
+        R"({"type":"object","required":["x","y"],"properties":{"x":{"type":"number"},"y":{"type":"number"}},"unevaluatedProperties":false})",
+        "path point");
+    const auto& alternatives = requireArray(schema.at("$defs").at("parameterValue-1.4").at("oneOf"),
+                                            "parameter value alternatives");
+    if (alternatives.empty())
+        fail("path value alternative missing");
+    requireExact(alternatives.back(), R"({"$ref":"#/$defs/pathValue-1.14"})",
+                 "path value discriminator arm");
+    validateReferences(schema, schema);
+}
+void validateManifestSchemaV1_14(const json::Value& schema) {
+    using namespace schema_detail;
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-manifest:1.14",
+                       "manifest id");
+    requireExact(schema.at("$defs").at("document-1.0").at("properties").at("schemaVersion"),
+                 R"({"$ref":"#/$defs/fixedVersion-1.14"})", "manifest document version");
+    requireExact(schema.at("$defs").at("fixedVersion-1.14").at("properties").at("minor"),
+                 R"({"const":14})", "manifest minor");
+    validateReferences(schema, schema);
+}
+
 } // namespace bloom::quality

@@ -564,6 +564,28 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
                state.ok(writer.memberName("value")) && state.ok(writer.stringValue(*text)) &&
                emitRetainedTrailing(state) && state.ok(writer.endObject());
     }
+    if (const auto* path = std::get_if<PathValue>(&value)) {
+        if (!path->isValid() || !state.ok(writer.memberName("kind")) ||
+            !state.ok(writer.stringValue("path")) || !state.ok(writer.memberName("anchors")) ||
+            !state.ok(writer.beginArray()))
+            return false;
+        const auto point = [&](const std::string_view name, const Vec2d p) {
+            return state.ok(writer.memberName(name)) && state.ok(writer.beginObject()) &&
+                   state.ok(writer.memberName("x")) && state.ok(writer.float64Value(p.x)) &&
+                   state.ok(writer.memberName("y")) && state.ok(writer.float64Value(p.y)) &&
+                   state.ok(writer.endObject());
+        };
+        for (const auto& anchor : path->anchors) {
+            if (!state.ok(writer.beginObject()) || !point("point", anchor.point) ||
+                (anchor.inHandle && !point("inHandle", *anchor.inHandle)) ||
+                (anchor.outHandle && !point("outHandle", *anchor.outHandle)) ||
+                !state.ok(writer.endObject()))
+                return false;
+        }
+        return state.ok(writer.endArray()) && state.ok(writer.memberName("closed")) &&
+               state.ok(writer.booleanValue(path->closed)) && emitRetainedTrailing(state) &&
+               state.ok(writer.endObject());
+    }
     if (const auto* rational = std::get_if<bloom::core::RationalTime>(&value)) {
         return state.ok(writer.memberName("kind")) && state.ok(writer.stringValue("rational")) &&
                emitNamedSigned(state, "numerator", rational->numerator()) &&

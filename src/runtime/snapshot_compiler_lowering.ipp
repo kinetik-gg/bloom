@@ -502,6 +502,8 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
         return lowerLayerStack(node, definition, indices);
     case NodeLoweringKind::CompositionOutput:
         return lowerCompositionOutput(node, indices);
+    case NodeLoweringKind::Shape:
+        return lowerShape(node);
     case NodeLoweringKind::Unsupported:
     // A value lowering never reaches here: compileValueGraph() compiled it into the plan's value
     // operations, and lower()'s own loop skips it. Reaching this arm means the two passes disagree
@@ -569,6 +571,51 @@ lowerImageSource(const document::NodeRecord& node) {
     return runtime::CompiledImageSource{node.id, record ? std::optional{*record} : std::nullopt,
                                         *start,  *loop,
                                         *space,  *premultiply};
+}
+
+[[nodiscard]] std::optional<runtime::CompiledOperation>
+lowerShape(const document::NodeRecord& node) {
+    const auto size = compiledVec2Parameter(findParameterBinding(node, "size"));
+    const auto fill = compiledColorParameter(findParameterBinding(node, "fillColor"));
+    const auto stroke = compiledColorParameter(findParameterBinding(node, "strokeColor"));
+    const auto width = compiledScalarParameter(findParameterBinding(node, "strokeWidth"));
+    const auto* kind = parameterConstant<std::int64_t>(findParameterBinding(node, "kind"));
+    const auto* radius = parameterConstant<double>(findParameterBinding(node, "cornerRadius"));
+    const auto* points = parameterConstant<std::int64_t>(findParameterBinding(node, "points"));
+    const auto* ratio = parameterConstant<double>(findParameterBinding(node, "innerRatio"));
+    const auto* start = parameterConstant<document::Vec2d>(findParameterBinding(node, "lineStart"));
+    const auto* end = parameterConstant<document::Vec2d>(findParameterBinding(node, "lineEnd"));
+    const auto* path = parameterConstant<document::PathValue>(findParameterBinding(node, "path"));
+    const auto* fillEnabled = parameterConstant<bool>(findParameterBinding(node, "fillEnabled"));
+    const auto* strokeEnabled =
+        parameterConstant<bool>(findParameterBinding(node, "strokeEnabled"));
+    const auto* align = parameterConstant<std::int64_t>(findParameterBinding(node, "strokeAlign"));
+    const auto* join = parameterConstant<std::int64_t>(findParameterBinding(node, "strokeJoin"));
+    const auto* cap = parameterConstant<std::int64_t>(findParameterBinding(node, "strokeCap"));
+    const auto* rule = parameterConstant<std::int64_t>(findParameterBinding(node, "fillRule"));
+    if (!size || !fill || !stroke || !width || !kind || !radius || !points || !ratio || !start ||
+        !end || !path || !fillEnabled || !strokeEnabled || !align || !join || !cap || !rule) {
+        addTopologyFailure(node.id, "Shape parameters could not be lowered.");
+        return std::nullopt;
+    }
+    return runtime::CompiledShape{node.id,
+                                  static_cast<document::ShapeKind>(*kind),
+                                  *size,
+                                  *radius,
+                                  *points,
+                                  *ratio,
+                                  *start,
+                                  *end,
+                                  *path,
+                                  *fillEnabled,
+                                  *fill,
+                                  *strokeEnabled,
+                                  *stroke,
+                                  *width,
+                                  static_cast<document::ShapeStrokeAlign>(*align),
+                                  static_cast<document::ShapeStrokeJoin>(*join),
+                                  static_cast<document::ShapeStrokeCap>(*cap),
+                                  static_cast<document::ShapeFillRule>(*rule)};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

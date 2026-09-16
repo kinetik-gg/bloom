@@ -77,6 +77,36 @@ QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view
     const auto add = [&items](const QString& text, const std::int64_t stored) {
         items.append({text, stored});
     };
+    if (schemaKey == "bloom.shape.kind") {
+        for (std::int64_t i = 0; i <= 6; ++i)
+            add(QString::fromUtf8(
+                    document::shapeKindName(static_cast<document::ShapeKind>(i)).data()),
+                i);
+        return items;
+    }
+    if (schemaKey == "bloom.shape.stroke-align") {
+        add(QObject::tr("Center"), 0);
+        add(QObject::tr("Inside"), 1);
+        add(QObject::tr("Outside"), 2);
+        return items;
+    }
+    if (schemaKey == "bloom.shape.stroke-join") {
+        add(QObject::tr("Miter"), 0);
+        add(QObject::tr("Round"), 1);
+        add(QObject::tr("Bevel"), 2);
+        return items;
+    }
+    if (schemaKey == "bloom.shape.stroke-cap") {
+        add(QObject::tr("Butt"), 0);
+        add(QObject::tr("Round"), 1);
+        add(QObject::tr("Square"), 2);
+        return items;
+    }
+    if (schemaKey == "bloom.shape.fill-rule") {
+        add(QObject::tr("Nonzero"), 0);
+        add(QObject::tr("Even-odd"), 1);
+        return items;
+    }
     if (schemaKey == "bloom.image.loop-mode") {
         add(QObject::tr("Hold"), 0);
         add(QObject::tr("Loop"), 1);

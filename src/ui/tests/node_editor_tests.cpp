@@ -5,6 +5,7 @@
 // this task must keep byte-equivalent.
 
 #include <bloom/ui/node_editor.hpp>
+#include <bloom/ui/properties_editor.hpp>
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -576,6 +577,46 @@ void testContextMenuOffersOnlyRealCommands(Expectations& expectations) {
     menu->deleteLater();
 }
 
+void testShapeMenuAndVisibility(Expectations& expectations) {
+    GraphFixture fixture(makeProject("Shapes"));
+    auto* menu = fixture.editor.contextMenuForTest();
+    for (int kind = 0; kind <= 6; ++kind)
+        expectations.expect(
+            menu && menu->findChild<QAction*>(QStringLiteral("nodeAddShape.%1").arg(kind)),
+            "Sources menu offers every shape kind");
+    auto* rectangle = menu ? menu->findChild<QAction*>("nodeAddShape.0") : nullptr;
+    if (!rectangle)
+        return;
+    const auto before = fixture.session.composition()->graph().nodes().size();
+    rectangle->trigger();
+    expectations.expect(fixture.session.composition()->graph().nodes().size() == before + 1 &&
+                            fixture.session.composition()->graph().layerStack().entries().empty(),
+                        "canvas shape preset creates only one standalone source");
+    expectations.expect(fixture.session.undo() &&
+                            fixture.session.composition()->graph().nodes().size() == before,
+                        "canvas shape preset undoes in one step");
+    expectations.expect(fixture.session.addShapeLayer(document::ShapeKind::Rectangle),
+                        "session creates a rectangle layer");
+    ui::PropertiesEditor properties(fixture.session);
+    properties.show();
+    QCoreApplication::processEvents();
+    const auto visible = [&](const QString& role) {
+        for (auto* row : properties.findChildren<QWidget*>("propertiesRegistryRow"))
+            if (row->property("role").toString() == role)
+                return !row->isHidden();
+        return false;
+    };
+    expectations.expect(visible("size") && visible("cornerRadius") && !visible("points") &&
+                            !visible("innerRatio") && !visible("path"),
+                        "rectangle hides irrelevant rows");
+    expectations.expect(fixture.session.addShapeLayer(document::ShapeKind::Star),
+                        "session creates a star layer");
+    QCoreApplication::processEvents();
+    expectations.expect(visible("points") && visible("innerRatio") && !visible("cornerRadius") &&
+                            !visible("lineStart"),
+                        "star projects its relevant rows");
+}
+
 void testAddFromTheCanvasIsOneUndoableCommand(Expectations& expectations) {
     GraphFixture fixture(makeProject("Node Menu Add Test"));
     auto* menu = fixture.editor.contextMenuForTest();
@@ -929,6 +970,7 @@ int runAll() {
     testEveryProjectedEdgeIsAPathItemBetweenTwoCards(expectations);
     testMidChainCardsCarryBothPortDots(expectations);
     testContextMenuOffersOnlyRealCommands(expectations);
+    testShapeMenuAndVisibility(expectations);
     testAddFromTheCanvasIsOneUndoableCommand(expectations);
     testInNodeValueFieldsCommitThroughThePropertiesPath(expectations);
     testInNodeTransformFieldsCommitThroughThePropertiesPath(expectations);

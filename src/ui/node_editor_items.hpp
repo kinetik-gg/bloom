@@ -260,6 +260,9 @@ class NodeItem final : public QGraphicsObject {
             const document::NodeLayoutRecord& layout,
             const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions()) {
         layout_ = layout;
+        shapeSource_ = node.typeId == document::kShapeSourceNodeType;
+        if (shapeSource_)
+            shapeKind_ = nodeShapeKind(composition, node);
         imageSource_ = node.typeId == "bloom.image-source";
         audioSource_ = node.typeId == "bloom.audio-source";
         imageAsset_ = {};
@@ -671,7 +674,8 @@ class NodeItem final : public QGraphicsObject {
         std::vector<std::string> roles;
         roles.reserve(node.parameters.size());
         for (const auto& binding : node.parameters) {
-            roles.push_back(binding.role);
+            if (!shapeSource_ || document::shapeRoleVisible(shapeKind_, binding.role))
+                roles.push_back(binding.role);
         }
         if (fieldsBuilt_ && roles == builtRoles_) {
             return;
@@ -836,7 +840,7 @@ class NodeItem final : public QGraphicsObject {
                 connect(textContent_, &QLineEdit::editingFinished, this,
                         [this] { commitTextContent(); });
                 valueRows_.push_back({tr("Text"), textContent_, nullptr, {}});
-            } else if (role == document::kTextSizeParameterRole) {
+            } else if (!shapeSource_ && role == document::kTextSizeParameterRole) {
                 // Range/decimals/step/unit mirror PropertiesEditor's Size editor verbatim, so the
                 // same gesture in either surface produces the same value.
                 textSize_ =
@@ -938,6 +942,8 @@ class NodeItem final : public QGraphicsObject {
         }
 
         switch (declared->valueKind) {
+        case document::ParameterValueKind::Path:
+            return false;
         case document::ParameterValueKind::Boolean: {
             row.toggle = new kit::KSwitch;
             row.toggle->setObjectName(QStringLiteral("nodeOperandToggle"));
@@ -1059,6 +1065,8 @@ class NodeItem final : public QGraphicsObject {
                            : std::nullopt;
             }
             switch (row.kind) {
+            case document::ParameterValueKind::Path:
+                return std::nullopt;
             case document::ParameterValueKind::Boolean:
                 return row.toggle == nullptr
                            ? std::nullopt
@@ -1142,6 +1150,7 @@ class NodeItem final : public QGraphicsObject {
                                          *sampled, row.color);
             }
             return;
+        case document::ParameterValueKind::Path:
         case document::ParameterValueKind::Boolean:
         case document::ParameterValueKind::Integer:
         case document::ParameterValueKind::Vec3d:
@@ -1441,6 +1450,8 @@ class NodeItem final : public QGraphicsObject {
 
         std::size_t readOnlyIndex = 0;
         for (const auto& binding : node.parameters) {
+            if (shapeSource_ && !document::shapeRoleVisible(shapeKind_, binding.role))
+                continue;
             if (binding.role == document::kPositionParameterRole ||
                 binding.role == document::kAnchorParameterRole ||
                 binding.role == document::kScaleParameterRole ||
@@ -1453,11 +1464,12 @@ class NodeItem final : public QGraphicsObject {
                 continue;
             }
             const auto* parameter = composition.parameters().find(binding.parameterId);
-            if (readOnlyIndex < readOnlyRows_.size()) {
+            if (readOnlyIndex < readOnlyRows_.size() &&
+                readOnlyRows_[readOnlyIndex].first == displayTypeName(binding.role)) {
                 readOnlyRows_[readOnlyIndex].second =
                     parameter == nullptr ? QString{} : parameterText(*parameter);
+                ++readOnlyIndex;
             }
-            ++readOnlyIndex;
         }
         for (std::size_t index = 0; index < readOnlyLabels_.size(); ++index)
             readOnlyLabels_[index]->setElidedText(readOnlyRows_[index].second);
@@ -1631,7 +1643,7 @@ class NodeItem final : public QGraphicsObject {
                     outputHeight += socket->rowHeight();
             }
         const qreal thumbnailHeight =
-            imageSource_ || audioSource_ ? kit::px(kit::Size::ImageThumbnail) : 0;
+            shapeSource_ || imageSource_ || audioSource_ ? kit::px(kit::Size::ImageThumbnail) : 0;
         parameterRowsTop_ = kCardHeaderHeight + socketHeight + thumbnailHeight;
         // A card with no parameter rows is exactly its header: no empty body lip below it, which
         // would read as a clipped row rather than as a node that simply has nothing to edit.
@@ -1730,6 +1742,8 @@ class NodeItem final : public QGraphicsObject {
     qreal minimumWidth_ = kCardMinimumWidth;
     document::NodeLayoutRecord layout_;
     bool reroute_ = false;
+    bool shapeSource_ = false;
+    document::ShapeKind shapeKind_ = document::ShapeKind::Rectangle;
     bool imageSource_ = false;
     bool audioSource_ = false;
     bool imageSequence_ = false;

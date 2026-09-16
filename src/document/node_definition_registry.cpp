@@ -4,6 +4,7 @@
 
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/shape.hpp>
 
 #include <algorithm>
 #include <array>
@@ -124,9 +125,11 @@ template <typename Definition>
     return definition.key.typeId == typeId && definition.key.schemaVersion == schemaVersion;
 }
 
-[[nodiscard]] bool hasValidLoweringShape(const NodeDefinition& definition) noexcept {
+[[nodiscard]] bool hasValidLoweringShape(const NodeDefinition& definition) {
     using namespace bloom::document;
     switch (definition.lowering) {
+    case NodeLoweringKind::Shape:
+        return definition == shapeDefinition();
     case NodeLoweringKind::Solid:
         return hasImageOutput(definition, kSolidSourceOutputPort) &&
                (definition.parameters.size() == 3 &&
@@ -544,9 +547,13 @@ bool NodeDefinitionRegistry::containsType(const std::string_view typeId) const n
 }
 
 bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
-    std::vector<NodeDefinition> definitions{solidDefinition(),      layerOutputDefinition(),
-                                            layerStackDefinition(), compositionOutputDefinition(),
-                                            textDefinition(),       imageDefinition(),
+    std::vector<NodeDefinition> definitions{shapeDefinition(),
+                                            solidDefinition(),
+                                            layerOutputDefinition(),
+                                            layerStackDefinition(),
+                                            compositionOutputDefinition(),
+                                            textDefinition(),
+                                            imageDefinition(),
                                             audioDefinition()};
     // The value library is appended, not interleaved: the five above are the structural node types
     // a composition is built out of, and reading them first in one place is what makes the

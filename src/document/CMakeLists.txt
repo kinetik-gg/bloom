@@ -13,6 +13,7 @@ target_sources(
         layer_stack.cpp
         new_project.cpp
         parameter.cpp
+        shape.cpp
         persisted_text.cpp
         project.cpp
         asset.cpp
@@ -34,6 +35,7 @@ target_sources(
             include/bloom/document/layer_stack.hpp
             include/bloom/document/new_project.hpp
             include/bloom/document/parameter.hpp
+            include/bloom/document/shape.hpp
             include/bloom/document/persisted_text.hpp
             include/bloom/document/project.hpp
             include/bloom/document/asset.hpp

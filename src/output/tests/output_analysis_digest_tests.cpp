@@ -115,9 +115,9 @@ constexpr core::Sha256Digest::Bytes kRevisionBytes{
 // reproducing EVERY previously checked-in golden set byte for byte when fed its own version
 // numbers, the version-4 set this slice replaces included.
 constexpr std::string_view kExpectedExrDigest =
-    "a1825f8660668568193e177d18d365e38e73caa0763a40c7ac4fbcbad7b25b4b";
+    "25d2424700524e6d413fab968c866e39b966080d4f68a0893c19a9ff01fb37b0";
 constexpr std::string_view kExpectedPngDigest =
-    "1cc8777d68ee48ea8fdca54b73ea2c9443c38e2604fe8d1afd5ba720e01b7263";
+    "011208b67d5fb5a53861af84fd0708388f30eecc0035069820b4d0d0c13ea827";
 
 class Expectations final {
   public:

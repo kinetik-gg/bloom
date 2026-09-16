@@ -107,6 +107,7 @@ target_sources(
         image_types.cpp
         text_glyph_source.hpp
         text_raster.cpp
+        path_raster.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -117,6 +118,7 @@ target_sources(
             include/bloom/render/image.hpp
             include/bloom/render/image_types.hpp
             include/bloom/render/text_raster.hpp
+            include/bloom/render/path_raster.hpp
 )
 
 target_compile_features(bloom_render PUBLIC cxx_std_20)

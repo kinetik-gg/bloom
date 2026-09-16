@@ -76,6 +76,7 @@ void reportProgress(const EvaluationProgressCallback& callback,
 template <typename Function>
 void forEachInput(const CompiledOperation& operation, Function&& function) {
     std::visit(Overloaded{
+                   [](const CompiledShape&) {},
                    [](const CompiledSolid&) {},
                    [](const CompiledText&) {},
                    [](const CompiledImageSource&) {},

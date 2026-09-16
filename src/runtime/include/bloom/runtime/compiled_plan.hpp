@@ -6,6 +6,7 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/shape.hpp>
 #include <bloom/render/embedded_fonts.hpp>
 #include <bloom/runtime/compiled_curves.hpp>
 #include <bloom/runtime/compiled_value_graph.hpp>
@@ -191,6 +192,27 @@ struct CompositionAudioMix final {
     friend bool operator==(const CompositionAudioMix&, const CompositionAudioMix&) = default;
 };
 
+struct CompiledShape {
+    document::NodeId sourceNodeId;
+    document::ShapeKind kind;
+    CompiledVec2Parameter size;
+    double cornerRadius = 0;
+    std::int64_t points = 5;
+    double innerRatio = 0.5;
+    document::Vec2d lineStart, lineEnd;
+    document::PathValue path;
+    bool fillEnabled = true;
+    CompiledColorParameter fillColor;
+    bool strokeEnabled = false;
+    CompiledColorParameter strokeColor;
+    CompiledScalarParameter strokeWidth;
+    document::ShapeStrokeAlign strokeAlign = document::ShapeStrokeAlign::Center;
+    document::ShapeStrokeJoin strokeJoin = document::ShapeStrokeJoin::Miter;
+    document::ShapeStrokeCap strokeCap = document::ShapeStrokeCap::Butt;
+    document::ShapeFillRule fillRule = document::ShapeFillRule::NonZero;
+    friend bool operator==(const CompiledShape&, const CompiledShape&) = default;
+};
+
 struct CompiledText {
     document::NodeId sourceNodeId;
     document::ParameterId contentParameterId;
@@ -288,7 +310,7 @@ struct CompiledCompositionOutput {
 
 using CompiledOperation =
     std::variant<CompiledSolid, CompiledText, CompiledImageSource, CompiledLayerOutput,
-                 CompiledMerge, CompiledCompositionOutput>;
+                 CompiledMerge, CompiledCompositionOutput, CompiledShape>;
 
 // Mutable construction storage is deliberately a distinct type. Publishing a plan copies or moves
 // this complete definition into private storage, so retaining or changing the definition cannot

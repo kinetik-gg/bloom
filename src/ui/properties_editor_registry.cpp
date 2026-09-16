@@ -189,7 +189,8 @@ void PropertiesEditor::filterRows() {
                                 (!display || display->isHidden()));
                 continue;
             }
-            if (row->property("unavailableReadout").toBool()) {
+            if (row->property("unavailableReadout").toBool() ||
+                row->property("roleHidden").toBool()) {
                 row->hide();
                 continue;
             }

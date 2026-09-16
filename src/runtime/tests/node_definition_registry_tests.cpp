@@ -108,7 +108,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // readouts. The number is pinned rather than computed so that adding a node type is a
     // deliberate edit here. MEDIA-1 adds one Image source definition and AUDIO-2 adds one Audio
     // source definition.
-    expectations.expect(registry.definitions().size() == 102,
+    expectations.expect(registry.definitions().size() == 103,
                         "startup contribution includes every built-in definition");
 
     for (const auto& [kind, version] : std::array<std::pair<std::string_view, std::uint32_t>, 4>{

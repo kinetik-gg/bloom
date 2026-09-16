@@ -155,3 +155,9 @@ target_include_directories(bloom_image_source_test PRIVATE ${CMAKE_CURRENT_SOURC
 target_link_libraries(bloom_image_source_test PRIVATE bloom_runtime_evaluator bloom_commands)
 bloom_enable_warnings(bloom_image_source_test)
 bloom_add_test(NAME bloom.runtime.image-source COMMAND bloom_image_source_test LABELS unit runtime media)
+
+add_executable(bloom_runtime_shape_sources_test ${PROJECT_SOURCE_DIR}/tests/shape_sources_tests.cpp)
+target_link_libraries(bloom_runtime_shape_sources_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands)
+bloom_enable_warnings(bloom_runtime_shape_sources_test)
+bloom_enable_strict_floating_point(bloom_runtime_shape_sources_test)
+bloom_add_test(NAME bloom.runtime.shape_sources COMMAND bloom_runtime_shape_sources_test LABELS unit rendering)

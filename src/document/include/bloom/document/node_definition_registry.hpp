@@ -46,14 +46,17 @@ enum class ParameterValueKind {
     // Task S7.
     Boolean,
     Vec3d,
+    Path,
 };
 
 // The one correspondence between an authored value's kind and the socket kind that carries it.
 // Every value-graph node definition is checked against this rather than restating the pairing, so a
 // parameter and the socket that can drive it cannot disagree about what they hold.
-[[nodiscard]] constexpr SocketValueKind
+[[nodiscard]] constexpr std::optional<SocketValueKind>
 socketKindForParameterValueKind(const ParameterValueKind kind) noexcept {
     switch (kind) {
+    case ParameterValueKind::Path:
+        return std::nullopt; // Path v1 is inline and constant-only.
     case ParameterValueKind::Color4d:
         return SocketValueKind::Color;
     case ParameterValueKind::Vec2d:
@@ -188,6 +191,7 @@ enum class NodeCardinality : std::uint8_t {
 
 enum class NodeLoweringKind {
     Solid,
+    Shape,
     Text,
     ImageSource,
     AudioSource,
@@ -249,6 +253,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::ValueReroute:
     case NodeLoweringKind::ValueUtility:
         return true;
+    case NodeLoweringKind::Shape:
     case NodeLoweringKind::Solid:
     case NodeLoweringKind::Text:
     case NodeLoweringKind::ImageSource:
