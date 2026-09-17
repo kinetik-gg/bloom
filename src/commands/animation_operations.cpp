@@ -367,6 +367,25 @@ OperationResult updateComponentKeyframes(
     const document::KeyframeId anchorId, const core::RationalTime time,
     const std::array<document::AnimationComponent, Count> components,
     const std::array<double, Count> values, const document::KeyframeInterpolation interpolation) {
+    // Admission first, for the whole batch, before a single component is touched. This used to
+    // lean on the store's own refusal, which reports a per-component failure only after earlier
+    // components were already rewritten and spells a non-finite value as InvalidOrder ("could not
+    // be updated") instead of naming the value. A non-finite value is refused here on the same
+    // terms every other keyframe-value command refuses one.
+    for (std::size_t index = 0; index < Count; ++index) {
+        if (!std::isfinite(values[index])) {
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Component keyframe value is invalid");
+        }
+        if constexpr (Count == 4) {
+            if (components[index] == document::AnimationComponent::Alpha &&
+                (values[index] < 0.0 || values[index] > 1.0)) {
+                return OperationResult::rejected(
+                    OperationIssueCode::InvalidValue,
+                    "Alpha keyframe value is outside its schema domain");
+            }
+        }
+    }
     std::optional<core::RationalTime> oldTime;
     for (const auto component : components) {
         const auto* curve = composition.animationCurves().findComponent(curveId, component);

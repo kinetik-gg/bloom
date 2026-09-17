@@ -15,8 +15,18 @@ QPointF ViewerMapping::toScreen(const document::Vec2d point) const {
 }
 
 document::Vec2d ViewerMapping::toComposition(const QPointF point) const {
-    return {(point.x() - displayRect.left()) / displayRect.width() * compositionFormat.width(),
-            (point.y() - displayRect.top()) / displayRect.height() * compositionFormat.height()};
+    // A degenerate or non-finite display rectangle has no composition-space answer. Returning the
+    // composition origin keeps every caller's arithmetic finite; dividing anyway seeded a NaN that
+    // every downstream zero-test (an empty-rect test, a `!= 0` divisor test) silently accepted,
+    // and that NaN is what a gesture then offered the document.
+    const double width = displayRect.width();
+    const double height = displayRect.height();
+    if (!std::isfinite(width) || !std::isfinite(height) || width <= 0.0 || height <= 0.0 ||
+        !std::isfinite(point.x()) || !std::isfinite(point.y())) {
+        return {0.0, 0.0};
+    }
+    return {(point.x() - displayRect.left()) / width * compositionFormat.width(),
+            (point.y() - displayRect.top()) / height * compositionFormat.height()};
 }
 
 std::array<QPointF, 8> viewerHandlePoints(const ViewerMapping& mapping,

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <limits>
 #include <optional>
 #include <string>
 
@@ -655,6 +656,56 @@ void testScalarKeyOperations(TestContext& test) {
                 "generic deletion removes and reports the selected scalar key");
 }
 
+// SAVEFIX-1. The component-aware branch of the typed Vec2/Vec3/Color4 keyframe updates was the one
+// keyframe-value write path with no admission of its own: it walked the components, rewrote each
+// one, and only discovered a value the store would not take part-way through -- reporting it as
+// InvalidOrder ("could not be updated") rather than naming the value. A non-finite component value
+// is now refused up front, for the whole batch, like every other value command refuses one.
+void testComponentUpdateRefusesNonFiniteValues(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    Transaction create("Animate position", document.snapshot().revision());
+    create.emplace<CreateAnimationForParameter>(kCompositionId, kFirstPositionId,
+                                                core::RationalTime::fromInteger(0));
+    const auto created = stack.execute(std::move(create));
+    const auto curve =
+        requireValue(created.outputId<document::AnimationCurveId>(kAnimationCurveOutput),
+                     "the non-finite update fixture must create a curve");
+
+    Transaction insert("Insert Vec2 key", document.snapshot().revision());
+    insert.emplace<InsertVec2Keyframe>(kCompositionId, curve, core::RationalTime::fromInteger(2),
+                                       document::Vec2d{2.0, 2.0},
+                                       document::KeyframeInterpolation::Linear);
+    const auto inserted = stack.execute(std::move(insert));
+    const auto keyframe = requireValue(inserted.outputId<document::KeyframeId>(kKeyframeOutput),
+                                       "the non-finite update fixture must insert a key");
+    const auto before = document.snapshot().revision();
+
+    Transaction update("Update Vec2 key with a NaN", before);
+    update.emplace<UpdateVec2Keyframe>(
+        kCompositionId, curve, keyframe, core::RationalTime::fromInteger(2),
+        document::Vec2d{std::numeric_limits<double>::quiet_NaN(), 2.0},
+        document::KeyframeInterpolation::Linear);
+    const auto refused = stack.execute(std::move(update));
+    test.expect(
+        !refused.changed() && refused.operationFailures.size() == 1 &&
+            refused.operationFailures.front().issue.code == OperationIssueCode::InvalidValue,
+        "a non-finite component keyframe value is refused as InvalidValue, not InvalidOrder");
+    test.expect(document.snapshot().revision() == before,
+                "and the refused component update leaves the document untouched");
+
+    Transaction infinite("Update Vec2 key with an infinity", document.snapshot().revision());
+    infinite.emplace<UpdateVec2Keyframe>(
+        kCompositionId, curve, keyframe, core::RationalTime::fromInteger(2),
+        document::Vec2d{2.0, std::numeric_limits<double>::infinity()},
+        document::KeyframeInterpolation::Linear);
+    const auto refusedInfinity = stack.execute(std::move(infinite));
+    test.expect(!refusedInfinity.changed() && refusedInfinity.operationFailures.size() == 1 &&
+                    refusedInfinity.operationFailures.front().issue.code ==
+                        OperationIssueCode::InvalidValue,
+                "an infinite component keyframe value is refused the same way");
+}
+
 void testVec2KeyOperations(TestContext& test) {
     Document document(makeProject());
     CommandStack stack(document);
@@ -971,6 +1022,7 @@ int main() {
         bloom::commands::test::testAnimatedToConstantTransitionUndoRedo(test);
         bloom::commands::test::testColorKeyOperations(test);
         bloom::commands::test::testComponentKeyOperations(test);
+        bloom::commands::test::testComponentUpdateRefusesNonFiniteValues(test);
         bloom::commands::test::testComponentCompatibilityProjection(test);
         bloom::commands::test::testTextSizeAnimationRespectsItsSchemaDomain(test);
         bloom::commands::test::testSetKeyframeInterpolation(test);

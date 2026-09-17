@@ -3,6 +3,7 @@
 #include <bloom/document/schema_version.hpp>
 #include <bloom/project/canonical_json_writer.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -108,6 +109,53 @@ enum class CanonicalDocumentError : std::uint8_t {
     // leftover entry means the caller passed state captured against a different document (or a
     // stale edit of this one) than the one actually being written.
     RoundTripStateMismatch,
+    // A Float64 field in the snapshot held NaN or an infinity. The canonical grammar has no
+    // spelling for either (see docs/architecture/project-format.md, "Numbers"), so the value is
+    // refused here with the offending field's document path rather than terminating the encode --
+    // saving a document must always fail typed, never abort the process.
+    NonFiniteValue,
+};
+
+// Fixed-capacity document path naming the field a failure refers to (currently NonFiniteValue
+// only), spelled as the emission walk's attachment path plus the offending member -- for example
+// "project/Composition[7]/AnimationCurve[12]/Keyframe[4]/value". Inline storage keeps the result
+// types trivially copyable and free of views into transient encode state. Overlong paths truncate
+// rather than fail: a diagnostic can never turn one reportable failure into a different one.
+class CanonicalDocumentFieldPath final {
+  public:
+    static constexpr std::size_t kCapacity = 255;
+
+    [[nodiscard]] constexpr std::string_view view() const& noexcept {
+        return {characters_.data(), static_cast<std::size_t>(size_)};
+    }
+    [[nodiscard]] constexpr std::string_view view() const&& = delete;
+    [[nodiscard]] constexpr bool empty() const noexcept { return size_ == 0; }
+    [[nodiscard]] constexpr bool truncated() const noexcept { return truncated_; }
+
+    // Copies `text`, truncating at kCapacity. Every path is built character by character through
+    // this one entry point, so a path value never carries storage of its own.
+    [[nodiscard]] static constexpr CanonicalDocumentFieldPath
+    from(const std::string_view text) noexcept {
+        CanonicalDocumentFieldPath path;
+        path.append(text);
+        return path;
+    }
+
+    constexpr void append(const std::string_view text) noexcept {
+        for (const char character : text) {
+            if (size_ >= kCapacity) {
+                truncated_ = true;
+                return;
+            }
+            characters_[size_] = character;
+            ++size_;
+        }
+    }
+
+  private:
+    std::array<char, kCapacity> characters_{};
+    std::uint8_t size_ = 0;
+    bool truncated_ = false;
 };
 
 class [[nodiscard]] CanonicalDocumentSizeResult final {
@@ -119,8 +167,10 @@ class [[nodiscard]] CanonicalDocumentSizeResult final {
     [[nodiscard]] static constexpr CanonicalDocumentSizeResult
     failure(const CanonicalDocumentError error,
             const std::size_t compositionIndex = kCanonicalDocumentNoIndex,
-            const std::size_t elementIndex = kCanonicalDocumentNoIndex) noexcept {
-        return CanonicalDocumentSizeResult(error, compositionIndex, elementIndex);
+            const std::size_t elementIndex = kCanonicalDocumentNoIndex,
+            const std::string_view fieldPath = {}) noexcept {
+        return CanonicalDocumentSizeResult(error, compositionIndex, elementIndex,
+                                           CanonicalDocumentFieldPath::from(fieldPath));
     }
 
     [[nodiscard]] constexpr bool hasValue() const noexcept { return size_.has_value(); }
@@ -134,34 +184,44 @@ class [[nodiscard]] CanonicalDocumentSizeResult final {
         return compositionIndex_;
     }
     [[nodiscard]] constexpr std::size_t elementIndex() const noexcept { return elementIndex_; }
+    // Non-empty only for NonFiniteValue.
+    [[nodiscard]] constexpr const CanonicalDocumentFieldPath& fieldPath() const& noexcept {
+        return fieldPath_;
+    }
+    [[nodiscard]] constexpr const CanonicalDocumentFieldPath& fieldPath() const&& = delete;
 
   private:
     constexpr explicit CanonicalDocumentSizeResult(const std::size_t size) noexcept : size_(size) {}
     constexpr CanonicalDocumentSizeResult(const CanonicalDocumentError error,
                                           const std::size_t compositionIndex,
-                                          const std::size_t elementIndex) noexcept
-        : error_(error), compositionIndex_(compositionIndex), elementIndex_(elementIndex) {}
+                                          const std::size_t elementIndex,
+                                          const CanonicalDocumentFieldPath fieldPath) noexcept
+        : error_(error), compositionIndex_(compositionIndex), elementIndex_(elementIndex),
+          fieldPath_(fieldPath) {}
 
     std::optional<std::size_t> size_;
     CanonicalDocumentError error_ = CanonicalDocumentError::None;
     std::size_t compositionIndex_ = kCanonicalDocumentNoIndex;
     std::size_t elementIndex_ = kCanonicalDocumentNoIndex;
+    CanonicalDocumentFieldPath fieldPath_{};
 };
 
 class [[nodiscard]] CanonicalDocumentWriteResult final {
   public:
     [[nodiscard]] static constexpr CanonicalDocumentWriteResult
     success(const std::size_t bytesWritten) noexcept {
-        return CanonicalDocumentWriteResult(CanonicalDocumentError::None, bytesWritten,
-                                            bytesWritten, kCanonicalDocumentNoIndex,
-                                            kCanonicalDocumentNoIndex);
+        return CanonicalDocumentWriteResult(
+            CanonicalDocumentError::None, bytesWritten, bytesWritten, kCanonicalDocumentNoIndex,
+            kCanonicalDocumentNoIndex, CanonicalDocumentFieldPath{});
     }
     [[nodiscard]] static constexpr CanonicalDocumentWriteResult
     failure(const CanonicalDocumentError error,
             const std::optional<std::size_t> requiredSize = std::nullopt,
             const std::size_t compositionIndex = kCanonicalDocumentNoIndex,
-            const std::size_t elementIndex = kCanonicalDocumentNoIndex) noexcept {
-        return CanonicalDocumentWriteResult(error, requiredSize, 0, compositionIndex, elementIndex);
+            const std::size_t elementIndex = kCanonicalDocumentNoIndex,
+            const std::string_view fieldPath = {}) noexcept {
+        return CanonicalDocumentWriteResult(error, requiredSize, 0, compositionIndex, elementIndex,
+                                            CanonicalDocumentFieldPath::from(fieldPath));
     }
 
     [[nodiscard]] constexpr bool succeeded() const noexcept {
@@ -177,21 +237,28 @@ class [[nodiscard]] CanonicalDocumentWriteResult final {
         return compositionIndex_;
     }
     [[nodiscard]] constexpr std::size_t elementIndex() const noexcept { return elementIndex_; }
+    // Non-empty only for NonFiniteValue.
+    [[nodiscard]] constexpr const CanonicalDocumentFieldPath& fieldPath() const& noexcept {
+        return fieldPath_;
+    }
+    [[nodiscard]] constexpr const CanonicalDocumentFieldPath& fieldPath() const&& = delete;
 
   private:
     constexpr CanonicalDocumentWriteResult(const CanonicalDocumentError error,
                                            const std::optional<std::size_t> requiredSize,
                                            const std::size_t bytesWritten,
                                            const std::size_t compositionIndex,
-                                           const std::size_t elementIndex) noexcept
+                                           const std::size_t elementIndex,
+                                           const CanonicalDocumentFieldPath fieldPath) noexcept
         : requiredSize_(requiredSize), bytesWritten_(bytesWritten), error_(error),
-          compositionIndex_(compositionIndex), elementIndex_(elementIndex) {}
+          compositionIndex_(compositionIndex), elementIndex_(elementIndex), fieldPath_(fieldPath) {}
 
     std::optional<std::size_t> requiredSize_;
     std::size_t bytesWritten_ = 0;
     CanonicalDocumentError error_ = CanonicalDocumentError::None;
     std::size_t compositionIndex_ = kCanonicalDocumentNoIndex;
     std::size_t elementIndex_ = kCanonicalDocumentNoIndex;
+    CanonicalDocumentFieldPath fieldPath_{};
 };
 
 // Validates the complete v1 document shape against the format contract and returns the exact
@@ -211,6 +278,7 @@ canonicalDocumentSize(const CanonicalDocumentV1& document,
 encodeCanonicalDocument(const CanonicalDocumentV1& document, std::span<char> output,
                         CanonicalDocumentLimits limits = CanonicalDocumentLimits{}) noexcept;
 
+static_assert(std::is_trivially_copyable_v<CanonicalDocumentFieldPath>);
 static_assert(std::is_trivially_copyable_v<CanonicalDocumentV1>);
 static_assert(std::is_trivially_copyable_v<CanonicalDocumentLimits>);
 static_assert(std::is_trivially_copyable_v<CanonicalDocumentSizeResult>);

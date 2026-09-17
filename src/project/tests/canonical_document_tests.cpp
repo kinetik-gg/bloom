@@ -24,12 +24,14 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <source_location>
 #include <span>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -48,6 +50,7 @@ using bloom::document::OpaqueExtensionPayload;
 using bloom::document::Project;
 using bloom::document::ScalarAnimationCurve;
 using bloom::document::ScalarKeyframe;
+using bloom::document::Vec2AnimationCurve;
 using bloom::project::CanonicalDocumentError;
 using bloom::project::CanonicalDocumentLimits;
 using bloom::project::CanonicalDocumentV1;
@@ -1269,6 +1272,121 @@ void testDriverSourceEncoding(Expectations& expectations) {
                         "a document carrying a driver source declares the current schema minor");
 }
 
+// SAVEFIX-1. The canonical grammar has no spelling for NaN or an infinity, so a non-finite Float64
+// anywhere in a snapshot must make the encode FAIL -- typed, with the offending field's document
+// path -- rather than terminate the save task (see docs/architecture/project-format.md, "Numbers").
+//
+// The document model's own admission already refuses every non-finite value a caller can author
+// (ParameterStore and AnimationCurveStore reject them on insert/update, and Document::commit()
+// re-runs Project::validate()), so this fixture reproduces the ONLY way the writer can meet one:
+// an in-memory document corrupted after it was committed -- which is exactly what the crash
+// report showed. The snapshot's shared state is a non-const object behind a const view, so writing
+// through it here is well defined, and it is deliberately confined to this test.
+[[nodiscard]] bool
+addComponentAnimatedPosition(Expectations& expectations, bloom::document::Project& project,
+                             const bloom::document::CompositionId compositionId) {
+    using namespace bloom::document;
+    auto* composition = project.findComposition(compositionId);
+    if (composition == nullptr) {
+        expectations.expect(false, "the non-finite fixture finds its composition");
+        return false;
+    }
+    const bool parameterAdded = composition->parameters().insert(
+        {ParameterId::fromRaw(1), std::string(kPositionParameterSchemaKey),
+         AnimationCurveSource{AnimationCurveId::fromRaw(1)}});
+    ComponentAnimationCurve x;
+    x.keyframes.push_back(
+        {KeyframeId::fromRaw(1), RationalTime{}, 12.0, KeyframeInterpolation::Linear});
+    ComponentAnimationCurve y;
+    y.keyframes.push_back(
+        {KeyframeId::fromRaw(2), RationalTime{}, -4.0, KeyframeInterpolation::Linear});
+    const bool curveAdded = composition->animationCurves().insert(
+        Vec2AnimationCurve{AnimationCurveId::fromRaw(1),
+                           std::array<ComponentAnimationCurve, 2>{std::move(x), std::move(y)}});
+    expectations.expect(parameterAdded && curveAdded,
+                        "the non-finite fixture admits its component-aware position curve");
+    return parameterAdded && curveAdded;
+}
+
+// Returns the first component keyframe of the fixture curve, through the snapshot's shared state.
+[[nodiscard]] bloom::document::ScalarKeyframe*
+fixtureComponentKeyframe(const bloom::document::Snapshot& snapshot) {
+    using namespace bloom::document;
+    auto& project = const_cast<Project&>(snapshot.project());
+    auto* composition = project.findComposition(CompositionId::fromRaw(1));
+    if (composition == nullptr) {
+        return nullptr;
+    }
+    auto* record = const_cast<AnimationCurveRecord*>(
+        composition->animationCurves().find(AnimationCurveId::fromRaw(1)));
+    auto* curve = record != nullptr ? std::get_if<Vec2AnimationCurve>(record) : nullptr;
+    if (curve == nullptr) {
+        return nullptr;
+    }
+    auto* component = curve->component(AnimationComponent::X);
+    return component != nullptr && !component->keyframes.empty() ? &component->keyframes.front()
+                                                                 : nullptr;
+}
+
+void testNonFiniteValuesFailTypedWithTheirFieldPath(Expectations& expectations) {
+    using namespace bloom::document;
+    auto newProject = makeMinimalProject();
+    const auto compositionId = newProject.initialCompositionId;
+    if (!addComponentAnimatedPosition(expectations, newProject.project, compositionId)) {
+        return;
+    }
+    Document document{std::move(newProject.project)};
+    auto snapshot = document.snapshot();
+    const auto settings = neutralColorSettings();
+    std::array<char, kScratchSize> payloadScratch{};
+    std::array<std::size_t, kScratchSize> sortScratch{};
+    const CanonicalDocumentV1 request{.snapshot = &snapshot,
+                                      .colorSettings = &settings,
+                                      .payloadScratch = payloadScratch,
+                                      .sortScratch = sortScratch};
+
+    expectations.expect(encodeWithSlack(request).ok,
+                        "the finite fixture encodes before any value is corrupted");
+
+    auto* keyframe = fixtureComponentKeyframe(snapshot);
+    expectations.expect(keyframe != nullptr, "the fixture exposes its X component keyframe");
+    if (keyframe == nullptr) {
+        return;
+    }
+
+    const auto expectFieldPath = [&expectations, &request](const std::string_view expectedPath,
+                                                           const std::string_view message) {
+        const auto size = bloom::project::canonicalDocumentSize(request, {});
+        expectations.expect(
+            !size.hasValue() && size.error() == CanonicalDocumentError::NonFiniteValue &&
+                size.fieldPath().view() == expectedPath && !size.fieldPath().truncated(),
+            message);
+        std::array<char, 8> tinyOutput{};
+        const auto encode = bloom::project::encodeCanonicalDocument(request, tinyOutput, {});
+        expectations.expect(!encode && encode.error() == CanonicalDocumentError::NonFiniteValue &&
+                                encode.bytesWritten() == 0 &&
+                                encode.fieldPath().view() == expectedPath,
+                            "the matching encode path reports the same typed failure and path");
+    };
+
+    keyframe->value = std::numeric_limits<double>::quiet_NaN();
+    expectFieldPath("project/Composition[1]/AnimationCurve[1]/Keyframe[1]/value",
+                    "a NaN component keyframe value fails the encode with its exact field path");
+
+    keyframe->value = std::numeric_limits<double>::infinity();
+    expectFieldPath("project/Composition[1]/AnimationCurve[1]/Keyframe[1]/value",
+                    "an infinite component keyframe value fails the encode the same way");
+
+    keyframe->value = 12.0;
+    keyframe->outgoingHandle = {0.5, std::numeric_limits<double>::quiet_NaN()};
+    expectFieldPath("project/Composition[1]/AnimationCurve[1]/Keyframe[1]/outgoingHandle/value",
+                    "a non-finite ease handle offset names the handle member it came from");
+
+    keyframe->outgoingHandle = {};
+    expectations.expect(encodeWithSlack(request).ok,
+                        "restoring finite values makes the same document encode again");
+}
+
 void testLimitsAndCapacityAdversarial(Expectations& expectations) {
     auto newProject = makeMinimalProject();
     Document document{std::move(newProject.project)};
@@ -2220,6 +2338,7 @@ int main() {
         testInvalidColorSettingsRejections(expectations);
         testDriverSourceEncoding(expectations);
         testLimitsAndCapacityAdversarial(expectations);
+        testNonFiniteValuesFailTypedWithTheirFieldPath(expectations);
         testPlainWriteExplicitDefaultsUnchanged(expectations);
         testSchemaMinorParameterization(expectations);
         testOverlayRootAttachmentPoint(expectations);

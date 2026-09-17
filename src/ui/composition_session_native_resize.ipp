@@ -37,8 +37,14 @@ if (modifiers.shift || state.nativeKind == Native::PointText) {
 const double minimum = state.nativeKind == Native::Line ? 0.0 : 1.0;
 next.setX(std::clamp(next.x(), minimum, 1'000'000.0));
 next.setY(std::clamp(next.y(), minimum, 1'000'000.0));
+// Staged exactly like put() above, never written straight into state.overrides: the whole update
+// is offered or dropped as one unit at the end of updateTransformInteraction(), so a native
+// override cannot outlive a dropped frame, accumulate across updates, or be overwritten by the
+// staged assignment that follows this switch. It also puts the native geometry a gesture authors
+// -- a size, a font size, line endpoints, path anchors -- behind the same finiteness check every
+// other offered value passes.
 const auto putNative = [&](std::size_t i, const auto& value) {
-    state.overrides.push_back({state.baseRevision, state.native[i].first, value});
+    staged.push_back({state.baseRevision, state.native[i].first, value});
 };
 if (state.nativeKind == Native::PointText) {
     const auto size = std::get<double>(state.native[0].second);

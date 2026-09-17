@@ -701,7 +701,9 @@ void TimelineGraphView::updateKeyDrag(const QMouseEvent& event) {
         if (base == nullptr)
             continue;
         const double moved = *base - dy * viewport.span() / bandHeight();
-        if (moved != *base)
+        // A value viewport that spans an overflowed range makes `moved` an infinity. Queuing it
+        // would cost the whole drag at commit, so a non-representable value is simply not offered.
+        if (std::isfinite(moved) && moved != *base)
             pendingValues_.push_back({{key.curveId, key.keyframeId, key.component}, moved});
     }
     update();
@@ -734,6 +736,8 @@ void TimelineGraphView::updateHandleDrag(const QMouseEvent& event) {
         outgoing ? pointerSeconds - at->time.toSeconds() : at->time.toSeconds() - pointerSeconds;
     const document::KeyframeHandle dragged{std::clamp(deltaTime / segment, 0.0, 1.0),
                                            pointerValue - at->value};
+    if (!std::isfinite(dragged.time) || !std::isfinite(dragged.value))
+        return;
 
     commands::KeyframeHandleEdit edit{{curve.curveId, at->id, curve.component}};
     if (outgoing)
@@ -758,10 +762,15 @@ void TimelineGraphView::updateHandleDrag(const QMouseEvent& event) {
         const double oppositeRun = (outgoing ? -1.0 : 1.0) * oppositeTime * oppositeSegment;
         const document::KeyframeHandle mirrored{oppositeTime,
                                                 (dragged.value / draggedRun) * oppositeRun};
-        if (outgoing)
-            edit.incoming = mirrored;
-        else
-            edit.outgoing = mirrored;
+        // `draggedRun != 0.0` above is a presence test, not a magnitude one: a handle time just
+        // off zero makes the run denormal and the mirrored offset overflow. The mirror is applied
+        // only when it is representable; otherwise the dragged handle stands on its own.
+        if (std::isfinite(mirrored.value)) {
+            if (outgoing)
+                edit.incoming = mirrored;
+            else
+                edit.outgoing = mirrored;
+        }
     }
     pendingHandles_.push_back(edit);
     update();

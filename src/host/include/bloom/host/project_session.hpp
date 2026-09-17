@@ -705,6 +705,16 @@ class ProjectSession final {
     // SessionSaveInput's class comment for the returned round-trip pointer's lifetime contract.
     [[nodiscard]] SessionSaveInputResult captureSaveInput(SessionPathIntentCapture intent) const;
 
+    // SAVEFIX-1. The same capture, for a crash-recovery write rather than a save. It differs from
+    // captureSaveInput() in exactly one gate: a pathless session is captured rather than refused
+    // with PathRequired. That gate exists because a plain SAVE has no target of its own without a
+    // display path; a recovery write always supplies its own target under the application's data
+    // directory, and a never-saved project is precisely the session whose loss would cost the most,
+    // so refusing it here would defeat the feature. Everything else is identical, and like
+    // captureSaveInput() this mutates nothing: no path intent is advanced and no savepoint is ever
+    // accepted from the result.
+    [[nodiscard]] SessionSaveInputResult captureRecoveryInput() const;
+
     // Atomically installs replacement session content from a successful Open (see
     // docs/architecture/project-session.md's "Session Publication" and "Open Intent"). Acceptance
     // is checked IN ORDER, all before any mutation -- see the .cpp file for the exact gate order

@@ -7,10 +7,12 @@
 
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QStandardPaths>
 
 #include <cstddef>
 #include <fstream>
 #include <stdexcept>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -21,6 +23,43 @@ namespace {
 
 constexpr int kPollIntervalMs = 100;
 constexpr std::uint64_t kBytesPerMebibyte = 1024ULL * 1024ULL;
+
+// SAVEFIX-1. Recovery files live beside the application's own data, never beside the artist's
+// project: a crash-safe copy is Bloom's business, not something to scatter through their folders.
+// QStandardPaths::AppDataLocation is Qt's per-user application data root on every platform Bloom
+// targets (XDG_DATA_HOME on Linux, Application Support on macOS, %APPDATA% on Windows).
+[[nodiscard]] std::filesystem::path defaultRecoveryDirectory() {
+    auto base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (base.isEmpty()) {
+        base = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    }
+    return std::filesystem::path(base.toStdString()) / "Bloom" / "recovery";
+}
+
+// The document path of the field a save refused as non-finite, or an empty view when this failure
+// is not a non-finite refusal. The chain is the one the save pipeline composes: publication ->
+// staged save -> archive build -> document encode (see docs/architecture/project-format.md,
+// "Numbers"). A save can only ever fail this way -- it never aborts the process -- so the message
+// this feeds is a plain, editable-session failure like any other.
+[[nodiscard]] std::string_view
+nonFiniteSaveFieldPath(const host::SavePublicationFailure* const failure) noexcept {
+    if (failure == nullptr) {
+        return {};
+    }
+    const auto* staged = failure->payloadAs<project::StagedSaveFailure>();
+    if (staged == nullptr) {
+        return {};
+    }
+    const auto* archive = staged->payloadAs<project::SaveArchiveFailure>();
+    if (archive == nullptr) {
+        return {};
+    }
+    const auto* encoding = archive->payloadAs<project::SaveArchiveDocumentEncodingFailure>();
+    if (encoding == nullptr || encoding->error != project::CanonicalDocumentError::NonFiniteValue) {
+        return {};
+    }
+    return encoding->fieldPath.view();
+}
 
 } // namespace
 
@@ -78,9 +117,29 @@ ProjectHost::ProjectHost(runtime::TaskScheduler& scheduler, QObject* parent)
         return std::filesystem::path(chosen.toStdString());
     };
 
+    recoveryDecisionProvider_ = [](const std::filesystem::path& recoveryPath) {
+        QMessageBox box;
+        box.setWindowTitle(tr("Recover Unsaved Changes"));
+        box.setText(tr("Bloom closed unexpectedly with unsaved changes."));
+        box.setInformativeText(tr("Recover the unsaved changes from %1?")
+                                   .arg(QString::fromStdString(recoveryPath.filename().string())));
+        box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+        box.setDefaultButton(QMessageBox::Yes);
+        return box.exec() == QMessageBox::Yes;
+    };
+    recoveryDirectory_ = defaultRecoveryDirectory();
+
     pollTimer_.setSingleShot(true);
     pollTimer_.setTimerType(Qt::PreciseTimer);
     connect(&pollTimer_, &QTimer::timeout, this, &ProjectHost::poll);
+
+    // Repeating, not single-shot: the recovery write is a cadence, not a response to an event.
+    // Started unconditionally -- a tick on a clean session costs one dirty-state read and retires
+    // any file left over from before the last save.
+    recoveryTimer_.setSingleShot(false);
+    recoveryTimer_.setInterval(static_cast<int>(recoveryPolicy_.interval.count()) * 1000);
+    connect(&recoveryTimer_, &QTimer::timeout, this, &ProjectHost::writeRecoverySnapshot);
+    recoveryTimer_.start();
 
     // Bootstrap the initial session (decision 1/5): the application always starts on a fresh,
     // untouched new project. No one is connected to sessionReplaced()/dirtyStateChanged() yet, so
@@ -195,6 +254,86 @@ void ProjectHost::setOpenPathProvider(ProjectPathProvider provider) {
 
 void ProjectHost::setSaveAsPathProvider(ProjectPathProvider provider) {
     saveAsPathProvider_ = std::move(provider);
+}
+
+void ProjectHost::setRecoveryDecisionProvider(RecoveryDecisionProvider provider) {
+    recoveryDecisionProvider_ = std::move(provider);
+}
+
+const std::filesystem::path& ProjectHost::recoveryDirectory() const noexcept {
+    return recoveryDirectory_;
+}
+
+void ProjectHost::setRecoveryDirectory(std::filesystem::path directory) {
+    recoveryDirectory_ = std::move(directory);
+}
+
+void ProjectHost::setRecoveryPolicy(const host::SessionRecoveryPolicy policy) {
+    if (!policy.isValid()) {
+        return;
+    }
+    recoveryPolicy_ = policy;
+    recoveryTimer_.setInterval(static_cast<int>(recoveryPolicy_.interval.count()) * 1000);
+}
+
+std::optional<host::SessionRecoveryOffer> ProjectHost::recoveryOffer() const {
+    return host::findSessionRecoveryOffer(recoveryDirectory_, displayPath());
+}
+
+std::filesystem::path ProjectHost::currentRecoveryPath() const {
+    if (!session_.has_value()) {
+        return {};
+    }
+    return host::sessionRecoveryFilePath(recoveryDirectory_,
+                                         session_->stateSnapshot().projectSessionId);
+}
+
+void ProjectHost::discardRecoveryFile() {
+    const auto path = currentRecoveryPath();
+    if (!path.empty()) {
+        static_cast<void>(host::removeSessionRecoveryFile(path));
+    }
+}
+
+void ProjectHost::writeRecoverySnapshot() {
+    // Never while a real Save/Open/Copy is in flight: that operation owns the publication ordering
+    // for its own target, and a recovery write has no claim to compete with it.
+    if (!session_.has_value() || isBusy() || !publicationCoordinator_.has_value() ||
+        !artifactCoordinator_.has_value()) {
+        return;
+    }
+    auto operation = makeOperation();
+    if (!operation.has_value()) {
+        return;
+    }
+    const auto path = currentRecoveryPath();
+    if (path.empty()) {
+        return;
+    }
+    std::error_code code;
+    std::filesystem::create_directories(recoveryDirectory_, code);
+    if (code) {
+        return;
+    }
+    // The result is deliberately not surfaced: a recovery write is Bloom protecting itself, and a
+    // failed one is not something to interrupt the artist over. Every failure it can report is
+    // typed and non-fatal (see bloom/host/session_recovery.hpp), and the next tick retries.
+    static_cast<void>(host::writeSessionRecoverySnapshot(*session_, *publicationCoordinator_,
+                                                         *artifactCoordinator_, path, {},
+                                                         std::move(*operation)));
+}
+
+void ProjectHost::offerRecoveryOnStartup() {
+    const auto offer = recoveryOffer();
+    if (!offer.has_value() || !recoveryDecisionProvider_) {
+        return;
+    }
+    if (!recoveryDecisionProvider_(offer->recoveryPath)) {
+        return;
+    }
+    // Recovering IS opening: the recovery file is an ordinary Bloom archive, so it goes through
+    // the same Open the artist would run on it themselves, unsaved-change prompt included.
+    confirmUnsavedChanges([this, path = offer->recoveryPath] { beginOpen(path); });
 }
 
 bool ProjectHost::hasDirtyDecodedContent() const {
@@ -629,10 +768,20 @@ void ProjectHost::handleSaveResult(host::SessionSaveResult result) {
         outcome = ProjectHostOperationOutcome::Refused;
         message = tr("The save could not capture the current project state.");
         break;
-    case host::SessionSaveStage::Publication:
+    case host::SessionSaveStage::Publication: {
         outcome = ProjectHostOperationOutcome::Failed;
-        message = tr("The save failed before the file could be written.");
+        const auto fieldPath = nonFiniteSaveFieldPath(result.publicationFailure());
+        if (!fieldPath.empty()) {
+            // The session stays open and editable: the offending value is still in the document
+            // for the user to correct, and nothing was written over the project file.
+            message = tr("Save failed: %1 is not a finite number.")
+                          .arg(QString::fromUtf8(fieldPath.data(),
+                                                 static_cast<qsizetype>(fieldPath.size())));
+        } else {
+            message = tr("The save failed before the file could be written.");
+        }
         break;
+    }
     case host::SessionSaveStage::Savepoint: {
         const auto* publication = result.publication();
         const auto publicationOutcome =
@@ -666,6 +815,10 @@ void ProjectHost::handleSaveResult(host::SessionSaveResult result) {
             outcome = ProjectHostOperationOutcome::Failed;
             message = tr("The save failed before the file could be replaced.");
             break;
+        }
+        if (publication != nullptr && publication->targetWasPublished()) {
+            // The file on disk now holds this work, so the recovery copy of it is retired.
+            discardRecoveryFile();
         }
         if (publication != nullptr && publication->targetWasPublished() &&
             result.savepointStatus().has_value() &&

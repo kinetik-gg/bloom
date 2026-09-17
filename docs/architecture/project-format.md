@@ -333,6 +333,27 @@ All other digits, exponent thresholds, lowercase `e`, and exponent sign follow t
 This preserves signed zero and the exact binary64 value while remaining independent of locale. The
 reader may accept another finite RFC 8259 decimal spelling and normalizes it on save.
 
+#### Non-Finite Values
+
+NaN and the infinities have no spelling in this format, in any field, at any version. The invariant
+is enforced at both ends and never by terminating:
+
+- **Writing.** Every Float64 the document writer emits passes one admission point. A non-finite
+  value fails the encode with `CanonicalDocumentError::NonFiniteValue` and the offending field's
+  document path (for example
+  `project/Composition[7]/AnimationCurve[12]/Keyframe[4]/value`), carried through
+  `SaveArchiveDocumentEncodingFailure::fieldPath` at `SaveArchiveStage::DocumentEncode`. The save
+  fails, the file on disk is untouched, and the session stays open and editable so the artist can
+  correct the value; the UI names it ("Save failed: `<field>` is not a finite number"). Save, Save
+  As and Save a Copy share the executor and therefore this behaviour.
+- **Reading.** `parseKnownFloat64` refuses a non-finite result, including a decimal that overflows
+  to infinity, with `DocumentDecodeError::InvalidFloat64`. JSON has no NaN or infinity literal, so
+  no well-formed archive can carry one.
+- **Before either.** The document model refuses non-finite values on admission (`ParameterStore`,
+  `AnimationCurveStore` insert/update, including a component curve's derived whole-value
+  projection) and `Document::commit()` re-runs `Project::validate()`, so a committed document
+  cannot hold one. The writer's refusal is the last line of defence, not the first.
+
 ### Unknown JSON Numbers
 
 An unknown additive member can remain editable only when Project I/O can preserve its JSON number
@@ -889,6 +910,26 @@ under that platform's native comparison semantics. An existing target's file ide
 fingerprint are additional conflict evidence. Resolution follows parent symlinks once but never
 follows a target-leaf symlink. Different spelling, case aliases, and Save As paths that resolve to
 the same target share one application intent-order record and one platform publication lease.
+
+### Recovery Files
+
+A session that is dirty periodically publishes its canonical document to a recovery file under the
+platform per-user application data directory (`Bloom/recovery/recovery-<session id>.bloom`), by
+default every 60 seconds. This is not a save and never claims to be one:
+
+- it is written through the same nine-step staged/atomic sequence above, reusing the same archive
+  writer and the same schema version, so a recovery file IS an ordinary project archive and
+  recovering is just opening it
+- no savepoint is accepted: the session's dirty state, revision and path authority are unchanged,
+  and the artist still owes the project a real Save
+- every failure is typed and non-fatal, and the next interval retries; a recovery write is never
+  allowed to be the reason a session is lost
+- a successful Save retires the file, because the project on disk then holds that work
+
+On the next launch, a recovery file is offered back ("Recover unsaved changes") only when it is
+newer than the project it belongs to, or when that project was never saved at all. A recovery file
+older than its saved project describes work the artist already has, and offering it would invite
+them to overwrite the newer file with it.
 
 The expected external-file fingerprint is either `Absent` or the existing regular file's identity,
 byte size, high-resolution modification time, and SHA-256 of its complete bytes. Open computes it

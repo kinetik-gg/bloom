@@ -109,6 +109,9 @@ add_executable(bloom_timeline_graph_view_test
 add_executable(bloom_composition_session_position_interaction_test
     composition_session_position_interaction_tests.cpp
 )
+add_executable(bloom_gesture_finiteness_test
+    gesture_finiteness_tests.cpp
+)
 add_executable(bloom_direct_manipulation_test
     direct_manipulation_tests.cpp
 )
@@ -194,6 +197,7 @@ target_link_libraries(bloom_timeline_graph_view_test PRIVATE bloom_ui)
 target_include_directories(bloom_timeline_graph_math_test PRIVATE ..)
 target_include_directories(bloom_timeline_graph_view_test PRIVATE ..)
 target_link_libraries(bloom_composition_session_position_interaction_test PRIVATE bloom_ui)
+target_link_libraries(bloom_gesture_finiteness_test PRIVATE bloom_ui)
 target_link_libraries(bloom_direct_manipulation_test PRIVATE bloom_ui)
 target_link_libraries(bloom_frame_export_controller_test PRIVATE bloom_ui)
 target_link_libraries(bloom_main_window_readonly_placeholder_test PRIVATE bloom_ui ZLIB::ZLIB)
@@ -239,6 +243,7 @@ bloom_enable_warnings(bloom_timeline_ruler_test)
 bloom_enable_warnings(bloom_timeline_graph_math_test)
 bloom_enable_warnings(bloom_timeline_graph_view_test)
 bloom_enable_warnings(bloom_composition_session_position_interaction_test)
+bloom_enable_warnings(bloom_gesture_finiteness_test)
 bloom_enable_warnings(bloom_direct_manipulation_test)
 bloom_enable_warnings(bloom_frame_export_controller_test)
 bloom_enable_warnings(bloom_main_window_readonly_placeholder_test)
@@ -543,6 +548,14 @@ bloom_add_test(
 bloom_add_test(
     NAME bloom.ui.composition_session_position_interaction
     COMMAND bloom_composition_session_position_interaction_test
+    LABELS ui unit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.gesture_finiteness
+    COMMAND bloom_gesture_finiteness_test
     LABELS ui unit
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"

@@ -245,6 +245,79 @@ void testFullSaveThenOpenCycle(Expectations& expectations) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// SAVEFIX-1's autosave, driven through the host: a dirty session writes a recovery file into the
+// host's own recovery directory, a successful Save retires it, and the startup offer is decided
+// through an injected seam so no dialog is ever presented here.
+// ---------------------------------------------------------------------------------------------
+
+void testRecoverySnapshotAndStartupOffer(Expectations& expectations) {
+    TempDirectory directory;
+    if (!directory.isValid()) {
+        expectations.expect(false, "recovery: temp directory is available");
+        return;
+    }
+    const auto recoveryDirectory = directory.path() / "recovery";
+    const auto targetPath = directory.path() / "project.bloom";
+
+    bloom::runtime::TaskScheduler scheduler;
+    ProjectHost host(scheduler);
+    host.setRecoveryDirectory(recoveryDirectory);
+
+    host.writeRecoverySnapshot();
+    expectations.expect(!host.recoveryOffer().has_value(),
+                        "recovery: a clean session leaves nothing to offer");
+
+    expectations.expect(executeRename(host, "Recovered Project"),
+                        "recovery: the rename transaction commits");
+    host.writeRecoverySnapshot();
+    const auto offer = host.recoveryOffer();
+    expectations.expect(offer.has_value() && std::filesystem::exists(offer->recoveryPath),
+                        "recovery: a dirty session writes a recovery file worth offering");
+    expectations.expect(host.isDirty(),
+                        "recovery: writing one accepts no savepoint -- the session stays dirty");
+
+    host.beginSaveAs(targetPath);
+    expectations.expect(waitUntilIdle(host), "recovery: the real save reaches a terminal state");
+    expectations.expect(!host.isDirty() && std::filesystem::exists(targetPath),
+                        "recovery: the real save publishes and cleans the session");
+    expectations.expect(offer.has_value() && !std::filesystem::exists(offer->recoveryPath),
+                        "recovery: a successful save removes the recovery file");
+    expectations.expect(!host.recoveryOffer().has_value(),
+                        "recovery: and there is nothing left to offer on the next launch");
+
+    // The startup offer seam: a declined offer opens nothing, an accepted one opens the recovery
+    // file through the ordinary Open path.
+    expectations.expect(executeRename(host, "Edited Again"), "recovery: a second edit commits");
+    host.writeRecoverySnapshot();
+    const auto secondOffer = host.recoveryOffer();
+    expectations.expect(secondOffer.has_value(), "recovery: the second edit is described on disk");
+    if (!secondOffer.has_value()) {
+        return;
+    }
+
+    int asked = 0;
+    host.setRecoveryDecisionProvider([&asked](const std::filesystem::path&) {
+        ++asked;
+        return false;
+    });
+    host.offerRecoveryOnStartup();
+    expectations.expect(asked == 1 && !host.isBusy(),
+                        "recovery: a declined offer asks once and opens nothing");
+
+    host.setUnsavedChangeDecisionProvider([] { return UnsavedChangeDecision::Discard; });
+    host.setRecoveryDecisionProvider([&asked](const std::filesystem::path&) {
+        ++asked;
+        return true;
+    });
+    host.offerRecoveryOnStartup();
+    expectations.expect(asked == 2, "recovery: an accepted offer asks again and proceeds");
+    expectations.expect(waitUntilIdle(host),
+                        "recovery: the recovery open reaches a terminal state");
+    expectations.expect(host.displayPath() == std::optional(secondOffer->recoveryPath),
+                        "recovery: recovering opens the recovery file like any other project");
+}
+
+// ---------------------------------------------------------------------------------------------
 // Busy refusal: a second begin* call while one is already in flight is refused synchronously with
 // a typed Refused outcome, and never disturbs the in-flight operation.
 // ---------------------------------------------------------------------------------------------
@@ -506,6 +579,7 @@ int main(int argc, char** argv) {
     testNewProjectConstruction(expectations);
     testDirtyAfterExecutedTransaction(expectations);
     testFullSaveThenOpenCycle(expectations);
+    testRecoverySnapshotAndStartupOffer(expectations);
     testBusyRefusalWhileInFlight(expectations);
     testTypedFailureSurfacedOnUnwritablePath(expectations);
     testUnsavedChangeDecisionSeamForNew(expectations);

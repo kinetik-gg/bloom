@@ -3,6 +3,38 @@
 namespace {
 QPointF transformPoint(const document::Vec2d point) { return {point.x, point.y}; }
 document::Vec2d transformValue(const QPointF point) { return {point.x(), point.y()}; }
+// SAVEFIX-1. Every degeneracy test in this file used to be a test against exactly zero -- an empty
+// bounds rectangle, a singular transform, a zero-length scale arm. NaN passes all of them
+// (NaN <= NaN, NaN != 0 and Qt's fuzzy determinant test are all false/true in the wrong
+// direction), so one non-finite number in the frozen evaluated bounds propagated straight through
+// the gesture arithmetic into the value the gesture offers the document. These predicates make
+// finiteness the precondition it always had to be.
+[[nodiscard]] bool finite(const double value) noexcept { return std::isfinite(value); }
+[[nodiscard]] bool finite(const QPointF point) noexcept {
+    return finite(point.x()) && finite(point.y());
+}
+[[nodiscard]] bool finite(const document::Vec2d value) noexcept {
+    return finite(value.x) && finite(value.y);
+}
+[[nodiscard]] bool finite(const QTransform& transform) noexcept {
+    return finite(transform.m11()) && finite(transform.m12()) && finite(transform.m21()) &&
+           finite(transform.m22()) && finite(transform.dx()) && finite(transform.dy());
+}
+[[nodiscard]] bool finite(const runtime::ContentBounds& bounds) noexcept {
+    return finite(bounds.left) && finite(bounds.top) && finite(bounds.right) &&
+           finite(bounds.bottom);
+}
+[[nodiscard]] bool finite(const runtime::EvaluatedOperationBounds& bounds) noexcept {
+    return finite(bounds.local) && finite(bounds.output) && finite(bounds.anchor) &&
+           std::ranges::all_of(bounds.polygon,
+                               [](const document::Vec2d point) { return finite(point); });
+}
+// A divisor is usable only when it is finite and not zero, and only when the quotient it produces
+// is itself representable -- a denormal arm overflows an ordinary delta to an infinity that every
+// `!= 0` guard in this file would have accepted.
+[[nodiscard]] bool dividesFinitely(const double numerator, const double divisor) noexcept {
+    return finite(numerator) && finite(divisor) && divisor != 0.0 && finite(numerator / divisor);
+}
 QTransform authoredLinear(const document::Vec2d scale, const double degrees) {
     QTransform result;
     result.rotate(degrees);
@@ -62,10 +94,13 @@ CompositionSession::beginTransformInteraction(TransformGesture gesture, ViewerMa
     const auto anchor = std::get<document::Vec2d>(values[1]);
     const auto scale = std::get<document::Vec2d>(values[2]);
     const auto rotation = std::get<double>(values[3]);
+    if (!finite(position) || !finite(anchor) || !finite(scale) || !finite(rotation))
+        return TransformInteractionRejection::SingularTransform;
     QTransform inverseParent;
     if (gesture.bounds) {
         const auto& bounds = *gesture.bounds;
-        if (bounds.layerId != *layerId || bounds.local.empty() || bounds.output.empty())
+        if (bounds.layerId != *layerId || !finite(bounds) || bounds.local.empty() ||
+            bounds.output.empty())
             return TransformInteractionRejection::NoResolvableTransform;
         const auto x = (transformPoint(bounds.polygon[1]) - transformPoint(bounds.polygon[0])) /
                        (bounds.local.right - bounds.local.left);
@@ -74,7 +109,9 @@ CompositionSession::beginTransformInteraction(TransformGesture gesture, ViewerMa
         const QTransform world(x.x(), x.y(), y.x(), y.y(), 0, 0);
         bool invertible = false;
         const auto inverseWorld = world.inverted(&invertible);
-        if (!invertible || scale.x == 0 || scale.y == 0)
+        // Qt reports invertibility from a fuzzy determinant test, which a non-finite basis passes:
+        // the inverse is checked for finiteness rather than trusted.
+        if (!invertible || !finite(inverseWorld) || !finite(scale) || scale.x == 0 || scale.y == 0)
             return TransformInteractionRejection::SingularTransform;
         // Qt composes row vectors left to right: world^-1 followed by childLocal.
         // With world = parent * child in column notation this is exactly parent^-1.
@@ -120,7 +157,7 @@ void CompositionSession::updateTransformInteraction(const QPointF screenPoint,
     const auto compositionDelta =
         state.mapping.toComposition(state.mapping.displayRect.topLeft() + screenDelta);
     const auto delta = state.inverseParent.map(transformPoint(compositionDelta));
-    if (!std::isfinite(delta.x()) || !std::isfinite(delta.y())) {
+    if (!finite(delta) || !finite(point) || !finite(origin)) {
         cancelTransformInteraction();
         return;
     }
@@ -128,9 +165,11 @@ void CompositionSession::updateTransformInteraction(const QPointF screenPoint,
     if (state.gesture.kind == TransformGesture::Kind::Rotate && !state.overrides.empty())
         if (const auto* value = std::get_if<double>(&state.overrides.front().value))
             previousRotation = *value;
-    state.overrides.clear();
+    // Staged, not written straight into the interaction: an update that would offer an
+    // unrepresentable value keeps the last good preview instead (see the check after the switch).
+    std::vector<runtime::SnapshotParameterOverride> staged;
     const auto put = [&](const std::size_t index, auto value) {
-        state.overrides.push_back({state.baseRevision, state.parameters[index], value});
+        staged.push_back({state.baseRevision, state.parameters[index], value});
     };
     const auto position = transformPoint(state.position);
     const auto linear = authoredLinear(state.scale, state.rotation);
@@ -141,7 +180,7 @@ void CompositionSession::updateTransformInteraction(const QPointF screenPoint,
     case TransformGesture::Kind::Anchor: {
         bool invertible = false;
         const auto inverse = linear.inverted(&invertible);
-        if (!invertible) {
+        if (!invertible || !finite(inverse)) {
             cancelTransformInteraction();
             return;
         }
@@ -161,7 +200,8 @@ void CompositionSession::updateTransformInteraction(const QPointF screenPoint,
         const auto pivot = transformPoint(state.gesture.bounds->anchor);
         const auto from = state.inverseParent.map(origin - pivot);
         const auto to = state.inverseParent.map(point - pivot);
-        if (std::hypot(from.x(), from.y()) == 0 || std::hypot(to.x(), to.y()) == 0) {
+        if (!finite(from) || !finite(to) || std::hypot(from.x(), from.y()) == 0 ||
+            std::hypot(to.x(), to.y()) == 0) {
             put(3, state.rotation);
             break;
         }
@@ -210,17 +250,17 @@ void CompositionSession::updateTransformInteraction(const QPointF screenPoint,
         const bool xActive = handle != 1 && handle != 5;
         const bool yActive = handle != 3 && handle != 7;
         document::Vec2d next = state.scale;
-        if (xActive && arm.x() != 0)
+        if (xActive && dividesFinitely(localDelta.x(), arm.x()))
             next.x += localDelta.x() / arm.x();
-        if (yActive && arm.y() != 0)
+        if (yActive && dividesFinitely(localDelta.y(), arm.y()))
             next.y += localDelta.y() / arm.y();
         if (modifiers.shift) {
             const QPointF baseArm(xActive ? arm.x() * state.scale.x : 0,
                                   yActive ? arm.y() * state.scale.y : 0);
             const double lengthSquared = QPointF::dotProduct(baseArm, baseArm);
+            const double projection = QPointF::dotProduct(localDelta, baseArm);
             const double factor =
-                lengthSquared == 0 ? 1
-                                   : 1 + QPointF::dotProduct(localDelta, baseArm) / lengthSquared;
+                dividesFinitely(projection, lengthSquared) ? 1 + projection / lengthSquared : 1;
             next = {state.scale.x * factor, state.scale.y * factor};
         }
         put(0, transformValue(position + linear.map(fixed - anchor) -
@@ -229,6 +269,32 @@ void CompositionSession::updateTransformInteraction(const QPointF screenPoint,
         break;
     }
     }
+    // The one place a gesture's arithmetic reaches the document. A degenerate frame -- an
+    // overflowed bounds, a denormal scale arm, a rotation about a zero-length ray -- can still
+    // produce a value the document must refuse; offering it would lose the whole gesture at
+    // commit. The update is dropped instead and the last representable preview stands.
+    const auto representable = [](const runtime::SnapshotParameterOverride& override) {
+        return std::visit(
+            [](const auto& held) {
+                using Held = std::decay_t<decltype(held)>;
+                if constexpr (std::is_same_v<Held, double> ||
+                              std::is_same_v<Held, document::Vec2d>) {
+                    return finite(held);
+                } else if constexpr (std::is_same_v<Held, document::Vec3d>) {
+                    return finite(held.x) && finite(held.y) && finite(held.z);
+                } else if constexpr (std::is_same_v<Held, core::Color4d> ||
+                                     std::is_same_v<Held, document::PathValue>) {
+                    return held.isValid();
+                } else {
+                    return true;
+                }
+            },
+            override.value);
+    };
+    if (!std::ranges::all_of(staged, representable)) {
+        return;
+    }
+    state.overrides = std::move(staged);
     emit transformInteractionChanged();
     emit liveValueChanged();
 }
