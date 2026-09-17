@@ -22,6 +22,7 @@ QPainterPath toolOutline(const render::Path& path) {
 } // namespace
 
 void ViewerEditor::cancelCreation() {
+    roiGesture_.reset();
     cancelPathDrag();
     penPath_ = {};
     penDown_ = false;
@@ -225,4 +226,93 @@ bool ViewerEditor::textPress(QMouseEvent* event) {
     }
     event->accept();
     return true;
+}
+
+void ViewerEditor::publishRoi() {
+    previewController_.setRegionOfInterest(roiButton_ && roiButton_->isChecked() ? roiRect_ : std::nullopt);
+    if (roiClearButton_)
+        roiClearButton_->setEnabled(roiRect_.has_value());
+    update();
+}
+
+bool ViewerEditor::roiPress(QMouseEvent* event) {
+    if (roiGesture_ && event->button() == Qt::RightButton) {
+        roiGesture_.reset();
+        update();
+        event->accept();
+        return true;
+    }
+    if (textEdit_ || tool_ != Tool::Select || event->button() != Qt::LeftButton ||
+        !event->modifiers().testFlag(Qt::ControlModifier))
+        return false;
+    const auto mapping = currentMapping();
+    if (!mapping || !contentRect().contains(event->position()))
+        return false;
+    playback_->pause();
+    setFocus(Qt::MouseFocusReason);
+    roiGesture_ = CreationGesture{*mapping, session_.snapshot().revision(), session_.currentTime(),
+                                  session_.compositionId(), event->position(), event->position(),
+                                  event->modifiers()};
+    event->accept();
+    return true;
+}
+
+bool ViewerEditor::roiMove(QMouseEvent* event) {
+    if (!roiGesture_)
+        return false;
+    const auto mapping = currentMapping();
+    if (!mapping || *mapping != roiGesture_->mapping)
+        roiGesture_.reset();
+    else
+        roiGesture_->pointer = event->position();
+    update();
+    event->accept();
+    return true;
+}
+
+bool ViewerEditor::roiRelease(QMouseEvent* event) {
+    if (!roiGesture_ || event->button() != Qt::LeftButton)
+        return false;
+    const auto mapping = currentMapping();
+    if (mapping && *mapping == roiGesture_->mapping) {
+        const auto first = mapping->toComposition(roiGesture_->origin);
+        const auto last = mapping->toComposition(event->position());
+        const auto region = QRectF(QPointF(first.x, first.y), QPointF(last.x, last.y)).normalized()
+            .intersected(QRectF(0, 0, mapping->compositionFormat.width(), mapping->compositionFormat.height()));
+        if (region.width() >= 1 && region.height() >= 1) {
+            roiRect_ = region;
+            roiButton_->setChecked(true);
+            publishRoi();
+        }
+    }
+    roiGesture_.reset();
+    update();
+    event->accept();
+    return true;
+}
+
+void ViewerEditor::paintRoi(QPainter& painter) const {
+    const auto mapping = currentMapping();
+    if (!mapping)
+        return;
+    std::optional<QRectF> screen;
+    if (roiGesture_)
+        screen = QRectF(roiGesture_->origin, roiGesture_->pointer).normalized();
+    else if (roiRect_ && roiButton_->isChecked())
+        screen = QRectF(mapping->toScreen({roiRect_->left(), roiRect_->top()}),
+                         mapping->toScreen({roiRect_->right(), roiRect_->bottom()}));
+    if (!screen)
+        return;
+    painter.save();
+    painter.setClipRect(contentRect());
+    QPainterPath dim;
+    dim.addRect(mapping->displayRect);
+    dim.addRect(screen->intersected(mapping->displayRect));
+    painter.fillPath(dim, QColor(0, 0, 0, 150));
+    QPen pen(kit::color(kit::Color::Accent), kit::px(kit::Size::Hairline));
+    pen.setCosmetic(true);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(*screen);
+    painter.restore();
 }

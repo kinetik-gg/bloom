@@ -290,3 +290,94 @@ void testTextTool(Expectations& expectations) {
     fixture.viewer.setParent(nullptr);
     properties.setParent(nullptr);
 }
+
+void testViewerRoi(Expectations& expectations) {
+    ViewerFixture fixture(toolProject());
+    fixture.viewer.resize(900, 650);
+    fixture.viewer.show();
+    toolReady(fixture, expectations);
+    const auto revision = fixture.session.snapshot().revision();
+    toolDrag(fixture, {50, 40}, {180, 120}, Qt::ControlModifier);
+    toolReady(fixture, expectations);
+    const auto roi = fixture.controller.regionOfInterest();
+    expectations.expect(roi.has_value() && fixture.session.snapshot().revision() == revision,
+                        "Ctrl-drag defines a session-only ROI without a document edit");
+    expectations.expect(fixture.controller.state().frame->desiredIdentity().roi == roi,
+                        "ROI reaches the prepared request identity");
+    auto* toggle = fixture.viewer.findChild<QToolButton*>("viewerRoiToggle");
+    toggle->click();
+    toolReady(fixture, expectations);
+    expectations.expect(!fixture.controller.regionOfInterest(), "ROI toggle restores full evaluation");
+    toggle->click();
+    toolReady(fixture, expectations);
+    expectations.expect(fixture.controller.regionOfInterest() == roi, "ROI toggle preserves its rectangle");
+    fixture.viewer.findChild<QToolButton*>("viewerRoiClear")->click();
+    toolReady(fixture, expectations);
+    expectations.expect(!fixture.controller.regionOfInterest() && !toggle->isChecked(),
+                        "clear forgets ROI and disables it");
+    toolShutdown(fixture, expectations);
+}
+
+void testViewerProbe(Expectations& expectations) {
+    using namespace bloom;
+    QSettings().remove("viewer/analysis/default");
+    ViewerFixture fixture(makeTestProject("Pixel probe"));
+    fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Full);
+    expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Solid"), {0.125, 0.25, 0.5, 1}),
+                        "probe fixture adds a known solid");
+    fixture.viewer.resize(900, 650);
+    fixture.viewer.show();
+    toolReady(fixture, expectations);
+    ui::WindowStatusBar status(fixture.session, &fixture.controller);
+    status.resize(1800, ui::kit::px(ui::kit::Size::Control));
+    status.show();
+    ui::ProbeReadout latest;
+    QObject::connect(&fixture.viewer, &ui::ViewerEditor::probeChanged, &fixture.viewer,
+                     [&](const ui::ProbeReadout& value) { latest = value; });
+    toolMouse(fixture, QEvent::MouseMove, {1.5, 1.5});
+    expectations.expect(latest.valid && latest.reference &&
+                            std::abs(latest.reference->red-0.125) < 1e-6 &&
+                            std::abs(latest.reference->green-0.25) < 1e-6 &&
+                            std::abs(latest.reference->blue-0.5) < 1e-6 &&
+                            latest.reference->alpha == 1,
+                        "retained process probe reads authored reference RGBA within 1e-6");
+    expectations.expect(latest.display == render::Rgba8{99, 137, 188, 255} &&
+                            std::abs(latest.normalized.red-99.0/255.0) < 1e-12 &&
+                            near(latest.coordinate.x, 1.5) && near(latest.coordinate.y, 1.5),
+                        "probe reports encoded RGBA8, normalized display and composition coordinates");
+    auto* cell = status.findChild<QLabel*>("windowStatusBarProbe");
+    expectations.expect(cell && cell->toolTip().contains("Reference linear"),
+                        "viewer probe signal feeds the status cell with a complete readout");
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(&fixture.viewer, &leave);
+    expectations.expect(!latest.valid && cell->text().isEmpty(), "leaving the viewer clears the probe cell");
+
+    (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(1));
+    toolReady(fixture, expectations);
+    (void)fixture.session.setCurrentTime({});
+    toolReady(fixture, expectations);
+    expectations.expect(!fixture.controller.state().frame->hasProcessFrame(),
+                        "returning to the cached frame drops its process image");
+    toolMouse(fixture, QEvent::MouseMove, {1.5, 1.5});
+    expectations.expect(waitUntil([&] { return latest.reference.has_value(); }) &&
+                            fixture.pipeline.probeCalls > 0 && fixture.pipeline.probeOffUi,
+                        "display-only cache probe evaluates a 1x1 ROI off the UI thread");
+    expectations.expect(latest.reference && std::abs(latest.reference->red-0.125) < 1e-6,
+                        "1x1 reevaluation retains exact reference values");
+    const auto calls = fixture.pipeline.probeCalls.load();
+    toolMouse(fixture, QEvent::MouseMove, {1.5, 1.5});
+    expectations.expect(fixture.pipeline.probeCalls == calls,
+                        "repeated frame and pixel probe uses its cached reference value");
+    auto* exposure = fixture.viewer.findChild<ui::kit::KValueField*>("viewerExposure");
+    exposure->stepBy(10);
+    expectations.expect(waitUntil([&] { return latest.display.red == 137; }) && latest.reference &&
+                            std::abs(latest.reference->red-0.125) < 1e-6,
+                        "exposure changes the display probe without changing its reference value");
+    exposure->stepBy(-10);
+    toolMouse(fixture, QEvent::MouseMove, {2.5, 1.5});
+    QCoreApplication::sendEvent(&fixture.viewer, &leave);
+    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }) && !latest.valid,
+                        "late probe completion cannot repopulate a cleared cursor readout");
+    toolShutdown(fixture, expectations);
+    QSettings().remove("viewer/analysis/default");
+}

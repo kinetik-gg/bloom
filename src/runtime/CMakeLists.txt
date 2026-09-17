@@ -74,6 +74,8 @@ target_sources(
         qualified_display_preparation.cpp
         qualified_display_processor_provider.cpp
         reference_display_preparation.cpp
+        view_adjust.cpp
+        view_adjust_support.hpp
         value_graph_evaluation.cpp
         value_utility_support.hpp
         value_utility_kernels.cpp
@@ -93,6 +95,7 @@ target_sources(
             include/bloom/runtime/qualified_display_preparation.hpp
             include/bloom/runtime/qualified_display_processor_provider.hpp
             include/bloom/runtime/reference_display_preparation.hpp
+            include/bloom/runtime/view_adjust.hpp
             include/bloom/runtime/value_graph_evaluation.hpp
             include/bloom/runtime/value_utility_kernels.hpp
 )

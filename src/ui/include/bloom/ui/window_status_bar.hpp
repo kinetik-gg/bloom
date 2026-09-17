@@ -2,6 +2,7 @@
 
 #include <bloom/runtime/operation_cache.hpp>
 #include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/viewer_editor_probe.hpp>
 
 #include <QString>
 #include <bloom/ui/kit/surfaces.hpp>
@@ -104,6 +105,7 @@ class WindowStatusBar final : public kit::KSurface {
   protected:
   private:
     void refreshPreviewCells();
+    void refreshProbeCell(const ProbeReadout& readout);
     void refreshMediaDiskCacheCell();
     void refreshMessage();
 
@@ -118,6 +120,7 @@ class WindowStatusBar final : public kit::KSurface {
     QLabel* mediaDiskCacheCell_ = nullptr;
     QLabel* message_ = nullptr;
     QLabel* version_ = nullptr;
+    QLabel* probe_ = nullptr;
     QTimer* transientTimer_ = nullptr;
     QTimer* cacheRefreshTimer_ = nullptr;
     QTimer* mediaDiskCacheTimer_ = nullptr;

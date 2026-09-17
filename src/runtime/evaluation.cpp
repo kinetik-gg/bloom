@@ -12,7 +12,8 @@ bool operator==(const ProcessFrameIdentity& lhs, const ProcessFrameIdentity& rhs
            lhs.colorIntent == rhs.colorIntent && lhs.provider == rhs.provider &&
            lhs.evaluatorSemanticsVersion == rhs.evaluatorSemanticsVersion &&
            lhs.animationSamplingSemanticsVersion == rhs.animationSamplingSemanticsVersion &&
-           lhs.imagePrimitiveSemanticsVersion == rhs.imagePrimitiveSemanticsVersion;
+           lhs.imagePrimitiveSemanticsVersion == rhs.imagePrimitiveSemanticsVersion &&
+           lhs.roi == rhs.roi;
 }
 
 std::string_view evaluationDiagnosticCodeId(const EvaluationDiagnosticCode code) noexcept {

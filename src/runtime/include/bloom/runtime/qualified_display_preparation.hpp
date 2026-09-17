@@ -2,8 +2,10 @@
 
 #include <bloom/color/ocio_cpu_display_frame.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
+#include <bloom/render/display_buffer.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/evaluation.hpp>
+#include <bloom/runtime/view_adjust.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -20,22 +22,10 @@
 // stay side by side; see docs/architecture/color-management.md, "CPU Display Processor Boundary"
 // and "Process And Display Separation".
 //
-// Display-window mechanism (design decision 1): produceBloomNeutralDisplayFrame() windows its
-// output to the source ProcessFrame's DATA window, not its display window (C2's recorded scope
-// decision -- "the prepared frame's window equals the source process frame's data window, no
-// padding composite"). CpuReferenceDisplayPreparer instead composites into the process descriptor's
-// full DISPLAY window, padding any area outside the data window with transparent black
-// (bloom::render::mapLinearRec709SceneToSrgbRow). This preparer reproduces that reference behavior
-// exactly under the one invariant every ProcessFrame this application produces currently satisfies:
-// bloom::runtime::CpuCompositionEvaluator always constructs Rgba32fImageDescriptor with dataWindow
-// == displayWindow (see cpu_composition_evaluator.cpp's Rgba32fImageDescriptor::create(window,
-// window, pixelAspect) call) -- so C2's data-window-sized output already covers the process frame's
-// entire display window and no separate padding composite is ever needed to match the reference
-// path bit-for-bit. If a future evaluator slice introduces a data window narrower than the display
-// window, the two paths would visibly diverge (this preparer would report the narrower data window
-// rather than a padded display window) until a later change teaches this preparer to composite
-// around C2's frame the way the reference preparer composites around its own row-mapped pixels --
-// this is a disclosed, currently-inert scope edge, not a silent behavior gap.
+// The qualified color product covers the process data window. ROI frames additionally prepare a
+// packed viewport buffer covering the unchanged display window, padding outside the data window
+// with transparent black. That same optional buffer carries non-neutral viewer adjustments;
+// PreparedPreviewFrame::displayBufferView() is the authoritative viewer handoff in both cases.
 namespace bloom::runtime {
 
 // Bounded pixels-per-call granularity handed to color::produceBloomNeutralDisplayFrame's own
@@ -48,6 +38,7 @@ inline constexpr std::uint32_t kQualifiedDisplayPreparerSemanticsVersion = 1;
 struct QualifiedDisplayPreparationRequest final {
     std::size_t aggregatePixelStorageByteLimit = 0;
     std::size_t chunkPixelCount = kDefaultQualifiedDisplayChunkPixelCount;
+    ViewAdjust viewAdjust{};
 };
 
 enum class QualifiedDisplayProvider : std::uint8_t {
@@ -70,6 +61,7 @@ struct QualifiedDisplayFrameIdentity final {
     QualifiedDisplayProvider provider = QualifiedDisplayProvider::CpuBloomNeutral;
     QualifiedDisplayPacking packing = QualifiedDisplayPacking::StraightRgba8;
     std::uint32_t preparerSemanticsVersion = kQualifiedDisplayPreparerSemanticsVersion;
+    ViewAdjust viewAdjust{};
 
     friend bool operator==(const QualifiedDisplayFrameIdentity&,
                            const QualifiedDisplayFrameIdentity&) = default;
@@ -143,17 +135,25 @@ class QualifiedDisplayFrame final {
     [[nodiscard]] const std::shared_ptr<const ProcessFrame>& processFrame() const&& = delete;
     [[nodiscard]] const color::PreparedDisplayFrame& buffer() const& noexcept { return buffer_; }
     [[nodiscard]] const color::PreparedDisplayFrame& buffer() const&& = delete;
+    [[nodiscard]] const std::optional<render::PreparedReferenceDisplayBuffer>&
+    adjustedBuffer() const& noexcept {
+        return adjustedBuffer_;
+    }
+    [[nodiscard]] const std::optional<render::PreparedReferenceDisplayBuffer>&
+    adjustedBuffer() const&& = delete;
 
   private:
     friend class CpuQualifiedDisplayPreparer;
 
-    QualifiedDisplayFrame(QualifiedDisplayFrameIdentity identity,
-                          std::shared_ptr<const ProcessFrame> processFrame,
-                          color::PreparedDisplayFrame buffer) noexcept;
+    QualifiedDisplayFrame(
+        QualifiedDisplayFrameIdentity identity, std::shared_ptr<const ProcessFrame> processFrame,
+        color::PreparedDisplayFrame buffer,
+        std::optional<render::PreparedReferenceDisplayBuffer> adjustedBuffer) noexcept;
 
     QualifiedDisplayFrameIdentity identity_;
     std::shared_ptr<const ProcessFrame> processFrame_;
     color::PreparedDisplayFrame buffer_;
+    std::optional<render::PreparedReferenceDisplayBuffer> adjustedBuffer_;
 };
 
 class QualifiedDisplayPreparationResult final {

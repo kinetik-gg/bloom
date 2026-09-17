@@ -396,6 +396,9 @@ target_sources(
         viewer_overlays.cpp
         viewer_overlays_text.cpp
         viewer_editor.cpp
+        viewer_editor_analysis.cpp
+        viewer_editor_probe.cpp
+        composition_preview_controller_analysis.cpp
         viewer_editor_text.cpp
         viewer_editor_text_input.cpp
         viewer_editor_text_layout.cpp
@@ -444,6 +447,7 @@ target_sources(
             include/bloom/ui/composition_commands.hpp
             include/bloom/ui/viewer_overlays.hpp
             include/bloom/ui/viewer_editor.hpp
+            include/bloom/ui/viewer_editor_probe.hpp
             include/bloom/ui/window_status_bar.hpp
             include/bloom/ui/workspace_host.hpp
 )

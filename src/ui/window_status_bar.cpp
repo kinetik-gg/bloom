@@ -196,6 +196,10 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     // than folded into `cache_` above so the two budgets stay independently readable.
     mediaDiskCacheCell_ = makeCell(QStringLiteral("windowStatusBarMediaDiskCache"),
                                    kit::TypeRole::UiSmall, kit::Color::Muted, this);
+    probe_ = makeCell(QStringLiteral("windowStatusBarProbe"), kit::TypeRole::UiSmall,
+                      kit::Color::Muted, this);
+    probe_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    probe_->hide();
     message_ = makeCell(QStringLiteral("windowStatusBarMessage"), kit::TypeRole::UiSmall,
                         kit::Color::Foreground, this);
     message_->setAccessibleName(tr("Status message"));
@@ -211,6 +215,7 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     layout->addWidget(cache_);
     // CACHE-2: placed right beside the RAM preview cache cell it complements.
     layout->addWidget(mediaDiskCacheCell_);
+    layout->addWidget(probe_, 1);
     layout->addWidget(message_, 1);
 
     transientTimer_ = new QTimer(this);
@@ -243,6 +248,8 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     }
 
     if (previewController_ != nullptr) {
+        connect(previewController_, &CompositionPreviewController::probeChanged, this,
+                &WindowStatusBar::refreshProbeCell);
         connect(previewController_, &CompositionPreviewController::stateChanged, this,
                 &WindowStatusBar::refreshPreviewCells);
         connect(previewController_, &CompositionPreviewController::droppedFrameCountChanged, this,
@@ -346,5 +353,36 @@ QString WindowStatusBar::mediaDiskCacheTextForTest() const { return mediaDiskCac
 QString WindowStatusBar::messageTextForTest() const { return message_->text(); }
 
 QString WindowStatusBar::versionTextForTest() const { return version_->text(); }
+
+void WindowStatusBar::refreshProbeCell(const ProbeReadout& readout) {
+    if (!readout.valid) {
+        static_cast<kit::KLabel*>(probe_)->setElidedText({});
+        probe_->setAccessibleName({});
+        probe_->hide();
+        return;
+    }
+    const auto rgba = [](core::Color4d value) {
+        return QStringLiteral("%1 %2 %3 %4")
+            .arg(value.red, 0, 'g', 7)
+            .arg(value.green, 0, 'g', 7)
+            .arg(value.blue, 0, 'g', 7)
+            .arg(value.alpha, 0, 'g', 7);
+    };
+    const auto reference = readout.reference              ? rgba(*readout.reference)
+                           : readout.pending              ? tr("Sampling…")
+                           : readout.diagnostic.isEmpty() ? tr("Unavailable")
+                                                          : readout.diagnostic;
+    const auto text = tr("(%1, %2)  Display RGBA8 %3 %4 %5 %6  Normalised %7  Reference linear %8")
+                          .arg(readout.coordinate.x, 0, 'f', 2)
+                          .arg(readout.coordinate.y, 0, 'f', 2)
+                          .arg(readout.display.red)
+                          .arg(readout.display.green)
+                          .arg(readout.display.blue)
+                          .arg(readout.display.alpha)
+                          .arg(rgba(readout.normalized), reference);
+    probe_->show();
+    static_cast<kit::KLabel*>(probe_)->setElidedText(text);
+    probe_->setAccessibleName(text);
+}
 
 } // namespace bloom::ui

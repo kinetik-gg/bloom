@@ -499,6 +499,51 @@ RGB is not clamped, valid alpha remains in `[0, 1]`, and transparent borders are
 future Color Mix or grade operation defines its own space and alpha contract; generic scalar Mix
 does not define color interpolation.
 
+## Viewer Analysis Requests
+
+`EvaluationRequest`, `ProcessFrameIdentity`, and `PreviewRequestIdentity` carry an optional `roi`:
+a nonempty integer pixel rectangle at the resolved request resolution, inside its display window.
+The viewer stores its selection in composition coordinates and rounds its scaled minimum down and
+maximum up when resolving a proxy request. Export requests leave ROI absent.
+
+ROI limits raster output, not content geometry. Solid, Text, Shape, Layer Output, and Merge clip
+applicable data windows before their row passes; evaluated bounds, polygons, anchors, and the
+composition display window remain unchanged. A gather cannot crop its inputs to the output ROI:
+transforms and their upstream dependencies currently retain conservative full input support so
+translation, filtering, nested merges, and parenting cannot lose contributing pixels. Media decode
+also retains its complete source. This is a correctness fallback, not a claim that every upstream
+operation costs one pixel for a one-pixel request. Composition Output stores only the requested
+rectangle. Both display preparers pad the remaining viewport with transparent black.
+
+ROI participates in image-operation and preview-frame keys and process-frame equality. The plan
+cache is unchanged. An absent ROI retains the existing operation-key encoding and raster path;
+primitive, evaluator, animation, and display semantics versions are unchanged. Identity fixtures
+compare ROI pixels bit for bit with full evaluation, retain the same bounds, and restore the
+unchanged full-frame result after clearing ROI.
+
+`ViewAdjust{exposure, gamma}` belongs to display preparation and preview display identity. Exposure
+multiplies linear display light by `2^exposure` after the view transform and before sRGB encoding.
+Gamma applies `pow(encoded, 1/gamma)` to the encoded RGB before RGBA8 quantization. Alpha is
+unchanged. The qualified path uses the processor's floating display output before quantization,
+undoing only the sRGB encoding for the exposure step; it never adjusts already quantized bytes.
+Finite EV values in `[-32, 32]` and gamma in `[0.01, 10]` are accepted. EV zero and gamma one bypass
+adjustment and preserve both original display paths bit for bit.
+
+Each viewer prepares its adjusted result on a cancellable worker, coalesces changed controls, and
+rejects retired results. Its controls persist by editor-area identity in QSettings. The shared
+neutral preview, thumbnails, process identities, authored colours, and export requests do not
+inherit this adjustment. Adjusted and ROI-padded qualified buffers retain qualified provenance;
+`PreparedPreviewFrame::displayBufferView()` selects the final viewport buffer.
+
+The pixel probe reads straight RGBA8 and its normalized values from that viewport buffer. Reference
+RGBA is the exact premultiplied `lin_rec709_scene` Float32 process value, widened to Float64 without
+a colour transform. A retained process image supports a constant-time pixel read. Display-only
+cache hits, or positions outside the preview ROI, request a one-pixel ROI through the evaluator on
+a worker. The probe caches one frame/position result, cancels superseded work, and discards late
+results after leave or frame changes. Exposure, gamma, channel display, and background never change
+its reference values. Allocation limits, progress, diagnostics, and shutdown use the existing task
+and evaluation contracts.
+
 ## Execution Classification
 
 Every image or domain primitive declares the minimum information needed for correct scheduling:
@@ -549,8 +594,8 @@ failed image operations are never inserted; complete earlier operations remain r
 
 An operation address includes its plan revision and resolved content. The content key includes
 project/composition and source-node identity, operation kind, its own resolved pixel-affecting
-operands, composition format and resolution/proxy. Merge keys include input order and whether a
-slot applies layer blending. Downstream keys include the SHA-256 content hashes of their inputs.
+operands, composition format, resolution/proxy, and an optional ROI. Merge keys include input order
+and whether a slot applies layer blending. Downstream keys include the SHA-256 content hashes of their inputs.
 Exact time participates only for time-dependent operations. Values use their kernel options,
 resolved operands and frame rate; these results are independent of image resolution. Keys encode
 floating-point bits, including signed zero, without rounding or locale-dependent text.

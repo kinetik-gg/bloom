@@ -163,7 +163,7 @@ ReferenceDisplayPreparationResult CpuReferenceDisplayPreparer::prepare(
             {.stage = ReferenceDisplayProgressStage::Preflight, .completed = 0, .total = 1});
         if (processFrame == nullptr || processFrame->identity().plan == nullptr ||
             request.intent != ReferenceDisplayIntent::LinearRec709SceneToSrgb ||
-            request.aggregatePixelStorageByteLimit == 0) {
+            request.aggregatePixelStorageByteLimit == 0 || !request.viewAdjust.valid()) {
             return ReferenceDisplayPreparationResult::failed(
                 diagnostic(ReferenceDisplayDiagnosticCode::InvalidRequest,
                            "Reference display preparation request is invalid"));
@@ -224,7 +224,7 @@ ReferenceDisplayPreparationResult CpuReferenceDisplayPreparer::prepare(
         const auto& source = *processView.value();
         const auto outcome = runRowBandPass(
             rowBands, cancellation, height, window.originY(),
-            [&buffer, &source,
+            [&buffer, &source, adjust = request.viewAdjust,
              window](const std::int64_t y) -> std::optional<ReferenceDisplayDiagnostic> {
                 auto outputRow = buffer.row(y);
                 if (!outputRow) {
@@ -235,6 +235,23 @@ ReferenceDisplayPreparationResult CpuReferenceDisplayPreparer::prepare(
                         source, window, y, *outputRow.value())) {
                     return imageDiagnostic(*rowStatus,
                                            "Reference display mapping could not be evaluated");
+                }
+                if (!adjust.neutral()) {
+                    for (std::size_t x = 0; x < outputRow.value()->size(); ++x) {
+                        const auto value =
+                            source.read(window.originX() + static_cast<std::int64_t>(x), y);
+                        if (!value || value.value()->alpha() == 0)
+                            continue;
+                        const auto pixel = *value.value();
+                        const auto alpha = static_cast<double>(pixel.alpha());
+                        auto& output = (*outputRow.value())[x];
+                        output.red = ViewAdjust::quantize(
+                            adjust.fromLinear(static_cast<double>(pixel.red()) / alpha));
+                        output.green = ViewAdjust::quantize(
+                            adjust.fromLinear(static_cast<double>(pixel.green()) / alpha));
+                        output.blue = ViewAdjust::quantize(
+                            adjust.fromLinear(static_cast<double>(pixel.blue()) / alpha));
+                    }
                 }
                 return std::nullopt;
             });
@@ -269,6 +286,7 @@ ReferenceDisplayPreparationResult CpuReferenceDisplayPreparer::prepare(
             .pipeline = ReferenceDisplayPipeline::UnqualifiedLinearRec709SceneToSrgb,
             .packing = ReferenceDisplayPacking::StraightRgba8,
             .mapperSemanticsVersion = kReferenceDisplayMapperSemanticsVersion,
+            .viewAdjust = request.viewAdjust,
         };
         auto frame = std::shared_ptr<const ReferenceDisplayFrame>(new ReferenceDisplayFrame(
             std::move(identity), std::move(processFrame), std::move(*displayBuffer.value())));

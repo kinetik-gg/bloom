@@ -4,6 +4,7 @@
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/row_band_execution.hpp>
+#include <bloom/runtime/view_adjust.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -37,6 +38,7 @@ enum class ReferenceDisplayPacking : std::uint8_t {
 struct ReferenceDisplayPreparationRequest final {
     ReferenceDisplayIntent intent = ReferenceDisplayIntent::LinearRec709SceneToSrgb;
     std::size_t aggregatePixelStorageByteLimit = 0;
+    ViewAdjust viewAdjust{};
 };
 
 struct ReferenceDisplayFrameIdentity final {
@@ -47,6 +49,7 @@ struct ReferenceDisplayFrameIdentity final {
         ReferenceDisplayPipeline::UnqualifiedLinearRec709SceneToSrgb;
     ReferenceDisplayPacking packing = ReferenceDisplayPacking::StraightRgba8;
     std::uint32_t mapperSemanticsVersion = kReferenceDisplayMapperSemanticsVersion;
+    ViewAdjust viewAdjust{};
 
     friend bool operator==(const ReferenceDisplayFrameIdentity&,
                            const ReferenceDisplayFrameIdentity&) = default;

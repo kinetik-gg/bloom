@@ -488,27 +488,28 @@ already rendered, costs a lookup rather than an evaluation.
 
 **Cache key.** Preview render inputs and the requested resolution policy: project, composition,
 document revision, exact rational time, preview output, resolution (which is where a proxy factor
-lives), resolution policy, quality, and color intent. That is `PreviewRequestIdentity` minus its request generation,
-because the generation says which ASK a frame answered, not what it contains -- a hit is therefore
-re-stamped with the asking request's own generation before it is published, so the frame the artist
-sees is the answer to the request they made.
+lives), resolution policy, quality, color intent, optional ROI, and display-only `ViewAdjust`.
+That is `PreviewRequestIdentity` minus its request generation. A cache hit is re-stamped with
+the current request generation before publication, so freshness still identifies the request
+that the frame answers.
 
-The display identity is a cache-wide tag rather than a key field: the qualified display processor
-publishes once per session, so an entry's display identity can change at most once, and when it does
-every earlier entry is stale. A frame whose qualification differs from the tag clears the cache and
-adopts the new one.
+Display qualification is a cache-wide tag; per-viewer exposure/gamma remains in the key. The
+qualified display processor publishes once per session, so an entry's display identity can change
+at most once, and when it does every earlier entry is stale. A frame whose qualification differs
+from the tag clears the cache and adopts the new one.
 
 **What is retained.** The packed RGBA8 display buffer and the identity, and NOT the Float32 process
 image it was mapped from. Playback paints the packed buffer and nothing else -- the viewer's own
 painting, its display geometry, its colour-state chip, and the direct-manipulation mapping all read
-that buffer, none of them the process image -- so keeping the process image would spend four fifths
-of the budget on pixels nothing in a preview ever reads. A retained frame is therefore about 8 MB at
-1920x1080 rather than about 41 MB.
+that buffer, none of them the process image. Retaining every process image would spend four fifths
+of the budget on pixels used only by occasional reference probes. A retained frame is therefore
+about 8 MB at 1920x1080 rather than about 41 MB.
 
-Anything that DOES need scene-linear pixels -- a frame or sequence export, a future sampler or
-analysis -- evaluates the frame again rather than being handed a cached one, and asks
-`PreparedPreviewFrame::hasProcessFrame()` rather than assuming. That is the one thing a cache hit
-cannot answer, and it is stated rather than papered over with a silently null handle.
+Consumers of scene-linear pixels check `PreparedPreviewFrame::hasProcessFrame()`. The pixel probe
+reads an available bounded process frame or schedules exact one-pixel ROI evaluation for a
+cached display-only frame. It caches that reference result by frame and position, independently
+of display adjustment. Frame and sequence export evaluate their own full-frame requests without
+ROI or viewer adjustment. The compiled-plan cache is unaffected by either viewer setting.
 
 **Budget.** `playback/ram-preview-memory-bytes` and
 `playback/operation-cache-bytes` are resolved together by the session's one memory-budget ledger.

@@ -34,6 +34,8 @@ PreparedPreviewFrame::create(const std::uint64_t requestGeneration,
         .quality = processIdentity.quality,
         .colorIntent = processIdentity.colorIntent,
         .resolutionPolicy = resolutionPolicy,
+        .roi = processIdentity.roi,
+        .viewAdjust = displayFrame->identity().viewAdjust,
     };
     return PreparedPreviewFrame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
 }
@@ -66,6 +68,8 @@ PreparedPreviewFrame::createQualified(const std::uint64_t requestGeneration,
         .quality = processIdentity.quality,
         .colorIntent = processIdentity.colorIntent,
         .resolutionPolicy = resolutionPolicy,
+        .roi = processIdentity.roi,
+        .viewAdjust = displayFrame->identity().viewAdjust,
     };
     return PreparedPreviewFrame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
 }
@@ -222,7 +226,18 @@ std::optional<PreviewDisplayBufferView> PreparedPreviewFrame::displayBufferView(
             .isOcioQualified = false,
         };
     }
-    const auto& buffer = std::get_if<QualifiedPtr>(&displayFrame_)->get()->buffer();
+    const auto* qualified = std::get_if<QualifiedPtr>(&displayFrame_)->get();
+    if (const auto& adjusted = qualified->adjustedBuffer()) {
+        const auto* descriptor = adjusted->descriptor();
+        if (!descriptor)
+            return std::nullopt;
+        return PreviewDisplayBufferView{.displayWindow = descriptor->displayWindow(),
+                                        .pixelAspect = descriptor->pixelAspect(),
+                                        .layout = descriptor->layout(),
+                                        .pixels = adjusted->pixels(),
+                                        .isOcioQualified = true};
+    }
+    const auto& buffer = qualified->buffer();
     if (!buffer.isValid()) {
         return std::nullopt;
     }

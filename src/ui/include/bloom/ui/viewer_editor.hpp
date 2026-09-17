@@ -1,9 +1,11 @@
 #pragma once
 
+#include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
+#include <bloom/ui/viewer_editor_probe.hpp>
 #include <bloom/ui/viewer_overlays.hpp>
 
 #include <QCursor>
@@ -30,11 +32,13 @@ class ImageExtent;
 
 namespace bloom::ui::kit {
 class KDropdown;
-}
+class KValueField;
+} // namespace bloom::ui::kit
 
 class QAction;
 class QLabel;
 class QToolButton;
+class QTimer;
 
 class QContextMenuEvent;
 class QKeyEvent;
@@ -190,6 +194,9 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     // Test/diagnostic surface only (never read by production code, mirroring kit::KDropdown's own
     // displayedText()/popupView() precedent): exposes state a test needs to assert on without
     // reaching into private members.
+    [[nodiscard]] PreparedPreviewFrameHandle displayedFrameForTest() const {
+        return displayedFrame();
+    }
     [[nodiscard]] bool textEditing() const noexcept;
     [[nodiscard]] QLineF textCaretForTest() const;
     [[nodiscard]] QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
@@ -203,7 +210,11 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     [[nodiscard]] ViewerBackground backgroundForTest() const noexcept;
     [[nodiscard]] QString timeReadoutTextForTest() const;
 
+  signals:
+    void probeChanged(ProbeReadout readout);
+
   protected:
+    void leaveEvent(QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     bool event(QEvent* event) override;
     // Direct viewer manipulation of the selected layer's position (docs/architecture/
@@ -344,6 +355,41 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     bool creationRelease(QMouseEvent* event);
     void cancelCreation();
     void paintCreation(QPainter& painter) const;
+    bool roiPress(QMouseEvent* event);
+    bool roiMove(QMouseEvent* event);
+    bool roiRelease(QMouseEvent* event);
+    void paintRoi(QPainter& painter) const;
+    void publishRoi();
+    [[nodiscard]] QString analysisSettingsPrefix() const;
+    void loadViewAdjust();
+    void refreshViewAdjustment();
+    void consumeViewAdjustment();
+    void refreshProbe(QPointF position);
+    void clearProbe();
+    void consumeProbe();
+    std::optional<QPointF> probePosition_;
+    ProbeReadout probeReadout_{};
+    QTimer* probeTimer_ = nullptr;
+    std::optional<runtime::TaskHandle<runtime::PreviewPreparationResultHandle>> probeTask_;
+    std::optional<runtime::PreviewRequestIdentity> probeIdentity_;
+    PreparedPreviewFrameHandle probeTaskFrame_;
+    QPoint probeTaskPixel_;
+    PreparedPreviewFrameHandle probeCacheFrame_;
+    QPoint probeCachePixel_;
+    std::optional<core::Color4d> probeCacheReference_;
+    QString probeFailure_;
+    [[nodiscard]] PreparedPreviewFrameHandle displayedFrame() const;
+    runtime::ViewAdjust viewAdjust_{};
+    kit::KValueField* exposureField_ = nullptr;
+    kit::KValueField* gammaField_ = nullptr;
+    QTimer* analysisTimer_ = nullptr;
+    std::optional<runtime::TaskHandle<runtime::PreviewPreparationResultHandle>> adjustTask_;
+    std::optional<runtime::PreviewRequestIdentity> adjustIdentity_;
+    PreparedPreviewFrameHandle adjustedFrame_;
+    std::optional<CreationGesture> roiGesture_;
+    std::optional<QRectF> roiRect_;
+    QToolButton* roiButton_ = nullptr;
+    QToolButton* roiClearButton_ = nullptr;
     document::PathValue penPath_;
     bool penDown_ = false;
     struct PathSelection {

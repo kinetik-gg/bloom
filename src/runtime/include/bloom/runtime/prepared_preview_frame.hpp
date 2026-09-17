@@ -31,6 +31,9 @@ struct PreviewRequestIdentity final {
 
     PreviewResolutionPolicy resolutionPolicy = PreviewResolutionPolicy::Auto;
 
+    std::optional<render::ImageWindow> roi = std::nullopt;
+    ViewAdjust viewAdjust{};
+
     friend bool operator==(const PreviewRequestIdentity&, const PreviewRequestIdentity&) = default;
 };
 

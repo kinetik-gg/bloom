@@ -5,9 +5,11 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
+#include <bloom/ui/viewer_editor_probe.hpp>
 
 #include <QElapsedTimer>
 #include <QObject>
+#include <QRectF>
 #include <QString>
 #include <QTimer>
 
@@ -157,6 +159,10 @@ class CompositionPreviewController final : public QObject {
     [[nodiscard]] runtime::EvaluationResolution resolution() const;
     [[nodiscard]] std::uint32_t resolutionDivisor() const noexcept;
     void setResolutionPolicy(runtime::PreviewResolutionPolicy policy);
+    void setRegionOfInterest(std::optional<QRectF> region);
+    [[nodiscard]] runtime::TaskSubmission<PreviewPreparationResultHandle>
+    submitViewerAnalysis(const runtime::PreviewRequestIdentity& identity);
+    [[nodiscard]] std::optional<render::ImageWindow> regionOfInterest() const;
     // Display pixels per composition pixel, including device pixel ratio. Unknown geometry uses 1.
     void setDisplayedCompositionScale(double scale);
 
@@ -174,6 +180,7 @@ class CompositionPreviewController final : public QObject {
     void notifyScrubEnded();
 
   signals:
+    void probeChanged(ProbeReadout readout);
     void stateChanged();
     void resolutionChanged();
     // Synchronous cancellation seam for speculative work, before foreground admission.
@@ -261,6 +268,7 @@ class CompositionPreviewController final : public QObject {
     std::uint64_t generation_ = 0;
     bool shuttingDown_ = false;
     double displayedCompositionScale_ = 1.0;
+    std::optional<QRectF> regionOfInterest_;
     std::unique_ptr<PlaybackController> playbackController_;
     bool playbackActive_ = false;
     std::chrono::nanoseconds playbackBudget_{};
