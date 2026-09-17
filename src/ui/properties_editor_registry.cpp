@@ -206,42 +206,4 @@ void PropertiesEditor::configureRegistryRows() {
         }
     }
 }
-void PropertiesEditor::filterRows() {
-    const auto query = search_->text();
-    for (auto* section : sections_) {
-        bool any = false;
-        auto* rows = section->bodyLayout();
-        for (int index = 0; index < rows->count(); ++index) {
-            auto* row = rows->itemAt(index)->widget();
-            if (!row)
-                continue;
-            const auto disclosure = row->property("disclosureFor").toString();
-            if (!disclosure.isEmpty()) {
-                auto* owner = qobject_cast<QWidget*>(row->property("colorOwner").value<QObject*>());
-                const auto* display =
-                    owner ? owner->findChild<QWidget*>("propertiesDrivenDisplay") : nullptr;
-                row->setVisible(row->property("expanded").toBool() &&
-                                disclosure.contains(query, Qt::CaseInsensitive) &&
-                                (!display || display->isHidden()));
-                continue;
-            }
-            if (row->property("unavailableReadout").toBool() ||
-                row->property("roleHidden").toBool()) {
-                row->hide();
-                continue;
-            }
-            const auto label = row->property("rowLabel").toString();
-            if (label.isEmpty())
-                continue;
-            const bool match = label.contains(query, Qt::CaseInsensitive);
-            row->setVisible(match);
-            any = any || match;
-        }
-        section->setVisible(query.isEmpty() || any);
-        section->body()->setVisible(!section->isCollapsed() || !query.isEmpty());
-    }
-    if (auto* more = findChild<QLabel*>("propertiesMoreUpstream"))
-        more->setVisible(more->text().contains(query, Qt::CaseInsensitive));
-}
-
 } // namespace bloom::ui

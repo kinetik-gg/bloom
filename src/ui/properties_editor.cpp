@@ -32,6 +32,7 @@
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/shape.hpp>
 #include <bloom/render/embedded_fonts.hpp>
 
 #include <QEvent>
@@ -41,6 +42,7 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QScrollArea>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -140,6 +142,109 @@ QString formatDuration(const TimelineFrameContext& context) {
 
 } // namespace
 
+void PropertiesEditor::buildFilterStrip() {
+    filterStrip_ = new kit::KToolColumn(this);
+    filterStrip_->setObjectName(QStringLiteral("propertiesFilterStrip"));
+    filterStrip_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+
+    const auto addFilter = [this](const kit::IconId icon, const QString& group,
+                                  const QString& label, const QString& objectName) {
+        auto* toggle = filterStrip_->addTool(icon, label, objectName);
+        toggle->setProperty("propertiesFilterGroup", group);
+        connect(toggle, &kit::KIconToggle::toggled, this,
+                [this, toggle, group](const bool checked) {
+                    if (checked && toggle->isEnabled())
+                        selectFilter(group, true);
+                });
+        return toggle;
+    };
+
+    filterToggles_ = {
+        addFilter(kit::IconId::Stack, QStringLiteral("all"), tr("Show all property sections"),
+                  QStringLiteral("propertiesFilterAll")),
+        addFilter(kit::IconId::Composition, QStringLiteral("object"),
+                  tr("Show Object and Composition sections"),
+                  QStringLiteral("propertiesFilterObject")),
+        addFilter(kit::IconId::SlidersHorizontal, QStringLiteral("transform"),
+                  tr("Show Transform sections"), QStringLiteral("propertiesFilterTransform")),
+        addFilter(kit::IconId::Image, QStringLiteral("source"), tr("Show Source sections"),
+                  QStringLiteral("propertiesFilterSource")),
+        addFilter(kit::IconId::Graph, QStringLiteral("graph"),
+                  tr("Show Merge inputs and upstream sections"),
+                  QStringLiteral("propertiesFilterGraph")),
+    };
+
+    const auto stored = QSettings()
+                            .value(QStringLiteral("properties/filter"), QStringLiteral("all"))
+                            .toString()
+                            .toLower();
+    const auto valid = stored == QStringLiteral("all") || stored == QStringLiteral("object") ||
+                       stored == QStringLiteral("transform") ||
+                       stored == QStringLiteral("source") || stored == QStringLiteral("graph");
+    filterGroup_ = valid ? stored : QStringLiteral("all");
+    for (auto* toggle : filterToggles_) {
+        const QSignalBlocker blocker(toggle);
+        toggle->setChecked(toggle->property("propertiesFilterGroup").toString() == filterGroup_);
+    }
+}
+
+bool PropertiesEditor::filterGroupAvailable(const QString& group) const {
+    if (group == QStringLiteral("all"))
+        return session_.composition() != nullptr;
+    if (group == QStringLiteral("object"))
+        return session_.composition() != nullptr;
+    if (group == QStringLiteral("transform"))
+        return !std::holds_alternative<std::monostate>(session_.selection().primary);
+    if (group == QStringLiteral("graph"))
+        return (mergeInputsPanel_ != nullptr && !mergeInputsPanel_->isHidden()) ||
+               !upstreamSignature_.isEmpty();
+    if (group != QStringLiteral("source") ||
+        std::holds_alternative<std::monostate>(session_.selection().primary))
+        return false;
+
+    const auto* node = session_.selectedNode();
+    if (const auto* layer = std::get_if<document::LayerId>(&session_.selection().primary)) {
+        const auto sourceId = session_.directSourceNodeForLayer(*layer);
+        node = sourceId && session_.composition()
+                   ? session_.composition()->graph().findNode(*sourceId)
+                   : nullptr;
+    }
+    if (node != nullptr &&
+        (node->typeId == document::kSolidSourceNodeType ||
+         node->typeId == document::kTextSourceNodeType ||
+         node->typeId == document::kShapeSourceNodeType ||
+         node->typeId == document::kAudioSourceNodeType || node->typeId == "bloom.image-source"))
+        return true;
+    return !registryRows_.empty();
+}
+
+void PropertiesEditor::selectFilter(const QString& group, const bool persist) {
+    if (group != QStringLiteral("all") && !filterGroupAvailable(group))
+        return;
+    filterGroup_ = group;
+    for (auto* toggle : filterToggles_) {
+        const QSignalBlocker blocker(toggle);
+        toggle->setChecked(toggle->property("propertiesFilterGroup").toString() == group);
+    }
+    if (persist)
+        QSettings().setValue(QStringLiteral("properties/filter"), filterGroup_);
+    filterRows();
+}
+
+void PropertiesEditor::updateFilterAvailability() {
+    for (auto* toggle : filterToggles_) {
+        const auto group = toggle->property("propertiesFilterGroup").toString();
+        toggle->setEnabled(group == QStringLiteral("all") || filterGroupAvailable(group));
+    }
+    if (filterGroup_ != QStringLiteral("all") && !filterGroupAvailable(filterGroup_))
+        selectFilter(QStringLiteral("all"), true);
+}
+
+bool PropertiesEditor::sectionMatchesFilter(const kit::KSection* section) const {
+    return filterGroup_ == QStringLiteral("all") ||
+           section->property("propertiesSectionGroup").toString() == filterGroup_;
+}
+
 PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     : QWidget(parent), session_(session) {
     setObjectName("propertiesEditor");
@@ -171,6 +276,11 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     (void)EditorArea::buildChromeRow(chrome_.header, this);
     connect(search_, &QLineEdit::textChanged, this, &PropertiesEditor::filterRows);
 
+    buildFilterStrip();
+    chrome_.leading = filterStrip_;
+    chrome_.leadingWidth = kit::px(kit::Size::ToolColumnWidth);
+    chrome_.leadingName = QStringLiteral("propertiesFilterStrip");
+
     auto* scroll = new QScrollArea(this);
     scroll->setObjectName("propertiesScrollArea");
     scroll->setWidgetResizable(true);
@@ -178,11 +288,23 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     auto* body = new QWidget(scroll);
     body->setObjectName("propertiesScrollBody");
+    // The fixed filter strip consumes part of the existing panel minimum. Let the scroll body
+    // follow the remaining viewport instead of preserving the old section-content hint as a new
+    // horizontal minimum; property rows already elide and shrink their value cells at this width.
+    body->setMinimumWidth(0);
+    body->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto* bodyLayout = new QVBoxLayout(body);
     bodyLayout->setContentsMargins(0, 0, 0, 0);
     bodyLayout->setSpacing(kit::px(kit::Spacing::S));
     scroll->setWidget(body);
-    layout->addWidget(scroll, 1);
+    auto* bodyChrome = new QWidget(this);
+    bodyChrome->setObjectName(QStringLiteral("propertiesBodyChrome"));
+    auto* bodyChromeLayout = new QHBoxLayout(bodyChrome);
+    bodyChromeLayout->setContentsMargins(0, 0, 0, 0);
+    bodyChromeLayout->setSpacing(0);
+    bodyChromeLayout->addWidget(filterStrip_);
+    bodyChromeLayout->addWidget(scroll, 1);
+    layout->addWidget(bodyChrome, 1);
 
     // Task P1 (owner review 2026-09-12: "should not show 'Nothing selected' or any other selected
     // layer info") removed the selection title row entirely. With nothing selected the panel shows
@@ -390,6 +512,7 @@ void PropertiesEditor::rebuild() {
     configureRegistryRows();
     configureUpstream();
     configureDrivenRows();
+    updateFilterAvailability();
     const auto* composition = session_.composition();
     const auto* selected = session_.selectedNode();
     const auto context = session_.selection().contextualLayer;
@@ -653,6 +776,48 @@ void PropertiesEditor::configureDocumentProperties() {
     const auto context = frameContextFor(session_);
     documentDuration_->setText(context.has_value() ? formatDuration(*context)
                                                    : QStringLiteral("—"));
+}
+
+void PropertiesEditor::filterRows() {
+    const auto query = search_->text();
+    for (auto* section : sections_) {
+        if (!sectionMatchesFilter(section)) {
+            section->hide();
+            continue;
+        }
+        bool any = false;
+        auto* rows = section->bodyLayout();
+        for (int index = 0; index < rows->count(); ++index) {
+            auto* row = rows->itemAt(index)->widget();
+            if (!row)
+                continue;
+            const auto disclosure = row->property("disclosureFor").toString();
+            if (!disclosure.isEmpty()) {
+                auto* owner = qobject_cast<QWidget*>(row->property("colorOwner").value<QObject*>());
+                const auto* display =
+                    owner ? owner->findChild<QWidget*>("propertiesDrivenDisplay") : nullptr;
+                row->setVisible(row->property("expanded").toBool() &&
+                                disclosure.contains(query, Qt::CaseInsensitive) &&
+                                (!display || display->isHidden()));
+                continue;
+            }
+            if (row->property("unavailableReadout").toBool() ||
+                row->property("roleHidden").toBool()) {
+                row->hide();
+                continue;
+            }
+            const auto label = row->property("rowLabel").toString();
+            if (label.isEmpty())
+                continue;
+            const bool match = label.contains(query, Qt::CaseInsensitive);
+            row->setVisible(match);
+            any = any || match;
+        }
+        section->setVisible(query.isEmpty() || any);
+        section->body()->setVisible(!section->isCollapsed() || !query.isEmpty());
+    }
+    if (auto* more = findChild<QLabel*>("propertiesMoreUpstream"))
+        more->setVisible(more->text().contains(query, Qt::CaseInsensitive));
 }
 
 } // namespace bloom::ui

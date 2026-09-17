@@ -23,6 +23,7 @@
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/section.hpp>
@@ -1117,6 +1118,135 @@ void testSectionsGroupCollapseAndPersist(Expectations& expectations) {
     QSettings().remove(QStringLiteral("properties/sections"));
 }
 
+void testPropertiesFilterStripGroupsSectionsAndPersists(Expectations& expectations) {
+    QSettings().remove(QStringLiteral("properties/filter"));
+    auto newProject = document::makeNewProject("Filter Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+
+    ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
+    session.selectLayer(ids.layer);
+    ui::PropertiesEditor properties(session);
+
+    auto* strip = properties.findChild<ui::kit::KToolColumn*>("propertiesFilterStrip");
+    auto* all = properties.findChild<ui::kit::KIconToggle*>("propertiesFilterAll");
+    auto* object = properties.findChild<ui::kit::KIconToggle*>("propertiesFilterObject");
+    auto* transform = properties.findChild<ui::kit::KIconToggle*>("propertiesFilterTransform");
+    auto* source = properties.findChild<ui::kit::KIconToggle*>("propertiesFilterSource");
+    auto* graph = properties.findChild<ui::kit::KIconToggle*>("propertiesFilterGraph");
+    expectations.expect(strip != nullptr &&
+                            strip->width() == ui::kit::px(ui::kit::Size::ToolColumnWidth) &&
+                            all != nullptr && object != nullptr && transform != nullptr &&
+                            source != nullptr && graph != nullptr,
+                        "Properties declares the token-sized five-choice filter strip");
+    if (!strip || !all || !object || !transform || !source || !graph)
+        return;
+    expectations.expect(all->isChecked() && !object->isChecked() && !transform->isChecked() &&
+                            !source->isChecked() && !graph->isChecked(),
+                        "All is the exclusive default filter");
+    expectations.expect(!graph->isEnabled(), "Graph is disabled when Solid has no graph section");
+    expectations.expect(transform->isEnabled() && source->isEnabled(),
+                        "available groups remain enabled for the selected Solid");
+
+    auto* objectSection = properties.findChild<ui::kit::KSection*>("propertiesSection_object");
+    auto* transformSection =
+        properties.findChild<ui::kit::KSection*>("propertiesSection_transform");
+    auto* sourceSection = properties.findChild<ui::kit::KSection*>("propertiesSection_solid");
+    expectations.expect(objectSection != nullptr && transformSection != nullptr &&
+                            sourceSection != nullptr,
+                        "filter tests resolve the three Solid sections");
+    if (!objectSection || !transformSection || !sourceSection)
+        return;
+
+    transform->click();
+    expectations.expect(transform->isChecked() && !transformSection->isHidden() &&
+                            objectSection->isHidden() && sourceSection->isHidden(),
+                        "Transform shows only the Transform section");
+    transformSection->setCollapsed(true);
+    all->click();
+    transform->click();
+    expectations.expect(!transformSection->isHidden() && transformSection->isCollapsed() &&
+                            transformSection->body()->isHidden(),
+                        "filtering hides sections without changing collapsed state");
+
+    all->click();
+    source->click();
+    expectations.expect(QSettings().value(QStringLiteral("properties/filter")).toString() ==
+                            QStringLiteral("source"),
+                        "the selected Properties filter persists under properties/filter");
+    {
+        ui::PropertiesEditor restored(session);
+        auto* restoredSource = restored.findChild<ui::kit::KIconToggle*>("propertiesFilterSource");
+        auto* restoredAll = restored.findChild<ui::kit::KIconToggle*>("propertiesFilterAll");
+        expectations.expect(restoredSource != nullptr && restoredSource->isChecked() &&
+                                restoredAll != nullptr && !restoredAll->isChecked(),
+                            "a new Properties editor restores the persisted filter choice");
+    }
+    QSettings().remove(QStringLiteral("properties/filter"));
+    QSettings().remove(QStringLiteral("properties/sections"));
+}
+
+void testPropertiesFilterGraphAndCompositionAvailability(Expectations& expectations) {
+    QSettings().remove(QStringLiteral("properties/filter"));
+    auto newProject = document::makeNewProject("Graph Filter Test", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+    ui::CompositionSession session(document, stack, compositionId);
+    prepareColor(session);
+
+    const auto* merge = session.timelineMerge();
+    expectations.expect(merge != nullptr, "the graph filter fixture has a composition Merge");
+    if (merge == nullptr)
+        return;
+    session.selectNode(merge->nodeId());
+    ui::PropertiesEditor properties(session);
+    auto* graph = properties.findChild<ui::kit::KIconToggle*>("propertiesFilterGraph");
+    auto* mergeSection = properties.findChild<ui::kit::KSection*>("propertiesSection_merge-inputs");
+    auto* object = properties.findChild<ui::kit::KSection*>("propertiesSection_object");
+    auto* transform = properties.findChild<ui::kit::KSection*>("propertiesSection_transform");
+    expectations.expect(graph != nullptr && graph->isEnabled() && mergeSection != nullptr,
+                        "Merge selection enables the Graph filter and exposes Inputs");
+    if (!graph || !mergeSection || !object || !transform)
+        return;
+    graph->click();
+    expectations.expect(graph->isChecked() && !mergeSection->isHidden() && object->isHidden() &&
+                            transform->isHidden(),
+                        "Graph shows Merge inputs and hides Object and Transform");
+    for (auto* section : properties.findChildren<ui::kit::KSection*>())
+        if (!section->isHidden())
+            expectations.expect(section->property("propertiesSectionGroup").toString() ==
+                                    QStringLiteral("graph"),
+                                "Graph filtering leaves only graph-tagged sections visible");
+
+    session.selectLayer(ids.layer);
+    auto* all = properties.findChild<ui::kit::KIconToggle*>("propertiesFilterAll");
+    graph = properties.findChild<ui::kit::KIconToggle*>("propertiesFilterGraph");
+    expectations.expect(all != nullptr && all->isChecked() && graph != nullptr &&
+                            !graph->isEnabled(),
+                        "selection changes fall back to All when Graph disappears");
+
+    session.clearSelection();
+    auto* objectFilter = properties.findChild<ui::kit::KIconToggle*>("propertiesFilterObject");
+    auto* composition = properties.findChild<ui::kit::KSection*>("propertiesSection_composition");
+    auto* transformFilter =
+        properties.findChild<ui::kit::KIconToggle*>("propertiesFilterTransform");
+    expectations.expect(objectFilter != nullptr && objectFilter->isEnabled() &&
+                            transformFilter != nullptr && !transformFilter->isEnabled() &&
+                            composition != nullptr && !composition->isHidden(),
+                        "Composition is available under Object while Transform is unavailable");
+    if (objectFilter && composition)
+        objectFilter->click();
+    expectations.expect(composition != nullptr && !composition->isHidden(),
+                        "Object filtering keeps the no-selection Composition section");
+    QSettings().remove(QStringLiteral("properties/filter"));
+    QSettings().remove(QStringLiteral("properties/sections"));
+}
+
 // The Object section's Visible/Solo/Locked switches author the layer boundary through the same
 // commands the timeline's toggle strip uses, so one undo reverses either surface identically.
 void testObjectSwitchesAuthorTheLayerBoundary(Expectations& expectations) {
@@ -1227,6 +1357,8 @@ int main(int argc, char** argv) {
     testLongLabelColumnElidesWhenNarrowAndKeepsTheFullNameAsATooltip(expectations);
     testValueCellMinimumSizeHintIsAFloorBelowItsPreferredWidth(expectations);
     testSectionsGroupCollapseAndPersist(expectations);
+    testPropertiesFilterStripGroupsSectionsAndPersists(expectations);
+    testPropertiesFilterGraphAndCompositionAvailability(expectations);
     testObjectSwitchesAuthorTheLayerBoundary(expectations);
     if (expectations.failures() > 0) {
         std::cerr << expectations.failures() << " properties editor expectation(s) failed\n";

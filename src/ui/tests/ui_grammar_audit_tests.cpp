@@ -214,6 +214,25 @@ int run(int argc, char** argv) {
                choice, "tool extent and help");
         expect(tools->rect().contains(choice->geometry()), choice, "tool stays inside column");
     }
+    auto* propertiesFilter = fixture.window->findChild<kit::KToolColumn*>("propertiesFilterStrip");
+    expect(propertiesFilter != nullptr &&
+               propertiesFilter->width() == kit::px(kit::Size::ToolColumnWidth),
+           fixture.window.get(), "Properties filter strip uses the tool-column token");
+    if (propertiesFilter != nullptr) {
+        const auto filters = propertiesFilter->findChildren<kit::KIconToggle*>();
+        int checked = 0;
+        expect(filters.size() == 5, propertiesFilter, "Properties filter has five choices");
+        for (auto* filter : filters) {
+            checked += filter->isChecked() ? 1 : 0;
+            expect(filter->size() ==
+                       QSize(kit::px(kit::Size::ToggleCell), kit::px(kit::Size::ToggleCell)),
+                   filter, "Properties filter choices use ToggleCell at every DPR");
+            expect(!filter->toolTip().isEmpty() &&
+                       propertiesFilter->rect().contains(filter->geometry()),
+                   filter, "Properties filter choices stay inside the strip with help text");
+        }
+        expect(checked == 1, propertiesFilter, "Properties filter choices are exclusive");
+    }
     int cards = 0, fields = 0, alignedSockets = 0;
     for (auto* view : fixture.window->findChildren<QGraphicsView*>()) {
         if (!view->scene())

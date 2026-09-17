@@ -429,6 +429,29 @@ void EditorArea::rebuildEditor(int editorIndex) {
         auto& spec = provider->editorChrome();
         if (spec.hosted)
             spec.hosted();
+        if (spec.leading != nullptr) {
+            spec.leading->setFixedWidth(spec.leadingWidth);
+            if (!spec.leadingName.isEmpty())
+                spec.leading->setObjectName(spec.leadingName);
+            // Form editors such as Properties own their body row because they are also used
+            // directly by projection tests. A detached leading widget is still hosted here so
+            // the chrome declaration remains useful for future panels without duplicating it.
+            if (!editorHost_->isAncestorOf(spec.leading)) {
+                contentLayout_->removeWidget(editorHost_);
+                auto* leadingChrome = new QWidget(contentLayout_->parentWidget());
+                leadingChrome->setObjectName(QStringLiteral("editorLeadingChrome"));
+                leadingChrome->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+                auto* leadingLayout = new QHBoxLayout(leadingChrome);
+                leadingLayout->setContentsMargins(0, 0, 0, 0);
+                leadingLayout->setSpacing(0);
+                spec.leading->setParent(leadingChrome);
+                leadingLayout->addWidget(spec.leading);
+                leadingLayout->addWidget(editorHost_, 1);
+                editorHost_ = leadingChrome;
+                contentLayout_->addWidget(editorHost_);
+                watchForActivation(spec.leading);
+            }
+        }
         if (auto* controls = buildChromeRow(spec.footer, this, true)) {
             footer_ = new QWidget(this);
             footer_->setObjectName("editorFooter");

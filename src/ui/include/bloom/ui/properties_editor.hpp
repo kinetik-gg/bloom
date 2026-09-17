@@ -30,9 +30,11 @@ namespace kit {
 class KButton;
 class KColorChip;
 class KDropdown;
+class KIconToggle;
 class KSection;
 class KSlider;
 class KSwitch;
+class KToolColumn;
 } // namespace kit
 
 class PropertiesEditor final : public QWidget, public EditorChromeProvider {
@@ -51,6 +53,11 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     void configureRegistryRows();
     void configureUpstream();
     void configureDrivenRows();
+    void buildFilterStrip();
+    void updateFilterAvailability();
+    void selectFilter(const QString& group, bool persist);
+    [[nodiscard]] bool filterGroupAvailable(const QString& group) const;
+    [[nodiscard]] bool sectionMatchesFilter(const kit::KSection* section) const;
     // Task DRIVE-1: this panel reads the session's resolved driven values rather than
     // running an evaluator of its own; the connection is made once.
     bool drivenValuesConnected_ = false;
@@ -58,6 +65,9 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     QString upstreamSignature_;
     std::vector<PropertiesRegistryRow*> upstreamRows_;
     void filterRows();
+    QString filterGroup_;
+    kit::KToolColumn* filterStrip_ = nullptr;
+    std::array<kit::KIconToggle*, 5> filterToggles_{};
     QLineEdit* search_ = nullptr;
     std::vector<PropertiesRegistryRow*> registryRows_;
     QWidget* registryPanel_ = nullptr;

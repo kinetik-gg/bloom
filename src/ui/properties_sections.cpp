@@ -28,6 +28,20 @@
 #include <utility>
 
 namespace bloom::ui::properties {
+namespace {
+
+QString sectionFilterGroup(const QString& id) {
+    if (id == QStringLiteral("object") || id == QStringLiteral("composition"))
+        return QStringLiteral("object");
+    if (id == QStringLiteral("transform"))
+        return QStringLiteral("transform");
+    if (id == QStringLiteral("merge-inputs") || id.startsWith(QStringLiteral("upstream-")))
+        return QStringLiteral("graph");
+    return QStringLiteral("source");
+}
+
+} // namespace
+
 void refreshColor(CompositionSession& session, const std::string_view schemaKey,
                   const core::Color4d value, kit::KColorChip* chip,
                   const std::initializer_list<kit::KValueField*> fields) {
@@ -269,6 +283,7 @@ kit::KSection* addSection(QVBoxLayout* layout, QWidget* parent, const QString& i
                           const QString& title) {
     auto* section = new kit::KSection(title, parent);
     section->setObjectName(QStringLiteral("propertiesSection_") + id);
+    section->setProperty("propertiesSectionGroup", sectionFilterGroup(id));
     section->setPersistenceKey(QStringLiteral("properties/sections/%1/collapsed").arg(id));
     layout->addWidget(section);
     return section;

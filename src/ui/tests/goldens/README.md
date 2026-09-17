@@ -109,3 +109,13 @@ viewer-footer controls already present at the lane base `55319c3`; the previous 
 The test printed mean channel errors of 0.474275 (DPR 1) and 0.468285 (DPR 1.5) against the previous
 references, and 0 at both DPRs after `--update-goldens`. Comparison tolerances, full-image coverage
 and rendering identity goldens are unchanged.
+
+TABS-1 approval (2026-09-17, Qt 6.8.3): both references were regenerated with
+`--update-goldens` at DPR 1 and 1.5 and visually inspected. The intentional change is the new
+32px Properties leading filter strip, with five exclusive choices beside the existing panel body;
+the workspace proportions, content dimensions, and rendering identity remain unchanged. Against
+the previous references, the printed mean channel errors were 0.447695 at DPR 1 and 0.403819 at
+DPR 1.5; after approval both were 0 with changed fraction 0. Comparison tolerances and full-image
+coverage are unchanged.
+
+Merged-tree approval (2026-09-17, Qt 6.8.3): ASSETS-2 and TABS-1 each re-approved the references on their own base; the integration merge regenerated both captures once more so the references carry both the Assets tree changes and the Properties filter strip. Tolerances unchanged.

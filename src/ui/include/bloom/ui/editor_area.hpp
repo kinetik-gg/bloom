@@ -66,6 +66,12 @@ struct EditorCanvasChromeSpec {
 struct EditorChromeSpec {
     EditorChromeRowSpec header;
     EditorChromeRowSpec footer;
+    // A panel may declare a fixed leading control strip for its content. Canvas editors usually
+    // materialize this inside their own body; when a provider gives EditorArea a detached widget,
+    // the area hosts it beside the editor content using these token/name hints.
+    QWidget* leading = nullptr;
+    int leadingWidth = 0;
+    QString leadingName;
     QWidget* headerCanvas = nullptr;
     std::function<int()> splitPosition;
     // task TL-FIX2: EditorArea fixes headerLeft_'s width to splitPosition() once, at rebuild time
