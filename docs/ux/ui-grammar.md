@@ -425,18 +425,38 @@ Assets rows use `KRow` with a leading Chrome kind glyph: Composition (`film-slat
 Composition, Image, Sequence [member count], Audio · duration, or Font · family/style.
 A missing/changed first member has a warning glyph; the context menu exposes Relink and Remove.
 The footer is four `KIconButton` controls with Chrome glyphs and exact tooltips New Composition,
-New Folder, Import, Delete. Folder authoring remains disabled because this slice adds no folder
-model; its button keeps the New Folder label. No media-pipeline placeholder tooltip remains.
+New Folder, Import, Delete. New Folder is live in both Add and the footer. Compositions have a
+separate expandable **Compositions** root; folders form a hierarchy for imported assets. Folder
+rows use the kit caret disclosure, with Qt owning indentation and keyboard navigation. Expansion
+and selection survive project projections; filtering temporarily opens matching ancestors.
+
+Assets and folders rename in place through a kit line edit, from Rename or F2. Escape restores
+the row without an edit. Every accepted rename uses the shared command transaction. Tagged rows
+compose compact `KButton` chips in `KRow`'s trailing area: the first tag and a `+n` count when
+more tags exist. The full tag list is available in the tooltip. Clicking a tag filters by it;
+the count opens Edit Tags. Narrow rows show a compact count for the complete tag set, preserving
+space for the asset name. The context menu also exposes **Edit Tags…**, with one kit line edit
+per tag, Add Tag and Remove Tag controls. Applying to multiple selected assets replaces their
+sets in one transaction.
+
+Search accepts `tag:` followed by a case-insensitive tag substring; plain text matches names and
+tags. Unmatched ancestors remain visible only when a descendant matches. Internal asset drags
+move onto a folder, move back to the root by dropping on empty space, or reorder above/below
+siblings. The internal selection MIME coexists with `application/x-bloom-asset`, retaining
+canvas and Timeline media drops. Internal drags are tied to the originating tree and snapshot;
+a changed or replaced project refuses a stale drag. Composition canvas drops remain refused
+with a user-visible message until composition sources are supported.
 
 File > Import, footer Import and file drops onto Assets all prepare one worker import transaction.
 Dragging an image/sequence row to Nodes creates an Image source; dragging an Audio row creates an
 Audio source. Dropping media on Timeline creates the matching wired Layer. Image source cards and
 Properties use an Asset `KDropdown` listing the project's Image
-and Sequence assets by filename or sequence pattern, with the kind glyph and Image / Sequence [n]
+and Sequence assets by their display names, with the kind glyph and Image / Sequence [n]
 text. Selection commits the stable asset id through the shared parameter setter. A removed id
 remains selected as **Missing asset**, in muted ink, with the id in its tooltip. An Image source
 card derives its title from the asset name; the title band's category remains **Sources**.
-Existing artist-authored Layer names remain intact.
+Timeline's imported default layer labels follow the asset display name; independently authored
+Layer names remain intact. Rename changes project metadata and does not rename media files.
 
 Loop Mode offers **Hold / Loop / Ping-pong**; Color Space offers **Auto / sRGB / Linear / Raw**.
 The card, generic Properties rows and timeline source twirl-downs read the same UI vocabulary table.

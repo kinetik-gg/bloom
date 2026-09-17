@@ -1,8 +1,12 @@
 #include "asset_drop.hpp"
+#include "assets_editor_internal.hpp"
+#include <QAbstractItemDelegate>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>
+#include <QTimer>
 #include <QUrl>
+#include <bloom/commands/asset_operations.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/kit/button.hpp>
@@ -41,69 +45,6 @@
 #include <optional>
 
 namespace bloom::ui {
-namespace {
-
-constexpr int kCompositionIdRole = Qt::UserRole + 1;
-
-[[nodiscard]] document::CompositionId compositionIdForItem(const QTreeWidgetItem* item) {
-    if (item == nullptr) {
-        return {};
-    }
-    return document::CompositionId::fromRaw(item->data(0, kCompositionIdRole).toULongLong());
-}
-
-class AssetTree final : public QTreeWidget {
-  public:
-    AssetTree(CompositionSession& session, QWidget* parent)
-        : QTreeWidget(parent), session_(session) {
-        setAcceptDrops(true);
-        setDragEnabled(true);
-        setDragDropMode(QAbstractItemView::DragDrop);
-    }
-
-  protected:
-    QStringList mimeTypes() const override { return {QString::fromLatin1(kAssetMimeType)}; }
-    QMimeData* mimeData(const QList<QTreeWidgetItem*>& items) const override {
-        auto* mime = new QMimeData;
-        for (const auto* item : items) {
-            const auto id = item->data(0, Qt::UserRole + 2).toULongLong();
-            if (id) {
-                mime->setData(kAssetMimeType,
-                              assetMimePayload(session_, document::AssetId::fromRaw(id)));
-                break;
-            }
-        }
-        return mime;
-    }
-    void dragEnterEvent(QDragEnterEvent* event) override {
-        if (event->mimeData()->hasUrls())
-            event->acceptProposedAction();
-        else
-            event->ignore();
-    }
-    void dragMoveEvent(QDragMoveEvent* event) override {
-        if (event->mimeData()->hasUrls())
-            event->acceptProposedAction();
-        else
-            event->ignore();
-    }
-    void dropEvent(QDropEvent* event) override {
-        QStringList files;
-        for (const auto& url : event->mimeData()->urls())
-            if (url.isLocalFile())
-                files.push_back(url.toLocalFile());
-        if (auto* controller = session_.assetController(); controller && !files.empty()) {
-            controller->importFiles(files);
-            event->acceptProposedAction();
-        }
-    }
-
-  private:
-    CompositionSession& session_;
-};
-
-} // namespace
-
 AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     : QWidget(parent), session_(session) {
     setObjectName(QStringLiteral("assetsEditor"));
@@ -120,12 +61,13 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     search_->setPlaceholderText(tr("Search assets…"));
     layout->addWidget(search_);
 
-    tree_ = new AssetTree(session_, this);
+    tree_ = new assets::AssetTree(session_, this);
     tree_->setObjectName(QStringLiteral("assetsTree"));
     tree_->setProperty("kitRows", true);
     tree_->setAccessibleName(tr("Assets"));
     tree_->setHeaderLabels({tr("Name"), tr("Kind")});
-    tree_->setRootIsDecorated(false);
+    tree_->setRootIsDecorated(true);
+    tree_->setIndentation(kit::px(kit::Size::ToggleCell));
     tree_->setUniformRowHeights(true);
     tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     tree_->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -141,13 +83,30 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     connect(tree_, &QTreeWidget::itemDoubleClicked, this,
             [this](QTreeWidgetItem* item, const int column) {
                 if (column == 0) {
-                    openComposition(compositionIdForItem(item));
+                    openComposition(assets::compositionId(item));
                 }
             });
     connect(tree_, &QTreeWidget::itemChanged, this,
             [this](QTreeWidgetItem* item, const int column) { commitRename(item, column); });
     connect(tree_, &QTreeWidget::customContextMenuRequested, this,
             [this](const QPoint position) { showContextMenu(position); });
+
+    connect(tree_->itemDelegate(), &QAbstractItemDelegate::closeEditor, this,
+            [this] { QTimer::singleShot(0, this, &AssetsEditor::rebuild); });
+    const auto expanded = [this](QTreeWidgetItem* item) {
+        if (search_->text().trimmed().isEmpty()) {
+            if (const auto folder = assets::folderId(item)) {
+                if (item->isExpanded())
+                    collapsedFolders_.remove(folder->value());
+                else
+                    collapsedFolders_.insert(folder->value());
+            } else if (item->data(0, assets::kCompositionRootRole).toBool())
+                compositionsCollapsed_ = !item->isExpanded();
+        }
+        refreshDisclosure(item);
+    };
+    connect(tree_, &QTreeWidget::itemExpanded, this, expanded);
+    connect(tree_, &QTreeWidget::itemCollapsed, this, expanded);
 
     connect(&session_, &CompositionSession::snapshotChanged, this, &AssetsEditor::rebuild);
     connect(&session_, &CompositionSession::compositionChanged, this,
@@ -160,154 +119,41 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     rebuild();
 }
 
-void AssetsEditor::rebuild() {
-    rebuilding_ = true;
-    const auto selectedAsset =
-        tree_->currentItem() ? tree_->currentItem()->data(0, Qt::UserRole + 2).toULongLong() : 0;
-    const QSignalBlocker blocker(tree_);
-    tree_->clear();
-    for (const auto& composition : session_.snapshot().project().compositions()) {
-        auto* item = new QTreeWidgetItem(tree_);
-        item->setText(0, QString::fromStdString(composition.name()));
-        item->setText(1, tr("Composition"));
-        item->setData(0, kCompositionIdRole,
-                      QVariant::fromValue<qulonglong>(composition.id().value()));
-        item->setToolTip(0, tr("Composition %1").arg(composition.id().value()));
-        item->setFlags(item->flags() | Qt::ItemIsEditable);
-        auto* row = new kit::KRow(tree_);
-        row->setObjectName(QStringLiteral("assetsRow"));
-        row->setName(item->text(0), kit::IconId::Composition);
-        auto* kind = new kit::KLabel(row);
-        kind->setElidedText(item->text(1));
-        row->setCells({}, nullptr, {kind});
-        row->setAttribute(Qt::WA_TransparentForMouseEvents);
-        item->setSizeHint(0, QSize(0, kit::px(kit::Size::ListRow)));
-        item->setFirstColumnSpanned(true);
-        tree_->setItemWidget(item, 0, row);
-    }
-    for (const auto& asset : session_.snapshot().project().assets()) {
-        auto* item = new QTreeWidgetItem(tree_);
-        const bool font = asset.kind == document::AssetKind::Font;
-        const auto name = font
-                              ? asset.fontFamily + (asset.fontStyle.empty() ? std::string{}
-                                                                            : " " + asset.fontStyle)
-                          : asset.kind == document::AssetKind::Sequence
-                              ? asset.manifest.pattern
-                              : asset.locator.path.substr(asset.locator.path.find_last_of('/') + 1);
-        const bool audio = asset.kind == document::AssetKind::Audio;
-        item->setText(0, QString::fromStdString(name));
-        item->setText(1, font ? tr("Font · %1").arg(QString::fromStdString(asset.fontStyle))
-                         : asset.kind == document::AssetKind::Sequence
-                             ? tr("Sequence [%1]").arg(asset.manifest.members.size())
-                         : audio ? tr("Audio · %1 s").arg(asset.duration.toSeconds(), 0, 'f', 2)
-                                 : tr("Image"));
-        item->setData(0, Qt::UserRole + 2, QVariant::fromValue<qulonglong>(asset.id.value()));
-        const auto* controller = session_.assetController();
-        const bool missing = controller && controller->missing(asset.id);
-        item->setToolTip(0, missing ? (font    ? tr("Missing font — Relink in Assets")
-                                       : audio ? tr("Missing audio — Relink in Assets")
-                                               : tr("Missing image — Relink in Assets"))
-                                    : QString::fromStdString(asset.locator.path));
-        auto* row = new kit::KRow(tree_);
-        row->setObjectName(QStringLiteral("assetsRow"));
-        row->setName(item->text(0), font ? kit::IconId::Text
-                                    : asset.kind == document::AssetKind::Sequence
-                                        ? kit::IconId::Images
-                                    : audio ? kit::IconId::Audio
-                                            : kit::IconId::Image);
-        auto* kind = new kit::KLabel(row);
-        kind->setElidedText(item->text(1));
-        auto* warning = new kit::KIconButton(row);
-        warning->setObjectName(QStringLiteral("assetsMissingGlyph"));
-        warning->setFixedSize(kit::px(kit::Size::ToggleCell), kit::px(kit::Size::ToggleCell));
-        warning->setIcon(kit::icon(kit::IconId::Warning, kit::IconRole::Chrome, kit::Color::Warn));
-        warning->setToolTip(font    ? tr("Missing font")
-                            : audio ? tr("Missing audio")
-                                    : tr("Missing image"));
-        warning->setVisible(missing);
-        row->setCells({}, nullptr, {kind}, warning);
-        row->setAttribute(Qt::WA_TransparentForMouseEvents);
-        item->setSizeHint(0, QSize(0, kit::px(kit::Size::ListRow)));
-        item->setFirstColumnSpanned(true);
-        tree_->setItemWidget(item, 0, row);
-    }
-    applyFilter(search_->text());
-    updateSelection();
-    if (selectedAsset)
-        for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
-            auto* item = tree_->topLevelItem(index);
-            if (item->data(0, Qt::UserRole + 2).toULongLong() == selectedAsset) {
-                tree_->clearSelection();
-                tree_->setCurrentItem(item);
-                item->setSelected(true);
-                refreshRowSelection();
-                break;
-            }
-        }
-    rebuilding_ = false;
-}
-
-void AssetsEditor::updateSelection() {
-    if (tree_ == nullptr) {
-        return;
-    }
-    const QSignalBlocker blocker(tree_);
-    tree_->clearSelection();
-    for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
-        auto* item = tree_->topLevelItem(index);
-        if (!item->isHidden() && compositionIdForItem(item) == session_.compositionId()) {
-            tree_->setCurrentItem(item);
-            item->setSelected(true);
-            refreshRowSelection();
-            return;
-        }
-    }
-    tree_->setCurrentItem(nullptr);
-    refreshRowSelection();
-}
-
-void AssetsEditor::refreshRowSelection() {
-    for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
-        auto* item = tree_->topLevelItem(index);
-        if (auto* row = qobject_cast<kit::KRow*>(tree_->itemWidget(item, 0)))
-            row->setRowState(index, item->isSelected());
-    }
-}
-
-void AssetsEditor::applyFilter(const QString& text) {
-    if (tree_ == nullptr) {
-        return;
-    }
-    const QString query = text.trimmed();
-    for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
-        auto* item = tree_->topLevelItem(index);
-        item->setHidden(!query.isEmpty() && !item->text(0).contains(query, Qt::CaseInsensitive));
-    }
-    if (!rebuilding_) {
-        updateSelection();
-    }
-}
-
 void AssetsEditor::openComposition(const document::CompositionId id) {
     if (id.isValid()) {
         (void)session_.setComposition(id);
     }
 }
 
-void AssetsEditor::commitRename(QTreeWidgetItem* item, const int column) {
-    if (rebuilding_ || item == nullptr || column != 0) {
+void AssetsEditor::beginRename(QTreeWidgetItem* item) {
+    static_cast<assets::AssetTree*>(tree_)->beginRename(item);
+}
+void AssetsEditor::commitRename(QTreeWidgetItem* item, int column) {
+    if (rebuilding_ || !item || column != 0)
         return;
-    }
-    const auto id = compositionIdForItem(item);
-    if (!id.isValid()) {
-        return;
-    }
-    commands::Transaction transaction("Rename Composition", session_.snapshot().revision());
-    transaction.emplace<commands::SetCompositionName>(id, item->text(0).toStdString());
-    const auto result = session_.executeTransaction(std::move(transaction));
-    if (!result.succeeded()) {
-        rebuild();
-    }
+    const auto composition = assets::compositionId(item);
+    const auto asset = assets::assetId(item);
+    const auto folder = assets::folderId(item);
+    const auto name = item->text(0).toStdString();
+    // Let the delegate finish before the snapshot signal replaces its item.
+    QTimer::singleShot(0, this,
+                       [this, composition, asset, folder, name, snapshot = session_.snapshot()] {
+                           if (&snapshot.project() != &session_.snapshot().project()) {
+                               rebuild();
+                               return;
+                           }
+                           commands::Transaction transaction("Rename Asset", snapshot.revision());
+                           if (asset.isValid())
+                               transaction.emplace<commands::RenameAsset>(asset, name);
+                           else if (folder)
+                               transaction.emplace<commands::RenameAssetFolder>(*folder, name);
+                           else if (composition.isValid())
+                               transaction.emplace<commands::SetCompositionName>(composition, name);
+                           else
+                               return;
+                           (void)session_.executeTransaction(std::move(transaction));
+                           rebuild();
+                       });
 }
 
 void AssetsEditor::showContextMenu(const QPoint position) {
@@ -315,10 +161,17 @@ void AssetsEditor::showContextMenu(const QPoint position) {
     if (item == nullptr) {
         return;
     }
-    tree_->setCurrentItem(item);
+    if (!item->isSelected())
+        tree_->setCurrentItem(item);
     const auto assetId = document::AssetId::fromRaw(item->data(0, Qt::UserRole + 2).toULongLong());
     if (assetId.isValid()) {
         std::unique_ptr<QMenu> menu(kit::makeMenu(this));
+        auto* rename = menu->addAction(tr("Rename"));
+        rename->setObjectName(QStringLiteral("assetsRenameAction"));
+        connect(rename, &QAction::triggered, this, [this] { beginRename(tree_->currentItem()); });
+        auto* tags = menu->addAction(tr("Edit Tags…"));
+        tags->setObjectName(QStringLiteral("assetsEditTagsAction"));
+        connect(tags, &QAction::triggered, this, [this, assetId] { editTags(assetId); });
         auto* relink = menu->addAction(tr("Relink…"));
         relink->setObjectName(QStringLiteral("assetsRelinkAction"));
         auto* remove = menu->addAction(tr("Remove"));
@@ -334,7 +187,22 @@ void AssetsEditor::showContextMenu(const QPoint position) {
         menu->exec(tree_->viewport()->mapToGlobal(position));
         return;
     }
-    const auto id = compositionIdForItem(item);
+    if (assets::folderId(item)) {
+        std::unique_ptr<QMenu> menu(kit::makeMenu(this));
+        auto* rename = menu->addAction(tr("Rename"));
+        rename->setObjectName(QStringLiteral("assetsRenameAction"));
+        connect(rename, &QAction::triggered, this, [this] { beginRename(tree_->currentItem()); });
+        auto* create = menu->addAction(tr("New Folder"));
+        connect(create, &QAction::triggered, this, &AssetsEditor::createFolder);
+        auto* remove = menu->addAction(tr("Remove Folder"));
+        remove->setObjectName(QStringLiteral("assetsRemoveFolderAction"));
+        connect(remove, &QAction::triggered, this, &AssetsEditor::removeSelected);
+        menu->exec(tree_->viewport()->mapToGlobal(position));
+        return;
+    }
+    const auto id = assets::compositionId(item);
+    if (!id.isValid())
+        return;
 
     std::unique_ptr<QMenu> menu(kit::makeMenu(this));
     auto* openAction = menu->addAction(tr("Open"));
@@ -342,7 +210,7 @@ void AssetsEditor::showContextMenu(const QPoint position) {
     connect(openAction, &QAction::triggered, this, [this, id] { openComposition(id); });
     auto* renameAction = menu->addAction(tr("Rename"));
     renameAction->setObjectName(QStringLiteral("assetsRenameAction"));
-    connect(renameAction, &QAction::triggered, this, [this, item] { tree_->editItem(item, 0); });
+    connect(renameAction, &QAction::triggered, this, [this] { beginRename(tree_->currentItem()); });
     auto* duplicateAction = menu->addAction(tr("Duplicate"));
     duplicateAction->setObjectName(QStringLiteral("assetsDuplicateAction"));
     connect(duplicateAction, &QAction::triggered, this, [this, id] { duplicateComposition(id); });
@@ -391,7 +259,7 @@ void AssetsEditor::buildHeaderMenus() {
     connect(newComposition, &QAction::triggered, this, &AssetsEditor::showNewCompositionDialog);
     auto* newFolder = add->addAction(tr("New Folder"));
     newFolder->setObjectName(QStringLiteral("assetsNewFolderAction"));
-    newFolder->setEnabled(false);
+    connect(newFolder, &QAction::triggered, this, &AssetsEditor::createFolder);
     newFolder->setToolTip(tr("New Folder"));
 
     auto* select = bar->addMenu(tr("Select"));
@@ -424,7 +292,7 @@ void AssetsEditor::buildFooter() {
             &AssetsEditor::showNewCompositionDialog);
     auto* newFolder =
         button(kit::IconId::NewFolder, tr("New Folder"), QStringLiteral("assetsNewFolderButton"));
-    newFolder->setEnabled(false);
+    connect(newFolder, &kit::KIconButton::clicked, this, &AssetsEditor::createFolder);
     auto* import = button(kit::IconId::Import, tr("Import"), QStringLiteral("assetsImportButton"));
     connect(import, &kit::KIconButton::clicked, this, [this] {
         if (auto* controller = session_.assetController())
@@ -433,18 +301,7 @@ void AssetsEditor::buildFooter() {
     layout->addStretch(1);
     auto* remove =
         button(kit::IconId::DeleteAsset, tr("Delete"), QStringLiteral("assetsDeleteButton"));
-    connect(remove, &kit::KIconButton::clicked, this, [this] {
-        const auto* item = tree_->currentItem();
-        if (!item)
-            return;
-        const auto asset =
-            document::AssetId::fromRaw(item->data(0, Qt::UserRole + 2).toULongLong());
-        if (asset.isValid()) {
-            if (auto* controller = session_.assetController())
-                controller->remove(asset);
-        } else
-            deleteComposition(compositionIdForItem(item));
-    });
+    connect(remove, &kit::KIconButton::clicked, this, &AssetsEditor::removeSelected);
     footerWidget_ = EditorArea::buildChromeRow(chrome_.footer, this, true);
 }
 

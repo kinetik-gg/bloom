@@ -434,10 +434,12 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
                            capturedInputVersion.value_or(manifestValue.documentSchemaVersion)}));
         }
 
-        // Schema 1.11 is the load floor. Historical numbered migration steps remain recorded,
-        // but opening a document never upgrades node semantics or an older schema.
+        // The decoder applies the additive 1.15 asset metadata defaults. Node semantics
+        // and older schema versions retain their existing refusal path.
         const JsonValue* trustedDocumentRoot = &documentDom.document()->root();
-        const auto effectiveDocumentVersion = decodedDocumentVersion;
+        auto effectiveDocumentVersion = decodedDocumentVersion;
+        if (effectiveDocumentVersion == document::SchemaVersion{1, 15})
+            effectiveDocumentVersion = kCanonicalDocumentSchemaVersionV1;
         const auto effectiveDocumentValueCount = documentValueCount;
 
         stage = SaveArchiveStage::DocumentDecode;

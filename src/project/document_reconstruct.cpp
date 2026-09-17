@@ -151,6 +151,10 @@ ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope) 
 
     document::Project project(envelope.projectId, std::move(envelope.projectName));
 
+    for (auto& folder : envelope.assetFolders)
+        if (!project.addAssetFolder(std::move(folder)))
+            return ReconstructDocumentResult::failure(
+                projectRejection(ReconstructionStage::ProjectValidate));
     for (auto& asset : envelope.assets) {
         if (!project.addAsset(std::move(asset)))
             return ReconstructDocumentResult::failure(

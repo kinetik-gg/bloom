@@ -67,6 +67,27 @@
                 !emitRational(state, asset.duration.numerator(), asset.duration.denominator()) ||
                 !state.ok(writer.endObject())) return false;
         }
+        if (!state.ok(writer.memberName("name")) || !state.ok(writer.stringValue(asset.name))) return false;
+        const auto assetFolder = asset.folder;
+        if (assetFolder && !emitNamedId(state, "folder", assetFolder->value())) return false;
+        if (!state.ok(writer.memberName("tags")) || !state.ok(writer.beginArray())) return false;
+        for (const auto& tag : asset.tags)
+            if (!state.ok(writer.stringValue(tag))) return false;
+        if (!state.ok(writer.endArray()) || !emitNamedId(state, "order", asset.order)) return false;
+        if (!state.ok(writer.endObject())) return false;
+    }
+    return state.ok(writer.endArray());
+}
+
+[[nodiscard]] bool emitAssetFolders(EmitState& state) noexcept {
+    if (state.project.assetFolders().empty()) return true;
+    auto& writer = state.writer;
+    if (!state.ok(writer.memberName("assetFolders")) || !state.ok(writer.beginArray())) return false;
+    for (const auto& folder : state.project.assetFolders()) {
+        if (!state.ok(writer.beginObject()) || !emitNamedId(state, "id", folder.id.value()) ||
+            !state.ok(writer.memberName("name")) || !state.ok(writer.stringValue(folder.name))) return false;
+        const auto parent = folder.parent;
+        if (parent && !emitNamedId(state, "parent", parent->value())) return false;
         if (!state.ok(writer.endObject())) return false;
     }
     return state.ok(writer.endArray());

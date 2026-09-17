@@ -99,3 +99,13 @@ top row at 16% / 31% / 32% / 19%, with Timeline across the 68% / 32% lower row a
 divider at 37%. The fixture's sample graph, selected content, composition pixels, controls and
 full-window dimensions are otherwise unchanged. Comparison tolerances and full-image coverage
 are unchanged; process/output identity goldens are unchanged.
+
+ASSETS-2 approval (2026-09-17, Qt 6.8.3): Assets now has a separate expandable Compositions
+root, kit disclosure and indentation, consistent selected-row backgrounds, and a live New Folder
+footer control. The fixture has no asset folders; its builtin font retains the captured face label.
+Both complete captures were visually inspected. These references also capture the ROI/exposure/gamma
+viewer-footer controls already present at the lane base `55319c3`; the previous reference approval
+`33f4f84` preceded those viewer commits. ASSETS-2 changes no viewer source.
+The test printed mean channel errors of 0.474275 (DPR 1) and 0.468285 (DPR 1.5) against the previous
+references, and 0 at both DPRs after `--update-goldens`. Comparison tolerances, full-image coverage
+and rendering identity goldens are unchanged.

@@ -524,13 +524,13 @@ void testAsyncOpenRoundTrippedNewerMinor(Expectations& expectations) {
     if (!written) {
         return;
     }
-    const std::string anchor = "\"minor\": 15\n  },\n  \"project\"";
+    const std::string anchor = "\"minor\": 16\n  },\n  \"project\"";
     const auto anchorPos = text.find(anchor);
     expectations.expect(anchorPos != std::string::npos, "async round trip: anchor is located");
     if (anchorPos == std::string::npos) {
         return;
     }
-    text.replace(anchorPos, std::string_view("\"minor\": 15").size(), "\"minor\": 16");
+    text.replace(anchorPos, std::string_view("\"minor\": 16").size(), "\"minor\": 17");
     if (text.size() < 2 || text.back() != '\n' || text[text.size() - 2] != '}') {
         expectations.expect(false, "async round trip: baseline ends with the root's closing brace");
         return;
@@ -558,11 +558,11 @@ void testAsyncOpenRoundTrippedNewerMinor(Expectations& expectations) {
         return;
     }
     auto reconstructedSnapshot = reconstructed.value()->document->snapshot();
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 16}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 17}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &reconstructedSnapshot,
                                             .colorSettings = &reconstructed.value()->colorSettings,
                                             .roundTrip = decoded.roundTrip(),
-                                            .schemaMinor = 16};
+                                            .schemaMinor = 17};
     auto built =
         buildVerifiedSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
     expectations.expect(static_cast<bool>(built), "async round trip: fixture archive builds");

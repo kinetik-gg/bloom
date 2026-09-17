@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <bloom/core/utf8.hpp>
 #include <bloom/document/asset.hpp>
+#include <bloom/document/persisted_text.hpp>
 
 namespace bloom::document {
 namespace {
@@ -29,8 +30,32 @@ bool validLocator(const AssetLocator& locator) {
     return false;
 }
 } // namespace
+std::string defaultAssetName(const AssetRecord& asset) {
+    // Builtin font locators name a captured face, not a file (for example embedded/0).
+    if (asset.kind == AssetKind::Font && asset.locator.portability == "builtin" &&
+        !asset.fontFamily.empty())
+        return asset.fontFamily + (asset.fontStyle.empty() ? "" : " " + asset.fontStyle);
+    auto name = asset.locator.path.substr(asset.locator.path.find_last_of("/\\") + 1);
+    const auto dot = name.find_last_of('.');
+    if (dot != std::string::npos && dot != 0 && name != "..")
+        name.resize(dot);
+    if (name.empty())
+        name = asset.fontFamily.empty() ? "Asset" : asset.fontFamily;
+    return name;
+}
 ValidationResult AssetRecord::validate() const {
     ValidationResult result;
+    // Prepared imports may omit the name; Project::addAsset supplies the lexical default.
+    if (!name.empty())
+        validateHumanFacingName(name, "name", "Asset name", result);
+    if (folder && !folder->isValid())
+        result.add(ValidationCode::InvalidId, "folder", "Folder ID must not be zero");
+    if (tags.size() > 64 || !std::ranges::is_sorted(tags) ||
+        std::ranges::adjacent_find(tags) != tags.end())
+        result.add(ValidationCode::InvalidValue, "tags",
+                   "Asset tags must be sorted, unique and at most 64");
+    for (const auto& tag : tags)
+        validateStructuralText(tag, "tags", "Asset tag", result);
     if (!id.isValid())
         result.add(ValidationCode::InvalidId, "id", "Asset ID must not be zero");
     if (!validLocator(locator))

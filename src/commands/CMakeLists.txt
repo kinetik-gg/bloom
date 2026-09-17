@@ -7,6 +7,7 @@ target_sources(
         command_stack.cpp
         operations.cpp
         asset_operations.cpp
+        asset_organization_operations.cpp
         node_operations.cpp
         layer_operations.cpp
         node_duplication.cpp

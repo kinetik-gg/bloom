@@ -10,6 +10,7 @@
 
 namespace bloom::document {
 
+struct AssetFolderIdTag;
 struct AssetIdTag;
 struct ProjectIdTag;
 struct CompositionIdTag;
@@ -24,6 +25,7 @@ struct KeyframeIdTag;
 struct DriverBindingIdTag;
 struct ExtensionRecordIdTag;
 
+using AssetFolderId = core::Id<AssetFolderIdTag>;
 using AssetId = core::Id<AssetIdTag>;
 using ProjectId = core::Id<ProjectIdTag>;
 using CompositionId = core::Id<CompositionIdTag>;
@@ -53,6 +55,7 @@ struct IdAllocatorHighWater final {
     // newest namespace (document schema 1.2), and an older file simply has no value for it.
     std::uint64_t nodeGroup = 0;
     std::uint64_t asset = 0;
+    std::uint64_t assetFolder = 0;
 
     friend constexpr auto operator<=>(const IdAllocatorHighWater&,
                                       const IdAllocatorHighWater&) noexcept = default;
@@ -81,6 +84,7 @@ class IdAllocator final {
             .extensionRecord = extensionRecord_,
             .nodeGroup = nodeGroup_,
             .asset = asset_,
+            .assetFolder = assetFolder_,
         };
     }
 
@@ -117,6 +121,14 @@ class IdAllocator final {
     [[nodiscard]] std::optional<AssetId> allocateAsset() noexcept {
         return allocate<AssetId>(asset_);
     }
+    [[nodiscard]] std::optional<AssetFolderId> allocateAssetFolder() noexcept {
+        return allocate<AssetFolderId>(assetFolder_);
+    }
+    void reserveExisting(AssetFolderId id) noexcept { reserve(id, assetFolder_); }
+    [[nodiscard]] constexpr bool covers(AssetFolderId id) const noexcept {
+        return coversId(id, assetFolder_);
+    }
+
     void reserveExisting(AssetId id) noexcept { reserve(id, asset_); }
     [[nodiscard]] constexpr bool covers(AssetId id) const noexcept { return coversId(id, asset_); }
 
@@ -179,6 +191,7 @@ class IdAllocator final {
         extensionRecord_ = std::max(extensionRecord_, other.extensionRecord_);
         nodeGroup_ = std::max(nodeGroup_, other.nodeGroup_);
         asset_ = std::max(asset_, other.asset_);
+        assetFolder_ = std::max(assetFolder_, other.assetFolder_);
     }
 
   private:
@@ -187,7 +200,8 @@ class IdAllocator final {
           layer_(highWater.layer), layerSlot_(highWater.layerSlot), parameter_(highWater.parameter),
           animationCurve_(highWater.animationCurve), keyframe_(highWater.keyframe),
           driverBinding_(highWater.driverBinding), extensionRecord_(highWater.extensionRecord),
-          nodeGroup_(highWater.nodeGroup), asset_(highWater.asset) {}
+          nodeGroup_(highWater.nodeGroup), asset_(highWater.asset),
+          assetFolder_(highWater.assetFolder) {}
 
     template <core::TypedId IdType>
     [[nodiscard]] static std::optional<IdType> allocate(std::uint64_t& highestIssued) noexcept {
@@ -224,6 +238,7 @@ class IdAllocator final {
     std::uint64_t extensionRecord_ = 0;
     std::uint64_t nodeGroup_ = 0;
     std::uint64_t asset_ = 0;
+    std::uint64_t assetFolder_ = 0;
 };
 
 } // namespace bloom::document

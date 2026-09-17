@@ -525,14 +525,14 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
         return;
     }
 
-    const std::string anchor = "\"minor\": 15\n  },\n  \"project\"";
+    const std::string anchor = "\"minor\": 16\n  },\n  \"project\"";
     const auto anchorPos = text.find(anchor);
     expectations.expect(anchorPos != std::string::npos,
                         "round-tripped newer minor: root schemaVersion anchor is located");
     if (anchorPos == std::string::npos) {
         return;
     }
-    text.replace(anchorPos, std::string_view("\"minor\": 15").size(), "\"minor\": 16");
+    text.replace(anchorPos, std::string_view("\"minor\": 16").size(), "\"minor\": 17");
     expectations.expect(text.size() >= 2 && text.back() == '\n' && text[text.size() - 2] == '}',
                         "round-tripped newer minor: baseline ends with the root's closing brace");
     if (text.size() < 2 || text.back() != '\n' || text[text.size() - 2] != '}') {
@@ -576,7 +576,7 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
                          .displayPath = std::nullopt,
                          .persistedAllocatorHighWater = persistedHighWater,
                          .roundTrip = std::move(roundTrip),
-                         .schemaMinor = 16,
+                         .schemaMinor = 17,
                          .retainedRequirements = {}});
     expectations.expect(static_cast<bool>(sessionResult),
                         "round-tripped newer minor: the session installs the round-tripped "
@@ -624,8 +624,8 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
         expectations.expect(
             static_cast<bool>(decodedManifest) && decodedManifest.value() != nullptr &&
                 decodedManifest.value()->documentSchemaVersion ==
-                    bloom::document::SchemaVersion{1, 16},
-            "round-tripped newer minor: the published manifest declares document schema {1,16}");
+                    bloom::document::SchemaVersion{1, 17},
+            "round-tripped newer minor: the published manifest declares document schema {1,17}");
     }
 
     auto documentDom =

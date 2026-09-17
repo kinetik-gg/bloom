@@ -352,6 +352,10 @@ target_sources(
         licenses_window.cpp
         main_window.cpp
         assets_editor.cpp
+        assets_editor_model.cpp
+        assets_editor_tree.cpp
+        assets_editor_actions.cpp
+        assets_editor_internal.hpp
         asset_controller.cpp
         asset_drop.cpp
         asset_drop.hpp

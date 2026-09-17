@@ -41,6 +41,10 @@ provide research or rationale, but they are not binding until adopted here.
 7. [`roadmap.md`](roadmap.md) — proof-oriented implementation sequence.
 8. [`decisions/`](decisions/) — accepted architecture decision records.
 
+## User Guides
+
+- [Organizing Assets](user-guide/assets.md) — folders, display names, tags, search and drag order.
+
 ## Current Checkpoint
 
 - The deterministic CPU preview vertical slice through Batch 3 is implemented and locally verified;

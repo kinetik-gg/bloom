@@ -1,0 +1,2331 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kinetik:bloom:schema:project-document:1.16",
+  "title": "Bloom Project Document 1.16",
+  "$comment": "Document 1.16 adds font assets (asset kind \"font\", a font descriptor of family/style/face index, and builtin/system locator portabilities whose path may be empty) and the box-text layout parameters carried as ordinary parameter values; every 1.14 construct, path values included, is unchanged, so a 1.14 document re-encodes byte-identically except for its schema version.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "project",
+    "idAllocation",
+    "extensions"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "$ref": "#/$defs/fixedVersion-1.16"
+    },
+    "project": {
+      "$ref": "#/$defs/project-1.0"
+    },
+    "idAllocation": {
+      "$ref": "#/$defs/idAllocation-1.0"
+    },
+    "extensions": {
+      "type": "array",
+      "maxItems": 1000000,
+      "items": {
+        "$ref": "#/$defs/extensionRecord-1.0"
+      }
+    }
+  },
+  "$defs": {
+    "fixedVersion-1.1": {
+      "type": "object",
+      "required": [
+        "major",
+        "minor"
+      ],
+      "properties": {
+        "major": {
+          "const": 1
+        },
+        "minor": {
+          "const": 1
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "fixedVersion-1.4": {
+      "type": "object",
+      "required": [
+        "major",
+        "minor"
+      ],
+      "properties": {
+        "major": {
+          "const": 1
+        },
+        "minor": {
+          "const": 4
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "nodeGroup-1.2": {
+      "$comment": "A node group frames member cards. It is layout only: no ports, no encapsulation, no evaluation meaning.",
+      "type": "object",
+      "required": [
+        "groupId",
+        "name",
+        "members",
+        "padding"
+      ],
+      "properties": {
+        "groupId": {
+          "$ref": "#/$defs/objectId"
+        },
+        "name": {
+          "$ref": "#/$defs/humanFacingName"
+        },
+        "members": {
+          "type": "array",
+          "maxItems": 1000000,
+          "items": {
+            "$ref": "#/$defs/objectId"
+          }
+        },
+        "padding": {
+          "type": "object",
+          "required": [
+            "x",
+            "y"
+          ],
+          "properties": {
+            "x": {
+              "type": "number",
+              "minimum": 0
+            },
+            "y": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "unevaluatedProperties": false
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "nodeLayout-1.1": {
+      "type": "object",
+      "required": [
+        "nodeId",
+        "position",
+        "width",
+        "collapsed",
+        "muted"
+      ],
+      "properties": {
+        "nodeId": {
+          "$ref": "#/$defs/objectId"
+        },
+        "position": {
+          "type": "object",
+          "required": [
+            "x",
+            "y"
+          ],
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "collapsed": {
+          "type": "boolean"
+        },
+        "muted": {
+          "type": "boolean"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "unsigned32": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "positiveUnsigned32": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "fixedVersion-1.0": {
+      "type": "object",
+      "required": [
+        "major",
+        "minor"
+      ],
+      "properties": {
+        "major": {
+          "const": 1
+        },
+        "minor": {
+          "const": 0
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "schemaVersion-1.0": {
+      "type": "object",
+      "required": [
+        "major",
+        "minor"
+      ],
+      "properties": {
+        "major": {
+          "$ref": "#/$defs/positiveUnsigned32"
+        },
+        "minor": {
+          "$ref": "#/$defs/unsigned32"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "objectId": {
+      "type": "string",
+      "pattern": "^(?:[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0][0-9]|1844674407370955161[0-5])$"
+    },
+    "allocatorHighWater": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0][0-9]|1844674407370955161[0-5])$"
+    },
+    "signed64Decimal": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7]|-(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-8]))$"
+    },
+    "positiveSigned64Decimal": {
+      "type": "string",
+      "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
+    },
+    "positiveUnsigned32Decimal": {
+      "type": "string",
+      "pattern": "^(?:[1-9][0-9]{0,8}|[1-3][0-9]{9}|4[0-1][0-9]{8}|42[0-8][0-9]{7}|429[0-3][0-9]{6}|4294[0-8][0-9]{5}|42949[0-5][0-9]{4}|429496[0-6][0-9]{3}|4294967[0-1][0-9]{2}|42949672[0-8][0-9]|429496729[0-5])$"
+    },
+    "humanFacingName": {
+      "$comment": "The normative 4096-byte UTF-8 ceiling is enforced by Project I/O; JSON Schema maxLength counts Unicode scalars.",
+      "type": "string",
+      "minLength": 1
+    },
+    "structuralText": {
+      "$comment": "The normative 256-byte UTF-8 ceiling is enforced by Project I/O; JSON Schema maxLength counts Unicode scalars.",
+      "type": "string",
+      "minLength": 1
+    },
+    "namespacedIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "rationalTime": {
+      "type": "object",
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "properties": {
+        "numerator": {
+          "$ref": "#/$defs/signed64Decimal"
+        },
+        "denominator": {
+          "$ref": "#/$defs/positiveSigned64Decimal"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "positiveRationalTime": {
+      "type": "object",
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "properties": {
+        "numerator": {
+          "$ref": "#/$defs/positiveSigned64Decimal"
+        },
+        "denominator": {
+          "$ref": "#/$defs/positiveSigned64Decimal"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "unsignedRatio": {
+      "type": "object",
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "properties": {
+        "numerator": {
+          "$ref": "#/$defs/positiveUnsigned32Decimal"
+        },
+        "denominator": {
+          "$ref": "#/$defs/positiveUnsigned32Decimal"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "project-1.0": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "colorSettings",
+        "compositions",
+        "assets"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "name": {
+          "$ref": "#/$defs/humanFacingName"
+        },
+        "colorSettings": {
+          "$ref": "#/$defs/colorSettings-1.0"
+        },
+        "compositions": {
+          "type": "array",
+          "maxItems": 1000000,
+          "items": {
+            "$ref": "#/$defs/composition-1.0"
+          }
+        },
+        "assets": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": {
+            "$ref": "#/$defs/asset-1.11"
+          }
+        },
+        "assetFolders": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": {
+            "$ref": "#/$defs/assetFolder-1.16"
+          }
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "composition-1.0": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "duration",
+        "format",
+        "parameters",
+        "animationCurves",
+        "graph",
+        "nodeLayout",
+        "nodeGroups",
+        "backgroundColor"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "name": {
+          "$ref": "#/$defs/humanFacingName"
+        },
+        "duration": {
+          "$ref": "#/$defs/positiveRationalTime"
+        },
+        "format": {
+          "$ref": "#/$defs/compositionFormat-1.0"
+        },
+        "parameters": {
+          "type": "array",
+          "maxItems": 1000000,
+          "items": {
+            "$ref": "#/$defs/parameter-1.0"
+          }
+        },
+        "animationCurves": {
+          "type": "array",
+          "maxItems": 1000000,
+          "items": {
+            "$ref": "#/$defs/animationCurve-1.9"
+          }
+        },
+        "graph": {
+          "$ref": "#/$defs/graph-1.0"
+        },
+        "nodeLayout": {
+          "type": "array",
+          "maxItems": 1000000,
+          "items": {
+            "$ref": "#/$defs/nodeLayout-1.1"
+          }
+        },
+        "nodeGroups": {
+          "type": "array",
+          "maxItems": 1000000,
+          "items": {
+            "$ref": "#/$defs/nodeGroup-1.2"
+          }
+        },
+        "safeAreas": {
+          "$ref": "#/$defs/safeAreaSettings-1.9"
+        },
+        "workArea": {
+          "type": "object",
+          "required": [
+            "start",
+            "end"
+          ],
+          "properties": {
+            "start": {
+              "$ref": "#/$defs/rationalTime"
+            },
+            "end": {
+              "$ref": "#/$defs/rationalTime"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "backgroundColor": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          ],
+          "items": false
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "safeAreaSettings-1.9": {
+      "type": "object",
+      "required": [
+        "action",
+        "title"
+      ],
+      "properties": {
+        "action": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "title": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "compositionFormat-1.0": {
+      "type": "object",
+      "required": [
+        "width",
+        "height",
+        "pixelAspect",
+        "frameRate"
+      ],
+      "properties": {
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "pixelAspect": {
+          "$ref": "#/$defs/unsignedRatio"
+        },
+        "frameRate": {
+          "$ref": "#/$defs/unsignedRatio"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "colorSettings-1.0": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "processColorSpaceId",
+        "ocioConfig"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "$ref": "#/$defs/fixedVersion-1.0"
+        },
+        "processColorSpaceId": {
+          "const": "lin_rec709_scene"
+        },
+        "ocioConfig": {
+          "$ref": "#/$defs/ocioConfigReference-1.0"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "ocioConfigReference-1.0": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "locator",
+        "expectedRevision",
+        "portability",
+        "contextVariables"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "$ref": "#/$defs/fixedVersion-1.0"
+        },
+        "locator": {
+          "$ref": "#/$defs/ocioConfigLocator-1.0"
+        },
+        "expectedRevision": {
+          "$ref": "#/$defs/ocioConfigRevision-1.0"
+        },
+        "portability": {
+          "enum": [
+            "builtin",
+            "project-relative",
+            "external"
+          ]
+        },
+        "contextVariables": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/ocioContextVariable-1.0"
+          }
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "ocioConfigLocator-1.0": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "uri"
+          ],
+          "properties": {
+            "kind": {
+              "const": "builtin"
+            },
+            "uri": {
+              "const": "bloom://ocio/neutral-v1/config.ocio"
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "path"
+          ],
+          "properties": {
+            "kind": {
+              "const": "project-relative-ocioz"
+            },
+            "path": {
+              "$comment": "The 4096-byte UTF-8 ceiling and complete normalized-component profile are Project I/O checks.",
+              "type": "string",
+              "minLength": 1,
+              "allOf": [
+                {
+                  "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*//)[^\\u0000]+$"
+                },
+                {
+                  "pattern": "\\.ocioz$"
+                }
+              ]
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "uri"
+          ],
+          "properties": {
+            "kind": {
+              "const": "external-ocioz"
+            },
+            "uri": {
+              "$ref": "#/$defs/externalFileUri"
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "uri"
+          ],
+          "properties": {
+            "kind": {
+              "const": "external-config"
+            },
+            "uri": {
+              "$ref": "#/$defs/externalFileUri"
+            }
+          },
+          "unevaluatedProperties": true
+        }
+      ]
+    },
+    "externalFileUri": {
+      "$comment": "Project I/O enforces the exact RFC 8089 subset, percent-escape rules, and decoded .ocioz/config.ocio leaf name.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "allOf": [
+        {
+          "pattern": "^[\\u0001-\\u007f]+$"
+        },
+        {
+          "pattern": "^[Ff][Ii][Ll][Ee]:"
+        },
+        {
+          "pattern": "^[^?#]*$"
+        }
+      ]
+    },
+    "ocioConfigRevision-1.0": {
+      "type": "object",
+      "required": [
+        "algorithm",
+        "digest"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "sha256"
+        },
+        "digest": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "ocioContextVariable-1.0": {
+      "type": "object",
+      "required": [
+        "name",
+        "value"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+        },
+        "value": {
+          "$comment": "The normative 4096-byte UTF-8 ceiling is enforced by Project I/O.",
+          "type": "string",
+          "pattern": "^[^\\u0000]*$"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "parameter-1.0": {
+      "type": "object",
+      "required": [
+        "id",
+        "schemaKey",
+        "source"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "schemaKey": {
+          "$ref": "#/$defs/structuralText"
+        },
+        "source": {
+          "$ref": "#/$defs/parameterSource-1.4"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "parameterSource-1.4": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "constant"
+            },
+            "value": {
+              "$ref": "#/$defs/parameterValue-1.4"
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "curveId"
+          ],
+          "properties": {
+            "kind": {
+              "const": "animation-curve"
+            },
+            "curveId": {
+              "$ref": "#/$defs/objectId"
+            },
+            "defaultValue": {
+              "$ref": "#/$defs/parameterValue-1.4"
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "sourceNodeId",
+            "outputPort"
+          ],
+          "properties": {
+            "kind": {
+              "const": "driver"
+            },
+            "sourceNodeId": {
+              "$ref": "#/$defs/objectId"
+            },
+            "outputPort": {
+              "$ref": "#/$defs/structuralText"
+            }
+          },
+          "unevaluatedProperties": true
+        }
+      ]
+    },
+    "parameterSource-1.0": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "constant"
+            },
+            "value": {
+              "$ref": "#/$defs/parameterValue-1.0"
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "curveId"
+          ],
+          "properties": {
+            "kind": {
+              "const": "animation-curve"
+            },
+            "curveId": {
+              "$ref": "#/$defs/objectId"
+            }
+          },
+          "unevaluatedProperties": true
+        }
+      ]
+    },
+    "parameterValue-1.4": {
+      "$comment": "1.4 adds the vec3 constant kind, the third authoring vector width. Its own kind token rather than a third component on vec2, because the discriminators name TYPES and a three-component vector is a different type -- so an older minor refuses it outright instead of reading it as a vec2 with a stray member. Every other arm is exactly parameterValue-1.0's, which is left as it shipped.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/parameterValue-1.0"
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "x",
+            "y",
+            "z"
+          ],
+          "properties": {
+            "kind": {
+              "const": "vec3"
+            },
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            },
+            "z": {
+              "type": "number"
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "$ref": "#/$defs/pathValue-1.14"
+        }
+      ]
+    },
+    "parameterValue-1.0": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "bool"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "int64"
+            },
+            "value": {
+              "$ref": "#/$defs/signed64Decimal"
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "float64"
+            },
+            "value": {
+              "type": "number"
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "x",
+            "y"
+          ],
+          "properties": {
+            "kind": {
+              "const": "vec2"
+            },
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "red",
+            "green",
+            "blue",
+            "alpha"
+          ],
+          "properties": {
+            "kind": {
+              "const": "color4"
+            },
+            "red": {
+              "type": "number"
+            },
+            "green": {
+              "type": "number"
+            },
+            "blue": {
+              "type": "number"
+            },
+            "alpha": {
+              "type": "number"
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "numerator",
+            "denominator"
+          ],
+          "properties": {
+            "kind": {
+              "const": "rational"
+            },
+            "numerator": {
+              "$ref": "#/$defs/signed64Decimal"
+            },
+            "denominator": {
+              "$ref": "#/$defs/positiveSigned64Decimal"
+            }
+          },
+          "unevaluatedProperties": true
+        }
+      ]
+    },
+    "animationCurve-1.3": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "kind",
+            "keyframes"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/objectId"
+            },
+            "kind": {
+              "const": "scalar"
+            },
+            "keyframes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000000,
+              "items": {
+                "$ref": "#/$defs/scalarKeyframe-1.3"
+              }
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "kind",
+            "keyframes"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/objectId"
+            },
+            "kind": {
+              "const": "vec2"
+            },
+            "keyframes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000000,
+              "items": {
+                "$ref": "#/$defs/vec2Keyframe-1.3"
+              }
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "kind",
+            "keyframes"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/objectId"
+            },
+            "kind": {
+              "const": "color4"
+            },
+            "keyframes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000000,
+              "items": {
+                "$ref": "#/$defs/color4Keyframe-1.3"
+              }
+            }
+          },
+          "unevaluatedProperties": true
+        }
+      ]
+    },
+    "animationCurve-1.9": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "kind",
+            "keyframes"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/objectId"
+            },
+            "kind": {
+              "const": "scalar"
+            },
+            "keyframes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000000,
+              "items": {
+                "$ref": "#/$defs/scalarKeyframe-1.3"
+              }
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "kind",
+            "keyframes"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/objectId"
+            },
+            "kind": {
+              "const": "vec2"
+            },
+            "keyframes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000000,
+              "items": {
+                "$ref": "#/$defs/vec2ComponentKeyframe-1.9"
+              }
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "kind",
+            "keyframes"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/objectId"
+            },
+            "kind": {
+              "const": "vec3"
+            },
+            "keyframes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000000,
+              "items": {
+                "$ref": "#/$defs/vec3ComponentKeyframe-1.9"
+              }
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "kind",
+            "keyframes"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/objectId"
+            },
+            "kind": {
+              "const": "color4"
+            },
+            "keyframes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000000,
+              "items": {
+                "$ref": "#/$defs/color4ComponentKeyframe-1.9"
+              }
+            }
+          },
+          "unevaluatedProperties": true
+        }
+      ]
+    },
+    "vec2ComponentKeyframe-1.9": {
+      "type": "object",
+      "required": [
+        "id",
+        "component",
+        "time",
+        "value",
+        "outgoingInterpolation"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "component": {
+          "enum": [
+            "x",
+            "y"
+          ]
+        },
+        "time": {
+          "$ref": "#/$defs/rationalTime"
+        },
+        "value": {
+          "type": "number"
+        },
+        "outgoingInterpolation": {
+          "$ref": "#/$defs/keyframeInterpolation-1.3"
+        },
+        "outgoingHandle": {
+          "$ref": "#/$defs/keyframeHandle-1.12"
+        },
+        "incomingHandle": {
+          "$ref": "#/$defs/keyframeHandle-1.12"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "vec3ComponentKeyframe-1.9": {
+      "type": "object",
+      "required": [
+        "id",
+        "component",
+        "time",
+        "value",
+        "outgoingInterpolation"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "component": {
+          "enum": [
+            "x",
+            "y",
+            "z"
+          ]
+        },
+        "time": {
+          "$ref": "#/$defs/rationalTime"
+        },
+        "value": {
+          "type": "number"
+        },
+        "outgoingInterpolation": {
+          "$ref": "#/$defs/keyframeInterpolation-1.3"
+        },
+        "outgoingHandle": {
+          "$ref": "#/$defs/keyframeHandle-1.12"
+        },
+        "incomingHandle": {
+          "$ref": "#/$defs/keyframeHandle-1.12"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "color4ComponentKeyframe-1.9": {
+      "type": "object",
+      "required": [
+        "id",
+        "component",
+        "time",
+        "value",
+        "outgoingInterpolation"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "component": {
+          "enum": [
+            "red",
+            "green",
+            "blue",
+            "alpha"
+          ]
+        },
+        "time": {
+          "$ref": "#/$defs/rationalTime"
+        },
+        "value": {
+          "type": "number"
+        },
+        "outgoingInterpolation": {
+          "$ref": "#/$defs/keyframeInterpolation-1.3"
+        },
+        "outgoingHandle": {
+          "$ref": "#/$defs/keyframeHandle-1.12"
+        },
+        "incomingHandle": {
+          "$ref": "#/$defs/keyframeHandle-1.12"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "scalarKeyframe-1.3": {
+      "type": "object",
+      "required": [
+        "id",
+        "time",
+        "value",
+        "outgoingInterpolation"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "time": {
+          "$ref": "#/$defs/rationalTime"
+        },
+        "value": {
+          "type": "number"
+        },
+        "outgoingInterpolation": {
+          "$ref": "#/$defs/keyframeInterpolation-1.3"
+        },
+        "outgoingHandle": {
+          "$ref": "#/$defs/keyframeHandle-1.12"
+        },
+        "incomingHandle": {
+          "$ref": "#/$defs/keyframeHandle-1.12"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "vec2Keyframe-1.3": {
+      "type": "object",
+      "required": [
+        "id",
+        "time",
+        "value",
+        "outgoingInterpolation"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "time": {
+          "$ref": "#/$defs/rationalTime"
+        },
+        "value": {
+          "$ref": "#/$defs/vec2Value-1.0"
+        },
+        "outgoingInterpolation": {
+          "$ref": "#/$defs/keyframeInterpolation-1.3"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "color4Keyframe-1.3": {
+      "$comment": "1.3 adds the color4 animation-curve kind and the ease-in-out interpolation token; the historical animationCurve-1.0/scalarKeyframe-1.0/vec2Keyframe-1.0 definitions are left exactly as they shipped in their own artifacts. A straight/unassociated authoring RGBA key. Channel order is the authoring order the constant color4 parameter value already writes, and alpha is confined to the unit interval exactly as a constant authoring color is.",
+      "type": "object",
+      "required": [
+        "id",
+        "time",
+        "value",
+        "outgoingInterpolation"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "time": {
+          "$ref": "#/$defs/rationalTime"
+        },
+        "value": {
+          "$ref": "#/$defs/color4Value-1.3"
+        },
+        "outgoingInterpolation": {
+          "$ref": "#/$defs/keyframeInterpolation-1.3"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "color4Value-1.3": {
+      "type": "object",
+      "required": [
+        "red",
+        "green",
+        "blue",
+        "alpha"
+      ],
+      "properties": {
+        "red": {
+          "type": "number"
+        },
+        "green": {
+          "type": "number"
+        },
+        "blue": {
+          "type": "number"
+        },
+        "alpha": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "keyframeInterpolation-1.3": {
+      "$comment": "ease-in-out is a cubic Bezier ease with fixed symmetric handles; see animation-and-time.md.",
+      "enum": [
+        "hold",
+        "linear",
+        "ease-in-out"
+      ]
+    },
+    "vec2Value-1.0": {
+      "type": "object",
+      "required": [
+        "x",
+        "y"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "graph-1.0": {
+      "type": "object",
+      "required": [
+        "nodes",
+        "edges",
+        "layerOutputs",
+        "layerStack",
+        "compositionOutput"
+      ],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "maxItems": 1000000,
+          "items": {
+            "$ref": "#/$defs/node-1.0"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "maxItems": 1000000,
+          "items": {
+            "$ref": "#/$defs/edge-1.0"
+          }
+        },
+        "layerOutputs": {
+          "type": "array",
+          "maxItems": 1000000,
+          "items": {
+            "$ref": "#/$defs/layerOutput-1.0"
+          }
+        },
+        "layerStack": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/layerStack-1.0"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "compositionOutput": {
+          "$ref": "#/$defs/outputPortReference-1.0"
+        },
+        "merges": {
+          "type": "array",
+          "maxItems": 1000000,
+          "items": {
+            "$ref": "#/$defs/layerStack-1.0"
+          }
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "node-1.0": {
+      "type": "object",
+      "required": [
+        "id",
+        "typeId",
+        "schemaVersion",
+        "parameters"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "typeId": {
+          "$ref": "#/$defs/namespacedIdentifier"
+        },
+        "schemaVersion": {
+          "$ref": "#/$defs/positiveUnsigned32"
+        },
+        "parameters": {
+          "type": "array",
+          "maxItems": 1000000,
+          "items": {
+            "$ref": "#/$defs/parameterBinding-1.0"
+          }
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "parameterBinding-1.0": {
+      "type": "object",
+      "required": [
+        "role",
+        "parameterId"
+      ],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/structuralText"
+        },
+        "parameterId": {
+          "$ref": "#/$defs/objectId"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "edge-1.0": {
+      "type": "object",
+      "required": [
+        "id",
+        "source",
+        "destination"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "source": {
+          "$ref": "#/$defs/outputPortReference-1.0"
+        },
+        "destination": {
+          "$ref": "#/$defs/inputPortReference-1.0"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "outputPortReference-1.0": {
+      "type": "object",
+      "required": [
+        "nodeId",
+        "port"
+      ],
+      "properties": {
+        "nodeId": {
+          "$ref": "#/$defs/objectId"
+        },
+        "port": {
+          "$ref": "#/$defs/structuralText"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "inputPortReference-1.0": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "nodeId",
+            "port"
+          ],
+          "properties": {
+            "kind": {
+              "const": "node-input"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/objectId"
+            },
+            "port": {
+              "$ref": "#/$defs/structuralText"
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "stackNodeId",
+            "slotId",
+            "role"
+          ],
+          "properties": {
+            "kind": {
+              "const": "layer-stack-input"
+            },
+            "stackNodeId": {
+              "$ref": "#/$defs/objectId"
+            },
+            "slotId": {
+              "$ref": "#/$defs/objectId"
+            },
+            "role": {
+              "$ref": "#/$defs/structuralText"
+            }
+          },
+          "unevaluatedProperties": true
+        }
+      ]
+    },
+    "layerOutput-1.0": {
+      "type": "object",
+      "required": [
+        "nodeId",
+        "layerId",
+        "name",
+        "outputPort"
+      ],
+      "properties": {
+        "nodeId": {
+          "$ref": "#/$defs/objectId"
+        },
+        "layerId": {
+          "$ref": "#/$defs/objectId"
+        },
+        "name": {
+          "$ref": "#/$defs/humanFacingName"
+        },
+        "outputPort": {
+          "$ref": "#/$defs/structuralText"
+        },
+        "inPoint": {
+          "$ref": "#/$defs/rationalTime"
+        },
+        "outPoint": {
+          "$ref": "#/$defs/rationalTime"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "solo": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "labelColor": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          }
+        },
+        "parent": {
+          "$ref": "#/$defs/objectId"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "layerStack-1.0": {
+      "type": "object",
+      "required": [
+        "nodeId",
+        "entries"
+      ],
+      "properties": {
+        "nodeId": {
+          "$ref": "#/$defs/objectId"
+        },
+        "entries": {
+          "type": "array",
+          "maxItems": 1000000,
+          "items": {
+            "$ref": "#/$defs/layerStackEntry-1.0"
+          }
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "layerStackEntry-1.0": {
+      "type": "object",
+      "required": [
+        "slotId",
+        "layerId"
+      ],
+      "properties": {
+        "slotId": {
+          "$ref": "#/$defs/objectId"
+        },
+        "layerId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/objectId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "idAllocation-1.0": {
+      "type": "object",
+      "required": [
+        "highestIssued"
+      ],
+      "properties": {
+        "highestIssued": {
+          "$ref": "#/$defs/highestIssued-1.2"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "highestIssued-1.2": {
+      "$comment": "The ten document 1.0 namespaces plus nodeGroup, which document 1.2 adds. Members beyond these remain unknown singleton data and never enter IdAllocatorHighWater.",
+      "type": "object",
+      "required": [
+        "composition",
+        "node",
+        "edge",
+        "layer",
+        "layerSlot",
+        "parameter",
+        "animationCurve",
+        "keyframe",
+        "driverBinding",
+        "extensionRecord",
+        "nodeGroup",
+        "asset"
+      ],
+      "properties": {
+        "composition": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "node": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "edge": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "layer": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "layerSlot": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "parameter": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "animationCurve": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "keyframe": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "driverBinding": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "extensionRecord": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "nodeGroup": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "asset": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "assetFolder": {
+          "$ref": "#/$defs/allocatorHighWater"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "highestIssued-1.0": {
+      "$comment": "Only these ten members have v1 allocator meaning. Additive members remain unknown singleton data and never enter IdAllocatorHighWater.",
+      "type": "object",
+      "required": [
+        "composition",
+        "node",
+        "edge",
+        "layer",
+        "layerSlot",
+        "parameter",
+        "animationCurve",
+        "keyframe",
+        "driverBinding",
+        "extensionRecord"
+      ],
+      "properties": {
+        "composition": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "node": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "edge": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "layer": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "layerSlot": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "parameter": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "animationCurve": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "keyframe": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "driverBinding": {
+          "$ref": "#/$defs/allocatorHighWater"
+        },
+        "extensionRecord": {
+          "$ref": "#/$defs/allocatorHighWater"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "extensionRecord-1.0": {
+      "type": "object",
+      "required": [
+        "id",
+        "ownerId",
+        "typeId",
+        "schemaVersion",
+        "subject",
+        "mediaType",
+        "referencePolicy",
+        "payload"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/namespacedIdentifier"
+        },
+        "typeId": {
+          "$ref": "#/$defs/namespacedIdentifier"
+        },
+        "schemaVersion": {
+          "$ref": "#/$defs/schemaVersion-1.0"
+        },
+        "subject": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/extensionTarget-1.0"
+            }
+          ]
+        },
+        "mediaType": {
+          "$ref": "#/$defs/structuralText"
+        },
+        "referencePolicy": {
+          "$ref": "#/$defs/extensionReferencePolicy-1.0"
+        },
+        "payload": {
+          "$ref": "#/$defs/canonicalBase64"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "extensionTarget-1.0": {
+      "type": "object",
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "project",
+            "composition",
+            "node",
+            "edge",
+            "layer",
+            "layer-slot",
+            "parameter",
+            "animation-curve",
+            "keyframe"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/objectId"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "extensionReferencePolicy-1.0": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "none"
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "references"
+          ],
+          "properties": {
+            "kind": {
+              "const": "host-table"
+            },
+            "references": {
+              "type": "array",
+              "maxItems": 1000000,
+              "items": {
+                "$ref": "#/$defs/extensionHostReference-1.0"
+              }
+            }
+          },
+          "unevaluatedProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "remapperId",
+            "version"
+          ],
+          "properties": {
+            "kind": {
+              "const": "owner-remapper"
+            },
+            "remapperId": {
+              "$ref": "#/$defs/namespacedIdentifier"
+            },
+            "version": {
+              "$ref": "#/$defs/schemaVersion-1.0"
+            }
+          },
+          "unevaluatedProperties": true
+        }
+      ]
+    },
+    "extensionHostReference-1.0": {
+      "type": "object",
+      "required": [
+        "key",
+        "target"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/structuralText"
+        },
+        "target": {
+          "$ref": "#/$defs/extensionTarget-1.0"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "canonicalBase64": {
+      "$comment": "Project I/O rejects nonzero unused tail bits and checks the decoded per-record and aggregate payload ceilings before allocation.",
+      "type": "string",
+      "maxLength": 89478488,
+      "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+    },
+    "fixedVersion-1.9": {
+      "type": "object",
+      "required": [
+        "major",
+        "minor"
+      ],
+      "properties": {
+        "major": {
+          "const": 1
+        },
+        "minor": {
+          "const": 9
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "fixedVersion-1.11": {
+      "type": "object",
+      "required": [
+        "major",
+        "minor"
+      ],
+      "properties": {
+        "major": {
+          "const": 1
+        },
+        "minor": {
+          "const": 11
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "assetLocator-1.11": {
+      "type": "object",
+      "required": [
+        "kind",
+        "portability",
+        "path",
+        "relinkHint"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "file",
+            "font"
+          ]
+        },
+        "portability": {
+          "enum": [
+            "project-relative",
+            "builtin",
+            "system"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 4096
+        },
+        "relinkHint": {
+          "type": "string",
+          "pattern": "^(?:file|font):",
+          "maxLength": 16384
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "assetMember-1.11": {
+      "type": "object",
+      "required": [
+        "frame",
+        "locator",
+        "contentDigest"
+      ],
+      "properties": {
+        "frame": {
+          "$ref": "#/$defs/signed64Decimal"
+        },
+        "locator": {
+          "$ref": "#/$defs/assetLocator-1.11"
+        },
+        "contentDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "assetManifest-1.11": {
+      "type": "object",
+      "required": [
+        "pattern",
+        "padding",
+        "first",
+        "last",
+        "members",
+        "gaps"
+      ],
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "padding": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "first": {
+          "$ref": "#/$defs/signed64Decimal"
+        },
+        "last": {
+          "$ref": "#/$defs/signed64Decimal"
+        },
+        "members": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": {
+            "$ref": "#/$defs/assetMember-1.11"
+          }
+        },
+        "gaps": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": {
+            "$ref": "#/$defs/signed64Decimal"
+          }
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "asset-1.11": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "locator",
+        "contentDigest",
+        "interpretation",
+        "width",
+        "height",
+        "manifest",
+        "name",
+        "tags",
+        "order"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "kind": {
+          "enum": [
+            "image",
+            "sequence",
+            "audio",
+            "font"
+          ]
+        },
+        "locator": {
+          "$ref": "#/$defs/assetLocator-1.11"
+        },
+        "contentDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "interpretation": {
+          "type": "object",
+          "required": [
+            "colorSpace",
+            "alphaAssociation"
+          ],
+          "properties": {
+            "colorSpace": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3
+            },
+            "alphaAssociation": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16384
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16384
+        },
+        "manifest": {
+          "$ref": "#/$defs/assetManifest-1.11"
+        },
+        "audio": {
+          "$ref": "#/$defs/audio-1.11"
+        },
+        "font": {
+          "$ref": "#/$defs/font-1.15"
+        },
+        "name": {
+          "$ref": "#/$defs/humanFacingName"
+        },
+        "folder": {
+          "$ref": "#/$defs/objectId"
+        },
+        "tags": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "order": {
+          "$ref": "#/$defs/allocatorHighWater"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "font"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "font"
+            ]
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "audio-1.11": {
+      "type": "object",
+      "required": [
+        "rate",
+        "channels",
+        "frames",
+        "duration"
+      ],
+      "properties": {
+        "rate": {
+          "type": "integer",
+          "minimum": 8000,
+          "maximum": 384000
+        },
+        "channels": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "frames": {
+          "$ref": "#/$defs/objectId"
+        },
+        "duration": {
+          "$ref": "#/$defs/positiveRationalTime"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "fixedVersion-1.16": {
+      "type": "object",
+      "required": [
+        "major",
+        "minor"
+      ],
+      "properties": {
+        "major": {
+          "const": 1
+        },
+        "minor": {
+          "const": 16
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "keyframeHandle-1.12": {
+      "type": "object",
+      "required": [
+        "time",
+        "value"
+      ],
+      "properties": {
+        "time": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "value": {
+          "type": "number"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "pathPoint-1.14": {
+      "type": "object",
+      "required": [
+        "x",
+        "y"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "pathAnchor-1.14": {
+      "type": "object",
+      "required": [
+        "point"
+      ],
+      "properties": {
+        "point": {
+          "$ref": "#/$defs/pathPoint-1.14"
+        },
+        "inHandle": {
+          "$ref": "#/$defs/pathPoint-1.14"
+        },
+        "outHandle": {
+          "$ref": "#/$defs/pathPoint-1.14"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "pathValue-1.14": {
+      "type": "object",
+      "required": [
+        "kind",
+        "anchors",
+        "closed"
+      ],
+      "properties": {
+        "kind": {
+          "const": "path"
+        },
+        "anchors": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/pathAnchor-1.14"
+          }
+        },
+        "closed": {
+          "type": "boolean"
+        }
+      },
+      "unevaluatedProperties": true
+    },
+    "font-1.15": {
+      "type": "object",
+      "required": [
+        "family",
+        "style",
+        "faceIndex"
+      ],
+      "properties": {
+        "family": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "style": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "faceIndex": {
+          "$ref": "#/$defs/unsigned32"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "assetFolder-1.16": {
+      "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/objectId"
+        },
+        "name": {
+          "$ref": "#/$defs/humanFacingName"
+        },
+        "parent": {
+          "$ref": "#/$defs/objectId"
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  },
+  "unevaluatedProperties": true
+}

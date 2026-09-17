@@ -129,6 +129,12 @@ class AssetDropTarget final : public QObject {
             event->type() != QEvent::Drop)
             return false;
         auto* drop = static_cast<QDropEvent*>(event);
+        if (drop->mimeData()->hasFormat(kCompositionMimeType)) {
+            if (event->type() == QEvent::DragEnter || event->type() == QEvent::Drop)
+                emit session_.commandRejected(tr("Compositions cannot be used as sources yet."));
+            drop->ignore();
+            return true;
+        }
         const auto id = assetFromMime(*drop->mimeData(), session_);
         if (!id.isValid()) {
             drop->ignore();

@@ -40,6 +40,12 @@ struct AssetSequenceManifest {
     std::vector<std::int64_t> gaps;
     friend bool operator==(const AssetSequenceManifest&, const AssetSequenceManifest&) = default;
 };
+struct AssetFolder {
+    AssetFolderId id;
+    std::string name;
+    std::optional<AssetFolderId> parent;
+    friend bool operator==(const AssetFolder&, const AssetFolder&) = default;
+};
 struct AssetRecord {
     AssetId id;
     AssetKind kind = AssetKind::Image;
@@ -60,7 +66,13 @@ struct AssetRecord {
     std::string fontFamily;
     std::string fontStyle;
     std::uint32_t fontIndex = 0;
+    std::string name;
+    std::optional<AssetFolderId> folder;
+    std::vector<std::string> tags;
+    std::uint64_t order = 0;
     [[nodiscard]] ValidationResult validate() const;
     friend bool operator==(const AssetRecord&, const AssetRecord&) = default;
 };
+// Lexical only: importing and migration share a portable UTF-8 file-stem default.
+[[nodiscard]] std::string defaultAssetName(const AssetRecord& asset);
 } // namespace bloom::document

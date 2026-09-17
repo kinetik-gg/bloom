@@ -57,3 +57,8 @@ target_include_directories(bloom_asset_operations_test PRIVATE ${CMAKE_CURRENT_S
 target_link_libraries(bloom_asset_operations_test PRIVATE bloom_commands bloom_project)
 bloom_enable_warnings(bloom_asset_operations_test)
 bloom_add_test(NAME bloom.commands.assets COMMAND bloom_asset_operations_test LABELS unit commands media)
+
+add_executable(bloom_commands_asset_organization_test asset_organization_tests.cpp)
+target_link_libraries(bloom_commands_asset_organization_test PRIVATE bloom_commands)
+bloom_enable_warnings(bloom_commands_asset_organization_test)
+bloom_add_test(NAME bloom.commands.asset-organization COMMAND bloom_commands_asset_organization_test LABELS unit commands)

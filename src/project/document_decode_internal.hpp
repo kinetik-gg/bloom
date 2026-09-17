@@ -218,6 +218,9 @@ decodeCompositionInterior(const JsonValue& parametersNode, const JsonValue& anim
                           std::vector<document::ParameterRecord>& parameters,
                           std::vector<document::AnimationCurveRecord>& curves, DecodedGraph& graph);
 
+[[nodiscard]] bool decodeAssetFolders(const JsonValue& node, DecodeState& state,
+                                      const std::string& path,
+                                      std::vector<document::AssetFolder>& out);
 [[nodiscard]] bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& path,
                                 std::vector<document::AssetRecord>& out);
 

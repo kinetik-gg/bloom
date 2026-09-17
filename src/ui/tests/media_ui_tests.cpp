@@ -13,6 +13,8 @@
 #include <QTest>
 #include <QTreeWidget>
 #include <QUrl>
+#include <bloom/commands/asset_operations.hpp>
+#include <bloom/commands/layer_operations.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -77,6 +79,15 @@ void run() {
     QMimeData mime;
     mime.setData(ui::kAssetMimeType, ui::assetMimePayload(session, asset));
     auto* view = nodes.findChild<QGraphicsView*>();
+    QString refused;
+    QObject::connect(&session, &ui::CompositionSession::commandRejected, &nodes,
+                     [&](const QString& message) { refused = message; });
+    QMimeData compositionMime;
+    compositionMime.setData(ui::kCompositionMimeType, "1");
+    const auto nodeCount = session.composition()->graph().nodes().size();
+    require(view && !drop(*view->viewport(), compositionMime) && !refused.isEmpty() &&
+                session.composition()->graph().nodes().size() == nodeCount,
+            "composition canvas drop is refused with a message and no graph edit");
     require(view && drop(*view->viewport(), mime), "asset drop onto node canvas");
     document::NodeId source;
     for (const auto& node : session.composition()->graph().nodes())
@@ -107,6 +118,27 @@ void run() {
     require(card->title() ==
                 ui::imageAssetDisplayName(*session.snapshot().project().findAsset(asset)),
             "source title derives from asset name");
+    commands::Transaction renameAsset("Rename Asset", session.snapshot().revision());
+    renameAsset.emplace<commands::RenameAsset>(asset, "Hero plate");
+    require(session.executeTransaction(std::move(renameAsset)).changed(), "rename imported asset");
+    require(card->title() == "Hero plate" &&
+                properties.findChild<ui::kit::KDropdown*>("propertiesImageAsset")
+                    ->currentText()
+                    .startsWith("Hero plate"),
+            "asset rename updates card title and Properties selector");
+    commands::Transaction addNamedLayer("Add Layer", session.snapshot().revision());
+    addNamedLayer.emplace<commands::AddImageLayer>(session.compositionId(), asset);
+    require(session.executeTransaction(std::move(addNamedLayer)).changed(),
+            "named image layer fixture");
+    const auto layerId = session.composition()->graph().layerOutputs().back().layerId;
+    require(ui::mediaLayerDisplayName(session, layerId) == "Hero plate",
+            "Timeline reads asset display name for imported layer label");
+    commands::Transaction customName("Rename Layer", session.snapshot().revision());
+    customName.emplace<commands::RenameLayer>(session.compositionId(), layerId, "Artist layer");
+    require(session.executeTransaction(std::move(customName)).changed() &&
+                ui::mediaLayerDisplayName(session, layerId) == "Artist layer",
+            "Timeline preserves an independently authored Layer name");
+    require(session.undo() && session.undo(), "remove layer naming fixture");
     const auto other = session.snapshot().project().assets().back().id;
     cardAsset->setCurrentIndex(cardAsset->findData(QString::number(other.value())));
     require(selector->currentData().toString() == QString::number(other.value()),

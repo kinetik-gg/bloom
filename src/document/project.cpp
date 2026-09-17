@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <set>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -112,6 +113,8 @@ AssetRecord* Project::findAsset(AssetId id) noexcept {
     return const_cast<AssetRecord*>(std::as_const(*this).findAsset(id));
 }
 bool Project::addAsset(AssetRecord asset) {
+    if (asset.name.empty())
+        asset.name = defaultAssetName(asset);
     if (findAsset(asset.id) || !asset.validate().ok())
         return false;
     assets_.push_back(std::move(asset));
@@ -120,6 +123,24 @@ bool Project::addAsset(AssetRecord asset) {
 }
 bool Project::removeAsset(AssetId id) {
     return std::erase_if(assets_, [id](const auto& asset) { return asset.id == id; }) != 0;
+}
+
+const AssetFolder* Project::findAssetFolder(AssetFolderId id) const noexcept {
+    const auto found = std::ranges::find(assetFolders_, id, &AssetFolder::id);
+    return found == assetFolders_.end() ? nullptr : &*found;
+}
+AssetFolder* Project::findAssetFolder(AssetFolderId id) noexcept {
+    return const_cast<AssetFolder*>(std::as_const(*this).findAssetFolder(id));
+}
+bool Project::addAssetFolder(AssetFolder folder) {
+    if (!folder.id.isValid() || !isValidHumanFacingName(folder.name) || findAssetFolder(folder.id))
+        return false;
+    assetFolders_.push_back(std::move(folder));
+    std::ranges::sort(assetFolders_, {}, &AssetFolder::id);
+    return true;
+}
+bool Project::removeAssetFolder(AssetFolderId id) {
+    return std::erase_if(assetFolders_, [id](const auto& folder) { return folder.id == id; }) != 0;
 }
 
 const Composition* Project::findComposition(const CompositionId id) const noexcept {
@@ -186,8 +207,48 @@ bool Project::removeExtensionRecord(const ExtensionRecordId id) {
 
 ValidationResult Project::validate() const {
     ValidationResult result;
-    for (const auto& asset : assets_)
+    std::unordered_set<AssetId> assetIds;
+    for (const auto& asset : assets_) {
         result.append("assets", asset.validate());
+        validateHumanFacingName(asset.name, "assets.name", "Asset name", result);
+        if (!assetIds.insert(asset.id).second)
+            result.add(ValidationCode::DuplicateId, "assets.id", "Duplicate asset ID");
+        if (asset.folder && !findAssetFolder(*asset.folder))
+            result.add(ValidationCode::MissingReference, "assets.folder",
+                       "Asset folder does not exist");
+    }
+    std::unordered_map<AssetFolderId, const AssetFolder*> folders;
+    std::set<std::pair<std::optional<AssetFolderId>, std::string>> siblingNames;
+    for (const auto& folder : assetFolders_) {
+        if (!folder.id.isValid() || !folders.emplace(folder.id, &folder).second)
+            result.add(ValidationCode::InvalidId, "assetFolders.id",
+                       "Invalid or duplicate folder ID");
+        validateHumanFacingName(folder.name, "assetFolders.name", "Folder name", result);
+        if (!siblingNames.emplace(folder.parent, folder.name).second)
+            result.add(ValidationCode::InvalidValue, "assetFolders.name",
+                       "Folder names must be unique among siblings");
+    }
+    // Mark completed chains once, so deep hierarchies validate in linear time.
+    std::unordered_set<AssetFolderId> complete;
+    for (const auto& folder : assetFolders_) {
+        std::unordered_set<AssetFolderId> chain;
+        auto current = std::optional(folder.id);
+        while (current && !complete.contains(*current)) {
+            const auto found = folders.find(*current);
+            if (found == folders.end()) {
+                result.add(ValidationCode::MissingReference, "assetFolders.parent",
+                           "Parent folder does not exist");
+                break;
+            }
+            if (!chain.insert(*current).second) {
+                result.add(ValidationCode::GraphCycle, "assetFolders.parent",
+                           "Folder hierarchy contains a cycle");
+                break;
+            }
+            current = found->second->parent;
+        }
+        complete.insert(chain.begin(), chain.end());
+    }
     if (!id_.isValid()) {
         result.add(ValidationCode::InvalidId, "id", "Project ID must not be zero");
     }

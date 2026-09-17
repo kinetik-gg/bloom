@@ -5,6 +5,7 @@
 #include <bloom/media/image.hpp>
 #include <cctype>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <set>
 #include <span>
@@ -67,6 +68,10 @@ OperationResult RelinkFontAsset::apply(document::Draft& draft) const {
                                          "Target is not a Font asset");
     auto replacement = replacement_;
     replacement.id = id_;
+    replacement.name = target->name;
+    replacement.folder = target->folder;
+    replacement.tags = target->tags;
+    replacement.order = target->order;
     if (!replacement.validate().ok())
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Invalid relinked font face");
@@ -90,6 +95,14 @@ OperationResult EnsureFontAsset::apply(document::Draft& draft) const {
                                          "Asset ID space is exhausted");
     auto asset = asset_;
     asset.id = *id;
+    if (asset.name.empty())
+        asset.name = document::defaultAssetName(asset);
+    for (const auto& existingAsset : draft.project().assets())
+        if (!existingAsset.folder)
+            asset.order = std::max(asset.order,
+                                   (existingAsset.order == std::numeric_limits<std::uint64_t>::max()
+                                        ? existingAsset.order
+                                        : existingAsset.order + 1));
     if (!asset.validate().ok())
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Invalid font face reference");
@@ -217,6 +230,13 @@ OperationResult ImportAssets::apply(document::Draft& draft) const {
             return OperationResult::rejected(OperationIssueCode::Unsupported,
                                              "Asset ID space is exhausted");
         asset.id = *id;
+        asset.name = document::defaultAssetName(asset);
+        for (const auto& existingAsset : draft.project().assets())
+            if (!existingAsset.folder)
+                asset.order = std::max(
+                    asset.order, (existingAsset.order == std::numeric_limits<std::uint64_t>::max()
+                                      ? existingAsset.order
+                                      : existingAsset.order + 1));
         if (!draft.project().addAsset(std::move(asset)))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Invalid imported asset");
@@ -236,6 +256,10 @@ OperationResult RelinkAsset::apply(document::Draft& draft) const {
         return OperationResult::rejected(OperationIssueCode::InvalidValue, prepared_.diagnostic());
     auto replacement = prepared_.prepared().front();
     replacement.id = id_;
+    replacement.name = target->name;
+    replacement.folder = target->folder;
+    replacement.tags = target->tags;
+    replacement.order = target->order;
     replacement.interpretation = target->interpretation;
     *target = std::move(replacement);
     return OperationResult::applied({{"asset", id_}});
