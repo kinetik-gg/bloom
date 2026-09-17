@@ -74,7 +74,17 @@ OperationResult AddNode::apply(document::Draft& draft) const {
     if (!composition->graph().addNode(std::move(node)))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Node could not be inserted");
-    composition->nodeLayout()[*nodeId] = {layoutPosition_, 128.0, false, false};
+    // The requested point is still authoritative when it is clear. When it is occupied, the
+    // document-side spatial index moves only this new card to the nearest free slot; existing
+    // authoring positions are never rewritten by AddNode.
+    auto occupied = composition->nodeLayout();
+    const auto defaults = document::defaultNodeLayout(composition->graph().nodes());
+    for (const auto& existing : composition->graph().nodes())
+        if (existing.id != *nodeId && !occupied.contains(existing.id))
+            occupied.emplace(existing.id, defaults.at(existing.id));
+    const auto placement = document::findNearestFreeNodePosition(
+        occupied, {}, document::kConservativeNodeCardSize, layoutPosition_);
+    composition->nodeLayout()[*nodeId] = {placement, 128.0, false, false};
     // A Layer node gets its layer IDENTITY here, at creation, rather than on its first connection
     // to Merge (task FIX1, item B). The alternative -- waiting for the Merge link -- would leave a
     // card on the canvas with no name to rename, no LayerId for Properties and the Timeline to

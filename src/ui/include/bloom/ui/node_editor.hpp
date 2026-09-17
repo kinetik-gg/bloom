@@ -339,6 +339,8 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider {
     // `muted` selects which layout flag is toggled: true for mute, false for collapse.
     void toggleSelectedMuted(bool muted);
     void renameSelectedLayer();
+    void arrangeAllNodes();
+    void arrangeSelectedNodes();
     // Ctrl+G / Ctrl+Shift+G, and the same two commands the context menu reaches. Ungrouping with no
     // explicit frame removes every frame the selection sits in.
     void groupSelectedNodes();
@@ -418,6 +420,8 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider {
     QAction* renameAction_ = nullptr;
     QAction* dissolveAction_ = nullptr;
     QAction* deleteAction_ = nullptr;
+    QAction* arrangeAllAction_ = nullptr;
+    QAction* arrangeSelectionAction_ = nullptr;
     // Recorded by populateAddMenu() when it builds headerAddMenu_, so refreshAddMenuState() can
     // update enabled/tooltip state per item without rebuilding the (structurally static, since the
     // node definition registry is frozen at startup) category tree.

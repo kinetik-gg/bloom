@@ -357,6 +357,7 @@ target_sources(
         asset_drop.hpp
         media_disk_cache_settings.cpp
         node_editor.cpp
+        node_layout_arrange.cpp
         node_editor_canvas.cpp
         node_editor_items.cpp
         node_editor_interactions.cpp
@@ -421,6 +422,7 @@ target_sources(
             include/bloom/ui/asset_controller.hpp
             include/bloom/ui/media_disk_cache_settings.hpp
             include/bloom/ui/node_editor.hpp
+            include/bloom/ui/node_layout_arrange.hpp
             include/bloom/ui/playback_controller.hpp
             include/bloom/ui/preview_frame_cache.hpp
             include/bloom/ui/project_host.hpp

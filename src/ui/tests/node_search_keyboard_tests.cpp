@@ -56,7 +56,7 @@ bool triggerNodeMenuAction(Fixture& f, const char* name) {
 void testSearchKeyboardAndMenus() {
     Fixture f;
     const auto a = f.add(document::kSolidSourceNodeType, {100, 100});
-    const auto b = f.add(document::kLayerOutputNodeType, {400, 100});
+    const auto b = f.add(document::kLayerOutputNodeType, {0, 400});
     f.session.selectNodes({a, b}, b);
     auto history = f.stack.size();
     expect(triggerNodeMenuAction(f, "nodeMuteAction"), "the node menu offers Mute");
@@ -168,7 +168,7 @@ void testSearchKeyboardAndMenus() {
     f.key(Qt::Key_Delete);
     expect(stolen == 0, "canvas ShortcutOverride prevents the window from stealing its command");
     f.session.clearSelection();
-    const auto cursor = QPointF(600, 500);
+    const auto cursor = QPointF(1100, 500);
     const auto global = f.view()->viewport()->mapToGlobal(f.view()->mapFromScene(cursor));
     const auto cursorScene =
         f.view()->sceneFromViewport(f.view()->viewport()->mapFromGlobal(global));

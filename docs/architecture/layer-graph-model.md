@@ -399,6 +399,23 @@ result. Missing records use the original four-column placement (origin 32, colum
 row pitch 180, width 128). Unknown-node layout entries are preserved with warning diagnostics,
 not document errors. Zoom, framing, grouping, and transient gestures remain session state.
 
+`Arrange All` is an editor command over this presentation state, not a graph mutation. It assigns
+each connected component a longest-path rank from its sources toward Composition Output, then uses
+stable barycenter sweeps in both directions to reduce crossings. Rank columns use the maximum card
+width in that rank plus `Spacing::L`; cards in a column use their measured heights plus the same
+gap, and the columns are vertically centred. Components are stacked below each other. Node-group
+members are kept as contiguous rank blocks, while the group's frame follows the resulting member
+bounding rectangle. `Arrange Selection` runs the same algorithm on the induced selected subgraph and
+translates the result back to the selection bounding-box top-left. Both publish one `MoveNodes`
+transaction and do not change graph, parameter, or group membership truth.
+
+Creation uses the complementary local rule. A free requested point is retained; otherwise the new
+card probes the rank-grid slot nearest to its connection, down before up and then by column, with
+an indexed rectangle collision test and `Spacing::L` clearance. A disconnected card uses the view
+centre supplied by the caller. Structured layer creation places its Layer Output one gap left of
+the Merge slot it feeds and the source one gap left of that Layer Output. Existing cards are never
+moved by these placement probes.
+
 Node definitions and their socket schemas now belong to the Qt-free document module so graph
 validation, commands, and compilation share one schema vocabulary without a document-to-runtime
 dependency. The runtime header retains source-compatible aliases. Graph add/validate accept an
@@ -927,7 +944,8 @@ With that adapter supplied, the following behavior is implemented and covered by
   its alias, Ctrl+1 is 100%, and Ctrl+A selects all. `ShortcutOverride` claims only canvas commands;
   focused proxy field widgets retain text editing, Tab included.
   `docs/ux/interaction-model.md` is the binding list for this editor and every other.
-- Canvas menus offer Add…, Fit, 100%, Zoom In/Out and Select All. Node menus offer only accepted
+- Canvas menus offer Add…, Fit, 100%, Zoom In/Out, Select All, and an Organize submenu containing
+  Arrange All plus Arrange Selection when nodes are selected. Node menus offer only accepted
   Duplicate, Dissolve, Mute/Unmute, Collapse/Expand, Rename and Delete operations. Rename appears
   only for a single participating Layer Output and edits its header through `RenameLayer`. Each of
   those menu items calls the editor's own named command method, never a synthesized key press, so a

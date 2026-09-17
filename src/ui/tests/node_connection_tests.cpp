@@ -52,9 +52,9 @@ void testConnectionsCutAndInsertion() {
 
     Fixture f;
     const auto source = f.add(document::kSolidSourceNodeType, {100, 100});
-    const auto second = f.add(document::kSolidSourceNodeType, {100, 350});
-    const auto target = f.add(document::kLayerOutputNodeType, {700, 100});
-    const auto pass = f.add(document::kLayerOutputNodeType, {350, 350});
+    const auto second = f.add(document::kSolidSourceNodeType, {100, 700});
+    const auto target = f.add(document::kLayerOutputNodeType, {1060, 600});
+    const auto pass = f.add(document::kLayerOutputNodeType, {360, 700});
     auto history = f.stack.size();
     auto start = f.socket(source, false)->scenePos();
     auto end = f.socket(target, true)->scenePos();
@@ -158,11 +158,11 @@ void testConnectionsCutAndInsertion() {
            "dropping a single unconnected Image pair on a wire inserts it in the move transaction");
     expect(f.session.undo() && !incoming(f, pass) && incoming(f, target)->source.nodeId == source,
            "one undo restores layout and both insertion connections");
-    const auto cutTarget = f.add(document::kLayerOutputNodeType, {700, 350});
+    const auto cutTarget = f.add(document::kLayerOutputNodeType, {700, 600});
     f.drag(f.socket(second, false)->scenePos(), f.socket(cutTarget, true)->scenePos());
     history = f.stack.size();
     f.press({480, 100}, Qt::ControlModifier, Qt::RightButton);
-    f.move({480, 700}, Qt::RightButton, Qt::ControlModifier);
+    f.move({480, 1000}, Qt::RightButton, Qt::ControlModifier);
     for (auto* candidate : f.scene()->items()) {
         if (candidate->data(kNodeItemKindRole) == QStringLiteral("cut-preview")) {
             const auto path = static_cast<QGraphicsPathItem*>(candidate)->path();
@@ -171,7 +171,7 @@ void testConnectionsCutAndInsertion() {
                    "first cut segment starts at the press point rather than the scene origin");
         }
     }
-    f.release({480, 700}, Qt::ControlModifier, Qt::RightButton);
+    f.release({480, 1000}, Qt::ControlModifier, Qt::RightButton);
     expect(!incoming(f, target) && !incoming(f, cutTarget) && f.stack.size() == history + 1,
            "Ctrl RMB cut disconnects every crossed ordinary link in one transaction");
     expect(f.session.undo() && incoming(f, target) && incoming(f, cutTarget),

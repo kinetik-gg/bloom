@@ -23,8 +23,8 @@ project::ProjectIoOperationMemory memory() {
 } // namespace
 void testLayoutSelectionAndSockets() {
     Fixture f;
-    const auto a = f.add(document::kSolidSourceNodeType, {100, 100});
-    const auto b = f.add(document::kLayerOutputNodeType, {350, 100});
+    const auto a = f.add(document::kSolidSourceNodeType, {0, 100});
+    const auto b = f.add(document::kLayerOutputNodeType, {280, 100});
     f.session.selectNodes({a, b}, b);
     const auto outlinePixel = [&](document::NodeId id) {
         QImage image(200, 300, QImage::Format_ARGB32_Premultiplied);
@@ -49,15 +49,15 @@ void testLayoutSelectionAndSockets() {
     f.press({120, 115});
     f.move({155, 145});
     f.move({180, 165});
-    expect(f.stack.size() == before && f.card(a)->pos() == QPointF(160, 150) &&
-               f.card(b)->pos() == QPointF(410, 150),
+    expect(f.stack.size() == before && f.card(a)->pos() == QPointF(60, 150) &&
+               f.card(b)->pos() == QPointF(340, 150),
            "drag previews the entire selection without per-pixel commands");
     f.release({180, 165});
     expect(f.stack.size() == before + 1 &&
-               f.session.composition()->nodeLayout().at(a).position == document::Vec2d{160, 150},
+               f.session.composition()->nodeLayout().at(a).position == document::Vec2d{60, 150},
            "one MoveNodes publishes the final positions");
-    expect(f.session.undo() && f.card(a)->pos() == QPointF(100, 100) &&
-               f.card(b)->pos() == QPointF(350, 100),
+    expect(f.session.undo() && f.card(a)->pos() == QPointF(0, 100) &&
+               f.card(b)->pos() == QPointF(280, 100),
            "one undo restores every selected node");
     expect(f.session.redo(), "move redoes");
     const auto resizedBefore = f.stack.size();
@@ -74,14 +74,14 @@ void testLayoutSelectionAndSockets() {
     expect(f.card(a)->pos() == savedPosition && f.stack.size() == resizedBefore + 1,
            "Escape cancels a move preview");
     f.release(savedPosition + QPointF(90, 45));
-    f.drag({145, 150}, {370, 290});
+    f.drag({5, 150}, {250, 290});
     expect(f.session.selectedNodes() == std::set{a},
            "box selection routes its complete set to session");
     // The box's right edge stays clear of the unplaced Merge card's own right edge: that card now
     // carries the audio stack pill (task FOLLOW-1) one PropertyRow taller than before, which brings
     // its bottom edge low enough to clip this box at its old width. Touching `a` and `b` only needs
     // their LEFT edges, so narrowing the box keeps the gesture this test actually exercises.
-    f.drag({400, 149}, {500, 340}, Qt::ShiftModifier);
+    f.drag({300, 149}, {500, 340}, Qt::ShiftModifier);
     expect(f.session.selectedNodes() == std::set{a, b}, "Shift box extends the selection");
     f.click({25, 680});
     expect(f.session.selectedNodes().empty(), "empty click clears all selection");
@@ -182,8 +182,8 @@ void testLayoutSelectionAndSockets() {
 // for a real edge to repaint under each link style.
 void testHeaderMenusGridSnappingLinkStyleAndFooter() {
     Fixture f;
-    const auto a = f.add(document::kSolidSourceNodeType, {100, 100});
-    const auto b = f.add(document::kLayerOutputNodeType, {350, 100});
+    const auto a = f.add(document::kSolidSourceNodeType, {20, 100});
+    const auto b = f.add(document::kLayerOutputNodeType, {280, 100});
     expect(f.edit<commands::ConnectPorts>(document::OutputPortRef{a, "image"},
                                           document::NodeInputRef{b, "image"})
                .changed(),
@@ -196,19 +196,19 @@ void testHeaderMenusGridSnappingLinkStyleAndFooter() {
     f.click({120, 115});
     f.press({120, 115});
     f.move({131, 122}); // unsnapped target would be (111, 107) -- not on the 16px lattice
-    expect(f.card(a)->pos() == QPointF(112, 112),
+    expect(f.card(a)->pos() == QPointF(32, 112),
            "an in-flight drag snaps to the nearest 16px lattice point while enabled");
     f.release({131, 122});
-    expect(f.session.composition()->nodeLayout().at(a).position == document::Vec2d{112, 112},
+    expect(f.session.composition()->nodeLayout().at(a).position == document::Vec2d{32, 112},
            "the committed MoveNodes position is the snapped one, not the raw drag delta");
     expect(f.session.undo(), "the snapped move undoes in one step");
 
     f.click({120, 115});
     f.press({120, 115});
     f.move({131, 122}, Qt::LeftButton, Qt::AltModifier);
-    expect(f.card(a)->pos() == QPointF(111, 107), "Alt bypasses snapping for this drag only");
+    expect(f.card(a)->pos() == QPointF(31, 107), "Alt bypasses snapping for this drag only");
     f.release({131, 122}, Qt::AltModifier);
-    expect(f.session.composition()->nodeLayout().at(a).position == document::Vec2d{111, 107},
+    expect(f.session.composition()->nodeLayout().at(a).position == document::Vec2d{31, 107},
            "and the committed position is the exact, unsnapped one");
     expect(f.session.undo(), "the Alt-bypassed move undoes in one step");
     f.scene()->setGridSnapEnabled(false);
@@ -249,6 +249,21 @@ void testHeaderMenusGridSnappingLinkStyleAndFooter() {
                (std::string("View offers ") + name).c_str());
     auto* linkStyleMenu = viewMenu->findChild<QMenu*>(QStringLiteral("nodeLinkStyleMenu"));
     expect(linkStyleMenu != nullptr, "View offers a Link Style submenu");
+    auto* organizeMenu = viewMenu->findChild<QMenu*>(QStringLiteral("nodeOrganizeMenu"));
+    expect(organizeMenu != nullptr, "View offers an Organize submenu");
+    if (organizeMenu != nullptr)
+        for (const char* name : {"nodeArrangeAllAction", "nodeArrangeSelectionAction"})
+            expect(organizeMenu->findChild<QAction*>(QString::fromLatin1(name)) != nullptr,
+                   (std::string("Organize offers ") + name).c_str());
+    const auto canvasMenu = std::unique_ptr<QMenu>(f.editor.contextMenuForTest(false));
+    auto* canvasOrganize = canvasMenu->findChild<QMenu*>(QStringLiteral("nodeOrganizeMenu"));
+    expect(canvasOrganize != nullptr, "the canvas context menu offers Organize");
+    if (canvasOrganize != nullptr)
+        expect(canvasOrganize->findChild<QAction*>(QStringLiteral("nodeArrangeAllAction")) !=
+                       nullptr &&
+                   canvasOrganize->findChild<QAction*>(
+                       QStringLiteral("nodeArrangeSelectionAction")) != nullptr,
+               "the canvas Organize menu offers both arrange actions for a selection");
     if (linkStyleMenu != nullptr)
         for (const char* name : {"nodeLinkStyleSplineAction", "nodeLinkStyleStraightAction",
                                  "nodeLinkStyleAngledAction"})
