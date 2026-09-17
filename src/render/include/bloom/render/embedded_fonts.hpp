@@ -3,8 +3,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string_view>
+#include <variant>
+#include <vector>
+
+#include <bloom/core/sha256.hpp>
 
 namespace bloom::render {
 
@@ -35,6 +40,16 @@ enum class EmbeddedFace : std::uint8_t {
     InterMedium,
     InterSemiBold,
 };
+
+struct ExternalFontFile final {
+    std::shared_ptr<const std::vector<std::uint8_t>> bytes;
+    core::Sha256Digest contentDigest;
+    std::uint32_t faceIndex = 0;
+
+    friend bool operator==(const ExternalFontFile&, const ExternalFontFile&) = default;
+};
+
+using TextFont = std::variant<EmbeddedFace, ExternalFontFile>;
 
 // Identifies an embedded face in diagnostics, the text-raster contract, and the text-source's
 // durable font enumeration. The order is the order of the document's closed face mapping.

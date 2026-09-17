@@ -203,10 +203,10 @@ Solid carries one `CompiledColorParameter`, a Text one `CompiledScalarParameter`
 `CompiledColorParameter` for its color, while its content stays a resolved constant. Indices are
 strong types so the wrong table cannot be addressed accidentally.
 
-`kCompiledCompositionPlanSemanticsVersion` is `2`. It moved from `1` when those three source fields
-stopped being resolved constants: a version-1 plan's `color` field was a `Color4d`, while a
-version-2 plan's is a parameter that may index a curve table, so the same field position means
-something different.
+`kCompiledCompositionPlanSemanticsVersion` is `5`. It moved from `1` when those source fields
+stopped being resolved constants, and TEXT-2 moved it again for the compiled text font-reference
+and box-layout fields. A plan's semantics version is part of the immutable plan identity, so cached
+or persisted frame identities cannot confuse either grammar.
 
 Which parameters may be animated, and with which curve kind, is one set of schema-key predicates in
 `bloom/document/parameter.hpp` that document validation, the animation commands, the registered node

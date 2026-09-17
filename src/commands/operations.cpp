@@ -32,6 +32,25 @@ OperationResult exhaustedIds() {
                                      "Document ID space is exhausted");
 }
 
+[[nodiscard]] std::optional<document::AssetId> ensureDefaultTextFont(document::Draft& draft) {
+    const auto digest = core::Sha256Digest::fromLowercaseHex(
+        "7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954");
+    if (!digest)
+        return std::nullopt;
+    document::AssetRecord face;
+    face.kind = document::AssetKind::Font;
+    face.locator = {"font", "builtin", "embedded/0", "font:embedded:DejaVu Sans|Book"};
+    face.contentDigest = *digest;
+    face.fontFamily = "DejaVu Sans";
+    face.fontStyle = "Book";
+    const auto result = EnsureFontAsset(std::move(face)).apply(draft);
+    for (const auto& output : result.outputs)
+        if (output.name == "asset")
+            if (const auto* id = std::get_if<document::AssetId>(&output.id))
+                return *id;
+    return std::nullopt;
+}
+
 struct CompositionCloneIds final {
     document::CompositionId composition;
     std::unordered_map<document::NodeId, document::NodeId> nodes;
@@ -291,8 +310,8 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
 
 // One parameter a source node owns: its node-local role, its global schema key, its initial value,
 // and the command-result output name the caller reads its freshly allocated ID back from. A solid
-// source has exactly one (color); a text source has seven (content, size, color, alignment, line
-// height, letter spacing, font), in the order its registered definition declares them.
+// source has exactly one (color); a text source has twelve (content, size, color, typography, and
+// box layout), in the order its registered definition declares them.
 struct StructuredSourceParameter {
     std::string_view role;
     std::string_view schemaKey;
@@ -695,6 +714,11 @@ OperationResult AddTextLayer::apply(document::Draft& draft) const {
                                          "Text layer content must be valid UTF-8");
     }
 
+    const auto fontAssetId = ensureDefaultTextFont(draft);
+    if (!fontAssetId)
+        return OperationResult::rejected(OperationIssueCode::Unsupported,
+                                         "The default text Font asset could not be created");
+
     return addStructuredLayer(
         draft, *composition, name_,
         {document::kTextSourceNodeType,
@@ -714,7 +738,18 @@ OperationResult AddTextLayer::apply(document::Draft& draft) const {
           {document::kTextLetterSpacingParameterRole,
            document::kTextLetterSpacingParameterSchemaKey, 0.0, "letterSpacingParameter"},
           {document::kTextFontParameterRole, document::kTextFontParameterSchemaKey,
-           document::kDefaultTextFontValue, kAddTextLayerFontParameterOutput}}},
+           std::to_string(fontAssetId->value()), kAddTextLayerFontParameterOutput},
+          {document::kTextBoxParameterRole, document::kTextBoxParameterSchemaKey, document::Vec2d{},
+           kAddTextLayerBoxParameterOutput},
+          {document::kTextWrapParameterRole, document::kTextWrapParameterSchemaKey, false,
+           kAddTextLayerWrapParameterOutput},
+          {document::kTextVerticalAlignmentParameterRole,
+           document::kTextVerticalAlignmentParameterSchemaKey, std::int64_t{0},
+           kAddTextLayerVerticalAlignmentParameterOutput},
+          {document::kTextAnchorModeParameterRole, document::kTextAnchorModeParameterSchemaKey,
+           std::int64_t{0}, kAddTextLayerAnchorModeParameterOutput},
+          {document::kTextOverflowParameterRole, document::kTextOverflowParameterSchemaKey,
+           std::int64_t{0}, kAddTextLayerOverflowParameterOutput}}},
         useCompositionCentre_
             ? document::Vec2d{static_cast<double>(composition->format().width()) / 2.0,
                               static_cast<double>(composition->format().height()) / 2.0}

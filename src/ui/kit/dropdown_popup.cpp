@@ -8,12 +8,15 @@
 #include <QFrame>
 #include <QKeyEvent>
 #include <QLayout>
+#include <QLineEdit>
 #include <QListView>
 #include <QMouseEvent>
 #include <QPainterPath>
 #include <QPropertyAnimation>
 #include <QRegion>
+#include <QRegularExpression>
 #include <QResizeEvent>
+#include <QSortFilterProxyModel>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -87,12 +90,12 @@ KDropdownPopup::KDropdownPopup(QWidget* parent)
     applyElevation(*surface_, Elevation::Popup);
     outer->addWidget(surface_);
 
-    auto* inner = new QVBoxLayout(surface_);
+    inner_ = new QVBoxLayout(surface_);
     // No margin of its own: QStyleSheetStyle already insets a styled frame's contents by its own
     // border, so the rows live INSIDE the hairline rather than on top of it -- which is what makes
     // the frame, not the row, the rounded container. Adding a margin here would inset them twice.
-    inner->setContentsMargins(0, 0, 0, 0);
-    inner->setSpacing(0);
+    inner_->setContentsMargins(0, 0, 0, 0);
+    inner_->setSpacing(0);
 
     view_ = new QListView(surface_);
     view_->setObjectName(QStringLiteral("kDropdownList"));
@@ -112,7 +115,7 @@ KDropdownPopup::KDropdownPopup(QWidget* parent)
     // corners at all, which is exactly what this popup's shape is supposed to do. The frame is a
     // wrapper around its items; it has no size of its own to defend.
     view_->setMinimumSize(0, 0);
-    inner->addWidget(view_);
+    inner_->addWidget(view_);
 
     setStyleSheet(popupStyleSheet());
     view_->viewport()->installEventFilter(this);
@@ -151,14 +154,64 @@ void KDropdownPopup::applyRoundedListMask() {
     view_->setMask(QRegion(path.toFillPolygon().toPolygon()));
 }
 
-void KDropdownPopup::setModel(QAbstractItemModel* model) { view_->setModel(model); }
+void KDropdownPopup::setModel(QAbstractItemModel* model) {
+    sourceModel_ = model;
+    view_->setModel(model);
+}
+
+void KDropdownPopup::setSearchable(const bool searchable) {
+    if (searchable_ == searchable)
+        return;
+    searchable_ = searchable;
+    if (!searchable_) {
+        if (search_ != nullptr) {
+            inner_->removeWidget(search_);
+            search_->deleteLater();
+            search_ = nullptr;
+        }
+        view_->setModel(sourceModel_);
+        return;
+    }
+
+    search_ = new QLineEdit(surface_);
+    search_->setObjectName(QStringLiteral("kDropdownSearch"));
+    search_->setPlaceholderText(QObject::tr("Search"));
+    search_->setClearButtonEnabled(true);
+    search_->setFont(kit::font(TypeRole::Ui));
+    search_->setStyleSheet(expandTokens(QStringLiteral(R"(
+QLineEdit#kDropdownSearch {
+    background: {color.SurfaceRaised};
+    border: none;
+    border-bottom: {border.Hairline}px solid {color.BorderSubtle};
+    color: {color.Foreground};
+    padding: {space.XS}px {space.S}px;
+}
+)")));
+    inner_->insertWidget(0, search_);
+
+    auto* proxy = new QSortFilterProxyModel(this);
+    proxy->setSourceModel(sourceModel_);
+    proxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
+    proxy->setFilterRole(Qt::DisplayRole);
+    view_->setModel(proxy);
+    connect(search_, &QLineEdit::textChanged, this, [proxy](const QString& text) {
+        proxy->setFilterRegularExpression(QRegularExpression(
+            QRegularExpression::escape(text), QRegularExpression::CaseInsensitiveOption));
+    });
+}
 
 QListView* KDropdownPopup::view() const noexcept { return view_; }
 
 void KDropdownPopup::openBelow(const QWidget& anchor, const int currentIndex) {
-    if (view_->model() != nullptr && currentIndex >= 0 &&
-        currentIndex < view_->model()->rowCount()) {
-        view_->setCurrentIndex(view_->model()->index(currentIndex, 0));
+    if (view_->model() != nullptr && currentIndex >= 0) {
+        auto index = view_->model()->index(currentIndex, 0);
+        if (searchable_) {
+            const auto* proxy = qobject_cast<const QSortFilterProxyModel*>(view_->model());
+            if (proxy != nullptr && sourceModel_ != nullptr)
+                index = proxy->mapFromSource(sourceModel_->index(currentIndex, 0));
+        }
+        if (index.isValid())
+            view_->setCurrentIndex(index);
     }
 
     const Shadow elevation = shadow(Elevation::Popup);
@@ -175,7 +228,8 @@ void KDropdownPopup::openBelow(const QWidget& anchor, const int currentIndex) {
     // could then never reach -- let alone be clipped by -- the frame's bottom corners.
     const int rowsHeight = std::max(rowHeight, rows * rowHeight);
     view_->setFixedHeight(rowsHeight);
-    const int listHeight = rowsHeight + frameBorderWidth() * 2;
+    const int searchHeight = search_ == nullptr ? 0 : search_->sizeHint().height();
+    const int listHeight = rowsHeight + searchHeight + frameBorderWidth() * 2;
 
     const QPoint anchorBottomLeft = anchor.mapToGlobal(QPoint(0, anchor.height()));
     const QSize outerSize(anchor.width() + margin * 2, listHeight + margin * 2 + elevation.offsetY);
@@ -188,10 +242,14 @@ void KDropdownPopup::openBelow(const QWidget& anchor, const int currentIndex) {
         // Reduced motion: straight to the end state, no rise.
         move(finalPosition);
         show();
+        if (search_ != nullptr)
+            search_->setFocus();
         return;
     }
     move(finalPosition + QPoint(0, kPopRisePx));
     show();
+    if (search_ != nullptr)
+        search_->setFocus();
     auto* rise = new QPropertyAnimation(this, "pos", this);
     rise->setDuration(riseMs);
     rise->setEasingCurve(easing(Motion::Pop));
@@ -249,7 +307,13 @@ bool KDropdownPopup::eventFilter(QObject* watched, QEvent* event) {
         // cannot have.
         if (index.isValid() && (index.flags() & Qt::ItemIsEnabled) != 0) {
             close();
-            Q_EMIT itemChosen(index.row());
+            int sourceRow = index.row();
+            if (searchable_) {
+                const auto* proxy = qobject_cast<const QSortFilterProxyModel*>(view_->model());
+                if (proxy != nullptr)
+                    sourceRow = proxy->mapToSource(index).row();
+            }
+            Q_EMIT itemChosen(sourceRow);
         }
         return true;
     }

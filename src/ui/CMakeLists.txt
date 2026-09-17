@@ -379,6 +379,7 @@ target_sources(
         qualified_display_processor_bootstrap.cpp
         task_monitor_model.cpp
         task_ui_bridge.cpp
+        text_box_overlay.cpp
         timeline_editor.cpp
         timeline_property_rows.cpp
         timeline_editor_menus.cpp
@@ -426,6 +427,7 @@ target_sources(
             include/bloom/ui/qualified_display_processor_bootstrap.hpp
             include/bloom/ui/task_monitor_model.hpp
             include/bloom/ui/task_ui_bridge.hpp
+            include/bloom/ui/text_box_overlay.hpp
             include/bloom/ui/third_party_license_catalog.hpp
             include/bloom/ui/timeline_editor.hpp
             include/bloom/ui/timeline_frame_math.hpp

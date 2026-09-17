@@ -167,12 +167,12 @@ template <typename Definition>
                hasParameter(definition, 2, "level", kAudioLevelParameterSchemaKey,
                             ParameterValueKind::Float64, true);
     case NodeLoweringKind::Text:
-        // Parameter ORDER is part of the shape, like every other lowering here: content, then size,
-        // then color, layout, and finally the optional font binding. The optional binding keeps
-        // version-2 documents authored before FONT-1 valid; its definition default is DejaVu Sans.
+        // Parameter ORDER is part of the shape, like every other lowering here: content, size,
+        // colour, typography, font reference, and the box layout controls. Font remains optional
+        // at the binding boundary so a pre-FONT-1 text node can still lower to its old default.
         return hasCanonicalKey(definition, kTextSourceNodeType, kTextSourceNodeSchemaVersion) &&
                hasImageOutput(definition, kTextSourceOutputPort) &&
-               (definition.parameters.size() == 7 &&
+               (definition.parameters.size() == 12 &&
                 hasParameter(definition, 3, kTextAlignmentParameterRole,
                              kTextAlignmentParameterSchemaKey, ParameterValueKind::Integer) &&
                 hasParameter(definition, 4, kTextLineHeightParameterRole,
@@ -182,7 +182,20 @@ template <typename Definition>
                              kTextLetterSpacingParameterSchemaKey, ParameterValueKind::Float64,
                              true)) &&
                hasParameter(definition, 6, kTextFontParameterRole, kTextFontParameterSchemaKey,
-                            ParameterValueKind::Integer, false, false) &&
+                            ParameterValueKind::String, false, false) &&
+               hasParameter(definition, 7, kTextBoxParameterRole, kTextBoxParameterSchemaKey,
+                            ParameterValueKind::Vec2d, false, false) &&
+               hasParameter(definition, 8, kTextWrapParameterRole, kTextWrapParameterSchemaKey,
+                            ParameterValueKind::Boolean, false, false) &&
+               hasParameter(definition, 9, kTextVerticalAlignmentParameterRole,
+                            kTextVerticalAlignmentParameterSchemaKey, ParameterValueKind::Integer,
+                            false, false) &&
+               hasParameter(definition, 10, kTextAnchorModeParameterRole,
+                            kTextAnchorModeParameterSchemaKey, ParameterValueKind::Integer, false,
+                            false) &&
+               hasParameter(definition, 11, kTextOverflowParameterRole,
+                            kTextOverflowParameterSchemaKey, ParameterValueKind::Integer, false,
+                            false) &&
                hasParameter(definition, 0, kTextParameterRole, kTextParameterSchemaKey,
                             ParameterValueKind::String,
                             isAnimatableSchemaKey(kTextParameterSchemaKey)) &&
@@ -467,7 +480,17 @@ template <typename Definition>
     definition.inputs.push_back(
         {std::string(kTextLetterSpacingParameterRole), SocketValueKind::Scalar, false});
     definition.inputs.push_back(
-        {std::string(kTextFontParameterRole), SocketValueKind::Integer, false});
+        {std::string(kTextFontParameterRole), SocketValueKind::String, false});
+    definition.inputs.push_back(
+        {std::string(kTextBoxParameterRole), SocketValueKind::Vector2, false});
+    definition.inputs.push_back(
+        {std::string(kTextWrapParameterRole), SocketValueKind::Boolean, false});
+    definition.inputs.push_back(
+        {std::string(kTextVerticalAlignmentParameterRole), SocketValueKind::Integer, false});
+    definition.inputs.push_back(
+        {std::string(kTextAnchorModeParameterRole), SocketValueKind::Integer, false});
+    definition.inputs.push_back(
+        {std::string(kTextOverflowParameterRole), SocketValueKind::Integer, false});
     definition.parameters.push_back({std::string(kTextAlignmentParameterRole),
                                      std::string(kTextAlignmentParameterSchemaKey),
                                      ParameterValueKind::Integer, true, false, std::int64_t{0}});
@@ -479,7 +502,22 @@ template <typename Definition>
                                      ParameterValueKind::Float64, true, true, 0.0});
     definition.parameters.push_back(
         {std::string(kTextFontParameterRole), std::string(kTextFontParameterSchemaKey),
-         ParameterValueKind::Integer, false, false, kDefaultTextFontValue});
+         ParameterValueKind::String, false, false, std::string(kDefaultTextFontReference)});
+    definition.parameters.push_back({std::string(kTextBoxParameterRole),
+                                     std::string(kTextBoxParameterSchemaKey),
+                                     ParameterValueKind::Vec2d, false, false, Vec2d{}});
+    definition.parameters.push_back({std::string(kTextWrapParameterRole),
+                                     std::string(kTextWrapParameterSchemaKey),
+                                     ParameterValueKind::Boolean, false, false, false});
+    definition.parameters.push_back({std::string(kTextVerticalAlignmentParameterRole),
+                                     std::string(kTextVerticalAlignmentParameterSchemaKey),
+                                     ParameterValueKind::Integer, false, false, std::int64_t{0}});
+    definition.parameters.push_back({std::string(kTextAnchorModeParameterRole),
+                                     std::string(kTextAnchorModeParameterSchemaKey),
+                                     ParameterValueKind::Integer, false, false, std::int64_t{0}});
+    definition.parameters.push_back({std::string(kTextOverflowParameterRole),
+                                     std::string(kTextOverflowParameterSchemaKey),
+                                     ParameterValueKind::Integer, false, false, std::int64_t{0}});
     return definition;
 }
 

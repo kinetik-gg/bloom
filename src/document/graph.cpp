@@ -48,6 +48,16 @@ constexpr std::array kTextSourceBindings{
                              bloom::document::kTextLetterSpacingParameterSchemaKey},
     ExpectedParameterBinding{bloom::document::kTextFontParameterRole,
                              bloom::document::kTextFontParameterSchemaKey, false},
+    ExpectedParameterBinding{bloom::document::kTextBoxParameterRole,
+                             bloom::document::kTextBoxParameterSchemaKey, false},
+    ExpectedParameterBinding{bloom::document::kTextWrapParameterRole,
+                             bloom::document::kTextWrapParameterSchemaKey, false},
+    ExpectedParameterBinding{bloom::document::kTextVerticalAlignmentParameterRole,
+                             bloom::document::kTextVerticalAlignmentParameterSchemaKey, false},
+    ExpectedParameterBinding{bloom::document::kTextAnchorModeParameterRole,
+                             bloom::document::kTextAnchorModeParameterSchemaKey, false},
+    ExpectedParameterBinding{bloom::document::kTextOverflowParameterRole,
+                             bloom::document::kTextOverflowParameterSchemaKey, false},
 };
 constexpr std::array kLayerOutputBindings{
     ExpectedParameterBinding{bloom::document::kPositionParameterRole,

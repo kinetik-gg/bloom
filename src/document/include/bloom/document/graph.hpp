@@ -62,6 +62,11 @@ inline constexpr std::string_view kTextAlignmentParameterRole = "alignment";
 inline constexpr std::string_view kTextLineHeightParameterRole = "line-height";
 inline constexpr std::string_view kTextLetterSpacingParameterRole = "letter-spacing";
 inline constexpr std::string_view kTextFontParameterRole = "font";
+inline constexpr std::string_view kTextBoxParameterRole = "box";
+inline constexpr std::string_view kTextWrapParameterRole = "wrap";
+inline constexpr std::string_view kTextVerticalAlignmentParameterRole = "verticalAlignment";
+inline constexpr std::string_view kTextAnchorModeParameterRole = "anchorMode";
+inline constexpr std::string_view kTextOverflowParameterRole = "overflow";
 // Deliberately the same role string as kSolidColorParameterRole. A role is node-local -- it names
 // which binding of THIS node a parameter fills -- while the schema key is the global identity of
 // the value's meaning, and a text source's color means what a solid source's color means. Keeping

@@ -634,12 +634,94 @@ lowerText(const document::NodeRecord& node) {
     const auto color = compiledColorParameter(colorBinding);
     const auto* storedFont = parameterConstant<std::int64_t>(fontBinding);
     auto face = render::EmbeddedFace::DejaVuSans;
+    document::AssetId fontAssetId;
+    render::TextFont font = face;
+    const auto fontWarning = [&](const std::string& detail) {
+        auto diagnosticSubject = subject(node.id, "font");
+        if (fontBinding != nullptr)
+            diagnosticSubject.parameterId = fontBinding->parameterId;
+        addWarning(runtime::CompileDiagnosticCode::FontAssetUnavailable,
+                   std::move(diagnosticSubject), "Text font is unavailable", detail);
+    };
+    const auto embeddedDigest = [](const render::EmbeddedFace candidate) {
+        constexpr std::array<std::string_view, 4> digests{
+            "7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954",
+            "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+            "97ad806f526e41546d46365bb3a393145f75b7b1568913db74549ad8b8dba872",
+            "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3"};
+        return core::Sha256Digest::fromLowercaseHex(
+            digests[static_cast<std::size_t>(candidate)]);
+    };
+    const auto useEmbedded = [&](const render::EmbeddedFace candidate,
+                                 const document::AssetId assetId = {}) {
+        face = candidate;
+        font = candidate;
+        fontAssetId = assetId;
+    };
     if (fontBinding != nullptr) {
-        if (storedFont == nullptr || *storedFont < 0 || *storedFont >= kTextFontChoiceCount) {
-            addTopologyFailure(node.id, "Validated text font could not be lowered.");
-            return std::nullopt;
+        if (storedFont != nullptr) {
+            if (*storedFont < 0 || *storedFont >= kTextFontChoiceCount) {
+                fontWarning("The legacy embedded face value is outside the supported range; DejaVu Sans was used.");
+            } else {
+                useEmbedded(static_cast<render::EmbeddedFace>(*storedFont));
+            }
+        } else if (const auto* reference = parameterConstant<std::string>(fontBinding)) {
+            std::uint64_t rawId = 0;
+            const auto parsedId = std::from_chars(reference->data(), reference->data() + reference->size(), rawId);
+            const auto* asset = parsedId.ec == std::errc{} &&
+                                        parsedId.ptr == reference->data() + reference->size()
+                                    ? request_.snapshot.project().findAsset(
+                                          document::AssetId::fromRaw(rawId))
+                                    : nullptr;
+            if (asset == nullptr || asset->kind != document::AssetKind::Font) {
+                fontWarning("The font reference does not name a Font asset; DejaVu Sans was used.");
+            } else {
+                fontAssetId = asset->id;
+                if (asset->locator.portability == "builtin") {
+                    if (asset->fontIndex >= kTextFontChoiceCount) {
+                        fontWarning("The embedded Font asset face index is invalid; DejaVu Sans was used.");
+                    } else {
+                        const auto candidate = static_cast<render::EmbeddedFace>(asset->fontIndex);
+                        if (embeddedDigest(candidate).value_or(core::Sha256Digest{}) !=
+                            asset->contentDigest) {
+                            fontWarning("The embedded Font asset digest changed; DejaVu Sans was used.");
+                        } else {
+                            useEmbedded(candidate, asset->id);
+                        }
+                    }
+                } else {
+                    constexpr std::uintmax_t kMaximumFontBytes =
+                        static_cast<std::uintmax_t>(64) * 1024U * 1024U;
+                    std::error_code error;
+                    const auto sizeOnDisk = std::filesystem::file_size(asset->locator.path, error);
+                    if (error || sizeOnDisk == 0 || sizeOnDisk > kMaximumFontBytes) {
+                        fontWarning("The system font file is missing or exceeds the compile-time size limit; DejaVu Sans was used.");
+                    } else {
+                        try {
+                            auto bytes = std::make_shared<std::vector<std::uint8_t>>(
+                                static_cast<std::size_t>(sizeOnDisk));
+                            std::ifstream input(asset->locator.path, std::ios::binary);
+                            input.read(reinterpret_cast<char*>(bytes->data()),
+                                       static_cast<std::streamsize>(bytes->size()));
+                            const auto digest = input
+                                                    ? core::Sha256Hasher::hash(
+                                                          std::as_bytes(std::span(*bytes)))
+                                                    : std::nullopt;
+                            if (!input || !digest.has_value() || *digest != asset->contentDigest) {
+                                fontWarning("The system font file is missing or its digest changed; DejaVu Sans was used.");
+                            } else {
+                                font = render::ExternalFontFile{std::move(bytes), *digest,
+                                                                 asset->fontIndex};
+                            }
+                        } catch (const std::bad_alloc&) {
+                            fontWarning("The system font could not be loaded within the compile memory budget; DejaVu Sans was used.");
+                        }
+                    }
+                }
+            }
+        } else {
+            fontWarning("The Font parameter has an unsupported value; DejaVu Sans was used.");
         }
-        face = static_cast<render::EmbeddedFace>(*storedFont);
     }
     if (contentBinding == nullptr || sizeBinding == nullptr || colorBinding == nullptr ||
         (content == nullptr && !drivenContent.has_value()) || !size.has_value() ||
@@ -662,18 +744,56 @@ lowerText(const document::NodeRecord& node) {
             addTopologyFailure(node.id, "Text layout could not be lowered.");
             return std::nullopt;
         }
-        layout = runtime::CompiledTextLayout{alignmentBinding->parameterId,
-                                             alignment == nullptr ? 0 : *alignment, *lineHeight,
-                                             *letterSpacing, drivenAlignment};
+        layout.alignmentId = alignmentBinding->parameterId;
+        layout.alignment = alignment == nullptr ? 0 : *alignment;
+        layout.lineHeight = *lineHeight;
+        layout.letterSpacing = *letterSpacing;
+        layout.drivenAlignment = drivenAlignment;
+        const auto* boxBinding = findParameterBinding(node, kTextBoxParameterRole);
+        const auto* wrapBinding = findParameterBinding(node, kTextWrapParameterRole);
+        const auto* verticalBinding = findParameterBinding(node, kTextVerticalAlignmentParameterRole);
+        const auto* anchorBinding = findParameterBinding(node, kTextAnchorModeParameterRole);
+        const auto* overflowBinding = findParameterBinding(node, kTextOverflowParameterRole);
+        if (boxBinding != nullptr) {
+            layout.boxId = boxBinding->parameterId;
+            if (const auto* box = parameterConstant<Vec2d>(boxBinding))
+                layout.box = *box;
+        }
+        if (wrapBinding != nullptr) {
+            layout.wrapId = wrapBinding->parameterId;
+            if (const auto* wrap = parameterConstant<bool>(wrapBinding))
+                layout.wrap = *wrap;
+        }
+        const auto readDiscrete = [this](const document::ParameterBinding* binding,
+                                         const std::int64_t fallback) {
+            const auto* value = parameterConstant<std::int64_t>(binding);
+            return value == nullptr ? fallback : *value;
+        };
+        if (verticalBinding != nullptr) {
+            layout.verticalAlignmentId = verticalBinding->parameterId;
+            layout.verticalAlignment = readDiscrete(verticalBinding, 0);
+        }
+        if (anchorBinding != nullptr) {
+            layout.anchorModeId = anchorBinding->parameterId;
+            layout.anchorMode = readDiscrete(anchorBinding, 0);
+        }
+        if (overflowBinding != nullptr) {
+            layout.overflowId = overflowBinding->parameterId;
+            layout.overflow = readDiscrete(overflowBinding, 0);
+        }
     }
-    return runtime::CompiledText{node.id,
-                                 contentBinding->parameterId,
-                                 content == nullptr ? std::string{} : *content,
-                                 *size,
-                                 *color,
-                                 layout,
-                                 drivenContent,
-                                 face};
+    runtime::CompiledText result;
+    result.sourceNodeId = node.id;
+    result.contentParameterId = contentBinding->parameterId;
+    result.content = content == nullptr ? std::string{} : *content;
+    result.size = *size;
+    result.color = *color;
+    result.layout = layout;
+    result.drivenContent = drivenContent;
+    result.face = face;
+    result.fontAssetId = fontAssetId;
+    result.font = std::move(font);
+    return result;
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

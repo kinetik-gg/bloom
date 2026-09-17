@@ -60,6 +60,44 @@ std::optional<core::Sha256Digest> digestFile(const std::filesystem::path& path) 
     return hasher.finalize();
 }
 } // namespace
+OperationResult RelinkFontAsset::apply(document::Draft& draft) const {
+    auto* target = draft.project().findAsset(id_);
+    if (target == nullptr || target->kind != document::AssetKind::Font)
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "Target is not a Font asset");
+    auto replacement = replacement_;
+    replacement.id = id_;
+    if (!replacement.validate().ok())
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Invalid relinked font face");
+    *target = std::move(replacement);
+    return OperationResult::applied({{"asset", id_}});
+}
+
+OperationResult EnsureFontAsset::apply(document::Draft& draft) const {
+    const auto existing =
+        std::ranges::find_if(draft.project().assets(), [&](const auto& candidate) {
+            return candidate.kind == document::AssetKind::Font &&
+                   candidate.contentDigest == asset_.contentDigest &&
+                   candidate.fontFamily == asset_.fontFamily &&
+                   candidate.fontStyle == asset_.fontStyle;
+        });
+    if (existing != draft.project().assets().end())
+        return OperationResult::applied({{"asset", existing->id}});
+    const auto id = draft.ids().allocateAsset();
+    if (!id)
+        return OperationResult::rejected(OperationIssueCode::Unsupported,
+                                         "Asset ID space is exhausted");
+    auto asset = asset_;
+    asset.id = *id;
+    if (!asset.validate().ok())
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Invalid font face reference");
+    if (!draft.project().addAsset(std::move(asset)))
+        return OperationResult::rejected(OperationIssueCode::InvalidValue, "Invalid font asset");
+    return OperationResult::applied({{"asset", *id}});
+}
+
 ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
                            const std::filesystem::path& projectDirectory,
                            const std::function<bool()>& cancel,
@@ -187,9 +225,9 @@ OperationResult ImportAssets::apply(document::Draft& draft) const {
     return outputs.empty() ? OperationResult::noChange()
                            : OperationResult::applied(std::move(outputs));
 }
-RelinkAsset::RelinkAsset(document::AssetId id, std::filesystem::path path,
+RelinkAsset::RelinkAsset(document::AssetId id, const std::filesystem::path& path,
                          const std::filesystem::path& base, const std::function<bool()>& cancel)
-    : id_(id), prepared_({std::move(path)}, base, cancel) {}
+    : id_(id), prepared_({path}, base, cancel) {}
 OperationResult RelinkAsset::apply(document::Draft& draft) const {
     auto* target = draft.project().findAsset(id_);
     if (!target)
@@ -250,10 +288,9 @@ OperationResult AddAudioLayer::apply(document::Draft& draft) const {
                                          "Audio layer ID space is exhausted");
 
     auto& parameters = composition->parameters();
-    const auto insert = [&](const document::ParameterId id, std::string key,
-                            document::ParameterValue value) {
-        return parameters.insert(
-            {id, std::move(key), document::ConstantValueSource{std::move(value)}});
+    const auto insert = [&](const document::ParameterId id, const std::string& key,
+                            const document::ParameterValue& value) {
+        return parameters.insert({id, key, document::ConstantValueSource{value}});
     };
     if (!insert(parameterIds[0], "bloom.audio.asset", std::to_string(asset_.value())) ||
         !insert(parameterIds[1], "bloom.audio.start-frame", std::int64_t{0}) ||

@@ -323,21 +323,26 @@ contract.
 ### Text Rasterization And Local Layout
 
 Text rasterization is Qt-free and deterministic. `bloom_render` embeds four vendored faces as
-build-time byte arrays: DejaVu Sans Book, Inter Regular, Inter Medium, and Inter SemiBold. No
-evaluation reads a font from the filesystem. `bloom.text-source` stores the closed face choice as a
-non-animatable Integer parameter in that same order, defaulting to DejaVu Sans, so a pre-FONT-1 text
-node with no binding still produces the old pixels. Outline rasterization is the vendored
+build-time byte arrays: DejaVu Sans Book, Inter Regular, Inter Medium, and Inter SemiBold. A text
+font is a non-animatable reference to a `Font` asset, never embedded project bytes. The compiler
+resolves that asset through the platform catalogue, reads a bounded system file at compile time,
+verifies its digest, and registers the parsed face once per digest in the glyph registry. Evaluation
+never reads a font from the filesystem. A missing or changed reference emits a warning and uses
+embedded DejaVu Sans while preserving the asset record for relink or replacement. A pre-reference
+text node with no binding still produces the old pixels. Outline rasterization is the vendored
 `stb_truetype` header, compiled into one translation unit behind a narrow Bloom-owned adapter; its
 acquisition provenance, license review, and security review are in
 `dependencies/licenses/stb_truetype/`, and that security review qualifies the library only for font
 bytes Bloom itself pins. Each embedded file has a configure-time byte-count assertion.
 
 Text v2 lays out multiple lines using glyph advances and kerning plus authored letter spacing.
-Each line is aligned Left, Center, or Right within the maximum line advance before glyph rasterization,
-so fractional alignment participates in the glyph's horizontal subpixel phase. Line baselines are
-separated by em size times line height and snapped to integer rows. The glyph union is the local
-bounds; only that bounds-sized coverage/image buffer is allocated. Empty lines advance layout without
-inventing ink. CRLF is accepted. Shaping, bidi, wrapping, and selectable font assets remain deferred.
+Without a box, each line is aligned Left, Center, or Right within the widest line and the glyph union
+is the local bounds. With a box, optional word wrapping uses the box width, horizontal alignment is
+within the box, vertical alignment positions the line stack, and Clip or Grow determines whether the
+coverage window is clipped to the box. Point text's anchor mode shifts the baseline anchor without
+changing its content-sized bounds. Line baselines are separated by em size times line height and
+snapped to integer rows. Empty lines advance layout without inventing ink. CRLF is accepted. Shaping
+and bidi remain deferred.
 
 Solid v2 evaluates its required dimension operands
 into exact local bounds and uses a containing integer buffer, with fractional edge coverage.
@@ -366,10 +371,11 @@ operation and scanline boundaries, and cancelled/failed evaluation publishes no 
 Operation memoization includes dimension, typography, and dependency values and retains matching
 evaluated geometry. Display preparation remains a separate typed stage.
 
-Evaluator semantics 5, primitive semantics 5, plan semantics 3, and animation semantics 2 remain
-unchanged: removing the compatibility operands and the placement selector changes which plans can be
-built, not what a current plan evaluates to. Existing pixel and semantic identity goldens are not
-regenerated.
+Evaluator semantics 7, primitive semantics 6, plan semantics 5, and animation semantics 2 are the
+current identities. TEXT-2 moved the plan version for the text reference/layout grammar and SHAPE-1
+moved the evaluator and primitive versions for path rasterization; the two lanes landed together, so
+all three steps are reflected in one set of re-derived identity goldens. Existing point-text pixels
+remain pinned because the zero-box defaults take the old path; only new box-layout pins were added.
 
 ### Path coverage
 
@@ -402,9 +408,11 @@ square, circle and five-point-star coverage with independent geometric predicate
 alignment, fill-rule, proxy and cancellation behavior. Runtime tests pin rectangle, circle, star,
 stroked-line and even-odd-path pixels and animation.
 
-SHAPE-1 advances image primitive semantics 5 → 6 and evaluator semantics 6 → 7. Plan semantics stay
-4 and animation semantics stay 2. The independent output-identity oracle reproduces the prior
-identity goldens before deriving the replacements; existing pixel goldens remain unchanged.
+SHAPE-1 advances image primitive semantics 5 → 6 and evaluator semantics 6 → 7; TEXT-2 advances
+plan semantics 4 → 5 in the same integration, and animation semantics stay 2. The independent
+output-identity oracle reproduces every prior identity golden set -- including each lane's own
+pre-merge set -- before deriving the single combined replacement; existing pixel goldens remain
+unchanged and the new text and shape pixel pins keep passing.
 
 ## Primitive Families
 
@@ -591,5 +599,6 @@ Compiled Solid dimensions, Text layout operands and Shape geometry operands are 
 bounds include the enabled fill and stroke. Layer transforms always place the
 local-bounds anchor at the authored position, and Merge always unions its inputs' bounds. Plans
 carry no historical evaluation selector. Unsupported document node versions are rejected before
-compilation. Current identity uses plan semantics 4, animation sampling 2, evaluator 7, and render
-primitives 6. SHAPE-1 adds shape pixels while preserving all existing source pixel goldens.
+compilation. Current identity uses plan semantics 5, animation sampling 2, evaluator 7, and render
+primitives 6. SHAPE-1 adds shape pixels and TEXT-2 adds box-text pixels, both while preserving all
+existing source pixel goldens.

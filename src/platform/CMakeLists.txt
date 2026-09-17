@@ -28,14 +28,17 @@ add_library(bloom_platform STATIC)
 target_sources(
     bloom_platform
     PRIVATE
+        font_catalog.cpp
         staged_artifact.cpp
         staged_artifact_platform.hpp
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_sources(bloom_platform PRIVATE staged_artifact_linux.cpp)
+    find_package(Fontconfig REQUIRED)
+    target_sources(bloom_platform PRIVATE font_catalog_linux.cpp staged_artifact_linux.cpp)
+    target_link_libraries(bloom_platform PUBLIC Fontconfig::Fontconfig)
 else()
-    target_sources(bloom_platform PRIVATE staged_artifact_unsupported.cpp)
+    target_sources(bloom_platform PRIVATE font_catalog_unavailable.cpp staged_artifact_unsupported.cpp)
 endif()
 
 target_sources(
@@ -43,7 +46,9 @@ target_sources(
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
-        FILES include/bloom/platform/staged_artifact.hpp
+        FILES
+            include/bloom/platform/font_catalog.hpp
+            include/bloom/platform/staged_artifact.hpp
 )
 
 target_compile_features(bloom_platform PUBLIC cxx_std_20)
@@ -52,6 +57,18 @@ bloom_enable_warnings(bloom_platform)
 
 if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     include(BloomTesting)
+    add_executable(bloom_platform_font_catalog_test tests/font_catalog_tests.cpp)
+    target_compile_definitions(
+        bloom_platform_font_catalog_test
+        PRIVATE BLOOM_FONT_FIXTURE_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/../ui/kit/third_party/inter"
+    )
+    target_link_libraries(bloom_platform_font_catalog_test PRIVATE bloom_platform)
+    bloom_enable_warnings(bloom_platform_font_catalog_test)
+    bloom_add_test(
+        NAME bloom.platform.font-catalog
+        COMMAND bloom_platform_font_catalog_test
+        LABELS unit platform text
+    )
     add_executable(bloom_platform_staged_artifact_test tests/staged_artifact_tests.cpp)
     target_link_libraries(bloom_platform_staged_artifact_test PRIVATE bloom_platform)
     bloom_enable_warnings(bloom_platform_staged_artifact_test)

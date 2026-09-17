@@ -75,7 +75,7 @@ add_library(
     "${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_fonts.generated.cpp"
 )
 target_compile_features(bloom_render_fonts PUBLIC cxx_std_20)
-target_include_directories(bloom_render_fonts PUBLIC include)
+target_include_directories(bloom_render_fonts PUBLIC include "${CMAKE_CURRENT_SOURCE_DIR}/../core/include")
 bloom_enable_warnings(bloom_render_fonts)
 
 # --- bloom_render_stb_truetype: the one vendored translation unit ------------------------------
@@ -88,7 +88,10 @@ bloom_enable_warnings(bloom_render_fonts)
 # ARE applied here, so glyph coverage stays reproducible build to build.
 add_library(bloom_render_stb_truetype OBJECT text_glyph_source.cpp text_glyph_source.hpp)
 target_compile_features(bloom_render_stb_truetype PUBLIC cxx_std_20)
-target_include_directories(bloom_render_stb_truetype PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(
+    bloom_render_stb_truetype
+    PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../core/include"
+)
 if(MSVC)
     target_compile_options(bloom_render_stb_truetype PRIVATE /w)
 else()

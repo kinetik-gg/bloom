@@ -36,7 +36,7 @@ level's dependencies.
 | Level | Planned nodes | Purpose |
 | --- | --- | --- |
 | `F0` | Solid Source | Deterministic finite RGBA source with explicit color-encoding identity |
-| `F0` | Text Source | Authorable text source rendered on the portable CPU path: content, em size, and color with one embedded face and single-line layout; font identity, shaping, and layout contracts remain deferred |
+| `F0` | Text Source | Authorable text source rendered on the portable CPU path: content, em size, color, embedded or system font reference, line metrics, alignment, and optional box/wrap/overflow layout; shaping remains a later extension |
 | `F0` | Layer Output | Explicit boundary that makes a graph result layer-addressable |
 | `F0` | Layer Stack | Stable ordered compositing inputs projected as Timeline rows |
 | `F0` | Composition Output | One explicit evaluation endpoint per composition |
@@ -195,7 +195,7 @@ mask, and geometry values remain distinct even where their storage shapes resemb
 | `M1` | Transform Path, Offset Path, Trim Path | Path-domain operations independent of raster resolution |
 | `M1` | Merge Paths, Boolean Paths | Declared fill rule and robust topology diagnostics |
 | `M1` | Repeater, Wiggle Path, Round Corners | Non-destructive procedural path modifiers |
-| `M1` | Text Layout, Text On Path | Portable font asset, shaping, language, direction, and layout contracts |
+| `M1` | Text Layout, Text On Path | Portable font asset, shaping, language, direction, and advanced layout contracts beyond the F0 box layout |
 | `M1` | Text Animator | Selector-driven per-glyph properties over stable text-layout results |
 | `V1` | Vectorize Image | Analysis operation with inspectable thresholds and topology output |
 

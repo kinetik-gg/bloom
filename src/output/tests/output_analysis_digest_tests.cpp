@@ -26,8 +26,9 @@
 #include <vector>
 
 namespace {
-// Plan grammar 4 adds the Layer Output parent reference. Identity digests are independently
-// derived for plan 4, animation 2, evaluator 6 and primitives 5; pixel digests are unchanged.
+// TEXT-2 plan grammar 5 adds the box-layout operands to CompiledText. Identity digests are
+// independently re-derived for plan 5, animation 2, evaluator 6 and primitives 5; pixel digests
+// are unchanged.
 
 namespace color = bloom::color;
 namespace core = bloom::core;
@@ -105,19 +106,19 @@ constexpr core::Sha256Digest::Bytes kRevisionBytes{
 };
 
 // These are produced by an independent byte-oriented oracle for the exact fixture below.
-// Re-derived for the task S4 semantics-version bumps (CPU composition evaluator 3 -> 4, CPU image
-// primitive 3 -> 4), then again for the blend-mode slice (evaluator 4 -> 5, primitive 4 -> 5). Both
-// are frozen fields of the process-frame semantic identity these preimages embed, so every digest
-// below changed while every preimage LENGTH stayed the same -- neither slice added a frozen field
-// or reordered one. The values come from the same independent byte-oriented oracle that produced
-// the originals -- a standalone script that packs each frozen field itself with explicit big-endian
-// integers and hashes the result, linking no Bloom code -- and that oracle was validated by
-// reproducing EVERY previously checked-in golden set byte for byte when fed its own version
-// numbers, the version-4 set this slice replaces included.
+// Re-derived ONCE for the TEXT-2 / SHAPE-1 integration, which combines both lanes' semantics
+// steps: SHAPE-1 moved the CPU image primitive 5 -> 6 and the CPU composition evaluator 6 -> 7 for
+// path rasterization, and TEXT-2 moved the compiled plan 4 -> 5 for the new CompiledText
+// box-layout operands. Animation sampling stays 2. All four integers are frozen fields of the
+// process-frame semantic identity these preimages embed, so every digest below moves while every
+// preimage LENGTH stays the same -- no frozen field was added, removed, or reordered. The values
+// come from the standalone byte-oriented identity oracle, which packs each frozen field itself and
+// links no Bloom code; it was re-validated against every previously checked-in golden set,
+// including both lanes' pre-merge sets, before its combined values were trusted.
 constexpr std::string_view kExpectedExrDigest =
-    "25d2424700524e6d413fab968c866e39b966080d4f68a0893c19a9ff01fb37b0";
+    "36ba92954552408b92aab4d288e67dacd49f41f9f0ee89d63f886c694276177e";
 constexpr std::string_view kExpectedPngDigest =
-    "011208b67d5fb5a53861af84fd0708388f30eecc0035069820b4d0d0c13ea827";
+    "18df4caab537ce1f06bd040ea90ba16309ae3d689d1bfdf7bc04f4f612c59df2";
 
 class Expectations final {
   public:

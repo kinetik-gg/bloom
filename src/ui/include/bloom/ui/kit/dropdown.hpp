@@ -73,6 +73,8 @@ class KDropdown final : public QWidget {
 
     void showPopup();
     void hidePopup();
+    void setSearchable(bool searchable);
+    [[nodiscard]] bool searchable() const noexcept;
     [[nodiscard]] bool isPopupVisible() const;
     [[nodiscard]] KDropdownPopup* popup() const noexcept;
     [[nodiscard]] QListView* popupView() const noexcept;

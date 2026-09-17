@@ -390,6 +390,34 @@ void testTypographyGoldens(Expectations& expectations) {
                         "unrepresentable layout is refused before allocation");
 }
 
+void testBoxTypographyGoldens(Expectations& expectations) {
+    using bloom::render::TextAlignment;
+    using bloom::render::TextLayoutOptions;
+    const auto parameters = TextRasterParameters::create(16, 16);
+    TextLayoutOptions layout;
+    layout.alignment = TextAlignment::Center;
+    layout.boxWidth = 32.0;
+    layout.boxHeight = 64.0;
+    layout.wrap = true;
+    layout.verticalAlignment = TextLayoutOptions::VerticalAlignment::Bottom;
+    layout.overflow = TextLayoutOptions::Overflow::Clip;
+    const auto raster = TextCoverageBitmap::rasterizeEmbeddedText(
+        EmbeddedFace::DejaVuSans, "A A A", *parameters.value(), generousByteLimit(), layout);
+    expectations.expect(static_cast<bool>(raster), "wrapped box typography rasterizes");
+    if (!raster)
+        return;
+    auto digest = std::uint64_t{14695981039346656037ULL};
+    for (const auto byte : raster.value()->coverage()) {
+        digest ^= byte;
+        digest *= 1099511628211ULL;
+    }
+    expectations.expect(raster.value()->originX() == 2 && raster.value()->originY() == 35 &&
+                            raster.value()->width() == 28 && raster.value()->height() == 28,
+                        "wrapped centred bottom-aligned box bounds golden");
+    expectations.expect(digest == 3600944647390057943ULL,
+                        "wrapped centred bottom-aligned box coverage golden");
+}
+
 } // namespace
 
 int main() {
@@ -404,6 +432,7 @@ int main() {
         testRefusals(expectations);
         testPerAxisScaling(expectations);
         testCoverageSolidRow(expectations);
+        testBoxTypographyGoldens(expectations);
         return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

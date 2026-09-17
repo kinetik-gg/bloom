@@ -248,6 +248,14 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
     const auto sizeParameterId = result.outputId<ParameterId>(kAddTextLayerSizeParameterOutput);
     const auto colorParameterId = result.outputId<ParameterId>(kAddTextLayerColorParameterOutput);
     const auto fontParameterId = result.outputId<ParameterId>(kAddTextLayerFontParameterOutput);
+    const auto boxParameterId = result.outputId<ParameterId>(kAddTextLayerBoxParameterOutput);
+    const auto wrapParameterId = result.outputId<ParameterId>(kAddTextLayerWrapParameterOutput);
+    const auto verticalAlignmentParameterId =
+        result.outputId<ParameterId>(kAddTextLayerVerticalAlignmentParameterOutput);
+    const auto anchorModeParameterId =
+        result.outputId<ParameterId>(kAddTextLayerAnchorModeParameterOutput);
+    const auto overflowParameterId =
+        result.outputId<ParameterId>(kAddTextLayerOverflowParameterOutput);
     const auto positionParameterId =
         result.outputId<ParameterId>(kAddTextLayerPositionParameterOutput);
     const auto anchorParameterId = result.outputId<ParameterId>(kAddTextLayerAnchorParameterOutput);
@@ -261,10 +269,12 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
     const auto textToLayerEdgeId = result.outputId<EdgeId>(kAddTextLayerTextToLayerEdgeOutput);
     const auto layerToStackEdgeId = result.outputId<EdgeId>(kAddTextLayerLayerToStackEdgeOutput);
     if (!layerId || !slotId || !textNodeId || !layerOutputNodeId || !contentParameterId ||
-        !sizeParameterId || !colorParameterId || !fontParameterId || !positionParameterId ||
-        !anchorParameterId || !scaleParameterId || !rotationParameterId || !opacityParameterId ||
-        !blendModeParameterId || !textToLayerEdgeId || !layerToStackEdgeId) {
-        test.fail("text branch should return all sixteen durable IDs");
+        !sizeParameterId || !colorParameterId || !fontParameterId || !boxParameterId ||
+        !wrapParameterId || !verticalAlignmentParameterId || !anchorModeParameterId ||
+        !overflowParameterId || !positionParameterId || !anchorParameterId || !scaleParameterId ||
+        !rotationParameterId || !opacityParameterId || !blendModeParameterId ||
+        !textToLayerEdgeId || !layerToStackEdgeId) {
+        test.fail("text branch should return all twenty-one durable IDs");
         return;
     }
     const std::array textParameters{
@@ -274,7 +284,8 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
     test.expect(std::ranges::adjacent_find(textParameters) == textParameters.end(),
                 "every parameter in a text branch has its own identity");
 
-    const auto& value = composition(document.snapshot());
+    const auto snapshot = document.snapshot();
+    const auto& value = composition(snapshot);
     NodeRecord expectedTextNode{
         *textNodeId,
         std::string(document::kTextSourceNodeType),
@@ -289,10 +300,13 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
     if (textNode)
         for (const auto& binding : textNode->parameters) {
             if (binding.role == "alignment" || binding.role == "line-height" ||
-                binding.role == "letter-spacing" || binding.role == "font")
+                binding.role == "letter-spacing" || binding.role == "font" ||
+                binding.role == "box" || binding.role == "wrap" ||
+                binding.role == "verticalAlignment" || binding.role == "anchorMode" ||
+                binding.role == "overflow")
                 expectedTextNode.parameters.push_back(binding);
         }
-    test.expect(expectedTextNode.parameters.size() == 7, "text declares typography parameters");
+    test.expect(expectedTextNode.parameters.size() == 12, "text declares typography parameters");
     test.expect(textNode != nullptr && *textNode == expectedTextNode,
                 "text source should bind content, size, and color in the registered order");
 
@@ -305,13 +319,34 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
     const ParameterRecord expectedColor{*colorParameterId,
                                         std::string(document::kTextColorParameterSchemaKey),
                                         ConstantValueSource{color}};
-    const ParameterRecord expectedFont{*fontParameterId,
-                                       std::string(document::kTextFontParameterSchemaKey),
-                                       ConstantValueSource{document::kDefaultTextFontValue}};
+    const ParameterRecord expectedFont{
+        *fontParameterId, std::string(document::kTextFontParameterSchemaKey),
+        ConstantValueSource{std::to_string(snapshot.project().assets().front().id.value())}};
+    const ParameterRecord expectedBox{*boxParameterId,
+                                      std::string(document::kTextBoxParameterSchemaKey),
+                                      ConstantValueSource{Vec2d{}}};
+    const ParameterRecord expectedWrap{*wrapParameterId,
+                                       std::string(document::kTextWrapParameterSchemaKey),
+                                       ConstantValueSource{false}};
+    const ParameterRecord expectedVerticalAlignment{
+        *verticalAlignmentParameterId,
+        std::string(document::kTextVerticalAlignmentParameterSchemaKey),
+        ConstantValueSource{std::int64_t{0}}};
+    const ParameterRecord expectedAnchorMode{
+        *anchorModeParameterId, std::string(document::kTextAnchorModeParameterSchemaKey),
+        ConstantValueSource{std::int64_t{0}}};
+    const ParameterRecord expectedOverflow{*overflowParameterId,
+                                           std::string(document::kTextOverflowParameterSchemaKey),
+                                           ConstantValueSource{std::int64_t{0}}};
     const auto* content = value.parameters().find(*contentParameterId);
     const auto* size = value.parameters().find(*sizeParameterId);
     const auto* storedColor = value.parameters().find(*colorParameterId);
     const auto* storedFont = value.parameters().find(*fontParameterId);
+    const auto* storedBox = value.parameters().find(*boxParameterId);
+    const auto* storedWrap = value.parameters().find(*wrapParameterId);
+    const auto* storedVerticalAlignment = value.parameters().find(*verticalAlignmentParameterId);
+    const auto* storedAnchorMode = value.parameters().find(*anchorModeParameterId);
+    const auto* storedOverflow = value.parameters().find(*overflowParameterId);
     test.expect(content != nullptr && *content == expectedContent,
                 "text content parameter should preserve exact schema and UTF-8 value");
     test.expect(size != nullptr && *size == expectedSize,
@@ -319,7 +354,13 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
     test.expect(storedColor != nullptr && *storedColor == expectedColor,
                 "text color parameter should preserve exact schema and straight authoring value");
     test.expect(storedFont != nullptr && *storedFont == expectedFont,
-                "text font parameter should preserve the DejaVu Sans default");
+                "text font parameter should preserve the DejaVu Sans asset reference");
+    test.expect(storedBox != nullptr && *storedBox == expectedBox && storedWrap != nullptr &&
+                    *storedWrap == expectedWrap && storedVerticalAlignment != nullptr &&
+                    *storedVerticalAlignment == expectedVerticalAlignment &&
+                    storedAnchorMode != nullptr && *storedAnchorMode == expectedAnchorMode &&
+                    storedOverflow != nullptr && *storedOverflow == expectedOverflow,
+                "text box layout parameters should preserve registry defaults");
 
     const LayerOutputBoundary expectedBoundary{*layerOutputNodeId, *layerId, "Title",
                                                std::string(document::kLayerOutputOutputPort)};

@@ -80,4 +80,22 @@ void embeddedFontRasterizeGlyph(EmbeddedFace face, std::span<std::uint8_t> outpu
                                 int height, int strideBytes, float scaleX, float scaleY,
                                 float shiftX, float shiftY, int glyph) noexcept;
 
+using ExternalFontFile = bloom::render::ExternalFontFile;
+[[nodiscard]] bool externalFontIsParsed(const ExternalFontFile& font) noexcept;
+[[nodiscard]] float externalFontScaleForEmPixelSize(const ExternalFontFile& font,
+                                                    double pixelSize) noexcept;
+[[nodiscard]] FontVerticalMetrics
+externalFontVerticalMetrics(const ExternalFontFile& font) noexcept;
+[[nodiscard]] int externalFontGlyphIndex(const ExternalFontFile& font, char32_t codepoint) noexcept;
+[[nodiscard]] GlyphHorizontalMetrics
+externalFontGlyphHorizontalMetrics(const ExternalFontFile& font, int glyph) noexcept;
+[[nodiscard]] int externalFontGlyphKernAdvance(const ExternalFontFile& font, int leftGlyph,
+                                               int rightGlyph) noexcept;
+[[nodiscard]] GlyphBitmapBox externalFontGlyphBitmapBox(const ExternalFontFile& font, int glyph,
+                                                        float scaleX, float scaleY, float shiftX,
+                                                        float shiftY) noexcept;
+void externalFontRasterizeGlyph(const ExternalFontFile& font, std::span<std::uint8_t> output,
+                                int width, int height, int strideBytes, float scaleX, float scaleY,
+                                float shiftX, float shiftY, int glyph) noexcept;
+
 } // namespace bloom::render::detail

@@ -6,6 +6,32 @@
 #include <vector>
 
 namespace bloom::commands {
+class EnsureFontAsset final : public Operation {
+  public:
+    explicit EnsureFontAsset(document::AssetRecord asset) : asset_(std::move(asset)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.asset.ensure-font";
+    }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::AssetRecord asset_;
+};
+
+class RelinkFontAsset final : public Operation {
+  public:
+    RelinkFontAsset(document::AssetId id, document::AssetRecord replacement)
+        : id_(id), replacement_(std::move(replacement)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.asset.relink-font";
+    }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::AssetId id_;
+    document::AssetRecord replacement_;
+};
+
 // Construct on an import worker: preparation probes, hashes and scans. apply only copies the
 // prepared records into a draft, so publishing the command never performs media I/O.
 class ImportAssets final : public Operation {
@@ -27,7 +53,7 @@ class ImportAssets final : public Operation {
 };
 class RelinkAsset final : public Operation {
   public:
-    RelinkAsset(document::AssetId id, std::filesystem::path path,
+    RelinkAsset(document::AssetId id, const std::filesystem::path& path,
                 const std::filesystem::path& projectDirectory,
                 const std::function<bool()>& cancel = {});
     [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.asset.relink"; }
