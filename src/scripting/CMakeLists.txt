@@ -1,3 +1,18 @@
+# CPython is an optional host prerequisite. Explicit OFF avoids discovery; an explicit ON
+# requires headers and embedding support instead of silently dropping the feature.
+set(Python3_FIND_STRATEGY LOCATION)
+set(Python3_FIND_UNVERSIONED_NAMES FIRST)
+if(NOT DEFINED BLOOM_BUILD_PYTHON)
+    find_package(Python3 3.10 QUIET COMPONENTS Interpreter Development.Module Development.Embed)
+    option(BLOOM_BUILD_PYTHON "Build the Python bridge and embedded interpreter" ${Python3_FOUND})
+endif()
+if(BLOOM_BUILD_PYTHON)
+    find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter Development.Module Development.Embed)
+    if(Python3_SOABI MATCHES "[0-9]t")
+        message(FATAL_ERROR "Bloom Python v1 requires a GIL-enabled CPython interpreter")
+    endif()
+endif()
+
 add_library(bloom_scripting STATIC)
 
 target_sources(
@@ -31,6 +46,11 @@ bloom_enable_warnings(bloom_scripting)
 
 if(BUILD_TESTING)
     include(BloomTesting)
+    add_executable(bloom_scripting_live_session_test tests/live_session_tests.cpp)
+    target_link_libraries(bloom_scripting_live_session_test PRIVATE bloom_scripting)
+    bloom_enable_warnings(bloom_scripting_live_session_test)
+    bloom_add_test(NAME bloom.scripting.live-session COMMAND bloom_scripting_live_session_test
+        LABELS unit scripting host commands document)
     add_executable(bloom_scripting_facade_test tests/facade_tests.cpp)
     target_link_libraries(bloom_scripting_facade_test PRIVATE bloom_scripting)
     bloom_enable_warnings(bloom_scripting_facade_test)
@@ -39,4 +59,8 @@ if(BUILD_TESTING)
         COMMAND bloom_scripting_facade_test
         LABELS unit scripting host commands document
     )
+endif()
+
+if(BLOOM_BUILD_PYTHON)
+    add_subdirectory(python)
 endif()

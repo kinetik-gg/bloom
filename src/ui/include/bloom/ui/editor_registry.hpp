@@ -13,6 +13,7 @@ namespace bloom::ui {
 class CompositionPreviewController;
 class RamPreviewController;
 class CompositionSession;
+class ProjectHost;
 
 using EditorFactory = std::function<QWidget*(QWidget* parent)>;
 
@@ -36,6 +37,7 @@ class EditorRegistry final {
 // unaffected.
 [[nodiscard]] bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& session,
                                              CompositionPreviewController& previewController,
-                                             RamPreviewController* ramPreview = nullptr);
+                                             RamPreviewController* ramPreview = nullptr,
+                                             ProjectHost* projectHost = nullptr);
 
 } // namespace bloom::ui

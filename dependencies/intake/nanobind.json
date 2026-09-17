@@ -1,0 +1,85 @@
+{
+  "name": "nanobind",
+  "version": "3.0.1",
+  "source": {
+    "url": "https://files.pythonhosted.org/packages/07/11/69cf231c4f3ac4fa724a0b1933c3650fb65aff6b9d7a4c2573b9e4e40077/nanobind-3.0.1.tar.gz",
+    "archiveSha256": "sha256:f7f0a889c8fb80deaacb95e918d88e05148850a32d2b8eda28446291b2bf7c35",
+    "archiveSizeBytes": 1142340,
+    "retrievedAt": "2026-09-17",
+    "commit": null,
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/nanobind/provenance.md",
+      "sha256": "sha256:1468fa42095d23549a48608cb4f6a570f90ed72a5122fb816907d0fb4dd64439"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "BSD-3-Clause",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/nanobind/LICENSE",
+        "sha256": "sha256:f305091a4e57805870b217a28ea4b1f16610eece8457d2370f822a9696b75836"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/nanobind/review.md",
+      "sha256": "sha256:0c746de2bd09c5a29a4bb5d707c92e4ab9cfdcf576de15c27e6328c67f1b0119"
+    },
+    "reviewedAt": "2026-09-17"
+  },
+  "patches": [],
+  "dependencies": [
+    {
+      "name": "robin-map",
+      "relationship": "vendored"
+    }
+  ],
+  "profileBuilds": [
+    {
+      "profileId": "bloom.linux-x86-64-clang-release",
+      "linkage": "static",
+      "cmakeOptions": [
+        {
+          "name": "CMAKE_POSITION_INDEPENDENT_CODE",
+          "value": "ON"
+        },
+        {
+          "name": "NB_CREATE_INSTALL_RULES",
+          "value": "OFF"
+        },
+        {
+          "name": "NB_TEST",
+          "value": "OFF"
+        },
+        {
+          "name": "NB_USE_SUBMODULE_DEPS",
+          "value": "ON"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.python-bindings"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "library",
+        "license",
+        "source"
+      ],
+      "conformanceFixtureSets": []
+    }
+  ],
+  "securityReview": {
+    "reviewedAt": "2026-09-17",
+    "record": {
+      "path": "dependencies/licenses/nanobind/security.md",
+      "sha256": "sha256:cb2d4ce8d67f1dc28e353a1f91cadf0c2c1606c785da78d879dbd511ab6af83a"
+    },
+    "vulnerabilities": []
+  }
+}

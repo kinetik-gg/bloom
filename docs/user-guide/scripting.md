@@ -22,3 +22,6 @@ Save As operation when a durable project is required.
 preservation report and only exits successfully after publication completes.
 
 Example scripts live in [`examples/scripting`](../../examples/scripting/).
+
+Python scripts and the interactive interpreter are described in [Scripting Bloom with Python](python.md).
+For stdio clients, see [Using Bloom from an agent (MCP)](mcp.md).

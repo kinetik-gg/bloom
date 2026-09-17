@@ -13,11 +13,14 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 
 namespace bloom::scripting {
+
+class EventStream;
 
 struct SessionDiagnostic final {
     std::string code;
@@ -72,6 +75,18 @@ struct SessionCommandResult final {
     }
 };
 
+// A live client borrows typed host services and immutable reads, never mutable document
+// pointers. The owner revokes valid() before replacing or destroying its authoring session.
+struct SessionBinding final {
+    std::function<bool()> valid;
+    std::function<document::Snapshot()> snapshot;
+    std::function<SessionCommandResult(commands::Transaction)> execute;
+    std::function<SessionCommandResult(bool)> history;
+    std::shared_ptr<EventStream> events;
+    host::PublicationCoordinator* publication = nullptr;
+    platform::StagedArtifactCoordinator* artifacts = nullptr;
+};
+
 class Session final {
   public:
     [[nodiscard]] static SessionCreateResult
@@ -80,6 +95,10 @@ class Session final {
               document::CompositionFormat format = {});
     [[nodiscard]] static SessionCreateResult open(const std::filesystem::path& path);
     [[nodiscard]] static SessionCreateResult openReadOnly(const std::filesystem::path& path);
+    [[nodiscard]] static SessionCreateResult attach(SessionBinding binding);
+    [[nodiscard]] std::shared_ptr<EventStream> eventStream() const noexcept {
+        return binding_ ? binding_->events : nullptr;
+    }
 
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
@@ -111,10 +130,10 @@ class Session final {
     [[nodiscard]] commands::CommandStack* commandStack() noexcept;
     [[nodiscard]] document::Document* document() noexcept;
     [[nodiscard]] host::PublicationCoordinator* publicationCoordinator() noexcept {
-        return publicationCoordinator_.get();
+        return binding_ ? binding_->publication : publicationCoordinator_.get();
     }
     [[nodiscard]] platform::StagedArtifactCoordinator* artifactCoordinator() noexcept {
-        return artifactCoordinator_.get();
+        return binding_ ? binding_->artifacts : artifactCoordinator_.get();
     }
 
   private:
@@ -142,6 +161,7 @@ class Session final {
     std::unique_ptr<platform::StagedArtifactCoordinator> artifactCoordinator_;
     OperationRegistry registry_;
     std::filesystem::path displayPath_;
+    std::optional<SessionBinding> binding_;
 };
 
 } // namespace bloom::scripting

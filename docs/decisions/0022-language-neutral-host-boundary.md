@@ -50,3 +50,41 @@ range runner owns exact frame-time iteration. Python and MCP bindings can be add
 document storage or renderer semantics. More adapters and contribution registries can be added
 incrementally while every request still has an owning module, a typed result, and a cancellation
 boundary.
+
+## SCRIPT-1 client addendum (2026-09-17)
+
+The optional Python client binds these contracts with nanobind 3.0.1. CPython's C API owns isolated
+interpreter startup/shutdown; nanobind owns extension binding, not embedding lifecycle. The native
+core is precompiled by the dependency superbuild against the host Python SOABI, with robin-map
+recorded as its vendored transitive. Host CPython plus development headers is an explicit
+SCRIPT-1 development prerequisite rather than a newly bundled or qualified dependency.
+
+The pure-Python layer derives keyword signatures from registry descriptors, projects read-only
+stable IDs, groups operations with expected revisions, and delivers event callbacks only through
+the subscribing thread's pump. Native task tickets observe Python work running on a separate
+Python worker. The evaluator and render kernels remain native. The 75-ID registry currently has
+eleven implemented factories; unsupported IDs retain their diagnostic instead of acquiring a
+client-specific implementation. The animation/component-keying and node-removal adapters live in this shared registry.
+
+The Script editor borrows the live host through `SessionBinding`: immutable snapshot and context
+callbacks, queued transaction/history callbacks, a native event stream and the existing publication
+services. No mutable document pointer crosses the binding. The UI thread drains one authoring
+transaction per pump slice; ordinary Python runs on the dedicated scripting thread. Native waits
+release the GIL. A generation token revokes the binding on New/Open, and stale queued transactions
+are refused before reaching the replacement document. Render requests pin one snapshot and carry
+cancellation through compile, analysis and publication. The native event stream makes subscription
+release a lifetime barrier; callbacks only enqueue native records and cannot reenter the stream.
+
+One interpreter is shared by the editor registry and initialized lazily. Closing an individual panel
+does not terminate it. Application shutdown requests cancellation and joins the interpreter only
+after its queued requests have been revoked. Python tracing supplies cancellation and a foreground
+GUI CPU budget; long work uses `bloom.tasks` and native progress tickets. Trusted native extensions
+still need cooperative shutdown. `.pyi` conformance and UI tests cover keyframe/undo, replacement,
+responsiveness, cancellation and Python/CLI/UI render-byte parity.
+
+The Qt-free `bloom-mcp` process implements JSON-RPC 2.0 over MCP stdio using qualified yyjson. Its
+five tools map to Query, atomic transactions, the reference render runner, MEDIA-4's owned sequence
+export runner and event subscriptions. Input schemas, bounded memory/queues, request-ID cancellation
+and protocol errors belong to this client; project validation, undo, preservation analysis and
+publication remain in their existing owners. It does not expose an HTTP service or Python source
+execution. The user guides record protocol versions, limits and platform-dependent export support.

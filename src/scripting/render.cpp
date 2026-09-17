@@ -14,8 +14,11 @@ namespace {
 using Plan = std::shared_ptr<const runtime::CompiledCompositionPlan>;
 
 template <typename Value>
-[[nodiscard]] std::optional<runtime::TaskResult<Value>> await(runtime::TaskHandle<Value>& handle) {
+[[nodiscard]] std::optional<runtime::TaskResult<Value>>
+await(runtime::TaskHandle<Value>& handle, const std::function<bool()>& cancelled) {
     while (true) {
+        if (cancelled && cancelled())
+            handle.cancel();
         if (auto result = handle.tryTakeResult(); result.has_value()) {
             return result;
         }
@@ -43,12 +46,11 @@ template <typename Value>
            "; approvable=" + (attempt.approvable() ? "true" : "false");
 }
 
-[[nodiscard]] RenderResult exportWithPlan(Session& session, runtime::TaskScheduler& scheduler,
-                                          const Plan& plan, const core::RationalTime time,
-                                          const output::OutputPresetV1 preset,
-                                          const std::filesystem::path& destination,
-                                          std::filesystem::path scratchDirectory,
-                                          output::ExportResourceLedgerV1& ledger) {
+[[nodiscard]] RenderResult
+exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& plan,
+               const core::RationalTime time, const output::OutputPresetV1 preset,
+               const std::filesystem::path& destination, std::filesystem::path scratchDirectory,
+               output::ExportResourceLedgerV1& ledger, const std::function<bool()>& cancelled) {
     const auto failed = [](std::string diagnostic) {
         return RenderResult{.succeeded = false,
                             .publishedFrames = 0,
@@ -81,6 +83,8 @@ template <typename Value>
     auto runner = std::move(attemptBegin).takeHandle();
     std::optional<host::OutputAnalysisAttemptOutcomeV1> outcome;
     while (!outcome.has_value()) {
+        if (cancelled && cancelled())
+            runner.requestCancellation();
         outcome = runner.tryComplete();
         if (!outcome.has_value()) {
             std::this_thread::yield();
@@ -146,7 +150,7 @@ template <typename Value>
                             .preservationReport = reportText(*attempt),
                             .diagnostic = "The export publication task could not start"};
     }
-    auto taskResult = await(submission.handle);
+    auto taskResult = await(submission.handle, cancelled);
     const bool publicationSucceeded =
         publicationResult->has_value() ? static_cast<bool>(publicationResult->value()) : false;
     const bool succeeded = taskResult.has_value() &&
@@ -158,16 +162,17 @@ template <typename Value>
             .diagnostic = succeeded ? std::string{} : "The export publication failed"};
 }
 
-[[nodiscard]] RenderResult compilePlan(Session& session, runtime::TaskScheduler& scheduler,
+[[nodiscard]] RenderResult compilePlan(const document::Snapshot& snapshot,
+                                       runtime::TaskScheduler& scheduler,
                                        const runtime::SnapshotCompiler& compiler,
-                                       document::CompositionId composition, Plan& plan) {
+                                       document::CompositionId composition, Plan& plan,
+                                       const std::function<bool()>& cancelled) {
     const auto failed = [](std::string diagnostic) {
         return RenderResult{.succeeded = false,
                             .publishedFrames = 0,
                             .preservationReport = {},
                             .diagnostic = std::move(diagnostic)};
     };
-    const auto snapshot = session.snapshot();
     runtime::TaskRequest request(
         "Compile composition for scripting render",
         {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(1)},
@@ -193,7 +198,7 @@ template <typename Value>
     if (!submission.accepted()) {
         return failed("The render compile task could not start");
     }
-    const auto result = await(submission.handle);
+    const auto result = await(submission.handle, cancelled);
     if (!result.has_value() || result->state() != runtime::TaskState::Succeeded ||
         !result->value().has_value()) {
         return failed("The composition could not be compiled");
@@ -214,7 +219,8 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
                             .preservationReport = {},
                             .diagnostic = std::move(diagnostic)};
     };
-    if (!session.isValid() || request.destination.empty()) {
+    if (!session.isValid() || request.destination.empty() ||
+        (request.cancelled && request.cancelled())) {
         return failed("Render request is invalid");
     }
     const auto snapshot = session.snapshot();
@@ -226,7 +232,8 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
         return failed("Render requires a frame or range");
     }
     Plan plan;
-    auto compileResult = compilePlan(session, scheduler, compiler, request.composition, plan);
+    auto compileResult =
+        compilePlan(snapshot, scheduler, compiler, request.composition, plan, request.cancelled);
     if (!compileResult.succeeded) {
         return compileResult;
     }
@@ -240,11 +247,12 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
                                         .duration = composition->duration()};
         RenderResult aggregate{
             .succeeded = true, .publishedFrames = 0, .preservationReport = {}, .diagnostic = {}};
-        const auto rangeResult =
-            host::FrameRangeRunnerV1::run(range, [&](const host::FrameRangeFrameV1& frame) {
+        const auto rangeResult = host::FrameRangeRunnerV1::run(
+            range,
+            [&](const host::FrameRangeFrameV1& frame) {
                 const auto current =
                     exportWithPlan(session, scheduler, plan, frame.time, request.preset, frame.path,
-                                   scratchDirectory, ledger);
+                                   scratchDirectory, ledger, request.cancelled);
                 if (!current.succeeded) {
                     aggregate = current;
                     return false;
@@ -252,7 +260,8 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
                 aggregate.publishedFrames += 1;
                 aggregate.preservationReport = current.preservationReport;
                 return true;
-            });
+            },
+            request.cancelled);
         if (!rangeResult.succeeded()) {
             if (aggregate.diagnostic.empty()) {
                 aggregate.diagnostic = rangeResult.diagnostic;
@@ -272,7 +281,7 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
         return failed("Frame is outside the composition range");
     }
     return exportWithPlan(session, scheduler, plan, *time, request.preset, request.destination,
-                          std::move(scratchDirectory), ledger);
+                          std::move(scratchDirectory), ledger, request.cancelled);
 }
 
 } // namespace bloom::scripting

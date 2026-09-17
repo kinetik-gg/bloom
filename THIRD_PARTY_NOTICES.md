@@ -15,6 +15,8 @@ component, and its own records explain why the lock cannot represent it.
 
 | Component | Version | License | Distribution boundary | Records |
 | --- | --- | --- | --- | --- |
+| nanobind | 3.0.1 | BSD-3-Clause | Precompiled static core for the optional Python bridge | `dependencies/licenses/nanobind/` |
+| robin-map | 1.4.0 | MIT | Unmodified headers inside the nanobind archive and static core | `dependencies/licenses/robin_map/` |
 | FFmpeg | 8.1.2 | LGPL-2.1-or-later | Shared libraries for the future Linux `bloom-media-worker` only; ProRes is non-authorized preview output | `dependencies/licenses/ffmpeg/`, `dependencies/dependencies.lock.json` |
 
 FFmpeg's corresponding-source obligation is the exact locked official release archive. The lock,

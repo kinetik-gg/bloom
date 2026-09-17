@@ -1,6 +1,6 @@
 # Scripting And Add-ons
 
-Status: accepted; SCRIPT-0 host contracts delivered
+Status: accepted; SCRIPT-0 host and SCRIPT-1 Python, live Script editor and MCP clients delivered
 
 Updated: 2026-09-17
 
@@ -20,8 +20,9 @@ composition proof.
 - Python is Bloom's only core scripting and add-on language.
 - Follow the Python minor version selected by the supported VFX Reference Platform generation. The
   initial CY2026 target is CPython 3.13.x.
-- Bloom bundles and pins its own interpreter, standard library, private native bridge, and Python
-  facade. It never links to or discovers an arbitrary system Python at runtime.
+- Packaged releases must bundle and pin their interpreter, standard library, private native bridge
+  and Python facade. The SCRIPT-1 development intake uses an explicitly build-selected host
+  CPython instead; it is not a qualified bundled release interpreter.
 - Pin an exact Python patch release in each Bloom build manifest while publishing compatibility at
   the declared minor-version boundary.
 - Lua is not a second Bloom API. An optional future pipeline may own a narrowly scoped Lua runtime
@@ -51,8 +52,9 @@ an advanced tier, not as the compatibility baseline every add-on must pay for.
 ## Language-neutral Host Boundary
 
 ADR 0022 is implemented by SCRIPT-0. The Qt-free `bloom::scripting` facade and `bloom-cli` are the
-reference host boundary for the future Python and MCP clients. The six contracts below are live in
-the headless build; Python binding and MCP transport remain SCRIPT-1 clients.
+reference host boundary for Python and MCP clients. The six contracts below are live in the
+headless build. SCRIPT-1 adds the optional nanobind package, CPython C API embedding and Qt-free
+stdio MCP transport; the live Script editor still needs its host adapter.
 
 Python consumes the same owned application boundaries as the UI and headless frontend:
 
@@ -113,11 +115,10 @@ remain subject to the API spike, but the accepted usability level looks like thi
 import bloom
 
 composition = bloom.context.composition
-title = bloom.ops.layers.add_text(composition=composition, text="Hello, Bloom!")
 
 with bloom.transactions.group("Build title"):
-    bloom.ops.parameters.set(title, "transform.position", (960, 540))
-    bloom.ops.parameters.set(title, "opacity", 0.9)
+    bloom.ops.project.set_name(name="Title study")
+    bloom.ops.layer.add_text(composition=composition, name="Title", text="Hello, Bloom!")
 ```
 
 `bloom.ops` is the public operation vocabulary. Internally, each persistent operation produces one
@@ -131,11 +132,11 @@ Every durable operation also accepts explicit project, composition, and object t
 deterministic headless and pipeline use. Bloom should not inherit an API where an operation succeeds
 only because a particular area happens to be focused.
 
-Namespace organization is discoverability, not permission enforcement. The host authorizes every
-operation at the command, task, file, network, render, and UI gateway using the current script or
-add-on scope. A known but unavailable operation remains inspectable and returns a structured
-capability or permission error. Scripts can query the same requirements before presenting an
-action.
+Namespace organization is discoverability, not permission enforcement. SCRIPT-1 runs trusted local
+scripts with the launcher's filesystem and network permissions; it does not provide add-on scopes
+or a Python sandbox. Scoped command, task, file, network, render and UI authorization remains part
+of the future add-on host. A known but unavailable operation remains inspectable and returns its
+structured unsupported diagnostic.
 
 This follows Blender's useful distinction between
 [`bpy.context`](https://docs.blender.org/api/current/bpy.context.html),
@@ -184,32 +185,49 @@ that needs hard cancellation belongs in an add-on process.
 
 ## Binding Stack
 
-The working implementation choice for the first cross-platform spike is:
+SCRIPT-1 uses nanobind 3.0.1 for the private `_bloom` extension and the CPython C API for
+isolated embedding. The official PyPI source distribution contains robin-map 1.4.0; both have
+separate reviewed lock and license records. The superbuild compiles the native core with PIC and
+installs a relocatable imported target. Normal Bloom builds compile Bloom's bindings only.
 
-- CPython 3.13.x embedding and lifecycle through the CPython C API
-- pybind11 3.x for `_bloom`, the private C++ binding module
-- a typed pure-Python `bloom` facade above `_bloom`
-- checked and shipped `.pyi` stubs plus `py.typed`
+`BLOOM_BUILD_PYTHON` defaults ON when a GIL-enabled CPython 3.10 or newer, its module headers and
+embedding library are found. Explicit ON requires those host prerequisites; OFF avoids development
+library discovery and disables the Python clients. MCP pipe tests can still discover an interpreter.
+Linux CI installs `python3-dev` and enables the option. The local SCRIPT-1 gate uses CPython 3.14.7;
+CI uses its installed host minor. The prefix checks exact Python SOABI and must be rebuilt for a
+minor/ABI change. This is a development exception to the bundled release policy above. The
+interpreter itself is not intaken into the dependency lock.
 
-pybind11 is selected for its first-class embedding API, RAII, CMake integration, licensing, and
-maturity. `_bloom` ships with one exact interpreter and does not need to be a general stable-ABI
-wheel. Rebuild it on intentional Python-minor upgrades.
+The typed pure-Python package supplies `app`, live GUI/headless `context`, read-only `data` proxies,
+registry-driven `ops`, atomic `transactions`, `tasks`, immutable file-render results and pumped
+`events`. `.pyi` files and `py.typed` ship with it. The 75 operation IDs are discoverable; eleven
+registry factories are implemented, including parameter animation, component keyframes and direct
+node removal. Other IDs preserve their structured unsupported diagnostic. `ui`, `addons`, `props` and contribution
+`types` are reserved stubs that raise `NotImplementedError` with ADR references. The registered Script editor uses kit controls and a shared interpreter owned by a scripting
+thread. A revocable live `SessionBinding` supplies immutable snapshots and plain context values;
+transactions and history calls queue to the UI thread. New/Open revokes the old generation before
+pending authoring work can execute. Native command events cross a lifetime-safe queue and Python
+callbacks run only at the subscriber's pump. Render compilation and publication use one captured
+snapshot and the live host's publication/artifact coordinators. Cancellation reaches foreground
+Python tracing, Python task tickets and native render tasks. The GUI console bounds each foreground
+Python CPU slice; long work belongs in `bloom.tasks`. Integration tests exercise a Python-keyed
+parameter through UI Undo and compare frame-12 bytes from Python, CLI and UI exports.
+
+`bloom-cli run <script.py>` and `bloom-cli python` embed the interpreter in isolated mode. Native
+latency-variable work releases the GIL; Python tasks run on a dedicated bounded Python worker,
+with native progress/cancellation tickets in `TaskScheduler`. Callbacks are delivered by the
+subscribing thread's event pump. Neither the evaluator nor render kernels execute Python.
+`bloom-mcp` uses the qualified yyjson implementation for bounded JSON-RPC stdio, mapping query,
+transaction, render, composition-export and event tools to their owned host boundaries.
 
 Checked-in Python is product scripting code, not repository infrastructure. `.py` and `.pyi` files
-are limited to `src/scripting/python/` for the bundled facade and bootstrap, to
-`tests/fixtures/scripting/` for inert scripting and add-on fixtures, and to `examples/scripting/`
-for artist-facing examples. Build logic, CI, quality gates, schema tooling, and code generation use
-native C++ or CMake rather than Python. The repository hygiene gate enforces these roots.
+are limited to `src/scripting/python/` for the facade and bootstrap, `tests/fixtures/scripting/` for
+client conformance and inert fixtures, and `examples/scripting/` for artist examples. The repository
+hygiene gate enforces those roots. Runtime and dependency code generation are not added to the
+application build.
 
-Nanobind may be reconsidered for separately distributed native modules where its limited-API
-support matters, but embedding is explicitly outside its current project scope. Boost.Python does
-not provide a practical advantage for a new C++20 host.
-
-Primary references:
-
-- [pybind11 embedding](https://pybind11.readthedocs.io/en/stable/advanced/embedding.html)
-- [nanobind rationale](https://nanobind.readthedocs.io/en/latest/why.html)
-- [CPython stable ABI](https://docs.python.org/3/c-api/stable.html)
+See [Scripting Bloom with Python](../user-guide/python.md) and
+[Using Bloom from an agent](../user-guide/mcp.md) for executable API examples and limits.
 
 ## Standard Add-on Packaging
 

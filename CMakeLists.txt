@@ -53,6 +53,7 @@ add_subdirectory(src/host)
 add_subdirectory(src/scripting)
 add_subdirectory(apps/bloom-media-worker)
 add_subdirectory(apps/bloom-cli)
+add_subdirectory(apps/bloom-mcp)
 
 if(BLOOM_BUILD_SPIKES)
     add_subdirectory(tools/spikes/instance0)

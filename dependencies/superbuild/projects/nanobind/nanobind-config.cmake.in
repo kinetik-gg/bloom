@@ -1,0 +1,13 @@
+# Precompiled core: no third-party compilation in the consuming application.
+if(NOT Python3_SOABI STREQUAL "@Python_SOABI@")
+    message(FATAL_ERROR "nanobind prefix requires CPython SOABI @Python_SOABI@; rebuild the intake for this interpreter")
+endif()
+get_filename_component(_bloom_nb_prefix "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+if(NOT TARGET nanobind::core)
+    add_library(nanobind::core STATIC IMPORTED)
+    set_target_properties(nanobind::core PROPERTIES
+        IMPORTED_LOCATION "${_bloom_nb_prefix}/lib/@CMAKE_STATIC_LIBRARY_PREFIX@bloom-nanobind-static@CMAKE_STATIC_LIBRARY_SUFFIX@"
+        INTERFACE_INCLUDE_DIRECTORIES "${_bloom_nb_prefix}/include"
+        INTERFACE_LINK_LIBRARIES "Python3::Module")
+endif()
+set(nanobind_VERSION 3.0.1)
