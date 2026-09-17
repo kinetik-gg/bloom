@@ -93,6 +93,8 @@ workspace tabs or custom title bar are part of this grammar revision.
 
 `WindowStatusBar` composes a single `Control`-height `UiSmall` row: version, colour state,
 readiness, dropped frames when measured, cache when populated, and transient/persistent messages.
+The cache cell combines RAM-preview frames with operation-cache hits, misses, retained bytes and
+effective budgets; its tooltip names those two cache accounts when the compact cell is dense.
 Colour state is tinted text with no filled badge. It remains visible on every central page,
 and reports unavailable colour state when no preview controller exists. Readiness and cache
 use muted ink; a colour-state failure remains explicit. `UiSmall` preserves mixed case with

@@ -2066,6 +2066,7 @@ int main(int argc, char* argv[]) {
         testParentedBounds(expectations);
         testContentBounds(expectations);
         testContentBoundsEdgeCases(expectations);
+        testMemoryBudgetLedger(expectations);
         testOperationCacheLifecycle(expectations);
         testOperationMemoization(expectations);
         testOperationTimeInvariance(expectations);

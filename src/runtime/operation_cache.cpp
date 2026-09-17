@@ -6,22 +6,26 @@ std::optional<OperationCacheValue> OperationCache::find(const std::string& conte
     const std::lock_guard lock(mutex_);
     const auto exact = addresses_.find({revision, content});
     if (exact != addresses_.end()) {
-        entries_.splice(entries_.begin(), entries_, exact->second);
+        touch(exact->second);
+        ++statistics_.hits;
         return exact->second->value;
     }
     const auto found = index_.find(content);
-    if (found == index_.end())
+    if (found == index_.end()) {
+        ++statistics_.misses;
         return std::nullopt;
+    }
     // A new revision can adopt the exact same resolved operation content. Keep only the
     // latest revision address, rather than retaining an unbounded alias table.
     addresses_.emplace(Address{revision, found->second->content}, found->second);
     addresses_.erase({found->second->revision, content});
     found->second->revision = revision;
-    entries_.splice(entries_.begin(), entries_, found->second);
+    touch(found->second);
+    ++statistics_.hits;
     return found->second->value;
 }
 void OperationCache::store(std::string content, document::Revision revision,
-                           OperationCacheValue value) {
+                           OperationCacheValue value, const OperationCacheEntryKind kind) {
     std::size_t bytes = sizeof(Entry) + content.capacity() + sizeof(Address) + sizeof(void*) * 16;
     if (value.image)
         bytes += sizeof(render::Rgba32fImage) + value.image->pixels().size_bytes();
@@ -32,7 +36,12 @@ void OperationCache::store(std::string content, document::Revision revision,
     const std::lock_guard lock(mutex_);
     if (bytes > budget_ || index_.contains(content))
         return;
-    entries_.push_front({std::move(content), revision, std::move(value), bytes});
+    ++accessEpoch_;
+    const auto protectedUntil = kind == OperationCacheEntryKind::DecodedMedia
+                                    ? accessEpoch_ + kDecodedMediaGraceAccesses
+                                    : 0;
+    entries_.push_front(
+        {std::move(content), revision, std::move(value), bytes, kind, protectedUntil});
     try {
         index_.emplace(entries_.front().content, entries_.begin());
         addresses_.emplace(Address{revision, entries_.front().content}, entries_.begin());
@@ -46,19 +55,46 @@ void OperationCache::store(std::string content, document::Revision revision,
 }
 void OperationCache::evict() {
     while (bytes_ > budget_) {
-        bytes_ -= entries_.back().bytes;
-        addresses_.erase({entries_.back().revision, entries_.back().content});
-        index_.erase(entries_.back().content);
-        entries_.pop_back();
+        const auto candidate = evictionCandidate();
+        bytes_ -= candidate->bytes;
+        addresses_.erase({candidate->revision, candidate->content});
+        index_.erase(candidate->content);
+        entries_.erase(candidate);
     }
 }
-void OperationCache::setByteBudget(std::size_t budget) {
+void OperationCache::touch(const std::list<Entry>::iterator entry) {
+    ++accessEpoch_;
+    entry->protectedUntil = entry->kind == OperationCacheEntryKind::DecodedMedia
+                                ? accessEpoch_ + kDecodedMediaGraceAccesses
+                                : 0;
+    entries_.splice(entries_.begin(), entries_, entry);
+}
+std::list<OperationCache::Entry>::iterator OperationCache::evictionCandidate() {
+    for (auto candidate = entries_.end(); candidate != entries_.begin();) {
+        --candidate;
+        if (candidate->kind == OperationCacheEntryKind::Operation ||
+            accessEpoch_ >= candidate->protectedUntil)
+            return candidate;
+    }
+    // A single protected decoded image can still exceed a newly reduced budget. The budget wins;
+    // this fallback keeps eviction bounded and is only reachable when every candidate is protected.
+    return std::prev(entries_.end());
+}
+void OperationCache::setByteBudget(const std::size_t budget) {
     const std::lock_guard lock(mutex_);
     budget_ = budget;
     evict();
 }
+std::size_t OperationCache::byteBudget() const {
+    const std::lock_guard lock(mutex_);
+    return budget_;
+}
 std::size_t OperationCache::retainedBytes() const {
     const std::lock_guard lock(mutex_);
     return bytes_;
+}
+OperationCacheAccessStatistics OperationCache::statistics() const {
+    const std::lock_guard lock(mutex_);
+    return statistics_;
 }
 } // namespace bloom::runtime

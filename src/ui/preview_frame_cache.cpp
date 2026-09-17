@@ -8,13 +8,8 @@
 #include <algorithm>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <utility>
-
-#if defined(_WIN32)
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
 
 namespace bloom::ui {
 namespace {
@@ -214,58 +209,38 @@ void PreviewFrameCache::removeAt(const std::size_t index) {
     entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(index));
 }
 
-std::size_t physicalMemoryBytes() noexcept {
-#if defined(_WIN32)
-    MEMORYSTATUSEX status{};
-    status.dwLength = sizeof(status);
-    if (GlobalMemoryStatusEx(&status) == 0)
-        return 0;
-    return static_cast<std::size_t>(status.ullTotalPhys);
-#else
-    const auto pages = sysconf(_SC_PHYS_PAGES);
-    const auto pageSize = sysconf(_SC_PAGE_SIZE);
-    if (pages <= 0 || pageSize <= 0)
-        return 0;
-    const auto total =
-        static_cast<unsigned long long>(pages) * static_cast<unsigned long long>(pageSize);
-    if (total > std::numeric_limits<std::size_t>::max())
-        return std::numeric_limits<std::size_t>::max();
-    return static_cast<std::size_t>(total);
-#endif
-}
+std::size_t physicalMemoryBytes() noexcept { return runtime::physicalMemoryBytes(); }
 
 std::size_t defaultPreviewFrameCacheByteBudget() noexcept {
-    const auto physical = physicalMemoryBytes();
-    if (physical == 0)
-        return kMinimumPreviewFrameCacheByteBudget;
-    constexpr std::size_t kMinimumReserve = std::size_t{4} * 1024U * 1024U * 1024U;
-    const auto reserve = std::max(kMinimumReserve, physical / 4);
-    if (physical <= reserve)
-        return kMinimumPreviewFrameCacheByteBudget;
-    return std::max(kMinimumPreviewFrameCacheByteBudget, physical - reserve);
+    return runtime::MemoryBudgetLedger{}.allocate().previewFrameCacheByteBudget;
+}
+
+namespace {
+
+[[nodiscard]] std::optional<std::size_t> budgetOverride(const QSettings& settings,
+                                                        const QLatin1StringView key) {
+    bool parsed = false;
+    const auto bytes = settings.value(key).toString().toULongLong(&parsed);
+    if (!parsed || bytes == 0 || bytes > std::numeric_limits<std::size_t>::max())
+        return std::nullopt;
+    return static_cast<std::size_t>(bytes);
+}
+
+} // namespace
+
+runtime::MemoryBudgetAllocation cacheMemoryBudgetsFromSettings(const QSettings& settings) {
+    const runtime::MemoryBudgetLedger ledger(physicalMemoryBytes());
+    return ledger.allocate(
+        budgetOverride(settings, QLatin1StringView("playback/operation-cache-bytes")),
+        budgetOverride(settings, QLatin1StringView(ramPreviewByteBudgetKey)));
 }
 
 std::size_t ramPreviewByteBudgetFromSettings(const QSettings& settings) {
-    const auto value = settings.value(QLatin1StringView(ramPreviewByteBudgetKey));
-    if (!value.isValid()) {
-        return defaultPreviewFrameCacheByteBudget();
-    }
-    bool parsed = false;
-    const auto bytes = value.toString().toULongLong(&parsed);
-    if (!parsed || bytes == 0) {
-        return defaultPreviewFrameCacheByteBudget();
-    }
-    return static_cast<std::size_t>(bytes);
+    return cacheMemoryBudgetsFromSettings(settings).previewFrameCacheByteBudget;
 }
 
 std::size_t operationCacheByteBudgetFromSettings(const QSettings& settings) {
-    bool parsed = false;
-    const auto bytes = settings.value(QStringLiteral("playback/operation-cache-bytes"))
-                           .toString()
-                           .toULongLong(&parsed);
-    if (!parsed || bytes == 0 || bytes > std::numeric_limits<std::size_t>::max())
-        return runtime::kDefaultOperationCacheBytes;
-    return static_cast<std::size_t>(bytes);
+    return cacheMemoryBudgetsFromSettings(settings).operationCacheByteBudget;
 }
 
 void setRamPreviewByteBudgetInSettings(QSettings& settings, const std::size_t bytes) {

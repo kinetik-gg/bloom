@@ -1914,7 +1914,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 return;
                             auto image = detail::evaluateImageSource(
                                 *selectedImage, resolved.imageDescriptor, resolved.horizontalScale,
-                                resolved.verticalScale, remainingPixelBudget(), *decodedImages_,
+                                resolved.verticalScale, remainingPixelBudget(), cache,
                                 cancellation);
                             if (image.cancelled) {
                                 operationCancelled = true;

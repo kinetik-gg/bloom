@@ -355,6 +355,25 @@ void testWindowStatusBarIsAKitStripWithEveryCell(Expectations& expectations) {
     }
     expectations.expect(strip->versionTextForTest() == QStringLiteral("0.1.0"),
                         "status bar: the application version is what the version cell shows");
+
+    bloom::runtime::OperationCache operationCache(1U << 20U);
+    operationCache.store(
+        "status-entry", bloom::document::Revision::fromRaw(1),
+        {.image = {}, .values = {bloom::runtime::CompiledValue{0.5}}, .bounds = {}});
+    (void)operationCache.find("status-entry", bloom::document::Revision::fromRaw(1));
+    (void)operationCache.find("missing-entry", bloom::document::Revision::fromRaw(1));
+    WindowStatusBar cacheStrip(fixture.compositionSession, nullptr, nullptr, &operationCache);
+    expectations.expect(
+        cacheStrip.cacheTextForTest().contains(QStringLiteral("Ops 1 hits")) &&
+            cacheStrip.cacheTextForTest().contains(QStringLiteral("1 misses")) &&
+            cacheStrip.cacheTextForTest().contains(QStringLiteral("/ 1.0 MB")),
+        "status bar: the cache cell reports operation hits, misses, retained bytes, "
+        "and budget");
+    auto* cacheLabel = cacheStrip.findChild<QLabel*>(QStringLiteral("windowStatusBarCache"));
+    expectations.expect(cacheLabel != nullptr &&
+                            cacheLabel->toolTip().contains(QStringLiteral("operation-cache")),
+                        "status bar: the dense cache cell explains its two cache accounts in a "
+                        "tooltip");
 }
 
 // A transient notice clears itself; a persistent one does not. The five-second life is asserted by

@@ -70,7 +70,6 @@ class CpuCompositionEvaluator final {
         std::filesystem::path directory;
     };
     std::shared_ptr<AssetContext> assetContext_ = std::make_shared<AssetContext>();
-    std::shared_ptr<OperationCache> decodedImages_ = std::make_shared<OperationCache>();
     std::shared_ptr<OperationCache> cache_ = std::make_shared<OperationCache>();
 };
 

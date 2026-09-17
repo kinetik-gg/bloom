@@ -100,10 +100,10 @@ int main(int argc, char* argv[]) {
     nodeDefinitions.freeze();
     bloom::runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
     bloom::runtime::CpuCompositionEvaluator cpuEvaluator;
+    const QSettings playbackSettings;
+    const auto cacheBudgets = bloom::ui::cacheMemoryBudgetsFromSettings(playbackSettings);
     {
-        const QSettings playbackSettings;
-        cpuEvaluator.operationCache()->setByteBudget(
-            bloom::ui::operationCacheByteBudgetFromSettings(playbackSettings));
+        cpuEvaluator.operationCache()->setByteBudget(cacheBudgets.operationCacheByteBudget);
     }
     bloom::runtime::CpuReferenceDisplayPreparer referenceDisplayPreparer;
     // Issue #97 (task C3): resolved and built once, on the shared TaskScheduler's blocking-I/O
@@ -132,11 +132,8 @@ int main(int argc, char* argv[]) {
     // `settings` is declared below for window state, so this read opens its own short-lived
     // QSettings over the same organization/application keys rather than moving that declaration up
     // here.
-    const auto ramPreviewByteBudget = [] {
-        const QSettings playbackSettings;
-        return bloom::ui::ramPreviewByteBudgetFromSettings(playbackSettings);
-    }();
-    auto previewFrameCache = std::make_shared<bloom::ui::PreviewFrameCache>(ramPreviewByteBudget);
+    auto previewFrameCache =
+        std::make_shared<bloom::ui::PreviewFrameCache>(cacheBudgets.previewFrameCacheByteBudget);
     // One compiled-plan cache for every consumer of the live revision: the preview surfaces below
     // and the audio mix, which derives from the document rather than from a shown frame.
     auto compiledPlanCache = std::make_shared<bloom::ui::CompiledPlanCache>();
@@ -230,7 +227,7 @@ int main(int argc, char* argv[]) {
     // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,
                                  frameExportController, &ramPreviewController, &previewController,
-                                 nullptr, &playback);
+                                 nullptr, &playback, cpuEvaluator.operationCache().get());
     playback.installWindowShortcut(window);
     QObject::connect(&ramPreviewController, &bloom::ui::RamPreviewController::stateChanged,
                      &playback, [&] {

@@ -214,6 +214,37 @@ void testOperationDirtyPropagation(Expectations& expectations) {
     }
 }
 
+void testMemoryBudgetLedger(Expectations& expectations) {
+    constexpr auto gibibyte = std::size_t{1024} * 1024U * 1024U;
+    const runtime::MemoryBudgetLedger ledger(std::size_t{16} * gibibyte);
+    const auto defaults = ledger.allocate();
+    const auto expectedOperation = std::size_t{12} * gibibyte * 3 / 5;
+    expectations.expect(defaults.usableByteBudget == std::size_t{12} * gibibyte &&
+                            defaults.operationCacheByteBudget == expectedOperation &&
+                            defaults.previewFrameCacheByteBudget ==
+                                defaults.usableByteBudget - expectedOperation,
+                        "the machine budget reserves four GiB and splits the usable budget 60/40");
+    expectations.expect(defaults.operationCacheByteBudget +
+                                defaults.previewFrameCacheByteBudget ==
+                            defaults.usableByteBudget,
+                        "the default cache allocations consume exactly the usable budget");
+
+    const auto operationOverride = ledger.allocate(std::size_t{10} * gibibyte);
+    expectations.expect(operationOverride.operationCacheByteBudget == std::size_t{10} * gibibyte &&
+                            operationOverride.previewFrameCacheByteBudget == std::size_t{2} * gibibyte,
+                        "a single operation override is honored and reduces preview space");
+    const auto previewOverride = ledger.allocate({}, std::size_t{10} * gibibyte);
+    expectations.expect(previewOverride.operationCacheByteBudget == std::size_t{2} * gibibyte &&
+                            previewOverride.previewFrameCacheByteBudget == std::size_t{10} * gibibyte,
+                        "a single preview override is honored and reduces operation space");
+    const auto overcommitted = ledger.allocate(std::size_t{10} * gibibyte,
+                                               std::size_t{10} * gibibyte);
+    expectations.expect(overcommitted.operationCacheByteBudget +
+                                overcommitted.previewFrameCacheByteBudget ==
+                            overcommitted.usableByteBudget,
+                        "two overcommitted overrides are proportionally clamped to the ledger");
+}
+
 void testOperationCacheLifecycle(Expectations& expectations) {
     runtime::OperationCache cache;
     const auto revision = document::Revision::fromRaw(1);
@@ -245,6 +276,20 @@ void testOperationCacheLifecycle(Expectations& expectations) {
         worker.join();
     expectations.expect(cache.retainedBytes() <= cost * 2,
                         "concurrent cache adoption and eviction stay bounded");
+
+    runtime::OperationCache mediaCache(cost * 12);
+    mediaCache.store("decoded-media", document::Revision{}, value,
+                     runtime::OperationCacheEntryKind::DecodedMedia);
+    const auto mediaCost = mediaCache.retainedBytes();
+    mediaCache.store("revision-operation-0", revision, value);
+    const auto operationCost = mediaCache.retainedBytes() - mediaCost;
+    mediaCache.setByteBudget(mediaCost + operationCost * 2);
+    for (std::size_t index = 1; index <= 6; ++index)
+        mediaCache.store("revision-operation-" + std::to_string(index),
+                         document::Revision::fromRaw(index + 1), value);
+    expectations.expect(mediaCache.find("decoded-media", document::Revision{}).has_value(),
+                        "a burst of revision entries does not evict recently decoded media");
+
     runtime::CpuCompositionEvaluator evaluator;
     auto definition = memoizationFixture()->copyDefinition();
     definition.bypassOperationCache = true;
