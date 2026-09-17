@@ -3,6 +3,7 @@
 
 #include <bloom/render/embedded_fonts.hpp>
 #include <bloom/render/image_types.hpp>
+#include <bloom/render/path_raster.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -83,6 +84,10 @@ class TextRasterParameters final {
 // position handed to the rasterizer so spacing is not rounded per glyph. A newline or any other
 // control character is a glyph lookup like every other codepoint, not a layout instruction. Text
 // shaping is a separate, later concern; this is the proof path the CPU reference evaluator needs.
+[[nodiscard]] ImageResult<std::vector<Path>>
+textOutlines(const TextFont& font, std::string_view content, TextRasterParameters parameters,
+             TextLayoutOptions layout = {}, PathCancellation cancelled = {});
+
 class TextCoverageBitmap final {
   public:
     // A bitmap with no covered pixels: the correct, successful result for empty content or content

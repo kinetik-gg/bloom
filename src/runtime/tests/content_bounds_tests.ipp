@@ -51,7 +51,8 @@ void testContentBounds(Expectations& expectations) {
     expectations.expect(
         geometry.polygon == polygon && geometry.anchor == document::Vec2d{8, 6},
         "scale then clockwise rotation about off-centre anchor has exact polygon and parent pivot");
-    expectations.expect(boundsPixelDigest(*result.frame()) == 9919536445715000421ULL,
+    // Analytic coverage: x=[6.5,8.5], y=[0,8], half-covered edge columns 6 and 8.
+    expectations.expect(boundsPixelDigest(*result.frame()) == 15538055505238530469ULL,
                         "off-centre rotated solid RGBA32F golden");
 
     const auto cached = evaluator.evaluate(rotatedPlan, requestFor(*rotatedPlan), {});

@@ -53,7 +53,7 @@ using namespace std::chrono_literals;
 // packing. These lengths and SHA-256 values cover the complete tiny PNG and EXR preimages.
 // Re-derived ONCE for the TEXT-2 / SHAPE-1 integration, which lands both lanes' semantics steps
 // together: the compiled plan is 5 (TEXT-2's CompiledText box-layout operands), the CPU
-// composition evaluator is 7 and the CPU image primitive 6 (SHAPE-1's path rasterization and
+// composition evaluator is 8 and the CPU image primitive 7 (SHAPE-1's path rasterization and
 // shape-source evaluation), and animation sampling stays 2. All four are frozen fields of the
 // process-frame semantic identity these preimages embed, so every digest below moves while every
 // preimage LENGTH is unchanged -- no frozen field was added, removed, or reordered. The values are
@@ -61,11 +61,11 @@ using namespace std::chrono_literals;
 // oracle was validated by reproducing every previously checked-in golden set byte for byte --
 // including both lanes' own pre-merge sets -- when fed their version numbers.
 constexpr std::string_view kExpectedPngAnalysisDigest =
-    "18df4caab537ce1f06bd040ea90ba16309ae3d689d1bfdf7bc04f4f612c59df2";
+    "eeb54717829e478c9523f9d3ccc23c1ad1bdf0ae919b900b4b157c1f0575d1ad";
 constexpr std::string_view kExpectedPngOutputDigest =
-    "e1d2f92a346b54461775533b920d20e34d7df96c27d43ed13824c7bc787f9b4d";
+    "3ec6635e6ce5951966860ffc9346e8b5c086560a108e10ffbb27049d6e4f744a";
 constexpr std::string_view kExpectedExrOutputDigest =
-    "8f48f99a8d21bcc844ac93a919f7acfed81644d31bdf8d87b2291b5f100dc298";
+    "adf3daeb04dccef0904efd1a0e7e6c3b79f5214e47e8d8d321381a12eb31f0fc";
 constexpr std::uint64_t kExpectedPngPreimageBytes = 669;
 constexpr std::uint64_t kExpectedExrPreimageBytes = 567;
 

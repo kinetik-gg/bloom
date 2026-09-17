@@ -247,7 +247,8 @@ template <typename Face>
 ImageResult<TextCoverageBitmap>
 rasterizeFontText(const Face& face, const std::string_view utf8Content,
                   const TextRasterParameters parameters, const std::size_t coverageByteLimit,
-                  const TextLayoutOptions layout) {
+                  const TextLayoutOptions layout, std::vector<Path>* outlines = nullptr,
+                  const PathCancellation& cancelled = {}) {
     if (!core::isValidUtf8(utf8Content) || !std::isfinite(layout.lineHeight) ||
         layout.lineHeight <= 0.0 || !std::isfinite(layout.letterSpacing) ||
         layout.alignment > TextAlignment::Right || !std::isfinite(layout.boxWidth) ||
@@ -373,6 +374,9 @@ rasterizeFontText(const Face& face, const std::string_view utf8Content,
         }
         if (layout.multiline && scalar.value == U'\r')
             continue;
+        if (cancelled && cancelled())
+            return ImageResult<TextCoverageBitmap>::failure(
+                codeError(ImageErrorCode::InvalidState));
         const auto glyph = fontGlyphIndex(face, scalar.value);
         if (previousGlyph >= 0) {
             pen += layout.letterSpacing;
@@ -385,6 +389,29 @@ rasterizeFontText(const Face& face, const std::string_view utf8Content,
                 codeError(ImageErrorCode::ArithmeticOverflow));
         }
 
+        if (outlines) {
+            auto paths = [&] {
+                if constexpr (std::is_same_v<Face, EmbeddedFace>)
+                    return detail::embeddedFontGlyphOutlines(face, glyph);
+                else
+                    return detail::externalFontGlyphOutlines(face, glyph);
+            }();
+            const auto map = [&](PathPoint p) -> PathPoint {
+                return {pen + p.x * static_cast<double>(scaleX),
+                        static_cast<double>(lineRow + baselineRow) -
+                            p.y * static_cast<double>(scaleY)};
+            };
+            for (auto& path : paths) {
+                for (auto& anchor : path.anchors) {
+                    anchor.point = map(anchor.point);
+                    if (anchor.inHandle)
+                        anchor.inHandle = map(*anchor.inHandle);
+                    if (anchor.outHandle)
+                        anchor.outHandle = map(*anchor.outHandle);
+                }
+                outlines->push_back(std::move(path));
+            }
+        }
         const auto penColumn = static_cast<std::int64_t>(std::floor(pen));
         const auto shiftX = static_cast<float>(pen - static_cast<double>(penColumn));
         const GlyphBitmapBox box = fontGlyphBitmapBox(face, glyph, scaleX, scaleY, shiftX, 0.0F);
@@ -411,7 +438,7 @@ rasterizeFontText(const Face& face, const std::string_view utf8Content,
         previousGlyph = glyph;
     }
 
-    if (placements.empty()) {
+    if (outlines || placements.empty()) {
         return ImageResult<TextCoverageBitmap>::success(TextCoverageBitmap::empty());
     }
 
@@ -469,6 +496,20 @@ rasterizeFontText(const Face& face, const std::string_view utf8Content,
     return ImageResult<TextCoverageBitmap>::success(
         TextCoverageBitmap(minimumLeft, minimumTop, extent.value()->width(),
                            extent.value()->height(), std::move(coverage)));
+}
+
+ImageResult<std::vector<Path>> textOutlines(const TextFont& font, std::string_view content,
+                                            TextRasterParameters parameters,
+                                            TextLayoutOptions layout, PathCancellation cancelled) {
+    std::vector<Path> paths;
+    const auto result = std::visit(
+        [&](const auto& face) {
+            return rasterizeFontText(face, content, parameters, 0, layout, &paths, cancelled);
+        },
+        font);
+    if (!result)
+        return ImageResult<std::vector<Path>>::failure(*result.error());
+    return ImageResult<std::vector<Path>>::success(std::move(paths));
 }
 
 ImageResult<TextCoverageBitmap> TextCoverageBitmap::rasterizeEmbeddedText(

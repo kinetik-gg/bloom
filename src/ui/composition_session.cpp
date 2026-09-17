@@ -1466,6 +1466,21 @@ CompositionSession::effectiveParameterValue(const document::ParameterRecord* par
     if (parameter == nullptr) {
         return std::nullopt;
     }
+    if (transformInteraction_) {
+        const auto& overrides = transformInteraction_->overrides;
+        const auto found = std::ranges::find(overrides, parameter->id,
+                                             &runtime::SnapshotParameterOverride::parameterId);
+        if (found != overrides.end())
+            return std::visit(
+                [](const auto& value) -> std::optional<ParameterSample> {
+                    if constexpr (std::is_constructible_v<ParameterSample,
+                                                          const std::decay_t<decltype(value)>&>)
+                        return ParameterSample(value);
+                    else
+                        return std::nullopt;
+                },
+                found->value);
+    }
     if (valueEdit_ && valueEdit_->anchor && valueEdit_->anchor->parameter == parameter->id)
         return ParameterSample(valueEdit_->anchor->value);
     if (valueEdit_ && isValueEditing(parameter->id))

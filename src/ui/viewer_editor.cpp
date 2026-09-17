@@ -78,6 +78,28 @@
 
 namespace bloom::ui {
 namespace {
+std::vector<document::LayerId>
+pointTextLayers(const CompositionSession& session,
+                std::span<const runtime::EvaluatedOperationBounds> bounds) {
+    std::vector<document::LayerId> result;
+    const auto* composition = session.composition();
+    if (!composition)
+        return result;
+    for (const auto& bound : bounds) {
+        const auto sourceId = session.directSourceNodeForLayer(bound.layerId);
+        const auto* source = sourceId ? composition->graph().findNode(*sourceId) : nullptr;
+        if (!source || source->typeId != document::kTextSourceNodeType)
+            continue;
+        const auto box = std::ranges::find(source->parameters, document::kTextBoxParameterRole,
+                                           &document::ParameterBinding::role);
+        const auto value =
+            box != source->parameters.end() ? session.liveValue(box->parameterId) : std::nullopt;
+        const auto* size = value ? std::get_if<document::Vec2d>(&*value) : nullptr;
+        if (!size || size->x == 0 || size->y == 0)
+            result.push_back(bound.layerId);
+    }
+    return result;
+}
 
 // Keyboard steps use current authored ancestor linear transforms, so auto-repeat never waits
 // for the previous nudge's preview. Pivot translations do not affect displacement vectors.
@@ -1997,9 +2019,9 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                                 bufferView->pixelAspect, *descriptor.value()};
                             painter.save();
                             painter.setClipRect(contentRect());
-                            paintViewerOverlays(painter, frame, mapping,
-                                                effectiveZoom(displayRect, *geometry),
-                                                overlayOptions_, bounds);
+                            paintViewerOverlays(
+                                painter, frame, mapping, effectiveZoom(displayRect, *geometry),
+                                overlayOptions_, bounds, pointTextLayers(session_, bounds));
                             painter.restore();
                         }
                     }
@@ -2116,7 +2138,8 @@ ViewerHit ViewerEditor::hitAt(const ViewerMapping& mapping, const QPointF point)
                 ordered.push_back(*found);
         }
     }
-    return hitTestViewer(mapping, point, ordered, previewController_.selectedLayerBounds());
+    const auto selected = previewController_.selectedLayerBounds();
+    return hitTestViewer(mapping, point, ordered, selected, pointTextLayers(session_, selected));
 }
 
 bool ViewerEditor::mappingStillValid() const {

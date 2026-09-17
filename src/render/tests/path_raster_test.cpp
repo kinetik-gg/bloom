@@ -122,8 +122,46 @@ void strokeAndRules() {
                                1, 1),
            "nonfinite geometry refused");
 }
+void transformedGeometry() {
+    const std::array paths{rectanglePath(8, 8)};
+    const double c = std::sqrt(0.5);
+    const auto rotated = PathRaster::transformed(paths, {}, {c, -c, c, c, 8.1, 0}, 1, 1);
+    expect(static_cast<bool>(rotated), "45 degree rectangle raster created");
+    if (!rotated)
+        return;
+    std::array<std::uint8_t, 16> row{};
+    for (int y = 0; y < 12; ++y) {
+        expect(rotated.value()->coverageRow(0, y, row, PathFillRule::NonZero, false),
+               "rotated row");
+        for (std::size_t x = 0; x < row.size(); ++x) {
+            unsigned count = 0;
+            for (int sy = 0; sy < 4; ++sy)
+                for (int sx = 0; sx < 4; ++sx) {
+                    const double px = static_cast<double>(x) + (sx + 0.5) / 4 - 8.1;
+                    const double py = y + (sy + 0.5) / 4;
+                    const double u = c * (px + py), v = c * (py - px);
+                    if (u >= 0 && u < 8 && v >= 0 && v < 8)
+                        ++count;
+                }
+            expect(row[x] == (count * 255 + 8) / 16,
+                   "45 degree edge agrees with analytic subpixel area");
+        }
+    }
+    const std::array line{linePath({0, 2}, {8, 2})};
+    const auto scaled = PathRaster::transformed(line, {2}, {4, 0, 0, 3, 0, 0}, 1, 1);
+    expect(static_cast<bool>(scaled), "nonuniform stroke raster created");
+    if (!scaled)
+        return;
+    for (int y = 0; y < 12; ++y) {
+        expect(scaled.value()->coverageRow(0, y, row, PathFillRule::NonZero, true),
+               "scaled stroke row");
+        expect(row[4] == (y >= 3 && y < 9 ? 255 : 0),
+               "two-unit stroke scales to six pixels vertically");
+    }
+}
 } // namespace
 int main() {
+    transformedGeometry();
     referenceOracles();
     strokeAndRules();
     return failures == 0 ? 0 : 1;

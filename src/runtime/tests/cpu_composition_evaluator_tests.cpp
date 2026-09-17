@@ -607,10 +607,10 @@ void testAbsoluteCenterAndFractionalTranslation(Expectations& expectations) {
     const auto shifted = oneSolidPlan({1.0, 0.0, 0.0, 1.0}, {2.5, 1.0});
     const auto shiftedResult = evaluator.evaluate(shifted, requestFor(*shifted), {});
     const auto* edgePixel = pixel(shiftedResult, 0, 0, sampled);
-    expectations.expect(shiftedResult.status() == runtime::EvaluationStatus::Evaluated &&
-                            edgePixel != nullptr && near(edgePixel->red(), 0.5F) &&
-                            near(edgePixel->alpha(), 0.5F),
-                        "fractional center displacement bilinearly blends transparent borders");
+    expectations.expect(
+        shiftedResult.status() == runtime::EvaluationStatus::Evaluated && edgePixel != nullptr &&
+            near(edgePixel->red(), 128.0F / 255.0F) && near(edgePixel->alpha(), 128.0F / 255.0F),
+        "fractional center displacement covers the vector edge at output resolution");
     const auto* interiorPixel = pixel(shiftedResult, 1, 0, sampled);
     expectations.expect(interiorPixel != nullptr && interiorPixel->red() == 1.0F &&
                             interiorPixel->alpha() == 1.0F,
@@ -672,8 +672,10 @@ void testLayerTransformShapesTheFrame(Expectations& expectations) {
                                                    1.0F, 1.0F, 1.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F};
     // Position pins centre(local bounds) + anchor, so an anchor at the layer's left edge holds
     // that edge at the composition centre and the narrowed layer falls to its right.
-    constexpr std::array<float, 16> kAnchoredBar{0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F,
-                                                 0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F};
+    // Native x in [0,4] maps to [1.75,3.75]: quarter and three-quarter edge coverage.
+    constexpr std::array<float, 16> kAnchoredBar{
+        0, 64.0F / 255.0F, 1, 191.0F / 255.0F, 0, 64.0F / 255.0F, 1, 191.0F / 255.0F,
+        0, 64.0F / 255.0F, 1, 191.0F / 255.0F, 0, 64.0F / 255.0F, 1, 191.0F / 255.0F};
     constexpr std::array<float, 16> kEmpty{};
 
     // Half scale on one axis only: the layer narrows about its own centre to columns 1 and 2.
@@ -737,8 +739,10 @@ void testEveryTransformParameterAnimates(Expectations& expectations) {
                                                  0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F};
     constexpr std::array<float, 16> kHorizontalBar{0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F,
                                                    1.0F, 1.0F, 1.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F};
-    constexpr std::array<float, 16> kAnchoredBar{0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F,
-                                                 0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 1.0F};
+    // Native x in [0,4] maps to [1.75,3.75]: quarter and three-quarter edge coverage.
+    constexpr std::array<float, 16> kAnchoredBar{
+        0, 64.0F / 255.0F, 1, 191.0F / 255.0F, 0, 64.0F / 255.0F, 1, 191.0F / 255.0F,
+        0, 64.0F / 255.0F, 1, 191.0F / 255.0F, 0, 64.0F / 255.0F, 1, 191.0F / 255.0F};
 
     // One plan per animated parameter, each curve running from the value that leaves the frame full
     // to the value that shapes it, so the frame at the first key, the midpoint, and the last key
@@ -963,8 +967,8 @@ void testAnimatedParametersAreSampledOncePerRequest(Expectations& expectations) 
     render::Rgba32f sample = render::Rgba32f::transparent();
     const auto* edge = pixel(result, 0, 0, sample);
     expectations.expect(result.status() == runtime::EvaluationStatus::Evaluated &&
-                            edge != nullptr && near(edge->red(), 0.25F) &&
-                            near(edge->alpha(), 0.25F),
+                            edge != nullptr && near(edge->red(), (128.0F / 255.0F) * 0.5F) &&
+                            near(edge->alpha(), (128.0F / 255.0F) * 0.5F),
                         "exact request time drives typed position and opacity curves");
     expectations.expect(result.frame() != nullptr &&
                             result.frame()->identity().animationSamplingSemanticsVersion ==
@@ -1266,8 +1270,8 @@ void testProxyAndPeakBudget(Expectations& expectations) {
                            {});
     render::Rgba32f proxyEdge = render::Rgba32f::transparent();
     const auto* proxyEdgePixel = pixel(proxyShifted, 0, 0, proxyEdge);
-    expectations.expect(proxyEdgePixel != nullptr && near(proxyEdgePixel->red(), 0.5F) &&
-                            near(proxyEdgePixel->alpha(), 0.5F),
+    expectations.expect(proxyEdgePixel != nullptr && near(proxyEdgePixel->red(), 128.0F / 255.0F) &&
+                            near(proxyEdgePixel->alpha(), 128.0F / 255.0F),
                         "absolute authoring displacement is scaled independently for a proxy");
 
     // A 4x2 layer's image is its transformed bounds grown by one pixel on every side for the
@@ -2009,6 +2013,44 @@ void testTextLayerIsComposedAtKnownGlyphPositions(Expectations& expectations) {
 }
 
 #include "content_bounds_tests.ipp"
+void testContinuousTextRasterisation(Expectations& expectations) {
+    runtime::CpuCompositionEvaluator evaluator;
+    const auto native = oneTextPlan({1, 1, 1, 1}, "H", 16, 1, {32, 32}, format(64, 64));
+    const auto base = evaluator.evaluate(native, requestFor(*native), {});
+    expectations.expect(base.frame() != nullptr, "native text bounds evaluate");
+    if (!base.frame())
+        return;
+    const auto centre = base.frame()->evaluatedBounds()[0].output.centre();
+    auto definition = native->copyDefinition();
+    auto& layer = std::get<runtime::CompiledLayerOutput>(definition.operations[1]);
+    layer.scale.source = document::Vec2d{4, 4};
+    layer.position.source = document::Vec2d{centre.x * 4, centre.y * 4};
+    const auto scaled =
+        std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
+    runtime::OperationCacheStatistics statistics;
+    const auto result =
+        evaluator.evaluate(scaled, requestFor(*scaled), {}, {}, nullptr, &statistics);
+    expectations.expect(result.frame() && statistics.hits >= 1,
+                        "scaled vector reuses native source cache safely");
+    if (!result.frame())
+        return;
+    render::Rgba32f value = render::Rgba32f::transparent();
+    const auto* before = pixel(result, 5, 20, value);
+    expectations.expect(before && before->alpha() == 0,
+                        "400 percent H outside stem stays transparent");
+    const auto* edge = pixel(result, 6, 20, value);
+    expectations.expect(edge && near(edge->alpha(), 191.0F / 255.0F),
+                        "400 percent H coverage is outline area");
+    const auto* inside = pixel(result, 7, 20, value);
+    expectations.expect(inside && inside->alpha() == 1,
+                        "400 percent H reaches full opacity in one pixel");
+    const auto warm = evaluator.evaluate(scaled, requestFor(*scaled), {}, {}, nullptr, &statistics);
+    expectations.expect(warm.frame() && statistics.misses == 0 &&
+                            std::ranges::equal(warm.frame()->processImage().pixels(),
+                                               result.frame()->processImage().pixels()),
+                        "vector cache hit is bit-identical to cold output");
+}
+
 #include "operation_memoization_tests.ipp"
 
 } // namespace
@@ -2020,6 +2062,7 @@ int main(int argc, char* argv[]) {
             benchmarkOperationMemoization(expectations);
             return expectations.failures() == 0 ? 0 : 1;
         }
+        testContinuousTextRasterisation(expectations);
         testParentedBounds(expectations);
         testContentBounds(expectations);
         testContentBoundsEdgeCases(expectations);

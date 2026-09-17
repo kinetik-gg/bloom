@@ -1495,6 +1495,8 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
     return description;
 }
 
+#include "vector_geometry.ipp"
+
 EvaluationResult CpuCompositionEvaluator::evaluate(
     std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
     const CancellationToken& cancellation, EvaluationProgressCallback progress,
@@ -1539,6 +1541,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         std::vector<std::string> contentHashes(plan->operations().size());
         std::vector<detail::LayerMatrix> layerMatrices(plan->operations().size());
 
+        struct VectorChain {
+            std::size_t source;
+            detail::LayerMatrix matrix;
+            double opacity = 1;
+        };
+        std::vector<std::optional<VectorChain>> vectors(plan->operations().size());
+
         for (std::size_t index = 0; index < plan->operations().size(); ++index) {
             if (cancellation.isCancellationRequested()) {
                 return EvaluationResult::cancelled();
@@ -1581,6 +1590,21 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     matrix = layerMatrices[layer->parent->value()].times(matrix);
                 layerMatrices[index] = matrix;
             }
+            const auto& operation = plan->operations()[index];
+            if (std::holds_alternative<CompiledSolid>(operation) ||
+                std::holds_alternative<CompiledShape>(operation) ||
+                std::holds_alternative<CompiledText>(operation))
+                vectors[index] = VectorChain{index, {}, 1};
+            if (const auto* layer = std::get_if<CompiledLayerOutput>(&operation)) {
+                const auto& inputVector = vectors[layer->input.value()];
+                if (inputVector) {
+                    const auto& input = *inputVector;
+                    const auto opacity = detail::resolveParameter(layer->opacity, *plan, resolved);
+                    vectors[index] =
+                        VectorChain{input.source, layerMatrices[index].times(input.matrix),
+                                    opacity ? input.opacity * opacity->value : 0};
+                }
+            }
             detail::OperationKey key;
             if (cache) {
                 key.add(std::string("image"));
@@ -1599,6 +1623,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 if (plan->operationTimeDependent(operationIndex))
                     key.add(request.time);
                 key.add(plan->operations()[index].index());
+                const auto& keyedVector = vectors[index];
+                if (keyedVector) {
+                    key.add(kCpuCompositionEvaluatorSemanticsVersion);
+                    const auto& matrix = keyedVector->matrix;
+                    for (const auto value :
+                         {matrix.a, matrix.b, matrix.c, matrix.d, matrix.x, matrix.y})
+                        key.add(value);
+                }
                 const auto parameter = [&](const auto& operand) {
                     const auto value = detail::resolveParameter(operand, *plan, resolved);
                     key.add(value.has_value());
@@ -2316,8 +2348,47 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                     "Transformed layer descriptor is invalid");
                                 return;
                             }
+                            std::optional<render::PathRaster> vectorRaster;
+                            render::Rgba32f vectorFill = render::Rgba32f::transparent();
+                            render::Rgba32f vectorStroke = render::Rgba32f::transparent();
+                            bool vectorHasFill = false, vectorHasStroke = false;
+                            const float vectorOpacity =
+                                vectors[index] ? static_cast<float>(vectors[index]->opacity) : 1.0F;
+                            render::PathFillRule vectorRule = render::PathFillRule::NonZero;
+                            if (vectors[index]) {
+                                const auto& chain = *vectors[index];
+                                const auto& m = chain.matrix;
+                                // Preserve the established coverage for an untranslated/whole-pixel
+                                // translated source. Every nonidentity linear map covers geometry.
+                                const bool nativeGrid =
+                                    m.a == 1 && m.b == 0 && m.c == 0 && m.d == 1 &&
+                                    m.x * resolved.horizontalScale ==
+                                        std::floor(m.x * resolved.horizontalScale) &&
+                                    m.y * resolved.verticalScale ==
+                                        std::floor(m.y * resolved.verticalScale);
+                                if (!nativeGrid || chain.source != layer.input.value()) {
+#include "vector_layer_evaluation.ipp"
+                                    if (operationFailure || operationCancelled)
+                                        return;
+                                }
+                            }
+                            const auto vectorScratch =
+                                vectorRaster
+                                    ? static_cast<std::uint64_t>(layerWindow->extent().width()) *
+                                          layerWindow->extent().height() *
+                                          (sizeof(render::Rgba32f) + 1)
+                                    : 0;
+                            if (vectorScratch > remainingPixelBudget()) {
+                                operationFailure = imageDiagnostic(
+                                    render::ImageError::codeOnly(
+                                        render::ImageErrorCode::PixelStorageBudgetExceeded),
+                                    operationSubject,
+                                    "Vector coverage exceeds the pixel storage budget");
+                                return;
+                            }
                             auto builder = render::Rgba32fImageBuilder::create(
-                                *layerDescriptor.value(), remainingPixelBudget());
+                                *layerDescriptor.value(),
+                                remainingPixelBudget() - static_cast<std::size_t>(vectorScratch));
                             if (!builder) {
                                 operationFailure = imageDiagnostic(
                                     *builder.error(), operationSubject,
@@ -2333,12 +2404,61 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             const auto outcome = runRowBandPass(
                                 rowBands, cancellation, height, outputWindow.originY(),
                                 [&image, &source, &layerTransform, &parented, outputWindow,
-                                 &operationSubject](const std::int64_t y) -> RowFailure {
+                                 &operationSubject, &vectorRaster, vectorFill, vectorStroke,
+                                 vectorHasFill, vectorHasStroke, vectorRule, vectorOpacity,
+                                 &cancellation](const std::int64_t y) -> RowFailure {
                                     auto outputRow = image.row(y);
                                     if (!outputRow) {
                                         return imageDiagnostic(
                                             *outputRow.error(), operationSubject,
                                             "Layer output row could not be addressed");
+                                    }
+                                    if (vectorRaster) {
+                                        auto pixels = *outputRow.value();
+                                        std::vector<std::uint8_t> coverage(pixels.size());
+                                        const auto cancelled = [&] {
+                                            return cancellation.isCancellationRequested();
+                                        };
+                                        if (vectorHasFill) {
+                                            if (!vectorRaster->coverageRow(outputWindow.originX(),
+                                                                           y, coverage, vectorRule,
+                                                                           false, cancelled))
+                                                return std::nullopt;
+                                            if (const auto error = render::coverageSolidRow(
+                                                    coverage, vectorFill, pixels))
+                                                return imageDiagnostic(*error, operationSubject,
+                                                                       "Vector fill failed");
+                                        }
+                                        if (vectorHasStroke) {
+                                            if (!vectorRaster->coverageRow(outputWindow.originX(),
+                                                                           y, coverage, vectorRule,
+                                                                           true, cancelled))
+                                                return std::nullopt;
+                                            std::vector<render::Rgba32f> stroke(
+                                                pixels.size(), render::Rgba32f::transparent());
+                                            if (const auto error = render::coverageSolidRow(
+                                                    coverage, vectorStroke, stroke))
+                                                return imageDiagnostic(*error, operationSubject,
+                                                                       "Vector stroke failed");
+                                            if (const auto error =
+                                                    render::sourceOverLinearRec709SceneRow(stroke,
+                                                                                           pixels))
+                                                return imageDiagnostic(*error, operationSubject,
+                                                                       "Vector compositing failed");
+                                        }
+                                        for (auto& value : pixels) {
+                                            const auto faded = render::Rgba32f::fromPremultiplied(
+                                                value.red() * vectorOpacity,
+                                                value.green() * vectorOpacity,
+                                                value.blue() * vectorOpacity,
+                                                value.alpha() * vectorOpacity);
+                                            if (!faded)
+                                                return imageDiagnostic(*faded.error(),
+                                                                       operationSubject,
+                                                                       "Vector opacity failed");
+                                            value = *faded.value();
+                                        }
+                                        return std::nullopt;
                                     }
                                     if (const auto rowStatus =
                                             parented ? parented->row(source, outputWindow, y,

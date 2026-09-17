@@ -31,7 +31,8 @@ std::array<QPointF, 8> viewerHandlePoints(const ViewerMapping& mapping,
 
 ViewerHit hitTestViewer(const ViewerMapping& mapping, const QPointF screenPoint,
                         const std::span<const runtime::EvaluatedOperationBounds> topmostFirst,
-                        const std::span<const runtime::EvaluatedOperationBounds> selected) {
+                        const std::span<const runtime::EvaluatedOperationBounds> selected,
+                        const std::span<const document::LayerId> pointText) {
     const auto near = [&](const QPointF point, const double radius) {
         return std::hypot(point.x() - screenPoint.x(), point.y() - screenPoint.y()) <= radius;
     };
@@ -40,14 +41,17 @@ ViewerHit hitTestViewer(const ViewerMapping& mapping, const QPointF screenPoint,
             return {bounds.layerId, ViewerHitRegion::Anchor};
         const auto handles = viewerHandlePoints(mapping, bounds);
         for (std::size_t i = 0; i < handles.size(); ++i)
-            if (near(handles[i], kit::px(kit::Size::GizmoHandle) / 2.0))
+            if ((i % 2 == 0 || std::ranges::find(pointText, bounds.layerId) == pointText.end()) &&
+                near(handles[i], kit::px(kit::Size::GizmoHandle) / 2.0))
                 return {bounds.layerId, ViewerHitRegion::Scale, static_cast<int>(i)};
         QPolygonF polygon;
         for (const auto point : bounds.polygon)
             polygon << mapping.toScreen(point);
         if (!polygon.containsPoint(screenPoint, Qt::OddEvenFill))
             for (std::size_t i = 0; i < handles.size(); i += 2)
-                if (near(handles[i], kit::px(kit::Size::GizmoRotateZone)))
+                if ((i % 2 == 0 ||
+                     std::ranges::find(pointText, bounds.layerId) == pointText.end()) &&
+                    near(handles[i], kit::px(kit::Size::GizmoRotateZone)))
                     return {bounds.layerId, ViewerHitRegion::Rotate, static_cast<int>(i)};
     }
     for (const auto& bounds : topmostFirst) {
@@ -209,7 +213,8 @@ void paintPixelGrid(QPainter& painter, const QRectF& displayRect, const QSize co
 }
 
 void paintSelectionBounds(QPainter& painter, const ViewerMapping& mapping,
-                          const std::span<const runtime::EvaluatedOperationBounds> bounds) {
+                          const std::span<const runtime::EvaluatedOperationBounds> bounds,
+                          const std::span<const document::LayerId> pointText) {
     const auto device = painter.deviceTransform();
     const auto inverse = device.inverted();
     const auto snap = [&](const QPointF point) {
@@ -228,7 +233,11 @@ void paintSelectionBounds(QPainter& painter, const ViewerMapping& mapping,
         painter.setBrush(Qt::NoBrush);
         painter.drawPolygon(polygon);
         painter.setBrush(kit::color(kit::Color::Surface));
-        for (const auto point : viewerHandlePoints(mapping, bound)) {
+        const auto handles = viewerHandlePoints(mapping, bound);
+        for (std::size_t i = 0; i < handles.size(); ++i) {
+            if (i % 2 != 0 && std::ranges::find(pointText, bound.layerId) != pointText.end())
+                continue;
+            const auto point = handles[i];
             const auto topLeft = snap(point - QPointF(halfHandle, halfHandle));
             const auto bottomRight = snap(point + QPointF(halfHandle, halfHandle));
             painter.drawRect(QRectF(topLeft, bottomRight));
@@ -248,7 +257,8 @@ void paintSelectionBounds(QPainter& painter, const ViewerMapping& mapping,
 
 void paintViewerOverlays(QPainter& painter, const QRectF& canvasRect, const ViewerMapping& mapping,
                          const double effectiveZoom, const ViewerOverlayOptions& options,
-                         const std::span<const runtime::EvaluatedOperationBounds> bounds) {
+                         const std::span<const runtime::EvaluatedOperationBounds> bounds,
+                         const std::span<const document::LayerId> pointText) {
     const auto& displayRect = mapping.displayRect;
     const QSize compositionSize(static_cast<int>(mapping.compositionFormat.width()),
                                 static_cast<int>(mapping.compositionFormat.height()));
@@ -271,7 +281,7 @@ void paintViewerOverlays(QPainter& painter, const QRectF& canvasRect, const View
     if (options.rulers) {
         paintRulers(painter, canvasRect, displayRect, compositionSize);
     }
-    paintSelectionBounds(painter, mapping, bounds);
+    paintSelectionBounds(painter, mapping, bounds, pointText);
     painter.restore();
 }
 

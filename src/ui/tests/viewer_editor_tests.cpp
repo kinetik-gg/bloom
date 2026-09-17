@@ -1680,6 +1680,22 @@ void testViewerOverlayPixelsFollowTransformAndThreshold(Expectations& expectatio
                                 hit.handle == static_cast<int>(i),
                             "each handle has a matching scale hit region");
     }
+    const std::array pointText{bound.layerId};
+    for (std::size_t i = 0; i < handles.size(); ++i) {
+        const auto hit = ui::hitTestViewer(mapping, handles[i], selected, selected, pointText);
+        expectations.expect((hit.region == ui::ViewerHitRegion::Scale) == (i % 2 == 0),
+                            "point text exposes only uniform corner resize handles");
+    }
+    QImage pointTextGizmo(420, 320, QImage::Format_ARGB32);
+    pointTextGizmo.fill(background);
+    {
+        QPainter painter(&pointTextGizmo);
+        ui::paintViewerOverlays(painter, QRectF(pointTextGizmo.rect()), mapping, 2.0, {}, selected,
+                                pointText);
+    }
+    const auto edgeProbe = handles[1] - QPointF(4, 4);
+    expectations.expect(pointTextGizmo.pixelColor(edgeProbe.toPoint()) == background,
+                        "point text does not paint an edge resize handle");
     expectations.expect(ui::hitTestViewer(mapping, {30, 20}, selected, selected).region ==
                             ui::ViewerHitRegion::Rotate,
                         "outside-corner region rotates");

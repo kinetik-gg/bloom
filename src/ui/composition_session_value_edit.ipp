@@ -45,6 +45,14 @@ std::optional<document::ParameterValue>
 CompositionSession::liveValue(const document::ParameterId parameterId) const {
     const auto* current = composition();
     const auto* parameter = current ? current->parameters().find(parameterId) : nullptr;
+    if (transformInteraction_) {
+        const auto& overrides = transformInteraction_->overrides;
+        const auto found = std::ranges::find(overrides, parameterId,
+                                             &runtime::SnapshotParameterOverride::parameterId);
+        if (found != overrides.end())
+            return std::visit([](const auto& value) -> document::ParameterValue { return value; },
+                              found->value);
+    }
     if (valueEdit_ && valueEdit_->anchor && valueEdit_->anchor->parameter == parameterId)
         return valueEdit_->anchor->value;
     if (valueEdit_ && isValueEditing(parameterId))

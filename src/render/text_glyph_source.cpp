@@ -263,4 +263,45 @@ void externalFontRasterizeGlyph(const ExternalFontFile& font, const std::span<st
                                   scaleY, shiftX, shiftY, glyph);
 }
 
+namespace {
+std::vector<Path> glyphOutlines(const stbtt_fontinfo& font, int glyph) {
+    stbtt_vertex* vertices = nullptr;
+    const int count = stbtt_GetGlyphShape(&font, glyph, &vertices);
+    const auto release = [&](stbtt_vertex* p) { stbtt_FreeShape(&font, p); };
+    std::unique_ptr<stbtt_vertex, decltype(release)> owned(vertices, release);
+    std::vector<Path> paths;
+    for (int i = 0; i < count; ++i) {
+        const auto& v = vertices[i];
+        const PathPoint end{double(v.x), double(v.y)};
+        if (v.type == STBTT_vmove) {
+            paths.push_back({{{end, {}, {}}}, true});
+            continue;
+        }
+        if (paths.empty())
+            continue;
+        auto& path = paths.back();
+        PathAnchor next{end, {}, {}};
+        auto& before = path.anchors.back();
+        if (v.type == STBTT_vcurve) {
+            before.outHandle = PathPoint{before.point.x + (double(v.cx) - before.point.x) * 2 / 3,
+                                         before.point.y + (double(v.cy) - before.point.y) * 2 / 3};
+            next.inHandle = PathPoint{end.x + (double(v.cx) - end.x) * 2 / 3,
+                                      end.y + (double(v.cy) - end.y) * 2 / 3};
+        } else if (v.type == STBTT_vcubic) {
+            before.outHandle = PathPoint{double(v.cx), double(v.cy)};
+            next.inHandle = PathPoint{double(v.cx1), double(v.cy1)};
+        }
+        path.anchors.push_back(next);
+    }
+    return paths;
+}
+} // namespace
+std::vector<Path> embeddedFontGlyphOutlines(EmbeddedFace face, int glyph) {
+    const auto* font = parsedFont(face);
+    return font && font->parsed ? glyphOutlines(font->info, glyph) : std::vector<Path>{};
+}
+std::vector<Path> externalFontGlyphOutlines(const ExternalFontFile& face, int glyph) {
+    const auto* font = parsedExternalFont(face);
+    return font && font->parsed ? glyphOutlines(font->info, glyph) : std::vector<Path>{};
+}
 } // namespace bloom::render::detail

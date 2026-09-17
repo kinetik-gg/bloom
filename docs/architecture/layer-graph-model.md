@@ -4,6 +4,17 @@ Status: working
 
 Updated: 2026-09-17
 
+## Geometry and transform levels
+
+- **NATIVE SIZE** is the source geometry in its own units: rectangle width/height, text box,
+  font size, line endpoints and path anchors. Stroke width, corner radius and points are authored
+  in these units; changing native dimensions does not stretch them.
+- **LOCAL TRANSFORM** is the layer's Position/Anchor/Scale/Rotation in parent space. Scale is an
+  animatable percentage that stretches the finished shape, including its strokes. Vector Scale
+  is edited only through Properties or timeline fields, never through handles.
+- **WORLD TRANSFORM** is LOCAL TRANSFORM composed with every ancestor. It is derived, never
+  authored. The gizmo works in this space and maps pointer motion back through the parent.
+
 ## Purpose
 
 Bloom is natively node-based and natively layer-authorable. These are two professional workflows
@@ -123,8 +134,8 @@ unconnected or out-of-range parent still contributes its authored transform. Emp
 uses a zero bounds centre. A collapsed ancestor transform collapses its children.
 
 The compiler evaluates parents before children while preserving the authored Merge order. Bounds,
-anchor positions and overlay polygons use the same composed matrix as pixels. Resampling occurs once
-per child placement. Parent values participate in cache dependencies even if the parent draws nothing.
+anchor positions and overlay polygons use the same composed matrix as pixels. Raster sources
+resample once per child placement; vector sources rasterise transformed geometry. Parent values participate in cache dependencies even if the parent draws nothing.
 
 Viewer gestures freeze the evaluated child polygon, local content bounds and sampled authored
 transform at the current time. Its polygon edge vectors reconstruct the world linear matrix;
@@ -132,7 +143,7 @@ removing the child's authored rotation/scale gives the parent's linear matrix. I
 matrix maps composition-space pointer deltas into the child's authored parent space, including
 non-uniform ancestors and resulting shear. This bounded geometry calculation does no evaluation
 on the UI thread and needs no render-plan layout change. Singular or missing geometry refuses a
-gesture. Scale compensates position to hold the opposite handle (or Alt-selected anchor) fixed;
+gesture. Native-size handles compensate position to hold the opposite handle (or Alt-selected anchor) fixed;
 anchor edits compensate position so the world polygon remains unchanged.
 
 Parent changes are undoable commands. Deleting or dissolving a parent clears its children's links in
@@ -1119,3 +1130,38 @@ The immutable plan owns `CompiledShape` and derives content bounds, including st
 time. Its data window contains that content even outside the composition display window. Fill
 coverage colors the image, then stroke coverage composites source-over in premultiplied scene
 linear space. The Qt-free CPU implementation is the common Linux, macOS and Windows path.
+
+## Continuous vector rasterisation
+
+CPU evaluator semantics 8 and image primitive semantics 7 retain vector provenance through
+Solid, Shape and Text sources followed by Layer Output chains. A raster operation such as Merge
+ends that provenance. A transformed vector layer covers its source geometry through the composed
+WORLD TRANSFORM at the requested output resolution, including per-axis proxy factors. Text uses
+font glyph outlines with the existing layout, wrapping, alignment and native box clipping. Strokes
+are constructed in native units and transformed as geometry, so nonuniform scale and ancestor
+shear affect both the shape and its stroke. Opacity applies after fill/stroke compositing.
+
+The whole-pixel translation path preserves established source coverage bit for bit. Image sources
+and other raster boundaries retain bilinear sampling. Source-space bounds still define the native
+centre and anchor; the world polygon and output support describe placement. Coverage rows accept
+absolute output coordinates, keeping the geometry independent of a future ROI request.
+
+Vector output keys include the complete composed affine matrix through OperationKey, source
+content dependencies, resolved parameters, exact time when time-dependent, and output resolution.
+A cache hit retains the same bounds as a miss. Vector provenance is reconstructed independently
+of pixel-cache hits, so a retained source cannot force transformed output back to raster sampling.
+Cancellation during outlines, path flattening and coverage prevents partial publication.
+
+## Native-size viewer gestures
+
+Shape, Solid and text handles edit NATIVE SIZE by default. Edge handles edit one dimension;
+corner handles edit both, with Shift preserving aspect. Point text exposes only corners and edits
+font size uniformly. Box text edits its box and rewraps at the new width without changing font size.
+Lines and paths author endpoints and anchors. Stroke width, corner radius and LOCAL TRANSFORM Scale
+remain unchanged. Raster sources without native editable geometry keep Scale handles.
+
+The session freezes source values, local bounds, the world polygon and the inverse parent mapping.
+It previews source and compensating Position overrides together, then commits them in one
+transaction. The opposite handle stays fixed, or Alt holds the anchor. Rotation and anchor gestures
+remain transforms. Selecting a path exposes its anchors and tangent handles immediately; no
+separate edit mode or double-click is required.

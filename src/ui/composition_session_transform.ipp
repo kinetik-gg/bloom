@@ -34,6 +34,10 @@ CompositionSession::beginTransformInteraction(TransformGesture gesture, ViewerMa
         return TransformInteractionRejection::EmptyMapping;
     if (gesture.handle < 0 || gesture.handle >= 8)
         return TransformInteractionRejection::NoResolvableTransform;
+    const bool nativeResize = gesture.kind == TransformGesture::Kind::Scale &&
+                              ((parameterForSelection("kind") && parameterForSelection("path")) ||
+                               parameterForSelection(document::kTextParameterRole) ||
+                               parameterForSelection(document::kSolidWidthParameterRole));
     constexpr std::array roles{document::kPositionParameterRole, document::kAnchorParameterRole,
                                document::kScaleParameterRole, document::kRotationParameterRole};
     std::array<document::ParameterId, 4> ids;
@@ -42,9 +46,10 @@ CompositionSession::beginTransformInteraction(TransformGesture gesture, ViewerMa
         const auto* parameter = parameterForSelection(roles[i]);
         if (!parameter)
             return TransformInteractionRejection::NoResolvableTransform;
-        if (composition()->parameterLocked(parameter->id))
+        if ((!nativeResize || i == 0) && composition()->parameterLocked(parameter->id))
             return TransformInteractionRejection::LockedLayer;
-        if (std::holds_alternative<document::DriverBindingSource>(parameter->source))
+        if ((!nativeResize || i == 0) &&
+            std::holds_alternative<document::DriverBindingSource>(parameter->source))
             return TransformInteractionRejection::DrivenParameter;
         const auto value = effectiveParameterValue(parameter);
         if (!value || (i < 3 ? !std::holds_alternative<document::Vec2d>(*value)
@@ -89,7 +94,12 @@ CompositionSession::beginTransformInteraction(TransformGesture gesture, ViewerMa
                                                  scale,
                                                  rotation,
                                                  inverseParent,
+                                                 {},
+                                                 TransformInteraction::NativeKind::Raster,
                                                  {}};
+    if (gesture.kind == TransformGesture::Kind::Scale) {
+#include "composition_session_native_begin.ipp"
+    }
     updateTransformInteraction(transformInteraction_->gesture.origin, modifiers);
     return std::nullopt;
 }
@@ -169,6 +179,10 @@ void CompositionSession::updateTransformInteraction(const QPointF screenPoint,
         break;
     }
     case TransformGesture::Kind::Scale: {
+        if (state.nativeKind != TransformInteraction::NativeKind::Raster) {
+#include "composition_session_native_resize.ipp"
+            break;
+        }
         if (delta.isNull()) {
             put(0, state.position);
             put(2, state.scale);
@@ -216,6 +230,7 @@ void CompositionSession::updateTransformInteraction(const QPointF screenPoint,
     }
     }
     emit transformInteractionChanged();
+    emit liveValueChanged();
 }
 
 void CompositionSession::cancelTransformInteraction() {
@@ -223,6 +238,7 @@ void CompositionSession::cancelTransformInteraction() {
     if (transformInteraction_) {
         transformInteraction_.reset();
         emit transformInteractionChanged();
+        emit liveValueChanged();
     }
 }
 
@@ -260,7 +276,21 @@ bool CompositionSession::commitTransformInteraction() {
         const auto* parameter = composition()->parameters().find(override.parameterId);
         if (!parameter)
             return finish(false);
-        const auto before = liveValue(parameter->id);
+        std::optional<document::ParameterValue> before;
+        if (override.parameterId == state.parameters[0])
+            before = state.position;
+        else if (override.parameterId == state.parameters[1])
+            before = state.anchor;
+        else if (override.parameterId == state.parameters[2])
+            before = state.scale;
+        else if (override.parameterId == state.parameters[3])
+            before = state.rotation;
+        else {
+            const auto native = std::ranges::find(state.native, override.parameterId,
+                                                  [](const auto& item) { return item.first; });
+            if (native != state.native.end())
+                before = native->second;
+        }
         const bool same =
             before && std::visit(
                           [&](const auto& value) {
