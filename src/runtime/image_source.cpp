@@ -91,11 +91,12 @@ ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::
 media::ImageResult<render::Rgba32fImage>
 evaluateImageSource(const ImageSourceSelection& selected,
                     render::Rgba32fImageDescriptor composition, double horizontalScale,
-                    double verticalScale, std::size_t budget, OperationCache& cache,
+                    double verticalScale, std::size_t budget, OperationCache* cache,
                     const CancellationToken& cancel) {
     if (!selected.available)
         return {{}, selected.warning};
-    auto cached = cache.find(selected.cacheKey, document::Revision{});
+    auto cached =
+        cache != nullptr ? cache->find(selected.cacheKey, document::Revision{}) : std::nullopt;
     std::shared_ptr<const render::Rgba32fImage> image = cached ? cached->image : nullptr;
     if (!image) {
         auto decoded = media::decodeImage(
@@ -105,8 +106,10 @@ evaluateImageSource(const ImageSourceSelection& selected,
         if (!decoded.value.has_value())
             return {{}, decoded.diagnostic, decoded.cancelled};
         image = std::move(*decoded.value);
-        cache.store(selected.cacheKey, document::Revision{},
-                    {.image = image, .values = {}, .bounds = {}});
+        if (cache != nullptr)
+            cache->store(selected.cacheKey, document::Revision{},
+                         {.image = image, .values = {}, .bounds = {}},
+                         OperationCacheEntryKind::DecodedMedia);
     }
     const auto sourceWindow = image->descriptor()->dataWindow();
     const auto width = static_cast<std::uint64_t>(

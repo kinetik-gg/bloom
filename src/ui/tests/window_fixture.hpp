@@ -95,6 +95,7 @@ struct WindowFixture {
             throw std::runtime_error("Fixture arrangement failed");
         // A pinned budget: the status bar prints it, and the production default follows the
         // machine's memory, which would make every whole-window golden machine-dependent.
+        evaluator.operationCache()->setByteBudget(kMinimumPreviewFrameCacheByteBudget);
         preview = std::make_unique<CompositionPreviewController>(
             session, scheduler, bridge,
             makeCompositionPreviewPipeline(compiler, evaluator, display, qualified),
@@ -106,7 +107,8 @@ struct WindowFixture {
         if (!registerFoundationEditors(registry, session, *preview))
             throw std::runtime_error("Editor registration failed");
         window = std::make_unique<MainWindow>(registry, session, projectHost, *exporter, nullptr,
-                                              preview.get());
+                                              preview.get(), nullptr, nullptr,
+                                              evaluator.operationCache().get());
         window->resize(1920, 1200);
         window->show();
         QElapsedTimer timer;

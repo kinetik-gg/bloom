@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/runtime/operation_cache.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QString>
@@ -55,6 +56,7 @@ struct PreviewColorState final {
 // that exists, since BackgroundPreviewController publishes no progress of its own. Empty when the
 // cache is empty and nothing is caching.
 [[nodiscard]] QString previewCacheText(const CompositionPreviewController& previewController);
+[[nodiscard]] QString operationCacheText(const runtime::OperationCache& operationCache);
 
 class WindowStatusBar final : public kit::KSurface {
     Q_OBJECT
@@ -63,7 +65,7 @@ class WindowStatusBar final : public kit::KSurface {
     // `previewController` may be null (a window built without a preview pipeline, as several tests
     // do): the preview-derived cells then stay empty rather than claiming anything.
     WindowStatusBar(CompositionSession& session, CompositionPreviewController* previewController,
-                    QWidget* parent = nullptr);
+                    QWidget* parent = nullptr, runtime::OperationCache* operationCache = nullptr);
 
     // A notice that clears itself after five seconds -- a rejected command, an export that
     // finished, a cancellation. It takes precedence over the persistent message while it lasts.
@@ -88,6 +90,7 @@ class WindowStatusBar final : public kit::KSurface {
 
     CompositionSession& session_;
     CompositionPreviewController* previewController_ = nullptr;
+    runtime::OperationCache* operationCache_ = nullptr;
     QWidget* colorChip_ = nullptr;
     QLabel* previewState_ = nullptr;
     QLabel* droppedFrames_ = nullptr;
@@ -95,6 +98,7 @@ class WindowStatusBar final : public kit::KSurface {
     QLabel* message_ = nullptr;
     QLabel* version_ = nullptr;
     QTimer* transientTimer_ = nullptr;
+    QTimer* cacheRefreshTimer_ = nullptr;
     QString transientMessage_;
     QString persistentMessage_;
 };

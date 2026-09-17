@@ -749,21 +749,18 @@ void testResolutionChangeCancelsAnActiveRamPreview(Expectations& expectations) {
 void testDefaultBudgetFollowsPhysicalMemory(Expectations& expectations) {
     const auto physical = ui::physicalMemoryBytes();
     const auto budget = ui::defaultPreviewFrameCacheByteBudget();
+    const auto allocation = runtime::MemoryBudgetLedger(physical).allocate();
     expectations.expect(budget >= ui::kMinimumPreviewFrameCacheByteBudget,
                         "the default RAM preview budget never drops below the floor");
-    if (physical == 0) {
-        expectations.expect(budget == ui::kMinimumPreviewFrameCacheByteBudget,
-                            "unknown physical memory falls back to the floor");
-    } else {
-        constexpr std::size_t kMinimumReserve = std::size_t{4} * 1024U * 1024U * 1024U;
-        const auto reserve = std::max(kMinimumReserve, physical / 4);
-        const auto expected = physical > reserve ? std::max(ui::kMinimumPreviewFrameCacheByteBudget,
-                                                            physical - reserve)
-                                                 : ui::kMinimumPreviewFrameCacheByteBudget;
-        expectations.expect(budget == expected,
-                            "the default budget is physical memory less the reserve");
-        expectations.expect(budget < physical, "the default budget leaves memory for the system");
-    }
+    expectations.expect(budget == allocation.previewFrameCacheByteBudget,
+                        "the preview cache uses the ledger's effective allocation");
+    expectations.expect(allocation.operationCacheByteBudget +
+                                allocation.previewFrameCacheByteBudget <=
+                            allocation.usableByteBudget,
+                        "the two default caches stay within the usable budget");
+    if (physical != 0)
+        expectations.expect(allocation.usableByteBudget <= physical,
+                            "the machine-derived budget never exceeds physical memory");
     QTemporaryDir directory;
     QSettings settings(directory.filePath("playback.ini"), QSettings::IniFormat);
     expectations.expect(ui::ramPreviewByteBudgetFromSettings(settings) == budget,
@@ -797,14 +794,15 @@ void testOperationCacheUnderRamPreview(Expectations& expectations) {
     if (!directory.isValid())
         return;
     QSettings settings(directory.filePath(QStringLiteral("playback.ini")), QSettings::IniFormat);
+    const auto defaultAllocation = ui::cacheMemoryBudgetsFromSettings(settings);
     expectations.expect(ui::operationCacheByteBudgetFromSettings(settings) ==
-                            runtime::kDefaultOperationCacheBytes,
-                        "missing operation budget defaults to 1 GiB");
+                            defaultAllocation.operationCacheByteBudget,
+                        "missing operation budget uses the machine-derived ledger allocation");
     for (const auto* value : {"0", "-1", "invalid", "18446744073709551616"}) {
         settings.setValue(QStringLiteral("playback/operation-cache-bytes"),
                           QString::fromLatin1(value));
         expectations.expect(ui::operationCacheByteBudgetFromSettings(settings) ==
-                                runtime::kDefaultOperationCacheBytes,
+                                defaultAllocation.operationCacheByteBudget,
                             "invalid operation budget uses the default");
     }
     settings.setValue(QStringLiteral("playback/operation-cache-bytes"), QStringLiteral("4096"));

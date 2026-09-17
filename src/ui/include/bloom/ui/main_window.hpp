@@ -12,6 +12,10 @@ class QMenuBar;
 class QSettings;
 class QStackedWidget;
 
+namespace bloom::runtime {
+class OperationCache;
+}
+
 namespace bloom::ui {
 
 class CompositionPreviewController;
@@ -58,7 +62,8 @@ class MainWindow final : public QMainWindow {
                ProjectHost& projectHost, FrameExportController& frameExportController,
                RamPreviewController* ramPreview = nullptr,
                CompositionPreviewController* previewController = nullptr, QWidget* parent = nullptr,
-               PlaybackController* playbackController = nullptr);
+               PlaybackController* playbackController = nullptr,
+               runtime::OperationCache* operationCache = nullptr);
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);
@@ -109,6 +114,7 @@ class MainWindow final : public QMainWindow {
     // window status bar's preview cells.
     CompositionPreviewController* previewController_ = nullptr;
     PlaybackController* playbackController_ = nullptr;
+    runtime::OperationCache* operationCache_ = nullptr;
     QMenuBar* menuBar_ = nullptr;
     QMenu* windowMenu_ = nullptr;
     QMenu* viewMenu_ = nullptr;

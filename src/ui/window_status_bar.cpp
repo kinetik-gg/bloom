@@ -140,10 +140,21 @@ QString previewCacheText(const CompositionPreviewController& previewController) 
         .arg(formatBytes(cache.residentBytes()), formatBytes(cache.byteBudget()));
 }
 
+QString operationCacheText(const runtime::OperationCache& operationCache) {
+    const auto statistics = operationCache.statistics();
+    if (statistics.hits == 0 && statistics.misses == 0 && operationCache.retainedBytes() == 0)
+        return {};
+    return WindowStatusBar::tr("Ops %1 hits · %2 misses · %3 / %4")
+        .arg(statistics.hits)
+        .arg(statistics.misses)
+        .arg(formatBytes(operationCache.retainedBytes()), formatBytes(operationCache.byteBudget()));
+}
+
 WindowStatusBar::WindowStatusBar(CompositionSession& session,
                                  CompositionPreviewController* const previewController,
-                                 QWidget* parent)
-    : kit::KSurface(parent), session_(session), previewController_(previewController) {
+                                 QWidget* parent, runtime::OperationCache* const operationCache)
+    : kit::KSurface(parent), session_(session), previewController_(previewController),
+      operationCache_(operationCache) {
     setObjectName(QStringLiteral("windowStatusBar"));
     setAccessibleName(tr("Application status"));
     setFixedHeight(kit::px(kit::Size::Control));
@@ -185,6 +196,13 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     connect(&session_, &CompositionSession::commandRejected, this,
             [this](const QString& reason) { showTransientMessage(reason); });
 
+    if (operationCache_ != nullptr) {
+        cacheRefreshTimer_ = new QTimer(this);
+        cacheRefreshTimer_->setInterval(250);
+        connect(cacheRefreshTimer_, &QTimer::timeout, this, &WindowStatusBar::refreshPreviewCells);
+        cacheRefreshTimer_->start();
+    }
+
     if (previewController_ != nullptr) {
         connect(previewController_, &CompositionPreviewController::stateChanged, this,
                 &WindowStatusBar::refreshPreviewCells);
@@ -197,6 +215,11 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
         connect(&previewController_->frameCache(), &PreviewFrameCache::byteBudgetChanged, this,
                 &WindowStatusBar::refreshPreviewCells);
     }
+    if (operationCache_ != nullptr) {
+        cache_->setToolTip(
+            tr("RAM preview frames and operation-cache hits, misses, retained bytes, and budgets"));
+        cache_->setAccessibleName(tr("Cache statistics"));
+    }
     refreshPreviewCells();
     refreshMessage();
 }
@@ -205,6 +228,10 @@ void WindowStatusBar::refreshPreviewCells() {
     if (previewController_ == nullptr) {
         static_cast<StatusColorChip*>(colorChip_)
             ->setState({tr("Color state unavailable"), kit::Color::Warn});
+        previewState_->clear();
+        droppedFrames_->clear();
+        cache_->setText(operationCache_ == nullptr ? QString{}
+                                                   : operationCacheText(*operationCache_));
         return;
     }
     const auto& preview = previewController_->state();
@@ -223,7 +250,12 @@ void WindowStatusBar::refreshPreviewCells() {
                                                       : kit::color(kit::Color::Warn));
     droppedFrames_->setPalette(droppedPalette);
 
-    cache_->setText(previewCacheText(*previewController_));
+    const auto previewText = previewCacheText(*previewController_);
+    const auto operationText =
+        operationCache_ == nullptr ? QString{} : operationCacheText(*operationCache_);
+    cache_->setText(previewText.isEmpty()     ? operationText
+                    : operationText.isEmpty() ? previewText
+                                              : previewText + tr(" · ") + operationText);
 }
 
 void WindowStatusBar::showTransientMessage(const QString& message) {

@@ -64,10 +64,12 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                        ProjectHost& projectHost, FrameExportController& frameExportController,
                        RamPreviewController* const ramPreview,
                        CompositionPreviewController* const previewController, QWidget* parent,
-                       PlaybackController* const playbackController)
+                       PlaybackController* const playbackController,
+                       runtime::OperationCache* const operationCache)
     : QMainWindow(parent), compositionSession_(compositionSession), projectHost_(projectHost),
       frameExportController_(frameExportController), ramPreview_(ramPreview),
-      previewController_(previewController), playbackController_(playbackController) {
+      previewController_(previewController), playbackController_(playbackController),
+      operationCache_(operationCache) {
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
     resize(1600, 1000);
@@ -585,7 +587,8 @@ void MainWindow::createCentralStack() {
     auto* column = new QVBoxLayout(central);
     column->setContentsMargins(0, 0, 0, 0);
     column->setSpacing(0);
-    statusStrip_ = new WindowStatusBar(compositionSession_, previewController_, central);
+    statusStrip_ =
+        new WindowStatusBar(compositionSession_, previewController_, central, operationCache_);
     column->addWidget(centralStack_, 1);
     column->addWidget(statusStrip_);
     setCentralWidget(central);

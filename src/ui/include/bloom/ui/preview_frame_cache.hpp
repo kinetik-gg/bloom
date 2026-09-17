@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
 
 #include <QObject>
@@ -20,11 +21,11 @@ namespace bloom::ui {
 // quarter of what the Float32 process image it was mapped from would have cost -- so even the floor
 // holds roughly 250 frames of a composition-resolution range.
 inline constexpr std::size_t kMinimumPreviewFrameCacheByteBudget =
-    std::size_t{2} * 1024U * 1024U * 1024U;
+    runtime::kMinimumPreviewFrameCacheByteBudget;
 
-// The default budget follows the machine: physical memory less a reserve for the operating system,
-// decoders, and other applications (a quarter of physical memory, never less than 4 GiB), and never
-// below the floor above. A machine whose memory cannot be read gets the floor.
+// The default is the preview allocation from the shared runtime ledger: 40% of physical memory
+// remaining after the operating-system reserve, with the 2 GiB floor applied when that usable
+// budget allows it. The paired operation-cache allocation is 60% of the same usable budget.
 [[nodiscard]] std::size_t defaultPreviewFrameCacheByteBudget() noexcept;
 
 // Total physical memory in bytes, or 0 when the platform does not report it.
@@ -157,13 +158,13 @@ class PreviewFrameCache final : public QObject {
 
 using PreviewFrameCacheHandle = std::shared_ptr<PreviewFrameCache>;
 
-// "playback/ram-preview-memory-bytes" = the RAM preview cache's byte budget. Missing, unparseable,
-// or zero reads as defaultPreviewFrameCacheByteBudget(); any other value is taken at face value,
-// because how much of their own memory an artist wants to spend on cached frames is their decision,
-// not Bloom's. Free functions over a QSettings the caller owns, matching chromeModeFromSettings()'s
-// precedent -- nothing in src/ui constructs a QSettings of its own.
+// Both playback memory settings are resolved through one runtime::MemoryBudgetLedger. A missing,
+// unparseable, or zero value is absent; the ledger applies the machine-derived split and clamps
+// effective allocations so their sum never exceeds the usable budget.
 [[nodiscard]] std::size_t ramPreviewByteBudgetFromSettings(const QSettings& settings);
 [[nodiscard]] std::size_t operationCacheByteBudgetFromSettings(const QSettings& settings);
+[[nodiscard]] runtime::MemoryBudgetAllocation
+cacheMemoryBudgetsFromSettings(const QSettings& settings);
 void setRamPreviewByteBudgetInSettings(QSettings& settings, std::size_t bytes);
 
 } // namespace bloom::ui

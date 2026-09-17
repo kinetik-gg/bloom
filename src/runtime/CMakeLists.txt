@@ -6,6 +6,7 @@ target_sources(
     bloom_runtime
     PRIVATE
         row_band_execution.cpp
+        memory_budget_ledger.cpp
         task_primitives.cpp
         task_gpu_executor.cpp
         task_gpu_executor_lease.cpp
@@ -16,6 +17,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/runtime/cancellation.hpp
+            include/bloom/runtime/memory_budget_ledger.hpp
             include/bloom/runtime/row_band_execution.hpp
             include/bloom/runtime/task_gpu_executor.hpp
             include/bloom/runtime/task_scheduler.hpp

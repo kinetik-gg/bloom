@@ -567,14 +567,30 @@ Static operations and a Merge of static inputs are invariant. Layer visibility a
 its resolved key: crossing either half-open trim boundary cannot reuse the opposite visibility
 state. This metadata is derived runtime state and does not change serialized plan identity inputs.
 
-`playback/operation-cache-bytes` sets the session budget, defaulting to 1 GiB when missing, invalid,
-zero or unrepresentable. The cache accounts retained image/value storage and entry/key overhead,
-evicts least-recently-used entries, and refuses an entry larger than the budget without evicting
-useful entries for it. Runtime `setByteBudget(0)` disables retention and releases entries. Images
-already held by an active evaluation or published frame live until those owners release them;
-eviction does not invalidate readers. Shared image storage is conservatively charged for every
-retaining entry. Concurrent misses may independently evaluate the same operation; cache access is
-synchronized, but row kernels never execute under its mutex.
+`playback/operation-cache-bytes` is the operation allocation from the session's one
+`MemoryBudgetLedger`, which also allocates `playback/ram-preview-memory-bytes`. The machine-derived
+usable budget reserves a quarter of physical memory, never less than 4 GiB, and defaults to a 60%
+operation / 40% preview split. Missing, invalid, or zero settings use that split; one override
+reduces the other cache when necessary, and two overcommitted overrides are proportionally clamped.
+The preview allocation retains its 2 GiB floor when the usable budget allows it. The effective pair,
+not the raw settings, is what the window status bar reports. If physical memory is unavailable or
+too small to leave the reserve, a bounded fallback is used without exceeding reported physical
+memory.
+
+The shared cache accounts retained image/value storage and entry/key overhead, evicts by
+least-recently-used last use, and refuses an entry larger than the budget without evicting useful
+entries for it. Runtime `setByteBudget(0)` disables retention and releases entries. Images already
+held by an active evaluation or published frame live until those owners release them; eviction does
+not invalidate readers. Shared image storage is conservatively charged for every retaining entry.
+Concurrent misses may independently evaluate the same operation; cache access is synchronized, but
+row kernels never execute under its mutex.
+
+Decoded media is stored in the same evaluator-session cache with a revision-independent address.
+Because a burst of new revision-qualified operation entries otherwise makes cold media the oldest
+entry, a decoded entry receives an eight-cache-access grace period. Unprotected operation entries
+are evicted first during that grace; if every entry is protected, the byte budget still wins.
+This small priority rule keeps a recently decoded source available across preview and export work
+without making decoded media immortal.
 
 The existing display-frame cache remains the upper level. A frame hit needs no evaluator work;
 a miss consults operation memoization before running kernels. Only display buffers count against

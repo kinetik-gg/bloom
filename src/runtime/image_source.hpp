@@ -23,6 +23,6 @@ struct ImageSourceSelection {
 [[nodiscard]] media::ImageResult<render::Rgba32fImage>
 evaluateImageSource(const ImageSourceSelection& selection,
                     render::Rgba32fImageDescriptor composition, double horizontalScale,
-                    double verticalScale, std::size_t budget, OperationCache& cache,
+                    double verticalScale, std::size_t budget, OperationCache* cache,
                     const CancellationToken& cancel);
 } // namespace bloom::runtime::detail
