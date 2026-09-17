@@ -66,16 +66,19 @@
             imageDiagnostic(*window.error(), operationSubject, "Shape bounds are invalid");
         return;
     }
+    const auto clipped = clipWindow(*window.value(), index);
+    if (!clipped)
+        return;
     const auto descriptor = render::Rgba32fImageDescriptor::create(
-        *window.value(), resolved.imageDescriptor.displayWindow(),
+        *clipped, resolved.imageDescriptor.displayWindow(),
         resolved.imageDescriptor.pixelAspect());
     if (!descriptor) {
         operationFailure =
             imageDiagnostic(*descriptor.error(), operationSubject, "Shape image is invalid");
         return;
     }
-    const auto pixelCount = static_cast<std::uint64_t>(window.value()->extent().width()) *
-                            window.value()->extent().height();
+    const auto pixelCount = static_cast<std::uint64_t>(clipped->extent().width()) *
+                            clipped->extent().height();
     // Reserve one coverage byte and one stroke pixel per output pixel: even if every row runs
     // concurrently, its temporary storage and the process image stay inside the request budget.
     if (pixelCount > remainingPixelBudget() / (2 * sizeof(render::Rgba32f) + 1)) {
@@ -93,10 +96,10 @@
         return;
     }
     auto& image = *builder.value();
-    const auto height = window.value()->extent().height();
+    const auto height = clipped->extent().height();
     reportRowPassStarted(progress, operationIndex, height);
     const auto outcome = runRowBandPass(
-        rowBands, cancellation, height, window.value()->originY(),
+        rowBands, cancellation, height, clipped->originY(),
         [&](std::int64_t y) -> RowFailure {
             auto output = image.row(y);
             if (!output)
@@ -105,7 +108,7 @@
             std::vector<std::uint8_t> coverage(pixels.size());
             const auto rule = static_cast<render::PathFillRule>(shape.fillRule);
             if (fillEnabled) {
-                if (!raster.value()->coverageRow(window.value()->originX(), y, coverage, rule,
+                if (!raster.value()->coverageRow(clipped->originX(), y, coverage, rule,
                                                  false, cancelled))
                     return std::nullopt;
                 if (const auto error =
@@ -113,7 +116,7 @@
                     return imageDiagnostic(*error, operationSubject, "Shape fill failed");
             }
             if (strokeEnabled) {
-                if (!raster.value()->coverageRow(window.value()->originX(), y, coverage, rule, true,
+                if (!raster.value()->coverageRow(clipped->originX(), y, coverage, rule, true,
                                                  cancelled))
                     return std::nullopt;
                 std::vector<render::Rgba32f> strokePixels(pixels.size(),

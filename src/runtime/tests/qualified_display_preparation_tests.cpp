@@ -1,9 +1,13 @@
 #include <bloom/runtime/qualified_display_preparation.hpp>
 
+#include <algorithm>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_frame.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/prepared_preview_frame.hpp>
+#include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <cmath>
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -75,12 +79,13 @@ constexpr auto kBlendModeParam = bloom::document::ParameterId::fromRaw(46);
 // (a real, evaluator-produced ProcessFrame; ProcessFrame's constructor is private to
 // CpuCompositionEvaluator, so it cannot be hand-built here).
 [[nodiscard]] std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>
-oneSolidPlan(const bloom::document::CompositionFormat compositionFormat = format()) {
+oneSolidPlan(const bloom::document::CompositionFormat compositionFormat = format(),
+             const bloom::core::Color4d color = {1.0, 0.0, 0.0, 1.0}) {
     using namespace bloom::runtime;
     std::vector<CompiledOperation> operations;
     operations.emplace_back(
         CompiledSolid{kSolidNode,
-                      {kColorParam, bloom::core::Color4d{1.0, 0.0, 0.0, 1.0}},
+                      {kColorParam, color},
                       {bloom::document::ParameterId::fromRaw(kSolidNode.value() * 100 + 1000),
                        static_cast<double>(compositionFormat.width())},
                       {bloom::document::ParameterId::fromRaw(kSolidNode.value() * 100 + 1001),
@@ -344,10 +349,108 @@ void testFailurePropagationTyped(Expectations& expectations) {
         "a zero pixel-storage budget is rejected as an invalid request");
 }
 
+void testViewAdjust(Expectations& expectations) {
+    using namespace bloom;
+    const auto plan = oneSolidPlan(format(), {0.125, 0.25, 0.5, 0.5});
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto evaluated = evaluator.evaluate(plan, requestFor(*plan), {});
+    auto handle = buildNeutralHandle();
+    expectations.expect(evaluated.frame() && handle, "adjust fixture evaluates and qualifies");
+    if (!evaluated.frame() || !handle)
+        return;
+    const runtime::CpuQualifiedDisplayPreparer qualified(*handle);
+    const runtime::CpuReferenceDisplayPreparer reference;
+    constexpr std::size_t budget = 1U << 20U;
+    const auto original =
+        reference.prepare(evaluated.frame(), {.aggregatePixelStorageByteLimit = budget}, {});
+    const auto qualifiedOriginal =
+        qualified.prepare(evaluated.frame(), {.aggregatePixelStorageByteLimit = budget}, {});
+    const auto encode = [](double value) {
+        return value <= 0.0031308 ? value * 12.92 : 1.055 * std::pow(value, 1.0 / 2.4) - 0.055;
+    };
+    expectations.expect(runtime::ViewAdjust{1, 1}.linearExposure(0.125) == 0.25,
+                        "one EV doubles linear display light before encoding");
+    for (const runtime::ViewAdjust adjust : {runtime::ViewAdjust{}, {1, 1}, {0, 2}, {-1, 0.5}}) {
+        const auto a =
+            reference.prepare(evaluated.frame(),
+                              {.aggregatePixelStorageByteLimit = budget, .viewAdjust = adjust}, {});
+        const auto b =
+            qualified.prepare(evaluated.frame(),
+                              {.aggregatePixelStorageByteLimit = budget, .viewAdjust = adjust}, {});
+        expectations.expect(a.frame() && b.frame(), "both adjusted display paths prepare");
+        if (!a.frame() || !b.frame())
+            continue;
+        const auto wrapped = runtime::PreparedPreviewFrame::createQualified(1, b.frame());
+        expectations.expect(wrapped.has_value(), "adjusted qualified frame wraps for preview");
+        if (!wrapped)
+            continue;
+        const auto view = wrapped->displayBufferView();
+        expectations.expect(view.has_value(), "adjusted preview has a display buffer");
+        if (!view)
+            continue;
+        const auto pixels = view->pixels;
+        const auto expected = static_cast<std::uint8_t>(std::floor(
+            std::pow(encode(0.125 * std::exp2(adjust.exposure)), 1 / adjust.gamma) * 255 + 0.5));
+        expectations.expect(a.frame()->buffer().pixels()[0].red == expected &&
+                                pixels[0].red == expected && pixels[0].alpha == 128,
+                            "exposure precedes encoding, gamma follows it and alpha is unchanged");
+        expectations.expect(a.frame()->processFrame() == evaluated.frame() &&
+                                b.frame()->processFrame() == evaluated.frame(),
+                            "adjustments preserve the exact reference process frame");
+        if (adjust.neutral()) {
+            expectations.expect(
+                std::ranges::equal(original.frame()->buffer().pixels(),
+                                   a.frame()->buffer().pixels()) &&
+                    std::ranges::equal(qualifiedOriginal.frame()->buffer().pixels(), pixels) &&
+                    !b.frame()->adjustedBuffer(),
+                "neutral settings bypass adjustment and keep both original buffers bit-identical");
+        }
+    }
+    auto roiRequest = requestFor(*plan);
+    const auto region = render::ImageWindow::create(1, 0, 1, 1);
+    roiRequest.roi = *region.value();
+    const auto sampled = evaluator.evaluate(plan, roiRequest, {});
+    expectations.expect(sampled.frame() && sampled.frame()->processImage().pixels().size() == 1,
+                        "1x1 ROI retains one reference process pixel");
+    if (sampled.frame()) {
+        const auto a =
+            reference.prepare(sampled.frame(), {.aggregatePixelStorageByteLimit = budget}, {});
+        const auto b =
+            qualified.prepare(sampled.frame(), {.aggregatePixelStorageByteLimit = budget}, {});
+        expectations.expect(a.frame() && b.frame(),
+                            "ROI display preparation succeeds in both paths");
+        if (a.frame() && b.frame()) {
+            const auto wrapped = runtime::PreparedPreviewFrame::createQualified(1, b.frame());
+            expectations.expect(wrapped.has_value(), "ROI qualified frame wraps for preview");
+            if (!wrapped)
+                return;
+            const auto view = wrapped->displayBufferView();
+            expectations.expect(view.has_value(), "ROI preview has a display buffer");
+            if (!view)
+                return;
+            expectations.expect(
+                view->displayWindow ==
+                        evaluated.frame()->processImage().descriptor()->displayWindow() &&
+                    view->pixels[0] == Rgba8{} &&
+                    view->pixels[1] == qualifiedOriginal.frame()->buffer().pixels()[1] &&
+                    std::ranges::equal(a.frame()->buffer().pixels(), view->pixels),
+                "ROI preserves the full viewport and pads uncomputed pixels in both display paths");
+        }
+    }
+    const auto invalid = reference.prepare(
+        evaluated.frame(), {.aggregatePixelStorageByteLimit = budget, .viewAdjust = {0, 0}}, {});
+    expectations.expect(!invalid.frame(), "invalid gamma is rejected before display work");
+    const auto starved = qualified.prepare(
+        evaluated.frame(), {.aggregatePixelStorageByteLimit = 200, .viewAdjust = {1, 1}}, {});
+    expectations.expect(!starved.frame(),
+                        "adjusted qualified storage obeys the aggregate byte budget");
+}
+
 } // namespace
 
 int main() {
     Expectations expectations;
+    testViewAdjust(expectations);
     testGoldenMatchesC2DirectOutput(expectations);
     testCancellationAtChunkBoundaryPublishesNothing(expectations);
     testFailurePropagationTyped(expectations);

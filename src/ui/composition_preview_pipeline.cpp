@@ -266,6 +266,7 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
             .colorIntent = desiredIdentity.colorIntent,
             .pixelStorageByteLimit = pixelStorageByteLimit,
             .bypassOperationCache = !interactionOverride.empty(),
+            .roi = desiredIdentity.roi,
         };
         auto evaluationResult = evaluator.evaluate(
             compileResult.plan, evaluationRequest, context.cancellation(),
@@ -305,6 +306,7 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
             const runtime::CpuQualifiedDisplayPreparer qualifiedPreparer(*qualifiedSnapshot.handle);
             const runtime::QualifiedDisplayPreparationRequest qualifiedRequest{
                 .aggregatePixelStorageByteLimit = pixelStorageByteLimit,
+                .viewAdjust = desiredIdentity.viewAdjust,
             };
             auto qualifiedResult = qualifiedPreparer.prepare(
                 evaluationResult.frame(), qualifiedRequest, context.cancellation(),
@@ -340,6 +342,7 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
             const runtime::ReferenceDisplayPreparationRequest displayRequest{
                 .intent = runtime::ReferenceDisplayIntent::LinearRec709SceneToSrgb,
                 .aggregatePixelStorageByteLimit = pixelStorageByteLimit,
+                .viewAdjust = desiredIdentity.viewAdjust,
             };
             auto displayResult = displayPreparer.prepare(
                 evaluationResult.frame(), displayRequest, context.cancellation(),

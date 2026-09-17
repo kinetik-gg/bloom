@@ -2,6 +2,8 @@
 #include <array>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/image_types.hpp>
+#include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
 #include <bloom/color/ocio_builtin_registry.hpp>
@@ -40,6 +42,7 @@
 #include <QEventLoop>
 #include <QImage>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMetaObject>
@@ -57,6 +60,7 @@
 #include <bloom/ui/properties_editor.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -462,14 +466,28 @@ struct PipelineFixture final {
     bloom::runtime::CpuReferenceDisplayPreparer displayPreparer;
     bloom::runtime::QualifiedDisplayProcessorProvider qualifiedProcessorProvider;
     bloom::ui::PreviewPreparationFunction pipeline;
+    std::atomic<int> probeCalls = 0;
+    std::atomic<bool> probeOffUi = false;
 
     PipelineFixture() : compiler(definitions) {
         if (!bloom::runtime::registerBuiltInNodeDefinitions(definitions)) {
             std::abort();
         }
         definitions.freeze();
-        pipeline = bloom::ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer,
-                                                             qualifiedProcessorProvider);
+        auto preparation = bloom::ui::makeCompositionPreviewPipeline(
+            compiler, evaluator, displayPreparer, qualifiedProcessorProvider);
+        pipeline = [this, preparation, uiThread = std::this_thread::get_id()](
+                       const bloom::document::Snapshot& snapshot,
+                       const bloom::runtime::PreviewRequestIdentity& identity, std::size_t budget,
+                       const std::vector<bloom::runtime::SnapshotParameterOverride>& overrides,
+                       bloom::runtime::TaskContext& context) {
+            if (identity.roi && identity.roi->extent().width() == 1 &&
+                identity.roi->extent().height() == 1) {
+                ++probeCalls;
+                probeOffUi = std::this_thread::get_id() != uiThread;
+            }
+            return preparation(snapshot, identity, budget, overrides, context);
+        };
     }
 };
 
@@ -945,7 +963,7 @@ void testResolutionDropdownPersistsAndMovesWithFooter(Expectations& expectations
                                     QStringLiteral("Half"),
                             "choosing Half updates the controller and preference");
         auto* footer = bloom::ui::test::footer(fixture.viewer);
-        footer->resize(800, ui::kit::px(ui::kit::Size::Control));
+        footer->resize(1100, ui::kit::px(ui::kit::Size::Control));
         (void)footer->grab();
         expectations.expect(dropdown->parentWidget() == footer &&
                                 dropdown->geometry().left() >
@@ -993,11 +1011,21 @@ void testFooterControlsAreOrderedLeftToRight(Expectations& expectations) {
     (void)footer->grab();
     QCoreApplication::processEvents();
 
-    const char* const ordered[] = {
-        "viewerChannelDropdown",  "timelineRamPreviewButton", "viewerStepToStartButton",
-        "timelineStepBackButton", "playPauseButton",          "timelineStepForwardButton",
-        "viewerStepToEndButton",  "timelineLoopIndicator",    "viewerTimeReadout",
-        "viewerZoomDropdown",     "viewerResolutionDropdown"};
+    const char* const ordered[] = {"viewerChannelDropdown",
+                                   "viewerRoiToggle",
+                                   "viewerRoiClear",
+                                   "viewerExposure",
+                                   "viewerGamma",
+                                   "timelineRamPreviewButton",
+                                   "viewerStepToStartButton",
+                                   "timelineStepBackButton",
+                                   "playPauseButton",
+                                   "timelineStepForwardButton",
+                                   "viewerStepToEndButton",
+                                   "timelineLoopIndicator",
+                                   "viewerTimeReadout",
+                                   "viewerZoomDropdown",
+                                   "viewerResolutionDropdown"};
     int previousRight = -1;
     for (const char* name : ordered) {
         auto* control = footer->findChild<QWidget*>(QString::fromLatin1(name));
@@ -1705,6 +1733,70 @@ void testViewerOverlayPixelsFollowTransformAndThreshold(Expectations& expectatio
         "anchor has priority over layer interior");
 }
 
+void testViewerAdjustments(Expectations& expectations) {
+    using namespace bloom;
+    ViewerFixture fixture(makeTestProject("Display analysis"));
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Solid"), {0.125, 0.25, 0.5, 1}),
+        "display fixture creates a known solid");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "display fixture is ready");
+    ui::EditorRegistry registry;
+    expectations.expect(registry.registerEditor({"viewer-test", QStringLiteral("Viewer"),
+                                                 [&](QWidget* parent) {
+                                                     return new ui::ViewerEditor(fixture.session,
+                                                                                 fixture.controller,
+                                                                                 nullptr, parent);
+                                                 }}),
+                        "viewer test factory registers");
+    const QString firstId = QStringLiteral("11111111-1111-4111-8111-111111111111");
+    const QString secondId = QStringLiteral("22222222-2222-4222-8222-222222222222");
+    QSettings().remove("viewer/analysis/" + firstId);
+    QSettings().remove("viewer/analysis/" + secondId);
+    const auto revision = fixture.session.snapshot().revision();
+    {
+        ui::EditorArea first(registry, "viewer-test", firstId);
+        ui::EditorArea second(registry, "viewer-test", secondId);
+        auto* one = first.findChild<ui::ViewerEditor*>();
+        auto* two = second.findChild<ui::ViewerEditor*>();
+        auto* exposure = first.findChild<ui::kit::KValueField*>("viewerExposure");
+        auto* gamma = first.findChild<ui::kit::KValueField*>("viewerGamma");
+        exposure->stepBy(10);
+        gamma->stepBy(20);
+        expectations.expect(waitUntil([&] {
+                                const auto frame = one->displayedFrameForTest();
+                                return frame && frame->desiredIdentity().viewAdjust ==
+                                                    runtime::ViewAdjust{1, 2};
+                            }),
+                            "viewer publishes its asynchronously adjusted frame");
+        expectations.expect(
+            two->displayedFrameForTest()->desiredIdentity().viewAdjust.neutral() &&
+                fixture.controller.state().frame->desiredIdentity().viewAdjust.neutral(),
+            "other viewer and shared preview remain neutral");
+        expectations.expect(fixture.session.snapshot().revision() == revision,
+                            "display adjustments never edit document or export truth");
+        exposure->stepBy(-10);
+        gamma->stepBy(-20);
+        expectations.expect(one->displayedFrameForTest()->desiredIdentity().viewAdjust.neutral(),
+                            "neutral controls immediately restore the original display buffer");
+        exposure->stepBy(10);
+        expectations.expect(waitUntil([&] {
+                                return one->displayedFrameForTest()->desiredIdentity().viewAdjust ==
+                                       runtime::ViewAdjust{1, 1};
+                            }),
+                            "returning to an earlier adjustment still prepares a frame");
+    }
+    {
+        ui::EditorArea restored(registry, "viewer-test", firstId);
+        expectations.expect(restored.findChild<ui::kit::KValueField*>("viewerExposure")->value() ==
+                                1,
+                            "exposure persists by viewer area identity");
+    }
+    QSettings().remove("viewer/analysis/" + firstId);
+    QSettings().remove("viewer/analysis/" + secondId);
+    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
+}
+
 #include "viewer_tools_tests.ipp"
 
 } // namespace
@@ -1780,6 +1872,9 @@ int main(int argc, char** argv) {
     Expectations expectations;
     testToolColumnUsesViewGestures(expectations);
     try {
+        testViewerProbe(expectations);
+        testViewerAdjustments(expectations);
+        testViewerRoi(expectations);
         testCreationTools(expectations);
         testPenTools(expectations);
         testTextTool(expectations);

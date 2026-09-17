@@ -2077,6 +2077,55 @@ void testContinuousTextRasterisation(Expectations& expectations) {
 
 #include "operation_memoization_tests.ipp"
 
+void testRegionOfInterest(Expectations& expectations) {
+    runtime::CpuCompositionEvaluator evaluator;
+    const std::array plans{oneSolidPlan(), twoSolidPlan(),
+                           squareTransformPlan({.position = {2.25, 1.5}, .rotation = 31}),
+                           squareTransformPlan({.position = {30, 30}})};
+    for (const auto& plan : plans) {
+        auto request = requestFor(*plan);
+        const auto full = evaluator.evaluate(plan, request, {});
+        const auto region = render::ImageWindow::create(1, 0, 2, 1);
+        request.roi = *region.value();
+        const auto cropped = evaluator.evaluate(plan, request, {});
+        expectations.expect(full.frame() && cropped.frame(), "ROI evaluates successfully");
+        if (!full.frame() || !cropped.frame())
+            continue;
+        expectations.expect(cropped.frame()->processImage().descriptor()->dataWindow() ==
+                                *request.roi,
+                            "ROI process storage is limited to the requested data window");
+        expectations.expect(
+            std::ranges::equal(full.frame()->evaluatedBounds(), cropped.frame()->evaluatedBounds()),
+            "ROI retains complete evaluated geometry");
+        for (std::int64_t x = 1; x < 3; ++x) {
+            render::Rgba32f a = render::Rgba32f::transparent(), b = a;
+            const auto* expected = pixel(full, x, 0, a);
+            const auto* actual = pixel(cropped, x, 0, b);
+            expectations.expect(expected && actual &&
+                                    std::bit_cast<std::array<std::uint32_t, 4>>(*expected) ==
+                                        std::bit_cast<std::array<std::uint32_t, 4>>(*actual),
+                                "ROI pixels are byte-identical to full evaluation");
+        }
+        expectations.expect(full.frame()->identity() != cropped.frame()->identity() &&
+                                cropped.frame()->identity().evaluatorSemanticsVersion == 8,
+                            "ROI changes request identity without changing semantics versions");
+        const auto again = evaluator.evaluate(plan, request, {});
+        expectations.expect(again.frame() && again.frame()->operationCacheStatistics().misses == 0,
+                            "repeated ROI reuses only matching operation entries");
+        request.roi.reset();
+        const auto restored = evaluator.evaluate(plan, request, {});
+        expectations.expect(restored.frame() &&
+                                std::ranges::equal(full.frame()->processImage().pixels(),
+                                                   restored.frame()->processImage().pixels()),
+                            "clearing ROI restores the unchanged full-frame golden");
+        const auto invalid = render::ImageWindow::create(-1, 0, 1, 1);
+        request.roi = *invalid.value();
+        expectations.expect(evaluator.evaluate(plan, request, {}).status() ==
+                                runtime::EvaluationStatus::Failed,
+                            "out-of-resolution ROI is rejected");
+    }
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -2086,6 +2135,7 @@ int main(int argc, char* argv[]) {
             benchmarkOperationMemoization(expectations);
             return expectations.failures() == 0 ? 0 : 1;
         }
+        testRegionOfInterest(expectations);
         testContinuousTextRasterisation(expectations);
         testParentedBounds(expectations);
         testContentBounds(expectations);

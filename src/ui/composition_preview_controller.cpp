@@ -158,7 +158,49 @@ CompositionPreviewController::cacheKeyForTime(const core::RationalTime time) con
         .quality = settings_.quality,
         .colorIntent = settings_.colorIntent,
         .resolutionPolicy = settings_.resolutionPolicy,
+        .roi = regionOfInterest(),
     };
+}
+
+void CompositionPreviewController::setRegionOfInterest(std::optional<QRectF> region) {
+    if (region &&
+        (!std::isfinite(region->left()) || !std::isfinite(region->top()) ||
+         !std::isfinite(region->right()) || !std::isfinite(region->bottom()) || region->isEmpty()))
+        return;
+    if (regionOfInterest_ == region || shuttingDown_)
+        return;
+    regionOfInterest_ = region;
+    requestRefresh();
+}
+
+std::optional<render::ImageWindow> CompositionPreviewController::regionOfInterest() const {
+    if (!regionOfInterest_)
+        return std::nullopt;
+    const auto* composition =
+        session_.snapshot().project().findComposition(session_.compositionId());
+    if (!composition)
+        return std::nullopt;
+    const auto format = composition->format();
+    auto width = format.width();
+    auto height = format.height();
+    const auto requested = resolution();
+    if (const auto* proxy = std::get_if<runtime::ProxyResolution>(&requested)) {
+        width = proxy->extent.width();
+        height = proxy->extent.height();
+    }
+    const double sx = static_cast<double>(width) / format.width();
+    const double sy = static_cast<double>(height) / format.height();
+    const auto left =
+        std::clamp(std::floor(regionOfInterest_->left() * sx), 0.0, double(width - 1));
+    const auto top = std::clamp(std::floor(regionOfInterest_->top() * sy), 0.0, double(height - 1));
+    const auto right =
+        std::clamp(std::ceil(regionOfInterest_->right() * sx), left + 1, double(width));
+    const auto bottom =
+        std::clamp(std::ceil(regionOfInterest_->bottom() * sy), top + 1, double(height));
+    const auto window = render::ImageWindow::create(
+        static_cast<std::int64_t>(left), static_cast<std::int64_t>(top),
+        static_cast<std::uint64_t>(right - left), static_cast<std::uint64_t>(bottom - top));
+    return *window.value();
 }
 
 std::uint32_t CompositionPreviewController::resolutionDivisor() const noexcept {
@@ -477,6 +519,7 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         .quality = settings_.quality,
         .colorIntent = settings_.colorIntent,
         .resolutionPolicy = settings_.resolutionPolicy,
+        .roi = regionOfInterest(),
     };
 
     const auto publishTerminal = [this, &desiredIdentity,

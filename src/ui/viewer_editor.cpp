@@ -62,6 +62,7 @@
 #include <QWheelEvent>
 #include <bloom/render/path_raster.hpp>
 #include <bloom/ui/kit/section.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <numbers>
 
 #include <algorithm>
@@ -1203,6 +1204,62 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
         setChannel(static_cast<ViewerChannel>(index));
     });
 
+    roiButton_ = new kit::KIconButton(footer);
+    roiButton_->setToolTip(tr("Region of interest: Ctrl-drag with Select"));
+    roiButton_->setObjectName("viewerRoiToggle");
+    roiButton_->setAccessibleName(tr("Region of interest"));
+    roiButton_->setCheckable(true);
+    roiButton_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    roiButton_->setText(tr("ROI"));
+    connect(roiButton_, &QToolButton::toggled, this, [this] { publishRoi(); });
+    roiClearButton_ = new kit::KIconButton(footer);
+    roiClearButton_->setToolTip(tr("Clear region of interest"));
+    roiClearButton_->setIcon(kit::icon(kit::IconId::Close, kit::IconRole::Control));
+    roiClearButton_->setEnabled(false);
+    roiClearButton_->setObjectName("viewerRoiClear");
+    connect(roiClearButton_, &QToolButton::clicked, this, [this] {
+        roiGesture_.reset();
+        roiRect_.reset();
+        roiButton_->setChecked(false);
+        publishRoi();
+    });
+
+    exposureField_ = new kit::KValueField(footer);
+    exposureField_->setObjectName("viewerExposure");
+    exposureField_->setLabel(tr("EV"));
+    exposureField_->setAccessibleName(tr("Viewer exposure in EV stops"));
+    exposureField_->setCompact(true);
+    exposureField_->setRange(-32, 32);
+    exposureField_->setSingleStep(0.1);
+    exposureField_->setDecimals(2);
+    exposureField_->setFixedWidth(kit::px(kit::Size::ViewerZoomWidth));
+    gammaField_ = new kit::KValueField(footer);
+    gammaField_->setObjectName("viewerGamma");
+    gammaField_->setLabel(tr("γ"));
+    gammaField_->setAccessibleName(tr("Viewer gamma"));
+    gammaField_->setToolTip(tr("Gamma after display encoding; viewer display only"));
+    gammaField_->setCompact(true);
+    gammaField_->setRange(0.01, 10);
+    gammaField_->setSingleStep(0.05);
+    gammaField_->setDecimals(2);
+    gammaField_->setValue(1);
+    gammaField_->setFixedWidth(kit::px(kit::Size::ViewerZoomWidth));
+    const auto changed = [this] {
+        viewAdjust_ = {exposureField_->value(), gammaField_->value()};
+        const auto prefix = analysisSettingsPrefix();
+        QSettings settings;
+        settings.setValue(prefix + "exposure", viewAdjust_.exposure);
+        settings.setValue(prefix + "gamma", viewAdjust_.gamma);
+        refreshViewAdjustment();
+        update();
+    };
+    connect(exposureField_, &kit::KValueField::valueChanged, this, changed);
+    connect(gammaField_, &kit::KValueField::valueChanged, this, changed);
+    analysisTimer_ = new QTimer(this);
+    analysisTimer_->setInterval(16);
+    connect(analysisTimer_, &QTimer::timeout, this, &ViewerEditor::consumeViewAdjustment);
+    loadViewAdjust();
+
     // ---- Zoom ----------------------------------------------------------------------------------
     zoomDropdown_ = new kit::KDropdown(footer);
     zoomDropdown_->setObjectName("viewerZoomDropdown");
@@ -1351,8 +1408,9 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     resolutionReadout_->hide();
     resolutionDropdown_->setToolTip(viewerResolutionText(previewController_));
     for (auto* control : std::initializer_list<QWidget*>{
-             channelDropdown_, ramPreviewButton_, stepToStartButton_, stepBackButton_,
-             playPauseButton_, stepForwardButton_, stepToEndButton_, loopButton_})
+             channelDropdown_, roiButton_, roiClearButton_, exposureField_, gammaField_,
+             ramPreviewButton_, stepToStartButton_, stepBackButton_, playPauseButton_,
+             stepForwardButton_, stepToEndButton_, loopButton_})
         chrome_.footer.addWidget(control);
     chrome_.footer.addStretch();
     for (auto* control :
@@ -1361,6 +1419,7 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     statusBarFooter_ = EditorArea::buildChromeRow(chrome_.footer, this, true);
     chrome_.hosted = [this] {
         statusBarFooterTaken_ = true;
+        loadViewAdjust();
         updatePreviewResolution();
         update();
     };
@@ -1419,9 +1478,24 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     // lets the widget receive Space/Z/F without a prior click.
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
+    probeTimer_ = new QTimer(this);
+    probeTimer_->setInterval(16);
+    connect(probeTimer_, &QTimer::timeout, this, &ViewerEditor::consumeProbe);
+    connect(this, &ViewerEditor::probeChanged, &previewController_,
+            &CompositionPreviewController::probeChanged);
+    connect(&previewController_, &CompositionPreviewController::stateChanged, this, [this] {
+        if (probePosition_)
+            refreshProbe(*probePosition_);
+    });
 
     connect(&session_, &CompositionSession::snapshotChanged, this, [this] { cancelCreation(); });
-    connect(&session_, &CompositionSession::compositionChanged, this, [this] { cancelCreation(); });
+    connect(&session_, &CompositionSession::compositionChanged, this, [this] {
+        cancelCreation();
+        roiRect_.reset();
+        if (roiButton_)
+            roiButton_->setChecked(false);
+        publishRoi();
+    });
     connect(&session_, &CompositionSession::currentTimeChanged, this, [this] { cancelCreation(); });
     connect(&session_, &CompositionSession::selectionChanged, this, [this] {
         cancelPathDrag();
@@ -1529,12 +1603,17 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
             statusBarFooter_->update();
         }
     });
+    connect(&previewController_, &CompositionPreviewController::stateChanged, this,
+            &ViewerEditor::refreshViewAdjustment);
     updatePreviewResolution();
     updatePreviewAccessibility();
     updateOverlayActions();
 }
 
 ViewerEditor::~ViewerEditor() {
+    clearProbe();
+    if (adjustTask_)
+        adjustTask_->cancel();
     finishTextEditing(true);
     cancelCreation();
     QObject::disconnect(focusConnection_);
@@ -1982,8 +2061,7 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                          session_.composition() ? session_.composition()->backgroundColor()
                                                 : core::Color4d{0.0, 0.0, 0.0, 1.0});
 
-    const auto& preview = previewController_.state();
-    const PreparedPreviewFrameHandle displayedFrame = preview.frame;
+    const PreparedPreviewFrameHandle displayedFrame = this->displayedFrame();
     if (displayedFrame != nullptr) {
         // displayBufferView() normalizes both display-product alternatives (reference and
         // qualified) to the same packed-RGBA8 shape -- the viewer draws pixels identically either
@@ -2057,6 +2135,7 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
         }
     }
 
+    paintRoi(painter);
     paintCreation(painter);
     paintPathTools(painter);
     paintTextEditing(painter);
@@ -2241,6 +2320,8 @@ void ViewerEditor::updatePanCursor() {
 }
 
 void ViewerEditor::mousePressEvent(QMouseEvent* event) {
+    if (roiPress(event))
+        return;
     if (textEditPress(event))
         return;
     if (textPress(event))
@@ -2330,6 +2411,9 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
 }
 
 void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
+    refreshProbe(event->position());
+    if (roiMove(event))
+        return;
     if (textEdit_) {
         if (textEdit_->dragging)
             moveTextCaret(event->position(), true);
@@ -2401,6 +2485,8 @@ void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
+    if (roiRelease(event))
+        return;
     if (textEdit_ && event->button() == Qt::LeftButton) {
         textEdit_->dragging = false;
         event->accept();
@@ -2452,6 +2538,12 @@ void ViewerEditor::wheelEvent(QWheelEvent* event) {
 }
 
 void ViewerEditor::keyPressEvent(QKeyEvent* event) {
+    if (roiGesture_ && event->key() == Qt::Key_Escape) {
+        roiGesture_.reset();
+        update();
+        event->accept();
+        return;
+    }
     if (textEditKey(event))
         return;
     if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) &&

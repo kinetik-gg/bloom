@@ -1,3 +1,4 @@
+#include "view_adjust_support.hpp"
 #include <bloom/runtime/qualified_display_preparation.hpp>
 
 #include <utility>
@@ -99,11 +100,12 @@ qualifiedDisplayDiagnosticCodeId(const QualifiedDisplayDiagnosticCode code) noex
     return "bloom.runtime.qualified-display.unknown";
 }
 
-QualifiedDisplayFrame::QualifiedDisplayFrame(QualifiedDisplayFrameIdentity identity,
-                                             std::shared_ptr<const ProcessFrame> processFrame,
-                                             color::PreparedDisplayFrame buffer) noexcept
+QualifiedDisplayFrame::QualifiedDisplayFrame(
+    QualifiedDisplayFrameIdentity identity, std::shared_ptr<const ProcessFrame> processFrame,
+    color::PreparedDisplayFrame buffer,
+    std::optional<render::PreparedReferenceDisplayBuffer> adjustedBuffer) noexcept
     : identity_(std::move(identity)), processFrame_(std::move(processFrame)),
-      buffer_(std::move(buffer)) {}
+      buffer_(std::move(buffer)), adjustedBuffer_(std::move(adjustedBuffer)) {}
 
 QualifiedDisplayPreparationResult
 QualifiedDisplayPreparationResult::prepared(std::shared_ptr<const QualifiedDisplayFrame> frame,
@@ -152,7 +154,8 @@ CpuQualifiedDisplayPreparer::prepare(std::shared_ptr<const ProcessFrame> process
     reportProgress(progress,
                    {.stage = QualifiedDisplayProgressStage::Preflight, .completed = 0, .total = 1});
     if (handle_ == nullptr || processFrame == nullptr || processFrame->identity().plan == nullptr ||
-        request.chunkPixelCount == 0 || request.aggregatePixelStorageByteLimit == 0) {
+        request.chunkPixelCount == 0 || request.aggregatePixelStorageByteLimit == 0 ||
+        !request.viewAdjust.valid()) {
         return QualifiedDisplayPreparationResult::failed(
             diagnostic(QualifiedDisplayDiagnosticCode::InvalidRequest,
                        "Qualified display preparation request is invalid"));
@@ -162,6 +165,11 @@ CpuQualifiedDisplayPreparer::prepare(std::shared_ptr<const ProcessFrame> process
         return QualifiedDisplayPreparationResult::failed(
             imageDiagnostic(*processView.error(), "Process frame image is invalid"));
     }
+    const auto processDescriptor = processView.value()->descriptor();
+    if (!processDescriptor)
+        return QualifiedDisplayPreparationResult::failed(
+            diagnostic(QualifiedDisplayDiagnosticCode::IncompatibleImageDescriptor,
+                       "Process frame has no image descriptor"));
     reportProgress(progress,
                    {.stage = QualifiedDisplayProgressStage::Preflight, .completed = 1, .total = 1});
     if (cancellation.isCancellationRequested()) {
@@ -197,14 +205,36 @@ CpuQualifiedDisplayPreparer::prepare(std::shared_ptr<const ProcessFrame> process
     reportProgress(progress,
                    {.stage = QualifiedDisplayProgressStage::Applying, .completed = 1, .total = 1});
 
+    std::optional<render::PreparedReferenceDisplayBuffer> adjusted;
+    if (!request.viewAdjust.neutral() ||
+        processDescriptor->dataWindow() != processDescriptor->displayWindow()) {
+        const auto processBytes = processFrame->processImage().pixels().size_bytes();
+        const auto displayBytes = produced.value()->pixels().size_bytes();
+        const auto budget = request.aggregatePixelStorageByteLimit;
+        if (processBytes > budget || displayBytes > budget - processBytes)
+            return QualifiedDisplayPreparationResult::failed(
+                diagnostic(QualifiedDisplayDiagnosticCode::PixelStorageBudgetExceeded,
+                           "Viewer adjustment exceeds its pixel-storage budget"));
+        auto result = detail::adjustedQualifiedBuffer(
+            *handle_, *processView.value(), request.viewAdjust, request.chunkPixelCount,
+            budget - processBytes - displayBytes, cancellation);
+        if (cancellation.isCancellationRequested())
+            return QualifiedDisplayPreparationResult::cancelled();
+        if (!result)
+            return QualifiedDisplayPreparationResult::failed(
+                imageDiagnostic(*result.error(), "Viewer adjustment failed"));
+        adjusted.emplace(std::move(*result.value()));
+    }
     QualifiedDisplayFrameIdentity identity{
         .processFrame = processFrame->identity(),
         .provider = QualifiedDisplayProvider::CpuBloomNeutral,
         .packing = QualifiedDisplayPacking::StraightRgba8,
         .preparerSemanticsVersion = kQualifiedDisplayPreparerSemanticsVersion,
+        .viewAdjust = request.viewAdjust,
     };
-    auto frame = std::shared_ptr<const QualifiedDisplayFrame>(new QualifiedDisplayFrame(
-        std::move(identity), std::move(processFrame), std::move(*produced.value())));
+    auto frame = std::shared_ptr<const QualifiedDisplayFrame>(
+        new QualifiedDisplayFrame(std::move(identity), std::move(processFrame),
+                                  std::move(*produced.value()), std::move(adjusted)));
     return QualifiedDisplayPreparationResult::prepared(std::move(frame));
 }
 

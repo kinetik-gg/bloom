@@ -50,6 +50,9 @@ struct PreviewFrameCacheKey final {
     [[nodiscard]] static PreviewFrameCacheKey
     forIdentity(const runtime::PreviewRequestIdentity& identity) noexcept;
 
+    std::optional<render::ImageWindow> roi = std::nullopt;
+    runtime::ViewAdjust viewAdjust{};
+
     friend bool operator==(const PreviewFrameCacheKey&, const PreviewFrameCacheKey&) = default;
 };
 

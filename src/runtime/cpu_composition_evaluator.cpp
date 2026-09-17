@@ -714,8 +714,13 @@ template <typename Value>
             imageDiagnostic(*windowResult.error(), {}, "Evaluation window is invalid"));
     }
     const auto window = *windowResult.value();
+    if (request.roi && (request.roi->originX() < 0 || request.roi->originY() < 0 ||
+                        request.roi->maxXExclusive() > window.maxXExclusive() ||
+                        request.roi->maxYExclusive() > window.maxYExclusive()))
+        return PreflightOutcome::failure(diagnostic(EvaluationDiagnosticCode::InvalidRequest,
+                                                    "ROI is outside the request resolution"));
     const auto descriptorResult =
-        render::Rgba32fImageDescriptor::create(window, window, pixelAspect);
+        render::Rgba32fImageDescriptor::create(request.roi.value_or(window), window, pixelAspect);
     if (!descriptorResult) {
         return PreflightOutcome::failure(
             imageDiagnostic(*descriptorResult.error(), {}, "Process image descriptor is invalid"));
@@ -1466,6 +1471,50 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                            "Evaluation preflight produced no result or diagnostic"));
         }
         auto resolved = std::move(*checked.resolved);
+        const auto fullDescriptorResult = render::Rgba32fImageDescriptor::create(
+            resolved.imageDescriptor.displayWindow(), resolved.imageDescriptor.displayWindow(),
+            resolved.imageDescriptor.pixelAspect());
+        if (!fullDescriptorResult)
+            return EvaluationResult::failed(imageDiagnostic(*fullDescriptorResult.error(), {},
+                                                            "Composition descriptor is invalid"));
+        const auto fullDescriptor = *fullDescriptorResult.value();
+        // Transforms can sample outside the requested output rectangle. Keep their input support
+        // conservative, including nested merges and parented transforms. Geometry is never clipped.
+        std::vector<bool> fullSupport(plan->operations().size(), false);
+        if (request.roi) {
+            for (const auto& operation : plan->operations())
+                if (const auto* layer = std::get_if<CompiledLayerOutput>(&operation))
+                    fullSupport[layer->input.value()] = true;
+            for (std::size_t i = fullSupport.size(); i-- > 0;)
+                if (fullSupport[i])
+                    forEachInput(plan->operations()[i],
+                                 [&](OperationIndex input) { fullSupport[input.value()] = true; });
+        }
+        const auto clipWindow = [&](render::ImageWindow window,
+                                    std::size_t index) -> std::optional<render::ImageWindow> {
+            if (!request.roi || fullSupport[index])
+                return window;
+            const auto left = std::max(window.originX(), request.roi->originX());
+            const auto top = std::max(window.originY(), request.roi->originY());
+            const auto right = std::min(window.maxXExclusive(), request.roi->maxXExclusive());
+            const auto bottom = std::min(window.maxYExclusive(), request.roi->maxYExclusive());
+            if (left >= right || top >= bottom)
+                return std::nullopt;
+            const auto clipped =
+                render::ImageWindow::create(left, top, static_cast<std::uint64_t>(right - left),
+                                            static_cast<std::uint64_t>(bottom - top));
+            return *clipped.value();
+        };
+        const auto clipDescriptor = [&](render::Rgba32fImageDescriptor& descriptor,
+                                        std::size_t index) {
+            const auto window = clipWindow(descriptor.dataWindow(), index);
+            if (!window)
+                return false;
+            const auto clipped = render::Rgba32fImageDescriptor::create(
+                *window, descriptor.displayWindow(), descriptor.pixelAspect());
+            descriptor = *clipped.value();
+            return true;
+        };
         std::vector<std::shared_ptr<const render::Rgba32fImage>> slots(plan->operations().size());
         std::vector<EvaluatedOperationBounds> bounds(plan->operations().size());
         const auto remainingPixelBudget = [&] {
@@ -1557,6 +1606,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 key.add(plan->format().height());
                 key.add(plan->format().pixelAspect());
                 key.add(plan->format().frameRate());
+                if (request.roi) {
+                    key.add(std::string("roi"));
+                    key.add(request.roi->originX());
+                    key.add(request.roi->originY());
+                    key.add(request.roi->extent().width());
+                    key.add(request.roi->extent().height());
+                }
                 key.add(request.resolution.index());
                 if (const auto* proxy = std::get_if<ProxyResolution>(&request.resolution)) {
                     key.add(proxy->extent.width());
@@ -1717,7 +1773,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     "Solid color is not evaluable");
                                 return;
                             }
-                            auto descriptor = resolved.imageDescriptor;
+                            auto descriptor = fullDescriptor;
                             double exactWidth =
                                 static_cast<double>(descriptor.dataWindow().extent().width());
                             double exactHeight =
@@ -1777,6 +1833,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             bounds[index].local.right = authorWidth;
                             bounds[index].local.bottom = authorHeight;
                             bounds[index].output = bounds[index].local;
+                            if (!clipDescriptor(descriptor, index))
+                                return;
                             auto builder = render::Rgba32fImageBuilder::create(
                                 descriptor, remainingPixelBudget());
                             if (!builder) {
@@ -1792,7 +1850,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             const auto solidPixel = *pixel.value();
                             const auto outcome = runRowBandPass(
                                 rowBands, cancellation, height, window.originY(),
-                                [&image, solidPixel, exactWidth, exactHeight,
+                                [&image, solidPixel, exactWidth, exactHeight, window,
                                  &operationSubject](const std::int64_t y) -> RowFailure {
                                     auto row = image.row(y);
                                     if (!row) {
@@ -1804,7 +1862,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     const auto verticalCoverage =
                                         std::clamp(exactHeight - static_cast<double>(y), 0.0, 1.0);
                                     if (verticalCoverage == 1.0 &&
-                                        exactWidth == static_cast<double>(row.value()->size()))
+                                        exactWidth >= static_cast<double>(window.maxXExclusive()))
                                         return std::nullopt;
                                     const auto firstPartial =
                                         verticalCoverage == 1.0 ? row.value()->size() - 1 : 0;
@@ -1812,8 +1870,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                          ++x) {
                                         const auto coverage =
                                             verticalCoverage *
-                                            std::clamp(exactWidth - static_cast<double>(x), 0.0,
-                                                       1.0);
+                                            std::clamp(exactWidth -
+                                                           static_cast<double>(window.originX()) -
+                                                           static_cast<double>(x),
+                                                       0.0, 1.0);
                                         if (coverage == 1.0)
                                             continue;
                                         const auto value = render::Rgba32f::fromPremultiplied(
@@ -1971,7 +2031,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 operationFailure->subject.field = "content";
                                 return;
                             }
-                            auto descriptor = resolved.imageDescriptor;
+                            auto descriptor = fullDescriptor;
 
                             {
                                 const bool hasBox = layout.boxWidth > 0.0 && layout.boxHeight > 0.0;
@@ -2048,6 +2108,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                                           resolved.horizontalScale,
                                                                           resolved.verticalScale);
                             bounds[index].output = bounds[index].local;
+                            if (!clipDescriptor(descriptor, index))
+                                return;
                             auto builder = render::Rgba32fImageBuilder::create(
                                 descriptor,
                                 remainingPixelBudget() -
@@ -2271,9 +2333,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
 
                             const auto workingWindow = render::ImageWindow::create(
                                 -16777216, -16777216, 33554432, 33554432);
-                            const auto layerWindow =
+                            auto layerWindow =
                                 parented ? parented->supportBounds(*workingWindow.value())
                                          : transform.value()->supportBounds(*workingWindow.value());
+                            if (layerWindow)
+                                layerWindow = clipWindow(*layerWindow, index);
                             if (!layerWindow.has_value()) {
                                 reportProgress(progress,
                                                {.stage = EvaluationProgressStage::Operation,
@@ -2471,6 +2535,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 }
                                 descriptor = *local.value();
                             }
+                            if (!clipDescriptor(descriptor, index))
+                                return;
                             auto builder = render::Rgba32fImageBuilder::create(
                                 descriptor, remainingPixelBudget(), render::Rgba32f::transparent());
                             if (!builder) {
@@ -2632,11 +2698,25 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         [&](const CompiledCompositionOutput& output) {
                             bounds[index] = bounds[output.input.value()];
                             processImage = slots[output.input.value()];
+                            if (!processImage) {
+                                auto empty = render::Rgba32fImageBuilder::create(
+                                    resolved.imageDescriptor, remainingPixelBudget(),
+                                    render::Rgba32f::transparent());
+                                if (!empty) {
+                                    operationFailure =
+                                        imageDiagnostic(*empty.error(), operationSubject,
+                                                        "Empty output allocation failed");
+                                    return;
+                                }
+                                auto frozen = std::move(*empty.value()).freeze();
+                                processImage = std::make_shared<const render::Rgba32fImage>(
+                                    std::move(*frozen.value()));
+                            }
                             const auto sourceView = processImage->view();
                             const auto sourceWindow =
                                 sourceView.value()->descriptor()->dataWindow();
                             const auto destinationWindow = resolved.imageDescriptor.dataWindow();
-                            if (sourceWindow != destinationWindow) {
+                            if (request.roi || sourceWindow != destinationWindow) {
                                 auto builder = render::Rgba32fImageBuilder::create(
                                     resolved.imageDescriptor, remainingPixelBudget(),
                                     render::Rgba32f::transparent());
@@ -2646,16 +2726,16 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                         "Output image could not be allocated");
                                     return;
                                 }
+                                const auto copyWindow = request.roi.value_or(destinationWindow);
                                 const auto left =
-                                    std::max(sourceWindow.originX(), destinationWindow.originX());
+                                    std::max(sourceWindow.originX(), copyWindow.originX());
                                 const auto right = std::min(sourceWindow.maxXExclusive(),
-                                                            destinationWindow.maxXExclusive());
+                                                            copyWindow.maxXExclusive());
                                 auto& image = *builder.value();
                                 const auto& source = *sourceView.value();
                                 const auto outcome = runRowBandPass(
-                                    rowBands, cancellation, destinationWindow.extent().height(),
-                                    destinationWindow.originY(),
-                                    [&](const std::int64_t y) -> RowFailure {
+                                    rowBands, cancellation, copyWindow.extent().height(),
+                                    copyWindow.originY(), [&](const std::int64_t y) -> RowFailure {
                                         if (right <= left || y < sourceWindow.originY() ||
                                             y >= sourceWindow.maxYExclusive())
                                             return std::nullopt;
@@ -2747,6 +2827,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             .evaluatorSemanticsVersion = kCpuCompositionEvaluatorSemanticsVersion,
             .animationSamplingSemanticsVersion = animationSamplingSemanticsVersion,
             .imagePrimitiveSemanticsVersion = render::kCpuImagePrimitiveSemanticsVersion,
+            .roi = request.roi,
         };
         auto frame = std::shared_ptr<const ProcessFrame>(new ProcessFrame(
             std::move(identity), std::move(processImage), frameStatistics, std::move(bounds)));
