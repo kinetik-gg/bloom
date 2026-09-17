@@ -6,6 +6,7 @@
 #include <QImage>
 #include <QSignalSpy>
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/kit/search_popup.hpp>
 #include <bloom/ui/kit/section.hpp>

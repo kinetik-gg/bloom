@@ -303,11 +303,13 @@ The [validation map and capture contract](grammar1-validation.md) identify enfor
 Existing object names remain stable. New names are `viewerToolColumn`, `viewerSelectTool`,
 `viewerHandTool`, `viewerZoomTool`, `viewerTextTool`, `viewerRectangleTool`, `viewerEllipseTool`,
 `viewerPolygonTool`, `viewerStarTool`, `viewerLineTool`, `viewerPenTool`,
+`propertiesFilterStrip`, `propertiesFilterAll`, `propertiesFilterObject`,
+`propertiesFilterTransform`, `propertiesFilterSource`, `propertiesFilterGraph`,
 and `nodeReadOnlyValue`. Node row widgets expose `nodeParameterRole` and
 `nodeParameterRowPitch` for geometry audits; list headings expose `headerRow`.
 
-The metric audit covers the status line, ten enabled tools, card/control containment and socket-row
-alignment at DPR 1, 1.5 and 2. It also verifies the timeline menu set remains expanded at
+The metric audit covers the status line, ten enabled viewer tools, the five Properties filter
+choices, card/control containment and socket-row alignment at DPR 1, 1.5 and 2. It also verifies the timeline menu set remains expanded at
 1600 and 1920 logical-pixel window widths. Whole-window references and final captures run at
 DPR 1 and 1.5. Changed geometry tests use the viewer's real padded mapping.
 
@@ -382,6 +384,15 @@ including transport, loop, snap and keyframe toggles. KToolColumn is sticky at t
 edge, paints the header Surface, and owns ChromePadding and ChromeGap around bordered ToggleCells.
 KDropdown's minimum is the measured widest item plus its icon, padding and chevron; requested
 fixed widths are floors. The chrome builder respects that minimum after assigning density.
+
+Properties has a leading `propertiesFilterStrip` KToolColumn at `Size::ToolColumnWidth`. Its five
+exclusive KIconToggles are All, Object, Transform, Source and Graph. All is the default and the
+choice persists as `properties/filter`; the strip never changes section collapse state. Object
+includes the no-selection Composition section, Source covers Solid/Text/Shape/Image/Audio source
+sections, and Graph covers Merge inputs plus every upstream section. A group with no section for
+the current selection is disabled, and a persisted group that disappears after selection changes
+falls back to All. Tooltips state the complete section set so the icon-only controls remain
+discoverable.
 
 Node Add menu and search order is Sources, Layers, Compositing, Values, Math, Convert, String,
 Logic, Time, Color, Vector, Utilities, Output. The UI category projection owns normalization;
