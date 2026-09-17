@@ -5,8 +5,11 @@
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/evaluation.hpp>
 
+#include <QLineF>
 #include <QRectF>
 #include <QSize>
+#include <QTransform>
+#include <bloom/render/text_raster.hpp>
 
 #include <span>
 
@@ -54,6 +57,13 @@ hitTestViewer(const ViewerMapping& mapping, QPointF screenPoint,
               std::span<const runtime::EvaluatedOperationBounds> topmostFirst,
               std::span<const runtime::EvaluatedOperationBounds> selected,
               std::span<const document::LayerId> pointText = {});
+
+[[nodiscard]] QLineF textLayoutCaret(const render::TextLayout& layout, std::size_t byte);
+[[nodiscard]] std::size_t nearestTextLayoutBoundary(const render::TextLayout& layout,
+                                                    QPointF point);
+void paintViewerTextEdit(QPainter& painter, const QRectF& clip, const QTransform& transform,
+                         const render::TextLayout& layout, std::size_t cursor, std::size_t first,
+                         std::size_t last, bool preedit, bool caretVisible);
 
 enum class ViewerSafeAreaPreset : unsigned char {
     Broadcast,

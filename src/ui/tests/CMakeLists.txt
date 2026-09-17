@@ -866,3 +866,14 @@ target_link_libraries(bloom_live_value_edit_test PRIVATE bloom_ui bloom_runtime_
 bloom_enable_warnings(bloom_live_value_edit_test)
 bloom_add_test(NAME bloom.ui.live-value-edit COMMAND bloom_live_value_edit_test
     LABELS ui integration TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(bloom_viewer_text_edit_test viewer_text_edit_tests.cpp)
+target_link_libraries(bloom_viewer_text_edit_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_viewer_text_edit_test)
+bloom_add_test(
+    NAME bloom.ui.viewer_text_edit
+    COMMAND bloom_viewer_text_edit_test
+    LABELS ui unit
+    TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)

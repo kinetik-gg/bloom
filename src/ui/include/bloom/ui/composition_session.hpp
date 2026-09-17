@@ -450,6 +450,7 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool commitValueEdit();
     void cancelValueEdit();
     [[nodiscard]] bool valueEditActive() const noexcept;
+    [[nodiscard]] bool beginTextEdit(document::ParameterId parameter);
     [[nodiscard]] bool beginPathEdit(document::ParameterId parameter);
     [[nodiscard]] bool updatePathEdit(document::PathValue path, document::Vec2d centreDelta);
     [[nodiscard]] bool isValueEditing(document::ParameterId parameterId) const noexcept;
@@ -675,6 +676,7 @@ class CompositionSession final : public QObject {
             document::Vec2d value;
         };
         std::optional<PathAnchorEdit> anchor{};
+        bool text = false;
     };
     std::optional<ValueEdit> valueEdit_;
     // Task DRIVE-1's shared driver resolution. The evaluator is created on the first refresh that

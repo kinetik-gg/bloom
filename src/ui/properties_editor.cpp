@@ -305,12 +305,37 @@ bool PropertiesEditor::eventFilter(QObject* watched, QEvent* event) {
         setFocus(Qt::ShortcutFocusReason);
         return true;
     }
-    if (event->type() == QEvent::FocusOut && watched->objectName() == "propertiesTextMultiline" &&
-        !rebuilding_) {
-        if (auto* text = qobject_cast<QPlainTextEdit*>(watched))
-            (void)session_.setParameterValue(
-                document::ParameterId::fromRaw(text->property("parameterId").toULongLong()),
-                text->toPlainText().toStdString(), tr("Set Text"));
+    const bool textField =
+        watched == textContent_ || watched->objectName() == "propertiesTextMultiline";
+    if (textField && !rebuilding_ && watched->property("ownsTextEdit").toBool()) {
+        const auto* parameter = session_.parameterForSelection(document::kTextParameterRole);
+        if (parameter && session_.isValueEditing(parameter->id)) {
+            if (event->type() == QEvent::KeyPress) {
+                const auto* key = static_cast<QKeyEvent*>(event);
+                if (key->key() == Qt::Key_Escape) {
+                    watched->setProperty("ownsTextEdit", false);
+                    const auto parameterId = parameter->id;
+                    session_.cancelValueEdit();
+                    if (auto* multiline = qobject_cast<QPlainTextEdit*>(watched)) {
+                        const QSignalBlocker blocker(multiline);
+                        multiline->setPlainText(
+                            session_.effectiveStringValue(parameterId).value_or(QString{}));
+                    }
+                    return true;
+                }
+                if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
+                    (watched == textContent_ || key->modifiers().testFlag(Qt::ControlModifier) ||
+                     key->modifiers().testFlag(Qt::MetaModifier))) {
+                    watched->setProperty("ownsTextEdit", false);
+                    (void)session_.commitValueEdit();
+                    return true;
+                }
+            }
+            if (event->type() == QEvent::FocusOut) {
+                watched->setProperty("ownsTextEdit", false);
+                (void)session_.commitValueEdit();
+            }
+        }
     }
     if (!rebuilding_ && (watched == opacitySlider_ || watched == rotationSlider_)) {
         const auto role = watched == opacitySlider_ ? document::kOpacityParameterRole

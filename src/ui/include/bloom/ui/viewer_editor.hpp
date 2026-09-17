@@ -8,6 +8,7 @@
 
 #include <QCursor>
 #include <QImage>
+#include <QLineF>
 #include <QMetaObject>
 #include <QPointF>
 #include <QRectF>
@@ -16,6 +17,7 @@
 #include <QWidget>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 
 namespace bloom::core {
@@ -158,6 +160,8 @@ struct ViewTransform final {
 // (viewer_editor_tests.cpp, direct_manipulation_tests.cpp, composition_session_position_
 // interaction_tests.cpp) never calls it, so their pinned canvasRect()-derived math is completely
 // unaffected by this amendment.
+struct ViewerTextEdit;
+
 class ViewerEditor final : public QWidget, public EditorChromeProvider {
     Q_OBJECT
 
@@ -186,6 +190,9 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     // Test/diagnostic surface only (never read by production code, mirroring kit::KDropdown's own
     // displayedText()/popupView() precedent): exposes state a test needs to assert on without
     // reaching into private members.
+    [[nodiscard]] bool textEditing() const noexcept;
+    [[nodiscard]] QLineF textCaretForTest() const;
+    [[nodiscard]] QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
     [[nodiscard]] ViewTransform viewTransformForTest() const noexcept;
     [[nodiscard]] QRectF canvasRectForTest() const { return canvasRect(); }
     [[nodiscard]] QRectF contentRectForTest() const { return contentRect(); }
@@ -206,6 +213,9 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     // detected resize/format/proxy/pixel-aspect/display-descriptor change -> cancel + disarm. A
     // middle-button press begins a PAN gesture instead
     // (decision 2) and never touches CompositionSession.
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void focusOutEvent(QFocusEvent* event) override;
+    void inputMethodEvent(QInputMethodEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
@@ -215,6 +225,18 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     void contextMenuEvent(QContextMenuEvent* event) override;
 
   private:
+    bool beginTextEditing(std::optional<QPointF> point = std::nullopt, bool selectAll = false);
+    void finishTextEditing(bool commit);
+    void refreshTextLayout();
+    void publishTextEdit();
+    void replaceTextSelection(const QString& replacement);
+    bool textEditKey(QKeyEvent* event);
+    bool textEditPress(QMouseEvent* event);
+    void moveTextCaret(QPointF screenPoint, bool extend);
+    [[nodiscard]] QTransform textToScreen() const;
+    [[nodiscard]] std::size_t textCaretByte() const;
+    void paintTextEditing(QPainter& painter) const;
+    std::unique_ptr<ViewerTextEdit> textEdit_;
     EditorChromeSpec chrome_;
     // The region paintEvent() draws the canvas into and currentMapping() maps gestures against:
 

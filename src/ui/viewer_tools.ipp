@@ -220,39 +220,8 @@ bool ViewerEditor::textPress(QMouseEvent* event) {
     playback_->pause();
     if (session_.addTextLayer(tr("Text"), tr("Text"), document::kDefaultTextSizePixels,
                               {1, 1, 1, 1}, mapping->toComposition(event->position()))) {
-        const auto layer = session_.selection().contextualLayer;
-        // Properties rebuilds synchronously on selection, then the layout settles on this turn.
-        // Use its existing public widget identities: this tool does not own text editing.
-        QTimer::singleShot(0, this, [this, layer] {
-            if (session_.selection().contextualLayer != layer)
-                return;
-            for (auto* panel : window()->findChildren<QWidget*>("propertiesEditor")) {
-                if (!panel->isVisible())
-                    continue;
-                QWidget* searchScope = panel;
-                for (auto* ancestor = panel->parentWidget(); ancestor;
-                     ancestor = ancestor->parentWidget()) {
-                    if (qobject_cast<EditorArea*>(ancestor)) {
-                        searchScope = ancestor;
-                        break;
-                    }
-                }
-                if (auto* search = searchScope->findChild<QLineEdit*>("propertiesSearchField"))
-                    search->clear();
-                auto* field = panel->findChild<QLineEdit*>("textContentEditor");
-                if (!field || !field->isEnabled())
-                    continue;
-                for (auto* ancestor = field->parentWidget(); ancestor && ancestor != panel;
-                     ancestor = ancestor->parentWidget())
-                    if (auto* section = qobject_cast<kit::KSection*>(ancestor))
-                        section->setCollapsed(false);
-                field->setFocus(Qt::OtherFocusReason);
-                field->selectAll();
-                if (auto* scroll = panel->findChild<QScrollArea*>("propertiesScrollArea"))
-                    scroll->ensureWidgetVisible(field);
-                return;
-            }
-        });
+        selectTool(Tool::Select);
+        (void)beginTextEditing(std::nullopt, true);
     }
     event->accept();
     return true;

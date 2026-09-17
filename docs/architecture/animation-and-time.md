@@ -689,6 +689,28 @@ preview completion. Delete removes the selected layers through the existing Remo
 in one transaction. All bindings and geometry use Qt's portable input and painting surfaces on
 Linux, macOS and Windows.
 
+### Text Editing
+
+`CompositionSession::beginTextEdit` uses the existing value-edit ownership and staging. It freezes
+the String parameter, source revision, exact time and initial value. Each accepted input validates
+the complete UTF-8 value before replacing the live override. Properties reads that same effective
+value. The document and history remain unchanged until one `Edit Text` transaction accepts the
+session value; Escape discards the override. No schema or persisted interaction state is added.
+
+The viewer enters through Select double-click, Enter on selected text, or Text-tool creation.
+It owns only cursor/selection and native IME composition state. Preedit temporarily replaces the
+selected range in the preview string; an IME commit replaces that range in the edit buffer once.
+Single-line Enter, multiline Ctrl+Enter and focus loss accept the buffer. Revision, composition or
+time changes invalidate it. Properties text fields share the same begin/update/commit/cancel seam.
+Canvas editing consumes layer nudge/Delete and tool shortcuts before they reach authoring commands.
+
+A cancellable worker resolves the compiled font and queries the render placement path, retaining
+one active request and one newest request. Results from retired generations are discarded. Layout
+activity and failures are visible in the canvas, and closing the viewer requests cancellation
+without joining a worker on the UI thread. Carets and selection use the layout's byte ranges and
+evaluated layer world transform, so parent rotation, nonuniform scale and shear follow the glyphs.
+The UI neither rasterizes text nor opens font files. The overlay is absent from output pixels.
+
 ### Path Gestures
 
 Path overrides carry the document's bounded `PathValue` (anchors, optional absolute cubic handles,

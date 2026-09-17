@@ -390,6 +390,7 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     // commit would make typing one word a dozen undo steps and a dozen recompiles.
     textContent_ = new kit::KLineEdit(body);
     textContent_->setObjectName("textContentEditor");
+    textContent_->installEventFilter(this);
     textContent_->setAccessibleName(tr("Text content"));
     textContent_->setFont(kit::font(kit::TypeRole::Value));
     textContent_->setFixedHeight(kit::px(kit::Size::ControlCompact));
@@ -479,6 +480,20 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     connect(&session_, &CompositionSession::snapshotChanged, multiline, [this, multiline] {
         if (!multiline->hasFocus())
             multiline->setPlainText(textContent_->text());
+    });
+    connect(&session_, &CompositionSession::liveValueChanged, multiline, [this, multiline] {
+        if (!multiline->hasFocus() && multiline->toPlainText() != textContent_->text()) {
+            const QSignalBlocker blocker(multiline);
+            multiline->setPlainText(textContent_->text());
+        }
+    });
+    connect(multiline, &QPlainTextEdit::textChanged, this, [this, multiline] {
+        const auto* parameter = session_.parameterForSelection(document::kTextParameterRole);
+        if (!rebuilding_ && multiline->hasFocus() && parameter &&
+            session_.beginTextEdit(parameter->id)) {
+            multiline->setProperty("ownsTextEdit", true);
+            (void)session_.updateValueEdit(multiline->toPlainText().toStdString());
+        }
     });
     connect(expand, &kit::KButton::toggled, multiline, [this, multiline](bool expanded) {
         if (expanded) {
@@ -691,9 +706,25 @@ void PropertiesEditor::bindCommits() {
     bindCell(solidColorAlpha_, document::kSolidColorParameterRole,
              document::AnimationComponent::Alpha, commitSolidColor);
 
+    connect(textContent_, &QLineEdit::textEdited, this, [this](const QString& text) {
+        const auto* parameter = session_.parameterForSelection(document::kTextParameterRole);
+        if (!rebuilding_ && parameter && session_.beginTextEdit(parameter->id)) {
+            textContent_->setProperty("ownsTextEdit", true);
+            (void)session_.updateValueEdit(text.toStdString());
+        }
+    });
     connect(textContent_, &QLineEdit::editingFinished, this, [this] {
-        if (!rebuilding_) {
-            (void)session_.setSelectedTextContent(textContent_->text());
+        const auto* parameter = session_.parameterForSelection(document::kTextParameterRole);
+        if (rebuilding_ || !parameter)
+            return;
+        const bool ownsEdit = textContent_->property("ownsTextEdit").toBool();
+        textContent_->setProperty("ownsTextEdit", false);
+        if (session_.isValueEditing(parameter->id) && !ownsEdit)
+            return;
+        if ((ownsEdit || session_.effectiveStringValue(parameter->id) != textContent_->text()) &&
+            session_.beginTextEdit(parameter->id)) {
+            (void)session_.updateValueEdit(textContent_->text().toStdString());
+            (void)session_.commitValueEdit();
         }
     });
     bindCell(textSize_, document::kTextSizeParameterRole, std::nullopt,

@@ -282,9 +282,10 @@ void testTextTool(Expectations& expectations) {
                             toolVector(fixture, "position", 110, 120),
                         "Text tool commits layer and click position together");
     auto* field = properties.findChild<QLineEdit*>("textContentEditor");
-    expectations.expect(waitUntil([&] { return field && field->hasFocus(); }),
-                        "Text tool focuses Properties text field");
+    expectations.expect(waitUntil([&] { return fixture.viewer.textEditing() && fixture.viewer.hasFocus(); }),
+                        "Text tool enters canvas edit mode");
     expectations.expect(field && field->isVisible(), "Text field is visible after focus");
+    toolKey(fixture, Qt::Key_Escape);
     toolShutdown(fixture, expectations);
     fixture.viewer.setParent(nullptr);
     properties.setParent(nullptr);
