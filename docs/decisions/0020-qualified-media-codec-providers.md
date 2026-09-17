@@ -4,6 +4,40 @@ Status: proposed
 
 Date: 2026-08-25
 
+## Accepted MEDIA-K1 amendment: contract and supervised worker (2026-09-17)
+
+Owner decisions dated 2026-09-16 admit the general provider worker now. Linux's first real
+provider will be FFmpeg in `bloom-media-worker`; MEDIA-3 owns that adapter. The existing
+FFmpeg 8.1.2 dependency intake remains worker-only. This lane introduces no codec headers,
+real media parser, or new in-process codec exception. Native macOS and Windows providers and
+process backends follow later. Their current supported fallback is typed `Unavailable`.
+
+FFmpeg ProRes is permitted as a preview-workflow candidate with explicit
+`apple_authorized=false` and `delivery_qualified=false`. It cannot satisfy strict ProRes
+or recipient delivery requests. This records the owner's product decision; it adds no vendor
+authorization or distribution qualification.
+
+Acceptance requirements #1–#3 are delivered for the MEDIA-K1 kernel and Linux worker scope:
+
+1. `src/media/provider` implements the five versioned capability, execution, qualification,
+   pipeline, and QC records, stable role/purpose/determinism values, canonical SHA-256 identities,
+   bounded probe/stream/CPU-plane/planar-audio values, and an independent encoding oracle.
+2. The exact registry requires separate passing pipeline evidence, separates technical evidence
+   from attributed authority, and pins execution generations in attempt handles. Missing fields,
+   missing roles/purposes, revocations, and absent authority yield typed unavailability.
+3. The bounded pipe protocol and Linux supervisor prove handshake identity checks, copied-plane
+   validation, replay rejection, crash/watchdog/cancellation containment, resource limits,
+   bounded admission, and orderly shutdown through the synthetic worker. Other targets compile
+   an explicit unsupported process backend. The original all-three-target containment requirement
+   remains a qualification gate when those backends arrive; Linux evidence is not portable proof.
+
+The containing ADR remains **proposed** for broad real-codec/export/delivery qualification.
+Requirements #4–#8 and complete secure media-file capabilities, demux/index/seek, audio transport,
+external GPU leases, shared memory, and export/reopen/QC execution remain future work. Existing
+accepted v0 image/audio exceptions stay narrowly scoped; no further exceptions are admitted.
+The implemented wire format, limits, target boundaries, and worker rpath policy are specified in
+[`media-io.md`](../architecture/media-io.md#implemented-media-k1-contract-and-worker).
+
 ## Accepted v0 amendment: WAV and MP3 preview audio (2026-09-15)
 
 Building on the narrow v0 in-process image exception introduced by MEDIA-1, AUDIO-1 admits a

@@ -498,6 +498,118 @@ provider without a reviewed preset version.
 
 ## Qualified Provider Model
 
+### Implemented MEDIA-K1 Contract And Worker
+
+Status: implemented for the synthetic provider and Linux process backend (2026-09-17).
+The following sections remain the larger qualification contract; the implementation slice is
+explicitly limited to the values and operations described here. No real codec is advertised.
+
+`bloom_media_provider` owns the Qt-free, codec-free contract, canonical identities, registry,
+and protocol. It depends only on `bloom_core`. `bloom_media_worker_host`, also located under
+`src/media/provider`, is the host facade over `bloom_platform_process` supervision and the
+core-only `bloom_runtime` scheduler target. The evaluator is a separate target; neither the
+scheduler nor the contract library depends on the host facade, so target dependencies remain
+acyclic. The repository module allowlist permits that narrow scheduling edge. The desktop
+must never link `bloom_media_fake_worker_provider`, the worker-private provider target that
+will later acquire codec adapters. No UI or durable document schema is involved.
+
+The five records in `include/bloom/media/provider/contract.hpp` are frozen as follows:
+
+- Each encoding begins with its exact C++ record name as a length-prefixed ASCII domain, then
+  a little-endian `u16` schema version of 1. All subsequent fields appear in declaration order.
+- Integers use their declared fixed width and little-endian order. Signed values use two's
+  complement. Enums and booleans occupy one byte; true is 1 and false is 0. Digests occupy 32
+  raw bytes. Strings contain a `u32` byte length followed by valid UTF-8 without NUL or implicit
+  terminators. Vector counts are `u32`; elements follow in order. No ABI padding is encoded.
+- Rationals contain signed 64-bit numerator and denominator, reduced with a positive
+  denominator. A missing capability field is rejected; an inapplicable field must explicitly
+  name its semantics, such as `none`. Fields are never wildcards.
+- SHA-256 covers the entire canonical encoding. The independent C++ test reconstructs all
+  five byte streams through literal fields and a separate hexadecimal encoder. Qualification
+  and authority fields remain separate, including issuer, reference, product, scope, verified
+  date and review date. An absent authority has six empty strings.
+- Pipeline steps contain ordered capability/execution/evidence digests. A tolerance claim
+  requires a nonzero immutable tolerance-profile digest; other classes require its absence.
+  `NoDeterminismClaim` is restricted to the explicitly limited Preview path in this slice.
+  Component registration never registers or qualifies a pipeline automatically.
+
+The numeric v1 budgets below instantiate the resource categories described by this document;
+previous image limits are retained where applicable. Stricter qualified providers may reject
+requests within these ceilings. Expanding a ceiling requires a reviewed profile/protocol change.
+
+| Resource | v1 ceiling |
+| --- | --- |
+| UTF-8 string | 4096 bytes |
+| Streams, declarations, pipeline steps, registry entries | 256 each |
+| CPU planes | 4, with exact plane count/layout for each supported format |
+| Dimension / pixels | 16384 per dimension / 16777216 pixels |
+| CPU-plane storage including row padding | 256 MiB per product |
+| Wire frame excluding its length prefix | 257 MiB |
+| Audio | 64 named channels, 65536 samples per channel, 384000 Hz |
+| Default worker address space / open descriptors | 2 GiB / 64; core dumps disabled |
+| Default pool slots / call deadline | 2 / 5 seconds |
+| Default cancellation message / SIGTERM grace | 50 ms / 100 ms |
+
+Video CPU formats currently close to RGBA8, RGBA32F, and YUV420P8. Plane dimensions, stride,
+byte count, chroma extents, aggregate allocation, and SHA-256 are revalidated by the host.
+Probe streams preserve original H.273 color tags with -1 for absence. This does not resolve
+color interpretation. Audio values use finite planar floats, explicit unique channel roles,
+matching sample counts, and bounded rates; audio transport/decoding is not implemented yet.
+
+The wire envelope is `u32 body_length`, `u32 magic=0x314d4c42`, `u16 protocol=1`,
+`u16 schema=1`, `u8 kind`, `u64 session`, `u64 sequence`, then payload. The fixed body header
+is 25 bytes. Every response echoes the host's nonzero session nonce and next sequence.
+Handshake, Call, Probe, Frame, Cancel, Shutdown, Ack and Failure use kind values 1 through 8.
+The host checks the complete expected execution identity, including provider/build, lock digest,
+OS/architecture/SDK/driver/device, generation, software/hardware use, transport, synchronization,
+resource profile, entitlement, availability and trust domain. The handshake also binds exact
+capability/evidence declarations, ordered pipeline digests and transport modes. The host owns
+qualification expectations; a worker cannot promote its own authority. A rejected frame never
+advances protocol state. Transport 0 copies length-prefixed planes over pipes; transport 1
+reserves shared-memory slabs and cannot be selected for execution in this version.
+
+`MediaWorkerPool` submits only `BlockingIo` tasks with indeterminate activity, cancellation,
+diagnostics and bounded process-slot admission. The scheduler bounds queued requests; terminal
+task history and calls cancelled before execution retain no process slots. Each call owns a fresh
+process and its pinned execution;
+no automatic restart or provider substitution occurs. Products become visible only after a
+validated reply, shutdown acknowledgement, and successful process exit. Pool destruction requests
+shutdown without waiting on the UI thread; task-owned state lives until the scheduler has reaped
+all children. Callers retain the scheduler's normal safe-shutdown obligation.
+
+Linux uses `posix_spawn`, separate stdin/stdout pipes, and a startup gate on descriptor 3.
+The trusted worker calls the bootstrap before provider work; the parent installs `RLIMIT_AS`,
+`RLIMIT_NOFILE` and `RLIMIT_CORE` before releasing that gate. Other descriptors are closed,
+stderr is discarded in favor of typed protocol diagnostics, and the environment contains only
+`LC_ALL=C` and `TZ=UTC`. No loader override is inherited. This is resource/process containment,
+not a filesystem/network sandbox or authorization to launch untrusted executables. Restricted
+media-file access capabilities and additional sandbox policy belong to real-provider intake.
+Poll-based pipe I/O shares a monotonic deadline. Cancellation sends a message, waits its grace,
+sends SIGTERM, waits again, then SIGKILL and reaps. No global host signal handler or detached
+watchdog thread is installed. macOS/Windows return typed process `Unavailable`.
+
+The fake build identity hashes the boundary/provider source generation and compiler configuration;
+its dependency identity separately hashes the reviewed lock bytes at configure time.
+The fake provider accepts only `synthetic:rgba8`, dimensions up to 64 by 64 and frame indices
+through 100000. It probes one video stream at 24 fps and generates R=x, G=y, B=frame modulo 256,
+A=255. These fixtures prove protocol/process behavior, not codec or real-file qualification.
+`bloom.media.worker` covers independent probe/decode results, installed rlimits, process reaping,
+kill -9 after request receipt, cooperative and forced cancellation, timeout, pool shutdown,
+and hostile/truncated/oversized/replayed/version/identity/digest responses. Synthetic fixture
+cases live under `tests/fixtures/media`; no binary media is checked in.
+
+#### Worker Rpath Policy
+
+Installed worker generations occupy `libexec/bloom/media/<provider-generation>/`, with private
+shared dependencies under their own `lib/`. Linux worker install rpath is exactly `$ORIGIN/lib`;
+CMake does not append link directories. The synthetic worker uses the same explicit rpath in build and install trees, avoiding empty
+loader-search entries.
+The current fake worker needs no codec library. MEDIA-3 must place the reviewed shared FFmpeg
+closure in its worker generation's private directory and validate the installed binary and
+transitive library rpaths. The desktop must continue to pass `desktop-no-ffmpeg`; loader paths
+and codec-bearing worker targets must never be propagated through `bloom_media_provider`.
+macOS and Windows packaging policies will be qualified with their process/provider backends.
+
 ### Internal Boundary
 
 Known in-tree code uses a small typed C++ provider interface inside `src/media`/`src/output` for

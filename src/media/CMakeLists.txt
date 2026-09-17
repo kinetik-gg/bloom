@@ -4,3 +4,5 @@
 add_subdirectory(image)
 add_subdirectory(audio)
 add_subdirectory(cache)
+
+add_subdirectory(provider)
