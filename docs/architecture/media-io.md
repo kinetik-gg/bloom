@@ -2,7 +2,7 @@
 
 Status: working research
 
-Updated: 2026-09-15
+Updated: 2026-09-17
 
 ## v0 implemented boundary
 
@@ -50,6 +50,30 @@ This slice does not add movie containers, EXIF orientation, ICC interpretation, 
 round-tripping, external codec processes, or a general proxy service. Files are interpreted by
 the closed sRGB/override rule in `color-management.md`, not by embedded profiles. The broader
 research below does not supersede this implemented boundary.
+
+## FFmpeg dependency intake (2026-09-17)
+
+The Linux candidate is FFmpeg 8.1.2, selected from the maintained 8.1 release line for this
+intake. It is a dependency-only result: the future `bloom-media-worker` may consume its shared
+libraries, while the desktop `bloom` target must not link or load `libav*`. No worker or codec
+integration is part of this intake.
+
+The lock records the official `ffmpeg-8.1.2.tar.xz` archive, detached-signature evidence, exact
+configure arguments, and a corresponding-source obligation. The recipe is shared-only,
+library-only, LGPL-2.1-or-later, disables GPL/nonfree/version-3/network/autodetection, and has no
+external codec or crypto libraries. Its closed preview allow-list covers MOV, Matroska, MXF, MPEG-TS,
+WAV, MP3, and AAC demuxing; MOV, Matroska, MXF, and WAV muxing; H.264/HEVC, ProRes, DNxHD, MJPEG,
+TIFF, AAC, MP3, and explicit PCM-family decoding; ProRes KS, DNxHD, PCM-family, AAC, and TIFF
+encoding; the required parsers/bitstream filters; and the `file` protocol. VA-API H.264/HEVC
+hardware acceleration is enabled when `libva` is available and can be disabled for a host without
+the development files.
+
+FFmpeg ProRes is a non-authorized preview/workflow capability only. It is not evidence of Apple
+authorization, certification, patent clearance, or delivery qualification. The Linux worker's
+eventual private runtime may use `$ORIGIN/../lib` rpath resolution for its own bundled shared
+libraries; the desktop binary receives no FFmpeg rpath. Source, license, security, and review
+records remain under `dependencies/licenses/ffmpeg/` and the lock is the authority for the exact
+configuration.
 
 ## Purpose
 

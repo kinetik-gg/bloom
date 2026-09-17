@@ -5,12 +5,14 @@
 #include <bloom/core/sha256.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <functional>
 #include <map>
 #include <ranges>
 #include <set>
 #include <span>
+#include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -25,6 +27,40 @@ constexpr std::string_view kUnicodeRepositoryDirectory = "dependencies/unicode/1
 constexpr std::string_view kDependenciesPrefix = "dependencies/";
 constexpr std::string_view kFixtureTreePrefix = "dependencies/tests/fixtures/";
 constexpr std::string_view kPatchesPrefix = "dependencies/patches/";
+
+struct OrderedMember final {
+    std::string_view name;
+    bool optional;
+};
+
+void objectWithOptionalMembers(const Value& value,
+                               const std::initializer_list<OrderedMember> members,
+                               const std::string_view location) {
+    if (!value.isObject()) {
+        fail("type", location, "expected object");
+    }
+    const auto& actual = value.asObject();
+    if (actual.size() > members.size()) {
+        fail("members", location, "object contains unknown members");
+    }
+    const auto* expected = members.begin();
+    for (const auto& [name, child] : actual) {
+        static_cast<void>(child);
+        while (expected != members.end() && expected->optional && expected->name != name) {
+            ++expected;
+        }
+        if (expected == members.end() || expected->name != name) {
+            fail("members", location, "object member order differs from the contract");
+        }
+        ++expected;
+    }
+    while (expected != members.end() && expected->optional) {
+        ++expected;
+    }
+    if (expected != members.end()) {
+        fail("members", location, "object is missing a required member");
+    }
+}
 
 // ASCII-STRICT v1 TIGHTENING: see production_lock_checks.hpp. The canonical profile emits
 // non-control Unicode directly as UTF-8 and admits only lowercase \u00xx control escapes, so a raw
@@ -167,21 +203,43 @@ void validateProductionProvenance(const Value& source, const std::string& locati
     }
 }
 
-void validateProductionLicense(const Value& license, const std::string& location,
-                               const Path& root) {
-    object(license,
-           {"spdxExpression", "licenseFiles", "copyrightFiles", "noticeFiles", "sourceObligation",
-            "modified", "reviewRecord", "reviewedAt"},
-           location);
+void validateProductionLicense(const Value& license, const std::string& location, const Path& root,
+                               const std::string_view archiveDigest) {
+    objectWithOptionalMembers(license,
+                              {{"spdxExpression", false},
+                               {"licenseFiles", false},
+                               {"copyrightFiles", false},
+                               {"noticeFiles", false},
+                               {"sourceObligation", false},
+                               {"correspondingSourceArchiveSha256", true},
+                               {"modified", false},
+                               {"reviewRecord", false},
+                               {"reviewedAt", false}},
+                              location);
     stringValue(license.at("spdxExpression"), location + ".spdxExpression");
     validateProductionArtifactArray(license.at("licenseFiles"), location + ".licenseFiles", root,
                                     1);
     validateProductionArtifactArray(license.at("copyrightFiles"), location + ".copyrightFiles",
                                     root, 0);
     validateProductionArtifactArray(license.at("noticeFiles"), location + ".noticeFiles", root, 0);
-    enumString(license.at("sourceObligation"),
-               {"none", "ship-corresponding-source", "ship-source-offer"},
-               location + ".sourceObligation");
+    const auto& sourceObligation =
+        enumString(license.at("sourceObligation"), {"none", "corresponding-source"},
+                   location + ".sourceObligation");
+    const auto* correspondingSourceDigest = license.find("correspondingSourceArchiveSha256");
+    if (sourceObligation == "corresponding-source") {
+        if (correspondingSourceDigest == nullptr) {
+            fail("source-obligation", location,
+                 "corresponding-source requires correspondingSourceArchiveSha256");
+        }
+        if (digestValue(*correspondingSourceDigest,
+                        location + ".correspondingSourceArchiveSha256") != archiveDigest) {
+            fail("source-obligation", location,
+                 "corresponding-source digest must equal source.archiveSha256");
+        }
+    } else if (correspondingSourceDigest != nullptr) {
+        fail("source-obligation", location,
+             "correspondingSourceArchiveSha256 is only valid for corresponding-source");
+    }
     static_cast<void>(booleanValue(license.at("modified"), location + ".modified"));
     verifyProductionArtifactReference(license.at("reviewRecord"), location + ".reviewRecord", root);
     validateDate(license.at("reviewedAt"), location + ".reviewedAt");
@@ -210,25 +268,103 @@ void validateProductionPatches(const Value& component, const std::string& compon
 
 void validateComponentProduction(const Value& value, const std::string& location,
                                  const Path& root) {
-    object(value,
-           {"name", "version", "source", "license", "patches", "dependencies", "profileBuilds",
-            "securityReview"},
-           location);
+    objectWithOptionalMembers(value,
+                              {{"name", false},
+                               {"version", false},
+                               {"configureArguments", true},
+                               {"source", false},
+                               {"license", false},
+                               {"patches", false},
+                               {"dependencies", false},
+                               {"profileBuilds", false},
+                               {"securityReview", false}},
+                              location);
     const auto& componentName = identifier(value.at("name"), location + ".name");
     stringValue(value.at("version"), location + ".version");
 
+    const auto* configureArguments = value.find("configureArguments");
+    if (configureArguments != nullptr) {
+        const auto& arguments =
+            array(*configureArguments, location + ".configureArguments", 8192, 1);
+        for (std::size_t index = 0; index < arguments.size(); ++index) {
+            const auto argumentLocation =
+                location + ".configureArguments[" + std::to_string(index) + ']';
+            const auto& argument = stringValue(arguments[index], argumentLocation);
+            validatePrintableToken(argument, argumentLocation);
+        }
+        if (componentName == "ffmpeg") {
+            const auto recipePath =
+                root / "dependencies/superbuild/projects/ffmpeg.configure-arguments";
+            const auto recipeBytes = readBounded(recipePath, static_cast<std::size_t>(64) * 1024U);
+            std::vector<std::string> recipeArguments;
+            std::size_t begin = 0;
+            while (begin < recipeBytes.size()) {
+                const auto end = recipeBytes.find('\n', begin);
+                auto line = recipeBytes.substr(begin, end == std::string::npos ? std::string::npos
+                                                                               : end - begin);
+                if (line.ends_with('\r')) {
+                    line.pop_back();
+                }
+                if (line.empty()) {
+                    fail("recipe-configure-arguments", recipePath.string(),
+                         "recipe argument records must not contain blank lines");
+                }
+                recipeArguments.push_back(std::move(line));
+                if (end == std::string::npos) {
+                    break;
+                }
+                begin = end + 1;
+            }
+            if (arguments.size() != recipeArguments.size()) {
+                fail("recipe-configure-arguments", location + ".configureArguments",
+                     "lock arguments must exactly match the FFmpeg recipe argument file");
+            }
+            for (std::size_t index = 0; index < arguments.size(); ++index) {
+                if (arguments[index].asString() != recipeArguments[index]) {
+                    fail("recipe-configure-arguments", location + ".configureArguments",
+                         "lock arguments must exactly match the FFmpeg recipe argument file");
+                }
+            }
+        } else {
+            // Configuration arguments are an ordered command vector, not a set.
+            for (std::size_t index = 1; index < arguments.size(); ++index) {
+                if (arguments[index].asString() == arguments[index - 1].asString()) {
+                    fail("duplicate-identity", location + ".configureArguments",
+                         "adjacent configure arguments must be unique");
+                }
+            }
+        }
+    } else if (componentName == "ffmpeg") {
+        fail("recipe-configure-arguments", location,
+             "FFmpeg must lock the exact configure argument vector");
+    }
+
     const auto& source = value.at("source");
-    object(source,
-           {"url", "archiveSha256", "commit", "provenancePolicy", "provenanceReview", "provenance"},
-           location + ".source");
+    objectWithOptionalMembers(source,
+                              {{"url", false},
+                               {"archiveSha256", false},
+                               {"archiveSizeBytes", true},
+                               {"retrievedAt", true},
+                               {"commit", false},
+                               {"provenancePolicy", false},
+                               {"provenanceReview", false},
+                               {"provenance", false}},
+                              location + ".source");
     stringValue(source.at("url"), location + ".source.url");
-    digestValue(source.at("archiveSha256"), location + ".source.archiveSha256");
+    const auto& archiveDigest =
+        digestValue(source.at("archiveSha256"), location + ".source.archiveSha256");
+    if (const auto* archiveSize = source.find("archiveSizeBytes"); archiveSize != nullptr) {
+        uintValue(*archiveSize, location + ".source.archiveSizeBytes");
+    }
+    if (const auto* retrievedAt = source.find("retrievedAt"); retrievedAt != nullptr) {
+        validateDate(*retrievedAt, location + ".source.retrievedAt");
+    }
     nullableString(source.at("commit"), location + ".source.commit");
     verifyProductionArtifactReference(source.at("provenanceReview"),
                                       location + ".source.provenanceReview", root);
     validateProductionProvenance(source, location, root);
 
-    validateProductionLicense(value.at("license"), location + ".license", root);
+    validateProductionLicense(value.at("license"), location + ".license", root, archiveDigest);
     validateProductionPatches(
         value, componentName, location, root,
         booleanValue(value.at("license").at("modified"), location + ".license.modified"));
@@ -257,9 +393,7 @@ void validateComponentProduction(const Value& value, const std::string& location
                 "shippingRoles", "conformanceFixtureSets"},
                buildLocation);
         identifier(build.at("profileId"), buildLocation + ".profileId");
-        enumString(build.at("linkage"),
-                   {"dynamic", "static", "header-only", "executable", "data-only"},
-                   buildLocation + ".linkage");
+        enumString(build.at("linkage"), {"static", "shared"}, buildLocation + ".linkage");
 
         const auto& options =
             array(build.at("cmakeOptions"), buildLocation + ".cmakeOptions", 8192);
@@ -414,8 +548,8 @@ void validateProductionLockDocument(const Value& value, const Path& root) {
     const auto& version = value.at("schemaVersion");
     object(version, {"major", "minor"}, "$.schemaVersion");
     if (!version.at("major").isNumber() || version.at("major").asNumber().spelling != "1" ||
-        !version.at("minor").isNumber() || version.at("minor").asNumber().spelling != "0") {
-        fail("version", "$.schemaVersion", "expected exact version 1.0");
+        !version.at("minor").isNumber() || version.at("minor").asNumber().spelling != "1") {
+        fail("version", "$.schemaVersion", "expected exact version 1.1");
     }
 
     validateProductionUnicodeProfile(value.at("unicodeProfile"));

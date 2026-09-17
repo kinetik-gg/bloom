@@ -207,6 +207,20 @@ Writer success does not prove stream timing, decoded pixels, alpha, color signal
 container structure, recipient policy, or disk durability. Reopen verification and preset-specific
 QC remain mandatory.
 
+### Requirement #6 evidence (2026-09-17)
+
+The dependency-intake lane records FFmpeg 8.1.2 as a Linux worker-only candidate, not as an
+accepted provider. The lock binds the official `ffmpeg-8.1.2.tar.xz` archive at
+`sha256:464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c`, its detached
+signature, the same archive as corresponding source, `LGPL-2.1-or-later`, shared linkage, and the
+exact non-GPL/nonfree configure allow-list. `dependencies/licenses/ffmpeg/` contains the license,
+provenance, review, and security records; the offline dependency checker enforces the archive
+metadata, schema 1.1 fields, and recipe/lock argument equality; and the isolated superbuild
+verified the shared-library SONAME set with VA-API enabled. The review explicitly excludes
+software H.264/HEVC encoding and treats FFmpeg ProRes as non-authorized preview output. Full
+patent/counsel disposition, shipped-file SPDX SBOM, and final distribution-package review remain
+gates for this ADR and are not implied by this intake evidence.
+
 ## Acceptance Requirements
 
 This ADR can become accepted when:

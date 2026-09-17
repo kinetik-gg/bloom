@@ -20,6 +20,7 @@ namespace bloom::quality::dependencies {
 
 enum class ArtifactKind {
     Lock,
+    LockV1_1,
     Prefix,
 };
 

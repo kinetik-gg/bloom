@@ -11,6 +11,16 @@ provenance, review, and security records under `dependencies/licenses/`. One ven
 checked in here rather than acquired by the superbuild; it is listed below like every other vendored
 component, and its own records explain why the lock cannot represent it.
 
+## Lock-managed dependency intake
+
+| Component | Version | License | Distribution boundary | Records |
+| --- | --- | --- | --- | --- |
+| FFmpeg | 8.1.2 | LGPL-2.1-or-later | Shared libraries for the future Linux `bloom-media-worker` only; ProRes is non-authorized preview output | `dependencies/licenses/ffmpeg/`, `dependencies/dependencies.lock.json` |
+
+FFmpeg's corresponding-source obligation is the exact locked official release archive. The lock,
+recipe, detached-signature evidence, and license/review/security records are the authority for the
+configuration and source offer; the desktop `bloom` target does not link FFmpeg.
+
 ## Vendored interface assets
 
 | Component | Version | License | Files | Records |

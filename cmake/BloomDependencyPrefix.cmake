@@ -104,6 +104,63 @@ endfunction()
 # untouched: in qualified mode the package resolves only from the validated prefix with
 # registries and default paths disabled; developer-system mode resolves from the host and stays
 # labeled Unqualified.
+function(bloom_validate_shared_dependency_inventory package)
+    if(NOT package STREQUAL "FFmpeg")
+        return()
+    endif()
+
+    # FFmpeg is a Linux-only worker dependency in this intake. The desktop target must never call
+    # this function or link these targets. The worker's eventual Linux rpath policy is
+    # $ORIGIN/../lib, relative to its private executable directory; no desktop rpath is permitted
+    # to mention this prefix. macOS and Windows providers will use their native loader/package
+    # rules in a later intake and do not silently pass this ELF inventory check.
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(STATUS "Bloom shared dependency inventory: FFmpeg ELF soname check skipped on "
+            "${CMAKE_SYSTEM_NAME}; this intake is Linux worker-only.")
+        return()
+    endif()
+
+    find_program(bloom_readelf NAMES readelf llvm-readelf
+        HINTS /usr/bin /usr/local/bin REQUIRED)
+    set(bloom_ffmpeg_libraries avcodec avdevice avfilter avformat avutil swresample swscale)
+    set(bloom_ffmpeg_inventory)
+    foreach(bloom_ffmpeg_library IN LISTS bloom_ffmpeg_libraries)
+        file(GLOB bloom_ffmpeg_candidates LIST_DIRECTORIES false
+            "${BLOOM_DEPENDENCY_PREFIX}/lib/lib${bloom_ffmpeg_library}.so.*")
+        if(NOT bloom_ffmpeg_candidates)
+            message(FATAL_ERROR
+                "qualified mode: FFmpeg shared-library inventory is missing "
+                "lib${bloom_ffmpeg_library}.so.* under ${BLOOM_DEPENDENCY_PREFIX}/lib.")
+        endif()
+        list(GET bloom_ffmpeg_candidates 0 bloom_ffmpeg_library_file)
+        execute_process(
+            COMMAND "${bloom_readelf}" -d "${bloom_ffmpeg_library_file}"
+            RESULT_VARIABLE bloom_readelf_result
+            OUTPUT_VARIABLE bloom_readelf_output
+            ERROR_VARIABLE bloom_readelf_error
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+        if(NOT bloom_readelf_result EQUAL 0 OR NOT bloom_readelf_output MATCHES
+               "SONAME.*\\[lib${bloom_ffmpeg_library}\\.so\\.[0-9]+\\]")
+            message(FATAL_ERROR
+                "qualified mode: FFmpeg library ${bloom_ffmpeg_library_file} has no verified "
+                "ELF SONAME (readelf: ${bloom_readelf_error}).")
+        endif()
+        list(APPEND bloom_ffmpeg_inventory "lib${bloom_ffmpeg_library}.so.*")
+    endforeach()
+
+    file(GLOB bloom_ffmpeg_static_archives LIST_DIRECTORIES false
+        "${BLOOM_DEPENDENCY_PREFIX}/lib/libav*.a"
+        "${BLOOM_DEPENDENCY_PREFIX}/lib/libsw*.a")
+    if(bloom_ffmpeg_static_archives)
+        message(FATAL_ERROR
+            "qualified mode: FFmpeg shared-only inventory contains static archives: "
+            "${bloom_ffmpeg_static_archives}")
+    endif()
+    list(JOIN bloom_ffmpeg_inventory ", " bloom_ffmpeg_inventory_text)
+    message(STATUS "Bloom shared dependency inventory: FFmpeg ${bloom_ffmpeg_inventory_text} "
+        "with verified ELF sonames.")
+endfunction()
+
 function(bloom_find_dependency package)
     if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
         set(CMAKE_FIND_USE_PACKAGE_REGISTRY OFF)
@@ -164,8 +221,10 @@ function(bloom_find_dependency package)
                     "${BLOOM_DEPENDENCY_PREFIX}.")
             endif()
         endif()
+        bloom_validate_shared_dependency_inventory("${package}")
     elseif(BLOOM_DEPENDENCY_MODE STREQUAL "developer-system")
         find_package(${package} REQUIRED CONFIG)
+        bloom_validate_shared_dependency_inventory("${package}")
     else()
         message(FATAL_ERROR
             "bloom_find_dependency(${package}) requires bloom_consume_dependency_prefix() to have "

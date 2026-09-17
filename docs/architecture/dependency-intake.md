@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-08-25
+Updated: 2026-09-17
 
 ## Purpose
 
@@ -18,16 +18,17 @@ profiles remain unqualified until they pass the gates below. The version 1 artif
 identity, resource, and qualification rules below are frozen; production component values and
 Unicode digests remain pending verified intake and must not be fabricated to populate the shape.
 
-Implementation status: the two exact Draft 2020-12 schema artifacts, the offline checker for
-synthetic contract fixtures, and production lock validation are implemented — including the
-reviewed Unicode 15.1 bootstrap tables with two-source digest equality, repository-artifact
-digest binding, and an ASCII-strict v1 string tightening that defers NFC machinery. The reviewed
-production lock exists with its first component: yyjson 0.12.0, whose superbuild recipe builds
-offline from the digest-verified archive into a staging prefix with library-only feature
-minimization; acquisition provenance, license review, and security review records are bound by
-digest in `dependencies/licenses/yyjson/`. `cmake/BloomDependencyPrefix.cmake` implements
-explicit `qualified`/`developer-system` consumption with restricted package search and the
-ABI-relevant toolchain-agreement subset, exercised in CI by a qualified-mode smoke consumer.
+Implementation status: the two exact Draft 2020-12 lock/prefix schema families, including reviewed
+lock schema 1.1, the offline checker for synthetic contract fixtures, and production lock
+validation are implemented — including the reviewed Unicode 15.1 bootstrap tables with two-source
+digest equality, repository-artifact digest binding, and an ASCII-strict v1 string tightening that
+defers NFC machinery. The reviewed production lock contains the static baseline and FFmpeg 8.1.2,
+the first shared component. FFmpeg builds offline from its digest-verified official archive as a
+worker-only LGPL candidate with a corresponding-source obligation, an explicit configure-argument
+allow-list, and an optional VA-API feature. `cmake/BloomDependencyPrefix.cmake` implements
+explicit `qualified`/`developer-system` consumption with restricted package search, the
+ABI-relevant toolchain-agreement subset, and Linux shared-library SONAME inventory checks;
+`tests/dependency-consumption` exercises both the FFmpeg package wrapper and the desktop boundary.
 Still pending: the production prefix manifest and its validator (with complete filesystem
 inventory and no-follow/hardlink/link-chain evidence), a trusted qualified identity capability,
 full Unicode collision data behind the ASCII tightening, exact tool-identity capture at the
@@ -57,7 +58,7 @@ not change: the normal root CMake build must not contain a parallel web of `Exte
 The production lock path is exactly `dependencies/dependencies.lock.json`. A qualified prefix
 contains its manifest at exactly
 `share/bloom/dependencies/prefix-manifest-v1.json`, relative to the prefix root. Schema artifacts
-live at `dependencies/schemas/dependency-lock-1.0.schema.json` and
+live at `dependencies/schemas/dependency-lock-1.1.schema.json` and
 `dependencies/schemas/prefix-manifest-1.0.schema.json`. None of those paths may be redirected by a
 value inside an artifact.
 
@@ -105,7 +106,7 @@ and artifact-reference paths are at most 4,096 UTF-8 bytes and non-empty unless 
 explicitly nullable. The absolute decoded-string ceiling remains 1 MiB.
 
 The schemas use JSON Schema Draft 2020-12 with absolute IDs
-`urn:kinetik:bloom:schema:dependency-lock:1.0` and
+`urn:kinetik:bloom:schema:dependency-lock:1.1` and
 `urn:kinetik:bloom:schema:dependency-prefix-manifest:1.0`. They use repository-local `$ref` values,
 declare every required member, set `unevaluatedProperties: false` on every object, and carry the
 closed lexical, enum, and count constraints expressible in that dialect. A standard-library-only
@@ -113,6 +114,11 @@ offline repository checker verifies the exact schema artifacts and schema-specif
 it never resolves a remote meta-schema. Member order, canonical bytes, Unicode table identity,
 cross-record equality, graph closure, and filesystem evidence remain explicit checker rules rather
 than claims delegated to JSON Schema.
+
+Lock schema 1.1 retains the v1 canonical ordering rules while permitting the reviewed optional
+component fields needed by non-CMake and shared-library dependencies: exact `configureArguments`,
+source archive size/retrieval date, `shared` linkage, and corresponding-source archive digest.
+Components that do not need those fields continue to use the 1.0-compatible static shape.
 
 ### Closed Resource Limits
 
