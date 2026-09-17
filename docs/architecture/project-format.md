@@ -38,17 +38,28 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.14`.
+The container version remains `1.0`; the current document schema is `1.15`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. Versioned artifacts through `1.11` remain checked as
-historical fixtures, with the current `1.14` contract also enforced by the canonical writer,
+historical fixtures, with the current `1.15` contract also enforced by the canonical writer,
 decoder tests. The manifest artifact still requires container `1.0`; its document
 declaration follows the current document minor. Every historical artifact from `1.0` through `1.11`,
 manifest and document, remains checked, and each version's checker validates what its own minor adds
 and then reduces the artifact to its predecessor so the older checks run unchanged.
+
+Document `1.14` adds the bounded `path` constant value (see "Path values" below).
+
+Document `1.15` adds the `Font` asset kind and the text-source font reference plus optional box,
+wrap, vertical-alignment, anchor, and overflow parameters. A Font asset stores an open path
+locator, family/style metadata, and the digest observed when the artist picked the face; it never
+stores font bytes. System font bytes are read and digest-verified only during compile, while an
+unavailable or changed face produces a warning and uses the deterministic fallback. The schema
+minor is additive and the `1.14` → `1.15` migration preserves existing point-text behavior by
+supplying the legacy default font and zero-sized point-text box. A `Font` asset can be relinked
+through the normal missing-asset flow.
 
 Document `1.4` adds exactly two discriminated-union arms and no member anywhere: a `vec3` constant
 value -- the third authoring vector width, with its own kind token rather than a third component on
@@ -83,7 +94,8 @@ document state.
 ### Path values (document 1.14)
 
 Document 1.14 adds a constant `path` value. The version-only 1.13 → 1.14 migration changes no
-existing value or pixel. The manifest declares document 1.14; container version remains 1.0.
+existing value or pixel. Container version remains 1.0; the manifest declares whatever the current
+document minor is, which is 1.15 since font assets landed on top.
 
 ```json
 {"kind":"path","anchors":[{"point":{"x":0,"y":0},"outHandle":{"x":20,"y":0}},{"point":{"x":40,"y":40},"inHandle":{"x":40,"y":20}}],"closed":false}
@@ -98,8 +110,9 @@ The path value envelope retains the usual additive-member preservation contract.
 There are at most 4,096 anchors, checked before decoded anchor allocation; empty paths and open
 paths are valid. The decoder rejects this discriminator in minor 1.13 or earlier. `PathValue` is a
 separate document parameter alternative, with no numeric promotion, driver socket or animation
-support in v1. `schemas/project/document-1.14.schema.json` and the matching manifest artifact pin
-the current structural contract; typed validation also enforces finite coordinates.
+support in v1. `schemas/project/document-1.14.schema.json` froze this structural contract and
+`schemas/project/document-1.15.schema.json` carries it forward unchanged under the `-1.14` `$defs`
+names; typed validation also enforces finite coordinates.
 
 ## Constrained ZIP Profile
 
@@ -744,7 +757,7 @@ Canonical ordering uses semantic values, never serialized decimal-string lexical
 Container and document versions use independent `{major, minor}` values:
 
 - unknown major versions are rejected without mutation
-- document 1.13 is the minimum loadable schema; earlier minors fail with
+- document 1.15 is the minimum loadable schema; earlier minors fail with
   `UnsupportedSchemaVersion`, without migration or mutation
 - a newer minor opens editable only when every unknown construct is additive, bounded, and
   provably preservable
@@ -808,12 +821,11 @@ schema-version path. Reconstruction applies the same registry validation to deco
 names the node ID. Old or future versions of a known kind are never silently upgraded, downgraded,
 or interpreted through another definition. No parameters or IDs are injected and no edges are dropped.
 
-The floor and canonical writer are **1.13**. This removal changes acceptance, not encoding, so
-it adds no schema minor. The numbered historical migration ladder remains as a record and as
-independently tested schema transforms; archive loading does not run it for documents below the
-floor. The 1.6 → 1.7 step now only advances its schema number; Solid parameter injection and Layer
-node upgrades have been removed. Historical schema artifacts describe their own versions and do
-not imply that those documents can be loaded.
+The floor and canonical writer are **1.15**. The 1.13 → 1.14 step adds the bounded `path`
+constant value; the 1.14 → 1.15 step adds Font assets and the text box/layout parameter grammar.
+The numbered migration ladder remains independently tested; archive loading applies the explicit
+migration before decoding the current floor. Historical schema
+artifacts describe their own versions and do not imply that those documents can be loaded.
 
 ## Project I/O Boundary
 
@@ -1104,7 +1116,7 @@ the new artifacts to 1.5 and run the complete historical ladder.
 ## Content Bounds Introduced In Document 1.7
 
 Solid v2 introduced explicit Scalar width and height. Text v2, Layer v4, and Merge v2 use local
-content bounds. These are now the only supported definitions; the current 1.14 schema includes
+content bounds. These are now the only supported definitions; the current 1.15 schema includes
 those contracts together with per-component animation, image assets, and audio. Documents carrying
 older node versions fail validation. There is no coordinate conversion or compatibility evaluator.
 
@@ -1173,7 +1185,7 @@ Import, relink, removal, layer placement and background editing use ordinary com
 
 Document `1.11` is an additive schema step. Migration `1.10 → 1.11` changes only the root minor
 version and preserves every existing object, ID, parameter source, graph edge, asset and authored
-value. The canonical writer and manifest declaration emit `1.11`; the floor has since moved to `1.14`.
+value. The canonical writer and manifest declaration emit `1.11`; the floor has since moved to `1.15`.
 Earlier documents are rejected; the numbered transform is retained only as historical schema bookkeeping.
 
 An Audio asset uses the same stable `AssetRecord` identity and project-relative `AssetLocator` as
@@ -1195,7 +1207,7 @@ edges and decode to the same image graph and pixels.
 
 Document `1.12` is an additive schema step. Migration `1.11 -> 1.12` changes only the root minor
 version; it adds no member, because every `1.11` key holds the default handle. The canonical writer
-and manifest declaration emitted `1.12`; the load floor is now `1.14`. Earlier documents are rejected;
+and manifest declaration emitted `1.12`; the load floor is now `1.15`. Earlier documents are rejected;
 the numbered transform is retained only as historical schema bookkeeping.
 
 A scalar keyframe and a component keyframe may each carry `outgoingHandle` and `incomingHandle`,
@@ -1220,11 +1232,31 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer, manifest declaration and load
-floor are `1.14`. The historical `1.12 -> 1.13` bookkeeping step changes only the root minor.
-Current artifacts are `document-1.14.schema.json` and `manifest-1.14.schema.json`.
+floor are `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes only the root minor.
+Current artifacts are `document-1.15.schema.json` and `manifest-1.15.schema.json`.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
 Its value is the canonical decimal-string LayerId of another boundary in the same composition.
 Absence means no parent and is omitted by the writer. Null, zero, unknown or cross-composition
 identities, self-parenting and parent cycles are refused. Parenting changes transform space only;
 it does not change Merge membership, stack order, opacity or visibility.
+
+## Font Assets And Text Layout In Document 1.15
+
+Document `1.15` adds the `Font` asset kind and the text capability fields. A Font asset is ordered
+as `id`, `kind`, `locator`, `contentDigest`, `font`, then any retained unknown members. Its `font`
+object stores `family`, `style`, and `faceIndex`; its locator uses `kind: "font"`, a project-relative
+or system path, and an optional RFC 8089 relink hint. Font bytes are never written into the project.
+The catalogue records the digest at pick time, and the compiler accepts the asset only when the
+resolved bytes hash to that digest. Removing an asset keeps text references intact so Assets can
+show a missing-font warning and the artist can replace or relink it.
+
+Text v2 appends `font` as a String asset reference, then `box` as a Vec2 width/height in pixels,
+`wrap` as a Boolean, `verticalAlignment`, `anchorMode`, and `overflow` as Integer selectors. A zero
+box is point text; a non-zero box is the authored local bounds. These fields are optional while
+reading the pre-1.15 text grammar and canonicalized to the defaults above during migration. The
+writer emits the current 1.15 parameter sources in their stable graph order.
+
+The current artifacts are `document-1.15.schema.json` and `manifest-1.15.schema.json`; the
+`1.14 -> 1.15` migration is intentionally small and preserves all prior IDs, values, graph edges,
+and unknown additive members.

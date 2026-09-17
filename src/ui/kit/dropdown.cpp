@@ -190,6 +190,10 @@ void KDropdown::showPopup() {
 
 void KDropdown::hidePopup() { popup_->close(); }
 
+void KDropdown::setSearchable(const bool searchable) { popup_->setSearchable(searchable); }
+
+bool KDropdown::searchable() const noexcept { return popup_->searchable(); }
+
 bool KDropdown::isPopupVisible() const { return popup_->isVisible(); }
 
 KDropdownPopup* KDropdown::popup() const noexcept { return popup_; }

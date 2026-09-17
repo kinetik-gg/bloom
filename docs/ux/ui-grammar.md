@@ -50,12 +50,14 @@ Glyphs are SVG rasterizations at integer physical pixel extents for the current 
 at 1, 1.25, 1.5 and 2. Do not scale an existing pixmap or paint a glyph by hand. KDiamond is the explicit vector
 primitive exception described below; it resolves geometry through the device transform.
 Toggle on uses Fill; off uses Regular, centered in a ToggleCell column.
-`TypeRole` is the only font API. The interface family is pinned, bundled Inter
+`TypeRole` is the only interface font API. The interface family is pinned, bundled Inter
 (Regular, Medium, SemiBold; SIL OFL); Geist Mono remains the value face. Intake includes
 upstream release identity, digests computed from downloaded bytes, license and manifest.
 Render-module text-source rendering embeds the same DejaVu Sans and Inter face files for deterministic
-CPU evaluation; it is independent of Qt's font database. `QFont(` outside the kit is a quality
-violation.
+CPU evaluation; it is independent of Qt's font database. Artist text fonts are selected through a
+searchable `KDropdown`: embedded faces appear first, then the asynchronously enumerated system
+catalogue. The selected row creates or reuses a Font asset and stores only its stable reference.
+`QFont(` outside the kit is a quality violation.
 
 ## Declared chrome and rows
 
@@ -369,8 +371,8 @@ not a data migration. The legacy timeline colour-row adapter remains pending thi
 ## Image Assets And Source Cards
 
 Assets rows use `KRow` with a leading Chrome kind glyph: Composition (`film-slate`), Image
-(`image`), Sequence (`images`), or Audio (`music-notes`). Kind text remains Composition, Image,
-Sequence [member count], or Audio · duration.
+(`image`), Sequence (`images`), Audio (`music-notes`), or Font (`text-t`). Kind text remains
+Composition, Image, Sequence [member count], Audio · duration, or Font · family/style.
 A missing/changed first member has a warning glyph; the context menu exposes Relink and Remove.
 The footer is four `KIconButton` controls with Chrome glyphs and exact tooltips New Composition,
 New Folder, Import, Delete. Folder authoring remains disabled because this slice adds no folder
@@ -406,6 +408,12 @@ cancels without blocking the UI. Relative-brightness probes pin the decoded and 
 Automation names are `nodeImageAsset`, `nodeImageDimensions`, `nodeImageRange`,
 `propertiesImageAsset`, `propertiesImageLoopMode`, `propertiesImageColorSpace`,
 `propertiesImageDimensions`, and `propertiesImageRange`.
+
+Text box rows (`Box`, `Wrap`, `Vertical Alignment`, and `Overflow`) are ordinary registry rows.
+For a selected boxed text layer, Select-tool viewer overlays draw the box and corner/edge handles;
+dragging a handle resizes the box in one session interaction and commits one transaction on release.
+Shift preserves aspect ratio and near composition edges snap to the edge. Double-clicking text focuses
+the Properties text field; inline canvas text editing is intentionally out of scope.
 
 Audio source cards reserve the same 72-pixel body cell for a waveform summary. The summary is
 decoded and bucketed on the worker; the card, Assets panel and timeline only paint its immutable

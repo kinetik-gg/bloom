@@ -175,6 +175,8 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     // Task S5, item 1: text size is animatable now, so its row gets a diamond like every other
     // animatable row. It had none before because no command could key it.
     KeyframeDiamond* textSizeKeyframe_ = nullptr;
+    // Compatibility probe retained for pre-TEXT-2 automation; the visible Font row is registry
+    // owned (`propertiesTextFont`) and this hidden object is not part of the layout.
     kit::KDropdown* textFontName_ = nullptr;
 
     // The no-selection document/composition view (issue #120, decision 3).

@@ -5,6 +5,7 @@ target_sources(
     PRIVATE
         copy_async_io.cpp
         copy_publication.cpp
+        font_catalogue.cpp
         frame_export_publication.cpp
         output_analysis_attempt_runner.cpp
         project_session.cpp
@@ -21,6 +22,7 @@ target_sources(
             include/bloom/host/copy_async_io.hpp
             include/bloom/host/copy_publication.hpp
             include/bloom/host/frame_export_publication.hpp
+            include/bloom/host/font_catalogue.hpp
             include/bloom/host/output_analysis_attempt_runner.hpp
             include/bloom/host/project_session.hpp
             include/bloom/host/publication_coordinator.hpp

@@ -257,7 +257,7 @@ frameIdentity(const std::shared_ptr<const runtime::CompiledCompositionPlan>& com
             .evaluatorSemanticsVersion = 1,
             // Read from the live constant, not spelled as 1: the identity preparer cross-checks
             // this against the PLAN's own animation-sampling version, and the shell plan above is
-            // built with the plan definition's defaults. Task S5 moved that number to 2, and a
+            // built with the plan definition's defaults. TEXT-2 moves that number to 5, and a
             // literal here would have to be chased on every future bump.
             .animationSamplingSemanticsVersion = runtime::kAnimationSamplingSemanticsVersion,
             .imagePrimitiveSemanticsVersion = 1};

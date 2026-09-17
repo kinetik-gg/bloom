@@ -19,17 +19,15 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
 namespace bloom::runtime {
 
-// Deliberately NOT bumped when CompiledText was added (task S3). This number exists so an evaluator
-// can refuse a plan built under different semantics, and a compiled plan never crosses a process or
-// persistence boundary: it is compiled in-process from a document snapshot and retained only by
-// frames of that same process, so no version-1 plan can reach a build that has CompiledText, and no
-// plan carrying a CompiledText can reach a build that does not. What DOES cross such a boundary is
-// ProcessFrameIdentity, and the two numbers it carries for this are
+// A compiled plan never crosses a process or persistence boundary: it is compiled in-process from a
+// document snapshot and retained only by frames of that same process. What DOES cross such a
+// boundary is ProcessFrameIdentity, and the two numbers it carries for this are
 // kCpuCompositionEvaluatorSemanticsVersion and render::kCpuImagePrimitiveSemanticsVersion -- both
 // bumped by the text path, because both describe pixels a cached or exported frame may already
 // hold. Bump this one when the plan's own grammar changes in a way an existing plan value could
@@ -40,10 +38,11 @@ namespace bloom::runtime {
 // CompiledScalarParameter operands, because those three schemas are now animatable. A version-1
 // plan's `color` field was a Color4d; a version-2 plan's is a parameter that may index a curve
 // table, so the same field position means something different -- a field's meaning changing, not a
-// new alternative appearing. Both numbers below also enter ProcessFrameIdentity and therefore every
-// cached/exported frame digest (src/output/process_frame_semantic_identity.cpp), which is why the
-// identity goldens were re-derived in the same change.
-inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 4;
+// new alternative appearing. TEXT-2 bumps this number to 5 because CompiledText now carries
+// font-reference and box-layout grammar. Both numbers below also enter ProcessFrameIdentity and
+// therefore every cached/exported frame digest (src/output/process_frame_semantic_identity.cpp),
+// which is why the identity goldens were re-derived in the same change.
+inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 5;
 // Task S5 bumped this 1 -> 2: KeyframeInterpolation gained EaseInOut, so sampling can now produce a
 // value no version-1 sampler could, and the Color4 curve table added a third sampled value kind.
 inline constexpr std::uint32_t kAnimationSamplingSemanticsVersion = 2;
@@ -140,6 +139,14 @@ struct CompiledSolid {
 // about curves. Each value carries its own parameter identity so a diagnostic can name the exact
 // parameter that failed, exactly as CompiledSolid does.
 struct CompiledTextLayout {
+    CompiledTextLayout() = default;
+    CompiledTextLayout(document::ParameterId alignmentParameterId,
+                       const std::int64_t alignmentValue, CompiledScalarParameter lineHeightValue,
+                       CompiledScalarParameter letterSpacingValue,
+                       std::optional<ValueOutputIndex> drivenAlignmentValue = {})
+        : alignmentId(alignmentParameterId), alignment(alignmentValue), lineHeight(lineHeightValue),
+          letterSpacing(letterSpacingValue), drivenAlignment(drivenAlignmentValue) {}
+
     document::ParameterId alignmentId;
     std::int64_t alignment = 0;
     CompiledScalarParameter lineHeight;
@@ -148,6 +155,16 @@ struct CompiledTextLayout {
     // See CompiledText::drivenContent for why a kind that cannot interpolate carries its driver
     // beside its authored value rather than as a third alternative of a typed operand.
     std::optional<ValueOutputIndex> drivenAlignment{};
+    document::ParameterId boxId;
+    document::Vec2d box{};
+    document::ParameterId wrapId;
+    bool wrap = false;
+    document::ParameterId verticalAlignmentId;
+    std::int64_t verticalAlignment = 0;
+    document::ParameterId anchorModeId;
+    std::int64_t anchorMode = 0;
+    document::ParameterId overflowId;
+    std::int64_t overflow = 0;
     friend bool operator==(const CompiledTextLayout&, const CompiledTextLayout&) = default;
 };
 
@@ -214,6 +231,16 @@ struct CompiledShape {
 };
 
 struct CompiledText {
+    CompiledText() = default;
+    CompiledText(document::NodeId source, document::ParameterId contentParameter,
+                 std::string authoredContent, CompiledScalarParameter authoredSize,
+                 CompiledColorParameter authoredColor, CompiledTextLayout authoredLayout,
+                 std::optional<ValueOutputIndex> contentDriver = {},
+                 render::EmbeddedFace authoredFace = render::EmbeddedFace::DejaVuSans)
+        : sourceNodeId(source), contentParameterId(contentParameter),
+          content(std::move(authoredContent)), size(authoredSize), color(authoredColor),
+          layout(authoredLayout), drivenContent(contentDriver), face(authoredFace) {}
+
     document::NodeId sourceNodeId;
     document::ParameterId contentParameterId;
     std::string content;
@@ -241,6 +268,8 @@ struct CompiledText {
     // boundary for old text-source nodes, which lower to this default and therefore retain the
     // pre-FONT-1 DejaVu Sans pixels exactly.
     render::EmbeddedFace face = render::EmbeddedFace::DejaVuSans;
+    document::AssetId fontAssetId;
+    render::TextFont font = render::EmbeddedFace::DejaVuSans;
 
     friend bool operator==(const CompiledText&, const CompiledText&) = default;
 };

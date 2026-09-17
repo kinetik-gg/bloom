@@ -5,14 +5,28 @@
 namespace bloom::document {
 namespace {
 bool validLocator(const AssetLocator& locator) {
-    return locator.kind == "file" && locator.portability == "project-relative" &&
-           !locator.path.empty() && locator.path.size() <= 4096 && locator.path.front() != '/' &&
-           locator.path.find('\\') == std::string::npos &&
-           locator.path.find(':') == std::string::npos &&
-           locator.path.find('\0') == std::string::npos && core::isValidUtf8(locator.path) &&
-           locator.relinkHint.starts_with("file:") && locator.relinkHint.size() <= 16384 &&
-           locator.relinkHint.find('\0') == std::string::npos &&
-           core::isValidUtf8(locator.relinkHint);
+    if (locator.kind == "file") {
+        return locator.portability == "project-relative" && !locator.path.empty() &&
+               locator.path.size() <= 4096 && locator.path.front() != '/' &&
+               locator.path.find('\\') == std::string::npos &&
+               locator.path.find(':') == std::string::npos &&
+               locator.path.find('\0') == std::string::npos && core::isValidUtf8(locator.path) &&
+               locator.relinkHint.starts_with("file:") && locator.relinkHint.size() <= 16384 &&
+               locator.relinkHint.find('\0') == std::string::npos &&
+               core::isValidUtf8(locator.relinkHint);
+    }
+    if (locator.kind == "font" && locator.portability == "builtin") {
+        return locator.path.size() <= 4096 && locator.relinkHint.starts_with("font:") &&
+               locator.relinkHint.size() <= 16384 && core::isValidUtf8(locator.path) &&
+               core::isValidUtf8(locator.relinkHint);
+    }
+    if (locator.kind == "font" && locator.portability == "system") {
+        return !locator.path.empty() && locator.path.size() <= 4096 &&
+               std::filesystem::path(locator.path).is_absolute() &&
+               core::isValidUtf8(locator.path) && locator.relinkHint.starts_with("file:") &&
+               locator.relinkHint.size() <= 16384 && core::isValidUtf8(locator.relinkHint);
+    }
+    return false;
 }
 } // namespace
 ValidationResult AssetRecord::validate() const {
@@ -21,7 +35,14 @@ ValidationResult AssetRecord::validate() const {
         result.add(ValidationCode::InvalidId, "id", "Asset ID must not be zero");
     if (!validLocator(locator))
         result.add(ValidationCode::InvalidValue, "locator", "Invalid asset locator");
-    if (kind == AssetKind::Audio) {
+    if (kind == AssetKind::Font) {
+        if (fontFamily.empty() || fontStyle.empty() || fontFamily.size() > 1024 ||
+            fontStyle.size() > 1024 || !core::isValidUtf8(fontFamily) ||
+            !core::isValidUtf8(fontStyle))
+            result.add(ValidationCode::InvalidValue, "font", "Invalid font face metadata");
+        if (!manifest.members.empty() || !manifest.gaps.empty() || !manifest.pattern.empty())
+            result.add(ValidationCode::InvalidValue, "manifest", "A font asset has no manifest");
+    } else if (kind == AssetKind::Audio) {
         if (rate < 8000 || rate > 384000 || channels == 0 || channels > 32 || frames == 0 ||
             duration <= core::RationalTime{})
             result.add(ValidationCode::InvalidValue, "audio", "Invalid audio descriptor");
@@ -31,7 +52,12 @@ ValidationResult AssetRecord::validate() const {
     if (interpretation.colorSpace > AssetColorSpace::Raw ||
         interpretation.alphaAssociation > AssetAlphaAssociation::Premultiplied)
         result.add(ValidationCode::InvalidValue, "interpretation", "Invalid image interpretation");
-    if (kind == AssetKind::Image) {
+    if (kind == AssetKind::Font) {
+        if (interpretation.colorSpace != AssetColorSpace::Auto ||
+            interpretation.alphaAssociation != AssetAlphaAssociation::Straight)
+            result.add(ValidationCode::InvalidValue, "interpretation",
+                       "A font asset has no image interpretation");
+    } else if (kind == AssetKind::Image) {
         if (!manifest.members.empty() || !manifest.gaps.empty() || !manifest.pattern.empty())
             result.add(ValidationCode::InvalidValue, "manifest",
                        "A still image has no sequence manifest");

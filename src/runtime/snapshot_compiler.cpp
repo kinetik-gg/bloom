@@ -8,11 +8,16 @@
 #include <bloom/runtime/curve_compilation.hpp>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+#include <limits>
 #include <map>
+#include <new>
 #include <optional>
 #include <queue>
 #include <string>
@@ -218,6 +223,16 @@ class CompilePass final {
                                               std::move(detail)};
         diagnostics_.emplace(diagnosticKey(diagnostic), std::move(diagnostic));
         hasUnsupported_ = true;
+    }
+
+    void addWarning(const runtime::CompileDiagnosticCode code,
+                    runtime::CompileSubject diagnosticSubject, std::string summary,
+                    std::string detail) {
+        diagnosticSubject.compositionId = request_.compositionId;
+        runtime::CompileDiagnostic diagnostic{code, runtime::DiagnosticSeverity::Warning,
+                                              std::move(diagnosticSubject), std::move(summary),
+                                              std::move(detail)};
+        diagnostics_.emplace(diagnosticKey(diagnostic), std::move(diagnostic));
     }
 
 #include "snapshot_compiler_mute.ipp"
@@ -756,7 +771,10 @@ class CompilePass final {
             return;
         }
         if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
-            if (!hasValueKind(constant->value, definition.valueKind)) {
+            const bool legacyTextFont =
+                definition.schemaKey == document::kTextFontParameterSchemaKey &&
+                std::holds_alternative<std::int64_t>(constant->value);
+            if (!hasValueKind(constant->value, definition.valueKind) && !legacyTextFont) {
                 auto diagnosticSubject = subject(node.id, "parameter." + definition.role);
                 diagnosticSubject.parameterId = parameter->id;
                 addFailure(runtime::CompileDiagnosticCode::ParameterValueKindMismatch,

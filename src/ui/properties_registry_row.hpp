@@ -5,8 +5,10 @@
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/shape.hpp>
+#include <bloom/platform/font_catalog.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <vector>
 class QLineEdit;
 class QPlainTextEdit;
 namespace bloom::ui {
@@ -47,6 +49,8 @@ class PropertiesRegistryRow final : public QWidget {
 
   private:
     void commit();
+    void populateFontSelector();
+    void pollFontCatalogue();
     [[nodiscard]] double displayScale() const;
     bool eventFilter(QObject* watched, QEvent* event) override;
     CompositionSession& session_;
@@ -56,6 +60,7 @@ class PropertiesRegistryRow final : public QWidget {
     std::array<kit::KValueField*, 4> fields_{};
     kit::KRadioGroup* segments_ = nullptr;
     kit::KDropdown* selector_ = nullptr;
+    std::vector<platform::FontFace> fontFaces_;
     kit::KSlider* slider_ = nullptr;
     kit::KSwitch* toggle_ = nullptr;
     kit::KColorChip* color_ = nullptr;

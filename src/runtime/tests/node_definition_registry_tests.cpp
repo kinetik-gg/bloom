@@ -135,11 +135,11 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
         registry.find(document::kTextSourceNodeType, document::kTextSourceNodeSchemaVersion);
     // ADAPTED (task S3): Text was NodeLoweringKind::Unsupported while no portable CPU glyph
     // rasterizer existed. It now has its own lowering, so the contract pinned here is its parameter
-    // shape -- content, then size, then color, layout, and a defaulted font selector.
+    // shape -- content, then size, then color, typography, font reference, and box layout.
     expectations.expect(text != nullptr && text->lowering == runtime::NodeLoweringKind::Text,
                         "Text is a lowered capability with its own compiled operation");
     expectations.expect(
-        text != nullptr && text->parameters.size() == 7 &&
+        text != nullptr && text->parameters.size() == 12 &&
             text->parameters[0].role == document::kTextParameterRole &&
             text->parameters[0].schemaKey == document::kTextParameterSchemaKey &&
             text->parameters[0].valueKind == runtime::ParameterValueKind::String &&
@@ -151,17 +151,18 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             text->parameters[2].valueKind == runtime::ParameterValueKind::Color4d &&
             text->parameters[6].role == document::kTextFontParameterRole &&
             text->parameters[6].schemaKey == document::kTextFontParameterSchemaKey &&
-            text->parameters[6].valueKind == runtime::ParameterValueKind::Integer &&
+            text->parameters[6].valueKind == runtime::ParameterValueKind::String &&
             !text->parameters[6].required && !text->parameters[6].supportsAnimation,
-        "the text schema includes a defaulted, non-animatable font selector");
-    expectations.expect(text != nullptr && text->parameters.size() == 7 &&
-                            text->parameters[1].defaultValue ==
-                                document::ParameterValue{document::kDefaultTextSizePixels} &&
-                            text->parameters[2].defaultValue ==
-                                document::ParameterValue{core::Color4d{1.0, 1.0, 1.0, 1.0}} &&
-                            text->parameters[6].defaultValue ==
-                                document::ParameterValue{document::kDefaultTextFontValue},
-                        "a new text layer defaults to 72 px opaque white and DejaVu Sans");
+        "the text schema includes a defaulted, non-animatable font reference");
+    expectations.expect(
+        text != nullptr && text->parameters.size() == 12 &&
+            text->parameters[1].defaultValue ==
+                document::ParameterValue{document::kDefaultTextSizePixels} &&
+            text->parameters[2].defaultValue ==
+                document::ParameterValue{core::Color4d{1.0, 1.0, 1.0, 1.0}} &&
+            text->parameters[6].defaultValue ==
+                document::ParameterValue{std::string(document::kDefaultTextFontReference)},
+        "a new text layer defaults to 72 px opaque white and a DejaVu Sans reference");
     const auto* layer =
         registry.find(document::kLayerOutputNodeType, document::kLayerOutputNodeSchemaVersion);
     // ADAPTED (task S4): the Layer Output schema grew from two parameters to five, so this
@@ -177,7 +178,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                 [](const auto& parameter) { return parameter.supportsAnimation; }) &&
             !layer->parameters[5].supportsAnimation && solid != nullptr &&
             solid->parameters.front().supportsAnimation && text != nullptr &&
-            text->parameters.size() == 7 && !text->parameters[0].supportsAnimation &&
+            text->parameters.size() == 12 && !text->parameters[0].supportsAnimation &&
             text->parameters[1].supportsAnimation && text->parameters[2].supportsAnimation,
         "animation support is an explicit per-parameter evaluator capability");
     const auto declarationMatchesSchema = [](const auto& definition) {

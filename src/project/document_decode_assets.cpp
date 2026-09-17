@@ -120,6 +120,17 @@ bool audio(const JsonValue& node, DecodeState& state, const std::string& path,
     out.frames = *parsedFrames.value();
     return decodeRationalTimeValue(*fields[3], state, path, out.duration);
 }
+bool font(const JsonValue& node, DecodeState& state, const std::string& path,
+          document::AssetRecord& out) {
+    constexpr std::array<std::string_view, 3> keys{"family", "style", "faceIndex"};
+    std::vector<const JsonValue*> fields;
+    if (!matchOrderedMembers(node, keys, false, state, path, fields) ||
+        !text(*fields[0], state, path, out.fontFamily) ||
+        !text(*fields[1], state, path, out.fontStyle) ||
+        !number(*fields[2], state, path, out.fontIndex))
+        return false;
+    return true;
+}
 } // namespace
 bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& path,
                   std::vector<document::AssetRecord>& out) {
@@ -141,14 +152,22 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
             !digest(*fields[3], state, path, asset.contentDigest))
             return false;
         if (asset.id.value() <= previous ||
-            (kind != "image" && kind != "sequence" && kind != "audio")) {
+            (kind != "image" && kind != "sequence" && kind != "audio" && kind != "font")) {
+            state.fail(DocumentDecodeError::DomainViolation, path);
+            return false;
+        }
+        // Font assets arrive with document 1.15; 1.14 carries path values but no font kind, so an
+        // earlier minor naming one is a domain violation rather than a tolerated unknown. Mirrors
+        // the `path` constant's own minor gate in document_decode_composition.cpp.
+        if (kind == "font" && state.documentMinor < 15) {
             state.fail(DocumentDecodeError::DomainViolation, path);
             return false;
         }
         previous = asset.id.value();
         asset.kind = kind == "image"      ? document::AssetKind::Image
                      : kind == "sequence" ? document::AssetKind::Sequence
-                                          : document::AssetKind::Audio;
+                     : kind == "audio"    ? document::AssetKind::Audio
+                                          : document::AssetKind::Font;
         constexpr std::array<std::string_view, 2> interpretationKeys{"colorSpace",
                                                                      "alphaAssociation"};
         std::vector<const JsonValue*> interpretation;
@@ -165,7 +184,13 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
         }
         asset.interpretation = {static_cast<document::AssetColorSpace>(space),
                                 static_cast<document::AssetAlphaAssociation>(alpha)};
-        if (asset.kind == document::AssetKind::Audio) {
+        if (asset.kind == document::AssetKind::Font) {
+            const auto* fontNode = value.findMember("font");
+            if (fontNode == nullptr || !font(*fontNode, state, path, asset)) {
+                state.fail(DocumentDecodeError::DomainViolation, path);
+                return false;
+            }
+        } else if (asset.kind == document::AssetKind::Audio) {
             const auto* audioNode = value.findMember("audio");
             if (audioNode == nullptr || !audio(*audioNode, state, path, asset)) {
                 state.fail(DocumentDecodeError::DomainViolation, path);

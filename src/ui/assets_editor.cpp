@@ -187,24 +187,31 @@ void AssetsEditor::rebuild() {
     }
     for (const auto& asset : session_.snapshot().project().assets()) {
         auto* item = new QTreeWidgetItem(tree_);
-        const auto name = asset.kind == document::AssetKind::Sequence
+        const bool font = asset.kind == document::AssetKind::Font;
+        const auto name = font
+                              ? asset.fontFamily + (asset.fontStyle.empty() ? std::string{}
+                                                                            : " " + asset.fontStyle)
+                          : asset.kind == document::AssetKind::Sequence
                               ? asset.manifest.pattern
                               : asset.locator.path.substr(asset.locator.path.find_last_of('/') + 1);
         const bool audio = asset.kind == document::AssetKind::Audio;
         item->setText(0, QString::fromStdString(name));
-        item->setText(1, asset.kind == document::AssetKind::Sequence
+        item->setText(1, font ? tr("Font · %1").arg(QString::fromStdString(asset.fontStyle))
+                         : asset.kind == document::AssetKind::Sequence
                              ? tr("Sequence [%1]").arg(asset.manifest.members.size())
                          : audio ? tr("Audio · %1 s").arg(asset.duration.toSeconds(), 0, 'f', 2)
                                  : tr("Image"));
         item->setData(0, Qt::UserRole + 2, QVariant::fromValue<qulonglong>(asset.id.value()));
         const auto* controller = session_.assetController();
         const bool missing = controller && controller->missing(asset.id);
-        item->setToolTip(0, missing ? (audio ? tr("Missing audio — Relink in Assets")
-                                             : tr("Missing image — Relink in Assets"))
+        item->setToolTip(0, missing ? (font    ? tr("Missing font — Relink in Assets")
+                                       : audio ? tr("Missing audio — Relink in Assets")
+                                               : tr("Missing image — Relink in Assets"))
                                     : QString::fromStdString(asset.locator.path));
         auto* row = new kit::KRow(tree_);
         row->setObjectName(QStringLiteral("assetsRow"));
-        row->setName(item->text(0), asset.kind == document::AssetKind::Sequence
+        row->setName(item->text(0), font ? kit::IconId::Text
+                                    : asset.kind == document::AssetKind::Sequence
                                         ? kit::IconId::Images
                                     : audio ? kit::IconId::Audio
                                             : kit::IconId::Image);
@@ -212,8 +219,11 @@ void AssetsEditor::rebuild() {
         kind->setElidedText(item->text(1));
         auto* warning = new kit::KIconButton(row);
         warning->setObjectName(QStringLiteral("assetsMissingGlyph"));
+        warning->setFixedSize(kit::px(kit::Size::ToggleCell), kit::px(kit::Size::ToggleCell));
         warning->setIcon(kit::icon(kit::IconId::Warning, kit::IconRole::Chrome, kit::Color::Warn));
-        warning->setToolTip(audio ? tr("Missing audio") : tr("Missing image"));
+        warning->setToolTip(font    ? tr("Missing font")
+                            : audio ? tr("Missing audio")
+                                    : tr("Missing image"));
         warning->setVisible(missing);
         row->setCells({}, nullptr, {kind}, warning);
         row->setAttribute(Qt::WA_TransparentForMouseEvents);

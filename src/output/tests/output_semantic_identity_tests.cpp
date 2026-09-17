@@ -35,8 +35,9 @@
 #include <vector>
 
 namespace {
-// Plan grammar 4 adds the Layer Output parent reference. Identity digests are independently
-// derived for plan 4, animation 2, evaluator 6 and primitives 5; pixel digests are unchanged.
+// TEXT-2 plan grammar 5 adds the box-layout operands to CompiledText. Identity digests are
+// independently re-derived for plan 5, animation 2, evaluator 6 and primitives 5; pixel digests
+// are unchanged.
 
 namespace color = bloom::color;
 namespace core = bloom::core;
@@ -50,29 +51,21 @@ using namespace std::chrono_literals;
 
 // An independent byte-oriented oracle assembled every frozen field with explicit big-endian
 // packing. These lengths and SHA-256 values cover the complete tiny PNG and EXR preimages.
-// Re-derived for the task S4 semantics-version bumps (CPU composition evaluator 3 -> 4, CPU image
-// primitive 3 -> 4). Both are frozen fields of the process-frame semantic identity these preimages
-// embed, so every digest below changed while every preimage LENGTH stayed the same. The values come
-// from the same kind of independent byte-oriented oracle that produced the originals -- a
-// standalone script that packs each frozen field itself with explicit big-endian integers and
-// hashes the result, linking no Bloom code -- and that oracle was validated by reproducing EVERY
-// previously checked-in golden set byte for byte when fed its own version numbers.
-//
-// Task S5 moved all four: kCompiledCompositionPlanSemanticsVersion and
-// kAnimationSamplingSemanticsVersion are both 2 now (a solid's colour and a text layer's size and
-// colour became typed operands; EaseInOut and Color4 curves changed what sampling can produce), and
-// both integers are hashed into the process-frame identity preimage. Every preimage LENGTH below is
-// unchanged -- no frozen field was added, removed, or reordered -- which is exactly why only the
-// digests move.
-// Merged goldens: the blend-mode slice moved the evaluator and primitive semantics to 5 while the
-// animation slice moved the plan to 2 and sampling to 2; the values below are the oracle's output
-// for that combination (evaluator/primitive 5, plan 2, animation 2), never the implementation's.
+// Re-derived ONCE for the TEXT-2 / SHAPE-1 integration, which lands both lanes' semantics steps
+// together: the compiled plan is 5 (TEXT-2's CompiledText box-layout operands), the CPU
+// composition evaluator is 7 and the CPU image primitive 6 (SHAPE-1's path rasterization and
+// shape-source evaluation), and animation sampling stays 2. All four are frozen fields of the
+// process-frame semantic identity these preimages embed, so every digest below moves while every
+// preimage LENGTH is unchanged -- no frozen field was added, removed, or reordered. The values are
+// the standalone oracle's output for that exact combination, never the implementation's, and that
+// oracle was validated by reproducing every previously checked-in golden set byte for byte --
+// including both lanes' own pre-merge sets -- when fed their version numbers.
 constexpr std::string_view kExpectedPngAnalysisDigest =
-    "011208b67d5fb5a53861af84fd0708388f30eecc0035069820b4d0d0c13ea827";
+    "18df4caab537ce1f06bd040ea90ba16309ae3d689d1bfdf7bc04f4f612c59df2";
 constexpr std::string_view kExpectedPngOutputDigest =
-    "ea06e23d2cca9351f1eb0a928eb573fe18059e5f6dc8e1911fc5508a3f8af5eb";
+    "e1d2f92a346b54461775533b920d20e34d7df96c27d43ed13824c7bc787f9b4d";
 constexpr std::string_view kExpectedExrOutputDigest =
-    "a58588b13897000b2dd721237eef631a432e59f0ed4da2a42c2684063869860e";
+    "8f48f99a8d21bcc844ac93a919f7acfed81644d31bdf8d87b2291b5f100dc298";
 constexpr std::uint64_t kExpectedPngPreimageBytes = 669;
 constexpr std::uint64_t kExpectedExrPreimageBytes = 567;
 

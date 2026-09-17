@@ -27,6 +27,15 @@ struct TextLayoutOptions final {
     double lineHeight = 1.0;
     double letterSpacing = 0.0;
     bool multiline = true;
+    double boxWidth = 0.0;
+    double boxHeight = 0.0;
+    bool wrap = false;
+    enum class VerticalAlignment : std::uint8_t { Top, Middle, Bottom };
+    enum class AnchorMode : std::uint8_t { Left, Center, Right };
+    enum class Overflow : std::uint8_t { Clip, Grow };
+    VerticalAlignment verticalAlignment = VerticalAlignment::Top;
+    AnchorMode anchorMode = AnchorMode::Left;
+    Overflow overflow = Overflow::Clip;
 };
 
 class TextRasterParameters final {
@@ -80,6 +89,9 @@ class TextCoverageBitmap final {
     // whose glyphs are all blank (a run of spaces). Never an error.
     [[nodiscard]] static TextCoverageBitmap empty() noexcept { return {}; }
 
+    TextCoverageBitmap(std::int64_t originX, std::int64_t originY, std::uint32_t width,
+                       std::uint32_t height, std::vector<std::uint8_t> coverage) noexcept;
+
     // Rasterizes `utf8Content` with the selected embedded face (bloom/render/embedded_fonts.hpp).
     // Fails with InvalidParameter for content that is not well-formed UTF-8, InvalidState if the
     // embedded font does not parse (a build-integrity
@@ -90,6 +102,11 @@ class TextCoverageBitmap final {
     rasterizeEmbeddedText(EmbeddedFace face, std::string_view utf8Content,
                           TextRasterParameters parameters, std::size_t coverageByteLimit,
                           TextLayoutOptions layout = {});
+
+    [[nodiscard]] static ImageResult<TextCoverageBitmap>
+    rasterizeText(const TextFont& font, std::string_view utf8Content,
+                  TextRasterParameters parameters, std::size_t coverageByteLimit,
+                  TextLayoutOptions layout = {});
 
     [[nodiscard]] bool hasCoverage() const noexcept { return !coverage_.empty(); }
     [[nodiscard]] std::int64_t originX() const noexcept { return originX_; }
@@ -105,8 +122,6 @@ class TextCoverageBitmap final {
 
   private:
     TextCoverageBitmap() noexcept = default;
-    TextCoverageBitmap(std::int64_t originX, std::int64_t originY, std::uint32_t width,
-                       std::uint32_t height, std::vector<std::uint8_t> coverage) noexcept;
 
     std::int64_t originX_ = 0;
     std::int64_t originY_ = 0;

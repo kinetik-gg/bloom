@@ -6,7 +6,9 @@
 
 class QAbstractItemModel;
 class QFrame;
+class QLineEdit;
 class QListView;
+class QVBoxLayout;
 
 namespace bloom::ui::kit {
 
@@ -31,6 +33,8 @@ class KDropdownPopup final : public QWidget {
     explicit KDropdownPopup(QWidget* parent = nullptr);
 
     void setModel(QAbstractItemModel* model);
+    void setSearchable(bool searchable);
+    [[nodiscard]] bool searchable() const noexcept { return searchable_; }
     [[nodiscard]] QListView* view() const noexcept;
 
     // The rounded, bordered SurfaceRaised container. Everything the artist sees is inside it; the
@@ -57,7 +61,11 @@ class KDropdownPopup final : public QWidget {
     void applyRoundedListMask();
 
     QFrame* surface_ = nullptr;
+    QVBoxLayout* inner_ = nullptr;
     QListView* view_ = nullptr;
+    QLineEdit* search_ = nullptr;
+    QAbstractItemModel* sourceModel_ = nullptr;
+    bool searchable_ = false;
 };
 
 } // namespace bloom::ui::kit

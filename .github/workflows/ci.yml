@@ -32,7 +32,8 @@ jobs:
       - name: Install LLVM 22 quality tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes ca-certificates cmake curl gnupg ninja-build
+          sudo apt-get install --yes ca-certificates cmake curl gnupg ninja-build \
+            libfontconfig1-dev
           llvm_key=$(mktemp)
           trap 'rm -f "$llvm_key"' EXIT
           curl --fail --silent --show-error --location \

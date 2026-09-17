@@ -21,15 +21,16 @@ inline constexpr std::string_view kSolidWidthParameterSchemaKey = "bloom.solid.w
 inline constexpr std::string_view kSolidHeightParameterSchemaKey = "bloom.solid.height";
 inline constexpr std::string_view kTextParameterSchemaKey = "bloom.text.content";
 inline constexpr std::string_view kTextSizeParameterSchemaKey = "bloom.text.size";
-// Font: 0 = DejaVu Sans Book, 1 = Inter Regular, 2 = Inter Medium, 3 = Inter SemiBold. The
-// numeric mapping is kept here, in the document module, so persisted text values do not depend on
-// the render module's enum type or on a UI spelling.
+// Font references are family|style|digest strings. The old integer values remain accepted while
+// opening FONT-1 documents, but new documents never persist a closed face enum.
 inline constexpr std::string_view kTextFontParameterSchemaKey = "bloom.text.font";
 inline constexpr std::int64_t kTextFontDejaVuSans = 0;
 inline constexpr std::int64_t kTextFontInterRegular = 1;
 inline constexpr std::int64_t kTextFontInterMedium = 2;
 inline constexpr std::int64_t kTextFontInterSemiBold = 3;
 inline constexpr std::int64_t kTextFontChoiceCount = 4;
+inline constexpr std::string_view kDefaultTextFontReference =
+    "DejaVu Sans|Book|7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954";
 inline constexpr std::int64_t kDefaultTextFontValue = kTextFontDejaVuSans;
 // Alignment: 0 = Left, 1 = Center, 2 = Right. Line height is a positive em multiplier;
 // letter spacing is a finite number of full-resolution pixels between adjacent glyphs.
@@ -37,6 +38,12 @@ inline constexpr std::string_view kTextAlignmentParameterSchemaKey = "bloom.text
 inline constexpr std::string_view kTextLineHeightParameterSchemaKey = "bloom.text.line-height";
 inline constexpr std::string_view kTextLetterSpacingParameterSchemaKey =
     "bloom.text.letter-spacing";
+inline constexpr std::string_view kTextBoxParameterSchemaKey = "bloom.text.box";
+inline constexpr std::string_view kTextWrapParameterSchemaKey = "bloom.text.wrap";
+inline constexpr std::string_view kTextVerticalAlignmentParameterSchemaKey =
+    "bloom.text.vertical-alignment";
+inline constexpr std::string_view kTextAnchorModeParameterSchemaKey = "bloom.text.anchor-mode";
+inline constexpr std::string_view kTextOverflowParameterSchemaKey = "bloom.text.overflow";
 inline constexpr std::string_view kTextColorParameterSchemaKey = "bloom.text.color";
 inline constexpr std::string_view kPositionParameterSchemaKey = "bloom.transform.position";
 // Offset from the centre of the source's local content bounds, in full-resolution pixels.

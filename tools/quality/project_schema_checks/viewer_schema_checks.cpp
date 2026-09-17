@@ -342,6 +342,58 @@ void validateDocumentSchemaV1_14(const json::Value& schema) {
                  "path value discriminator arm");
     validateReferences(schema, schema);
 }
+void validateDocumentSchemaV1_15(const json::Value& schema) {
+    using namespace schema_detail;
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-document:1.15",
+                       "document id");
+    requireExact(schema.at("properties").at("schemaVersion"),
+                 R"({"$ref":"#/$defs/fixedVersion-1.15"})", "document version");
+    requireExact(schema.at("$defs").at("fixedVersion-1.15").at("properties").at("minor"),
+                 R"({"const":15})", "minor");
+    // 1.15 is additive over 1.14: the path value family SHAPE-1 froze at 1.14 is still referenced
+    // under its own introduction version, and nothing about it moved.
+    requireExact(
+        schema.at("$defs").at("pathValue-1.14"),
+        R"({"type":"object","required":["kind","anchors","closed"],"properties":{"kind":{"const":"path"},"anchors":{"type":"array","maxItems":4096,"items":{"$ref":"#/$defs/pathAnchor-1.14"}},"closed":{"type":"boolean"}},"unevaluatedProperties":true})",
+        "bounded path value");
+    const auto& alternatives = requireArray(schema.at("$defs").at("parameterValue-1.4").at("oneOf"),
+                                            "parameter value alternatives");
+    if (alternatives.empty())
+        fail("path value alternative missing");
+    requireExact(alternatives.back(), R"({"$ref":"#/$defs/pathValue-1.14"})",
+                 "path value discriminator arm");
+    // What 1.15 itself adds: the Font asset kind, its descriptor, and the locator portabilities a
+    // builtin or system face needs (an embedded face carries no filesystem path, hence minLength
+    // 0).
+    requireExact(
+        schema.at("$defs").at("font-1.15"),
+        R"({"type":"object","required":["family","style","faceIndex"],"properties":{"family":{"type":"string","minLength":1,"maxLength":1024},"style":{"type":"string","minLength":1,"maxLength":1024},"faceIndex":{"$ref":"#/$defs/unsigned32"}},"unevaluatedProperties":false})",
+        "font descriptor");
+    requireExact(
+        schema.at("$defs").at("assetLocator-1.11"),
+        R"({"type":"object","required":["kind","portability","path","relinkHint"],"properties":{"kind":{"enum":["file","font"]},"portability":{"enum":["project-relative","builtin","system"]},"path":{"type":"string","minLength":0,"maxLength":4096},"relinkHint":{"type":"string","pattern":"^(?:file|font):","maxLength":16384}},"unevaluatedProperties":false})",
+        "font-aware asset locator");
+    const auto& asset = schema.at("$defs").at("asset-1.11");
+    requireExact(asset.at("properties").at("kind"),
+                 R"({"enum":["image","sequence","audio","font"]})", "asset kind vocabulary");
+    requireExact(asset.at("properties").at("font"), R"({"$ref":"#/$defs/font-1.15"})",
+                 "asset font payload");
+    requireExact(
+        asset.at("allOf"),
+        R"([{"if":{"properties":{"kind":{"const":"font"}}},"then":{"required":["font"]}}])",
+        "font assets require their descriptor");
+    validateReferences(schema, schema);
+}
+void validateManifestSchemaV1_15(const json::Value& schema) {
+    using namespace schema_detail;
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-manifest:1.15",
+                       "manifest id");
+    requireExact(schema.at("$defs").at("document-1.0").at("properties").at("schemaVersion"),
+                 R"({"$ref":"#/$defs/fixedVersion-1.15"})", "manifest document version");
+    requireExact(schema.at("$defs").at("fixedVersion-1.15").at("properties").at("minor"),
+                 R"({"const":15})", "manifest minor");
+    validateReferences(schema, schema);
+}
 void validateManifestSchemaV1_14(const json::Value& schema) {
     using namespace schema_detail;
     requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-manifest:1.14",

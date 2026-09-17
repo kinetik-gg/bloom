@@ -359,7 +359,14 @@ enum class ScalarDomain : std::uint8_t {
                        (hasValidScalarCurveReference(text.layout.lineHeight, plan, index,
                                                      failure) &&
                         hasValidScalarCurveReference(text.layout.letterSpacing, plan, index,
-                                                     failure));
+                                                     failure) &&
+                        text.layout.box.x >= 0.0 && text.layout.box.y >= 0.0 &&
+                        text.layout.box.x <= 1'000'000.0 && text.layout.box.y <= 1'000'000.0 &&
+                        std::isfinite(text.layout.box.x) && std::isfinite(text.layout.box.y) &&
+                        ((text.layout.box.x == 0.0) == (text.layout.box.y == 0.0)) &&
+                        text.layout.verticalAlignment >= 0 && text.layout.verticalAlignment <= 2 &&
+                        text.layout.anchorMode >= 0 && text.layout.anchorMode <= 2 &&
+                        text.layout.overflow >= 0 && text.layout.overflow <= 1);
             },
             [&plan, index, &failure](const CompiledLayerOutput& layer) {
                 const auto sourcesAnImage = [&plan, index, &layer] {
@@ -1009,6 +1016,19 @@ template <typename Value>
                                        ScalarDomain::Positive, operationSubject) &&
                         registerScalar(text.layout.letterSpacing, "letter-spacing",
                                        ScalarDomain::Unbounded, operationSubject));
+                    if (text.layout.boxId.isValid())
+                        static_cast<void>(registerParameter(text.layout.boxId, operationSubject));
+                    if (text.layout.wrapId.isValid())
+                        static_cast<void>(registerParameter(text.layout.wrapId, operationSubject));
+                    if (text.layout.verticalAlignmentId.isValid())
+                        static_cast<void>(
+                            registerParameter(text.layout.verticalAlignmentId, operationSubject));
+                    if (text.layout.anchorModeId.isValid())
+                        static_cast<void>(
+                            registerParameter(text.layout.anchorModeId, operationSubject));
+                    if (text.layout.overflowId.isValid())
+                        static_cast<void>(
+                            registerParameter(text.layout.overflowId, operationSubject));
 
                     // Every check is re-run here rather than trusted from compilation: the
                     // evaluator validates the plan it is handed, because a plan can also
@@ -1631,6 +1651,23 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                      step.layout.drivenAlignment);
                             parameter(step.layout.lineHeight);
                             parameter(step.layout.letterSpacing);
+                            key.add(step.layout.box);
+                            key.add(step.layout.wrap);
+                            key.add(step.layout.verticalAlignment);
+                            key.add(step.layout.anchorMode);
+                            key.add(step.layout.overflow);
+                            std::visit(
+                                [&key](const auto& font) {
+                                    using Font = std::decay_t<decltype(font)>;
+                                    if constexpr (std::is_same_v<Font, render::EmbeddedFace>) {
+                                        key.add(font);
+                                    } else {
+                                        const auto digest = font.contentDigest.toLowercaseHex();
+                                        key.add(std::string(digest.data(), digest.size()));
+                                        key.add(font.faceIndex);
+                                    }
+                                },
+                                step.font);
 
                             parameter(step.size);
                             parameter(step.color);
@@ -1933,12 +1970,23 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                "Text layout is invalid", {}, operationSubject);
                                 return;
                             }
-                            layout = {static_cast<render::TextAlignment>(alignment->value),
-                                      lineHeight->value,
-                                      letterSpacing->value * resolved.horizontalScale, true};
+                            layout.alignment = static_cast<render::TextAlignment>(alignment->value);
+                            layout.lineHeight = lineHeight->value;
+                            layout.letterSpacing = letterSpacing->value * resolved.horizontalScale;
+                            layout.multiline = true;
+                            layout.boxWidth = text.layout.box.x * resolved.horizontalScale;
+                            layout.boxHeight = text.layout.box.y * resolved.verticalScale;
+                            layout.wrap = text.layout.wrap;
+                            layout.verticalAlignment =
+                                static_cast<render::TextLayoutOptions::VerticalAlignment>(
+                                    text.layout.verticalAlignment);
+                            layout.anchorMode = static_cast<render::TextLayoutOptions::AnchorMode>(
+                                text.layout.anchorMode);
+                            layout.overflow = static_cast<render::TextLayoutOptions::Overflow>(
+                                text.layout.overflow);
 
-                            auto coverage = render::TextCoverageBitmap::rasterizeEmbeddedText(
-                                text.face, content->value, *rasterParameters.value(),
+                            auto coverage = render::TextCoverageBitmap::rasterizeText(
+                                text.font, content->value, *rasterParameters.value(),
                                 remainingPixelBudget(), layout);
                             if (!coverage) {
                                 operationFailure =
@@ -1951,11 +1999,64 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             auto descriptor = resolved.imageDescriptor;
 
                             {
-                                if (!coverage.value()->hasCoverage())
+                                const bool hasBox = layout.boxWidth > 0.0 && layout.boxHeight > 0.0;
+                                if (!coverage.value()->hasCoverage() && !hasBox)
                                     return;
-                                const auto window = render::ImageWindow::create(
-                                    coverage.value()->originX(), coverage.value()->originY(),
-                                    coverage.value()->width(), coverage.value()->height());
+                                const auto extent =
+                                    [](const double value) -> std::optional<std::uint64_t> {
+                                    if (!std::isfinite(value) || value <= 0.0 ||
+                                        value > static_cast<double>(
+                                                    std::numeric_limits<std::uint32_t>::max()))
+                                        return std::nullopt;
+                                    return static_cast<std::uint64_t>(std::ceil(value));
+                                };
+                                auto originX = coverage.value()->originX();
+                                auto originY = coverage.value()->originY();
+                                auto width = static_cast<std::uint64_t>(coverage.value()->width());
+                                auto height =
+                                    static_cast<std::uint64_t>(coverage.value()->height());
+                                if (hasBox) {
+                                    const auto boxWidth = extent(layout.boxWidth);
+                                    const auto boxHeight = extent(layout.boxHeight);
+                                    if (!boxWidth || !boxHeight) {
+                                        operationFailure = diagnostic(
+                                            EvaluationDiagnosticCode::InvalidParameter,
+                                            "Text box bounds are invalid", {}, operationSubject);
+                                        return;
+                                    }
+                                    const auto boxRight = static_cast<std::int64_t>(*boxWidth);
+                                    const auto boxBottom = static_cast<std::int64_t>(*boxHeight);
+                                    if (layout.overflow ==
+                                        render::TextLayoutOptions::Overflow::Grow) {
+                                        const auto contentRight =
+                                            coverage.value()->originX() +
+                                            static_cast<std::int64_t>(coverage.value()->width());
+                                        const auto contentBottom =
+                                            coverage.value()->originY() +
+                                            static_cast<std::int64_t>(coverage.value()->height());
+                                        originX =
+                                            std::min<std::int64_t>(0, coverage.value()->originX());
+                                        originY =
+                                            std::min<std::int64_t>(0, coverage.value()->originY());
+                                        const auto right = std::max(boxRight, contentRight);
+                                        const auto bottom = std::max(boxBottom, contentBottom);
+                                        width = static_cast<std::uint64_t>(right - originX);
+                                        height = static_cast<std::uint64_t>(bottom - originY);
+                                    } else {
+                                        originX = 0;
+                                        originY = 0;
+                                        width = *boxWidth;
+                                        height = *boxHeight;
+                                    }
+                                }
+                                const auto window =
+                                    render::ImageWindow::create(originX, originY, width, height);
+                                if (!window) {
+                                    operationFailure =
+                                        imageDiagnostic(*window.error(), operationSubject,
+                                                        "Text bounds are invalid");
+                                    return;
+                                }
                                 const auto local = render::Rgba32fImageDescriptor::create(
                                     *window.value(), descriptor.displayWindow(),
                                     descriptor.pixelAspect());

@@ -16,7 +16,14 @@
     if (!state.ok(writer.memberName("assets")) || !state.ok(writer.beginArray())) return false;
     for (const auto& asset : state.project.assets()) {
         if (!state.ok(writer.beginObject()) || !emitNamedId(state,"id",asset.id.value()) ||
-            !state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue(asset.kind == bloom::document::AssetKind::Image ? "image" : asset.kind == bloom::document::AssetKind::Sequence ? "sequence" : "audio")) ||
+            !state.ok(writer.memberName("kind")) ||
+            !state.ok(writer.stringValue(asset.kind == bloom::document::AssetKind::Image
+                                             ? "image"
+                                             : asset.kind == bloom::document::AssetKind::Sequence
+                                                   ? "sequence"
+                                                   : asset.kind == bloom::document::AssetKind::Audio
+                                                         ? "audio"
+                                                         : "font")) ||
             !state.ok(writer.memberName("locator")) || !emitAssetLocator(state, asset.locator) ||
             !state.ok(writer.memberName("contentDigest")) || !emitAssetDigest(state, asset.contentDigest) ||
             !state.ok(writer.memberName("interpretation")) || !state.ok(writer.beginObject()) ||
@@ -41,6 +48,16 @@
             if (!state.ok(writer.stringValue(text.view()))) return false;
         }
         if (!state.ok(writer.endArray()) || !state.ok(writer.endObject())) return false;
+        if (asset.kind == bloom::document::AssetKind::Font) {
+            if (!state.ok(writer.memberName("font")) || !state.ok(writer.beginObject()) ||
+                !state.ok(writer.memberName("family")) ||
+                !state.ok(writer.stringValue(asset.fontFamily)) ||
+                !state.ok(writer.memberName("style")) ||
+                !state.ok(writer.stringValue(asset.fontStyle)) ||
+                !state.ok(writer.memberName("faceIndex")) ||
+                !state.ok(writer.integerValue(asset.fontIndex)) || !state.ok(writer.endObject()))
+                return false;
+        }
         if (asset.kind == bloom::document::AssetKind::Audio) {
             if (!state.ok(writer.memberName("audio")) || !state.ok(writer.beginObject()) ||
                 !state.ok(writer.memberName("rate")) || !state.ok(writer.integerValue(asset.rate)) ||

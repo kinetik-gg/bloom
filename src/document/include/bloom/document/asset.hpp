@@ -5,11 +5,12 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/document/validation.hpp>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
 namespace bloom::document {
-enum class AssetKind : std::uint8_t { Image, Sequence, Audio };
+enum class AssetKind : std::uint8_t { Image, Sequence, Audio, Font };
 enum class AssetColorSpace : std::uint8_t { Auto, Srgb, Linear, Raw };
 enum class AssetAlphaAssociation : std::uint8_t { Straight, Premultiplied };
 struct AssetInterpretation {
@@ -53,6 +54,12 @@ struct AssetRecord {
     std::uint32_t channels = 0;
     std::uint64_t frames = 0;
     core::RationalTime duration{};
+    // Font metadata is captured when the artist picks a face. It keeps the Properties and Assets
+    // surfaces useful even when the system font later disappears; the renderer still verifies the
+    // locator bytes against contentDigest at compile time.
+    std::string fontFamily;
+    std::string fontStyle;
+    std::uint32_t fontIndex = 0;
     [[nodiscard]] ValidationResult validate() const;
     friend bool operator==(const AssetRecord&, const AssetRecord&) = default;
 };

@@ -27,6 +27,12 @@ inline constexpr std::string_view kAddTextLayerTextParameterOutput = "textParame
 inline constexpr std::string_view kAddTextLayerSizeParameterOutput = "sizeParameter";
 inline constexpr std::string_view kAddTextLayerColorParameterOutput = "colorParameter";
 inline constexpr std::string_view kAddTextLayerFontParameterOutput = "fontParameter";
+inline constexpr std::string_view kAddTextLayerBoxParameterOutput = "boxParameter";
+inline constexpr std::string_view kAddTextLayerWrapParameterOutput = "wrapParameter";
+inline constexpr std::string_view kAddTextLayerVerticalAlignmentParameterOutput =
+    "verticalAlignmentParameter";
+inline constexpr std::string_view kAddTextLayerAnchorModeParameterOutput = "anchorModeParameter";
+inline constexpr std::string_view kAddTextLayerOverflowParameterOutput = "overflowParameter";
 inline constexpr std::string_view kAddTextLayerPositionParameterOutput = "positionParameter";
 inline constexpr std::string_view kAddTextLayerAnchorParameterOutput = "anchorParameter";
 inline constexpr std::string_view kAddTextLayerScaleParameterOutput = "scaleParameter";
@@ -104,8 +110,9 @@ class AddSolidLayer final : public Operation {
 // authoring value, the same encoding a solid color uses; both default to the registered text
 // definition's own defaults so a caller that only has content does not have to restate them.
 //
-// The font is a non-animatable integer selector whose default is the text source definition's
-// DejaVu Sans face.
+// The font is a non-animatable Font-asset reference whose default is the embedded DejaVu Sans
+// face. Box layout controls are created as ordinary source parameters so every authoring surface
+// can project the same registry rows.
 class AddTextLayer final : public Operation {
   public:
     AddTextLayer(document::CompositionId compositionId, std::string name, std::string text)

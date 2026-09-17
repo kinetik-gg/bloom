@@ -36,6 +36,8 @@ std::string_view compileDiagnosticCodeId(const CompileDiagnosticCode code) noexc
         return "bloom.runtime.compile.invalid-parameter-override";
     case CompileDiagnosticCode::UnsupportedParameterOverride:
         return "bloom.runtime.compile.unsupported-parameter-override";
+    case CompileDiagnosticCode::FontAssetUnavailable:
+        return "bloom.runtime.compile.font-asset-unavailable";
     case CompileDiagnosticCode::TopologyInvariant:
         return "bloom.runtime.compile.topology-invariant";
     }

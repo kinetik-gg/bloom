@@ -116,7 +116,7 @@ measurements here. The [workspace layout contract](../architecture/workspace-lay
 persistence and migration. The existing application menu bar and native window frame remain.
 
 Properties remains a command-backed projection: colour values use the existing colour picker,
-text uses the supported render face (DejaVu Sans), driven rows navigate upstream, and anchor
+text uses a command-backed embedded-first font reference selected from the system catalogue, driven rows navigate upstream, and anchor
 placement resolves immutable local bounds asynchronously. UI typography is independent of the
 rendered text face. Viewer guides, backgrounds, channel inspection and zoom remain presentation
 state; they never change cached composition pixels or export semantics.

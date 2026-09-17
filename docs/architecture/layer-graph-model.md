@@ -189,7 +189,7 @@ produce diagnostics when a requested image cannot be represented or allocated.
 Solid v2, Text v2, Layer v4, and Merge v2 are the only built-in definitions for these kinds.
 Every layer uses this local-bounds contract. Project I/O rejects an unsupported node version with
 `UnsupportedNodeVersion`, naming the kind and version; it never injects parameters, rewrites node
-versions, or converts placement. The document schema floor is 1.13.
+versions, or converts placement. The document schema floor is 1.15.
 
 ### Blending
 
@@ -398,16 +398,29 @@ remain preservable. Existing ports are Image. Known incompatible socket kinds ar
 
 ### Text And Mute Lowering
 
-Text version 2 has seven parameters in authoring order: content (String), size (Scalar em pixels,
+Text version 2 has twelve parameters in authoring order: content (String), size (Scalar em pixels,
 default 72), color (straight Color4d, default opaque white), alignment (Integer: Left=0, Center=1,
 Right=2; default Left), line-height (positive Scalar em multiplier, default 1), letter-spacing
-(Scalar pixels between adjacent glyphs, default 0), and font (Integer: DejaVu Sans=0, Inter
-Regular=1, Inter Medium=2, Inter SemiBold=3; default DejaVu Sans). Size, color, line height and
-letter spacing are animatable. Content, alignment and font are discrete; font is non-animatable.
-The four faces are embedded in the Qt-free render module. A version-2 node authored before the font
-binding existed decodes with the definition's DejaVu Sans default. Newlines start lines, CR is
-ignored for CRLF, and alignment places each line within the maximum line advance. Wrapping, shaping
-and bidi remain deferred.
+(Scalar pixels between adjacent glyphs, default 0), font (String reference), box (Vec2 width and
+height in pixels, default zero), wrap (Boolean), vertical alignment (Top/Middle/Bottom), anchor
+mode (Left/Center/Right), and overflow (Clip/Grow). Size, color, line height and letter spacing are
+animatable. Content, alignment, font, box, wrap, vertical alignment, anchor mode and overflow are
+non-animatable values.
+
+Font is a `family|style|digest` reference represented by a stable `AssetId` of a `Font` asset once
+picked. The asset stores family, style, face index, content digest and a portable locator; it never
+stores font bytes. Embedded faces are listed before system faces in the asynchronous platform font
+catalogue. A missing or digest-changed system face warns and falls back to DejaVu Sans while the
+Font asset remains visible to Assets for relink or replacement. A version-2 node authored before
+the font binding existed decodes with the definition's DejaVu Sans reference.
+
+When box width and height are both non-zero, the box is the local bounds and horizontal alignment
+positions each line within it. `wrap` breaks at word boundaries inside the box width; explicit
+newlines always win. Vertical alignment positions the line stack at the top, middle or bottom of
+the box. Clip keeps the box bounds and clips coverage; Grow lets content extend the coverage window.
+With no box, point text retains content-sized bounds, alignment acts within the widest line as
+before, and anchor mode selects the left, centre or right baseline anchor. Shaping and bidi remain
+deferred.
 
 Source rows are projected from the current registry in Nodes and Timeline. The color role
 is node-local and shared with Solid; the text color schema retains its distinct global identity.

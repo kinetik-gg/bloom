@@ -233,8 +233,25 @@ constantMatchesSchema(const std::string_view schemaKey,
         return value && *value >= 0 && *value <= 2;
     }
     if (schemaKey == kTextFontParameterSchemaKey) {
+        if (const auto* reference = std::get_if<std::string>(&constant.value))
+            return bloom::core::isValidUtf8(*reference) && reference->size() <= 4096;
         const auto* value = std::get_if<std::int64_t>(&constant.value);
         return value && *value >= 0 && *value < kTextFontChoiceCount;
+    }
+    if (schemaKey == kTextBoxParameterSchemaKey) {
+        const auto* value = std::get_if<Vec2d>(&constant.value);
+        return value != nullptr && std::isfinite(value->x) && std::isfinite(value->y) &&
+               value->x >= 0.0 && value->y >= 0.0 && value->x <= 1'000'000.0 &&
+               value->y <= 1'000'000.0 &&
+               ((value->x == 0.0 && value->y == 0.0) || (value->x > 0.0 && value->y > 0.0));
+    }
+    if (schemaKey == kTextWrapParameterSchemaKey)
+        return std::holds_alternative<bool>(constant.value);
+    if (schemaKey == kTextVerticalAlignmentParameterSchemaKey ||
+        schemaKey == kTextAnchorModeParameterSchemaKey ||
+        schemaKey == kTextOverflowParameterSchemaKey) {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr && *value >= 0 && *value <= 2;
     }
     if (schemaKey == kTextLineHeightParameterSchemaKey ||
         schemaKey == kTextLetterSpacingParameterSchemaKey) {

@@ -71,9 +71,10 @@ an editorial sequence.
 The first useful Bloom should demonstrate this complete workflow:
 
 1. Create a project and composition.
-2. Add a deterministic solid source, or a text source that renders on the portable CPU path with one
-   embedded face, multiline alignment, line height, and letter spacing. Text shaping and font asset
-   identity remain deferred.
+2. Add a deterministic solid source, or a text source that renders on the portable CPU path with an
+   embedded or system font reference, multiline alignment, line height, letter spacing, and an
+   optional box layout. Text shaping remains a later extension; font portability is reference-based
+   and never embeds source bytes in the project.
 3. Represent it coherently in the layer timeline and canonical node graph.
 4. Synchronize selection across viewer, timeline, graph, and properties.
 5. Edit transform and opacity through properties and direct viewer manipulation.

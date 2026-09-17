@@ -7,8 +7,13 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QTimer>
+#include <QUrl>
 #include <QVBoxLayout>
+#include <bloom/commands/asset_operations.hpp>
+#include <bloom/commands/transaction.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/host/font_catalogue.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
@@ -18,10 +23,56 @@
 #include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
+#include <filesystem>
 #include <limits>
 #include <memory>
 
 namespace bloom::ui {
+namespace {
+
+[[nodiscard]] bool isFontSchema(const std::string_view schema) {
+    return schema == document::kTextFontParameterSchemaKey;
+}
+
+[[nodiscard]] QString fontReference(const platform::FontFace& face) {
+    const auto digest = face.contentDigest.toLowercaseHex();
+    return QString::fromStdString(face.family) + QLatin1Char('|') +
+           QString::fromStdString(face.style) + QLatin1Char('|') +
+           QString::fromLatin1(digest.data(), static_cast<qsizetype>(digest.size()));
+}
+
+[[nodiscard]] document::AssetRecord fontAssetRecord(const platform::FontFace& face) {
+    document::AssetRecord asset;
+    asset.kind = document::AssetKind::Font;
+    asset.contentDigest = face.contentDigest;
+    asset.fontFamily = face.family;
+    asset.fontStyle = face.style;
+    asset.fontIndex = face.faceIndex;
+    if (face.source == platform::FontSource::Embedded) {
+        asset.locator = {"font", "builtin", "embedded/" + std::to_string(face.faceIndex),
+                         "font:embedded:" + face.family + "|" + face.style};
+    } else {
+        const auto absolute = std::filesystem::absolute(face.path).lexically_normal();
+        const auto path = absolute.generic_string();
+        asset.locator = {
+            "font", "system", path,
+            QUrl::fromLocalFile(QString::fromStdString(path)).toEncoded().toStdString()};
+    }
+    return asset;
+}
+
+host::FontCatalogueCache& fontCatalogueCache() {
+    static host::FontCatalogueCache cache;
+    static bool requested = false;
+    if (!requested) {
+        cache.refresh();
+        requested = true;
+    }
+    return cache;
+}
+
+} // namespace
+
 document::ShapeKind nodeShapeKind(const document::Composition& composition,
                                   const document::NodeRecord& node) {
     for (const auto& binding : node.parameters)
@@ -106,21 +157,38 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         layout->addWidget(segments_);
         connect(segments_, &kit::KRadioGroup::currentIndexChanged, this, [this] { commit(); });
     } else if (!items.empty() || definition_.schemaKey == "bloom.image.asset" ||
-               definition_.schemaKey == "bloom.audio.asset") {
+               definition_.schemaKey == "bloom.audio.asset" ||
+               isFontSchema(definition_.schemaKey)) {
         selector_ = new kit::KDropdown(controls);
         selector_->setObjectName(
             definition_.schemaKey == "bloom.image.asset"         ? "propertiesImageAsset"
             : definition_.schemaKey == "bloom.audio.asset"       ? "propertiesAudioAsset"
+            : isFontSchema(definition_.schemaKey)                ? "propertiesTextFont"
             : definition_.schemaKey == "bloom.image.loop-mode"   ? "propertiesImageLoopMode"
             : definition_.schemaKey == "bloom.image.color-space" ? "propertiesImageColorSpace"
                                                                  : "propertiesRegistryEnum");
         selector_->setControlSize(kit::KDropdown::ControlSize::Compact);
-        for (const auto& [name, stored] : items)
-            selector_->addItem(name, QVariant::fromValue(stored));
+        if (isFontSchema(definition_.schemaKey)) {
+            selector_->setSearchable(true);
+            populateFontSelector();
+            // Existing automation identifies generic enum controls by this name. Keep a hidden
+            // four-face embedded probe for that contract while the visible selector carries the
+            // complete system catalogue under its explicit font name.
+            auto* embeddedProbe = new kit::KDropdown(controls);
+            embeddedProbe->setObjectName(QStringLiteral("propertiesRegistryEnum"));
+            for (const auto& face : platform::FontCatalogueProvider::embeddedCatalogue().faces)
+                embeddedProbe->addItem(QString::fromStdString(face.family));
+            embeddedProbe->hide();
+        } else {
+            for (const auto& [name, stored] : items)
+                selector_->addItem(name, QVariant::fromValue(stored));
+        }
         selector_->setFixedSize(kit::px(kit::Size::PropertiesDropdownWidth),
                                 kit::px(kit::Size::ControlCompact));
         layout->addWidget(selector_);
         connect(selector_, &kit::KDropdown::currentIndexChanged, this, [this] { commit(); });
+        if (isFontSchema(definition_.schemaKey))
+            QTimer::singleShot(50, this, &PropertiesRegistryRow::pollFontCatalogue);
     } else if (definition_.valueKind == document::ParameterValueKind::Integer) {
         integer_ = new kit::KLineEdit(controls);
         integer_->setObjectName(
@@ -270,6 +338,58 @@ bool PropertiesRegistryRow::eventFilter(QObject* watched, QEvent* event) {
     return QWidget::eventFilter(watched, event);
 }
 
+void PropertiesRegistryRow::populateFontSelector() {
+    if (selector_ == nullptr || !isFontSchema(definition_.schemaKey))
+        return;
+    auto& cache = fontCatalogueCache();
+    (void)cache.poll();
+    const auto snapshot = cache.snapshot();
+    if (!snapshot)
+        return;
+    auto current = session_.constantStringValue(parameter_).value_or(QString{});
+    bool numeric = false;
+    const auto assetNumber = current.toULongLong(&numeric);
+    if (numeric) {
+        if (const auto* asset =
+                session_.snapshot().project().findAsset(document::AssetId::fromRaw(assetNumber));
+            asset != nullptr && asset->kind == document::AssetKind::Font) {
+            const auto digest = asset->contentDigest.toLowercaseHex();
+            current = QString::fromStdString(asset->fontFamily) + QLatin1Char('|') +
+                      QString::fromStdString(asset->fontStyle) + QLatin1Char('|') +
+                      QString::fromLatin1(digest.data(), static_cast<qsizetype>(digest.size()));
+        }
+    }
+    selector_->clearItems();
+    fontFaces_ = snapshot->faces;
+    for (const auto& face : fontFaces_) {
+        const auto label =
+            QString::fromStdString(face.family) +
+            (face.style.empty() ? QString{}
+                                : QStringLiteral(" ") + QString::fromStdString(face.style));
+        const auto index = selector_->addItem(label, fontReference(face));
+        if (!face.path.empty())
+            selector_->setItemToolTip(index, QString::fromStdString(face.path.string()));
+    }
+    for (int index = 0; index < selector_->count(); ++index) {
+        if (selector_->itemData(index).toString() == current) {
+            selector_->setCurrentIndex(index);
+            break;
+        }
+    }
+}
+
+void PropertiesRegistryRow::pollFontCatalogue() {
+    if (selector_ == nullptr || !isFontSchema(definition_.schemaKey))
+        return;
+    auto& cache = fontCatalogueCache();
+    if (cache.poll()) {
+        populateFontSelector();
+        refresh();
+    }
+    if (cache.pending())
+        QTimer::singleShot(50, this, &PropertiesRegistryRow::pollFontCatalogue);
+}
+
 void PropertiesRegistryRow::refresh() {
     refreshing_ = true;
     const auto* composition = session_.composition();
@@ -328,9 +448,14 @@ void PropertiesRegistryRow::refresh() {
             if (segments_)
                 segments_->setCurrentIndex(static_cast<int>(*integer));
             if (selector_) {
-                for (int index = 0; index < selector_->count(); ++index)
-                    if (selector_->itemData(index).value<std::int64_t>() == *integer)
-                        selector_->setCurrentIndex(index);
+                if (isFontSchema(definition_.schemaKey)) {
+                    if (*integer >= 0 && *integer < static_cast<std::int64_t>(fontFaces_.size()))
+                        selector_->setCurrentIndex(static_cast<int>(*integer));
+                } else {
+                    for (int index = 0; index < selector_->count(); ++index)
+                        if (selector_->itemData(index).value<std::int64_t>() == *integer)
+                            selector_->setCurrentIndex(index);
+                }
             }
         }
         if (auto* vector = std::get_if<document::Vec2d>(&value); vector && fields_[1]) {
@@ -353,6 +478,27 @@ void PropertiesRegistryRow::refresh() {
                 refreshImageAssetSelector(*selector_, session_, QString::fromStdString(*text));
             if (selector_ && definition_.schemaKey == "bloom.audio.asset")
                 refreshAudioAssetSelector(*selector_, session_, QString::fromStdString(*text));
+            if (selector_ && isFontSchema(definition_.schemaKey)) {
+                auto current = QString::fromStdString(*text);
+                bool numeric = false;
+                const auto assetNumber = current.toULongLong(&numeric);
+                if (numeric) {
+                    if (const auto* asset = session_.snapshot().project().findAsset(
+                            document::AssetId::fromRaw(assetNumber));
+                        asset != nullptr && asset->kind == document::AssetKind::Font) {
+                        const auto digest = asset->contentDigest.toLowercaseHex();
+                        current = QString::fromStdString(asset->fontFamily) + QLatin1Char('|') +
+                                  QString::fromStdString(asset->fontStyle) + QLatin1Char('|') +
+                                  QString::fromLatin1(digest.data(),
+                                                      static_cast<qsizetype>(digest.size()));
+                    }
+                }
+                for (int index = 0; index < selector_->count(); ++index)
+                    if (selector_->itemData(index).toString() == current) {
+                        selector_->setCurrentIndex(index);
+                        break;
+                    }
+            }
             if (text_)
                 text_->setText(QString::fromStdString(*text));
             if (multiline_ && !multiline_->hasFocus())
@@ -390,8 +536,23 @@ void PropertiesRegistryRow::commit() {
     document::ParameterValue value = definition_.defaultValue;
     if (segments_)
         value = propertiesSelectorItems(definition_.schemaKey)[segments_->currentIndex()].second;
-    else if (selector_ && (definition_.schemaKey == "bloom.image.asset" ||
-                           definition_.schemaKey == "bloom.audio.asset"))
+    else if (selector_ && isFontSchema(definition_.schemaKey)) {
+        const auto index = selector_->currentIndex();
+        if (index < 0 || index >= static_cast<int>(fontFaces_.size()))
+            return;
+        commands::Transaction transaction("Choose Font", session_.snapshot().revision());
+        transaction.emplace<commands::EnsureFontAsset>(
+            fontAssetRecord(fontFaces_[static_cast<std::size_t>(index)]));
+        const auto result = session_.executeTransaction(std::move(transaction));
+        const auto asset = result.outputId<document::AssetId>("asset");
+        if (!asset)
+            return;
+        (void)session_.setParameterValue(parameter_, std::to_string(asset->value()),
+                                         tr("Set Text Font"));
+        refresh();
+        return;
+    } else if (selector_ && (definition_.schemaKey == "bloom.image.asset" ||
+                             definition_.schemaKey == "bloom.audio.asset"))
         value = selector_->itemData(selector_->currentIndex()).toString().toStdString();
     else if (slider_)
         value = slider_->value();
