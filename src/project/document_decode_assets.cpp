@@ -1,6 +1,7 @@
 #include "document_decode_internal.hpp"
 #include <array>
 #include <bloom/document/asset.hpp>
+#include <bloom/document/persisted_text.hpp>
 #include <limits>
 
 namespace bloom::project::detail {
@@ -197,11 +198,104 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
                 return false;
             }
         }
+        if (state.documentMinor >= 16) {
+            auto allKeys = std::vector<std::string_view>(keys.begin(), keys.end());
+            if (asset.kind == document::AssetKind::Font)
+                allKeys.push_back("font");
+            if (asset.kind == document::AssetKind::Audio)
+                allKeys.push_back("audio");
+            allKeys.push_back("name");
+            if (value.findMember("folder"))
+                allKeys.push_back("folder");
+            allKeys.push_back("tags");
+            allKeys.push_back("order");
+            if (!matchOrderedMembers(value, allKeys, false, state, path, fields) ||
+                value.objectMembers().size() != allKeys.size()) {
+                state.fail(DocumentDecodeError::UnknownMember, path);
+                return false;
+            }
+            const auto* nameNode = value.findMember("name");
+            if (!text(*nameNode, state, path, asset.name) ||
+                !document::isValidHumanFacingName(asset.name)) {
+                state.fail(DocumentDecodeError::DomainViolation, path);
+                return false;
+            }
+            if (const auto* folderNode = value.findMember("folder")) {
+                document::AssetFolderId folderId;
+                if (!decodeObjectId(*folderNode, state, path, folderId))
+                    return false;
+                asset.folder = folderId;
+            }
+            const auto* tags = value.findMember("tags");
+            if (tags->kind() != JsonValueKind::Array || tags->arrayElements().size() > 64) {
+                state.fail(DocumentDecodeError::DomainViolation, path);
+                return false;
+            }
+            for (const auto& tagNode : tags->arrayElements()) {
+                std::string tag;
+                if (!text(tagNode, state, path, tag))
+                    return false;
+                asset.tags.push_back(std::move(tag));
+            }
+            const auto orderText = value.findMember("order")->asString();
+            const auto order = parseCanonicalAllocatorHighWater(orderText.value_or(""));
+            if (!order) {
+                state.fail(DocumentDecodeError::DomainViolation, path);
+                return false;
+            }
+            asset.order = *order.value();
+        } else {
+            auto legacyKeys = std::vector<std::string_view>(keys.begin(), keys.end());
+            if (asset.kind == document::AssetKind::Font)
+                legacyKeys.push_back("font");
+            if (asset.kind == document::AssetKind::Audio)
+                legacyKeys.push_back("audio");
+            if (!matchOrderedMembers(value, legacyKeys, false, state, path, fields) ||
+                value.objectMembers().size() != legacyKeys.size()) {
+                state.fail(DocumentDecodeError::UnknownMember, path);
+                return false;
+            }
+            asset.name = document::defaultAssetName(asset);
+            asset.order = out.size();
+        }
         if (!asset.validate().ok()) {
             state.fail(DocumentDecodeError::DomainViolation, path);
             return false;
         }
         out.push_back(std::move(asset));
+    }
+    return true;
+}
+bool decodeAssetFolders(const JsonValue& node, DecodeState& state, const std::string& path,
+                        std::vector<document::AssetFolder>& out) {
+    if (node.kind() != JsonValueKind::Array || node.arrayElements().size() > 100000) {
+        state.fail(DocumentDecodeError::DomainViolation, path);
+        return false;
+    }
+    std::uint64_t previous = 0;
+    for (const auto& value : node.arrayElements()) {
+        std::vector<std::string_view> keys{"id", "name"};
+        if (value.findMember("parent"))
+            keys.push_back("parent");
+        std::vector<const JsonValue*> fields;
+        document::AssetFolder folder;
+        if (!matchOrderedMembers(value, keys, false, state, path, fields) ||
+            !decodeObjectId(*fields[0], state, path, folder.id) ||
+            !text(*fields[1], state, path, folder.name))
+            return false;
+        if (value.objectMembers().size() != keys.size() || folder.id.value() <= previous ||
+            !document::isValidHumanFacingName(folder.name)) {
+            state.fail(DocumentDecodeError::DomainViolation, path);
+            return false;
+        }
+        previous = folder.id.value();
+        if (fields.size() == 3) {
+            document::AssetFolderId parent;
+            if (!decodeObjectId(*fields[2], state, path, parent))
+                return false;
+            folder.parent = parent;
+        }
+        out.push_back(std::move(folder));
     }
     return true;
 }

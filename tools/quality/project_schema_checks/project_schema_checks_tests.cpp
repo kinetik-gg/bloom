@@ -440,6 +440,38 @@ void testNodeGroupSchema(const std::filesystem::path& root, int& failures) {
                                          failures);
 }
 
+void testAssetOrganizationSchema(const std::filesystem::path& root, int& failures) {
+    using namespace bloom::quality;
+    const auto document = json::parseFile(root / "schemas/project/document-1.16.schema.json");
+    validateDocumentSchemaV1_16(document);
+    for (const auto* field : {"name", "folder", "tags", "order"}) {
+        auto missing = document;
+        eraseMember(path(missing, {"$defs", "asset-1.11", "properties"}), field);
+        expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_16(missing); },
+                                             "organization fields stay pinned", failures);
+    }
+    auto duplicateTags = document;
+    path(duplicateTags, {"$defs", "asset-1.11", "properties", "tags", "uniqueItems"}) =
+        Value(false);
+    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_16(duplicateTags); },
+                                         "tags stay unique", failures);
+    auto openFolder = document;
+    path(openFolder, {"$defs", "assetFolder-1.16", "unevaluatedProperties"}) = Value(true);
+    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_16(openFolder); },
+                                         "folder records remain closed", failures);
+    auto missingNamespace = document;
+    eraseMember(path(missingNamespace, {"$defs", "highestIssued-1.2", "properties"}),
+                "assetFolder");
+    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_16(missingNamespace); },
+                                         "folder allocator namespace stays pinned", failures);
+    auto manifest = json::parseFile(root / "schemas/project/manifest-1.16.schema.json");
+    validateManifestSchemaV1_16(manifest);
+    path(manifest, {"$defs", "fixedVersion-1.16", "properties", "minor", "const"}) =
+        json::parse("15");
+    expectTypedFailure<SchemaCheckError>([&] { validateManifestSchemaV1_16(manifest); },
+                                         "manifest minor stays 1.16", failures);
+}
+
 [[nodiscard]] auto parseRoot(const std::span<const char* const> arguments)
     -> std::filesystem::path {
     if (arguments.size() != 3U || std::string_view{arguments[1]} != "--root") {
@@ -464,6 +496,7 @@ auto main(const int count, const char* const* values) -> int {
         testDocument(document, failures);
         testNodeLayoutSchema(root, failures);
         testNodeGroupSchema(root, failures);
+        testAssetOrganizationSchema(root, failures);
         if (failures == 0) {
             std::cout << "Project schema checker self-tests passed\n";
         }

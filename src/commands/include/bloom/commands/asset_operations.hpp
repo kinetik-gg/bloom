@@ -6,6 +6,100 @@
 #include <vector>
 
 namespace bloom::commands {
+inline constexpr std::string_view kCreateAssetFolderOutput = "folder";
+class CreateAssetFolder final : public Operation {
+  public:
+    explicit CreateAssetFolder(std::string name, std::optional<document::AssetFolderId> parent = {})
+        : name_(std::move(name)), parent_(parent) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.asset.create-folder";
+    }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    std::string name_;
+    std::optional<document::AssetFolderId> parent_;
+};
+class RenameAssetFolder final : public Operation {
+  public:
+    RenameAssetFolder(document::AssetFolderId id, std::string name)
+        : id_(id), name_(std::move(name)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.asset.rename-folder";
+    }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::AssetFolderId id_;
+    std::string name_;
+};
+class RemoveAssetFolder final : public Operation {
+  public:
+    explicit RemoveAssetFolder(document::AssetFolderId id) : id_(id) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.asset.remove-folder";
+    }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::AssetFolderId id_;
+};
+class RenameAsset final : public Operation {
+  public:
+    RenameAsset(document::AssetId id, std::string name) : id_(id), name_(std::move(name)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.asset.rename"; }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::AssetId id_;
+    std::string name_;
+};
+// index addresses the destination's asset list AFTER removing all moved IDs. The caller's
+// ID order is retained; all affected folders receive contiguous positions. No graph is rewritten.
+class MoveAssets final : public Operation {
+  public:
+    MoveAssets(std::vector<document::AssetId> assets, std::optional<document::AssetFolderId> folder,
+               std::size_t index)
+        : assets_(std::move(assets)), folder_(folder), index_(index) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.asset.move"; }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    std::vector<document::AssetId> assets_;
+    std::optional<document::AssetFolderId> folder_;
+    std::size_t index_;
+};
+class SetAssetTags final : public Operation {
+  public:
+    SetAssetTags(std::vector<document::AssetId> assets, std::vector<std::string> tags)
+        : assets_(std::move(assets)), tags_(std::move(tags)) {}
+    SetAssetTags(document::AssetId asset, std::vector<std::string> tags)
+        : assets_{asset}, tags_(std::move(tags)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.asset.set-tags";
+    }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    std::vector<document::AssetId> assets_;
+    std::vector<std::string> tags_;
+};
+// A complete permutation of the assets in one folder (nullopt denotes the project root).
+class ReorderAssets final : public Operation {
+  public:
+    ReorderAssets(std::optional<document::AssetFolderId> folder,
+                  std::vector<document::AssetId> order)
+        : folder_(folder), order_(std::move(order)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.asset.reorder";
+    }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    std::optional<document::AssetFolderId> folder_;
+    std::vector<document::AssetId> order_;
+};
+
 class EnsureFontAsset final : public Operation {
   public:
     explicit EnsureFontAsset(document::AssetRecord asset) : asset_(std::move(asset)) {}

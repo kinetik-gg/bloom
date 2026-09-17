@@ -994,10 +994,12 @@ using document::SchemaVersion;
                                  DecodedDocumentEnvelope& out) {
     static constexpr std::array<std::string_view, 4> kKeys{"id", "name", "colorSettings",
                                                            "compositions"};
-    const std::vector<std::string_view> keys =
+    std::vector<std::string_view> keys =
         state.documentMinor >= 10
             ? std::vector<std::string_view>{"id", "name", "colorSettings", "compositions", "assets"}
             : std::vector<std::string_view>(kKeys.begin(), kKeys.end());
+    if (state.documentMinor >= 16 && node.findMember("assetFolders"))
+        keys.push_back("assetFolders");
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, true, state, path, members)) {
         return false;
@@ -1057,6 +1059,10 @@ using document::SchemaVersion;
     if (state.documentMinor >= 10 &&
         !detail::decodeAssets(*members[4], state, joinPath(path, "assets"), out.assets))
         return false;
+    if (members.size() > 5 &&
+        !detail::decodeAssetFolders(*members[5], state, joinPath(path, "assetFolders"),
+                                    out.assetFolders))
+        return false;
     return true;
 }
 
@@ -1089,12 +1095,15 @@ using document::SchemaVersion;
 // not exist has never issued a group id.
 [[nodiscard]] bool decodeHighestIssued(const JsonValue& node, DecodeState& state,
                                        const std::string& path, IdAllocatorHighWater& out) {
-    static constexpr std::array<std::string_view, 12> kKeys{
-        "composition",    "node",     "edge",          "layer",           "layerSlot", "parameter",
-        "animationCurve", "keyframe", "driverBinding", "extensionRecord", "nodeGroup", "asset"};
-    const auto keys = std::span(kKeys).first(state.documentMinor <= 1   ? 10U
-                                             : state.documentMinor < 10 ? 11U
-                                                                        : 12U);
+    static constexpr std::array<std::string_view, 13> kKeys{
+        "composition", "node",           "edge",       "layer",         "layerSlot",
+        "parameter",   "animationCurve", "keyframe",   "driverBinding", "extensionRecord",
+        "nodeGroup",   "asset",          "assetFolder"};
+    const auto keys = std::span(kKeys).first(
+        state.documentMinor <= 1 ? 10U
+        : state.documentMinor < 10
+            ? 11U
+            : (state.documentMinor >= 16 && node.findMember("assetFolder") ? 13U : 12U));
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, true, state, path, members)) {
         return false;
@@ -1125,6 +1134,10 @@ using document::SchemaVersion;
     }
     if (state.documentMinor >= 10 &&
         !decodeAllocatorHighWaterMember(*members[11], state, joinPath(path, "asset"), out.asset))
+        return false;
+    if (members.size() > 12 &&
+        !decodeAllocatorHighWaterMember(*members[12], state, joinPath(path, "assetFolder"),
+                                        out.assetFolder))
         return false;
     return decodeAllocatorHighWaterMember(*members[10], state, joinPath(path, "nodeGroup"),
                                           out.nodeGroup);
@@ -1638,7 +1651,7 @@ DocumentDecodeResult decodeDocumentEnvelope(const JsonValue& root) {
             ++compositionIndex;
         }
     }
-    if (schemaVersion.minor < kCanonicalDocumentSchemaVersionV1.minor) {
+    if (schemaVersion.minor < kMinimumDocumentSchemaVersionV1.minor) {
         return DocumentDecodeResult::failure(DocumentDecodeError::UnsupportedSchemaVersion,
                                              "/schemaVersion");
     }

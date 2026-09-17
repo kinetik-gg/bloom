@@ -164,6 +164,7 @@ struct DecodedDocumentEnvelope final {
     document::ColorSettings colorSettings;
     std::vector<DecodedComposition> compositions;
     std::vector<document::AssetRecord> assets;
+    std::vector<document::AssetFolder> assetFolders;
     document::IdAllocatorHighWater highWater;
     std::vector<document::ExtensionRecord> extensionRecords;
 

@@ -16,6 +16,7 @@ class CompositionSession;
 QString imageDimensionsText(const document::AssetRecord* asset);
 QString imageRangeText(const document::AssetRecord* asset);
 QString imageAssetDisplayName(const document::AssetRecord& asset);
+QString mediaLayerDisplayName(const CompositionSession& session, document::LayerId id);
 void refreshImageAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
                                const QString& stored);
 void refreshAudioAssetSelector(kit::KDropdown& selector, const CompositionSession& session,

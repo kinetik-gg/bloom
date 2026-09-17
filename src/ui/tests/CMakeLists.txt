@@ -877,3 +877,9 @@ bloom_add_test(
     TIMEOUT 90
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
+
+add_executable(bloom_assets_organization_test asset_organization_tests.cpp)
+target_include_directories(bloom_assets_organization_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_assets_organization_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_assets_organization_test)
+bloom_add_test(NAME bloom.ui.asset-organization COMMAND bloom_assets_organization_test LABELS unit ui)

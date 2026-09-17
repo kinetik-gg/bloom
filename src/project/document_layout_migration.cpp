@@ -1,5 +1,6 @@
 #include <bloom/project/document_migration.hpp>
 
+#include <bloom/document/asset.hpp>
 #include <bloom/document/node_layout.hpp>
 #include <bloom/project/canonical_decimal.hpp>
 #include <bloom/project/canonical_json_writer.hpp>
@@ -140,11 +141,14 @@ enum class Step {
     KeyframeHandles,
     LayerParenting,
     Paths,
-    TextCapability
+    TextCapability,
+    AssetOrganization
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
 [[nodiscard]] bool alreadyMigrated(const JsonValue& value, const Scope scope, const Step step) {
+    if (step == Step::AssetOrganization)
+        return scope == Scope::Project && value.findMember("assetFolders");
     if (step == Step::Images) {
         return (scope == Scope::Project && value.findMember("assets")) ||
                (scope == Scope::Composition && value.findMember("backgroundColor")) ||
@@ -200,7 +204,8 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::KeyframeHandles  ? "{\"major\":1,\"minor\":12}"
                            : step == Step::LayerParenting   ? "{\"major\":1,\"minor\":13}"
                            : step == Step::Paths            ? "{\"major\":1,\"minor\":14}"
-                                                            : "{\"major\":1,\"minor\":15}");
+                           : step == Step::TextCapability   ? "{\"major\":1,\"minor\":15}"
+                                                            : "{\"major\":1,\"minor\":16}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
                 return false;
@@ -212,6 +217,47 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
         } else if (scope == Scope::IdAllocation && member.key() == "highestIssued") {
             if (!descend(Scope::HighestIssued))
                 return false;
+        } else if (scope == Scope::Project && member.key() == "assets" &&
+                   step == Step::AssetOrganization) {
+            if (member.value().kind() != JsonValueKind::Array)
+                return false;
+            append(output, "[");
+            std::uint64_t index = 0;
+            for (const auto& asset : member.value().arrayElements()) {
+                if (asset.kind() != JsonValueKind::Object || asset.findMember("name") ||
+                    asset.findMember("folder") || asset.findMember("tags") ||
+                    asset.findMember("order"))
+                    return false;
+                if (index != 0)
+                    append(output, ",");
+                if (!copyValue(asset, output))
+                    return false;
+                output.pop_back();
+                const auto* locator = asset.findMember("locator");
+                const auto* path = locator ? locator->findMember("path") : nullptr;
+                if (!path || !path->asString())
+                    return false;
+                document::AssetRecord record;
+                record.locator.path = path->asString().value_or("");
+                if (const auto* portability = locator->findMember("portability"))
+                    record.locator.portability = portability->asString().value_or("");
+                if (const auto* font = asset.findMember("font")) {
+                    record.kind = document::AssetKind::Font;
+                    if (const auto* family = font->findMember("family"))
+                        record.fontFamily = family->asString().value_or("");
+                    if (const auto* style = font->findMember("style"))
+                        record.fontStyle = style->asString().value_or("");
+                }
+                append(output, ",\"name\":");
+                if (!quoted(output, document::defaultAssetName(record)))
+                    return false;
+                append(output, ",\"tags\":[],\"order\":");
+                const auto orderText = formatCanonicalUInt64(index++);
+                if (!quoted(output, orderText.view()))
+                    return false;
+                append(output, "}");
+            }
+            append(output, "]");
         } else if (scope == Scope::Project && member.key() == "compositions") {
             if (member.value().kind() != JsonValueKind::Array)
                 return false;
@@ -365,6 +411,13 @@ MigrationStepOutcome migrateTextCapabilityV1_14(const JsonValue& root, std::pmr:
                                                 Buffer& output) {
     if (!sourceVersionIs(root, "14") || !transform(root, Scope::Root, Step::TextCapability, output))
         return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateAssetOrganizationV1_15(const JsonValue& root,
+                                                   std::pmr::memory_resource*, Buffer& output) {
+    if (!sourceVersionIs(root, "15") ||
+        !transform(root, Scope::Root, Step::AssetOrganization, output))
+        return MigrationStepOutcome::failure("/project/assets");
     return MigrationStepOutcome::success();
 }
 } // namespace bloom::project

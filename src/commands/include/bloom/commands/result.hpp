@@ -41,7 +41,7 @@ using DurableObjectId =
     std::variant<document::CompositionId, document::NodeId, document::EdgeId, document::LayerId,
                  document::LayerSlotId, document::ParameterId, document::AnimationCurveId,
                  document::KeyframeId, document::DriverBindingId, document::NodeGroupId,
-                 document::AssetId>;
+                 document::AssetId, document::AssetFolderId>;
 
 struct OperationOutput {
     std::string name;

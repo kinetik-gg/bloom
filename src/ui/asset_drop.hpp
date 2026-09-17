@@ -6,6 +6,7 @@ class QWidget;
 class QGraphicsView;
 namespace bloom::ui {
 class CompositionSession;
+inline constexpr auto kCompositionMimeType = "application/x-bloom-composition";
 inline constexpr auto kAssetMimeType = "application/x-bloom-asset";
 [[nodiscard]] QByteArray assetMimePayload(const CompositionSession& session,
                                           document::AssetId asset);

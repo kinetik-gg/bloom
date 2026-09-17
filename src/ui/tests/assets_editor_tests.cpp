@@ -12,6 +12,7 @@
 #include <QMenu>
 #include <QPushButton>
 #include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QWidget>
 
 #include <cstdio>
@@ -60,7 +61,10 @@ int main(int argc, char** argv) {
                    "assets tree names the Name column");
     context.expect(tree->headerItem()->text(1) == QStringLiteral("Kind"),
                    "assets tree names the Kind column");
-    context.expect(tree->topLevelItemCount() == 1, "new project exposes one composition");
+    context.expect(tree->rootIsDecorated() && tree->topLevelItemCount() == 1 &&
+                       tree->topLevelItem(0)->text(0) == QStringLiteral("Compositions") &&
+                       tree->topLevelItem(0)->childCount() == 1,
+                   "new project exposes its composition under an expandable Compositions root");
     context.expect(editor.findChild<QMenu*>(QStringLiteral("assetsViewMenu")) != nullptr,
                    "assets View menu exists");
     context.expect(editor.findChild<QMenu*>(QStringLiteral("assetsAddMenu")) != nullptr,
@@ -71,8 +75,7 @@ int main(int argc, char** argv) {
     auto* newFolder = editor.findChild<QAction*>(QStringLiteral("assetsNewFolderAction"));
     auto* import =
         editor.findChild<bloom::ui::kit::KIconButton*>(QStringLiteral("assetsImportButton"));
-    context.expect(newFolder != nullptr && !newFolder->isEnabled(),
-                   "header New Folder is disabled");
+    context.expect(newFolder != nullptr && newFolder->isEnabled(), "header New Folder is live");
     context.expect(import != nullptr && import->isEnabled(), "footer Import is enabled");
     context.expect(import != nullptr && import->toolTip() == QStringLiteral("Import"),
                    "Import has its action tooltip");
@@ -90,15 +93,16 @@ int main(int argc, char** argv) {
         "Second", bloom::document::CompositionFormat{}, bloom::core::RationalTime::fromInteger(8));
     const auto addResult = session.executeTransaction(std::move(addTransaction));
     context.expect(addResult.succeeded(), "assets can observe a newly added composition");
-    context.expect(tree->topLevelItemCount() == 2, "assets tree rebuilds after add");
+    context.expect(tree->topLevelItem(0)->childCount() == 2,
+                   "assets composition root rebuilds after add");
 
     search->setText(QStringLiteral("Second"));
     QApplication::processEvents();
     int visibleCount = 0;
     QTreeWidgetItem* visibleItem = nullptr;
-    for (int index = 0; index < tree->topLevelItemCount(); ++index) {
-        auto* item = tree->topLevelItem(index);
-        if (!item->isHidden()) {
+    for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+        auto* item = *it;
+        if (!item->isHidden() && item->data(0, Qt::UserRole + 1).toULongLong() != 0) {
             ++visibleCount;
             visibleItem = item;
         }

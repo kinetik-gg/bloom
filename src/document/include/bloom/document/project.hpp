@@ -85,6 +85,13 @@ class Project final {
 
     [[nodiscard]] ProjectId id() const noexcept { return id_; }
     [[nodiscard]] const std::string& name() const noexcept { return name_; }
+    [[nodiscard]] std::span<const AssetFolder> assetFolders() const noexcept {
+        return assetFolders_;
+    }
+    [[nodiscard]] const AssetFolder* findAssetFolder(AssetFolderId id) const noexcept;
+    [[nodiscard]] AssetFolder* findAssetFolder(AssetFolderId id) noexcept;
+    [[nodiscard]] bool addAssetFolder(AssetFolder folder);
+    [[nodiscard]] bool removeAssetFolder(AssetFolderId id);
     [[nodiscard]] std::span<const AssetRecord> assets() const noexcept { return assets_; }
     [[nodiscard]] const AssetRecord* findAsset(AssetId id) const noexcept;
     [[nodiscard]] AssetRecord* findAsset(AssetId id) noexcept;
@@ -114,6 +121,7 @@ class Project final {
     std::string name_;
     std::vector<Composition> compositions_;
     std::vector<AssetRecord> assets_;
+    std::vector<AssetFolder> assetFolders_;
     std::vector<ExtensionRecord> extensionRecords_;
 };
 

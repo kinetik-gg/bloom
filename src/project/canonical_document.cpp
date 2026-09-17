@@ -1961,7 +1961,7 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
                 return false;
             }
         }
-        if (!state.ok(writer.endArray()) || !emitAssets(state)) {
+        if (!state.ok(writer.endArray()) || !emitAssets(state) || !emitAssetFolders(state)) {
             return false;
         }
         if (!emitRetainedTrailing(state)) {
@@ -1994,7 +1994,9 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
                 !emitHighWaterMember(state, "driverBinding", water.driverBinding) ||
                 !emitHighWaterMember(state, "extensionRecord", water.extensionRecord) ||
                 !emitHighWaterMember(state, "nodeGroup", water.nodeGroup) ||
-                !emitHighWaterMember(state, "asset", water.asset)) {
+                !emitHighWaterMember(state, "asset", water.asset) ||
+                (water.assetFolder != 0 &&
+                 !emitHighWaterMember(state, "assetFolder", water.assetFolder))) {
                 return false;
             }
             if (!emitRetainedTrailing(state)) {

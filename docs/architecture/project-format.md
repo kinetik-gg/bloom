@@ -16,7 +16,7 @@ migrations are implemented.
 Format-specific semantic verification of
 the complete save/reopen pipeline, and cross-platform publication parity remain pending.
 
-Updated: 2026-09-16
+Updated: 2026-09-17
 
 ## Purpose And Ownership
 
@@ -38,17 +38,19 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.15`.
+The container version remains `1.0`; the current document schema is `1.16`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. Versioned artifacts through `1.11` remain checked as
-historical fixtures, with the current `1.15` contract also enforced by the canonical writer,
+historical fixtures, with the current `1.16` contract also enforced by the canonical writer,
 decoder tests. The manifest artifact still requires container `1.0`; its document
 declaration follows the current document minor. Every historical artifact from `1.0` through `1.11`,
 manifest and document, remains checked, and each version's checker validates what its own minor adds
 and then reduces the artifact to its predecessor so the older checks run unchanged.
+
+Document `1.16` adds asset folders, display names, tags and ordering (see "Asset Organization" below).
 
 Document `1.14` adds the bounded `path` constant value (see "Path values" below).
 
@@ -95,7 +97,7 @@ document state.
 
 Document 1.14 adds a constant `path` value. The version-only 1.13 → 1.14 migration changes no
 existing value or pixel. Container version remains 1.0; the manifest declares whatever the current
-document minor is, which is 1.15 since font assets landed on top.
+document minor is, which is 1.16 since asset organization landed on top.
 
 ```json
 {"kind":"path","anchors":[{"point":{"x":0,"y":0},"outHandle":{"x":20,"y":0}},{"point":{"x":40,"y":40},"inHandle":{"x":40,"y":20}}],"closed":false}
@@ -760,6 +762,9 @@ Canonical ordering uses semantic values, never serialized decimal-string lexical
 | one requirement's `providedNodeTypeIds` | UTF-8 node-type ID |
 | OCIO context variables | UTF-8 name |
 | compositions | numeric `CompositionId` |
+| assets | numeric `AssetId` |
+| asset folders | numeric `AssetFolderId` |
+| asset tags | UTF-8 tag text |
 | parameters | numeric `ParameterId` |
 | animation curves | numeric `AnimationCurveId` |
 | curve keys | exact rational time |
@@ -841,10 +846,11 @@ schema-version path. Reconstruction applies the same registry validation to deco
 names the node ID. Old or future versions of a known kind are never silently upgraded, downgraded,
 or interpreted through another definition. No parameters or IDs are injected and no edges are dropped.
 
-The floor and canonical writer are **1.15**. The 1.13 → 1.14 step adds the bounded `path`
-constant value; the 1.14 → 1.15 step adds Font assets and the text box/layout parameter grammar.
-The numbered migration ladder remains independently tested; archive loading applies the explicit
-migration before decoding the current floor. Historical schema
+The canonical writer is **1.16** and the load floor is **1.15**. Opening 1.15 applies the additive
+asset metadata defaults during typed decoding and reports the resulting document as 1.16. The
+registered 1.15 → 1.16 DOM transform is tested against the same decoded result. No node version,
+parameter source or rendering meaning changes. The earlier numbered ladder remains independently
+tested bookkeeping and does not admit files below the load floor. Historical schema
 artifacts describe their own versions and do not imply that those documents can be loaded.
 
 ## Project I/O Boundary
@@ -1156,7 +1162,7 @@ the new artifacts to 1.5 and run the complete historical ladder.
 ## Content Bounds Introduced In Document 1.7
 
 Solid v2 introduced explicit Scalar width and height. Text v2, Layer v4, and Merge v2 use local
-content bounds. These are now the only supported definitions; the current 1.15 schema includes
+content bounds. These are now the only supported definitions; the current 1.16 schema includes
 those contracts together with per-component animation, image assets, and audio. Documents carrying
 older node versions fail validation. There is no coordinate conversion or compatibility evaluator.
 
@@ -1271,9 +1277,10 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 
 ## Layer Parenting In Document 1.13
 
-Parenting was introduced in document `1.13`; the current writer, manifest declaration and load
-floor are `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes only the root minor.
-Current artifacts are `document-1.15.schema.json` and `manifest-1.15.schema.json`.
+Parenting was introduced in document `1.13`; the current writer and manifest declaration are
+`1.16`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+only the root minor.
+Current artifacts are `document-1.16.schema.json` and `manifest-1.16.schema.json`.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
 Its value is the canonical decimal-string LayerId of another boundary in the same composition.
@@ -1283,8 +1290,9 @@ it does not change Merge membership, stack order, opacity or visibility.
 
 ## Font Assets And Text Layout In Document 1.15
 
-Document `1.15` adds the `Font` asset kind and the text capability fields. A Font asset is ordered
-as `id`, `kind`, `locator`, `contentDigest`, `font`, then any retained unknown members. Its `font`
+Document `1.15` adds the `Font` asset kind and the text capability fields. A Font asset carries
+the shared `id`, `kind`, `locator`, `contentDigest`, `interpretation`, `width`, `height`, `manifest`
+envelope followed by `font`; 1.16 appends organization metadata afterward. Its closed `font`
 object stores `family`, `style`, and `faceIndex`; its locator uses `kind: "font"`, a project-relative
 or system path, and an optional RFC 8089 relink hint. Font bytes are never written into the project.
 The catalogue records the digest at pick time, and the compiler accepts the asset only when the
@@ -1295,8 +1303,53 @@ Text v2 appends `font` as a String asset reference, then `box` as a Vec2 width/h
 `wrap` as a Boolean, `verticalAlignment`, `anchorMode`, and `overflow` as Integer selectors. A zero
 box is point text; a non-zero box is the authored local bounds. These fields are optional while
 reading the pre-1.15 text grammar and canonicalized to the defaults above during migration. The
-writer emits the current 1.15 parameter sources in their stable graph order.
+writer retains the 1.15 parameter sources in their stable graph order.
 
-The current artifacts are `document-1.15.schema.json` and `manifest-1.15.schema.json`; the
+The introduction artifacts are `document-1.15.schema.json` and `manifest-1.15.schema.json`; the
 `1.14 -> 1.15` migration is intentionally small and preserves all prior IDs, values, graph edges,
 and unknown additive members.
+
+## Asset Organization In Document 1.16
+
+Document `1.16` adds organization metadata without changing media identity or evaluation. The
+canonical document and manifest artifacts are `document-1.16.schema.json` and
+`manifest-1.16.schema.json`. Container version remains `1.0`; the load floor remains `1.15` so
+existing projects can acquire these additive defaults when opened. Saving writes 1.16, while
+opening alone leaves the original file untouched.
+
+Each asset appends `name`, optional `folder`, `tags`, then `order` after its existing media
+payload (`manifest`, and optional `font` or `audio`). `name` is a non-empty display name of at
+most 4,096 UTF-8 bytes. It is independent of the locator: rename never renames a file on disk.
+`folder` is a non-zero decimal-string `AssetFolderId`; absence denotes the project root, and
+`null` is not accepted. `tags` is an array of at most 64 non-empty UTF-8 strings, each at most
+256 bytes, sorted uniquely by UTF-8 bytes. Command input is sorted and deduplicated; serialized
+unsorted or duplicate tags are rejected. `order` is a canonical unsigned 64-bit decimal string,
+including `"0"`, for the asset's position within its folder.
+
+The project may append `assetFolders` after `assets`. Its records are ordered by ID and have the
+closed member order `id`, `name`, optional `parent`. Folder names use the same human-facing name
+bound as assets; `parent` is another non-zero `AssetFolderId`, omitted for root folders. An empty
+folder collection is omitted by the canonical writer. Folder IDs have their own allocator
+namespace: `idAllocation.highestIssued` may append `assetFolder` after `asset`, omitted only
+when zero. Deletion and undo preserve this high-water mark, so identities are never reused.
+
+Project validation refuses folder cycles, dangling parent/asset folder references, duplicate
+folder identities and duplicate names among sibling folders. Sibling names compare exactly;
+case-insensitive search is a UI behavior. Folders are virtual project organization, with no
+filesystem directory creation or media relocation.
+
+The asset array stays sorted by stable ID for canonical encoding. The panel orders each folder's
+assets by `(order, id)`, making equal imported positions deterministic. Move and reorder commands
+write contiguous positions in affected folders; moving preserves the supplied selection order,
+and its insertion index addresses the destination after removing the moving IDs. Reorder requires
+a complete permutation of one folder's assets. Folder removal promotes direct child folders to
+the parent and appends its assets in their existing order. If promotion would duplicate a sibling
+folder name, removal is refused atomically until the conflicting folder is renamed.
+
+The 1.15 → 1.16 migration derives display names lexically from locator file stems, preserves
+multiple dots before the final extension and leaves dotfile names intact. An empty locator stem
+uses the captured font family, or `Asset` when no family exists. Builtin font locators identify a
+captured face rather than a file, so those use the captured family and style. Migrated assets have no folder,
+empty tags, and positions matching their former ID-ordered listing. The migration preserves every
+asset ID, locator, digest, media descriptor, graph node and parameter source. Relink likewise keeps
+name, folder, tags and order. No organization command changes render pixels.

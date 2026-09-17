@@ -11,6 +11,7 @@ add_library(
     merge_schema_checks.cpp
     content_bounds_schema_checks.cpp
     viewer_schema_checks.cpp
+    asset_schema_checks.cpp
     node_layout_schema_checks.cpp
     schema_check_helpers.cpp
     schema_check_helpers.hpp

@@ -808,7 +808,7 @@ void TimelineLayerStack::renameLayer(const document::LayerId layerId) {
     const auto found = std::ranges::find(entries_, layerId, &TimelineLayerEntry::layerId);
     if (found == entries_.end())
         return;
-    auto* field = new kit::KLineEdit(QString::fromStdString(layer->name), this);
+    auto* field = new kit::KLineEdit(mediaLayerDisplayName(session_, layerId), this);
     field->setObjectName("timelineLayerRenameEditor");
     field->setGeometry(kNameCellX, rowTop(static_cast<int>(found - entries_.begin())),
                        nameCellWidth(width()), kTimelineRowHeight);
@@ -1896,7 +1896,7 @@ void TimelineEditor::rebuild() {
             }
             entries.push_back({.layerId = entry.layerId,
                                .slotId = entry.slotId,
-                               .name = layerName(*composition, entry.layerId),
+                               .name = mediaLayerDisplayName(session_, entry.layerId),
                                .kind = layerKind(session_, entry.layerId),
                                .clipColor = layerClipColorToken(session_, entry.layerId)});
             if (const auto* source = directSourceNode(session_, entry.layerId);

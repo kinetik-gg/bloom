@@ -15,6 +15,7 @@ int main() {
     doc::AssetRecord asset;
     asset.id = doc::AssetId::fromRaw(4);
     asset.locator = {"file", "project-relative", "images/test.png", "file:///test.png"};
+    asset.name = "test";
     asset.width = 2;
     asset.height = 3;
     if (!project.addAsset(asset))

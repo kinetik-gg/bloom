@@ -1,3 +1,4 @@
+#include "composition_editor_support.hpp"
 #include "node_editor_items.hpp"
 #include "properties_registry_row.hpp"
 #include <QSignalBlocker>
@@ -17,9 +18,35 @@ QString imageRangeText(const document::AssetRecord* asset) {
         .arg(asset->manifest.last);
 }
 QString imageAssetDisplayName(const document::AssetRecord& asset) {
-    const auto& path =
-        asset.kind == document::AssetKind::Sequence ? asset.manifest.pattern : asset.locator.path;
-    return QString::fromStdString(path.substr(path.find_last_of("/\\") + 1));
+    return QString::fromStdString(asset.name);
+}
+QString mediaLayerDisplayName(const CompositionSession& session, document::LayerId id) {
+    const auto* composition = session.composition();
+    const auto* layer = composition ? composition->graph().findLayer(id) : nullptr;
+    const auto* source = directSourceNode(session, id);
+    if (layer && source &&
+        (source->typeId == "bloom.image-source" ||
+         source->typeId == document::kAudioSourceNodeType)) {
+        for (const auto& binding : source->parameters) {
+            if (binding.role != "asset")
+                continue;
+            const auto value = session.constantStringValue(binding.parameterId);
+            const auto* asset = value ? session.snapshot().project().findAsset(
+                                            document::AssetId::fromRaw(value->toULongLong()))
+                                      : nullptr;
+            if (!asset)
+                break;
+            const auto importedName =
+                asset->kind == document::AssetKind::Sequence
+                    ? asset->manifest.pattern
+                    : asset->locator.path.substr(asset->locator.path.find_last_of('/') + 1);
+            // Existing import commands store the locator-derived label on the Layer. Project
+            // organization changes its displayed default; an authored Layer name stays independent.
+            if (layer->name == importedName || layer->name == asset->locator.path)
+                return imageAssetDisplayName(*asset);
+        }
+    }
+    return composition ? layerName(*composition, id) : QString{};
 }
 void refreshAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
                           const QString& stored, const bool audioOnly) {

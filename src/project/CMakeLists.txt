@@ -324,6 +324,11 @@ if(BUILD_TESTING)
         LABELS unit project persistence security
     )
 
+    add_executable(bloom_project_asset_organization_test tests/asset_organization_tests.cpp)
+    target_link_libraries(bloom_project_asset_organization_test PRIVATE bloom_project ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_asset_organization_test)
+    bloom_add_test(NAME bloom.project.asset-organization COMMAND bloom_project_asset_organization_test LABELS unit persistence)
+
     add_executable(bloom_project_node_layout_test tests/node_layout_persistence_tests.cpp)
     target_link_libraries(bloom_project_node_layout_test PRIVATE bloom_project ZLIB::ZLIB)
     bloom_enable_warnings(bloom_project_node_layout_test)
