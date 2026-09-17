@@ -4,8 +4,11 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <limits>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace bloom::commands::test {
 namespace {
@@ -600,6 +603,60 @@ void testAddSolidLayerRejectsInvalidInputs(TestContext& test) {
                 "rejected solid inputs should preserve revision, graph, IDs, and history");
 }
 
+void testManyCreatedLayersUseCollisionFreeSlots(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    const auto before = composition(document.snapshot()).nodeLayout();
+    std::vector<std::pair<NodeId, NodeId>> created;
+    created.reserve(200);
+    const auto start = std::chrono::steady_clock::now();
+    for (int index = 0; index < 200; ++index) {
+        Transaction add("Add stress layer", document.snapshot().revision());
+        add.emplace<AddSolidLayer>(kCompositionId, "Stress " + std::to_string(index),
+                                   core::Color4d{0.2, 0.3, 0.4, 1.0}, Vec2d{320.0, 180.0}, 1.0);
+        const auto result = stack.execute(std::move(add));
+        const auto source = result.outputId<NodeId>(kAddSolidLayerSolidNodeOutput);
+        const auto layer = result.outputId<NodeId>(kAddSolidLayerLayerOutputNodeOutput);
+        if (result.status != CommandStatus::Succeeded || !source || !layer) {
+            test.fail("200 layer placement stress operation succeeds");
+            return;
+        }
+        created.emplace_back(*source, *layer);
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    // The loop executes 200 full transactions (snapshot copies included) through the command
+    // stack, so the wall-clock bound only guards against a placement search that degrades to
+    // quadratic or worse: a Debug clang-tidy build on a slow CI runner needs ~6.5 s for the
+    // whole test, while a degenerate search takes minutes.
+    test.expect(elapsed < std::chrono::seconds(60),
+                "200 layer placement stays within the bounded stress-test time");
+
+    const auto& compositionAfter = composition(document.snapshot());
+    for (const auto& [id, record] : before)
+        test.expect(compositionAfter.nodeLayout().at(id).position == record.position,
+                    "structured layer placement never moves an existing card");
+
+    const auto clearOf = [&](const NodeId left, const NodeId right) {
+        const auto& leftPosition = compositionAfter.nodeLayout().at(left).position;
+        const auto& rightPosition = compositionAfter.nodeLayout().at(right).position;
+        constexpr auto size = document::kConservativeNodeCardSize;
+        constexpr auto gap = document::kNodeLayoutSpacing;
+        return leftPosition.x >= rightPosition.x + size.width + gap ||
+               rightPosition.x >= leftPosition.x + size.width + gap ||
+               leftPosition.y >= rightPosition.y + size.height + gap ||
+               rightPosition.y >= leftPosition.y + size.height + gap;
+    };
+    std::set<NodeId> createdNodes;
+    for (const auto [source, layer] : created) {
+        createdNodes.insert(source);
+        createdNodes.insert(layer);
+    }
+    for (const auto id : createdNodes)
+        for (const auto& [other, unused] : compositionAfter.nodeLayout())
+            if (id != other)
+                test.expect(clearOf(id, other), "a newly created card never overlaps or touches");
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -613,6 +670,7 @@ int main() {
         bloom::commands::test::testAddSolidLayerBuildsOneCanonicalTopology(test);
         bloom::commands::test::testPublishedSolidBranchIdsAreNeverReused(test);
         bloom::commands::test::testAddSolidLayerRejectsInvalidInputs(test);
+        bloom::commands::test::testManyCreatedLayersUseCollisionFreeSlots(test);
     } catch (const std::exception& error) {
         test.fail(std::string("unexpected test exception: ") + error.what());
     }

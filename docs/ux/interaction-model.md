@@ -143,6 +143,8 @@ panel menus or the composition context menu.
 | `Ctrl+D` | Duplicate the selection and start placing it |
 | `Ctrl+G` | Group the selection in a node group |
 | `Ctrl+Shift+G` | Ungroup every node group the selection is in |
+| `Ctrl+Shift+A` | Arrange all nodes left to right, then fit the graph |
+| `Ctrl+Alt+A` | Arrange the selected induced subgraph in place |
 | `Enter` | Rename the selected layer node |
 | Double-click a layer node | Rename it |
 | Double-click a group frame | Rename the group |
@@ -168,20 +170,23 @@ View, Select, and Node reuse the canvas's existing commands and objectNames wher
 existed (`nodeFitAction`, `nodeSelectAllAction`, `nodeGroupAction`, and so on); a command the
 context menu shows only when it applies, this persistent menu instead disables when it does not,
 since hiding and re-showing entries in a menu that stays open across gestures would read as the
-menu itself changing shape. A few commands are new here and bind no key, matching the "reserved
-keys are left unbound" rule above:
+menu itself changing shape. Frame Selected, Grid Snapping, Link Style, Select None and Select
+Invert bind no new keys; Arrange uses the two explicit node-canvas bindings below:
 
 | Menu | New command | Does |
 | --- | --- | --- |
 | View | Frame Selected | Frames exactly the selected cards; frames the whole graph if nothing is selected |
 | View | Grid Snapping | Toggles grid snapping (see below); the same toggle the footer's switch offers |
 | View | Link Style | Spline / Straight / Angled (see below); the same choice the footer's dropdown offers |
+| View → Organize | Arrange All | Lays out every node, fits the graph, and commits one `MoveNodes` transaction |
+| View → Organize | Arrange Selection | Lays out the selected induced subgraph in place and commits one `MoveNodes` transaction |
 | Select | None | Clears the selection |
 | Select | Invert | Selects every unselected node, deselecting every selected one |
 | Select | Linked Upstream | Extends the selection to every node reachable by following links backward, transitively |
 | Select | Linked Downstream | The same walk, following links forward |
 
-A shortcut shown next to a header menu item (Fit, Actual Size, Select All, Group, Ungroup, Delete)
+A shortcut shown next to a header menu item (Fit, Actual Size, Select All, Group, Ungroup, Delete,
+Arrange All, Arrange Selection)
 is the SAME key `NodeGraphicsView` already claims through `ShortcutOverride` -- it is display text,
 not a second live binding, so it never fires while some other panel has focus (see Ownership
 Boundary below). The header itself never wraps to a second row: once it is too narrow to hold all

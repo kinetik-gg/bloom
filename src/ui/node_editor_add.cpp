@@ -1,9 +1,55 @@
 #include "node_editor_add.hpp"
 #include <algorithm>
 #include <array>
+#include <type_traits>
 #include <utility>
 
 namespace bloom::ui::node_editor {
+namespace {
+document::Vec2d nodePosition(const document::Composition& composition, const document::NodeId id) {
+    if (const auto found = composition.nodeLayout().find(id);
+        found != composition.nodeLayout().end())
+        return found->second.position;
+    return document::defaultNodeLayout(composition.graph().nodes()).at(id).position;
+}
+
+void placeConnectedNode(document::Composition& composition, const document::NodeId node,
+                        const std::optional<document::InputPortRef>& input,
+                        const std::optional<document::OutputPortRef>& output) {
+    const auto connected = input
+                               ? std::optional(std::visit(
+                                     [](const auto& port) {
+                                         if constexpr (std::is_same_v<std::decay_t<decltype(port)>,
+                                                                      document::NodeInputRef>)
+                                             return port.nodeId;
+                                         else
+                                             return port.stackNodeId;
+                                     },
+                                     *input))
+                           : output ? std::optional(output->nodeId)
+                                    : std::nullopt;
+    if (!connected)
+        return;
+    const auto anchorPosition = nodePosition(composition, *connected);
+    const auto gap = document::kNodeLayoutSpacing;
+    const auto& size = document::kConservativeNodeCardSize;
+    const auto preferred =
+        input ? document::Vec2d{anchorPosition.x - size.width - gap, anchorPosition.y}
+              : document::Vec2d{anchorPosition.x + size.width + gap, anchorPosition.y};
+    auto occupied = composition.nodeLayout();
+    const auto defaults = document::defaultNodeLayout(composition.graph().nodes());
+    for (const auto& existing : composition.graph().nodes())
+        if (existing.id != node && !occupied.contains(existing.id))
+            occupied.emplace(existing.id, defaults.at(existing.id));
+    occupied.erase(node);
+    const auto placement =
+        document::findNearestFreeNodePosition(occupied, {}, size, preferred, gap);
+    auto record = composition.nodeLayout().at(node);
+    record.position = placement;
+    composition.nodeLayout()[node] = record;
+}
+} // namespace
+
 commands::OperationResult AddEditorNode::apply(document::Draft& draft) const {
     const auto* composition = draft.project().findComposition(composition_);
     if (!composition)
@@ -36,6 +82,7 @@ commands::OperationResult AddEditorNode::apply(document::Draft& draft) const {
     if (!definition)
         return result;
     const auto& graph = draft.project().findComposition(composition_)->graph();
+    placeConnectedNode(*draft.project().findComposition(composition_), *node, input_, output_);
     if (input_) {
         const auto kind = graph.inputKind(*input_);
         for (const auto& port : definition->outputs) {

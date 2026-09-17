@@ -366,9 +366,29 @@ OperationResult AddAudioLayer::apply(document::Draft& draft) const {
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Audio output could not be connected");
     }
+    const auto card = document::kConservativeNodeCardSize;
     const auto defaults = document::defaultNodeLayout(graph.nodes());
-    composition->nodeLayout().try_emplace(*sourceNodeId, defaults.at(*sourceNodeId));
-    composition->nodeLayout().try_emplace(*layerOutputNodeId, defaults.at(*layerOutputNodeId));
+    const auto mergeId = graph.layerStack().nodeId();
+    const auto mergePosition = composition->nodeLayout().contains(mergeId)
+                                   ? composition->nodeLayout().at(mergeId).position
+                                   : defaults.at(mergeId).position;
+    const auto gap = document::kNodeLayoutSpacing;
+    const auto layerPreferred =
+        document::Vec2d{mergePosition.x - card.width - gap, mergePosition.y};
+    auto occupied = composition->nodeLayout();
+    for (const auto& existing : graph.nodes())
+        if (existing.id != *sourceNodeId && existing.id != *layerOutputNodeId &&
+            !occupied.contains(existing.id))
+            occupied.emplace(existing.id, defaults.at(existing.id));
+    const auto layerPosition =
+        document::findNearestFreeNodePosition(occupied, {}, card, layerPreferred, gap);
+    occupied[*layerOutputNodeId] = {layerPosition, 128.0, false, false};
+    const auto sourcePreferred =
+        document::Vec2d{layerPosition.x - card.width - gap, layerPosition.y};
+    const auto sourcePosition =
+        document::findNearestFreeNodePosition(occupied, {}, card, sourcePreferred, gap);
+    composition->nodeLayout()[*sourceNodeId] = {sourcePosition, 128.0, false, false};
+    composition->nodeLayout()[*layerOutputNodeId] = {layerPosition, 128.0, false, false};
     return OperationResult::applied({{"layer", *layerId},
                                      {"slot", *slotId},
                                      {"audioNode", *sourceNodeId},

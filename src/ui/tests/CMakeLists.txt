@@ -628,6 +628,12 @@ target_link_libraries(bloom_node_interaction_test PRIVATE bloom_ui bloom_project
 bloom_enable_warnings(bloom_node_interaction_test)
 bloom_add_test(NAME bloom.ui.node-interaction COMMAND bloom_node_interaction_test LABELS ui integration kit TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(bloom_node_layout_arrange_test node_layout_arrange_tests.cpp)
+target_include_directories(bloom_node_layout_arrange_test PRIVATE ..)
+target_link_libraries(bloom_node_layout_arrange_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_node_layout_arrange_test)
+bloom_add_test(NAME bloom.ui.node-layout-arrange COMMAND bloom_node_layout_arrange_test LABELS ui unit TIMEOUT 30)
+
 # Task S1: the node card's own primitives (in-card field geometry, the content-derived card
 # minimum, socket identity). Its own executable rather than more cases inside
 # node_interaction_tests.cpp, which owns the gesture/command contract this task keeps intact.

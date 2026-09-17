@@ -287,11 +287,12 @@ void testAddAndLayout(TestContext& test) {
             throw std::logic_error("node ID returned");
         const auto& comp = composition(fixture.document.snapshot());
         const auto* node = comp.graph().findNode(*id);
-        test.expect(node && node->parameters.size() == definition.parameters.size() &&
-                        node->schemaVersion == definition.key.schemaVersion &&
-                        comp.nodeLayout().at(*id).position == Vec2d{17, -31} &&
-                        comp.graph().layerStack().entries().size() == beforeSlots,
-                    "generic AddNode uses schema defaults and never creates a layer or slot");
+        test.expect(
+            node && node->parameters.size() == definition.parameters.size() &&
+                node->schemaVersion == definition.key.schemaVersion &&
+                comp.nodeLayout().contains(*id) &&
+                comp.graph().layerStack().entries().size() == beforeSlots,
+            "generic AddNode uses schema defaults, a free requested slot, and no layer or slot");
         for (const auto& parameter : definition.parameters) {
             const auto parameterId = result.outputId<ParameterId>("parameter." + parameter.role);
             const auto* record = parameterId ? comp.parameters().find(*parameterId) : nullptr;
@@ -354,6 +355,24 @@ void testAddAndLayout(TestContext& test) {
     for (const auto width : {0.0, -1.0, std::numeric_limits<double>::infinity(),
                              std::numeric_limits<double>::quiet_NaN()})
         refuse<SetNodeWidth>(test, fixture, OperationIssueCode::InvalidValue, id, width);
+}
+
+void testNewNodePlacementDoesNotMoveExistingCards(TestContext& test) {
+    Fixture fixture;
+    const auto before = composition(fixture.document.snapshot()).nodeLayout();
+    const auto requested = before.at(kLayerStackNodeId).position;
+    const auto result = apply<AddNode>(fixture, std::string(kSolidSourceNodeType), requested);
+    const auto added = result.outputId<NodeId>(kAddNodeOutput);
+    if (!added) {
+        test.fail("collision placement returns the new node");
+        return;
+    }
+    const auto& after = composition(fixture.document.snapshot()).nodeLayout();
+    for (const auto& [id, record] : before)
+        test.expect(after.at(id).position == record.position,
+                    "placing a new node does not move an existing card");
+    test.expect(after.at(*added).position != requested,
+                "a new card moves to the nearest free slot when its requested slot is occupied");
 }
 
 void testWiringAndRename(TestContext& test) {
@@ -931,6 +950,7 @@ int main() {
         bloom::commands::test::testLayerRanges(test);
         bloom::commands::test::testValidityQuery(test);
         bloom::commands::test::testAddAndLayout(test);
+        bloom::commands::test::testNewNodePlacementDoesNotMoveExistingCards(test);
         bloom::commands::test::testWiringAndRename(test);
         bloom::commands::test::testRemoveAndDissolve(test);
         bloom::commands::test::testDissolveParticipatingLayer(test);

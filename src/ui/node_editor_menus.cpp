@@ -18,7 +18,9 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/search_popup.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
+#include <bloom/ui/node_layout_arrange.hpp>
 #include <iterator>
+#include <limits>
 #include <tuple>
 #include <vector>
 
@@ -121,8 +123,15 @@ void NodeGraphEditor::handleCanvasKey(const int key, const Qt::KeyboardModifiers
         return;
     }
     if (modifiers == (Qt::ControlModifier | Qt::ShiftModifier)) {
-        if (key == Qt::Key_G)
+        if (key == Qt::Key_A)
+            arrangeAllNodes();
+        else if (key == Qt::Key_G)
             ungroupSelection();
+        return;
+    }
+    if (modifiers == (Qt::ControlModifier | Qt::AltModifier)) {
+        if (key == Qt::Key_A)
+            arrangeSelectedNodes();
         return;
     }
     if (modifiers == Qt::ControlModifier) {
@@ -248,6 +257,80 @@ void NodeGraphEditor::renameSelectedLayer() {
         return;
     }
     showStatus(tr("Only a layer node can be renamed"));
+}
+
+namespace {
+[[nodiscard]] NodeCardSizes measuredNodeSizes(const NodeGraphicsScene& scene) {
+    NodeCardSizes sizes;
+    for (auto* item : scene.items()) {
+        const auto* card = dynamic_cast<const node_editor::NodeItem*>(item);
+        if (card == nullptr)
+            continue;
+        const auto rect = card->cardRect();
+        sizes.emplace(card->id(), document::NodeCardSize{rect.width(), rect.height()});
+    }
+    return sizes;
+}
+} // namespace
+
+void NodeGraphEditor::arrangeAllNodes() {
+    if (!scene_->canSubmit() || session_.composition() == nullptr) {
+        showStatus(tr("Node command submission is unavailable"));
+        return;
+    }
+    const auto* composition = session_.composition();
+    const auto positions = arrangeNodes(*composition, measuredNodeSizes(*scene_));
+    if (positions.empty())
+        return;
+    commands::Transaction transaction("Arrange Nodes", session_.snapshot().revision());
+    transaction.emplace<commands::MoveNodes>(session_.compositionId(), positions);
+    const auto result = scene_->submit(std::move(transaction));
+    if (result.succeeded())
+        view_->frameGraph();
+}
+
+void NodeGraphEditor::arrangeSelectedNodes() {
+    if (!scene_->canSubmit() || session_.composition() == nullptr) {
+        showStatus(tr("Node command submission is unavailable"));
+        return;
+    }
+    const auto selection = session_.selectedNodes();
+    if (selection.empty()) {
+        showStatus(tr("Select nodes first"));
+        return;
+    }
+    const auto* composition = session_.composition();
+    const auto sizes = measuredNodeSizes(*scene_);
+    const auto relative = arrangeNodes(*composition, sizes, selection);
+    if (relative.empty())
+        return;
+
+    // ArrangeSelection is local to the selection. Shift its local result back to the selected
+    // cards' current bounding-box top-left, so arranging never drags the selection across the
+    // canvas as a side effect.
+    double oldLeft = std::numeric_limits<double>::infinity();
+    double oldTop = std::numeric_limits<double>::infinity();
+    double newLeft = std::numeric_limits<double>::infinity();
+    double newTop = std::numeric_limits<double>::infinity();
+    const auto defaults = document::defaultNodeLayout(composition->graph().nodes());
+    for (const auto id : selection) {
+        const auto current = composition->nodeLayout().find(id);
+        const auto& record =
+            current == composition->nodeLayout().end() ? defaults.at(id) : current->second;
+        oldLeft = std::min(oldLeft, record.position.x);
+        oldTop = std::min(oldTop, record.position.y);
+        const auto arranged = relative.at(id);
+        newLeft = std::min(newLeft, arranged.x);
+        newTop = std::min(newTop, arranged.y);
+    }
+    const document::Vec2d offset{oldLeft - newLeft, oldTop - newTop};
+    std::map<document::NodeId, document::Vec2d> positions;
+    for (const auto& [id, position] : relative)
+        positions.emplace(id, document::Vec2d{position.x + offset.x, position.y + offset.y});
+
+    commands::Transaction transaction("Arrange Nodes", session_.snapshot().revision());
+    transaction.emplace<commands::MoveNodes>(session_.compositionId(), std::move(positions));
+    static_cast<void>(scene_->submit(std::move(transaction)));
 }
 
 void NodeGraphEditor::groupSelectedNodes() {
@@ -525,6 +608,19 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
         const auto accepts = [&](const commands::Operation& operation) {
             return commands::canApplyNodeOperation(session_.snapshot(), operation);
         };
+        auto* organize = menu->addMenu(tr("Organize"));
+        organize->setObjectName(QStringLiteral("nodeOrganizeMenu"));
+        auto* arrangeAll = organize->addAction(tr("Arrange All"));
+        arrangeAll->setObjectName(QStringLiteral("nodeArrangeAllAction"));
+        arrangeAll->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A));
+        arrangeAll->setShortcutContext(Qt::WidgetShortcut);
+        connect(arrangeAll, &QAction::triggered, this, [this] { arrangeAllNodes(); });
+        auto* arrangeSelection = organize->addAction(tr("Arrange Selection"));
+        arrangeSelection->setObjectName(QStringLiteral("nodeArrangeSelectionAction"));
+        arrangeSelection->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_A));
+        arrangeSelection->setShortcutContext(Qt::WidgetShortcut);
+        connect(arrangeSelection, &QAction::triggered, this, [this] { arrangeSelectedNodes(); });
+        menu->addSeparator();
         if (accepts(commands::DuplicateNodes(composition, nodes, {24, 24})))
             action(tr("Duplicate"), QStringLiteral("nodeDuplicateAction"),
                    [this] { duplicateSelectedNodes(); });
@@ -585,6 +681,23 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
     addMenu->setObjectName(QStringLiteral("nodeAddMenu"));
     addMenu->setEnabled(session_.composition() != nullptr);
     populateAddMenu(addMenu);
+    menu->addSeparator();
+    auto* organize = menu->addMenu(tr("Organize"));
+    organize->setObjectName(QStringLiteral("nodeOrganizeMenu"));
+    auto* arrangeAll = organize->addAction(tr("Arrange All"));
+    arrangeAll->setObjectName(QStringLiteral("nodeArrangeAllAction"));
+    arrangeAll->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A));
+    arrangeAll->setShortcutContext(Qt::WidgetShortcut);
+    arrangeAll->setEnabled(scene_->canSubmit() && session_.composition() != nullptr);
+    connect(arrangeAll, &QAction::triggered, this, [this] { arrangeAllNodes(); });
+    if (!session_.selectedNodes().empty()) {
+        auto* arrangeSelection = organize->addAction(tr("Arrange Selection"));
+        arrangeSelection->setObjectName(QStringLiteral("nodeArrangeSelectionAction"));
+        arrangeSelection->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_A));
+        arrangeSelection->setShortcutContext(Qt::WidgetShortcut);
+        arrangeSelection->setEnabled(scene_->canSubmit());
+        connect(arrangeSelection, &QAction::triggered, this, [this] { arrangeSelectedNodes(); });
+    }
     menu->addSeparator();
     action(tr("Fit"), QStringLiteral("nodeFitAction"), [this] { view_->frameGraph(); });
     action(tr("100%"), QStringLiteral("nodeActualSizeAction"),
@@ -857,6 +970,16 @@ void NodeGraphEditor::buildHeaderMenus() {
                         QKeySequence(Qt::CTRL | Qt::Key_0));
     action(headerViewMenu_, tr("Frame Selected"), QStringLiteral("nodeFrameSelectedAction"),
            [this] { frameSelectedNodes(); });
+    auto* organizeMenu = headerViewMenu_->addMenu(tr("Organize"));
+    organizeMenu->setObjectName(QStringLiteral("nodeOrganizeMenu"));
+    arrangeAllAction_ = withDisplayShortcut(action(organizeMenu, tr("Arrange All"),
+                                                   QStringLiteral("nodeArrangeAllAction"),
+                                                   [this] { arrangeAllNodes(); }),
+                                            QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A));
+    arrangeSelectionAction_ = withDisplayShortcut(
+        action(organizeMenu, tr("Arrange Selection"), QStringLiteral("nodeArrangeSelectionAction"),
+               [this] { arrangeSelectedNodes(); }),
+        QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_A));
     withDisplayShortcut(action(headerViewMenu_, tr("Actual Size"),
                                QStringLiteral("nodeActualSizeAction"),
                                [this] { view_->zoomToActualSize(); }),
@@ -956,6 +1079,13 @@ void NodeGraphEditor::buildHeaderMenus() {
 }
 
 void NodeGraphEditor::refreshViewMenuState() {
+    const auto* composition = session_.composition();
+    if (arrangeAllAction_ != nullptr)
+        arrangeAllAction_->setEnabled(scene_->canSubmit() && composition != nullptr &&
+                                      !composition->graph().nodes().empty());
+    if (arrangeSelectionAction_ != nullptr)
+        arrangeSelectionAction_->setEnabled(scene_->canSubmit() && composition != nullptr &&
+                                            !session_.selectedNodes().empty());
     if (gridSnapAction_ != nullptr) {
         gridSnapAction_->setChecked(scene_->gridSnapEnabled());
     }

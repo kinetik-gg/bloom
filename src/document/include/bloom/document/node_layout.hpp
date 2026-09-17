@@ -3,6 +3,7 @@
 #include <bloom/document/graph.hpp>
 
 #include <map>
+#include <optional>
 #include <set>
 #include <span>
 #include <string>
@@ -20,6 +21,29 @@ struct NodeLayoutRecord {
 };
 
 using NodeLayout = std::map<NodeId, NodeLayoutRecord>;
+
+// Card geometry is deliberately a small Qt-free value. The node editor supplies measured values
+// for Arrange; command-side creation uses the conservative defaults so a newly authored card never
+// lands on top of an existing card before the first projection measures it.
+struct NodeCardSize {
+    double width = 240.0;
+    double height = 180.0;
+
+    friend bool operator==(const NodeCardSize&, const NodeCardSize&) = default;
+};
+
+using NodeCardSizes = std::map<NodeId, NodeCardSize>;
+
+inline constexpr double kNodeLayoutSpacing = 16.0; // Spacing::L in the UI grammar.
+inline constexpr NodeCardSize kConservativeNodeCardSize{240.0, 540.0};
+
+// Returns the first deterministic free top-left position at or around `preferred`. Existing
+// rectangles are indexed into x buckets, so a probe checks nearby cards rather than scanning the
+// complete layout. `gap` is the minimum clear distance on every side, not merely the distance
+// between card origins.
+[[nodiscard]] Vec2d findNearestFreeNodePosition(const NodeLayout& layout,
+                                                const NodeCardSizes& sizes, NodeCardSize newSize,
+                                                Vec2d preferred, double gap = kNodeLayoutSpacing);
 
 // The inset a group frame keeps between its members' bounding rectangle and its own border, frozen
 // in document units exactly as the default card width is: the editor reads it rather than spelling

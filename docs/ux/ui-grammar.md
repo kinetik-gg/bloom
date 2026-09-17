@@ -167,10 +167,22 @@ parameters retain the existing hidden-editor/driver behavior. Ordered multi-inpu
 their segmented pill and insertion semantics; reroutes remain dots.
 
 `NodeCardWidth` is the normal floor. Content can require a wider minimum, and an authored
-resize remains authoritative above that minimum. Unplaced nodes retain the document's
-row/column grouping but use measured card extents plus kit gaps to prevent overlap. Authored
-positions are never rearranged, including compact positions stored by existing layer-creation
-commands. Artists can rearrange those cards through the existing layout gesture. Links use the socket-kind palette and a horizontal-tangent
+resize remains authoritative above that minimum. `Arrange All` lays out the graph left to right:
+longest-path ranks place sources and value drivers before their consumers, and stable barycenter
+sweeps order each rank to reduce crossings. Each rank uses its maximum measured card width plus one
+`Spacing::L` gap; cards in a rank use their measured heights plus the same gap, and shorter ranks
+are vertically centred. Disconnected components stack below one another. Nodes in a group remain a
+contiguous rank block, and the frame is recomputed from its members after the transaction.
+`Arrange Selection` applies the same rule to the induced selection and preserves its bounding-box
+top-left. Both commands are one undoable `MoveNodes` transaction; Arrange All fits the canvas after
+publication.
+
+Authored positions are never rearranged by creation. A new card keeps its requested free position,
+or searches the nearest rank-grid slot around its connection (down, up, then the next column) using
+an indexed collision test against every card and a `Spacing::L` clearance. Structured layer
+creation puts the Layer card one gap left of Merge and its source one gap left of Layer. This rule
+also applies to Assets drops and viewer/timeline layer actions, so existing cards never move and a
+new card never touches another card. Links use the socket-kind palette and a horizontal-tangent
 cubic spline with `NodeLinkHandleMin`; existing straight/angled preferences remain available.
 Every selected card, including the primary selection, uses an Accent outline.
 
@@ -229,7 +241,8 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `NodeTitleBand` | 32 | Node name and category on one row |
 | `NodeSocketDot / NodeRerouteDot` | 8 / 10 | Scene port geometry |
 | `NodeLinkHandleMin` | 32 | Minimum spline tangent |
-| `NodeColumnGap / NodeRowGap` | 80 / 24 | Unplaced-node grid |
+| `NodeColumnGap / NodeRowGap` | 80 / 24 | Legacy unplaced-node grid |
+| `NodeArrangeGap` | `Spacing::L` (16) | Rank, component and creation clearance |
 | `GraphValueAxis / GraphHandleDot` | 48 / 6 | Graph editor value gutter / ease-handle dot |
 | `Hairline / SelectionEdge` | 1 / 2 | Pixel-edge arithmetic / scene selection outline |
 | `NodeGrid` | 16 | Node snap grid |

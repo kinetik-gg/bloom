@@ -519,10 +519,33 @@ addStructuredLayer(document::Draft& draft, document::Composition& composition,
                                          "Layer topology could not be inserted");
     }
 
+    // Structured layer creation owns two new cards. Anchor the Layer Output to the Merge it feeds
+    // and the source to the Layer Output, then use the same gap-aware spatial index for each card.
+    // The existing layout is never rewritten; a crowded row grows down, then up, and only then
+    // into the next column.
+    const auto conservative = document::kConservativeNodeCardSize;
+    const auto mergeId = graph.layerStack().nodeId();
     const auto defaults = document::defaultNodeLayout(graph.nodes());
-    composition.nodeLayout().try_emplace(ids->sourceNodeId, defaults.at(ids->sourceNodeId));
-    composition.nodeLayout().try_emplace(ids->layerOutputNodeId,
-                                         defaults.at(ids->layerOutputNodeId));
+    const auto mergePosition = composition.nodeLayout().contains(mergeId)
+                                   ? composition.nodeLayout().at(mergeId).position
+                                   : defaults.at(mergeId).position;
+    const auto gap = document::kNodeLayoutSpacing;
+    auto layerPreferred =
+        document::Vec2d{mergePosition.x - conservative.width - gap, mergePosition.y};
+    auto occupied = composition.nodeLayout();
+    for (const auto& existing : graph.nodes())
+        if (existing.id != ids->sourceNodeId && existing.id != ids->layerOutputNodeId &&
+            !occupied.contains(existing.id))
+            occupied.emplace(existing.id, defaults.at(existing.id));
+    const auto layerPosition =
+        document::findNearestFreeNodePosition(occupied, {}, conservative, layerPreferred, gap);
+    occupied[ids->layerOutputNodeId] = {layerPosition, 128.0, false, false};
+    const auto sourcePreferred =
+        document::Vec2d{layerPosition.x - conservative.width - gap, layerPosition.y};
+    const auto sourcePosition =
+        document::findNearestFreeNodePosition(occupied, {}, conservative, sourcePreferred, gap);
+    composition.nodeLayout()[ids->sourceNodeId] = {sourcePosition, 128.0, false, false};
+    composition.nodeLayout()[ids->layerOutputNodeId] = {layerPosition, 128.0, false, false};
     std::vector<OperationOutput> outputs{
         {std::string(outputNames.layer), DurableObjectId{ids->layerId}},
         {std::string(outputNames.slot), DurableObjectId{ids->slotId}},

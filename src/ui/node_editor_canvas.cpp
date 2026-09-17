@@ -242,7 +242,8 @@ void NodeGraphicsView::mouseReleaseEvent(QMouseEvent* event) {
 namespace {
 // The canvas's own keys (task S1, item 8; docs/ux/interaction-model.md is the list). Adobe-first:
 // Delete/Backspace remove, Ctrl+D duplicates, Ctrl+A selects all, Ctrl+0 fits and Ctrl+1 is actual
-// size, Tab opens Add, Enter renames, Ctrl+G groups and Ctrl+Shift+G ungroups.
+// size, Tab opens Add, Enter renames, Ctrl+G groups and Ctrl+Shift+G ungroups. Arrange uses the
+// modifier combinations declared in the interaction model.
 // Mute, collapse and dissolve are context-menu commands and bind no key at all.
 bool canvasShortcut(const QKeyEvent& event) {
     const auto modifiers = event.modifiers();
@@ -252,7 +253,9 @@ bool canvasShortcut(const QKeyEvent& event) {
                key == Qt::Key_Escape || key == Qt::Key_Return || key == Qt::Key_Enter ||
                key == Qt::Key_Tab;
     if (modifiers == (Qt::ControlModifier | Qt::ShiftModifier))
-        return key == Qt::Key_G;
+        return key == Qt::Key_A || key == Qt::Key_G;
+    if (modifiers == (Qt::ControlModifier | Qt::AltModifier))
+        return key == Qt::Key_A;
     return modifiers == Qt::ControlModifier &&
            (key == Qt::Key_A || key == Qt::Key_D || key == Qt::Key_G || key == Qt::Key_0 ||
             key == Qt::Key_1);
