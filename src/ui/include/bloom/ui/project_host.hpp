@@ -7,6 +7,7 @@
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/session_async_io.hpp>
 #include <bloom/host/session_open.hpp>
+#include <bloom/host/session_recovery.hpp>
 #include <bloom/host/session_save.hpp>
 #include <bloom/platform/staged_artifact.hpp>
 #include <bloom/project/project_io_memory.hpp>
@@ -46,6 +47,10 @@ using UnsavedChangeDecisionProvider = std::function<UnsavedChangeDecision()>;
 // both Open's and Save As's target-path chooser (decision 4's "same seam pattern for the file
 // dialogs").
 using ProjectPathProvider = std::function<std::optional<std::filesystem::path>()>;
+// The artist's answer to "Recover unsaved changes?" on the launch after an abnormal exit. True
+// opens the recovery file; false leaves it alone. Injectable for the same reason every other
+// dialog here is: an offscreen test drives the whole startup-offer path without a dialog.
+using RecoveryDecisionProvider = std::function<bool(const std::filesystem::path&)>;
 
 // A typed outcome for saveFinished()/openFinished() -- composed from the host's own typed results
 // (bloom::host::SessionSaveResult/SessionOpenResult) without ever collapsing a non-published or
@@ -146,6 +151,19 @@ class ProjectHost final : public QObject {
     void setUnsavedChangeDecisionProvider(UnsavedChangeDecisionProvider provider);
     void setOpenPathProvider(ProjectPathProvider provider);
     void setSaveAsPathProvider(ProjectPathProvider provider);
+    void setRecoveryDecisionProvider(RecoveryDecisionProvider provider);
+
+    // SAVEFIX-1's crash-safe autosave (see bloom/host/session_recovery.hpp). While the session is
+    // dirty, a timer publishes its canonical document to a recovery file in this directory through
+    // the ordinary staged/atomic save path; a successful Save retires that file. Nothing here ever
+    // touches session state, and every failure is typed and swallowed: an autosave that cannot run
+    // must never interrupt the artist.
+    [[nodiscard]] const std::filesystem::path& recoveryDirectory() const noexcept;
+    void setRecoveryDirectory(std::filesystem::path directory);
+    void setRecoveryPolicy(host::SessionRecoveryPolicy policy);
+    // What this launch found worth offering back, decided without any dialog; std::nullopt when
+    // there is nothing to recover.
+    [[nodiscard]] std::optional<host::SessionRecoveryOffer> recoveryOffer() const;
 
     // Runs the unsaved-change flow (Save/Discard/Cancel) if, and only if, the current content is a
     // dirty decoded document; otherwise `onProceed` runs immediately. Exposed publicly (beyond
@@ -186,6 +204,13 @@ class ProjectHost final : public QObject {
     // directly.
     void beginSaveCopy(std::filesystem::path path);
 
+    // Writes the recovery snapshot now. The recovery timer's own action, public so a test can
+    // drive one tick deterministically instead of waiting out an interval.
+    void writeRecoverySnapshot();
+    // Called once at launch: if a recovery file describes work the project on disk does not hold,
+    // asks the recovery-decision seam and, on yes, opens that file through the ordinary Open path.
+    void offerRecoveryOnStartup();
+
   signals:
     // Fires exactly once per successful New replace or successful Open install.
     void sessionReplaced();
@@ -213,6 +238,8 @@ class ProjectHost final : public QObject {
     void handleCopyResult(host::CopyPublicationResult result);
     [[nodiscard]] std::optional<project::ProjectIoOperationMemory> makeOperation() const;
     [[nodiscard]] bool hasDirtyDecodedContent() const;
+    void discardRecoveryFile();
+    [[nodiscard]] std::filesystem::path currentRecoveryPath() const;
 
     runtime::TaskScheduler& scheduler_;
     host::ProjectSessionIdentitySource identitySource_;
@@ -244,11 +271,15 @@ class ProjectHost final : public QObject {
                  host::AsyncCopyPublication>
         inFlight_;
     QTimer pollTimer_;
+    QTimer recoveryTimer_;
     ProjectHostActivity activity_ = ProjectHostActivity::Idle;
+    host::SessionRecoveryPolicy recoveryPolicy_;
+    std::filesystem::path recoveryDirectory_;
 
     UnsavedChangeDecisionProvider decisionProvider_;
     ProjectPathProvider openPathProvider_;
     ProjectPathProvider saveAsPathProvider_;
+    RecoveryDecisionProvider recoveryDecisionProvider_;
 
     // Set only while the unsaved-change flow's Save choice is running an async save; consumed
     // exactly once when that save completes (docs/architecture/project-session.md's "If the

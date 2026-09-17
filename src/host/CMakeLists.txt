@@ -13,6 +13,7 @@ target_sources(
         save_publication.cpp
         session_async_io.cpp
         session_open.cpp
+        session_recovery.cpp
         session_save.cpp
     PUBLIC
         FILE_SET HEADERS
@@ -29,6 +30,7 @@ target_sources(
             include/bloom/host/save_publication.hpp
             include/bloom/host/session_async_io.hpp
             include/bloom/host/session_open.hpp
+            include/bloom/host/session_recovery.hpp
             include/bloom/host/session_save.hpp
 )
 
@@ -130,6 +132,17 @@ if(BUILD_TESTING)
 
         # Gated Linux-only exactly as bloom.host.save-publication is gated: saveProjectSession()
         # drives the same real platform::StagedArtifactCoordinator.
+        # Gated Linux-only for the same reason: the recovery writer drives the same real
+        # platform::StagedArtifactCoordinator that a save does.
+        add_executable(bloom_host_session_recovery_test tests/session_recovery_tests.cpp)
+        target_link_libraries(bloom_host_session_recovery_test PRIVATE bloom_host)
+        bloom_enable_warnings(bloom_host_session_recovery_test)
+        bloom_add_test(
+            NAME bloom.host.session-recovery
+            COMMAND bloom_host_session_recovery_test
+            LABELS unit host persistence
+        )
+
         add_executable(bloom_host_session_save_test tests/session_save_tests.cpp)
         target_link_libraries(bloom_host_session_save_test PRIVATE bloom_host)
         bloom_enable_warnings(bloom_host_session_save_test)

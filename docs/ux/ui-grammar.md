@@ -479,3 +479,21 @@ During a native-size or transform gesture, source-size and Scale readbacks in Pr
 refresh from the same session overrides as the viewer. Source-size gestures leave Scale unchanged;
 transform field edits leave native size unchanged. Cancel restores readbacks without history, and
 release commits the frozen-start values as one transaction. No property rows are added or renamed.
+
+## Save And Recovery Messages
+
+Every save outcome is reported honestly and in the artist's terms; none of them is ever collapsed
+into "saved". A save that refuses a value the format cannot spell reads
+
+> Save failed: `<field>` is not a finite number.
+
+naming the exact field (for example
+`project/Composition[7]/AnimationCurve[12]/Keyframe[4]/value`). The project file on disk is
+untouched and the session stays open and editable, so the artist can correct that value and save
+again; the message is a status report, not a dialog, and never an abort.
+
+On the launch after an abnormal exit, a recovery file describing work the project on disk does not
+hold is offered once, before the artist starts editing: "Bloom closed unexpectedly with unsaved
+changes. Recover the unsaved changes from `<file>`?" with Yes/No. Yes opens that file through the
+ordinary Open flow, unsaved-change prompt included; No leaves it alone. Nothing is offered when the
+last shutdown was clean, and a recovery file older than its saved project is never offered.

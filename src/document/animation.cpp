@@ -447,7 +447,13 @@ bool AnimationCurveStore::insert(AnimationCurveRecord record) {
                     !curve.keyframes.empty()) {
                     return curveCanEnterStore(curve);
                 }
-                return componentCurveRecordCanEnterStore(curve.id, curve.components);
+                // The whole-value projection is derived, not authored, but it is still part of the
+                // stored record and part of what a save would have to spell, so it is held to the
+                // same finiteness rule as the components it mirrors.
+                return componentCurveRecordCanEnterStore(curve.id, curve.components) &&
+                       std::ranges::all_of(curve.keyframes, [](const auto& keyframe) {
+                           return finiteValue(keyframe);
+                       });
             }
         },
         record);
@@ -918,6 +924,17 @@ ValidationResult AnimationCurveStore::validate() const {
                         result.add(ValidationCode::InvalidValue,
                                    "[" + std::to_string(curve.id.value()) + "].components",
                                    "Component animation curve must contain at least one keyframe");
+                    }
+                    // The derived whole-value projection is validated for finiteness even though
+                    // the components are authoritative: it is stored state, and no stored Float64
+                    // may be one the canonical format cannot spell.
+                    for (const auto& keyframe : curve.keyframes) {
+                        if (!finiteValue(keyframe)) {
+                            result.add(ValidationCode::InvalidValue,
+                                       "[" + std::to_string(curve.id.value()) + "].keyframes[" +
+                                           std::to_string(keyframe.id.value()) + "].value",
+                                       "Keyframe value must be finite");
+                        }
                     }
                 }
             },

@@ -606,6 +606,24 @@ ProjectSessionSavepointStatus ProjectSession::acceptSavepoint(
     return ProjectSessionSavepointStatus::Accepted;
 }
 
+SessionSaveInputResult ProjectSession::captureRecoveryInput() const {
+    if (!isValid()) {
+        return SessionSaveInputResult(SessionSaveInputStatus::InvalidSession);
+    }
+    if (contentKind_ != ProjectSessionContentKind::DecodedDocument) {
+        return SessionSaveInputResult(SessionSaveInputStatus::ReadOnly);
+    }
+    if (!colorSettings_.has_value()) {
+        return SessionSaveInputResult(SessionSaveInputStatus::ColorSettingsUnavailable);
+    }
+    // No path gate and no intent matching: see the declaration's comment. The capture still names
+    // the session's CURRENT plain-save intent so the value is self-describing, but nothing in the
+    // recovery path ever presents it back to the session.
+    return SessionSaveInputResult(SessionSaveInput(
+        document_->snapshot(), *colorSettings_, roundTrip_, schemaMinor_, retainedRequirements_,
+        displayPath_, capturePlainSavePathIntent(), captureResultAcceptance()));
+}
+
 SessionSaveInputResult
 ProjectSession::captureSaveInput(const SessionPathIntentCapture intent) const {
     if (!isValid()) {

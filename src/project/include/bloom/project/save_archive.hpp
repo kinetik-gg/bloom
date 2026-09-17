@@ -85,6 +85,9 @@ struct SaveArchiveDocumentEncodingFailure final {
     CanonicalDocumentError error = CanonicalDocumentError::None;
     std::size_t compositionIndex = kCanonicalDocumentNoIndex;
     std::size_t elementIndex = kCanonicalDocumentNoIndex;
+    // Document path of the offending field, carried for CanonicalDocumentError::NonFiniteValue so
+    // the UI can name it ("<field> is not a finite number"). Empty for every other encoding error.
+    SaveArchiveErrorPath fieldPath{};
 };
 
 struct SaveArchiveContainerWriteFailure final {

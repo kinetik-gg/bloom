@@ -32,6 +32,7 @@
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QSettings>
+#include <QTimer>
 
 #include <memory>
 
@@ -263,6 +264,10 @@ int main(int argc, char* argv[]) {
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownQuiescent, &application,
                      &QApplication::quit);
     window.show();
+
+    // SAVEFIX-1: the launch after an abnormal exit. Queued, not called inline, so the offer is
+    // presented over a window that is already on screen rather than in front of one.
+    QTimer::singleShot(0, &projectHost, &bloom::ui::ProjectHost::offerRecoveryOnStartup);
 
     // NOLINTEND(clang-analyzer-cplusplus.NewDeleteLeaks)
     return application.exec();

@@ -589,6 +589,66 @@ void testColorAndScalarSchemaOwnership(ExpectationContext& expectations) {
         "and text size keeps its own exclusive-low, inclusive-high domain");
 }
 
+// SAVEFIX-1. Store admission is the model's own backstop behind the commands: whatever bypasses a
+// command must still be refused here, and the suite must catch a bypass rather than let it reach a
+// save. Every authored component value and ease handle was already refused; the derived
+// whole-value projection carried alongside a component-aware record was not, and it is stored
+// state like any other.
+void testStoreRefusesNonFiniteComponentAndProjectedValues(ExpectationContext& expectations) {
+    AnimationCurveStore store;
+    const auto curveId = id<AnimationCurveId>(120);
+    const auto nan = std::numeric_limits<double>::quiet_NaN();
+    const auto infinity = std::numeric_limits<double>::infinity();
+
+    expectations.expect(
+        !store.insert(Vec2AnimationCurve{
+            curveId,
+            {},
+            std::array{bloom::document::ComponentAnimationCurve{{
+                           ScalarKeyframe{id<KeyframeId>(121), RationalTime::fromInteger(0), nan},
+                       }},
+                       bloom::document::ComponentAnimationCurve{}}}),
+        "a component keyframe value that is not finite cannot enter the store");
+
+    expectations.expect(!store.insert(Vec2AnimationCurve{
+                            curveId,
+                            {},
+                            std::array{bloom::document::ComponentAnimationCurve{{
+                                           ScalarKeyframe{id<KeyframeId>(122),
+                                                          RationalTime::fromInteger(0),
+                                                          1.0,
+                                                          KeyframeInterpolation::Linear,
+                                                          {0.5, infinity}},
+                                       }},
+                                       bloom::document::ComponentAnimationCurve{}}}),
+                        "a non-finite ease handle offset cannot enter the store either");
+
+    expectations.expect(
+        !store.insert(Vec2AnimationCurve{
+            curveId,
+            {Vec2Keyframe{id<KeyframeId>(123), RationalTime::fromInteger(0), Vec2d{nan, 0.0}}},
+            std::array{bloom::document::ComponentAnimationCurve{{
+                           ScalarKeyframe{id<KeyframeId>(124), RationalTime::fromInteger(0), 1.0},
+                       }},
+                       bloom::document::ComponentAnimationCurve{}}}),
+        "a non-finite whole-value projection cannot ride along beside valid components");
+
+    const auto valid = store.insert(Vec2AnimationCurve{
+        curveId,
+        {},
+        std::array{bloom::document::ComponentAnimationCurve{{
+                       ScalarKeyframe{id<KeyframeId>(125), RationalTime::fromInteger(0), 1.0},
+                   }},
+                   bloom::document::ComponentAnimationCurve{}}});
+    expectations.expect(valid && store.validate().ok(),
+                        "the same record with finite values is admitted and validates");
+    expectations.expect(
+        !store.updateKeyframe(
+            curveId, bloom::document::AnimationComponent::X,
+            ScalarKeyframe{id<KeyframeId>(125), RationalTime::fromInteger(0), infinity}),
+        "an update cannot make an admitted component value non-finite either");
+}
+
 void testIndependentComponentCurves(ExpectationContext& expectations) {
     AnimationCurveStore store;
     const auto curveId = id<AnimationCurveId>(90);
@@ -654,6 +714,7 @@ int main() {
         testColor4CurveAndEasedInterpolation(expectations);
         testColorAndScalarSchemaOwnership(expectations);
         testIndependentComponentCurves(expectations);
+        testStoreRefusesNonFiniteComponentAndProjectedValues(expectations);
         return expectations.ok() ? EXIT_SUCCESS : EXIT_FAILURE;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

@@ -34,6 +34,7 @@ using bloom::project::ProjectIoMemoryReservation;
 using bloom::project::ProjectIoOperationMemory;
 using bloom::project::SaveArchiveDocumentEncodingFailure;
 using bloom::project::SaveArchiveEntry;
+using bloom::project::SaveArchiveErrorPath;
 using bloom::project::SaveArchiveFailure;
 using bloom::project::SaveArchiveLimits;
 using bloom::project::SaveArchiveManifestEncodingFailure;
@@ -184,16 +185,18 @@ encodeDocument(const CanonicalDocumentV1& input,
 
     const auto size = bloom::project::canonicalDocumentSize(request, limits);
     if (!size) {
-        return SaveArchiveFailure(stage, SaveArchiveDocumentEncodingFailure{size.error(),
-                                                                            size.compositionIndex(),
-                                                                            size.elementIndex()});
+        return SaveArchiveFailure(stage,
+                                  SaveArchiveDocumentEncodingFailure{
+                                      size.error(), size.compositionIndex(), size.elementIndex(),
+                                      SaveArchiveErrorPath::from(size.fieldPath().view())});
     }
     output.resize(*size.value());
     const auto written = bloom::project::encodeCanonicalDocument(request, output, limits);
     if (!written) {
         return SaveArchiveFailure(
-            stage, SaveArchiveDocumentEncodingFailure{written.error(), written.compositionIndex(),
-                                                      written.elementIndex()});
+            stage, SaveArchiveDocumentEncodingFailure{
+                       written.error(), written.compositionIndex(), written.elementIndex(),
+                       SaveArchiveErrorPath::from(written.fieldPath().view())});
     }
     return std::nullopt;
 }

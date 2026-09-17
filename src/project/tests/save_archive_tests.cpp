@@ -34,6 +34,7 @@
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <source_location>
@@ -41,6 +42,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -898,6 +900,95 @@ void expectResourceExhausted(Expectations& expectations, const std::uint64_t ope
     });
 }
 
+// ---------------------------------------------------------------------------------------------
+// SAVEFIX-1: a non-finite Float64 in the captured snapshot must make the SAVE fail -- typed, at
+// SaveArchiveStage::DocumentEncode, naming the offending field -- and must never terminate the
+// process. The document model's own admission refuses every non-finite value a caller can author,
+// so the fixture reproduces the crash report's condition directly: an in-memory document corrupted
+// after it was committed. The snapshot's shared state is a non-const object behind a const view,
+// so writing through it here is well defined, and it is confined to this test.
+// ---------------------------------------------------------------------------------------------
+
+void testNonFiniteDocumentValueFailsTypedAndSurvives(Expectations& expectations) {
+    using namespace bloom::document;
+    const auto duration = bloom::core::RationalTime::create(240, 24);
+    expectations.expect(duration.has_value(), "non-finite save: fixture duration constructs");
+    if (!duration.has_value()) {
+        return;
+    }
+    auto newProject = makeNewProject("Untitled Project", "Main Composition", *duration);
+    auto* composition = newProject.project.findComposition(newProject.initialCompositionId);
+    expectations.expect(composition != nullptr, "non-finite save: fixture composition exists");
+    if (composition == nullptr) {
+        return;
+    }
+    ComponentAnimationCurve x;
+    x.keyframes.push_back(
+        {KeyframeId::fromRaw(1), bloom::core::RationalTime{}, 12.0, KeyframeInterpolation::Linear});
+    ComponentAnimationCurve y;
+    y.keyframes.push_back(
+        {KeyframeId::fromRaw(2), bloom::core::RationalTime{}, -4.0, KeyframeInterpolation::Linear});
+    const bool fixtureAdmitted =
+        composition->parameters().insert({ParameterId::fromRaw(1),
+                                          std::string(kPositionParameterSchemaKey),
+                                          AnimationCurveSource{AnimationCurveId::fromRaw(1)}}) &&
+        composition->animationCurves().insert(
+            Vec2AnimationCurve{AnimationCurveId::fromRaw(1),
+                               std::array<ComponentAnimationCurve, 2>{std::move(x), std::move(y)}});
+    expectations.expect(fixtureAdmitted,
+                        "non-finite save: the component-aware fixture curve is admitted");
+    if (!fixtureAdmitted) {
+        return;
+    }
+
+    Document document{std::move(newProject.project)};
+    auto snapshot = document.snapshot();
+    const auto colorSettings = neutralColorSettings();
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 15}, .requirements = {}};
+    const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
+
+    expectations.expect(static_cast<bool>(buildVerifiedSaveArchive(
+                            manifest, documentInput, SaveArchiveLimits{}, makeOperation())),
+                        "non-finite save: the finite fixture saves before it is corrupted");
+
+    auto& corruptible = const_cast<Project&>(snapshot.project());
+    auto* corrupted = corruptible.findComposition(CompositionId::fromRaw(1));
+    auto* record = corrupted != nullptr
+                       ? const_cast<AnimationCurveRecord*>(
+                             corrupted->animationCurves().find(AnimationCurveId::fromRaw(1)))
+                       : nullptr;
+    auto* curve = record != nullptr ? std::get_if<Vec2AnimationCurve>(record) : nullptr;
+    auto* component = curve != nullptr ? curve->component(AnimationComponent::X) : nullptr;
+    expectations.expect(component != nullptr && !component->keyframes.empty(),
+                        "non-finite save: the fixture exposes its X component keyframe");
+    if (component == nullptr || component->keyframes.empty()) {
+        return;
+    }
+    component->keyframes.front().value = std::numeric_limits<double>::quiet_NaN();
+
+    // The process must still be here after this call: the encode reports, it does not terminate.
+    const auto built =
+        buildVerifiedSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
+    expectations.expect(!built && built.archive() == nullptr,
+                        "non-finite save: the save fails and produces no archive");
+    const auto* failure = built.failure();
+    expectations.expect(failure != nullptr && failure->stage() == SaveArchiveStage::DocumentEncode,
+                        "non-finite save: the failure is staged at DocumentEncode");
+    const auto* encoding =
+        failure != nullptr ? failure->payloadAs<SaveArchiveDocumentEncodingFailure>() : nullptr;
+    expectations.expect(encoding != nullptr &&
+                            encoding->error ==
+                                bloom::project::CanonicalDocumentError::NonFiniteValue &&
+                            encoding->fieldPath.view() ==
+                                "project/Composition[1]/AnimationCurve[1]/Keyframe[1]/value",
+                        "non-finite save: the typed payload names the exact offending field");
+
+    component->keyframes.front().value = 12.0;
+    expectations.expect(static_cast<bool>(buildVerifiedSaveArchive(
+                            manifest, documentInput, SaveArchiveLimits{}, makeOperation())),
+                        "non-finite save: the session stays saveable once the value is corrected");
+}
+
 void testBudgetExhaustion(Expectations& expectations) {
     expectResourceExhausted(
         expectations, 64, SaveArchiveStage::ManifestEncode,
@@ -995,6 +1086,7 @@ int main() {
     testVersionDisagreement(expectations);
     testRequirementsCoverageFailure(expectations);
     testCorruptionInjection(expectations);
+    testNonFiniteDocumentValueFailsTypedAndSurvives(expectations);
     testBudgetExhaustion(expectations);
     testDeterminism(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

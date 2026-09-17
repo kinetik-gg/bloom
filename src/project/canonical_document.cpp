@@ -10,6 +10,7 @@
 #include <bloom/project/round_trip_state.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <numeric>
@@ -27,6 +28,7 @@ using bloom::document::Composition;
 using bloom::document::ExtensionRecord;
 using bloom::project::CanonicalDecimalText;
 using bloom::project::CanonicalDocumentError;
+using bloom::project::CanonicalDocumentFieldPath;
 using bloom::project::CanonicalDocumentLimits;
 using bloom::project::CanonicalDocumentV1;
 using bloom::project::CanonicalJsonWriter;
@@ -159,6 +161,8 @@ struct WalkState final {
     CanonicalDocumentError error = CanonicalDocumentError::None;
     std::size_t compositionIndex = kCanonicalDocumentNoIndex;
     std::size_t elementIndex = kCanonicalDocumentNoIndex;
+    // Set only alongside CanonicalDocumentError::NonFiniteValue; empty for every other failure.
+    CanonicalDocumentFieldPath fieldPath{};
 
     void fail(const CanonicalDocumentError failure,
               const std::size_t failedCompositionIndex = kCanonicalDocumentNoIndex,
@@ -170,6 +174,42 @@ struct WalkState final {
         }
     }
 };
+
+// Diagnostic spelling of one collection kind for CanonicalDocumentFieldPath. Deliberately the
+// enumerator's own name rather than the wire member name: a path segment identifies the collection
+// element by its stable identity, and the enumerator is the one spelling that never drifts as
+// schema members are renamed.
+[[nodiscard]] std::string_view collectionKindName(const RoundTripCollectionKind kind) noexcept {
+    switch (kind) {
+    case RoundTripCollectionKind::NodeLayout:
+        return "NodeLayout";
+    case RoundTripCollectionKind::Composition:
+        return "Composition";
+    case RoundTripCollectionKind::Parameter:
+        return "Parameter";
+    case RoundTripCollectionKind::AnimationCurve:
+        return "AnimationCurve";
+    case RoundTripCollectionKind::Keyframe:
+        return "Keyframe";
+    case RoundTripCollectionKind::Node:
+        return "Node";
+    case RoundTripCollectionKind::Edge:
+        return "Edge";
+    case RoundTripCollectionKind::ExtensionRecord:
+        return "ExtensionRecord";
+    case RoundTripCollectionKind::ParameterBinding:
+        return "ParameterBinding";
+    case RoundTripCollectionKind::LayerOutput:
+        return "LayerOutput";
+    case RoundTripCollectionKind::LayerStackEntry:
+        return "LayerStackEntry";
+    case RoundTripCollectionKind::HostReference:
+        return "HostReference";
+    case RoundTripCollectionKind::NodeGroup:
+        return "NodeGroup";
+    }
+    return "Unknown";
+}
 
 struct EmitState final {
     CanonicalJsonWriter& writer;
@@ -205,6 +245,14 @@ struct EmitState final {
             case CanonicalJsonWriterError::ContainerLimitExceeded:
                 walk.error = CanonicalDocumentError::ContainerEntryCountExceeded;
                 break;
+            case CanonicalJsonWriterError::NonFiniteNumber:
+                // Backstop. Every float64 member is written through emitFloat64Member()/
+                // emitFloat64Value() below, which refuse a non-finite double with the offending
+                // field's path before the writer ever sees it. A snapshot that still reaches the
+                // writer's own refusal is reported, never terminated: an unsaveable value must
+                // cost the user a typed save failure, not the process.
+                failNonFinite({});
+                break;
             default:
                 // Validation proved every other writer failure impossible for trusted snapshots.
                 std::terminate();
@@ -212,7 +260,56 @@ struct EmitState final {
         }
         return false;
     }
+
+    // Records CanonicalDocumentError::NonFiniteValue with the current attachment path plus the
+    // offending member name, e.g. "project/Composition[7]/AnimationCurve[12]/Keyframe[4]/value".
+    void failNonFinite(const std::string_view member) noexcept {
+        if (walk.error != CanonicalDocumentError::None) {
+            return;
+        }
+        CanonicalDocumentFieldPath path;
+        for (std::size_t index = 0; index < attachmentDepth; ++index) {
+            const auto& segment = attachmentPath[index];
+            if (index != 0) {
+                path.append("/");
+            }
+            if (segment.isCollectionElement) {
+                path.append(collectionKindName(segment.kind));
+                path.append("[");
+                path.append(segment.text);
+                path.append("]");
+            } else {
+                path.append(segment.text);
+            }
+        }
+        if (!member.empty()) {
+            if (attachmentDepth != 0) {
+                path.append("/");
+            }
+            path.append(member);
+        }
+        walk.error = CanonicalDocumentError::NonFiniteValue;
+        walk.fieldPath = path;
+    }
 };
+
+// Emits one float64 value for the already-written member `name`, refusing NaN and the infinities
+// with the offending field's document path. The canonical grammar has no spelling for either, so
+// this is the single admission point every float64 member in this writer goes through.
+[[nodiscard]] bool emitFloat64Value(EmitState& state, const std::string_view name,
+                                    const double value) noexcept {
+    if (!std::isfinite(value)) {
+        state.failNonFinite(name);
+        return false;
+    }
+    return state.ok(state.writer.float64Value(value));
+}
+
+// memberName(name) followed by emitFloat64Value(name, value).
+[[nodiscard]] bool emitFloat64Member(EmitState& state, const std::string_view name,
+                                     const double value) noexcept {
+    return state.ok(state.writer.memberName(name)) && emitFloat64Value(state, name, value);
+}
 
 // RAII scope that pushes one attachment-path segment for the duration of emitting one nested
 // singleton member or collection element, and pops it back off on destruction -- the writer-side
@@ -530,14 +627,14 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
     }
     if (const auto* floating = std::get_if<double>(&value)) {
         return state.ok(writer.memberName("kind")) && state.ok(writer.stringValue("float64")) &&
-               state.ok(writer.memberName("value")) && state.ok(writer.float64Value(*floating)) &&
-               emitRetainedTrailing(state) && state.ok(writer.endObject());
+               emitFloat64Member(state, "value", *floating) && emitRetainedTrailing(state) &&
+               state.ok(writer.endObject());
     }
     if (const auto* vector = std::get_if<Vec2d>(&value)) {
         return state.ok(writer.memberName("kind")) && state.ok(writer.stringValue("vec2")) &&
-               state.ok(writer.memberName("x")) && state.ok(writer.float64Value(vector->x)) &&
-               state.ok(writer.memberName("y")) && state.ok(writer.float64Value(vector->y)) &&
-               emitRetainedTrailing(state) && state.ok(writer.endObject());
+               emitFloat64Member(state, "x", vector->x) &&
+               emitFloat64Member(state, "y", vector->y) && emitRetainedTrailing(state) &&
+               state.ok(writer.endObject());
     }
     if (const auto* vector = std::get_if<Vec3d>(&value)) {
         // Document 1.4. Its own kind token rather than a third component appended to "vec2": the
@@ -545,18 +642,17 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
         // a two-component one -- which is also why an older minor refuses to decode this kind at
         // all rather than reading it as a vec2 with a stray member.
         return state.ok(writer.memberName("kind")) && state.ok(writer.stringValue("vec3")) &&
-               state.ok(writer.memberName("x")) && state.ok(writer.float64Value(vector->x)) &&
-               state.ok(writer.memberName("y")) && state.ok(writer.float64Value(vector->y)) &&
-               state.ok(writer.memberName("z")) && state.ok(writer.float64Value(vector->z)) &&
-               emitRetainedTrailing(state) && state.ok(writer.endObject());
+               emitFloat64Member(state, "x", vector->x) &&
+               emitFloat64Member(state, "y", vector->y) &&
+               emitFloat64Member(state, "z", vector->z) && emitRetainedTrailing(state) &&
+               state.ok(writer.endObject());
     }
     if (const auto* color = std::get_if<bloom::core::Color4d>(&value)) {
         return state.ok(writer.memberName("kind")) && state.ok(writer.stringValue("color4")) &&
-               state.ok(writer.memberName("red")) && state.ok(writer.float64Value(color->red)) &&
-               state.ok(writer.memberName("green")) &&
-               state.ok(writer.float64Value(color->green)) && state.ok(writer.memberName("blue")) &&
-               state.ok(writer.float64Value(color->blue)) && state.ok(writer.memberName("alpha")) &&
-               state.ok(writer.float64Value(color->alpha)) && emitRetainedTrailing(state) &&
+               emitFloat64Member(state, "red", color->red) &&
+               emitFloat64Member(state, "green", color->green) &&
+               emitFloat64Member(state, "blue", color->blue) &&
+               emitFloat64Member(state, "alpha", color->alpha) && emitRetainedTrailing(state) &&
                state.ok(writer.endObject());
     }
     if (const auto* text = std::get_if<std::string>(&value)) {
@@ -570,9 +666,9 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
             !state.ok(writer.beginArray()))
             return false;
         const auto point = [&](const std::string_view name, const Vec2d p) {
+            const PathScope pointScope(state, name);
             return state.ok(writer.memberName(name)) && state.ok(writer.beginObject()) &&
-                   state.ok(writer.memberName("x")) && state.ok(writer.float64Value(p.x)) &&
-                   state.ok(writer.memberName("y")) && state.ok(writer.float64Value(p.y)) &&
+                   emitFloat64Member(state, "x", p.x) && emitFloat64Member(state, "y", p.y) &&
                    state.ok(writer.endObject());
         };
         for (const auto& anchor : path->anchors) {
@@ -692,10 +788,10 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
         return true;
     }
     auto& writer = state.writer;
+    const PathScope handleScope(state, name);
     return state.ok(writer.memberName(name)) && state.ok(writer.beginObject()) &&
-           state.ok(writer.memberName("time")) && state.ok(writer.float64Value(handle.time)) &&
-           state.ok(writer.memberName("value")) && state.ok(writer.float64Value(handle.value)) &&
-           state.ok(writer.endObject());
+           emitFloat64Member(state, "time", handle.time) &&
+           emitFloat64Member(state, "value", handle.value) && state.ok(writer.endObject());
 }
 
 [[nodiscard]] bool emitKeyframeHandles(EmitState& state,
@@ -738,10 +834,7 @@ emitInterpolation(EmitState& state,
             return false;
         }
     }
-    if (!state.ok(writer.memberName("value"))) {
-        return false;
-    }
-    if (!state.ok(writer.float64Value(key.value))) {
+    if (!emitFloat64Member(state, "value", key.value)) {
         return false;
     }
     if (!state.ok(writer.memberName("outgoingInterpolation"))) {
@@ -784,10 +877,10 @@ emitInterpolation(EmitState& state,
     }
     {
         const PathScope valueScope(state, "value");
-        if (!state.ok(writer.memberName("x")) || !state.ok(writer.float64Value(key.value.x))) {
+        if (!emitFloat64Member(state, "x", key.value.x)) {
             return false;
         }
-        if (!state.ok(writer.memberName("y")) || !state.ok(writer.float64Value(key.value.y))) {
+        if (!emitFloat64Member(state, "y", key.value.y)) {
             return false;
         }
         if (!emitRetainedTrailing(state)) {
@@ -847,7 +940,7 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
         if (!emitRational(state, key.time.numerator(), key.time.denominator()))
             return false;
     }
-    if (!state.ok(writer.memberName("value")) || !state.ok(writer.float64Value(key.value)) ||
+    if (!emitFloat64Member(state, "value", key.value) ||
         !state.ok(writer.memberName("outgoingInterpolation")) ||
         !emitInterpolation(state, key.outgoingInterpolation) || !emitKeyframeHandles(state, key) ||
         !emitRetainedTrailing(state) || !state.ok(writer.endObject())) {
@@ -884,19 +977,16 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
     }
     {
         const PathScope valueScope(state, "value");
-        if (!state.ok(writer.memberName("red")) || !state.ok(writer.float64Value(key.value.red))) {
+        if (!emitFloat64Member(state, "red", key.value.red)) {
             return false;
         }
-        if (!state.ok(writer.memberName("green")) ||
-            !state.ok(writer.float64Value(key.value.green))) {
+        if (!emitFloat64Member(state, "green", key.value.green)) {
             return false;
         }
-        if (!state.ok(writer.memberName("blue")) ||
-            !state.ok(writer.float64Value(key.value.blue))) {
+        if (!emitFloat64Member(state, "blue", key.value.blue)) {
             return false;
         }
-        if (!state.ok(writer.memberName("alpha")) ||
-            !state.ok(writer.float64Value(key.value.alpha))) {
+        if (!emitFloat64Member(state, "alpha", key.value.alpha)) {
             return false;
         }
         if (!emitRetainedTrailing(state)) {
@@ -1484,14 +1574,11 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
             return false;
         {
             const PathScope positionScope(state, "position");
-            if (!state.ok(writer.memberName("x")) ||
-                !state.ok(writer.float64Value(record.position.x)) ||
-                !state.ok(writer.memberName("y")) ||
-                !state.ok(writer.float64Value(record.position.y)) || !emitRetainedTrailing(state))
+            if (!emitFloat64Member(state, "x", record.position.x) ||
+                !emitFloat64Member(state, "y", record.position.y) || !emitRetainedTrailing(state))
                 return false;
         }
-        if (!state.ok(writer.endObject()) || !state.ok(writer.memberName("width")) ||
-            !state.ok(writer.float64Value(record.width)) ||
+        if (!state.ok(writer.endObject()) || !emitFloat64Member(state, "width", record.width) ||
             !state.ok(writer.memberName("collapsed")) ||
             !state.ok(writer.booleanValue(record.collapsed)) ||
             !state.ok(writer.memberName("muted")) || !state.ok(writer.booleanValue(record.muted)) ||
@@ -1525,10 +1612,8 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
             return false;
         {
             const PathScope paddingScope(state, "padding");
-            if (!state.ok(writer.memberName("x")) ||
-                !state.ok(writer.float64Value(record.padding.x)) ||
-                !state.ok(writer.memberName("y")) ||
-                !state.ok(writer.float64Value(record.padding.y)) || !emitRetainedTrailing(state))
+            if (!emitFloat64Member(state, "x", record.padding.x) ||
+                !emitFloat64Member(state, "y", record.padding.y) || !emitRetainedTrailing(state))
                 return false;
         }
         if (!state.ok(writer.endObject()) || !emitRetainedTrailing(state) ||
@@ -1543,9 +1628,8 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
     const auto settings = composition.safeAreas();
     const PathScope scope(state, "safeAreas");
     return state.ok(writer.memberName("safeAreas")) && state.ok(writer.beginObject()) &&
-           state.ok(writer.memberName("action")) &&
-           state.ok(writer.float64Value(settings.action)) && state.ok(writer.memberName("title")) &&
-           state.ok(writer.float64Value(settings.title)) && emitRetainedTrailing(state) &&
+           emitFloat64Member(state, "action", settings.action) &&
+           emitFloat64Member(state, "title", settings.title) && emitRetainedTrailing(state) &&
            state.ok(writer.endObject());
 }
 
@@ -1652,10 +1736,16 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
     if (!state.ok(writer.memberName("backgroundColor")) || !state.ok(writer.beginArray()))
         return false;
     const auto background = composition.backgroundColor();
-    for (const double channel :
-         {background.red, background.green, background.blue, background.alpha})
-        if (!state.ok(writer.float64Value(channel)))
-            return false;
+    {
+        // Scoped to the channel loop only: the composition's own retained members are attached to
+        // the composition path, not to this array.
+        const PathScope backgroundScope(state, "backgroundColor");
+        for (const auto& [channelName, channel] :
+             {std::pair{"red", background.red}, std::pair{"green", background.green},
+              std::pair{"blue", background.blue}, std::pair{"alpha", background.alpha}})
+            if (!emitFloat64Value(state, channelName, channel))
+                return false;
+    }
     if (!state.ok(writer.endArray()))
         return false;
     if (!emitRetainedTrailing(state)) {
@@ -2256,7 +2346,8 @@ CanonicalDocumentSizeResult canonicalDocumentSize(const CanonicalDocumentV1& doc
     const auto validation = validateRequest(document, limits, plan);
     if (validation.error != CanonicalDocumentError::None) {
         return CanonicalDocumentSizeResult::failure(validation.error, validation.compositionIndex,
-                                                    validation.elementIndex);
+                                                    validation.elementIndex,
+                                                    validation.fieldPath.view());
     }
 
     const auto& snapshot = *document.snapshot;
@@ -2275,7 +2366,8 @@ CanonicalDocumentSizeResult canonicalDocumentSize(const CanonicalDocumentV1& doc
                     document.schemaMinor};
     if (!emitDocumentRoot(state)) {
         return CanonicalDocumentSizeResult::failure(state.walk.error, state.walk.compositionIndex,
-                                                    state.walk.elementIndex);
+                                                    state.walk.elementIndex,
+                                                    state.walk.fieldPath.view());
     }
     const auto requiredSize = counter.bytesRequired();
     if (requiredSize > limits.maximumOutputBytes) {
@@ -2289,9 +2381,9 @@ encodeCanonicalDocument(const CanonicalDocumentV1& document, const std::span<cha
                         const CanonicalDocumentLimits limits) noexcept {
     const auto sizeResult = canonicalDocumentSize(document, limits);
     if (!sizeResult) {
-        return CanonicalDocumentWriteResult::failure(sizeResult.error(), std::nullopt,
-                                                     sizeResult.compositionIndex(),
-                                                     sizeResult.elementIndex());
+        return CanonicalDocumentWriteResult::failure(
+            sizeResult.error(), std::nullopt, sizeResult.compositionIndex(),
+            sizeResult.elementIndex(), sizeResult.fieldPath().view());
     }
     const auto requiredSize = *sizeResult.value();
     if (output.size() < requiredSize) {

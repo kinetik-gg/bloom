@@ -51,6 +51,28 @@ predicates, `src/commands/animation_operations.*`, `src/runtime/animation_sampli
 compilation, snapshot lowering, and CPU evaluation, project canonical encode/decode plus the
 document migration registry and schemas, and `src/ui/composition_session.*` with its tests. KEY-2 now supplies the component-aware widgets and lanes described below.
 
+## Finite Value Invariant
+
+Every Float64 an animation curve holds -- a keyframe value, and a 1.12 ease handle's time fraction
+and value offset -- is finite. NaN and the infinities are not authorable, not storable and not
+writable:
+
+- the commands refuse one with `OperationIssueCode::InvalidValue` (every keyframe insert, update,
+  set-at-time, paste, handle edit and value edit, on whole values and on components alike)
+- `AnimationCurveStore` refuses one on insert and update, including a component-aware record's
+  derived whole-value projection, and reports one from `validate()`, so a bypass of the commands is
+  caught by `Document::commit()` and by the test suite rather than reaching a save
+- the gestures that compute these values -- the viewer transform drags and the graph editor's value
+  and ease-handle drags -- decline to offer an unrepresentable result at all, keeping the last
+  representable preview instead of proposing a value the commands would then refuse (see
+  "Direct Manipulation And Preview Overrides")
+- the canonical writer and decoder refuse one with a typed error rather than terminating (see
+  docs/architecture/project-format.md, "Non-Finite Values")
+
+The invariant is deliberately enforced at every layer rather than at one: an unrepresentable value
+that reaches the save writer costs the artist a failed save, and one that reached a file would cost
+them the project.
+
 ## Durable Type Model
 
 `KeyframeId` is a project-global strong ID with allocator and high-water semantics identical to the
