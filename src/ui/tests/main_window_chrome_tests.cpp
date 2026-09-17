@@ -1,13 +1,23 @@
+#ifndef BLOOM_GRAMMAR_ARTIFACT_DIR
+#define BLOOM_GRAMMAR_ARTIFACT_DIR "."
+#endif
+#include "window_fixture.hpp"
+#undef BLOOM_GRAMMAR_ARTIFACT_DIR
+
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
+#include <bloom/ui/kit/split_handle.hpp>
 #include <bloom/ui/licenses_window.hpp>
 #include <bloom/ui/main_window.hpp>
+#include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/project_host.hpp>
+#include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
@@ -15,12 +25,15 @@
 #include <QApplication>
 #include <QDesktopServices>
 #include <QDir>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QMenuBar>
+#include <QMouseEvent>
 #include <QObject>
 #include <QSettings>
+#include <QSplitter>
 #include <QStatusBar>
 #include <QString>
 #include <QTemporaryDir>
@@ -28,8 +41,13 @@
 #include <QUrl>
 #include <QWidget>
 
+#include <array>
+#include <cmath>
+#include <exception>
+
 #include <cstdlib>
 #include <iostream>
+#include <numeric>
 #include <source_location>
 #include <string>
 
@@ -185,6 +203,143 @@ void testLegacyLayoutMigration(Expectations& expectations) {
     expectations.expect(QJsonDocument::fromJson(migrated).object().value("schema").toInt() == 2 &&
                             migrated.contains("bloom.assets"),
                         "version 2 pins Assets into the migrated default");
+}
+
+void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expectations) {
+    try {
+        bloom::ui::test::WindowFixture fixture;
+        auto* resetAction =
+            fixture.window->findChild<QAction*>(QStringLiteral("resetWorkspaceAction"));
+        expectations.expect(resetAction != nullptr &&
+                                resetAction->text() == QStringLiteral("Reset Workspace"),
+                            "reset workspace: Window menu carries the Reset Workspace action");
+
+        const auto visibleTopRow = [&fixture] {
+            for (auto* splitter : fixture.window->workspaceHost()->findChildren<QSplitter*>(
+                     QStringLiteral("workspaceSplitter"))) {
+                if (splitter->isVisible() && splitter->orientation() == Qt::Horizontal &&
+                    splitter->count() == 4) {
+                    return splitter;
+                }
+            }
+            return static_cast<QSplitter*>(nullptr);
+        };
+        const auto visibleTimeline = [&fixture] {
+            for (auto* timeline : fixture.window->findChildren<TimelineEditor*>()) {
+                if (timeline->isVisible()) {
+                    return timeline;
+                }
+            }
+            return static_cast<TimelineEditor*>(nullptr);
+        };
+
+        auto* topRow = visibleTopRow();
+        auto* timeline = visibleTimeline();
+        expectations.expect(topRow != nullptr && timeline != nullptr,
+                            "reset workspace: the default top row and timeline are visible");
+        if (topRow == nullptr || timeline == nullptr || resetAction == nullptr) {
+            return;
+        }
+
+        topRow->setSizes({500, 250, 750, 350});
+        auto* handle = timeline->splitHandleForTest();
+        expectations.expect(handle != nullptr, "reset workspace: the timeline divider exists");
+        if (handle == nullptr) {
+            return;
+        }
+        const int originalTimelineWidth = timeline->layerColumnWidthForTest();
+        const QPointF press(handle->width() / 2.0, handle->height() / 2.0);
+        QMouseEvent pressEvent(QEvent::MouseButtonPress, press,
+                               handle->mapToGlobal(press.toPoint()), Qt::LeftButton, Qt::LeftButton,
+                               Qt::NoModifier);
+        QCoreApplication::sendEvent(handle, &pressEvent);
+        const QPointF moved(press.x() + 80.0, press.y());
+        QMouseEvent moveEvent(QEvent::MouseMove, moved, handle->mapToGlobal(moved.toPoint()),
+                              Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(handle, &moveEvent);
+        QMouseEvent releaseEvent(QEvent::MouseButtonRelease, moved,
+                                 handle->mapToGlobal(moved.toPoint()), Qt::LeftButton, Qt::NoButton,
+                                 Qt::NoModifier);
+        QCoreApplication::sendEvent(handle, &releaseEvent);
+        QCoreApplication::processEvents();
+        expectations.expect(timeline->layerColumnWidthForTest() != originalTimelineWidth,
+                            "reset workspace: dragging changes the timeline divider");
+
+        resetAction->trigger();
+        QCoreApplication::processEvents();
+        QCoreApplication::processEvents();
+        topRow = visibleTopRow();
+        timeline = visibleTimeline();
+        expectations.expect(topRow != nullptr && timeline != nullptr,
+                            "reset workspace: reset rebuilds the visible default panels");
+        if (topRow == nullptr || timeline == nullptr) {
+            return;
+        }
+
+        const auto share = [](const QList<int>& sizes, const int index) {
+            const int total = std::accumulate(sizes.cbegin(), sizes.cend(), 0);
+            return total > 0 ? static_cast<double>(sizes[index]) / total : 0.0;
+        };
+        const auto sizes = topRow->sizes();
+        for (const auto [index, expected] : std::array{std::pair{0, 0.16}, std::pair{1, 0.31},
+                                                       std::pair{2, 0.32}, std::pair{3, 0.19}}) {
+            expectations.expect(std::abs(share(sizes, index) - expected) <= 0.01,
+                                "reset workspace: top-row proportions are restored");
+        }
+        const double timelineShare =
+            timeline->width() > 0
+                ? static_cast<double>(timeline->layerColumnWidthForTest()) / timeline->width()
+                : 0.0;
+        expectations.expect(std::abs(timelineShare - 0.37) <= 0.01,
+                            "reset workspace: the timeline divider returns to 37%");
+
+        auto* viewer = fixture.window->findChild<ViewerEditor*>();
+        expectations.expect(viewer != nullptr && viewer->isVisible() &&
+                                viewer->channelForTest() == ViewerChannel::Rgba &&
+                                viewer->viewTransformForTest().fitToWindow,
+                            "reset workspace: Viewer starts in RGBA and Fit");
+        auto* nodes = fixture.window->findChild<NodeGraphEditor*>();
+        expectations.expect(nodes != nullptr && nodes->isVisible() &&
+                                nodes->graphView() != nullptr &&
+                                !nodes->graphView()->viewAdjusted(),
+                            "reset workspace: Nodes starts fitted");
+        fixture.session.clearSelection();
+        QCoreApplication::processEvents();
+        auto* properties = fixture.window->findChild<PropertiesEditor*>();
+        auto* documentSection =
+            properties != nullptr
+                ? properties->findChild<QWidget*>(QStringLiteral("propertiesDocumentSection"))
+                : nullptr;
+        expectations.expect(properties != nullptr && properties->isVisible() &&
+                                documentSection != nullptr && documentSection->isVisible(),
+                            "reset workspace: Properties shows Composition with no selection");
+
+        QSettings settings;
+        settings.sync();
+        const auto saved = QJsonDocument::fromJson(
+            settings.value(QStringLiteral("workspace/compositing/layout")).toByteArray());
+        const auto root = saved.object().value(QStringLiteral("root")).toObject();
+        const auto savedTop = root.value(QStringLiteral("children")).toArray().at(0).toObject();
+        const auto savedRootWeights = root.value(QStringLiteral("weights")).toArray();
+        const auto savedTopWeights = savedTop.value(QStringLiteral("weights")).toArray();
+        expectations.expect(savedRootWeights.size() == 2 &&
+                                std::abs(savedRootWeights.at(0).toDouble() - 0.68) <= 0.01 &&
+                                std::abs(savedRootWeights.at(1).toDouble() - 0.32) <= 0.01 &&
+                                savedTopWeights.size() == 4 &&
+                                std::abs(savedTopWeights.at(0).toDouble() - 0.16) <= 0.01 &&
+                                std::abs(savedTopWeights.at(1).toDouble() - 0.31) <= 0.01 &&
+                                std::abs(savedTopWeights.at(2).toDouble() - 0.32) <= 0.01 &&
+                                std::abs(savedTopWeights.at(3).toDouble() - 0.19) <= 0.01,
+                            "reset workspace: persisted layout keys contain the restored weights");
+        const int persistedTimelineWidth =
+            settings.value(QStringLiteral("timeline/layer-column-width")).toInt();
+        expectations.expect(
+            settings.contains(QStringLiteral("timeline/layer-column-width")) &&
+                std::abs(persistedTimelineWidth - timeline->layerColumnWidthForTest()) <= 1,
+            "reset workspace: the timeline divider's persisted key matches its live value");
+    } catch (const std::exception& error) {
+        expectations.expect(false, std::string("reset workspace fixture: ") + error.what());
+    }
 }
 
 void testMainWindowAlwaysBuildsNativeChrome(Expectations& expectations) {
@@ -463,6 +618,7 @@ int main(int argc, char** argv) {
     Expectations expectations;
     testChromeModeFromSettingsReadsTheInjectedFile(expectations);
     testLegacyLayoutMigration(expectations);
+    testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(expectations);
     testMainWindowAlwaysBuildsNativeChrome(expectations);
     testWindowTitleIsJustTheDocumentTitle(expectations);
     testViewMenuItemsExistAndFire(expectations);

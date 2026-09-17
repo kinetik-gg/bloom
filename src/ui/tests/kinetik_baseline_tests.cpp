@@ -13,15 +13,19 @@
 #include <QMenuBar>
 #include <QPixmap>
 #include <QRect>
+#include <QSettings>
 #include <QSplitter>
 #include <QString>
+#include <QTemporaryDir>
 #include <QTest>
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <numeric>
 #include <source_location>
 #include <string>
 
@@ -51,6 +55,83 @@ EditorRegistry makeRegistry() {
     (void)registry.registerEditor(
         {"bloom.probe", "Probe", [](QWidget* parent) -> QWidget* { return new QWidget(parent); }});
     return registry;
+}
+
+EditorRegistry makeDefaultRegistry() {
+    EditorRegistry registry;
+    for (const auto* id :
+         {"bloom.assets", "bloom.viewer", "bloom.nodes", "bloom.properties", "bloom.timeline"}) {
+        (void)registry.registerEditor(
+            {id, QString::fromLatin1(id), [](QWidget* parent) { return new QWidget(parent); }});
+    }
+    return registry;
+}
+
+void testDefaultWorkspaceUsesTheOwnerArrangement(Expectations& expectations) {
+    const EditorRegistry registry = makeDefaultRegistry();
+    QTemporaryDir settingsDirectory;
+    expectations.expect(settingsDirectory.isValid(),
+                        "default workspace: settings directory exists");
+    if (!settingsDirectory.isValid()) {
+        return;
+    }
+    QSettings settings(settingsDirectory.filePath(QStringLiteral("workspace.ini")),
+                       QSettings::IniFormat);
+    WorkspaceHost host(registry);
+    expectations.expect(host.restorePersistedLayout(settings, QStringLiteral("workspace/layout")) ==
+                            WorkspaceLayoutRestoreResult::Missing,
+                        "default workspace: an empty settings store has no persisted layout");
+    host.resetToDefaultLayout({"bloom.assets", "bloom.viewer", "bloom.nodes", "bloom.properties"},
+                              "bloom.timeline");
+    host.resize(1920, 1080);
+    host.show();
+    QCoreApplication::processEvents();
+    QCoreApplication::processEvents();
+
+    QSplitter* topRow = nullptr;
+    QSplitter* workspaceRows = nullptr;
+    for (auto* splitter : host.findChildren<QSplitter*>(QStringLiteral("workspaceSplitter"))) {
+        if (splitter->orientation() == Qt::Horizontal && splitter->count() == 4) {
+            topRow = splitter;
+        } else if (splitter->orientation() == Qt::Vertical && splitter->count() == 2) {
+            workspaceRows = splitter;
+        }
+    }
+    expectations.expect(topRow != nullptr, "default workspace: top row is one four-area splitter");
+    expectations.expect(workspaceRows != nullptr,
+                        "default workspace: top and bottom rows are split vertically");
+    if (topRow == nullptr || workspaceRows == nullptr) {
+        host.hide();
+        return;
+    }
+
+    const auto share = [](const QList<int>& sizes, const int index) {
+        const int total = std::accumulate(sizes.cbegin(), sizes.cend(), 0);
+        return total > 0 ? static_cast<double>(sizes[index]) / total : 0.0;
+    };
+    const auto topSizes = topRow->sizes();
+    for (const auto [index, expected] : std::array{std::pair{0, 0.16}, std::pair{1, 0.31},
+                                                   std::pair{2, 0.32}, std::pair{3, 0.19}}) {
+        expectations.expect(std::abs(share(topSizes, index) - expected) <= 0.01,
+                            "default workspace: top-row share is within one percentage point");
+    }
+    const auto rowSizes = workspaceRows->sizes();
+    expectations.expect(std::abs(share(rowSizes, 0) - 0.68) <= 0.01 &&
+                            std::abs(share(rowSizes, 1) - 0.32) <= 0.01,
+                        "default workspace: top/bottom row shares are 68%/32%");
+    for (int index = 0; index < topRow->count(); ++index) {
+        const auto* area = qobject_cast<const EditorArea*>(topRow->widget(index));
+        expectations.expect(
+            area != nullptr &&
+                area->editorId() ==
+                    std::array<std::string, 4>{"bloom.assets", "bloom.viewer", "bloom.nodes",
+                                               "bloom.properties"}[static_cast<std::size_t>(index)],
+            "default workspace: top-row editor order is Assets, Viewer, Nodes, Properties");
+    }
+    const auto* timeline = qobject_cast<const EditorArea*>(workspaceRows->widget(1));
+    expectations.expect(timeline != nullptr && timeline->editorId() == "bloom.timeline",
+                        "default workspace: Timeline occupies the full bottom row");
+    host.hide();
 }
 
 void testPanelsAreSeparatedByARealGutter(Expectations& expectations) {
@@ -319,6 +400,7 @@ int main(int argc, char** argv) {
     testBacktickTogglesFullscreenForTheActivePanelAndDefersToTextEntry(expectations);
     testTheStyledQComboBoxRendersFieldAndBorder(expectations);
     testWorkspaceHostInsetsItsSingleAreaByTheGutterFromItsOwnRect(expectations);
+    testDefaultWorkspaceUsesTheOwnerArrangement(expectations);
     testMenuBarCarriesItsDocumentedPadding(expectations);
     testMenuBarItemsRenderVerticallyCenteredWithRoomAboveThem(expectations);
     return expectations.failures() == 0 ? 0 : 1;

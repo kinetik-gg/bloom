@@ -91,3 +91,11 @@ and Pen moves below them. Both references were regenerated with `--update-golden
 and 1.5 and visually inspected. Against the previous references, changes are confined to the
 tool column: (8,166)–(40,356) at DPR 1 and (12,250)–(60,534) at DPR 1.5. Window geometry,
 composition pixels and all other panels are unchanged. Rendering identity goldens are unchanged.
+
+WORKSPACE-1 approval (2026-09-17, Qt 6.8.3): both references were regenerated with
+`--update-goldens` at DPR 1 and 1.5 and visually inspected. The intentional change is the
+proportions-only workspace arrangement: Assets, Viewer, Nodes and Properties now share the full
+top row at 16% / 31% / 32% / 19%, with Timeline across the 68% / 32% lower row and its layer-table
+divider at 37%. The fixture's sample graph, selected content, composition pixels, controls and
+full-window dimensions are otherwise unchanged. Comparison tolerances and full-image coverage
+are unchanged; process/output identity goldens are unchanged.

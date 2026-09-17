@@ -280,7 +280,7 @@ void testRulerAndLanesShareTheLaneRegionOrigin(Expectations& expectations) {
         return;
     }
 
-    const int columnWidth = ui::TimelineEditor::layerColumnWidth();
+    const int columnWidth = editor->layerColumnWidthForTest();
     expectations.expect(stack->width() == columnWidth,
                         "the layer column paints at its own fixed width");
     // task TL-FIX2: the divider is now the draggable KSplitHandle (Size::SplitHandle), not the bare
@@ -554,7 +554,7 @@ void testTimelineHeaderMenus(Expectations& expectations) {
     // the row -- the navigator, and the empty left cell that keeps its time axis aligned.
     auto* navigatorCell = editor->findChild<QWidget*>("timelineNavigatorLeftCell");
     expectations.expect(navigatorCell != nullptr &&
-                            navigatorCell->width() == ui::TimelineEditor::layerColumnWidth(),
+                            navigatorCell->width() == editor->layerColumnWidthForTest(),
                         "the navigator row's left cell still reserves exactly the layer column's "
                         "width, so the time axis below the lanes stays aligned with them");
     expectations.expect(editor->findChildren<QToolButton*>("playPauseButton").isEmpty() &&
@@ -738,7 +738,7 @@ void testRowsAreFlatThirtyTwoPixelRows(Expectations& expectations) {
             continue;
         }
         expectations.expect(row->height() == 32, "every visible row widget is 32px tall");
-        expectations.expect(row->width() == ui::TimelineEditor::layerColumnWidth(),
+        expectations.expect(row->width() == stack->width(),
                             "every row spans the whole layer column");
     }
 
@@ -1905,8 +1905,30 @@ void testPropertyRowNestingAndOneDiamondPerRow(Expectations& expectations) {
 // column by 80px and carries the ruler origin and the lane region along with it by the same 80px --
 // the header split and the body split read one live value, not two that could drift apart. The
 // result persists in QSettings across a rebuild, and a double-click on the handle resets it to the
-// shipped default (which also cleans up after this test: no persisted width leaks into a later
-// test's fresh TimelineEditor).
+// 37% default (which also cleans up after this test: no persisted width leaks into a later test's
+// fresh TimelineEditor).
+void testLayerColumnDefaultIsThirtySevenPercent(Expectations& expectations) {
+    using namespace bloom;
+    QSettings settings;
+    settings.remove(QStringLiteral("timeline/layer-column-width"));
+    SessionFixture fixture(makeTestProject("Default split"));
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
+        "the default split fixture adds a layer");
+
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    layoutEditor(*editor, 1600, 400);
+    const double share = editor->width() > 0
+                             ? static_cast<double>(editor->layerColumnWidthForTest()) /
+                                   static_cast<double>(editor->width())
+                             : 0.0;
+    expectations.expect(std::abs(share - 0.37) <= 0.01,
+                        "a fresh timeline uses a 37% layer-table divider default");
+    delete editor;
+    settings.remove(QStringLiteral("timeline/layer-column-width"));
+    finishFixture(fixture);
+}
+
 void testLayerColumnSplitHandleDragsPersistsAndResets(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Split handle"));
@@ -1959,9 +1981,12 @@ void testLayerColumnSplitHandleDragsPersistsAndResets(Expectations& expectations
     sendMouse(*rebuiltHandle, QEvent::MouseButtonDblClick, rebuiltHandle->width() / 2.0,
               rebuiltHandle->height() / 2.0);
     QCoreApplication::processEvents();
-    expectations.expect(rebuilt->layerColumnWidthForTest() ==
-                            ui::TimelineEditor::layerColumnWidth(),
-                        "a double-click on the handle resets the column to its shipped default");
+    const double resetShare = rebuilt->width() > 0
+                                  ? static_cast<double>(rebuilt->layerColumnWidthForTest()) /
+                                        static_cast<double>(rebuilt->width())
+                                  : 0.0;
+    expectations.expect(std::abs(resetShare - 0.37) <= 0.01,
+                        "a double-click on the handle resets the column to its 37% default");
 
     delete rebuilt;
     finishFixture(fixture);
@@ -2427,6 +2452,7 @@ int main(int argc, char** argv) {
         testPropertyRows(expectations);
         testDrivenParameterRowsAndUpstreamGroups(expectations);
         testPropertyRowNestingAndOneDiamondPerRow(expectations);
+        testLayerColumnDefaultIsThirtySevenPercent(expectations);
         testLayerColumnSplitHandleDragsPersistsAndResets(expectations);
         testIntegratedKeyGestures(expectations);
         testTimelineHeaderMenus(expectations);

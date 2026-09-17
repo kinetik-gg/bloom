@@ -207,15 +207,6 @@ void TimelineEditor::createHeaderMenus() {
     bar->addWidget(new TimelineCompositionName(session_, this));
 }
 
-void TimelineEditor::showEvent(QShowEvent* event) {
-    QWidget::showEvent(event);
-    refreshHeaderMenus();
-    // task TL-FIX2: the first show is the first point width() means anything, so this is where a
-    // persisted column width that no longer leaves Size::PanelMinWidth for the lanes (a narrower
-    // window since it was saved) finally gets clamped down to fit.
-    setLayerColumnWidth(layerColumnWidth_, /*persist=*/false);
-}
-
 void TimelineEditor::refreshHeaderMenus() {
     // Workspace construction can precede parenting under MainWindow. Resolve on show and before
     // opening Edit, when window() is authoritative, instead of caching an early standalone

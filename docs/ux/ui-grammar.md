@@ -207,22 +207,24 @@ bounds off the UI thread. `KListSurface` paints the common flat empty-row backdr
 
 ## Layout and specialized metrics
 
-The default is five editors in four regions: Viewer and Nodes across the upper left,
-Timeline across their combined width, and a full-height right sidebar with Assets over Properties.
-These fractions are applied after the complete split tree receives window geometry, so early
-minimum-width clamping cannot change the intended proportions.
+The default is five editors in two rows. The full-width top row is Assets, Viewer, Nodes,
+Properties at 16% / 31% / 32% / 19%; the full-width bottom row is Timeline. The rows are 68% / 32%
+of the content height. These weights are authored in `WorkspaceHost` as per-mille values and are
+applied after the complete split tree receives window geometry, so early minimum-size clamping
+cannot change the intended proportions.
 
 | Layout token | Value |
 | --- | --- |
-| `Layout::SidebarShare` | 0.1875 |
-| `Layout::TimelineShare` | 0.48 |
-| `Layout::NodesShare` | 0.50 |
-| `Layout::PropertiesShare` | 0.68 |
+| `WorkspaceHost` top-row weights | 160 / 310 / 320 / 190 |
+| `WorkspaceHost` row weights | 680 / 320 |
+| `TimelineEditor` layer-table share | 0.37 of the Timeline width |
 | `Layout::WorkspaceVersion` | 2 |
 
 Assets is included in both the default and migrated layouts; editor areas remain replaceable.
 Validated version-1 application layouts reset to this complete default. Generic WorkspaceHost
-version-1 restoration remains supported. Future schema versions are preserved and not overwritten.
+version-1 and earlier version-2 trees remain restorable. `Window → Reset Workspace` restores these
+weights, resets the Timeline divider to 37%, and persists both results. Future schema versions are
+preserved and not overwritten.
 See [Workspace Layout](../architecture/workspace-layout.md) for the migration contract.
 
 | Size token | Pixels | Owner |
@@ -322,10 +324,10 @@ is a draggable `KSplitHandle` (`Size::SplitHandle`, 6, its hit zone; it paints a
 (2) Background hairline centered in that zone), used identically for the header split so the ruler
 and lane region always move together with the column headings and rows below them. It is clamped
 between the layer table's own minimum (name, Blending and Parent columns all still visible) and a
-maximum that leaves `PanelMinWidth` for the lanes, persists under `timeline/layer-column-width`
-(default: `TimelineEditor::layerColumnWidth()`), and a double-click resets it to that default. All
-timeline rows share TimelineRow pitch and a zero origin; the 28px KPropertyRow is centered within
-that pitch.
+maximum that leaves `PanelMinWidth` for the lanes. A fresh Timeline defaults to 37% of its live
+width; an existing `timeline/layer-column-width` pixel value wins, and a double-click or Reset
+Workspace returns to the 37% ratio. All timeline rows share TimelineRow pitch and a zero origin;
+the 28px KPropertyRow is centered within that pitch.
 Selected rows use SurfaceRaised with no edge stripe. Every populated and empty row uses a
 Background hairline separator, without alternating fills. The work-area band is BorderHover,
 with 10px-tall accent pills (`TimelineWorkArea`); cached-frame strips are muted.

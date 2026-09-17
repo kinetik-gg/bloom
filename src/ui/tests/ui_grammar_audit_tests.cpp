@@ -2,6 +2,7 @@
 #include "ui3_audit.hpp"
 #include "window_fixture.hpp"
 #include <QGraphicsView>
+#include <QMenu>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
@@ -144,10 +145,18 @@ int run(int argc, char** argv) {
         }
     }
     auto* viewerMenus = fixture.window->findChild<QWidget*>("viewerHeaderMenuBar");
-    expect(!viewerMenus->property("collapsed").toBool(), viewerMenus,
-           "A3 default viewer menus fit");
+    auto* overflow = fixture.window->findChild<kit::KMenuButton*>("viewerHeaderOverflowButton");
+    const bool collapsed = viewerMenus->property("collapsed").toBool();
+    expect(!collapsed || (overflow && overflow->isVisible()), viewerMenus,
+           "A3 default viewer menus fit or expose the overflow affordance");
     auto* add = fixture.window->findChild<kit::KMenuButton*>("viewerAddMenuButton");
-    expect(add && add->isVisible(), viewerMenus, "A3 Add is a visible menu button");
+    bool addInOverflow = false;
+    if (add && overflow && overflow->menu()) {
+        for (auto* action : overflow->menu()->actions())
+            addInOverflow = addInOverflow || action->menu() == add->menu();
+    }
+    expect(add && (add->isVisible() || addInOverflow), viewerMenus,
+           "A3 Add is visible or reachable from the overflow menu");
     for (const auto* name : {"viewerCompositionMenuButton", "viewerFullscreenButton"}) {
         auto* retired = fixture.window->findChild<QWidget*>(name);
         expect(retired && !retired->isVisible(), viewerMenus, "A3 retired controls stay hidden");

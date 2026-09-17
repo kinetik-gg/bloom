@@ -107,7 +107,7 @@ class MainWindow final : public QMainWindow {
     void createCentralStack();
     QWidget* createReadOnlyPlaceholderPage();
     void createWorkspaceActions();
-    void resetCompositingLayout();
+    void resetCompositingLayout(bool persist = false);
     void updateEditActions();
     void updateWorkspaceActions();
     void updateFileActions();

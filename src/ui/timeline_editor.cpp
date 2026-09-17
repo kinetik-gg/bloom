@@ -51,6 +51,7 @@
 #include <QResizeEvent>
 #include <QScrollBar>
 #include <QSettings>
+#include <QShowEvent>
 #include <QSize>
 #include <QToolButton>
 #include <QToolTip>
@@ -89,6 +90,10 @@ constexpr int kColumnWidth = kit::px(kit::Size::TimelineColumn);
 constexpr int kToggleStripX = 0;
 constexpr int kNameCellX = kToggleColumnWidth;
 constexpr int kLayerColumnWidthPx = kit::px(kit::Size::TimelineLeftColumn);
+// First-run / Reset Workspace divider: the layer table occupies 37% of the timeline's usable
+// width. This is a ratio, not a pixel default; a persisted pixel width still wins on later opens.
+constexpr double kDefaultLayerColumnShare = 0.37;
+constexpr auto kLayerColumnWidthSetting = "timeline/layer-column-width";
 
 // The scroll gutter reserved to the right of the lane region. It is the scrollbar's HOVER extent,
 // not its resting one: the kit stylesheet grows a hovered vertical scrollbar from Size::ScrollBar
@@ -1640,13 +1645,12 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     const QSettings settings;
     keyframesVisible_ = settings.value(QStringLiteral("timeline/keyframes-visible"), true).toBool();
     snapping_ = settings.value(QStringLiteral("timeline/snapping"), true).toBool();
-    // task TL-FIX2: the layer-table/lanes split, persisted the same way -- read once here, applied
-    // through the exact setter the drag handle uses, default the shipped width. Only min-clamped
-    // here: this widget has no real width() yet, so the "leave PanelMinWidth for the lanes" ceiling
-    // waits for showEvent(), where the panel's actual geometry is known.
+    // task TL-FIX2 / WORKSPACE-1: a persisted width remains authoritative. Without one, the
+    // 37%-of-timeline default is applied in showEvent(), when this widget has real geometry; the
+    // fixed token width is only the construction-time floor for the not-yet-laid-out panel.
     layerColumnWidth_ = std::max(
         minLayerColumnWidth(),
-        settings.value(QStringLiteral("timeline/layer-column-width"), layerColumnWidth()).toInt());
+        settings.value(QLatin1StringView(kLayerColumnWidthSetting), layerColumnWidth()).toInt());
     keyframesVisibleButton_ =
         addHeaderToggle(QStringLiteral("timelineKeyframesVisibleButton"), tr("Show keyframes"),
                         kit::IconId::Keyframe, keyframesVisible_, true);
@@ -1776,8 +1780,13 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     });
     connect(splitHandle_, &kit::KSplitHandle::dragFinished, this,
             [this] { setLayerColumnWidth(layerColumnWidth_, /*persist=*/true); });
-    connect(splitHandle_, &kit::KSplitHandle::resetRequested, this,
-            [this] { setLayerColumnWidth(layerColumnWidth(), /*persist=*/true); });
+    connect(splitHandle_, &kit::KSplitHandle::resetRequested, this, [this] {
+        const int defaultWidth =
+            this->width() > 0
+                ? static_cast<int>(std::lround(this->width() * kDefaultLayerColumnShare))
+                : layerColumnWidth();
+        setLayerColumnWidth(defaultWidth, /*persist=*/true);
+    });
     bodyLayout->addWidget(stack_);
     bodyLayout->addWidget(splitHandle_);
     bodyLayout->addWidget(lanes_, 1);
@@ -1813,6 +1822,22 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     updateHistoryActions();
 }
 
+void TimelineEditor::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    refreshHeaderMenus();
+    const QSettings settings;
+    const int width = settings.contains(QLatin1StringView(kLayerColumnWidthSetting))
+                          ? layerColumnWidth_
+                          : static_cast<int>(std::lround(this->width() * kDefaultLayerColumnShare));
+    // The persisted pixel width is authoritative. A fresh panel gets the ratio-based default only
+    // after its real geometry exists, and the shared setter applies the final clamp to both halves.
+    setLayerColumnWidth(width, /*persist=*/false);
+}
+
+void TimelineEditor::persistLayerColumnWidth() {
+    setLayerColumnWidth(layerColumnWidth_, /*persist=*/true);
+}
+
 // task TL-FIX2. The one place that ever assigns layerColumnWidth_, so every caller -- a live drag
 // frame, a completed drag, a reset, and the showEvent() re-clamp -- goes through the same clamp and
 // the same set of widgets, and can never leave one of them stale. The maximum (leave
@@ -1835,7 +1860,7 @@ void TimelineEditor::setLayerColumnWidth(const int width, const bool persist) {
         navigatorCell->setFixedWidth(layerColumnWidth_);
     if (persist) {
         QSettings settings;
-        settings.setValue(QStringLiteral("timeline/layer-column-width"), layerColumnWidth_);
+        settings.setValue(QLatin1StringView(kLayerColumnWidthSetting), layerColumnWidth_);
     }
 }
 

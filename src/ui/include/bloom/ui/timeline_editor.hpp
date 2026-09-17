@@ -90,10 +90,9 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
     TimelineEditor(CompositionSession& session, CompositionPreviewController& previewController,
                    QWidget* parent = nullptr);
 
-    // The DEFAULT width of the LEFT layer-stack column -- what a fresh install (or a reset
-    // double-click on the split handle, task TL-FIX2) starts from. The live width, which the
-    // artist can drag, is an instance member (layerColumnWidth_); this stays a static default so
-    // every caller that wants "the shipped width" keeps working unchanged.
+    // Construction-time fallback for the LEFT layer-stack column. The live first-run/reset
+    // default is 37% of the Timeline's width once geometry exists; this token-sized fallback keeps
+    // the panel non-degenerate during construction and preserves the existing API.
     [[nodiscard]] static int layerColumnWidth();
     [[nodiscard]] static int propertyNameIndent();
 
@@ -106,6 +105,7 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
     // task TL-FIX2. The draggable layer-table/lanes divider, and the live width it edits.
     [[nodiscard]] kit::KSplitHandle* splitHandleForTest() const noexcept { return splitHandle_; }
     [[nodiscard]] int layerColumnWidthForTest() const noexcept { return layerColumnWidth_; }
+    void persistLayerColumnWidth();
 
   private:
     EditorChromeSpec chrome_;
