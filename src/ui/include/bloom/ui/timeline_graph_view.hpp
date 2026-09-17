@@ -5,9 +5,8 @@
 // showing both at once would only make the artist ask which one they are editing.
 //
 // Everything numeric lives in timeline_graph_math.hpp; this widget owns the ink, the viewport
-// state, and the pointer. Keys are ALWAYS read through a component-aware address -- never through
-// the legacy whole-value projection -- so a vector or colour parameter appears here as the several
-// independent curves it actually is.
+// state, and the pointer. Keys are ALWAYS read through a component-aware address, so a vector or
+// colour parameter appears here as the several independent curves it actually is.
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/core/rational_time.hpp>

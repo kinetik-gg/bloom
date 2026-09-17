@@ -1129,14 +1129,16 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
             "typed scalar curve must be publishable");
     require(animatedComposition->animationCurves().insert(document::Vec2AnimationCurve{
                 positionCurveId,
-                {{document::KeyframeId::fromRaw(104),
-                  core::RationalTime::fromInteger(0),
-                  {2.0, 1.0},
-                  document::KeyframeInterpolation::Linear},
-                 {document::KeyframeId::fromRaw(105),
-                  core::RationalTime::fromInteger(1),
-                  {3.0, 1.0},
-                  document::KeyframeInterpolation::Linear}},
+                {document::ComponentAnimationCurve{
+                     {{document::KeyframeId::fromRaw(104), core::RationalTime::fromInteger(0), 2.0,
+                       document::KeyframeInterpolation::Linear},
+                      {document::KeyframeId::fromRaw(105), core::RationalTime::fromInteger(1), 3.0,
+                       document::KeyframeInterpolation::Linear}}},
+                 document::ComponentAnimationCurve{
+                     {{document::KeyframeId::fromRaw(106), core::RationalTime::fromInteger(0), 1.0,
+                       document::KeyframeInterpolation::Linear},
+                      {document::KeyframeId::fromRaw(107), core::RationalTime::fromInteger(1), 1.0,
+                       document::KeyframeInterpolation::Linear}}}},
             }),
             "typed Vec2 curve must be publishable");
     require(parameters->setSource(kFirstOpacity, document::AnimationCurveSource{curveId}),
@@ -1170,7 +1172,8 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
                 curveIndex->value() == 0 && layer->position.id == kFirstPosition &&
                 positionCurveIndex != nullptr && positionCurveIndex->value() == 0 &&
                 result.plan->vec2Curves().front().id == positionCurveId &&
-                result.plan->vec2Curves().front().keyframes.size() == 2,
+                result.plan->vec2Curves().front().components[0].size() == 2 &&
+                result.plan->vec2Curves().front().components[1].size() == 2,
             "compiled curve tables and parameter references preserve canonical typed identity");
 
         const auto halfway = requireValue(core::RationalTime::create(1, 2),
@@ -1391,10 +1394,12 @@ void testRequestScopedParameterOverrides(Expectations& expectations) {
     constexpr auto curveId = document::AnimationCurveId::fromRaw(93);
     require(animatedComposition->animationCurves().insert(document::Vec2AnimationCurve{
                 curveId,
-                {{document::KeyframeId::fromRaw(94),
-                  core::RationalTime::fromInteger(0),
-                  {120.0, 80.0},
-                  document::KeyframeInterpolation::Linear}},
+                {document::ComponentAnimationCurve{
+                     {{document::KeyframeId::fromRaw(94), core::RationalTime::fromInteger(0), 120.0,
+                       document::KeyframeInterpolation::Linear}}},
+                 document::ComponentAnimationCurve{
+                     {{document::KeyframeId::fromRaw(95), core::RationalTime::fromInteger(0), 80.0,
+                       document::KeyframeInterpolation::Linear}}}},
             }) &&
                 animatedComposition->parameters().setSource(
                     kFirstPosition, document::AnimationCurveSource{curveId}) &&

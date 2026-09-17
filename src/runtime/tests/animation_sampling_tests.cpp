@@ -14,6 +14,7 @@
 #include <limits>
 #include <source_location>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -135,15 +136,27 @@ void testEaseInOutAtExactThirds(Expectations& expectations) {
 }
 
 // --- Task S5, item 1: the Color4 curve ----------------------------------------------------------
+//
+// A colour curve is four component tables. The fixture below is the whole-value fixture this test
+// used before the whole-value projection was removed, spelled channel by channel at the same exact
+// times with the same values: the composed samples must not move.
 void testColor4Sampling(Expectations& expectations) {
-    const runtime::CompiledColor4Curve curve{
-        document::AnimationCurveId::fromRaw(11),
-        {{document::KeyframeId::fromRaw(110), time(0), core::Color4d{0.0, 0.25, 1.0, 0.0},
-          runtime::CompiledKeyframeInterpolation::Linear},
-         {document::KeyframeId::fromRaw(111), time(1), core::Color4d{1.0, 0.75, -1.0, 1.0},
-          runtime::CompiledKeyframeInterpolation::EaseInOut},
-         {document::KeyframeId::fromRaw(112), time(2), core::Color4d{2.0, 0.75, -1.0, 1.0},
-          runtime::CompiledKeyframeInterpolation::Linear}}};
+    const auto channel = [](const std::uint64_t base, const double first, const double second,
+                            const double third) {
+        return std::vector<runtime::CompiledScalarKeyframe>{
+            {document::KeyframeId::fromRaw(base), time(0), first,
+             runtime::CompiledKeyframeInterpolation::Linear},
+            {document::KeyframeId::fromRaw(base + 1), time(1), second,
+             runtime::CompiledKeyframeInterpolation::EaseInOut},
+            {document::KeyframeId::fromRaw(base + 2), time(2), third,
+             runtime::CompiledKeyframeInterpolation::Linear}};
+    };
+    runtime::CompiledColor4Curve curve;
+    curve.id = document::AnimationCurveId::fromRaw(11);
+    curve.components[0] = channel(110, 0.0, 1.0, 2.0);
+    curve.components[1] = channel(120, 0.25, 0.75, 0.75);
+    curve.components[2] = channel(130, 1.0, -1.0, -1.0);
+    curve.components[3] = channel(140, 0.0, 1.0, 1.0);
 
     const auto atFirst = runtime::sampleAnimationCurve(curve, time(0));
     expectations.expect(atFirst && atFirst.value == core::Color4d{0.0, 0.25, 1.0, 0.0},
@@ -160,15 +173,17 @@ void testColor4Sampling(Expectations& expectations) {
     expectations.expect(eased && eased.value == core::Color4d{1.0 + (7.0 / 27.0), 0.75, -1.0, 1.0},
                         "an eased colour segment uses the same 7/27 factor at its first third");
 
-    // The authoring-colour domain: alpha outside [0, 1] is not a representable authoring colour, so
-    // the whole curve is invalid rather than silently clamped.
-    const runtime::CompiledColor4Curve invalid{
-        document::AnimationCurveId::fromRaw(12),
-        {{document::KeyframeId::fromRaw(120), time(0), core::Color4d{0.0, 0.0, 0.0, 2.0},
-          runtime::CompiledKeyframeInterpolation::Linear}}};
+    // A non-finite channel key is not a representable value, so the whole curve is invalid rather
+    // than silently sampled. (The narrower authoring-colour domain -- alpha inside the unit
+    // interval -- belongs to the parameter that owns the curve and is enforced there.)
+    runtime::CompiledColor4Curve invalid;
+    invalid.id = document::AnimationCurveId::fromRaw(12);
+    invalid.components[3] = {{document::KeyframeId::fromRaw(150), time(0),
+                              std::numeric_limits<double>::infinity(),
+                              runtime::CompiledKeyframeInterpolation::Linear}};
     const auto refused = runtime::sampleAnimationCurve(invalid, time(0));
     expectations.expect(!refused && refused.error == runtime::AnimationSamplingError::InvalidCurve,
-                        "a colour key whose alpha leaves the unit interval invalidates the curve");
+                        "a non-finite colour channel key invalidates the curve");
 }
 
 void testSampling(Expectations& expectations) {
@@ -195,15 +210,17 @@ void testSampling(Expectations& expectations) {
 
 void testVec2AndExtremeTime(Expectations& expectations) {
     constexpr auto maximum = std::numeric_limits<std::int64_t>::max();
-    const runtime::CompiledVec2Curve curve{document::AnimationCurveId::fromRaw(4),
-                                           {{document::KeyframeId::fromRaw(20),
-                                             time(0),
-                                             {0.0, 4.0},
-                                             runtime::CompiledKeyframeInterpolation::Linear},
-                                            {document::KeyframeId::fromRaw(21),
-                                             time(maximum),
-                                             {static_cast<double>(maximum), -4.0},
-                                             runtime::CompiledKeyframeInterpolation::Linear}}};
+    runtime::CompiledVec2Curve curve;
+    curve.id = document::AnimationCurveId::fromRaw(4);
+    curve.components[0] = {{document::KeyframeId::fromRaw(20), time(0), 0.0,
+                            runtime::CompiledKeyframeInterpolation::Linear},
+                           {document::KeyframeId::fromRaw(21), time(maximum),
+                            static_cast<double>(maximum),
+                            runtime::CompiledKeyframeInterpolation::Linear}};
+    curve.components[1] = {{document::KeyframeId::fromRaw(22), time(0), 4.0,
+                            runtime::CompiledKeyframeInterpolation::Linear},
+                           {document::KeyframeId::fromRaw(23), time(maximum), -4.0,
+                            runtime::CompiledKeyframeInterpolation::Linear}};
     const auto sample = runtime::sampleAnimationCurve(curve, time(1, maximum));
     expectations.expect(sample && sample.value.has_value() && sample.value->x == 0x1p-63 &&
                             sample.value->y == 4.0,

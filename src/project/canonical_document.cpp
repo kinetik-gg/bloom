@@ -84,17 +84,14 @@ struct SortWindows final {
                 plan.window2 = maximumOf(plan.window2, scalar->keyframes.size());
             } else if (const auto* vector =
                            std::get_if<bloom::document::Vec2AnimationCurve>(&record)) {
-                plan.window2 = maximumOf(plan.window2, vector->keyframes.size());
                 for (const auto& component : vector->components)
                     plan.window2 = maximumOf(plan.window2, component.keyframes.size());
             } else if (const auto* vector3 =
                            std::get_if<bloom::document::Vec3AnimationCurve>(&record)) {
-                plan.window2 = maximumOf(plan.window2, vector3->keyframes.size());
                 for (const auto& component : vector3->components)
                     plan.window2 = maximumOf(plan.window2, component.keyframes.size());
             } else if (const auto* color =
                            std::get_if<bloom::document::Color4AnimationCurve>(&record)) {
-                plan.window2 = maximumOf(plan.window2, color->keyframes.size());
                 for (const auto& component : color->components)
                     plan.window2 = maximumOf(plan.window2, component.keyframes.size());
             }
@@ -852,56 +849,6 @@ emitInterpolation(EmitState& state,
     return state.ok(writer.endObject());
 }
 
-[[nodiscard]] bool emitVec2Keyframe(EmitState& state,
-                                    const bloom::document::Vec2Keyframe& key) noexcept {
-    auto& writer = state.writer;
-    const auto idText = bloom::project::formatCanonicalUInt64(key.id.value());
-    const PathScope keyframeScope(state, RoundTripCollectionKind::Keyframe, idText.view());
-    if (!state.ok(writer.beginObject())) {
-        return false;
-    }
-    if (!emitNamedId(state, "id", key.id.value())) {
-        return false;
-    }
-    if (!state.ok(writer.memberName("time"))) {
-        return false;
-    }
-    {
-        const PathScope timeScope(state, "time");
-        if (!emitRational(state, key.time.numerator(), key.time.denominator())) {
-            return false;
-        }
-    }
-    if (!state.ok(writer.memberName("value")) || !state.ok(writer.beginObject())) {
-        return false;
-    }
-    {
-        const PathScope valueScope(state, "value");
-        if (!emitFloat64Member(state, "x", key.value.x)) {
-            return false;
-        }
-        if (!emitFloat64Member(state, "y", key.value.y)) {
-            return false;
-        }
-        if (!emitRetainedTrailing(state)) {
-            return false;
-        }
-    }
-    if (!state.ok(writer.endObject())) {
-        return false;
-    }
-    if (!state.ok(writer.memberName("outgoingInterpolation"))) {
-        return false;
-    }
-    if (!emitInterpolation(state, key.outgoingInterpolation)) {
-        return false;
-    }
-    if (!emitRetainedTrailing(state)) {
-        return false;
-    }
-    return state.ok(writer.endObject());
-}
-
 [[nodiscard]] std::string_view
 componentName(const bloom::document::AnimationComponent component) noexcept {
     switch (component) {
@@ -947,65 +894,6 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
         return false;
     }
     return true;
-}
-
-[[nodiscard]] bool emitColor4Keyframe(EmitState& state,
-                                      const bloom::document::Color4Keyframe& key) noexcept {
-    auto& writer = state.writer;
-    const auto idText = bloom::project::formatCanonicalUInt64(key.id.value());
-    const PathScope keyframeScope(state, RoundTripCollectionKind::Keyframe, idText.view());
-    if (!state.ok(writer.beginObject())) {
-        return false;
-    }
-    if (!emitNamedId(state, "id", key.id.value())) {
-        return false;
-    }
-    if (!state.ok(writer.memberName("time"))) {
-        return false;
-    }
-    {
-        const PathScope timeScope(state, "time");
-        if (!emitRational(state, key.time.numerator(), key.time.denominator())) {
-            return false;
-        }
-    }
-    // Channel order is the authoring order core::Color4d declares and the constant colour value
-    // already writes (red, green, blue, alpha) -- the same member order, so a colour key and a
-    // colour constant read identically on the wire.
-    if (!state.ok(writer.memberName("value")) || !state.ok(writer.beginObject())) {
-        return false;
-    }
-    {
-        const PathScope valueScope(state, "value");
-        if (!emitFloat64Member(state, "red", key.value.red)) {
-            return false;
-        }
-        if (!emitFloat64Member(state, "green", key.value.green)) {
-            return false;
-        }
-        if (!emitFloat64Member(state, "blue", key.value.blue)) {
-            return false;
-        }
-        if (!emitFloat64Member(state, "alpha", key.value.alpha)) {
-            return false;
-        }
-        if (!emitRetainedTrailing(state)) {
-            return false;
-        }
-    }
-    if (!state.ok(writer.endObject())) {
-        return false;
-    }
-    if (!state.ok(writer.memberName("outgoingInterpolation"))) {
-        return false;
-    }
-    if (!emitInterpolation(state, key.outgoingInterpolation)) {
-        return false;
-    }
-    if (!emitRetainedTrailing(state)) {
-        return false;
-    }
-    return state.ok(writer.endObject());
 }
 
 [[nodiscard]] bool emitAnimationCurves(EmitState& state, const Composition& composition,
@@ -1067,37 +955,20 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
                 !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray())) {
                 return false;
             }
-            const bool componentAware =
-                std::ranges::any_of(vector->components, [](const auto& component) {
-                    return !component.keyframes.empty();
-                });
-            if (componentAware) {
-                constexpr std::array names{AnimationComponent::X, AnimationComponent::Y};
-                for (std::size_t componentIndex = 0; componentIndex < names.size();
-                     ++componentIndex) {
-                    std::span<const std::size_t> keyOrder;
-                    if (!makeOrder(
-                            vector->components[componentIndex].keyframes,
-                            [](const ScalarKeyframe& key) noexcept { return key.time; },
-                            state.sort.window2, keyOrder, state.walk.error))
-                        return false;
-                    for (const auto keyIndex : keyOrder) {
-                        if (!emitComponentKeyframe(
-                                state, names[componentIndex],
-                                vector->components[componentIndex].keyframes[keyIndex]))
-                            return false;
-                    }
-                }
-            } else {
+            constexpr std::array names{AnimationComponent::X, AnimationComponent::Y};
+            for (std::size_t componentIndex = 0; componentIndex < names.size(); ++componentIndex) {
                 std::span<const std::size_t> keyOrder;
                 if (!makeOrder(
-                        vector->keyframes,
-                        [](const Vec2Keyframe& key) noexcept { return key.time; },
+                        vector->components[componentIndex].keyframes,
+                        [](const ScalarKeyframe& key) noexcept { return key.time; },
                         state.sort.window2, keyOrder, state.walk.error))
                     return false;
-                for (const auto keyIndex : keyOrder)
-                    if (!emitVec2Keyframe(state, vector->keyframes[keyIndex]))
+                for (const auto keyIndex : keyOrder) {
+                    if (!emitComponentKeyframe(
+                            state, names[componentIndex],
+                            vector->components[componentIndex].keyframes[keyIndex]))
                         return false;
+                }
             }
         } else if (const auto* vector3 = std::get_if<Vec3AnimationCurve>(&record)) {
             if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("vec3")) ||
@@ -1105,76 +976,37 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
                 return false;
             constexpr std::array names{AnimationComponent::X, AnimationComponent::Y,
                                        AnimationComponent::Z};
-            const bool componentAware =
-                std::ranges::any_of(vector3->components, [](const auto& component) {
-                    return !component.keyframes.empty();
-                });
-            if (componentAware) {
-                for (std::size_t componentIndex = 0; componentIndex < names.size();
-                     ++componentIndex) {
-                    std::span<const std::size_t> keyOrder;
-                    if (!makeOrder(
-                            vector3->components[componentIndex].keyframes,
-                            [](const ScalarKeyframe& key) noexcept { return key.time; },
-                            state.sort.window2, keyOrder, state.walk.error))
+            for (std::size_t componentIndex = 0; componentIndex < names.size(); ++componentIndex) {
+                std::span<const std::size_t> keyOrder;
+                if (!makeOrder(
+                        vector3->components[componentIndex].keyframes,
+                        [](const ScalarKeyframe& key) noexcept { return key.time; },
+                        state.sort.window2, keyOrder, state.walk.error))
+                    return false;
+                for (const auto keyIndex : keyOrder)
+                    if (!emitComponentKeyframe(
+                            state, names[componentIndex],
+                            vector3->components[componentIndex].keyframes[keyIndex]))
                         return false;
-                    for (const auto keyIndex : keyOrder)
-                        if (!emitComponentKeyframe(
-                                state, names[componentIndex],
-                                vector3->components[componentIndex].keyframes[keyIndex]))
-                            return false;
-                }
-            } else {
-                for (const auto& key : vector3->keyframes) {
-                    const auto value = key.value;
-                    constexpr std::array names3{AnimationComponent::X, AnimationComponent::Y,
-                                                AnimationComponent::Z};
-                    const std::array values{value.x, value.y, value.z};
-                    for (std::size_t componentIndex = 0; componentIndex < names3.size();
-                         ++componentIndex) {
-                        if (!emitComponentKeyframe(state, names3[componentIndex],
-                                                   ScalarKeyframe{key.id, key.time,
-                                                                  values[componentIndex],
-                                                                  key.outgoingInterpolation}))
-                            return false;
-                    }
-                }
             }
         } else if (const auto* color = std::get_if<Color4AnimationCurve>(&record)) {
             if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("color4")) ||
                 !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray())) {
                 return false;
             }
-            const bool componentAware =
-                std::ranges::any_of(color->components, [](const auto& component) {
-                    return !component.keyframes.empty();
-                });
-            if (componentAware) {
-                constexpr std::array names{AnimationComponent::Red, AnimationComponent::Green,
-                                           AnimationComponent::Blue, AnimationComponent::Alpha};
-                for (std::size_t componentIndex = 0; componentIndex < names.size();
-                     ++componentIndex) {
-                    std::span<const std::size_t> keyOrder;
-                    if (!makeOrder(
-                            color->components[componentIndex].keyframes,
-                            [](const ScalarKeyframe& key) noexcept { return key.time; },
-                            state.sort.window2, keyOrder, state.walk.error))
-                        return false;
-                    for (const auto keyIndex : keyOrder)
-                        if (!emitComponentKeyframe(
-                                state, names[componentIndex],
-                                color->components[componentIndex].keyframes[keyIndex]))
-                            return false;
-                }
-            } else {
+            constexpr std::array names{AnimationComponent::Red, AnimationComponent::Green,
+                                       AnimationComponent::Blue, AnimationComponent::Alpha};
+            for (std::size_t componentIndex = 0; componentIndex < names.size(); ++componentIndex) {
                 std::span<const std::size_t> keyOrder;
                 if (!makeOrder(
-                        color->keyframes,
-                        [](const Color4Keyframe& key) noexcept { return key.time; },
+                        color->components[componentIndex].keyframes,
+                        [](const ScalarKeyframe& key) noexcept { return key.time; },
                         state.sort.window2, keyOrder, state.walk.error))
                     return false;
                 for (const auto keyIndex : keyOrder)
-                    if (!emitColor4Keyframe(state, color->keyframes[keyIndex]))
+                    if (!emitComponentKeyframe(
+                            state, names[componentIndex],
+                            color->components[componentIndex].keyframes[keyIndex]))
                         return false;
             }
         } else {

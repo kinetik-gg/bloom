@@ -58,10 +58,11 @@ and value offset -- is finite. NaN and the infinities are not authorable, not st
 writable:
 
 - the commands refuse one with `OperationIssueCode::InvalidValue` (every keyframe insert, update,
-  set-at-time, paste, handle edit and value edit, on whole values and on components alike)
-- `AnimationCurveStore` refuses one on insert and update, including a component-aware record's
-  derived whole-value projection, and reports one from `validate()`, so a bypass of the commands is
-  caught by `Document::commit()` and by the test suite rather than reaching a save
+  set-at-time, paste, handle edit and value edit; a whole-value vector or colour argument is split
+  across its components and each component value is admitted on the same terms)
+- `AnimationCurveStore` refuses one on insert and update, and reports one from `validate()`, so a
+  bypass of the commands is caught by `Document::commit()` and by the test suite rather than
+  reaching a save
 - the gestures that compute these values -- the viewer transform drags and the graph editor's value
   and ease-handle drags -- decline to offer an unrepresentable result at all, keeping the last
   representable preview instead of proposing a value the commands would then refuse (see
@@ -100,13 +101,19 @@ but a curve has at least one key overall. Two keys at the same normalized time a
 one component. Values are finite, and colour alpha remains in `[0, 1]`. The final key of every
 non-empty component is canonical `Linear` on every mutation. A component with no keys samples the
 typed `AnimationCurveSource.defaultValue`, which is the parameter's unkeyed constant component.
-The compatibility whole-value projection remains an in-memory aid for pre-KEY-2 callers and is not
-the durable source of truth.
+
+There is no whole-value key record and no derived whole-value list beside the components. "The
+parameter's keys" is the UNION of its component key sets, computed by whoever asks: a lane, a
+collapsed layer summary, a diamond, a paste. Nothing stores that union, so no writer has to keep a
+second copy of the same facts in step with the first.
 
 A `Color4Curve` carries straight/unassociated authoring RGBA, the same encoding a constant solid or
-text color already uses. A color key is valid exactly when `core::Color4d::isValid()` accepts it:
-finite RGB -- negative and HDR channels included -- and alpha within `[0, 1]`. Animating a color
-therefore cannot reach a value a constant one could not.
+text color already uses. A colour key is valid on exactly the terms `core::Color4d::isValid()`
+states: finite RGB -- negative and HDR channels included -- and alpha within `[0, 1]`. Finiteness is
+the store's own rule for every component key; the narrower alpha domain belongs to the parameter
+that owns the curve, so it is enforced by the animation commands and by
+`validateAnimationCurveReferences()`. Animating a color therefore cannot reach a value a constant
+one could not.
 
 Curve ownership is deliberately narrow:
 
@@ -177,9 +184,9 @@ A scalar or component key carries two `KeyframeHandle{time, value}` records: an 
 governing the segment that starts at it and an `incomingHandle` governing the segment that ends at
 it. `time` is a fraction of THAT segment's duration measured from the key the handle belongs to;
 `value` is an offset from that key's own value. The defaults are `time = 1/3` and `value = 0`,
-which are exactly the fixed handles the pre-handle `EaseInOut` carried. The legacy whole-value
-`Vec2Keyframe`, `Vec3Keyframe` and `Color4Keyframe` projections get no handles at all: a whole-value
-key has no single scalar axis for an offset to move along.
+which are exactly the fixed handles the pre-handle `EaseInOut` carried. A handle therefore belongs
+to one scalar axis, which is why a vector or colour key is addressed through its component: there
+is no whole-value key for an offset to move along.
 
 For segment `k_i -> k_{i+1}` with `Δt = t_{i+1} - t_i` and `EaseInOut` on the LEFT key, the curve is
 the cubic Bezier through
@@ -328,8 +335,7 @@ Parameter lanes display the exact union of component times. Clicking an aggregat
 every component key at that time; clicking a component lane selects only its key. Shift extends
 selection. Drag, stretch, duplicate, copy/paste, delete, interpolation and ghost previews preserve
 component addresses. Double-clicking an empty component lane inserts only that component.
-Collapsed layer summaries read those same component keys. The temporary whole-value compatibility
-projection still equals the union of component times, but lanes and graph curves no longer read it.
+Collapsed layer summaries read those same component keys.
 
 Editing the VALUE of an animated parameter at a time with no key inserts one, through the same
 `SetKeyframeAtTime` path a constant edit's `SetParameterSource` takes. That requires the row to stay

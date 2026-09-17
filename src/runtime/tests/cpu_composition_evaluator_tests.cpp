@@ -319,6 +319,18 @@ twoSolidBlendPlan(const core::BlendMode topMode, const core::BlendMode bottomMod
                                                    runtime::OperationIndex::fromRaw(1)});
 }
 
+// A compiled vector or colour curve is one scalar table per component, so a fixture names its
+// component tables rather than a whole-value key list.
+[[nodiscard]] runtime::CompiledVec2Curve vec2Curve(const document::AnimationCurveId id,
+                                                   std::vector<runtime::CompiledScalarKeyframe> x,
+                                                   std::vector<runtime::CompiledScalarKeyframe> y) {
+    runtime::CompiledVec2Curve curve;
+    curve.id = id;
+    curve.components[0] = std::move(x);
+    curve.components[1] = std::move(y);
+    return curve;
+}
+
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan> animatedLayerPlan() {
     auto definition = oneSolidPlan()->copyDefinition();
     auto& layer = std::get<runtime::CompiledLayerOutput>(definition.operations[1]);
@@ -330,15 +342,16 @@ twoSolidBlendPlan(const core::BlendMode topMode, const core::BlendMode bottomMod
            runtime::CompiledKeyframeInterpolation::Linear},
           {document::KeyframeId::fromRaw(61), core::RationalTime::fromInteger(1), 0.0,
            runtime::CompiledKeyframeInterpolation::Linear}}});
-    definition.vec2Curves.push_back({kPositionCurve,
-                                     {{document::KeyframeId::fromRaw(62),
-                                       core::RationalTime::fromInteger(0),
-                                       {2.0, 1.0},
-                                       runtime::CompiledKeyframeInterpolation::Linear},
-                                      {document::KeyframeId::fromRaw(63),
-                                       core::RationalTime::fromInteger(1),
-                                       {3.0, 1.0},
-                                       runtime::CompiledKeyframeInterpolation::Linear}}});
+    definition.vec2Curves.push_back(
+        vec2Curve(kPositionCurve,
+                  {{document::KeyframeId::fromRaw(62), core::RationalTime::fromInteger(0), 2.0,
+                    runtime::CompiledKeyframeInterpolation::Linear},
+                   {document::KeyframeId::fromRaw(63), core::RationalTime::fromInteger(1), 3.0,
+                    runtime::CompiledKeyframeInterpolation::Linear}},
+                  {{document::KeyframeId::fromRaw(64), core::RationalTime::fromInteger(0), 1.0,
+                    runtime::CompiledKeyframeInterpolation::Linear},
+                   {document::KeyframeId::fromRaw(65), core::RationalTime::fromInteger(1), 1.0,
+                    runtime::CompiledKeyframeInterpolation::Linear}}));
     return std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
 }
 
@@ -764,15 +777,16 @@ void testEveryTransformParameterAnimates(Expectations& expectations) {
     auto scaleDefinition = squareTransformPlan({.position = kSquareCentre})->copyDefinition();
     std::get<runtime::CompiledLayerOutput>(scaleDefinition.operations[1]).scale.source =
         runtime::Vec2CurveIndex::fromRaw(0);
-    scaleDefinition.vec2Curves.push_back({kScaleCurve,
-                                          {{document::KeyframeId::fromRaw(70),
-                                            core::RationalTime::fromInteger(0),
-                                            {1.0, 1.0},
-                                            runtime::CompiledKeyframeInterpolation::Linear},
-                                           {document::KeyframeId::fromRaw(71),
-                                            core::RationalTime::fromInteger(1),
-                                            {0.5, 1.0},
-                                            runtime::CompiledKeyframeInterpolation::Linear}}});
+    scaleDefinition.vec2Curves.push_back(
+        vec2Curve(kScaleCurve,
+                  {{document::KeyframeId::fromRaw(70), core::RationalTime::fromInteger(0), 1.0,
+                    runtime::CompiledKeyframeInterpolation::Linear},
+                   {document::KeyframeId::fromRaw(71), core::RationalTime::fromInteger(1), 0.5,
+                    runtime::CompiledKeyframeInterpolation::Linear}},
+                  {{document::KeyframeId::fromRaw(72), core::RationalTime::fromInteger(0), 1.0,
+                    runtime::CompiledKeyframeInterpolation::Linear},
+                   {document::KeyframeId::fromRaw(73), core::RationalTime::fromInteger(1), 1.0,
+                    runtime::CompiledKeyframeInterpolation::Linear}}));
     const auto scalePlan = publishPlan(std::move(scaleDefinition));
     const auto scaleStart = maskAt(scalePlan, 0, 1);
     const auto scaleMiddle = maskAt(scalePlan, 1, 2);
@@ -813,15 +827,16 @@ void testEveryTransformParameterAnimates(Expectations& expectations) {
             ->copyDefinition();
     std::get<runtime::CompiledLayerOutput>(anchorDefinition.operations[1]).anchor.source =
         runtime::Vec2CurveIndex::fromRaw(0);
-    anchorDefinition.vec2Curves.push_back({kAnchorCurve,
-                                           {{document::KeyframeId::fromRaw(74),
-                                             core::RationalTime::fromInteger(0),
-                                             {0.0, 0.0},
-                                             runtime::CompiledKeyframeInterpolation::Linear},
-                                            {document::KeyframeId::fromRaw(75),
-                                             core::RationalTime::fromInteger(1),
-                                             {-1.5, 0.0},
-                                             runtime::CompiledKeyframeInterpolation::Linear}}});
+    anchorDefinition.vec2Curves.push_back(
+        vec2Curve(kAnchorCurve,
+                  {{document::KeyframeId::fromRaw(74), core::RationalTime::fromInteger(0), 0.0,
+                    runtime::CompiledKeyframeInterpolation::Linear},
+                   {document::KeyframeId::fromRaw(75), core::RationalTime::fromInteger(1), -1.5,
+                    runtime::CompiledKeyframeInterpolation::Linear}},
+                  {{document::KeyframeId::fromRaw(76), core::RationalTime::fromInteger(0), 0.0,
+                    runtime::CompiledKeyframeInterpolation::Linear},
+                   {document::KeyframeId::fromRaw(77), core::RationalTime::fromInteger(1), 0.0,
+                    runtime::CompiledKeyframeInterpolation::Linear}}));
     const auto anchorPlan = publishPlan(std::move(anchorDefinition));
     const auto anchorStart = maskAt(anchorPlan, 0, 1);
     const auto anchorMiddle = maskAt(anchorPlan, 1, 2);
@@ -862,12 +877,21 @@ void testAnimatedSolidColorChangesPixelsOverTime(Expectations& expectations) {
         runtime::Color4CurveIndex::fromRaw(0);
     // Black at t = 0, white at t = 1, with an EASED departure so the midpoint is not the linear
     // one.
-    definition.color4Curves.push_back(
-        {kColorCurve,
-         {{document::KeyframeId::fromRaw(200), core::RationalTime::fromInteger(0),
-           core::Color4d{0.0, 0.0, 0.0, 1.0}, runtime::CompiledKeyframeInterpolation::EaseInOut},
-          {document::KeyframeId::fromRaw(201), core::RationalTime::fromInteger(1),
-           core::Color4d{1.0, 1.0, 1.0, 1.0}, runtime::CompiledKeyframeInterpolation::Linear}}});
+    const auto easedChannel = [](const std::uint64_t first, const std::uint64_t second,
+                                 const double from, const double to) {
+        return std::vector<runtime::CompiledScalarKeyframe>{
+            {document::KeyframeId::fromRaw(first), core::RationalTime::fromInteger(0), from,
+             runtime::CompiledKeyframeInterpolation::EaseInOut},
+            {document::KeyframeId::fromRaw(second), core::RationalTime::fromInteger(1), to,
+             runtime::CompiledKeyframeInterpolation::Linear}};
+    };
+    runtime::CompiledColor4Curve colorCurve;
+    colorCurve.id = kColorCurve;
+    colorCurve.components[0] = easedChannel(200, 201, 0.0, 1.0);
+    colorCurve.components[1] = easedChannel(202, 203, 0.0, 1.0);
+    colorCurve.components[2] = easedChannel(204, 205, 0.0, 1.0);
+    colorCurve.components[3] = easedChannel(206, 207, 1.0, 1.0);
+    definition.color4Curves.push_back(std::move(colorCurve));
     const auto plan =
         std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
 
@@ -997,7 +1021,7 @@ void testAnimatedParametersAreSampledOncePerRequest(Expectations& expectations) 
                         "curve identities are globally unique across typed plan tables");
 
     auto duplicateKeyDefinition = plan->copyDefinition();
-    duplicateKeyDefinition.vec2Curves.front().keyframes.front().id =
+    duplicateKeyDefinition.vec2Curves.front().components[0].front().id =
         duplicateKeyDefinition.scalarCurves.front().keyframes.front().id;
     const auto duplicateKey = publishPlan(std::move(duplicateKeyDefinition));
     const auto duplicateKeyResult = evaluator.evaluate(duplicateKey, requestFor(*duplicateKey), {});
@@ -1006,7 +1030,7 @@ void testAnimatedParametersAreSampledOncePerRequest(Expectations& expectations) 
                             duplicateKeyResult.diagnostics().front().subject.animationCurveId ==
                                 kPositionCurve &&
                             duplicateKeyResult.diagnostics().front().subject.keyframeId ==
-                                duplicateKey->vec2Curves().front().keyframes.front().id,
+                                duplicateKey->vec2Curves().front().components[0].front().id,
                         "keyframe identities are validated globally before animation sampling");
 
     auto unusedCurveDefinition = plan->copyDefinition();

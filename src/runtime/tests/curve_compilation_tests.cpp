@@ -82,25 +82,36 @@ void testScalarCurveMapsEveryFieldIncludingHoldAndLinear(Expectations& expectati
                         "md) survives the conversion unchanged");
 }
 
+// The same three keys per axis the whole-value fixture used, now spelled as the two component
+// curves a Vec2 parameter actually holds: independent tables, mapped key for key.
 void testVec2CurveMapsEveryFieldIncludingHoldAndLinear(Expectations& expectations) {
-    const document::Vec2AnimationCurve curve{
-        document::AnimationCurveId::fromRaw(8),
-        {{document::KeyframeId::fromRaw(80), time(0), document::Vec2d{1.0, 2.0},
-          document::KeyframeInterpolation::Linear},
-         {document::KeyframeId::fromRaw(81), time(7, 4), document::Vec2d{3.0, -4.0},
-          document::KeyframeInterpolation::Hold},
-         {document::KeyframeId::fromRaw(82), time(9), document::Vec2d{5.0, 6.0},
-          document::KeyframeInterpolation::Linear}}};
+    document::Vec2AnimationCurve curve;
+    curve.id = document::AnimationCurveId::fromRaw(8);
+    curve.components[0].keyframes = {
+        {document::KeyframeId::fromRaw(80), time(0), 1.0, document::KeyframeInterpolation::Linear},
+        {document::KeyframeId::fromRaw(81), time(7, 4), 3.0, document::KeyframeInterpolation::Hold},
+        {document::KeyframeId::fromRaw(82), time(9), 5.0, document::KeyframeInterpolation::Linear}};
+    curve.components[1].keyframes = {
+        {document::KeyframeId::fromRaw(83), time(0), 2.0, document::KeyframeInterpolation::Linear},
+        {document::KeyframeId::fromRaw(84), time(7, 4), -4.0,
+         document::KeyframeInterpolation::Hold},
+        {document::KeyframeId::fromRaw(85), time(9), 6.0, document::KeyframeInterpolation::Linear}};
 
     const auto compiled = runtime::compileAnimationCurve(curve);
-    const runtime::CompiledVec2Curve expected{
-        document::AnimationCurveId::fromRaw(8),
-        {{document::KeyframeId::fromRaw(80), time(0), document::Vec2d{1.0, 2.0},
-          runtime::CompiledKeyframeInterpolation::Linear},
-         {document::KeyframeId::fromRaw(81), time(7, 4), document::Vec2d{3.0, -4.0},
-          runtime::CompiledKeyframeInterpolation::Hold},
-         {document::KeyframeId::fromRaw(82), time(9), document::Vec2d{5.0, 6.0},
-          runtime::CompiledKeyframeInterpolation::Linear}}};
+    runtime::CompiledVec2Curve expected;
+    expected.id = document::AnimationCurveId::fromRaw(8);
+    expected.components[0] = {{document::KeyframeId::fromRaw(80), time(0), 1.0,
+                               runtime::CompiledKeyframeInterpolation::Linear},
+                              {document::KeyframeId::fromRaw(81), time(7, 4), 3.0,
+                               runtime::CompiledKeyframeInterpolation::Hold},
+                              {document::KeyframeId::fromRaw(82), time(9), 5.0,
+                               runtime::CompiledKeyframeInterpolation::Linear}};
+    expected.components[1] = {{document::KeyframeId::fromRaw(83), time(0), 2.0,
+                               runtime::CompiledKeyframeInterpolation::Linear},
+                              {document::KeyframeId::fromRaw(84), time(7, 4), -4.0,
+                               runtime::CompiledKeyframeInterpolation::Hold},
+                              {document::KeyframeId::fromRaw(85), time(9), 6.0,
+                               runtime::CompiledKeyframeInterpolation::Linear}};
 
     expectations.expect(compiled == expected,
                         "Vec2 conversion preserves curve id, exact key id/time/value, and maps "
@@ -140,8 +151,8 @@ void testHandlesTravelWithEveryCompiledKey(Expectations& expectations) {
                             compiledScalar.keyframes[1].incomingHandle == second.incomingHandle,
                         "a scalar curve carries both handles of every key into the compiled table");
 
-    document::Vec2AnimationCurve vector{document::AnimationCurveId::fromRaw(9),
-                                        std::array<document::ComponentAnimationCurve, 2>{}};
+    document::Vec2AnimationCurve vector;
+    vector.id = document::AnimationCurveId::fromRaw(9);
     vector.components[1].keyframes = {first, second};
     const auto compiledVector = runtime::compileAnimationCurve(vector);
     expectations.expect(compiledVector.components[1].size() == 2 &&

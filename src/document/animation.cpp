@@ -31,35 +31,15 @@ using bloom::document::Vec3AnimationCurve;
            interpolation == KeyframeInterpolation::EaseInOut;
 }
 
-// "Value is representable" per curve kind. A color key reuses core::Color4d::isValid() rather than
-// a fourth hand-written finiteness test, so an animated authoring color is admitted on exactly the
-// terms a constant one is.
+// "Value is representable". Every stored key is a ScalarKeyframe -- a scalar curve's own or one
+// component of a vector or colour parameter -- so there is one finiteness rule, not four.
 [[nodiscard]] bool finiteValue(const ScalarKeyframe& keyframe) noexcept {
     return std::isfinite(keyframe.value);
 }
 
-[[nodiscard]] bool finiteValue(const bloom::document::Vec2Keyframe& keyframe) noexcept {
-    return std::isfinite(keyframe.value.x) && std::isfinite(keyframe.value.y);
-}
-
-[[nodiscard]] bool finiteValue(const bloom::document::Vec3Keyframe& keyframe) noexcept {
-    return std::isfinite(keyframe.value.x) && std::isfinite(keyframe.value.y) &&
-           std::isfinite(keyframe.value.z);
-}
-
-[[nodiscard]] bool finiteValue(const bloom::document::Color4Keyframe& keyframe) noexcept {
-    return keyframe.value.isValid();
-}
-
-// Ease handles exist only on the scalar/component key. For the whole-value projections the
-// predicate is vacuously true, so every keyframe admission path can ask it unconditionally.
-template <typename Keyframe> [[nodiscard]] bool validHandles(const Keyframe& keyframe) noexcept {
-    if constexpr (requires { keyframe.outgoingHandle; }) {
-        return bloom::document::isValidKeyframeHandle(keyframe.outgoingHandle) &&
-               bloom::document::isValidKeyframeHandle(keyframe.incomingHandle);
-    } else {
-        return true;
-    }
+[[nodiscard]] bool validHandles(const ScalarKeyframe& keyframe) noexcept {
+    return bloom::document::isValidKeyframeHandle(keyframe.outgoingHandle) &&
+           bloom::document::isValidKeyframeHandle(keyframe.incomingHandle);
 }
 
 template <typename Curve> void normalizeFinalInterpolation(Curve& curve) noexcept {
@@ -214,8 +194,9 @@ void validateComponentCurve(const ComponentAnimationCurve& curve, const std::str
     }
 }
 
-template <typename Curve, typename Keyframe>
-[[nodiscard]] bool insertKeyframe(Curve& curve, Keyframe keyframe, const bool idAlreadyExists) {
+template <typename Curve>
+[[nodiscard]] bool insertKeyframe(Curve& curve, ScalarKeyframe keyframe,
+                                  const bool idAlreadyExists) {
     if (!keyframe.id.isValid() || idAlreadyExists || !finiteValue(keyframe) ||
         !validHandles(keyframe) || !validInterpolation(keyframe.outgoingInterpolation)) {
         return false;
@@ -231,23 +212,22 @@ template <typename Curve, typename Keyframe>
     return true;
 }
 
-template <typename Curve, typename Keyframe>
-[[nodiscard]] bool updateKeyframe(Curve& curve, Keyframe keyframe) {
+template <typename Curve> [[nodiscard]] bool updateKeyframe(Curve& curve, ScalarKeyframe keyframe) {
     if (!keyframe.id.isValid() || !finiteValue(keyframe) || !validHandles(keyframe) ||
         !validInterpolation(keyframe.outgoingInterpolation)) {
         return false;
     }
-    const auto current = std::ranges::find(curve.keyframes, keyframe.id, &Keyframe::id);
+    const auto current = std::ranges::find(curve.keyframes, keyframe.id, &ScalarKeyframe::id);
     if (current == curve.keyframes.end()) {
         return false;
     }
-    const auto occupied = std::ranges::find(curve.keyframes, keyframe.time, &Keyframe::time);
+    const auto occupied = std::ranges::find(curve.keyframes, keyframe.time, &ScalarKeyframe::time);
     if (occupied != curve.keyframes.end() && occupied->id != keyframe.id) {
         return false;
     }
 
     *current = keyframe;
-    std::ranges::sort(curve.keyframes, {}, &Keyframe::time);
+    std::ranges::sort(curve.keyframes, {}, &ScalarKeyframe::time);
     normalizeFinalInterpolation(curve);
     return true;
 }
@@ -441,19 +421,7 @@ bool AnimationCurveStore::insert(AnimationCurveRecord record) {
             if constexpr (std::is_same_v<Curve, ScalarAnimationCurve>) {
                 return curveCanEnterStore(curve);
             } else {
-                if (std::ranges::all_of(
-                        curve.components,
-                        [](const auto& component) { return component.keyframes.empty(); }) &&
-                    !curve.keyframes.empty()) {
-                    return curveCanEnterStore(curve);
-                }
-                // The whole-value projection is derived, not authored, but it is still part of the
-                // stored record and part of what a save would have to spell, so it is held to the
-                // same finiteness rule as the components it mirrors.
-                return componentCurveRecordCanEnterStore(curve.id, curve.components) &&
-                       std::ranges::all_of(curve.keyframes, [](const auto& keyframe) {
-                           return finiteValue(keyframe);
-                       });
+                return componentCurveRecordCanEnterStore(curve.id, curve.components);
             }
         },
         record);
@@ -463,22 +431,15 @@ bool AnimationCurveStore::insert(AnimationCurveRecord record) {
     }
     const bool hasDuplicateKeyframe = std::visit(
         [&](const auto& curve) {
+            const auto duplicated = [&](const auto& keys) {
+                return std::ranges::any_of(
+                    keys, [&](const auto& keyframe) { return containsKeyframe(keyframe.id); });
+            };
             if constexpr (std::is_same_v<std::decay_t<decltype(curve)>, ScalarAnimationCurve>) {
-                return std::ranges::any_of(curve.keyframes, [&](const auto& keyframe) {
-                    return containsKeyframe(keyframe.id);
-                });
+                return duplicated(curve.keyframes);
             } else {
-                if (std::ranges::all_of(curve.components, [](const auto& component) {
-                        return component.keyframes.empty();
-                    })) {
-                    return std::ranges::any_of(curve.keyframes, [&](const auto& keyframe) {
-                        return containsKeyframe(keyframe.id);
-                    });
-                }
                 return std::ranges::any_of(curve.components, [&](const auto& component) {
-                    return std::ranges::any_of(component.keyframes, [&](const auto& keyframe) {
-                        return containsKeyframe(keyframe.id);
-                    });
+                    return duplicated(component.keyframes);
                 });
             }
         },
@@ -493,14 +454,8 @@ bool AnimationCurveStore::insert(AnimationCurveRecord record) {
             if constexpr (std::is_same_v<Curve, ScalarAnimationCurve>) {
                 normalizeFinalInterpolation(curve);
             } else {
-                if (std::ranges::all_of(curve.components, [](const auto& component) {
-                        return component.keyframes.empty();
-                    })) {
-                    normalizeFinalInterpolation(curve);
-                } else {
-                    for (auto& component : curve.components) {
-                        normalizeFinalInterpolation(component);
-                    }
+                for (auto& component : curve.components) {
+                    normalizeFinalInterpolation(component);
                 }
             }
         },
@@ -531,35 +486,17 @@ bool AnimationCurveStore::containsKeyframe(const KeyframeId id) const noexcept {
             return std::ranges::any_of(curve.keyframes,
                                        [id](const auto& keyframe) { return keyframe.id == id; });
         };
+        // std::get_if rather than std::visit: this reader is noexcept, and std::visit's contract
+        // still permits bad_variant_access however unreachable a valueless variant is here.
+        const auto containsComponentKey = [&](const auto* curve) {
+            return curve != nullptr && std::ranges::any_of(curve->components, contains);
+        };
         if (const auto* scalar = std::get_if<ScalarAnimationCurve>(&record)) {
             return contains(*scalar);
         }
-        if (const auto* vector = std::get_if<Vec2AnimationCurve>(&record)) {
-            if (std::ranges::all_of(vector->components, [](const auto& component) {
-                    return component.keyframes.empty();
-                })) {
-                return contains(*vector);
-            }
-            return std::ranges::any_of(vector->components, contains);
-        }
-        if (const auto* vector = std::get_if<Vec3AnimationCurve>(&record)) {
-            if (std::ranges::all_of(vector->components, [](const auto& component) {
-                    return component.keyframes.empty();
-                })) {
-                return contains(*vector);
-            }
-            return std::ranges::any_of(vector->components, contains);
-        }
-        const auto* color = std::get_if<Color4AnimationCurve>(&record);
-        if (color == nullptr) {
-            return false;
-        }
-        if (std::ranges::all_of(color->components, [](const auto& component) {
-                return component.keyframes.empty();
-            })) {
-            return contains(*color);
-        }
-        return std::ranges::any_of(color->components, contains);
+        return containsComponentKey(std::get_if<Vec2AnimationCurve>(&record)) ||
+               containsComponentKey(std::get_if<Vec3AnimationCurve>(&record)) ||
+               containsComponentKey(std::get_if<Color4AnimationCurve>(&record));
     });
 }
 
@@ -568,32 +505,6 @@ bool AnimationCurveStore::insertKeyframe(const AnimationCurveId curveId, ScalarK
     auto* record = findMutable(curveId);
     auto* curve = record == nullptr ? nullptr : std::get_if<ScalarAnimationCurve>(record);
     return curve != nullptr && ::insertKeyframe(*curve, keyframe, containsKeyframe(keyframeId));
-}
-
-bool AnimationCurveStore::insertKeyframe(const AnimationCurveId curveId, Vec2Keyframe keyframe) {
-    auto* record = findMutable(curveId);
-    auto* curve = record == nullptr ? nullptr : std::get_if<Vec2AnimationCurve>(record);
-    return curve != nullptr && curve->components[0].keyframes.empty() &&
-           curve->components[1].keyframes.empty() &&
-           ::insertKeyframe(*curve, keyframe, containsKeyframe(keyframe.id));
-}
-
-bool AnimationCurveStore::insertKeyframe(const AnimationCurveId curveId, Vec3Keyframe keyframe) {
-    auto* record = findMutable(curveId);
-    auto* curve = record == nullptr ? nullptr : std::get_if<Vec3AnimationCurve>(record);
-    return curve != nullptr &&
-           std::ranges::all_of(curve->components,
-                               [](const auto& component) { return component.keyframes.empty(); }) &&
-           ::insertKeyframe(*curve, keyframe, containsKeyframe(keyframe.id));
-}
-
-bool AnimationCurveStore::insertKeyframe(const AnimationCurveId curveId, Color4Keyframe keyframe) {
-    auto* record = findMutable(curveId);
-    auto* curve = record == nullptr ? nullptr : std::get_if<Color4AnimationCurve>(record);
-    return curve != nullptr &&
-           std::ranges::all_of(curve->components,
-                               [](const auto& component) { return component.keyframes.empty(); }) &&
-           ::insertKeyframe(*curve, keyframe, containsKeyframe(keyframe.id));
 }
 
 bool AnimationCurveStore::insertKeyframe(const AnimationCurveId curveId,
@@ -620,33 +531,6 @@ bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId, ScalarK
     auto* record = findMutable(curveId);
     auto* curve = record == nullptr ? nullptr : std::get_if<ScalarAnimationCurve>(record);
     return curve != nullptr && ::updateKeyframe(*curve, keyframe);
-}
-
-bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId, Vec2Keyframe keyframe) {
-    auto* record = findMutable(curveId);
-    auto* curve = record == nullptr ? nullptr : std::get_if<Vec2AnimationCurve>(record);
-    return curve != nullptr &&
-           std::ranges::all_of(curve->components,
-                               [](const auto& component) { return component.keyframes.empty(); }) &&
-           ::updateKeyframe(*curve, keyframe);
-}
-
-bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId, Vec3Keyframe keyframe) {
-    auto* record = findMutable(curveId);
-    auto* curve = record == nullptr ? nullptr : std::get_if<Vec3AnimationCurve>(record);
-    return curve != nullptr &&
-           std::ranges::all_of(curve->components,
-                               [](const auto& component) { return component.keyframes.empty(); }) &&
-           ::updateKeyframe(*curve, keyframe);
-}
-
-bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId, Color4Keyframe keyframe) {
-    auto* record = findMutable(curveId);
-    auto* curve = record == nullptr ? nullptr : std::get_if<Color4AnimationCurve>(record);
-    return curve != nullptr &&
-           std::ranges::all_of(curve->components,
-                               [](const auto& component) { return component.keyframes.empty(); }) &&
-           ::updateKeyframe(*curve, keyframe);
 }
 
 bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId,
@@ -677,27 +561,6 @@ bool AnimationCurveStore::eraseKeyframe(const AnimationCurveId curveId,
     if (auto* scalar = std::get_if<ScalarAnimationCurve>(record)) {
         return eraseCurveKeyframe(*scalar, keyframeId);
     }
-    const bool legacy = std::visit(
-        [](const auto& curve) {
-            using Curve = std::decay_t<decltype(curve)>;
-            if constexpr (std::is_same_v<Curve, ScalarAnimationCurve>)
-                return false;
-            else
-                return std::ranges::all_of(curve.components, [](const auto& component) {
-                    return component.keyframes.empty();
-                });
-        },
-        *record);
-    if (legacy) {
-        return std::visit(
-            [&](auto& curve) {
-                using Curve = std::decay_t<decltype(curve)>;
-                if constexpr (!std::is_same_v<Curve, ScalarAnimationCurve>)
-                    return eraseCurveKeyframe(curve, keyframeId);
-                return false;
-            },
-            *record);
-    }
     bool erased = false;
     std::visit(
         [&](auto& curve) {
@@ -714,118 +577,6 @@ bool AnimationCurveStore::eraseKeyframe(const AnimationCurveId curveId,
         },
         *record);
     return erased;
-}
-
-bool AnimationCurveStore::synchronizeCompatibilityProjection(const AnimationCurveId curveId) {
-    auto* record = findMutable(curveId);
-    if (record == nullptr)
-        return false;
-    return std::visit(
-        [](auto& curve) {
-            using Curve = std::decay_t<decltype(curve)>;
-            if constexpr (std::is_same_v<Curve, ScalarAnimationCurve>) {
-                return false;
-            } else {
-                if (std::ranges::all_of(curve.components, [](const auto& component) {
-                        return component.keyframes.empty();
-                    }))
-                    return false;
-                std::vector<core::RationalTime> times;
-                for (const auto& component : curve.components)
-                    for (const auto& key : component.keyframes)
-                        if (std::ranges::find(times, key.time) == times.end())
-                            times.push_back(key.time);
-                std::ranges::sort(times);
-                if constexpr (std::is_same_v<Curve, Vec2AnimationCurve>) {
-                    curve.keyframes.clear();
-                    for (const auto time : times) {
-                        const auto x = std::ranges::find(curve.components[0].keyframes, time,
-                                                         &ScalarKeyframe::time);
-                        const auto y = std::ranges::find(curve.components[1].keyframes, time,
-                                                         &ScalarKeyframe::time);
-                        if (x == curve.components[0].keyframes.end() &&
-                            y == curve.components[1].keyframes.end())
-                            continue;
-                        const auto id = x != curve.components[0].keyframes.end() ? x->id : y->id;
-                        const auto interpolation = x != curve.components[0].keyframes.end()
-                                                       ? x->outgoingInterpolation
-                                                       : y->outgoingInterpolation;
-                        curve.keyframes.push_back(
-                            {id,
-                             time,
-                             {x == curve.components[0].keyframes.end() ? 0.0 : x->value,
-                              y == curve.components[1].keyframes.end() ? 0.0 : y->value},
-                             interpolation});
-                    }
-                } else if constexpr (std::is_same_v<Curve, Vec3AnimationCurve>) {
-                    curve.keyframes.clear();
-                    for (const auto time : times) {
-                        const auto x = std::ranges::find(curve.components[0].keyframes, time,
-                                                         &ScalarKeyframe::time);
-                        const auto y = std::ranges::find(curve.components[1].keyframes, time,
-                                                         &ScalarKeyframe::time);
-                        const auto z = std::ranges::find(curve.components[2].keyframes, time,
-                                                         &ScalarKeyframe::time);
-                        if (x == curve.components[0].keyframes.end() &&
-                            y == curve.components[1].keyframes.end() &&
-                            z == curve.components[2].keyframes.end())
-                            continue;
-                        const auto id = x != curve.components[0].keyframes.end()   ? x->id
-                                        : y != curve.components[1].keyframes.end() ? y->id
-                                                                                   : z->id;
-                        const auto interpolation =
-                            x != curve.components[0].keyframes.end()   ? x->outgoingInterpolation
-                            : y != curve.components[1].keyframes.end() ? y->outgoingInterpolation
-                                                                       : z->outgoingInterpolation;
-                        curve.keyframes.push_back(
-                            {id,
-                             time,
-                             {x == curve.components[0].keyframes.end() ? 0.0 : x->value,
-                              y == curve.components[1].keyframes.end() ? 0.0 : y->value,
-                              z == curve.components[2].keyframes.end() ? 0.0 : z->value},
-                             interpolation});
-                    }
-                } else {
-                    curve.keyframes.clear();
-                    for (const auto time : times) {
-                        const auto red = std::ranges::find(curve.components[0].keyframes, time,
-                                                           &ScalarKeyframe::time);
-                        const auto green = std::ranges::find(curve.components[1].keyframes, time,
-                                                             &ScalarKeyframe::time);
-                        const auto blue = std::ranges::find(curve.components[2].keyframes, time,
-                                                            &ScalarKeyframe::time);
-                        const auto alpha = std::ranges::find(curve.components[3].keyframes, time,
-                                                             &ScalarKeyframe::time);
-                        if (red == curve.components[0].keyframes.end() &&
-                            green == curve.components[1].keyframes.end() &&
-                            blue == curve.components[2].keyframes.end() &&
-                            alpha == curve.components[3].keyframes.end())
-                            continue;
-                        const auto id = red != curve.components[0].keyframes.end()     ? red->id
-                                        : green != curve.components[1].keyframes.end() ? green->id
-                                        : blue != curve.components[2].keyframes.end()  ? blue->id
-                                                                                       : alpha->id;
-                        const auto interpolation = red != curve.components[0].keyframes.end()
-                                                       ? red->outgoingInterpolation
-                                                   : green != curve.components[1].keyframes.end()
-                                                       ? green->outgoingInterpolation
-                                                   : blue != curve.components[2].keyframes.end()
-                                                       ? blue->outgoingInterpolation
-                                                       : alpha->outgoingInterpolation;
-                        curve.keyframes.push_back(
-                            {id,
-                             time,
-                             {red == curve.components[0].keyframes.end() ? 0.0 : red->value,
-                              green == curve.components[1].keyframes.end() ? 0.0 : green->value,
-                              blue == curve.components[2].keyframes.end() ? 0.0 : blue->value,
-                              alpha == curve.components[3].keyframes.end() ? 0.0 : alpha->value},
-                             interpolation});
-                    }
-                }
-                return true;
-            }
-        },
-        *record);
 }
 
 bool AnimationCurveStore::eraseKeyframe(const AnimationCurveId curveId,
@@ -889,21 +640,6 @@ ValidationResult AnimationCurveStore::validate() const {
                         }
                     }
                 } else {
-                    if (std::ranges::all_of(
-                            curve.components,
-                            [](const auto& component) { return component.keyframes.empty(); }) &&
-                        !curve.keyframes.empty()) {
-                        validateCurve(curve, result);
-                        for (const auto& keyframe : curve.keyframes) {
-                            if (keyframe.id.isValid() && !keyframeIds.insert(keyframe.id).second) {
-                                result.add(ValidationCode::DuplicateId,
-                                           "[" + std::to_string(curve.id.value()) + "].keyframes[" +
-                                               std::to_string(keyframe.id.value()) + "].id",
-                                           "Keyframe ID is duplicated within the composition");
-                            }
-                        }
-                        return;
-                    }
                     for (std::size_t componentIndex = 0; componentIndex < curve.components.size();
                          ++componentIndex) {
                         const auto path = "[" + std::to_string(curve.id.value()) + "].components[" +
@@ -924,17 +660,6 @@ ValidationResult AnimationCurveStore::validate() const {
                         result.add(ValidationCode::InvalidValue,
                                    "[" + std::to_string(curve.id.value()) + "].components",
                                    "Component animation curve must contain at least one keyframe");
-                    }
-                    // The derived whole-value projection is validated for finiteness even though
-                    // the components are authoritative: it is stored state, and no stored Float64
-                    // may be one the canonical format cannot spell.
-                    for (const auto& keyframe : curve.keyframes) {
-                        if (!finiteValue(keyframe)) {
-                            result.add(ValidationCode::InvalidValue,
-                                       "[" + std::to_string(curve.id.value()) + "].keyframes[" +
-                                           std::to_string(keyframe.id.value()) + "].value",
-                                       "Keyframe value must be finite");
-                        }
                     }
                 }
             },

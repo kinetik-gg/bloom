@@ -1,5 +1,7 @@
 #include <bloom/ui/composition_session.hpp>
 
+#include "animation_components.hpp"
+
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/result.hpp>
@@ -1163,18 +1165,23 @@ bool CompositionSession::moveSelectedKeyframe(const core::RationalTime newTime) 
         transaction.emplace<commands::UpdateScalarKeyframe>(compositionId_, keySelection->curveId,
                                                             keySelection->keyframeId, newTime,
                                                             key->value, key->outgoingInterpolation);
-    } else if (const auto* vec2 = std::get_if<document::Vec2AnimationCurve>(record)) {
-        const auto key = std::ranges::find(vec2->keyframes, keySelection->keyframeId,
-                                           &document::Vec2Keyframe::id);
-        if (key == vec2->keyframes.end()) {
+    } else if (!std::holds_alternative<document::ScalarAnimationCurve>(*record)) {
+        // A vector or colour key lives on a component curve, so the move is addressed as
+        // KeyframeAddress{curve, key, component}: a component-tagged selection moves that lane's
+        // key, and a component-less one moves every component key sharing its exact time.
+        const auto time = keyframeTimeForSelection(*record, *keySelection);
+        if (!time.has_value()) {
             return false;
         }
-        if (key->time == newTime) {
+        if (*time == newTime) {
+            // Zero effective change commits nothing, exactly as the scalar arm above.
             return true;
         }
-        transaction.emplace<commands::UpdateVec2Keyframe>(compositionId_, keySelection->curveId,
-                                                          keySelection->keyframeId, newTime,
-                                                          key->value, key->outgoingInterpolation);
+        transaction.emplace<commands::MoveKeyframes>(
+            compositionId_,
+            std::vector<commands::KeyframeMove>{
+                {{keySelection->curveId, keySelection->keyframeId, keySelection->component},
+                 newTime}});
     } else {
         return false;
     }
@@ -1358,33 +1365,77 @@ bool CompositionSession::keyframeSelectionExists(const KeyframeSelection& select
     return std::visit(
         [&](const auto& curve) {
             using Curve = std::decay_t<decltype(curve)>;
-            if (selection.component.has_value()) {
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
-                    return false;
-                } else {
-                    const auto* component = curve.component(*selection.component);
-                    return component != nullptr &&
-                           std::ranges::any_of(component->keyframes, [&](const auto& key) {
-                               return key.id == selection.keyframeId;
-                           });
-                }
+            const auto holdsKey = [&](const auto& keys) {
+                return std::ranges::any_of(
+                    keys, [&](const auto& key) { return key.id == selection.keyframeId; });
+            };
+            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                return !selection.component.has_value() && holdsKey(curve.keyframes);
+            } else if (selection.component.has_value()) {
+                const auto* component = curve.component(*selection.component);
+                return component != nullptr && holdsKey(component->keyframes);
+            } else {
+                return std::ranges::any_of(curve.components, [&](const auto& component) {
+                    return holdsKey(component.keyframes);
+                });
             }
-            return std::ranges::any_of(
-                       curve.keyframes,
-                       [&](const auto& key) { return key.id == selection.keyframeId; }) ||
-                   [&] {
-                       if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
-                           return false;
-                       } else {
-                           return std::ranges::any_of(curve.components, [&](const auto& component) {
-                               return std::ranges::any_of(
-                                   component.keyframes,
-                                   [&](const auto& key) { return key.id == selection.keyframeId; });
-                           });
-                       }
-                   }();
         },
         *record);
+}
+
+std::optional<document::AnimationComponent>
+CompositionSession::componentForKeyframe(const document::AnimationCurveId curveId,
+                                         const document::KeyframeId keyframeId) const {
+    const auto* current = composition();
+    const auto* record = current == nullptr ? nullptr : current->animationCurves().find(curveId);
+    if (record == nullptr) {
+        return std::nullopt;
+    }
+    // A vector or colour key belongs to exactly one component curve, and the component is half of
+    // its address now that the whole-value projection is gone. Resolving it once, here, is what
+    // lets the component-less selectKeyframe() overload stay the caller-facing convenience it was.
+    return std::visit(
+        [keyframeId](const auto& curve) -> std::optional<document::AnimationComponent> {
+            using Curve = std::decay_t<decltype(curve)>;
+            if constexpr (!std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                for (const auto component : animationComponentsOf<Curve>()) {
+                    const auto* values = curve.component(component);
+                    if (values != nullptr &&
+                        std::ranges::any_of(values->keyframes, [keyframeId](const auto& key) {
+                            return key.id == keyframeId;
+                        }))
+                        return component;
+                }
+            }
+            return std::nullopt;
+        },
+        *record);
+}
+
+std::optional<core::RationalTime>
+CompositionSession::keyframeTimeForSelection(const document::AnimationCurveRecord& record,
+                                             const KeyframeSelection& selection) {
+    return std::visit(
+        [&](const auto& curve) -> std::optional<core::RationalTime> {
+            using Curve = std::decay_t<decltype(curve)>;
+            const auto timeOf = [&](const auto& keys) -> std::optional<core::RationalTime> {
+                const auto key =
+                    std::ranges::find(keys, selection.keyframeId, &document::ScalarKeyframe::id);
+                return key == keys.end() ? std::nullopt : std::optional{key->time};
+            };
+            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                return selection.component.has_value() ? std::nullopt : timeOf(curve.keyframes);
+            } else if (selection.component.has_value()) {
+                const auto* component = curve.component(*selection.component);
+                return component == nullptr ? std::nullopt : timeOf(component->keyframes);
+            } else {
+                for (const auto& component : curve.components)
+                    if (const auto time = timeOf(component.keyframes))
+                        return time;
+                return std::nullopt;
+            }
+        },
+        record);
 }
 
 std::optional<document::ParameterId>
@@ -1593,19 +1644,16 @@ CompositionSession::keyframeAtExactTime(const document::ParameterRecord& paramet
     }
     return std::visit(
         [time](const auto& curve) -> std::optional<document::KeyframeId> {
-            for (const auto& key : curve.keyframes) {
-                if (key.time == time) {
-                    return key.id;
-                }
-            }
             using Curve = std::decay_t<decltype(curve)>;
-            if constexpr (!std::is_same_v<Curve, document::ScalarAnimationCurve>) {
-                for (const auto& component : curve.components) {
-                    for (const auto& key : component.keyframes) {
+            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                for (const auto& key : curve.keyframes)
+                    if (key.time == time)
+                        return key.id;
+            } else {
+                for (const auto& component : curve.components)
+                    for (const auto& key : component.keyframes)
                         if (key.time == time)
                             return key.id;
-                    }
-                }
             }
             return std::nullopt;
         },
@@ -1624,12 +1672,6 @@ std::size_t CompositionSession::keyframeCount(const document::AnimationCurveId c
             if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
                 return curve.keyframes.size();
             } else {
-                const bool grouped =
-                    std::ranges::any_of(curve.components, [](const auto& component) {
-                        return !component.keyframes.empty();
-                    });
-                if (!grouped)
-                    return curve.keyframes.size();
                 std::size_t count = 0;
                 for (const auto& component : curve.components)
                     count += component.keyframes.size();
@@ -1716,15 +1758,6 @@ CompositionSession::keyframeParameterState(const document::ParameterId parameter
                            ? KeyframeParameterState::All
                            : KeyframeParameterState::None;
             } else {
-                const bool grouped =
-                    std::ranges::any_of(curve.components, [](const auto& component) {
-                        return !component.keyframes.empty();
-                    });
-                if (!grouped)
-                    return std::ranges::any_of(curve.keyframes,
-                                               [time](const auto& key) { return key.time == time; })
-                               ? KeyframeParameterState::All
-                               : KeyframeParameterState::None;
                 std::size_t keyed = 0;
                 for (const auto& component : curve.components)
                     if (std::ranges::any_of(component.keyframes,
@@ -1975,31 +2008,22 @@ CompositionSession::selectedKeyframeInterpolation() const {
         [keyframeId, component = keySelection->component](
             const auto& curve) -> std::optional<document::KeyframeInterpolation> {
             using Curve = std::decay_t<decltype(curve)>;
-            if (component.has_value()) {
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
-                    return std::nullopt;
-                } else {
-                    const auto* values = curve.component(*component);
-                    if (values == nullptr)
-                        return std::nullopt;
-                    for (const auto& key : values->keyframes)
-                        if (key.id == keyframeId)
-                            return key.outgoingInterpolation;
-                    return std::nullopt;
-                }
-            }
-            for (const auto& key : curve.keyframes) {
-                if (key.id == keyframeId) {
-                    return key.outgoingInterpolation;
-                }
-            }
-            if constexpr (!std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+            const auto interpolationOf =
+                [keyframeId](const auto& keys) -> std::optional<document::KeyframeInterpolation> {
+                const auto key = std::ranges::find(keys, keyframeId, &document::ScalarKeyframe::id);
+                return key == keys.end() ? std::nullopt : std::optional{key->outgoingInterpolation};
+            };
+            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                return component.has_value() ? std::nullopt : interpolationOf(curve.keyframes);
+            } else if (component.has_value()) {
+                const auto* values = curve.component(*component);
+                return values == nullptr ? std::nullopt : interpolationOf(values->keyframes);
+            } else {
                 for (const auto& values : curve.components)
-                    for (const auto& key : values.keyframes)
-                        if (key.id == keyframeId)
-                            return key.outgoingInterpolation;
+                    if (const auto found = interpolationOf(values.keyframes))
+                        return found;
+                return std::nullopt;
             }
-            return std::nullopt;
         },
         *record);
 }
@@ -2017,23 +2041,19 @@ bool CompositionSession::selectedKeyframeIsFinal() const {
     return std::visit(
         [keyframeId, component = keySelection->component](const auto& curve) {
             using Curve = std::decay_t<decltype(curve)>;
-            if (component.has_value()) {
-                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
-                    return false;
-                } else {
-                    const auto* values = curve.component(*component);
-                    return values != nullptr && !values->keyframes.empty() &&
-                           values->keyframes.back().id == keyframeId;
-                }
-            }
-            if (!curve.keyframes.empty() && curve.keyframes.back().id == keyframeId)
-                return true;
-            if constexpr (!std::is_same_v<Curve, document::ScalarAnimationCurve>) {
-                return std::ranges::any_of(curve.components, [keyframeId](const auto& values) {
-                    return !values.keyframes.empty() && values.keyframes.back().id == keyframeId;
+            const auto endsWithKey = [keyframeId](const auto& keys) {
+                return !keys.empty() && keys.back().id == keyframeId;
+            };
+            if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                return !component.has_value() && endsWithKey(curve.keyframes);
+            } else if (component.has_value()) {
+                const auto* values = curve.component(*component);
+                return values != nullptr && endsWithKey(values->keyframes);
+            } else {
+                return std::ranges::any_of(curve.components, [&](const auto& values) {
+                    return endsWithKey(values.keyframes);
                 });
             }
-            return false;
         },
         *record);
 }

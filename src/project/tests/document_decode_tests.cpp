@@ -1428,9 +1428,12 @@ void testKeyframeEaseHandles(Expectations& expectations) {
 void testAcceptsVec2AnimationCurve(Expectations& expectations) {
     // An unreferenced vec2 curve is valid wire shape at this decode layer: curve ownership by
     // exactly one parameter is a later document-construction invariant, not checked here.
-    const std::string curves = R"([{"id":"1","kind":"vec2","keyframes":[)"
-                               R"({"id":"1","time":{"numerator":"0","denominator":"1"},)"
-                               R"("value":{"x":0.0,"y":0.0},"outgoingInterpolation":"linear"}]}])";
+    const std::string curves =
+        R"([{"id":"1","kind":"vec2","keyframes":[)"
+        R"({"id":"1","component":"x","time":{"numerator":"0","denominator":"1"},)"
+        R"("value":0.0,"outgoingInterpolation":"linear"},)"
+        R"({"id":"2","component":"y","time":{"numerator":"0","denominator":"1"},)"
+        R"("value":0.0,"outgoingInterpolation":"linear"}]}])";
     const auto decoded = decodeText(documentWithComposition(
         compositionWithInterior("[]", curves, std::string(kMinimalGraphJson))));
     expectations.expect(static_cast<bool>(decoded) && decoded.value() != nullptr,

@@ -246,7 +246,7 @@ Authored authoredProject() {
                                       document::KeyframeInterpolation::EaseInOut},
              document::ScalarKeyframe{colorKeys[7], time(7, 24), 1.0}}}};
     if (!composition.animationCurves().insert(
-            document::Color4AnimationCurve{*colorCurve, {}, std::move(colorComponents)})) {
+            document::Color4AnimationCurve{*colorCurve, std::move(colorComponents)})) {
         throw std::runtime_error("fixture colour curve");
     }
     // GRAPH-1, D2: the eased scalar segment also carries NON-DEFAULT ease handles on both of its

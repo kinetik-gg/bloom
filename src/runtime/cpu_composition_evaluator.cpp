@@ -1177,39 +1177,8 @@ template <typename Value>
         if (cancellation.isCancellationRequested()) {
             return PreflightOutcome::cancellation();
         }
-        const bool componentCurve = std::ranges::any_of(
-            curve.components, [](const auto& component) { return !component.empty(); });
-        if (componentCurve) {
-            for (const auto& component : curve.components) {
-                for (const auto& keyframe : component) {
-                    if (cancellation.isCancellationRequested()) {
-                        return PreflightOutcome::cancellation();
-                    }
-                    if (!keyframe.id.isValid() || !keyframeIds.insert(keyframe.id).second) {
-                        EvaluationSubject subject;
-                        subject.animationCurveId = curve.id;
-                        subject.keyframeId = keyframe.id;
-                        subject.field = "animationCurve.components";
-                        return PreflightOutcome::failure(
-                            diagnostic(EvaluationDiagnosticCode::InvalidPlan,
-                                       "Animation keyframe identity is not canonical",
-                                       "Keyframe identities must be valid and globally unique.",
-                                       std::move(subject)));
-                    }
-                    if (!std::isfinite(keyframe.value)) {
-                        EvaluationSubject subject;
-                        subject.parameterId = vec2CurveOwners[curveIndex];
-                        subject.animationCurveId = curve.id;
-                        subject.keyframeId = keyframe.id;
-                        subject.field = std::string(vec2CurveFields[curveIndex]);
-                        return PreflightOutcome::failure(diagnostic(
-                            EvaluationDiagnosticCode::InvalidParameter,
-                            "Animated layer transform key is not finite", {}, std::move(subject)));
-                    }
-                }
-            }
-        } else {
-            for (const auto& keyframe : curve.keyframes) {
+        for (const auto& component : curve.components) {
+            for (const auto& keyframe : component) {
                 if (cancellation.isCancellationRequested()) {
                     return PreflightOutcome::cancellation();
                 }
@@ -1217,14 +1186,14 @@ template <typename Value>
                     EvaluationSubject subject;
                     subject.animationCurveId = curve.id;
                     subject.keyframeId = keyframe.id;
-                    subject.field = "animationCurve.keyframes";
+                    subject.field = "animationCurve.components";
                     return PreflightOutcome::failure(
                         diagnostic(EvaluationDiagnosticCode::InvalidPlan,
                                    "Animation keyframe identity is not canonical",
                                    "Keyframe identities must be valid and globally unique.",
                                    std::move(subject)));
                 }
-                if (!std::isfinite(keyframe.value.x) || !std::isfinite(keyframe.value.y)) {
+                if (!std::isfinite(keyframe.value)) {
                     EvaluationSubject subject;
                     subject.parameterId = vec2CurveOwners[curveIndex];
                     subject.animationCurveId = curve.id;
@@ -1253,45 +1222,9 @@ template <typename Value>
         if (cancellation.isCancellationRequested()) {
             return PreflightOutcome::cancellation();
         }
-        const bool componentCurve = std::ranges::any_of(
-            curve.components, [](const auto& component) { return !component.empty(); });
-        if (componentCurve) {
-            for (std::size_t componentIndex = 0; componentIndex < curve.components.size();
-                 ++componentIndex) {
-                for (const auto& keyframe : curve.components[componentIndex]) {
-                    if (cancellation.isCancellationRequested()) {
-                        return PreflightOutcome::cancellation();
-                    }
-                    if (!keyframe.id.isValid() || !keyframeIds.insert(keyframe.id).second) {
-                        EvaluationSubject subject;
-                        subject.animationCurveId = curve.id;
-                        subject.keyframeId = keyframe.id;
-                        subject.field = "animationCurve.components";
-                        return PreflightOutcome::failure(
-                            diagnostic(EvaluationDiagnosticCode::InvalidPlan,
-                                       "Animation keyframe identity is not canonical",
-                                       "Keyframe identities must be valid and globally unique.",
-                                       std::move(subject)));
-                    }
-                    const bool valid = componentIndex == 3
-                                           ? std::isfinite(keyframe.value) &&
-                                                 keyframe.value >= 0.0 && keyframe.value <= 1.0
-                                           : std::isfinite(keyframe.value);
-                    if (!valid) {
-                        EvaluationSubject subject;
-                        subject.parameterId = color4CurveOwners[curveIndex];
-                        subject.animationCurveId = curve.id;
-                        subject.keyframeId = keyframe.id;
-                        subject.field = std::string(color4CurveFields[curveIndex]);
-                        return PreflightOutcome::failure(
-                            diagnostic(EvaluationDiagnosticCode::InvalidParameter,
-                                       "Animated color key is not a valid authoring color", {},
-                                       std::move(subject)));
-                    }
-                }
-            }
-        } else {
-            for (const auto& keyframe : curve.keyframes) {
+        for (std::size_t componentIndex = 0; componentIndex < curve.components.size();
+             ++componentIndex) {
+            for (const auto& keyframe : curve.components[componentIndex]) {
                 if (cancellation.isCancellationRequested()) {
                     return PreflightOutcome::cancellation();
                 }
@@ -1299,15 +1232,20 @@ template <typename Value>
                     EvaluationSubject subject;
                     subject.animationCurveId = curve.id;
                     subject.keyframeId = keyframe.id;
-                    subject.field = "animationCurve.keyframes";
+                    subject.field = "animationCurve.components";
                     return PreflightOutcome::failure(
                         diagnostic(EvaluationDiagnosticCode::InvalidPlan,
                                    "Animation keyframe identity is not canonical",
                                    "Keyframe identities must be valid and globally unique.",
                                    std::move(subject)));
                 }
-                // The authoring-colour contract, exactly as a constant colour satisfies it.
-                if (!keyframe.value.isValid()) {
+                // The authoring-colour contract, exactly as a constant colour satisfies it:
+                // finite everywhere, and alpha confined to the unit interval.
+                const bool valid = componentIndex == 3
+                                       ? std::isfinite(keyframe.value) && keyframe.value >= 0.0 &&
+                                             keyframe.value <= 1.0
+                                       : std::isfinite(keyframe.value);
+                if (!valid) {
                     EvaluationSubject subject;
                     subject.parameterId = color4CurveOwners[curveIndex];
                     subject.animationCurveId = curve.id;

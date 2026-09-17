@@ -613,6 +613,17 @@ class CompositionSession final : public QObject {
     // exception-free by clang-tidy's bugprone-exception-escape (the variant is never valueless in
     // practice, but std::visit's contract still permits bad_variant_access).
     [[nodiscard]] bool keyframeSelectionExists(const KeyframeSelection& selection) const;
+    // The component a vector or colour key belongs to. Since KEY-2 a key IS a component key, so a
+    // KeyframeSelection that named only a curve and a key id would be half an address; the
+    // component-less selectKeyframe() overload completes it through this.
+    [[nodiscard]] std::optional<document::AnimationComponent>
+    componentForKeyframe(document::AnimationCurveId curveId, document::KeyframeId keyframeId) const;
+    // The exact time of one addressed key, scalar or component, or nothing when the address does
+    // not resolve. A component-less address on a vector or colour curve answers with the first
+    // component that owns the key id -- every component key at that time moves together.
+    [[nodiscard]] static std::optional<core::RationalTime>
+    keyframeTimeForSelection(const document::AnimationCurveRecord& record,
+                             const KeyframeSelection& selection);
     [[nodiscard]] std::optional<document::ParameterId>
     parameterForCurve(document::AnimationCurveId curveId) const noexcept;
     [[nodiscard]] std::optional<document::LayerId>
