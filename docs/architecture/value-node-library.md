@@ -106,7 +106,7 @@ the edge behaviour of every row.
 | [String utilities](#string-utilities) | 15 | `String` | Building, measuring, cutting and comparing text |
 | [Math](#math) | 16 | `Math`, `Vector`, `Color` | The numeric gaps, plus the nine existing arithmetic nodes that moved into the section |
 | [Logic](#logic) | 3 | `Logic` | Boolean combination and a range predicate |
-| [Readouts](#readouts) | 4 | `Time` (frame), `Values` (composition) | What the composition and the frame are, as numbers |
+| [Readouts](#readouts) | 5 | `Time` (frame), `Values` (composition) | What the composition, frame, or evaluated image bounds are, as numbers |
 
 Every node's socket names, its inline selectors and its outputs come from ONE record --
 `document::valueUtilityDescriptors()` -- so the tables below describe the same table the registry,
@@ -313,6 +313,7 @@ evaluation request, not to the document's authored values.
 | Frame Rate | none | `result` Scalar | The composition's frame rate as a number |
 | Composition Duration | none | `result` Scalar | Seconds, so it compares directly with a `Time` node's `seconds` output |
 | Composition Size | none | `result` Vector2 | The composition's pixel extent |
+| Layer Bounds | `image` Image | `size` Vector2, `origin` Vector2, `anchor` Vector2, `center` Vector2 | Evaluated image bounds in composition pixels; read after the image pass |
 
 ### Three of these are constants in the plan
 
@@ -326,24 +327,33 @@ cannot disagree with the settings they came from.
 and the one readout the plan's time-dependence analysis marks as time-dependent -- exactly as it
 marks a `Time` node.
 
-### Layer Bounds is NOT delivered
+### Layer Bounds is a post-image readout
 
-Task UTIL-1 asked for a `Layer Bounds` readout -- an Image input answering size, origin and anchor
-from the compiled plan's evaluated bounds -- "if it needs plan plumbing beyond a day's work, deliver
-the others and disclose". It does, and this is the disclosure.
+`bloom.value.layer-bounds` takes one Image transport edge from a Layer, Merge, source, or other
+image-producing operation and publishes four ordinary Vector2 outputs in composition pixels:
 
-The obstruction is an ORDERING one, not an amount of typing. The value graph is compiled and
-evaluated in its own pass BEFORE any image operation runs, which is what lets an image operation
-read a value-graph output as a parameter. Evaluated bounds are produced BY the image pass. A value
-node that read them would need the image pass's results to exist before the value pass runs, which
-inverts the one ordering the two-pass design rests on, and a composition could then contain a cycle
-the existing acyclic check cannot see -- a Layer Bounds feeding a transform whose own bounds it
-reads.
+- `size`: the evaluated output width and height;
+- `origin`: the evaluated output left and top edge;
+- `anchor`: the authored/evaluated anchor carried by the operation; and
+- `center`: the evaluated output rectangle centre.
 
-Delivering it properly means either a second value pass that runs after the image pass (and a rule
-about which parameters may read it), or per-node bounds resolution hoisted out of evaluation into
-compilation. Both are design changes to the evaluation model rather than another node, so the other
-four readouts ship and this one does not.
+The compiler lowers the connected image operation to `CompiledBoundsReadout{operationIndex}`. The
+evaluator runs the ordinary value pass first, evaluates the image plan and its memoised bounds, then
+runs a POST-PASS for each Layer Bounds node and every value node transitively downstream of one.
+This is a read of evaluated runtime state; bounds are not hoisted into compilation and the plan
+semantics version does not move.
+
+#### Read rule (v0)
+
+A Layer Bounds readout, or any value node downstream of one, may not drive a parameter of an image
+operation. Such a graph fails compilation with
+`bloom.runtime.compile.bounds-readout-drives-image-operation`, naming the offending destination
+node and parameter. This keeps the image plan acyclic and restates the same-time cycle refusal
+already exercised by `testValueGraphCycleRefusal`.
+
+The readout may drive value nodes whose outputs are used for Properties/timeline readback, another
+readout, or a value-graph output. The post-pass is additive: identity goldens and
+`content_bounds_tests` remain unchanged.
 
 ### Why these are nodes rather than implicit coercions
 

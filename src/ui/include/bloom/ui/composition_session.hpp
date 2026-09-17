@@ -423,6 +423,11 @@ class CompositionSession final : public QObject {
     // ONE evaluation answers every surface: the Properties row and the timeline row for the same
     // parameter read the same string by construction.
     [[nodiscard]] QString drivenValueText(document::ParameterId parameterId) const;
+    // The evaluated value of a named value-node output, or an empty string while the worker has
+    // not published a frame for it. Layer Bounds uses the same readback as driven parameters, so
+    // Properties and node cards never evaluate the graph on the UI thread.
+    [[nodiscard]] QString valueOutputText(document::NodeId nodeId,
+                                          std::string_view outputPort) const;
     // Requests a fresh resolution of every driven parameter in the composition. Idempotent: a
     // request identical to the one already in flight or already answered -- same revision, same
     // time, same parameters -- starts nothing, so a surface may call it from the same refresh that
@@ -699,6 +704,7 @@ class CompositionSession final : public QObject {
     class DrivenValueResolver* drivenValues_ = nullptr;
     QString drivenRequest_;
     std::map<document::ParameterId, QString> drivenText_;
+    std::map<std::pair<document::NodeId, std::string>, QString> valueOutputText_;
 };
 
 } // namespace bloom::ui

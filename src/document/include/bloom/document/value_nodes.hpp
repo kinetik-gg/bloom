@@ -130,6 +130,16 @@ inline constexpr std::string_view kRandomNodeType = "bloom.random";
 // answered, and filled the Utilities section with eight rows that differ only in a colour.
 inline constexpr std::string_view kRerouteNodeType = "bloom.reroute";
 
+// Layer Bounds reads the evaluated image operation bounds after the image pass. Its input is a
+// transport edge (not a driver-backed parameter), and its four outputs remain ordinary value
+// sockets so math and readback consumers use the generic value graph rules.
+inline constexpr std::string_view kLayerBoundsNodeType = "bloom.value.layer-bounds";
+inline constexpr std::string_view kLayerBoundsImagePortName = "image";
+inline constexpr std::string_view kLayerBoundsSizePortName = "size";
+inline constexpr std::string_view kLayerBoundsOriginPortName = "origin";
+inline constexpr std::string_view kLayerBoundsAnchorPortName = "anchor";
+inline constexpr std::string_view kLayerBoundsCenterPortName = "center";
+
 [[nodiscard]] constexpr bool isRerouteNodeType(const std::string_view typeId) noexcept {
     return typeId == kRerouteNodeType;
 }

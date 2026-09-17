@@ -710,6 +710,16 @@ which is what `DisconnectInput` already takes. The pick-up gesture asks an input
 does your value come from", and an edge and a driver binding are the two answers; dropping a picked-up
 driver on empty canvas restores the operand's registered default, in one undoable step.
 
+#### Layer Bounds read rule
+
+`bloom.value.layer-bounds` is the value graph's read-only bridge to evaluated image bounds. It reads
+the connected image operation after the image pass and may feed value nodes, another readout, or
+Properties/timeline value readback. A Layer Bounds node, or any value node transitively downstream
+of it, must not drive a parameter of an image operation. Compilation refuses that destination with
+`bloom.runtime.compile.bounds-readout-drives-image-operation`, naming the offending node and
+parameter. The rule keeps the image plan acyclic and preserves the existing same-time value-graph
+cycle refusal; it does not change the plan semantics version or move bounds into compilation.
+
 Pointer slop around a socket is an ARTIST's slop, not a scene measurement: the socket's own hit shape
 is fixed in scene units, so the canvas widens the grab radius by the view's inverse scale before
 resolving a press. A socket is therefore the same size under the pointer at every zoom, and never

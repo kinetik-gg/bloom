@@ -1314,12 +1314,24 @@ template <typename Value>
     // fallback, so a divisor that reached zero degrades one value rather than failing the frame --
     // which is why they are reported as warnings beside a rendered picture instead of becoming a
     // preflight failure.
-    auto valueGraph = evaluateValueGraph(
-        plan->valueOperations(), plan->valueOutputCount(), request.time, plan->format().frameRate(),
-        ValueGraphCurves{plan->scalarCurves(), plan->vec2Curves(), plan->color4Curves(),
-                         plan->vec3Curves()},
-        {cache, statistics, plan->sourceRevision(), plan->projectId(), plan->compositionId(),
-         &cancellation, plan->valueTimeDependence()});
+    const bool hasPostImageValues = std::ranges::any_of(
+        plan->valueOperations(), [](const auto& operation) { return operation.requiresPostImage; });
+    ValueGraphMemoization valueMemoization{cache,
+                                           statistics,
+                                           plan->sourceRevision(),
+                                           plan->projectId(),
+                                           plan->compositionId(),
+                                           &cancellation,
+                                           plan->valueTimeDependence(),
+                                           {},
+                                           {},
+                                           {}};
+    valueMemoization.pass = hasPostImageValues ? ValueGraphPass::PreImage : ValueGraphPass::All;
+    auto valueGraph = evaluateValueGraph(plan->valueOperations(), plan->valueOutputCount(),
+                                         request.time, plan->format().frameRate(),
+                                         ValueGraphCurves{plan->scalarCurves(), plan->vec2Curves(),
+                                                          plan->color4Curves(), plan->vec3Curves()},
+                                         valueMemoization);
     if (cancellation.isCancellationRequested()) {
         return PreflightOutcome::cancellation();
     }
@@ -2808,6 +2820,44 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             }
         }
 
+        if (std::ranges::any_of(plan->valueOperations(), [](const auto& operation) {
+                return operation.requiresPostImage;
+            })) {
+            ValueGraphMemoization postMemoization{cache,
+                                                  &frameStatistics,
+                                                  plan->sourceRevision(),
+                                                  plan->projectId(),
+                                                  plan->compositionId(),
+                                                  &cancellation,
+                                                  plan->valueTimeDependence(),
+                                                  {},
+                                                  {},
+                                                  {}};
+            postMemoization.pass = ValueGraphPass::PostImage;
+            postMemoization.initialOutputs = resolved.valueOutputs;
+            postMemoization.evaluatedBounds = bounds;
+            auto postValues =
+                evaluateValueGraph(plan->valueOperations(), plan->valueOutputCount(), request.time,
+                                   plan->format().frameRate(),
+                                   ValueGraphCurves{plan->scalarCurves(), plan->vec2Curves(),
+                                                    plan->color4Curves(), plan->vec3Curves()},
+                                   postMemoization);
+            if (cancellation.isCancellationRequested())
+                return EvaluationResult::cancelled();
+            for (const auto& valueDiagnostic : postValues.diagnostics) {
+                EvaluationSubject valueSubject;
+                if (valueDiagnostic.nodeId.isValid())
+                    valueSubject.nodeId = valueDiagnostic.nodeId;
+                if (valueDiagnostic.parameterId.isValid())
+                    valueSubject.parameterId = valueDiagnostic.parameterId;
+                valueSubject.field = "value";
+                imageWarnings.push_back({EvaluationDiagnosticCode::InvalidParameter,
+                                         DiagnosticSeverity::Warning, std::move(valueSubject),
+                                         valueDiagnostic.summary, valueDiagnostic.detail});
+            }
+            resolved.valueOutputs = std::move(postValues.outputs);
+        }
+
         if (!processImage || cancellation.isCancellationRequested()) {
             return cancellation.isCancellationRequested()
                        ? EvaluationResult::cancelled()
@@ -2829,8 +2879,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             .imagePrimitiveSemanticsVersion = render::kCpuImagePrimitiveSemanticsVersion,
             .roi = request.roi,
         };
-        auto frame = std::shared_ptr<const ProcessFrame>(new ProcessFrame(
-            std::move(identity), std::move(processImage), frameStatistics, std::move(bounds)));
+        auto frame = std::shared_ptr<const ProcessFrame>(
+            new ProcessFrame(std::move(identity), std::move(processImage), frameStatistics,
+                             std::move(bounds), std::move(resolved.valueOutputs)));
         if (statistics)
             *statistics = std::move(frameStatistics);
         return EvaluationResult::evaluated(std::move(frame), std::move(imageWarnings));

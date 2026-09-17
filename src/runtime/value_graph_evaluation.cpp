@@ -1,4 +1,5 @@
 #include <bloom/runtime/animation_sampling.hpp>
+#include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/runtime/value_utility_kernels.hpp>
 
@@ -117,17 +118,16 @@ using Scalar = core::primitives::ScalarPrimitive;
     return &sampled.emplace_back(value.value.value());
 }
 
-[[nodiscard]] const CompiledValue* read(const CompiledValueOperand& operand,
-                                        const std::vector<CompiledValue>& outputs,
-                                        const std::size_t written, const ValueGraphCurves& curves,
-                                        const core::RationalTime time,
-                                        std::deque<CompiledValue>& sampled) {
+[[nodiscard]] const CompiledValue*
+read(const CompiledValueOperand& operand, const std::vector<CompiledValue>& outputs,
+     const std::span<const std::uint8_t> available, const ValueGraphCurves& curves,
+     const core::RationalTime time, std::deque<CompiledValue>& sampled) {
     if (const auto* constant = std::get_if<CompiledValue>(&operand.source)) {
         return constant;
     }
     if (const auto* output = std::get_if<ValueOutputIndex>(&operand.source)) {
         const auto index = output->value();
-        if (index >= written || index >= outputs.size()) {
+        if (index >= available.size() || index >= outputs.size() || available[index] == 0) {
             return nullptr;
         }
         return &outputs[index];
@@ -200,6 +200,11 @@ class Evaluator final {
               runtime::ValueGraphMemoization memoization)
         : time_(time), rate_(rate), curves_(curves), memoization_(memoization) {
         outputs_.assign(outputCount, CompiledValue{0.0});
+        available_.assign(outputCount, 0);
+        if (!memoization_.initialOutputs.empty()) {
+            const auto count = std::min(outputCount, memoization_.initialOutputs.size());
+            std::copy_n(memoization_.initialOutputs.begin(), count, outputs_.begin());
+        }
     }
 
     void run(const std::span<const runtime::CompiledValueOperation> operations) {
@@ -207,19 +212,39 @@ class Evaluator final {
         for (const auto& operation : operations) {
             if (memoization_.cancellation && memoization_.cancellation->isCancellationRequested())
                 return;
+            const bool postOperation = operation.requiresPostImage;
+            if (memoization_.pass == runtime::ValueGraphPass::PreImage && postOperation) {
+                ++operationIndex;
+                continue;
+            }
+            if (memoization_.pass == runtime::ValueGraphPass::PostImage && !postOperation) {
+                markAvailable(operation);
+                ++operationIndex;
+                continue;
+            }
             const auto first = operation.firstOutput.value();
             const auto count = static_cast<std::size_t>(operation.outputCount);
-            if (count == 0 || first != written_ || first + count > outputs_.size()) {
-                // The operations partition the output table in order; anything else is a malformed
-                // plan, and writing into it would corrupt a later operation's operands.
+            if (count == 0 || first > outputs_.size() || count > outputs_.size() - first) {
+                // The two passes may skip disjoint output runs, so contiguity is not an invariant.
+                // Each operation must still own a valid range in the flat output table.
                 fail(operation, {}, "Value operation claims an invalid output range",
-                     "Value operations must partition the plan's output table in order.");
+                     "Value operations must claim a valid output range in the plan table.");
+                return;
+            }
+            if (std::ranges::any_of(available_.begin() + static_cast<std::ptrdiff_t>(first),
+                                    available_.begin() + static_cast<std::ptrdiff_t>(first + count),
+                                    [](const auto value) { return value != 0; })) {
+                fail(operation, {}, "Value operation overlaps an earlier output",
+                     "A value output may be written by only one compiled operation.");
                 return;
             }
             runtime::detail::OperationKey key;
             bool valid = true;
+            const bool cacheable =
+                memoization_.cache != nullptr &&
+                !std::holds_alternative<runtime::CompiledBoundsReadout>(operation.kernel);
             const auto currentOperation = operationIndex++;
-            if (memoization_.cache) {
+            if (cacheable) {
                 key.add(std::string("value"));
                 key.add(memoization_.project);
                 key.add(memoization_.composition);
@@ -270,7 +295,7 @@ class Evaluator final {
                                                      valid = false;
                                              });
             }
-            const auto hit = memoization_.cache && valid
+            const auto hit = cacheable && valid
                                  ? memoization_.cache->find(key.bytes(), memoization_.revision)
                                  : std::nullopt;
             if (hit) {
@@ -285,7 +310,7 @@ class Evaluator final {
                 }
                 const auto diagnosticsBefore = diagnostics_.size();
                 evaluateOperation(operation);
-                if (memoization_.cache && valid && diagnosticsBefore == diagnostics_.size()) {
+                if (cacheable && valid && diagnosticsBefore == diagnostics_.size()) {
                     memoization_.cache->store(
                         key.bytes(), memoization_.revision,
                         {.image = {},
@@ -295,7 +320,7 @@ class Evaluator final {
                 }
             }
             sampled_.clear();
-            written_ = first + count;
+            markAvailable(operation);
         }
     }
 
@@ -311,7 +336,7 @@ class Evaluator final {
     }
 
     [[nodiscard]] const CompiledValue* operandOf(const CompiledValueOperand& operand) {
-        return read(operand, outputs_, written_, curves_, time_, sampled_);
+        return read(operand, outputs_, available_, curves_, time_, sampled_);
     }
 
     // Bounds-checked against the operation's OWN run, not just against the table: a kernel's own
@@ -321,10 +346,21 @@ class Evaluator final {
     // operation whose range is wrong, and every slot in the table starts at a usable zero.
     void write(const runtime::CompiledValueOperation& operation, const std::size_t slot,
                CompiledValue value) {
-        if (slot >= static_cast<std::size_t>(operation.outputCount)) {
+        if (slot >= static_cast<std::size_t>(operation.outputCount) ||
+            operation.firstOutput.value() >= outputs_.size() ||
+            slot >= outputs_.size() - operation.firstOutput.value()) {
             return;
         }
         outputs_[operation.firstOutput.value() + slot] = std::move(value);
+    }
+
+    void markAvailable(const runtime::CompiledValueOperation& operation) {
+        const auto first = operation.firstOutput.value();
+        const auto count = static_cast<std::size_t>(operation.outputCount);
+        if (first > available_.size() || count > available_.size() - first)
+            return;
+        std::fill(available_.begin() + static_cast<std::ptrdiff_t>(first),
+                  available_.begin() + static_cast<std::ptrdiff_t>(first + count), 1);
     }
 
     void evaluateOperation(const runtime::CompiledValueOperation& operation);
@@ -357,6 +393,8 @@ class Evaluator final {
                            const runtime::CompiledValuePromotion& kernel);
     void evaluateUtility(const runtime::CompiledValueOperation& operation,
                          const runtime::CompiledValueUtility& kernel);
+    void evaluateBoundsReadout(const runtime::CompiledValueOperation& operation,
+                               const runtime::CompiledBoundsReadout& kernel);
 
     core::RationalTime time_;
     document::FrameRate rate_;
@@ -366,8 +404,8 @@ class Evaluator final {
     // the operation that read it is running, and a vector would move them on the next sample.
     std::deque<CompiledValue> sampled_;
     std::vector<CompiledValue> outputs_;
+    std::vector<std::uint8_t> available_;
     std::vector<ValueGraphDiagnostic> diagnostics_;
-    std::size_t written_ = 0;
 };
 
 void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operation) {
@@ -402,11 +440,32 @@ void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operati
                 evaluateRandom(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueUtility>) {
                 evaluateUtility(operation, kernel);
+            } else if constexpr (std::is_same_v<Kernel, runtime::CompiledBoundsReadout>) {
+                evaluateBoundsReadout(operation, kernel);
             } else {
                 evaluatePromotion(operation, kernel);
             }
         },
         operation.kernel);
+}
+
+void Evaluator::evaluateBoundsReadout(const runtime::CompiledValueOperation& operation,
+                                      const runtime::CompiledBoundsReadout& kernel) {
+    const auto index = kernel.operationIndex.value();
+    if (index >= memoization_.evaluatedBounds.size()) {
+        fail(operation, {}, "Layer Bounds input is unavailable",
+             "The connected image operation did not publish evaluated bounds for this frame.");
+        for (std::size_t slot = 0; slot < 4; ++slot)
+            write(operation, slot, document::Vec2d{});
+        return;
+    }
+    const auto& bounds = memoization_.evaluatedBounds[index];
+    write(operation, 0,
+          document::Vec2d{std::max(0.0, bounds.output.right - bounds.output.left),
+                          std::max(0.0, bounds.output.bottom - bounds.output.top)});
+    write(operation, 1, document::Vec2d{bounds.output.left, bounds.output.top});
+    write(operation, 2, bounds.anchor);
+    write(operation, 3, bounds.output.centre());
 }
 
 void Evaluator::evaluatePassthrough(const runtime::CompiledValueOperation& operation,

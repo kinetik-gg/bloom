@@ -16,12 +16,19 @@
 
 namespace bloom::runtime {
 
+struct EvaluatedOperationBounds;
+
+enum class ValueGraphPass : std::uint8_t {
+    All,
+    PreImage,
+    PostImage,
+};
+
 // The per-frame evaluation of a compiled plan's value graph.
 //
 // Pure and self-contained: it reads a compiled operation list and the request time, and answers
-// with one value per output. No image, no allocation beyond the output table, no dependence on the
-// image chain -- which is what makes it directly testable against golden values for every kernel,
-// and what lets the frame evaluator call it once before touching a pixel.
+// with one value per output. Ordinary kernels have no image dependency; the bounded post-image
+// pass supplies only evaluated operation bounds to Layer Bounds readouts.
 //
 // FAILURE PHILOSOPHY. The bloom_core kernels beneath this report domain failures and never
 // substitute a value, because only the caller knows what the number is for. Here, at the node
@@ -86,6 +93,9 @@ struct ValueGraphMemoization final {
     document::CompositionId composition;
     const CancellationToken* cancellation = nullptr;
     std::span<const std::uint8_t> timeDependence;
+    ValueGraphPass pass = ValueGraphPass::All;
+    std::span<const CompiledValue> initialOutputs;
+    std::span<const EvaluatedOperationBounds> evaluatedBounds;
 };
 
 // Evaluates every operation in order. `operations` must already be topologically ordered (the

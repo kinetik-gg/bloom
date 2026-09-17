@@ -106,9 +106,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // the value library's first slice, and UTIL-1's twenty conversions, four
     // time conversions, fifteen string utilities, nineteen numeric and logic nodes and four
     // readouts. The number is pinned rather than computed so that adding a node type is a
-    // deliberate edit here. MEDIA-1 adds one Image source definition and AUDIO-2 adds one Audio
-    // source definition.
-    expectations.expect(registry.definitions().size() == 103,
+    // deliberate edit here. MEDIA-1 adds one Image source definition, AUDIO-2 adds one Audio
+    // source definition and LB-1 adds the Layer Bounds value readout.
+    expectations.expect(registry.definitions().size() == 104,
                         "startup contribution includes every built-in definition");
 
     for (const auto& [kind, version] : std::array<std::pair<std::string_view, std::uint32_t>, 4>{
@@ -382,6 +382,26 @@ void testValueLoweringShapeContract(Expectations& expectations) {
         auto retyped = reroute;
         retyped.outputs.front().valueKind = runtime::SocketValueKind::Color;
         refuses(std::move(retyped), "a Reroute's two sockets declare one kind, not two");
+    }
+
+    const auto bounds =
+        builtInDefinition(document::kLayerBoundsNodeType, document::kValueNodeSchemaVersion);
+    expectations.expect(bounds.lowering == runtime::NodeLoweringKind::ValueBoundsReadout &&
+                            bounds.inputs.size() == 1 &&
+                            bounds.inputs.front().name == document::kLayerBoundsImagePortName &&
+                            bounds.inputs.front().valueKind == runtime::SocketValueKind::Image &&
+                            bounds.inputs.front().required && bounds.outputs.size() == 4 &&
+                            std::ranges::all_of(bounds.outputs,
+                                                [](const auto& output) {
+                                                    return output.valueKind ==
+                                                           runtime::SocketValueKind::Vector2;
+                                                }),
+                        "Layer Bounds declares one required Image input and four Vector2 outputs");
+    {
+        auto extraSocket = bounds;
+        extraSocket.inputs.push_back({std::string(document::kLayerBoundsImagePortName),
+                                      runtime::SocketValueKind::Image, true});
+        refuses(std::move(extraSocket), "Layer Bounds accepts exactly one Image input");
     }
 
     // Time: no inputs, no parameters, and its two outputs in their declared units.

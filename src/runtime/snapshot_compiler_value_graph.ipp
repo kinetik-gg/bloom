@@ -1,7 +1,8 @@
-// The value-graph pass (task S7). A second, independent lowering over the SAME reachable node set,
-// producing runtime::CompiledValueOperation rather than runtime::CompiledOperation. It runs before
-// the image pass and shares none of its address space: an OperationIndex names a step that produces
-// pixels, a ValueOutputIndex names one number.
+// The value-graph pass (task S7). A second, independent lowering over the reachable node set,
+// producing runtime::CompiledValueOperation rather than runtime::CompiledOperation. Ordinary value
+// operations run before the image pass; Layer Bounds readouts are patched to image OperationIndex
+// values and run in the post-image pass. The address spaces remain separate: an OperationIndex
+// names a step that produces pixels, a ValueOutputIndex names one number.
 //
 // Everything here reuses the patterns the image pass already established -- the same reachable set,
 // the same topological order, the same "resolve an operand, or fail with a scoped diagnostic" shape
@@ -50,6 +51,52 @@ struct DriverReference final {
     std::string role;
     document::OutputPortRef source;
 };
+
+[[nodiscard]] bool validateBoundsReadoutRule(const std::vector<document::NodeId>& order) {
+    std::unordered_set<document::NodeId> postImageNodes;
+    const auto isImageOperation = [](const runtime::NodeLoweringKind lowering) {
+        switch (lowering) {
+        case runtime::NodeLoweringKind::Solid:
+        case runtime::NodeLoweringKind::Shape:
+        case runtime::NodeLoweringKind::Text:
+        case runtime::NodeLoweringKind::ImageSource:
+        case runtime::NodeLoweringKind::LayerOutput:
+        case runtime::NodeLoweringKind::LayerStack:
+        case runtime::NodeLoweringKind::CompositionOutput:
+            return true;
+        default:
+            return false;
+        }
+    };
+    for (const auto nodeId : order) {
+        const auto* node = findNode(nodeId);
+        const auto definition = definitions_.find(nodeId);
+        if (node == nullptr || definition == definitions_.end())
+            continue;
+        if (definition->second->lowering == runtime::NodeLoweringKind::ValueBoundsReadout)
+            postImageNodes.insert(nodeId);
+        for (const auto& reference : driverReferences(*node)) {
+            if (!postImageNodes.contains(reference.source.nodeId))
+                continue;
+            if (isValueNode(nodeId)) {
+                postImageNodes.insert(nodeId);
+                break;
+            }
+            if (isImageOperation(definition->second->lowering)) {
+                auto diagnosticSubject = subject(nodeId, "parameter." + reference.role);
+                diagnosticSubject.parameterId = reference.parameterId;
+                addFailure(
+                    runtime::CompileDiagnosticCode::BoundsReadoutDrivesImageOperation,
+                    std::move(diagnosticSubject),
+                    "Layer Bounds cannot drive an image operation",
+                    "A Layer Bounds readout and every value node downstream of it may only feed "
+                    "value readback, another readout, or a value-graph output.");
+                return false;
+            }
+        }
+    }
+    return !hasFailure_;
+}
 
 [[nodiscard]] std::vector<DriverReference>
 driverReferences(const document::NodeRecord& node) const {
@@ -148,12 +195,16 @@ resolveValueOutput(const document::OutputPortRef& source,
     }
     const auto index = runtime::ValueOutputIndex::fromRaw(valueOutputCount_);
     ++valueOutputCount_;
+    const bool requiresPostImage = produced->second.value() < postImageValueOutputs_.size() &&
+                                   postImageValueOutputs_[produced->second.value()] != 0;
     valueOperations_.push_back(runtime::CompiledValueOperation{
         {},
         index,
         1,
         runtime::CompiledValuePromotion{*promotion,
-                                        runtime::CompiledValueOperand{{}, produced->second}}});
+                                        runtime::CompiledValueOperand{{}, produced->second}},
+        requiresPostImage});
+    postImageValueOutputs_.push_back(requiresPostImage ? 1 : 0);
     return index;
 }
 
@@ -292,6 +343,15 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
             return std::nullopt;
         }
         return runtime::CompiledValueKernel{runtime::CompiledValuePassthrough{*std::move(value)}};
+    }
+    case runtime::NodeLoweringKind::ValueBoundsReadout: {
+        const auto* edge = fixedInputEdge(node.id, kLayerBoundsImagePortName);
+        if (edge == nullptr) {
+            return std::nullopt;
+        }
+        pendingBoundsReadouts_[node.id] = edge->source.nodeId;
+        return runtime::CompiledValueKernel{runtime::CompiledBoundsReadout{
+            runtime::OperationIndex::fromRaw(0)}};
     }
     case runtime::NodeLoweringKind::ValueScalarMath: {
         const auto operation = selector<core::primitives::ScalarPrimitive>(
@@ -543,13 +603,49 @@ vectorComponentCount(const runtime::SocketValueKind kind) noexcept {
         }
         const auto outputCount = definition->second->outputs.size();
         const auto first = runtime::ValueOutputIndex::fromRaw(valueOutputCount_);
+        bool requiresPostImage =
+            std::holds_alternative<runtime::CompiledBoundsReadout>(*kernel);
+        runtime::forEachValueOperand(*kernel, [&](const runtime::CompiledValueOperand& operand) {
+            if (const auto* output = std::get_if<runtime::ValueOutputIndex>(&operand.source);
+                output != nullptr && output->value() < postImageValueOutputs_.size())
+                requiresPostImage = requiresPostImage || postImageValueOutputs_[output->value()] != 0;
+        });
         valueOperations_.push_back(runtime::CompiledValueOperation{
-            nodeId, first, static_cast<std::uint8_t>(outputCount), *std::move(kernel)});
+            nodeId, first, static_cast<std::uint8_t>(outputCount), *std::move(kernel),
+            requiresPostImage});
         for (std::size_t slot = 0; slot < outputCount; ++slot) {
             valueOutputs_.emplace(ValueOutputKey{nodeId, definition->second->outputs[slot].name},
                                   runtime::ValueOutputIndex::fromRaw(valueOutputCount_ + slot));
         }
+        postImageValueOutputs_.resize(valueOutputCount_ + outputCount, 0);
+        if (requiresPostImage)
+            std::fill(postImageValueOutputs_.begin() +
+                          static_cast<std::ptrdiff_t>(valueOutputCount_),
+                      postImageValueOutputs_.end(), 1);
         valueOutputCount_ += outputCount;
+    }
+    return true;
+}
+
+[[nodiscard]] bool resolveBoundsReadouts(
+    const std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    for (auto& operation : valueOperations_) {
+        auto* readout = std::get_if<runtime::CompiledBoundsReadout>(&operation.kernel);
+        if (readout == nullptr)
+            continue;
+        const auto source = pendingBoundsReadouts_.find(operation.sourceNodeId);
+        if (source == pendingBoundsReadouts_.end()) {
+            addTopologyFailure(operation.sourceNodeId,
+                               "Layer Bounds did not retain its connected image source.");
+            return false;
+        }
+        const auto image = indices.find(source->second);
+        if (image == indices.end()) {
+            addTopologyFailure(operation.sourceNodeId,
+                               "Layer Bounds image input was not lowered into the image plan.");
+            return false;
+        }
+        readout->operationIndex = image->second;
     }
     return true;
 }

@@ -96,6 +96,16 @@ void PropertiesEditor::configureDrivenRows() {
                     label->setToolTip(text);
                 }
             }
+            for (auto* label : findChildren<QLabel*>()) {
+                const auto port = label->property("valueOutputPort").toString();
+                if (port.isEmpty())
+                    continue;
+                const auto node =
+                    document::NodeId::fromRaw(label->property("valueOutputNodeId").toULongLong());
+                const auto text = session_.valueOutputText(node, port.toStdString());
+                label->setText(text.isEmpty() ? tr("Resolving…") : text);
+                label->setToolTip(label->text());
+            }
         });
     }
     auto rows = findChildren<QWidget*>("propertiesRow");

@@ -1,3 +1,4 @@
+#include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 
 #include <bloom/core/value_primitives.hpp>
@@ -454,6 +455,44 @@ void testMalformedPlan(Expectations& expectations) {
                         "a kernel that would overrun its own run writes only the slots it owns");
 }
 
+void testLayerBoundsPostImagePass(Expectations& expectations) {
+    const std::vector<CompiledValueOperation> operations{
+        {document::NodeId::fromRaw(100), ValueOutputIndex::fromRaw(0), 4,
+         runtime::CompiledBoundsReadout{runtime::OperationIndex::fromRaw(0)}, true},
+        {document::NodeId::fromRaw(101), ValueOutputIndex::fromRaw(4), 1,
+         runtime::CompiledValuePassthrough{reference(ValueOutputIndex::fromRaw(0))}, true}};
+    std::vector<runtime::EvaluatedOperationBounds> bounds(1);
+    bounds.front().output = {10.0, 20.0, 1930.0, 1100.0};
+    bounds.front().anchor = {960.0, 540.0};
+
+    runtime::ValueGraphMemoization preImage;
+    preImage.pass = runtime::ValueGraphPass::PreImage;
+    const auto before =
+        runtime::evaluateValueGraph(operations, 5, core::RationalTime::fromInteger(0),
+                                    document::FrameRate::framesPerSecond24(), {}, preImage);
+
+    runtime::ValueGraphMemoization postImage;
+    postImage.pass = runtime::ValueGraphPass::PostImage;
+    postImage.initialOutputs = before.outputs;
+    postImage.evaluatedBounds = bounds;
+    const auto after =
+        runtime::evaluateValueGraph(operations, 5, core::RationalTime::fromInteger(0),
+                                    document::FrameRate::framesPerSecond24(), {}, postImage);
+
+    expectations.expect(before.diagnostics.empty() && after.diagnostics.empty(),
+                        "Layer Bounds passes report no diagnostics with evaluated bounds");
+    expectations.expect(holds(after, 0, document::Vec2d{1920.0, 1080.0}),
+                        "Layer Bounds size is the evaluated output extent");
+    expectations.expect(holds(after, 1, document::Vec2d{10.0, 20.0}),
+                        "Layer Bounds origin is the evaluated output origin");
+    expectations.expect(holds(after, 2, document::Vec2d{960.0, 540.0}),
+                        "Layer Bounds anchor is read from the evaluated operation bounds");
+    expectations.expect(holds(after, 3, document::Vec2d{970.0, 560.0}),
+                        "Layer Bounds center is the evaluated output rectangle center");
+    expectations.expect(holds(after, 4, document::Vec2d{1920.0, 1080.0}),
+                        "a value operation downstream of Layer Bounds runs in the post-pass");
+}
+
 } // namespace
 
 int main() {
@@ -466,5 +505,6 @@ int main() {
     testCompareSwitchAndConvert(expectations);
     testRandomAndPromotions(expectations);
     testMalformedPlan(expectations);
+    testLayerBoundsPostImagePass(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

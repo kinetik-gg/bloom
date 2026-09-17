@@ -38,6 +38,7 @@ enum class CompileDiagnosticCode {
     UnsupportedParameterSource,
     InvalidParameterOverride,
     UnsupportedParameterOverride,
+    BoundsReadoutDrivesImageOperation,
     FontAssetUnavailable,
     TopologyInvariant,
 };

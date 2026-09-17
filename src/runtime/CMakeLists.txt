@@ -47,6 +47,7 @@ target_sources(
         FILES
             include/bloom/runtime/compiled_plan.hpp
             include/bloom/runtime/compiled_value_graph.hpp
+            include/bloom/runtime/operation_index.hpp
             include/bloom/runtime/curve_compilation.hpp
             include/bloom/runtime/node_definition_registry.hpp
             include/bloom/runtime/snapshot_compiler.hpp
