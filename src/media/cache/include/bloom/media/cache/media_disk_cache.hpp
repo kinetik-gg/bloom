@@ -32,6 +32,12 @@ inline constexpr std::uint64_t kDefaultMediaDiskCacheMaxEntries = 200'000;
 // blocking the calling (evaluation) thread; a dropped write only means the next read decodes
 // again, never incorrect pixels.
 inline constexpr std::size_t kMediaDiskCacheAsyncQueueCapacity = 64;
+// CACHEFIX-1: the entry count above is NOT a memory bound. A queued write owns the only remaining
+// reference to a decoded Float32 image, so 64 pending 4K frames are 7.9 GiB and 64 pending 8K
+// frames are 31.6 GiB of process memory that no budget ever saw. The queue is therefore bounded by
+// BYTES as well, and the byte bound is the one that matters: a write whose payload alone exceeds
+// the capacity is refused outright rather than queued and then discarded by the writer.
+inline constexpr std::uint64_t kMediaDiskCacheAsyncQueueByteCapacity = 256ULL * 1024 * 1024;
 
 struct MediaDiskCacheConfig final {
     // The cache's private root directory (typically from bloom::platform::userCacheDirectory()
@@ -41,6 +47,9 @@ struct MediaDiskCacheConfig final {
     // settings override passes its own resolved byte count.
     std::uint64_t byteBudget = 0;
     std::uint64_t maxEntryCount = kDefaultMediaDiskCacheMaxEntries;
+    // 0 defers to kMediaDiskCacheAsyncQueueByteCapacity. Tests set a small value to exercise
+    // back-pressure without staging gigabytes.
+    std::uint64_t asyncQueueByteCapacity = 0;
     bool enabled = true;
 };
 
@@ -50,8 +59,15 @@ struct MediaDiskCacheStatistics final {
     // Entries removed because their stored digest did not match their bytes on read.
     std::uint64_t corruptDropped = 0;
     std::uint64_t evictions = 0;
-    // storeAsync() calls whose write was dropped because the background queue was full.
+    // storeAsync() calls whose write was dropped because the background queue was full -- by entry
+    // count or, since CACHEFIX-1, by bytes.
     std::uint64_t droppedAsyncWrites = 0;
+    // Bytes of decoded pixels the pending-write queue holds right now -- queued AND in flight, so
+    // the figure is the memory the queue is responsible for -- and the high-water mark it has ever
+    // reached. The high-water mark is what an accounting test asserts against the
+    // capacity: it is true regardless of when the writer thread happened to drain.
+    std::uint64_t asyncQueueBytes = 0;
+    std::uint64_t peakAsyncQueueBytes = 0;
     std::uint64_t entryCount = 0;
     std::uint64_t storedBytes = 0;
 
@@ -113,6 +129,10 @@ class MediaDiskCache final {
     void clear();
 
     [[nodiscard]] MediaDiskCacheStatistics statistics() const;
+    // The pending-write queue's byte capacity, as resolved from the config.
+    [[nodiscard]] std::uint64_t asyncQueueByteCapacity() const noexcept {
+        return asyncQueueByteCapacity_;
+    }
     void setByteBudget(std::uint64_t bytes);
     [[nodiscard]] std::uint64_t byteBudget() const;
     [[nodiscard]] bool enabled() const noexcept { return enabled_.load(std::memory_order_acquire); }
@@ -134,6 +154,7 @@ class MediaDiskCache final {
     struct AsyncWrite final {
         std::string key;
         std::shared_ptr<const render::Rgba32fImage> image;
+        std::uint64_t bytes = 0;
     };
     using Lru = std::list<std::string>;
 
@@ -154,6 +175,7 @@ class MediaDiskCache final {
     std::filesystem::path root_;
     std::uint64_t byteBudget_;
     std::uint64_t maxEntryCount_;
+    std::uint64_t asyncQueueByteCapacity_;
     std::atomic<bool> enabled_;
     Lru lru_; // front = most recently used
     std::unordered_map<std::string, std::pair<IndexEntry, Lru::iterator>> index_;
@@ -165,6 +187,9 @@ class MediaDiskCache final {
     std::condition_variable queueCv_;
     std::condition_variable idleCv_;
     std::deque<AsyncWrite> queue_;
+    // Queued plus in-flight bytes. Guarded by queueMutex_, mirrored into statistics_ under mutex_
+    // so a reader sees one number rather than two that disagree.
+    std::uint64_t queuedBytes_ = 0;
     std::size_t inFlight_ = 0;
     bool stopping_ = false;
     std::thread writer_;

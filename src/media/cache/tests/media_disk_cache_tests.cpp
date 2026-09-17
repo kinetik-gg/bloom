@@ -412,6 +412,63 @@ void testClearRemovesEverything(Expectations& check) {
 
 } // namespace
 
+// CACHEFIX-1. The pending-write queue was bounded at 64 ENTRIES and never at bytes, while each
+// entry owns the last reference to a decoded Float32 image: 64 pending 4K RGBA32F frames are
+// 7.9 GiB and 64 pending 8K frames are 31.6 GiB of process memory that no budget ever saw. This
+// pins the byte bound, and pins that the bound is applied at storeAsync() -- before the memory is
+// staged -- rather than by the writer thread after the fact.
+void testAsyncWriteQueueIsBoundedByBytes(Expectations& check) {
+    ScratchDirectory scratch("media-disk-cache-async-queue-bytes");
+    cache::MediaDiskCacheConfig config;
+    config.rootDirectory = scratch.path();
+    config.byteBudget = 64ULL * 1024 * 1024;
+    // One 32x32 RGBA32F image is 16 KiB of pixels. A capacity of 4 KiB is below a single image, so
+    // EVERY offer is refused outright: the assertion does not depend on when the writer drained.
+    config.asyncQueueByteCapacity = 4ULL * 1024;
+    constexpr int kOffered = 32;
+    {
+        cache::MediaDiskCache diskCache(config);
+        check.expect(diskCache.asyncQueueByteCapacity() == 4ULL * 1024,
+                     "the configured queue byte capacity is what the cache uses");
+        for (int i = 0; i < kOffered; ++i)
+            diskCache.storeAsync(keyFor(2000 + i),
+                                 std::make_shared<const render::Rgba32fImage>(
+                                     makeImage(32, 32, static_cast<float>(i) * 0.01F)));
+        diskCache.flush();
+        const auto stats = diskCache.statistics();
+        check.expect(stats.peakAsyncQueueBytes == 0,
+                     "a write larger than the queue capacity is never staged at all");
+        check.expect(stats.asyncQueueBytes == 0, "the queue account returns to zero when drained");
+        check.expect(stats.droppedAsyncWrites == kOffered,
+                     "every oversized async write is dropped and counted");
+        check.expect(stats.storedBytes == 0 && stats.entryCount == 0,
+                     "a refused async write never reaches the disk");
+    }
+
+    // With room for a few images the queue accepts them, and the high-water mark -- which is true
+    // whenever the writer happened to run -- never passes the capacity.
+    ScratchDirectory roomy("media-disk-cache-async-queue-room");
+    config.rootDirectory = roomy.path();
+    config.asyncQueueByteCapacity = 64ULL * 1024;
+    {
+        cache::MediaDiskCache diskCache(config);
+        for (int i = 0; i < kOffered; ++i)
+            diskCache.storeAsync(keyFor(3000 + i),
+                                 std::make_shared<const render::Rgba32fImage>(
+                                     makeImage(32, 32, static_cast<float>(i) * 0.01F)));
+        diskCache.flush();
+        const auto stats = diskCache.statistics();
+        check.expect(stats.peakAsyncQueueBytes <= diskCache.asyncQueueByteCapacity(),
+                     "the queue never holds more than its byte capacity");
+        check.expect(stats.asyncQueueBytes == 0,
+                     "the queue account is empty once every write has landed or been dropped");
+        check.expect(stats.entryCount > 0, "writes that fit the queue still reach the disk");
+        check.expect(stats.entryCount + stats.droppedAsyncWrites ==
+                         static_cast<std::uint64_t>(kOffered),
+                     "every offered write either landed or was counted as dropped");
+    }
+}
+
 int main() {
     Expectations check;
     testRoundTripAcrossRestart(check);
@@ -425,5 +482,6 @@ int main() {
     testDecodeThroughDiskCacheRealDecoder(check);
     testDisabledCacheNeverTouchesDisk(check);
     testClearRemovesEverything(check);
+    testAsyncWriteQueueIsBoundedByBytes(check);
     return check.failures() == 0 ? 0 : 1;
 }

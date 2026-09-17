@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <limits>
 #include <memory>
+#include <new>
 #include <optional>
 #include <utility>
 
@@ -139,17 +140,37 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
         ++statistics_.rejections;
         return;
     }
-    auto retained = retainable(*frame);
-    if (retained == nullptr) {
-        ++statistics_.rejections;
+    // CACHEFIX-1: copying the display buffer and growing the entry vector both allocate. Under
+    // real memory pressure either can throw, and RETAINING a frame is an optimization -- the frame
+    // the caller is about to publish is unaffected, so a failed insert is counted and dropped
+    // rather than propagated into the render path.
+    try {
+        auto retained = retainable(*frame);
+        if (retained == nullptr) {
+            ++statistics_.rejections;
+            return;
+        }
+        entries_.insert(entries_.begin(),
+                        Entry{.key = key, .frame = std::move(retained), .bytes = bytes});
+    } catch (const std::bad_alloc&) {
+        ++statistics_.allocationFailures;
         return;
     }
-    entries_.insert(entries_.begin(),
-                    Entry{.key = key, .frame = std::move(retained), .bytes = bytes});
     residentBytes_ += bytes;
     ++statistics_.insertions;
     scheduleNotification();
     evictToBudget();
+}
+
+void PreviewFrameCache::trimToBytes(const std::size_t bytes) {
+    // Deliberately not setByteBudget(): the budget is the artist's or the ledger's decision and
+    // must survive the pressure that caused this trim, so the cache can fill back up once the
+    // machine recovers.
+    const auto limit = std::min(bytes, byteBudget_);
+    while (residentBytes_ > limit && !entries_.empty()) {
+        ++statistics_.pressureDrops;
+        removeAt(entries_.size() - 1);
+    }
 }
 
 bool PreviewFrameCache::contains(const PreviewFrameCacheKey& key) const {

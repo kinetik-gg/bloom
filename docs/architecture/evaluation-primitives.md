@@ -613,14 +613,80 @@ its resolved key: crossing either half-open trim boundary cannot reuse the oppos
 state. This metadata is derived runtime state and does not change serialized plan identity inputs.
 
 `playback/operation-cache-bytes` is the operation allocation from the session's one
-`MemoryBudgetLedger`, which also allocates `playback/ram-preview-memory-bytes`. The machine-derived
-usable budget reserves a quarter of physical memory, never less than 4 GiB, and defaults to a 60%
-operation / 40% preview split. Missing, invalid, or zero settings use that split; one override
-reduces the other cache when necessary, and two overcommitted overrides are proportionally clamped.
-The preview allocation retains its 2 GiB floor when the usable budget allows it. The effective pair,
+`MemoryBudgetLedger`, which also allocates `playback/ram-preview-memory-bytes`.
+
+The ledger computes three numbers. The **host reserve** is what Bloom leaves to the rest of the
+machine: `max(8 GiB, 40% of physical)`. The **usable budget** is physical memory minus that reserve,
+and is the ceiling an explicit override may reach. The **default total** is the ceiling the
+unconfigured 60% operation / 40% preview split may reach, and is the most conservative of three
+independent limits: the usable budget, 50% of physical memory, and 80% of `availableMemory` at
+startup. On Linux `availableMemory` is `MemAvailable` from `/proc/meminfo`, which is the kernel's own
+estimate of what can be allocated without swapping; where that file cannot be read it falls back to
+`sysconf(_SC_AVPHYS_PAGES)`, and on Windows to `MEMORYSTATUSEX::ullAvailPhys`. A platform that
+reports nothing (0) simply does not apply the availability limit.
+
+No rule may push a budget below the 3 GiB low-memory floor (2 GiB preview + 1 GiB operation), and no
+rule may invent more budget than the machine reports. The resulting defaults:
+
+| Physical | Reserve | Usable | Default total | Operation | Preview |
+| --- | --- | --- | --- | --- | --- |
+| 8 GiB | 8 GiB | 3 GiB (floor) | 3 GiB (floor) | 1 GiB | 2 GiB |
+| 16 GiB | 8 GiB | 8 GiB | 8 GiB | 4.8 GiB | 3.2 GiB |
+| 32 GiB | 12.8 GiB | 19.2 GiB | 16 GiB | 9.6 GiB | 6.4 GiB |
+| 60 GiB | 24 GiB | 36 GiB | 30 GiB | 18 GiB | 12 GiB |
+
+The rule exists because the previous one -- reserve `max(4 GiB, 25%)`, then split all of it --
+allocated 27 GiB operation + 18 GiB preview on a 60 GiB workstation. One application may not
+legitimately plan to hold 45 of 60 GiB while the kernel, the compositor and a browser need the rest
+and the swap is 3 GiB.
+
+Missing, invalid, or zero settings use the default split; one override keeps its exact value where
+possible, clamped to the **usable** budget rather than the default total, and reduces the other
+cache; two overcommitted overrides are proportionally clamped. An artist who deliberately asks for
+more than Bloom would choose still gets it, up to the point where the machine itself would starve.
+The preview allocation retains its 2 GiB floor when the default total allows it. The effective pair,
 not the raw settings, is what the window status bar reports. If physical memory is unavailable or
-too small to leave the reserve, a bounded fallback is used without exceeding reported physical
-memory.
+too small to leave the reserve, the 3 GiB floor is used without exceeding reported physical memory.
+
+### Memory pressure response
+
+Budgets are a plan; they are not a promise the machine will keep. The window status bar polls
+`availableMemoryBytes()` on its existing five-second disk-cache cadence. When `MemAvailable` falls
+below the ledger's reserve, both in-memory caches are trimmed to 50% of their budgets --
+`OperationCache::trimToBytes()` and `PreviewFrameCache::trimToBytes()`, neither of which changes the
+configured budget, so the caches refill once the machine recovers -- and the bar shows the transient
+notice "Memory pressure: caches trimmed". The trim is not repeated while pressure persists; it is
+armed again once availability recovers above the reserve, so a machine that stays busy does not
+produce a message every five seconds.
+
+Separately, and independent of any poll, a cache insert never takes a process past a failed
+allocation. `std::bad_alloc` raised while retaining an entry -- in `OperationCache::store()` or
+`PreviewFrameCache::insert()` -- unwinds the partial insert, counts it (`allocationFailures`), and
+returns. Caching is an optimization: the value the caller produced is untouched and the frame still
+renders.
+
+### Cache byte accounting
+
+Every cache in the process counts its bytes against a budget or a hard cap. The accounting surface
+is test- and diagnostic-only; none of it is UI.
+
+| Pool | Bound | Counter |
+| --- | --- | --- |
+| `OperationCache`, operation entries | operation budget | `retainedBytes(Operation)` |
+| `OperationCache`, decoded media entries | operation budget (shared) | `retainedBytes(DecodedMedia)` |
+| `PreviewFrameCache` display buffers | preview budget | `residentBytes()` |
+| `MediaDiskCache` pending async writes | 64 entries **and** 256 MiB | `statistics().asyncQueueBytes`, `peakAsyncQueueBytes` |
+| `AssetController` proxy thumbnails | 512 entries **and** 8 MiB | `proxyCacheBytes()` |
+| `AssetController` decoded audio buffers | 2 GiB aggregate | `decodedAudioBytes()` |
+| Viewer display buffers | one retained frame plus at most one channel-remap copy, per open viewer | -- |
+
+The disk cache's pending-write queue is the pool that mattered. It was bounded at 64 entries and
+never at bytes, and a queued write owns the last reference to a decoded Float32 image: 64 pending
+4K RGBA32F frames are 7.9 GiB and 64 pending 8K frames are 31.6 GiB of process memory no budget ever
+saw. It is now bounded by bytes as well, and the byte bound is the binding one -- a write whose
+payload alone exceeds the capacity is refused at `storeAsync()` rather than staged and then
+discarded by the writer thread. A refused write is counted in `droppedAsyncWrites` and only means
+the next read decodes again; it can never mean incorrect pixels.
 
 The shared cache accounts retained image/value storage and entry/key overhead, evicts by
 least-recently-used last use, and refuses an entry larger than the budget without evicting useful

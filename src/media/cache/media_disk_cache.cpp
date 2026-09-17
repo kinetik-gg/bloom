@@ -265,7 +265,11 @@ struct ParsedHeader final {
 MediaDiskCache::MediaDiskCache(MediaDiskCacheConfig config)
     : root_(std::move(config.rootDirectory)),
       byteBudget_(config.byteBudget != 0 ? config.byteBudget : kDefaultMediaDiskCacheCapBytes),
-      maxEntryCount_(config.maxEntryCount), enabled_(config.enabled) {
+      maxEntryCount_(config.maxEntryCount),
+      asyncQueueByteCapacity_(config.asyncQueueByteCapacity != 0
+                                  ? config.asyncQueueByteCapacity
+                                  : kMediaDiskCacheAsyncQueueByteCapacity),
+      enabled_(config.enabled) {
     writer_ = std::thread([this] { writerLoop(); });
 }
 
@@ -461,16 +465,31 @@ void MediaDiskCache::storeAsync(std::string key,
                                 std::shared_ptr<const render::Rgba32fImage> image) {
     if (!enabled() || root_.empty())
         return;
+    // CACHEFIX-1: charge the write against the queue's byte capacity BEFORE queueing it. A queued
+    // write is the last owner of a decoded Float32 image, so this figure is real process memory --
+    // the 38 GiB incident's largest single unaccounted pool. An image that alone exceeds the
+    // capacity is refused here rather than staged and then discarded by the writer.
+    const std::uint64_t bytes =
+        image && image->isValid() ? std::as_bytes(image->pixels()).size_bytes() : 0;
+    const auto dropped = [this] {
+        std::lock_guard statsLock(mutex_);
+        ++statistics_.droppedAsyncWrites;
+    };
     {
         std::lock_guard lock(queueMutex_);
         if (stopping_)
             return;
-        if (queue_.size() >= kMediaDiskCacheAsyncQueueCapacity) {
-            std::lock_guard statsLock(mutex_);
-            ++statistics_.droppedAsyncWrites;
+        if (queue_.size() >= kMediaDiskCacheAsyncQueueCapacity ||
+            bytes > asyncQueueByteCapacity_ - std::min(queuedBytes_, asyncQueueByteCapacity_)) {
+            dropped();
             return;
         }
-        queue_.push_back({std::move(key), std::move(image)});
+        queue_.push_back({std::move(key), std::move(image), bytes});
+        queuedBytes_ += bytes;
+        const auto queued = queuedBytes_;
+        const std::lock_guard statsLock(mutex_);
+        statistics_.asyncQueueBytes = queued;
+        statistics_.peakAsyncQueueBytes = std::max(statistics_.peakAsyncQueueBytes, queued);
     }
     queueCv_.notify_one();
 }
@@ -489,11 +508,23 @@ void MediaDiskCache::writerLoop() {
             work = std::move(queue_.front());
             queue_.pop_front();
             ++inFlight_;
+            // queuedBytes_ deliberately still counts this write: dequeuing it does not free the
+            // image, the writer below is now the one holding it, and an account that dropped here
+            // would let one more image in than the capacity allows.
         }
         storeOnCallingThread(work.key, work.image);
+        // The write is done: release the image, and only then give its bytes back, so the account
+        // and the memory it stands for fall at the same moment.
+        work.image.reset();
         {
             std::lock_guard lock(queueMutex_);
+            queuedBytes_ -= std::min(queuedBytes_, work.bytes);
             --inFlight_;
+            const auto queued = queuedBytes_;
+            {
+                const std::lock_guard statsLock(mutex_);
+                statistics_.asyncQueueBytes = queued;
+            }
             if (queue_.empty() && inFlight_ == 0)
                 idleCv_.notify_all();
         }

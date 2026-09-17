@@ -1,5 +1,8 @@
 #include <bloom/runtime/operation_cache.hpp>
 
+#include <algorithm>
+#include <new>
+
 namespace bloom::runtime {
 std::optional<OperationCacheValue> OperationCache::find(const std::string& content,
                                                         document::Revision revision) {
@@ -40,27 +43,61 @@ void OperationCache::store(std::string content, document::Revision revision,
     const auto protectedUntil = kind == OperationCacheEntryKind::DecodedMedia
                                     ? accessEpoch_ + kDecodedMediaGraceAccesses
                                     : 0;
-    entries_.push_front(
-        {std::move(content), revision, std::move(value), bytes, kind, protectedUntil});
+    // CACHEFIX-1: a cache insert is an optimization, never a reason to fail the work that produced
+    // the value. If the node, the index entry or the address entry cannot be allocated, the insert
+    // is unwound and DROPPED -- the caller keeps its own value and the frame still renders. The
+    // allocation that already failed is never retried here, and nothing past it is attempted.
+    try {
+        entries_.push_front(
+            {std::move(content), revision, std::move(value), bytes, kind, protectedUntil});
+    } catch (const std::bad_alloc&) {
+        ++statistics_.allocationFailures;
+        return;
+    }
     try {
         index_.emplace(entries_.front().content, entries_.begin());
         addresses_.emplace(Address{revision, entries_.front().content}, entries_.begin());
+    } catch (const std::bad_alloc&) {
+        index_.erase(entries_.front().content);
+        entries_.pop_front();
+        ++statistics_.allocationFailures;
+        return;
     } catch (...) {
+        // Anything that is not an allocation failure keeps its original contract: unwind the
+        // partial insert and let the caller see what went wrong.
         index_.erase(entries_.front().content);
         entries_.pop_front();
         throw;
     }
     bytes_ += bytes;
+    if (kind == OperationCacheEntryKind::DecodedMedia)
+        decodedMediaBytes_ += bytes;
     evict();
 }
-void OperationCache::evict() {
-    while (bytes_ > budget_) {
-        const auto candidate = evictionCandidate();
-        bytes_ -= candidate->bytes;
-        addresses_.erase({candidate->revision, candidate->content});
-        index_.erase(candidate->content);
-        entries_.erase(candidate);
+void OperationCache::removeLocked(const std::list<Entry>::iterator candidate) {
+    bytes_ -= candidate->bytes;
+    if (candidate->kind == OperationCacheEntryKind::DecodedMedia)
+        decodedMediaBytes_ -= std::min(decodedMediaBytes_, candidate->bytes);
+    addresses_.erase({candidate->revision, candidate->content});
+    index_.erase(candidate->content);
+    entries_.erase(candidate);
+}
+
+void OperationCache::evictToLocked(const std::size_t limit, std::uint64_t& counter) {
+    while (bytes_ > limit && !entries_.empty()) {
+        removeLocked(evictionCandidate());
+        ++counter;
     }
+}
+
+void OperationCache::evict() {
+    std::uint64_t ignored = 0;
+    evictToLocked(budget_, ignored);
+}
+
+void OperationCache::trimToBytes(const std::size_t bytes) {
+    const std::lock_guard lock(mutex_);
+    evictToLocked(std::min(bytes, budget_), statistics_.pressureDrops);
 }
 void OperationCache::touch(const std::list<Entry>::iterator entry) {
     ++accessEpoch_;
@@ -92,6 +129,11 @@ std::size_t OperationCache::byteBudget() const {
 std::size_t OperationCache::retainedBytes() const {
     const std::lock_guard lock(mutex_);
     return bytes_;
+}
+std::size_t OperationCache::retainedBytes(const OperationCacheEntryKind kind) const {
+    const std::lock_guard lock(mutex_);
+    return kind == OperationCacheEntryKind::DecodedMedia ? decodedMediaBytes_
+                                                         : bytes_ - decodedMediaBytes_;
 }
 OperationCacheAccessStatistics OperationCache::statistics() const {
     const std::lock_guard lock(mutex_);

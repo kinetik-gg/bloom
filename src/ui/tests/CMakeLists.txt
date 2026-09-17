@@ -753,6 +753,21 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# Task CACHEFIX-1: the byte accounting every cache in the process owes, exercised at the scale of
+# the 38 GB incident (200 synthetic 4K RGBA32F frames) and checked against the process's own RSS.
+# Links bloom_ui for Qt and the media/runtime cache libraries it pulls in; deliberately not the
+# whole window fixture, because the accounting under test lives in the caches.
+add_executable(bloom_ui_cache_accounting_test cache_accounting_tests.cpp)
+target_link_libraries(bloom_ui_cache_accounting_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_cache_accounting_test)
+bloom_add_test(
+    NAME bloom.ui.cache-accounting
+    COMMAND bloom_ui_cache_accounting_test
+    LABELS ui unit cache
+    TIMEOUT 300
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 # Task CACHE-2: the media disk cache's QSettings surface and status-bar/menu-facing pure logic,
 # independent of a full evaluator or window (see main_window_chrome_tests.cpp and
 # window_status_bar's own coverage there for the widget-level wiring).

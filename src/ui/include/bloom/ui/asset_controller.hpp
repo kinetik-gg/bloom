@@ -43,6 +43,11 @@ class AssetController final : public QObject {
     [[nodiscard]] std::shared_ptr<const media::audio::AudioBuffer>
     audioBuffer(document::AssetId id) const;
     [[nodiscard]] std::filesystem::path baseDirectory() const;
+    // CACHEFIX-1 accounting counters (no UI): the bytes this controller's two in-memory caches
+    // hold. Both are hard-capped rather than budgeted -- they are small next to the frame caches,
+    // but "small" has to be a measured claim, not an assumption in a comment.
+    [[nodiscard]] std::size_t proxyCacheBytes() const noexcept { return proxyCacheBytes_; }
+    [[nodiscard]] std::size_t decodedAudioBytes() const noexcept { return decodedAudioBytes_; }
     void cancel();
     [[nodiscard]] bool acceptsEdits() const;
     [[nodiscard]] QByteArray dragToken() const { return dragToken_; }
@@ -69,6 +74,10 @@ class AssetController final : public QObject {
         std::map<std::string, QImage> cache;
         Waveforms waveforms;
         AudioBuffers audioBuffers;
+        // CACHEFIX-1 accounting: what these two maps actually hold, carried back from the worker
+        // so the controller can report it without walking every entry on the interface thread.
+        std::size_t proxyBytes = 0;
+        std::size_t audioBytes = 0;
     };
     void prepare(const QStringList& paths, document::AssetId relinkId = {});
     void refresh();
@@ -86,6 +95,8 @@ class AssetController final : public QObject {
     std::map<std::string, QImage> thumbnailCache_;
     Waveforms waveforms_;
     AudioBuffers audioBuffers_;
+    std::size_t proxyCacheBytes_ = 0;
+    std::size_t decodedAudioBytes_ = 0;
     QByteArray dragToken_;
     bool busy_ = false;
     bool previewPending_ = false;
