@@ -30,8 +30,8 @@ using bloom::document::AnimationCurveSource;
 using bloom::document::AnimationCurveStore;
 using bloom::document::CanonicalGraph;
 using bloom::document::Color4AnimationCurve;
-using bloom::document::Color4Keyframe;
 using bloom::document::CommitStatus;
+using bloom::document::ComponentAnimationCurve;
 using bloom::document::Composition;
 using bloom::document::CompositionId;
 using bloom::document::Document;
@@ -49,7 +49,6 @@ using bloom::document::ValidationCode;
 using bloom::document::ValidationResult;
 using bloom::document::Vec2AnimationCurve;
 using bloom::document::Vec2d;
-using bloom::document::Vec2Keyframe;
 using bloom::document::Vec3AnimationCurve;
 using bloom::document::Vec3d;
 
@@ -96,10 +95,10 @@ scalarKey(const std::uint64_t keyframeId, const RationalTime at, const double va
     return {id<KeyframeId>(keyframeId), at, value, interpolation};
 }
 
-[[nodiscard]] Vec2Keyframe
-vec2Key(const std::uint64_t keyframeId, const RationalTime at, const Vec2d value,
-        const KeyframeInterpolation interpolation = KeyframeInterpolation::Linear) {
-    return {id<KeyframeId>(keyframeId), at, value, interpolation};
+// One component curve holding the given keys. A vector or colour curve IS its components, so a
+// fixture that used to spell one whole-value key now spells one key per axis.
+[[nodiscard]] ComponentAnimationCurve component(std::vector<ScalarKeyframe> keyframes) {
+    return ComponentAnimationCurve{std::move(keyframes)};
 }
 
 [[nodiscard]] Composition emptyComposition(const std::uint64_t compositionValue,
@@ -144,7 +143,9 @@ void addVec2Animation(Composition& composition, const ParameterId parameterId,
                       const AnimationCurveId curveId, const KeyframeId keyframeId,
                       const Vec2d value) {
     if (!composition.animationCurves().insert(Vec2AnimationCurve{
-            curveId, {Vec2Keyframe{keyframeId, RationalTime::fromInteger(0), value}}}) ||
+            curveId,
+            {component({ScalarKeyframe{keyframeId, RationalTime::fromInteger(0), value.x}}),
+             component({})}}) ||
         !composition.parameters().insert({parameterId,
                                           std::string(bloom::document::kPositionParameterSchemaKey),
                                           AnimationCurveSource{curveId}})) {
@@ -159,17 +160,22 @@ void testStoreCanonicalizationAndMutation(ExpectationContext& expectations) {
             id<AnimationCurveId>(20),
             {scalarKey(20, RationalTime::fromInteger(0), 0.25, KeyframeInterpolation::Hold),
              scalarKey(21, RationalTime::fromInteger(2), 0.75, KeyframeInterpolation::Hold)}}) &&
-            store.insert(Vec2AnimationCurve{id<AnimationCurveId>(10),
-                                            {vec2Key(10, RationalTime::fromInteger(0), {1.0, 2.0},
-                                                     KeyframeInterpolation::Hold)}}),
+            store.insert(
+                Vec2AnimationCurve{id<AnimationCurveId>(10),
+                                   {component({scalarKey(10, RationalTime::fromInteger(0), 1.0,
+                                                         KeyframeInterpolation::Hold)}),
+                                    component({scalarKey(11, RationalTime::fromInteger(0), 2.0,
+                                                         KeyframeInterpolation::Hold)})}}),
         "typed animation curves insert with finite values and exact ordered times");
     expectations.expect(
         bloom::document::animationCurveId(store.records()[0]) == id<AnimationCurveId>(10) &&
             bloom::document::animationCurveId(store.records()[1]) == id<AnimationCurveId>(20),
         "curve records are stored canonically by AnimationCurveId");
     expectations.expect(
-        store.findVec2(id<AnimationCurveId>(10))->keyframes.back().outgoingInterpolation ==
-                KeyframeInterpolation::Linear &&
+        store.findVec2(id<AnimationCurveId>(10))
+                    ->components[0]
+                    .keyframes.back()
+                    .outgoingInterpolation == KeyframeInterpolation::Linear &&
             store.findScalar(id<AnimationCurveId>(20))->keyframes.back().outgoingInterpolation ==
                 KeyframeInterpolation::Linear,
         "the final outgoing interpolation is normalized to Linear");
@@ -201,8 +207,8 @@ void testStoreCanonicalizationAndMutation(ExpectationContext& expectations) {
         !store.insertKeyframe(id<AnimationCurveId>(20), scalarKey(23, time(2, 2), 0.6)) &&
             !store.insertKeyframe(id<AnimationCurveId>(20),
                                   scalarKey(10, RationalTime::fromInteger(3), 0.6)) &&
-            !store.insertKeyframe(id<AnimationCurveId>(20),
-                                  vec2Key(23, RationalTime::fromInteger(3), {0.0, 0.0})),
+            !store.insertKeyframe(id<AnimationCurveId>(20), bloom::document::AnimationComponent::X,
+                                  scalarKey(23, RationalTime::fromInteger(3), 0.0)),
         "exact-time collisions, project-local key ID reuse, and kind mismatch are rejected");
 
     expectations.expect(
@@ -244,10 +250,11 @@ void testStoreRejectsMalformedCurves(ExpectationContext& expectations) {
                 {scalarKey(1, time(1, 2), 0.0), scalarKey(2, time(2, 4), 1.0)}}) &&
             !store.insert(ScalarAnimationCurve{
                 id<AnimationCurveId>(1), {scalarKey(1, RationalTime::fromInteger(0), nan)}}) &&
-            !store.insert(
-                Vec2AnimationCurve{id<AnimationCurveId>(1),
-                                   {vec2Key(1, RationalTime::fromInteger(0),
-                                            {0.0, std::numeric_limits<double>::infinity()})}}) &&
+            !store.insert(Vec2AnimationCurve{
+                id<AnimationCurveId>(1),
+                {component({scalarKey(1, RationalTime::fromInteger(0), 0.0)}),
+                 component({scalarKey(2, RationalTime::fromInteger(0),
+                                      std::numeric_limits<double>::infinity())})}}) &&
             !store.insert(ScalarAnimationCurve{
                 id<AnimationCurveId>(1),
                 {scalarKey(1, RationalTime::fromInteger(0), 0.0, invalidInterpolation)}}),
@@ -473,33 +480,38 @@ void testAnimationAllocatorAndPublication(ExpectationContext& expectations) {
 // --- Task S5: the Color4 curve kind and the EaseInOut mode ---------------------------------------
 void testColor4CurveAndEasedInterpolation(ExpectationContext& expectations) {
     AnimationCurveStore store;
-    expectations.expect(
-        store.insert(Color4AnimationCurve{
-            AnimationCurveId::fromRaw(1),
-            {Color4Keyframe{KeyframeId::fromRaw(1), RationalTime::fromInteger(0),
-                            Color4d{0.0, 0.5, 1.0, 1.0}, KeyframeInterpolation::EaseInOut},
-             Color4Keyframe{KeyframeId::fromRaw(2), RationalTime::fromInteger(2),
-                            Color4d{-0.25, 2.0, 0.0, 0.0}}}}),
-        "a colour curve enters the store, HDR and negative channels included");
+    // Channel by channel, at the same two exact times the whole-value fixture used, with the same
+    // values: a colour key is four component keys.
+    expectations.expect(store.insert(Color4AnimationCurve{
+                            AnimationCurveId::fromRaw(1),
+                            {component({scalarKey(1, RationalTime::fromInteger(0), 0.0,
+                                                  KeyframeInterpolation::EaseInOut),
+                                        scalarKey(2, RationalTime::fromInteger(2), -0.25)}),
+                             component({scalarKey(11, RationalTime::fromInteger(0), 0.5,
+                                                  KeyframeInterpolation::EaseInOut),
+                                        scalarKey(12, RationalTime::fromInteger(2), 2.0)}),
+                             component({scalarKey(13, RationalTime::fromInteger(0), 1.0,
+                                                  KeyframeInterpolation::EaseInOut),
+                                        scalarKey(14, RationalTime::fromInteger(2), 0.0)}),
+                             component({scalarKey(15, RationalTime::fromInteger(0), 1.0,
+                                                  KeyframeInterpolation::EaseInOut),
+                                        scalarKey(16, RationalTime::fromInteger(2), 0.0)})}}),
+                        "a colour curve enters the store, HDR and negative channels included");
     expectations.expect(store.findColor4(AnimationCurveId::fromRaw(1)) != nullptr &&
                             store.findScalar(AnimationCurveId::fromRaw(1)) == nullptr &&
                             store.findVec2(AnimationCurveId::fromRaw(1)) == nullptr,
                         "and the three typed finders are mutually exclusive on it");
     expectations.expect(store.validate().ok(), "the colour curve validates as stored");
 
-    // The authoring-colour domain IS the curve's key domain: an alpha outside the unit interval is
-    // not a representable authoring colour, so the key never enters the store.
+    // Finiteness is the STORE's rule for any key. The narrower authoring-colour domain (alpha in
+    // the unit interval) belongs to the parameter that owns the curve, so it is enforced by
+    // validateAnimationCurveReferences() and by the commands, not by a colour-shaped key record.
     expectations.expect(!store.insert(Color4AnimationCurve{
-                            AnimationCurveId::fromRaw(2),
-                            {Color4Keyframe{KeyframeId::fromRaw(3), RationalTime::fromInteger(0),
-                                            Color4d{0.0, 0.0, 0.0, 1.5}}}}),
-                        "a colour key whose alpha leaves the unit interval is refused");
-    expectations.expect(
-        !store.insert(Color4AnimationCurve{
-            AnimationCurveId::fromRaw(3),
-            {Color4Keyframe{KeyframeId::fromRaw(4), RationalTime::fromInteger(0),
-                            Color4d{std::numeric_limits<double>::infinity(), 0.0, 0.0, 1.0}}}}),
-        "and a non-finite channel is refused too");
+                            AnimationCurveId::fromRaw(3),
+                            {component({scalarKey(4, RationalTime::fromInteger(0),
+                                                  std::numeric_limits<double>::infinity())}),
+                             component({}), component({}), component({})}}),
+                        "a non-finite colour channel is refused");
 
     // Keyframe IDs stay project-global across kinds: a colour key may not reuse a scalar key's ID.
     expectations.expect(
@@ -507,36 +519,35 @@ void testColor4CurveAndEasedInterpolation(ExpectationContext& expectations) {
             AnimationCurveId::fromRaw(4),
             {ScalarKeyframe{KeyframeId::fromRaw(9), RationalTime::fromInteger(0), 1.0}}}),
         "a scalar curve coexists with a colour one");
-    expectations.expect(
-        !store.insertKeyframe(
-            AnimationCurveId::fromRaw(1),
-            Color4Keyframe{KeyframeId::fromRaw(9), RationalTime::fromInteger(1), Color4d{}}),
-        "a colour key may not reuse a keyframe ID a scalar curve already holds");
+    expectations.expect(!store.insertKeyframe(AnimationCurveId::fromRaw(1),
+                                              bloom::document::AnimationComponent::Red,
+                                              scalarKey(9, RationalTime::fromInteger(1), 0.0)),
+                        "a colour key may not reuse a keyframe ID a scalar curve already holds");
 
     // Insert/update/erase behave exactly as the scalar and Vec2 overloads do, and the final key's
     // interpolation is re-normalized to Linear on every mutation.
-    expectations.expect(
-        store.insertKeyframe(AnimationCurveId::fromRaw(1),
-                             Color4Keyframe{KeyframeId::fromRaw(5), RationalTime::fromInteger(4),
-                                            Color4d{1.0, 1.0, 1.0, 1.0},
-                                            KeyframeInterpolation::EaseInOut}),
-        "a colour key inserts at a free exact time");
+    expectations.expect(store.insertKeyframe(AnimationCurveId::fromRaw(1),
+                                             bloom::document::AnimationComponent::Red,
+                                             scalarKey(5, RationalTime::fromInteger(4), 1.0,
+                                                       KeyframeInterpolation::EaseInOut)),
+                        "a colour key inserts at a free exact time");
     const auto* curve = store.findColor4(AnimationCurveId::fromRaw(1));
-    expectations.expect(curve != nullptr && curve->keyframes.size() == 3 &&
-                            curve->keyframes.back().outgoingInterpolation ==
+    expectations.expect(curve != nullptr && curve->components[0].keyframes.size() == 3 &&
+                            curve->components[0].keyframes.back().outgoingInterpolation ==
                                 KeyframeInterpolation::Linear,
                         "and the new final key's interpolation is normalized to canonical Linear");
-    expectations.expect(curve != nullptr && curve->keyframes[0].outgoingInterpolation ==
-                                                KeyframeInterpolation::EaseInOut,
+    expectations.expect(curve != nullptr &&
+                            curve->components[0].keyframes[0].outgoingInterpolation ==
+                                KeyframeInterpolation::EaseInOut,
                         "while an interior eased key keeps its own mode");
+    expectations.expect(!store.insertKeyframe(AnimationCurveId::fromRaw(1),
+                                              bloom::document::AnimationComponent::Red,
+                                              scalarKey(6, RationalTime::fromInteger(4), 0.0)),
+                        "an occupied exact time refuses a colour insert, as it does every kind");
     expectations.expect(
-        !store.insertKeyframe(
-            AnimationCurveId::fromRaw(1),
-            Color4Keyframe{KeyframeId::fromRaw(6), RationalTime::fromInteger(4), Color4d{}}),
-        "an occupied exact time refuses a colour insert, as it does every kind");
-    expectations.expect(store.eraseKeyframe(AnimationCurveId::fromRaw(1), KeyframeId::fromRaw(5)) &&
-                            store.findColor4(AnimationCurveId::fromRaw(1))->keyframes.size() == 2,
-                        "erasing a colour key leaves the curve non-empty and ordered");
+        store.eraseKeyframe(AnimationCurveId::fromRaw(1), KeyframeId::fromRaw(5)) &&
+            store.findColor4(AnimationCurveId::fromRaw(1))->components[0].keyframes.size() == 2,
+        "erasing a colour key leaves the curve non-empty and ordered");
     expectations.expect(store.validate().ok(), "every colour mutation leaves the store canonical");
 }
 
@@ -591,10 +602,9 @@ void testColorAndScalarSchemaOwnership(ExpectationContext& expectations) {
 
 // SAVEFIX-1. Store admission is the model's own backstop behind the commands: whatever bypasses a
 // command must still be refused here, and the suite must catch a bypass rather than let it reach a
-// save. Every authored component value and ease handle was already refused; the derived
-// whole-value projection carried alongside a component-aware record was not, and it is stored
-// state like any other.
-void testStoreRefusesNonFiniteComponentAndProjectedValues(ExpectationContext& expectations) {
+// save. Every stored key is a component key now, so there is exactly one set of values to hold to
+// the rule.
+void testStoreRefusesNonFiniteComponentValues(ExpectationContext& expectations) {
     AnimationCurveStore store;
     const auto curveId = id<AnimationCurveId>(120);
     const auto nan = std::numeric_limits<double>::quiet_NaN();
@@ -603,43 +613,24 @@ void testStoreRefusesNonFiniteComponentAndProjectedValues(ExpectationContext& ex
     expectations.expect(
         !store.insert(Vec2AnimationCurve{
             curveId,
-            {},
-            std::array{bloom::document::ComponentAnimationCurve{{
-                           ScalarKeyframe{id<KeyframeId>(121), RationalTime::fromInteger(0), nan},
-                       }},
-                       bloom::document::ComponentAnimationCurve{}}}),
+            {component({ScalarKeyframe{id<KeyframeId>(121), RationalTime::fromInteger(0), nan}}),
+             component({})}}),
         "a component keyframe value that is not finite cannot enter the store");
 
-    expectations.expect(!store.insert(Vec2AnimationCurve{
-                            curveId,
-                            {},
-                            std::array{bloom::document::ComponentAnimationCurve{{
-                                           ScalarKeyframe{id<KeyframeId>(122),
-                                                          RationalTime::fromInteger(0),
-                                                          1.0,
-                                                          KeyframeInterpolation::Linear,
-                                                          {0.5, infinity}},
-                                       }},
-                                       bloom::document::ComponentAnimationCurve{}}}),
-                        "a non-finite ease handle offset cannot enter the store either");
-
     expectations.expect(
-        !store.insert(Vec2AnimationCurve{
-            curveId,
-            {Vec2Keyframe{id<KeyframeId>(123), RationalTime::fromInteger(0), Vec2d{nan, 0.0}}},
-            std::array{bloom::document::ComponentAnimationCurve{{
-                           ScalarKeyframe{id<KeyframeId>(124), RationalTime::fromInteger(0), 1.0},
-                       }},
-                       bloom::document::ComponentAnimationCurve{}}}),
-        "a non-finite whole-value projection cannot ride along beside valid components");
+        !store.insert(Vec2AnimationCurve{curveId,
+                                         {component({ScalarKeyframe{id<KeyframeId>(122),
+                                                                    RationalTime::fromInteger(0),
+                                                                    1.0,
+                                                                    KeyframeInterpolation::Linear,
+                                                                    {0.5, infinity}}}),
+                                          component({})}}),
+        "a non-finite ease handle offset cannot enter the store either");
 
     const auto valid = store.insert(Vec2AnimationCurve{
         curveId,
-        {},
-        std::array{bloom::document::ComponentAnimationCurve{{
-                       ScalarKeyframe{id<KeyframeId>(125), RationalTime::fromInteger(0), 1.0},
-                   }},
-                   bloom::document::ComponentAnimationCurve{}}});
+        {component({ScalarKeyframe{id<KeyframeId>(125), RationalTime::fromInteger(0), 1.0}}),
+         component({})}});
     expectations.expect(valid && store.validate().ok(),
                         "the same record with finite values is admitted and validates");
     expectations.expect(
@@ -654,18 +645,9 @@ void testIndependentComponentCurves(ExpectationContext& expectations) {
     const auto curveId = id<AnimationCurveId>(90);
     const auto inserted = store.insert(Vec3AnimationCurve{
         curveId,
-        {},
-        std::array{
-            bloom::document::ComponentAnimationCurve{{
-                ScalarKeyframe{id<KeyframeId>(91), RationalTime::fromInteger(0), 1.0},
-            }},
-            bloom::document::ComponentAnimationCurve{{
-                ScalarKeyframe{id<KeyframeId>(92), RationalTime::fromInteger(0), 2.0},
-            }},
-            bloom::document::ComponentAnimationCurve{{
-                ScalarKeyframe{id<KeyframeId>(93), RationalTime::fromInteger(0), 3.0},
-            }},
-        }});
+        {component({ScalarKeyframe{id<KeyframeId>(91), RationalTime::fromInteger(0), 1.0}}),
+         component({ScalarKeyframe{id<KeyframeId>(92), RationalTime::fromInteger(0), 2.0}}),
+         component({ScalarKeyframe{id<KeyframeId>(93), RationalTime::fromInteger(0), 3.0}})}});
     expectations.expect(inserted && store.validate().ok(),
                         "a Vec3 curve accepts one independent scalar key per component");
     const auto* x = store.findComponent(curveId, bloom::document::AnimationComponent::X);
@@ -714,7 +696,7 @@ int main() {
         testColor4CurveAndEasedInterpolation(expectations);
         testColorAndScalarSchemaOwnership(expectations);
         testIndependentComponentCurves(expectations);
-        testStoreRefusesNonFiniteComponentAndProjectedValues(expectations);
+        testStoreRefusesNonFiniteComponentValues(expectations);
         return expectations.ok() ? EXIT_SUCCESS : EXIT_FAILURE;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

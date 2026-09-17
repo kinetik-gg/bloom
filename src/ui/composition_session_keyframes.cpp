@@ -1,3 +1,4 @@
+#include "animation_components.hpp"
 #include "timeline_keyframe_time.hpp"
 #include <QThread>
 #include <algorithm>
@@ -30,7 +31,9 @@ bool editableParameter(const CompositionSession& session, document::ParameterId 
 void CompositionSession::selectKeyframe(document::AnimationCurveId curve, document::KeyframeId key,
                                         bool extend) {
     auto keys = extend ? selection_.keyframes : std::vector<KeyframeSelection>{};
-    const KeyframeSelection target{curve, key, std::nullopt};
+    // A vector or colour key is addressed by {curve, key, component}: this overload is the
+    // convenience that does not make its caller name the component, not a whole-value selection.
+    const KeyframeSelection target{curve, key, componentForKeyframe(curve, key)};
     if (!keyframeSelectionExists(target)) {
         reportUnavailable(tr("The selected keyframe is no longer available"));
         return;
@@ -106,17 +109,13 @@ std::vector<commands::KeyframePaste> CompositionSession::selectedKeyframeData() 
                     }
                     return;
                 }
-                for (const auto& key : curve.keyframes)
-                    if (key.id == address.keyframeId) {
-                        if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                    for (const auto& key : curve.keyframes)
+                        if (key.id == address.keyframeId)
                             result.push_back({*parameter, key.time, key.value,
                                               key.outgoingInterpolation, std::nullopt,
                                               key.outgoingHandle, key.incomingHandle});
-                        } else {
-                            result.push_back(
-                                {*parameter, key.time, key.value, key.outgoingInterpolation});
-                        }
-                    }
+                }
             },
             *record);
     }
@@ -253,36 +252,18 @@ bool CompositionSession::pasteKeyframes(const std::vector<commands::KeyframePast
                     }
                     return;
                 }
-                for (const auto& key : curve.keyframes)
-                    if (key.time == paste.time)
-                        selection.push_back({curve.id, key.id, std::nullopt});
-                if constexpr (!std::is_same_v<Curve, document::ScalarAnimationCurve>) {
-                    if (curve.keyframes.empty()) {
-                        for (std::size_t index = 0; index < curve.components.size(); ++index) {
-                            for (const auto& key : curve.components[index].keyframes) {
-                                if (key.time != paste.time)
-                                    continue;
-                                const auto component = [&] {
-                                    if constexpr (std::is_same_v<Curve,
-                                                                 document::Vec2AnimationCurve>)
-                                        return std::array{document::AnimationComponent::X,
-                                                          document::AnimationComponent::Y}[index];
-                                    else if constexpr (std::is_same_v<Curve,
-                                                                      document::Vec3AnimationCurve>)
-                                        return std::array{document::AnimationComponent::X,
-                                                          document::AnimationComponent::Y,
-                                                          document::AnimationComponent::Z}[index];
-                                    else
-                                        return std::array{
-                                            document::AnimationComponent::Red,
-                                            document::AnimationComponent::Green,
-                                            document::AnimationComponent::Blue,
-                                            document::AnimationComponent::Alpha}[index];
-                                }();
-                                selection.push_back({curve.id, key.id, component});
-                            }
-                        }
-                    }
+                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                    for (const auto& key : curve.keyframes)
+                        if (key.time == paste.time)
+                            selection.push_back({curve.id, key.id, std::nullopt});
+                } else {
+                    // A whole-value paste lands one key per component at the same exact time, so
+                    // the selection it leaves behind names every one of them.
+                    constexpr auto names = animationComponentsOf<Curve>();
+                    for (std::size_t index = 0; index < curve.components.size(); ++index)
+                        for (const auto& key : curve.components[index].keyframes)
+                            if (key.time == paste.time)
+                                selection.push_back({curve.id, key.id, names[index]});
                 }
             },
             *record);

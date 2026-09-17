@@ -24,6 +24,7 @@
 #include <cmath>
 #include <set>
 #include <string_view>
+#include <type_traits>
 
 using namespace bloom;
 using namespace bloom::ui;
@@ -208,8 +209,18 @@ void agree(const Surfaces& surfaces, const std::string& where) {
                     if (curve != nullptr) {
                         std::visit(
                             [&expectedUnion](const auto& curveRecord) {
-                                for (const auto& key : curveRecord.keyframes) {
-                                    expectedUnion.insert(key.time);
+                                using Curve = std::decay_t<decltype(curveRecord)>;
+                                if constexpr (std::is_same_v<Curve,
+                                                             document::ScalarAnimationCurve>) {
+                                    for (const auto& key : curveRecord.keyframes) {
+                                        expectedUnion.insert(key.time);
+                                    }
+                                } else {
+                                    for (const auto& component : curveRecord.components) {
+                                        for (const auto& key : component.keyframes) {
+                                            expectedUnion.insert(key.time);
+                                        }
+                                    }
                                 }
                             },
                             *curve);

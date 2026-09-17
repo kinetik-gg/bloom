@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <string_view>
 
 namespace {
@@ -108,9 +109,12 @@ void testAnimatedEditsUseExactSessionTime() {
     require(composition != nullptr, "active composition remains available");
     const auto* position = composition->animationCurves().findVec2(positionCurve);
     const auto* opacity = composition->animationCurves().findScalar(opacityCurve);
-    require(position != nullptr && position->keyframes.size() == 2 &&
-                position->keyframes.back().time == time(3, 2) &&
-                position->keyframes.back().value == document::Vec2d{30.0, 40.0},
+    require(position != nullptr && position->components[0].keyframes.size() == 2 &&
+                position->components[1].keyframes.size() == 2 &&
+                position->components[0].keyframes.back().time == time(3, 2) &&
+                position->components[1].keyframes.back().time == time(3, 2) &&
+                position->components[0].keyframes.back().value == 30.0 &&
+                position->components[1].keyframes.back().value == 40.0,
             "position key preserves exact time and typed value");
     require(opacity != nullptr && opacity->keyframes.size() == 2 &&
                 opacity->keyframes.back().time == time(3, 2) &&
@@ -344,6 +348,89 @@ void testComponentDiamondsAndSelections() {
             "animated component edit preserves the sampled sibling");
 }
 
+// KEY-2's parameter-level invariant, pinned now that nothing derives a grouped key list: a
+// parameter's key set IS the UNION of its components' key sets. The diamond and the aggregate
+// parameter state are the two readers that answer "is this parameter keyed here", and with the
+// whole-value projection gone they have no source but components[], so they must agree with that
+// union frame by frame rather than with a second, derived list.
+void testParameterKeySetIsTheUnionOfComponentKeySets() {
+    auto newProject = document::makeNewProject("Union Session", "Main", time(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack stack(document);
+    const auto ids = addSolidLayer(document, stack);
+    ui::CompositionSession session(document, stack, compositionId);
+    session.selectLayer(ids.layer);
+
+    require(session.toggleKeyframe(ids.position, document::AnimationComponent::X, time(0)) &&
+                session.toggleKeyframe(ids.position, document::AnimationComponent::Y, time(0)),
+            "both position components are keyed at the first frame");
+    require(session.setCurrentTime(time(3)), "move to a time only X is keyed at");
+    require(session.setParameterComponentValue(ids.position, document::AnimationComponent::X, 42.0),
+            "X alone gains a key at t = 3");
+    require(session.setCurrentTime(time(6)), "move to a time only Y is keyed at");
+    require(session.setParameterComponentValue(ids.position, document::AnimationComponent::Y, 7.0),
+            "Y alone gains a key at t = 6");
+
+    const auto* parameter = session.composition()->parameters().find(ids.position);
+    const auto* source = parameter != nullptr
+                             ? std::get_if<document::AnimationCurveSource>(&parameter->source)
+                             : nullptr;
+    const auto* curve = source != nullptr
+                            ? session.composition()->animationCurves().findVec2(source->curveId)
+                            : nullptr;
+    require(curve != nullptr, "the position parameter is animated component-wise");
+    if (curve == nullptr) {
+        return;
+    }
+
+    std::set<core::RationalTime> unionTimes;
+    for (const auto& component : curve->components) {
+        for (const auto& key : component.keyframes) {
+            unionTimes.insert(key.time);
+        }
+    }
+    require(unionTimes.size() == 3 && curve->components[0].keyframes.size() == 2 &&
+                curve->components[1].keyframes.size() == 2,
+            "two two-key component curves span three distinct exact times");
+
+    for (std::int64_t frame = 0; frame < 10; ++frame) {
+        const auto at = time(frame);
+        const bool keyed = unionTimes.contains(at);
+        require(session.setCurrentTime(at), "the session reaches every frame of the fixture");
+        require(session.keyframeDiamondStateForParameter(ids.position) ==
+                    (keyed ? ui::KeyframeDiamondState::AnimatedWithKey
+                           : ui::KeyframeDiamondState::AnimatedWithoutKey),
+                "the parameter diamond is filled on exactly the union of component key times");
+        require((session.keyframeParameterState(ids.position, at) !=
+                 ui::KeyframeParameterState::None) == keyed,
+                "and the aggregate parameter state is keyed on exactly that same union");
+    }
+    require(session.keyframeParameterState(ids.position, time(0)) ==
+                    ui::KeyframeParameterState::All &&
+                session.keyframeParameterState(ids.position, time(3)) ==
+                    ui::KeyframeParameterState::Some,
+            "a time every component shares reads All; a time only one owns reads Some");
+
+    // The address half: a selection made without naming a component completes itself with the
+    // component that actually owns the key, so every downstream reader stays component-scoped.
+    const auto lastX = curve->components[0].keyframes.back();
+    session.selectKeyframe(source->curveId, lastX.id);
+    const auto* selected = std::get_if<ui::KeyframeSelection>(&session.selection().primary);
+    require(selected != nullptr && selected->component.has_value() &&
+                *selected->component == document::AnimationComponent::X,
+            "a component-less selection completes its address with the owning component");
+    require(session.selectedKeyframeIsFinal(),
+            "finality is read from that key's own component curve");
+    const auto copied = session.selectedKeyframeData();
+    const auto* copiedValue = copied.empty() ? nullptr : std::get_if<double>(&copied.front().value);
+    require(copied.size() == 1 && copied.front().component.has_value() &&
+                *copied.front().component == document::AnimationComponent::X &&
+                copied.front().time == lastX.time && copiedValue != nullptr &&
+                *copiedValue == lastX.value,
+            "copying a vector key copies the scalar component key it really is");
+}
+
 // --- Task S5, item 0: THE KEYFRAME GESTURE ------------------------------------------------------
 //
 // Before this task nothing in production constructed CreateAnimationForParameter at all: the
@@ -497,8 +584,12 @@ void testKeyframeGestureReachesEveryAnimatableSchema() {
     require(colorSource != nullptr, "and it is animated");
     const auto* colorCurve =
         session.composition()->animationCurves().findColor4(colorSource->curveId);
-    require(colorCurve != nullptr && colorCurve->keyframes.size() == 1 &&
-                colorCurve->keyframes.front().value == core::Color4d{1.0, 0.5, 0.25, 1.0},
+    const std::array authoredColor{1.0, 0.5, 0.25, 1.0};
+    bool seededColor = colorCurve != nullptr;
+    for (std::size_t index = 0; seededColor && index < authoredColor.size(); ++index)
+        seededColor = colorCurve->components[index].keyframes.size() == 1 &&
+                      colorCurve->components[index].keyframes.front().value == authoredColor[index];
+    require(seededColor,
             "a colour parameter gets a COLOUR curve seeded with its own authored colour");
 
     // An animated parameter's value edit at a time with no key inserts one (the AE rule), through
@@ -758,6 +849,7 @@ int main(int argc, char** argv) {
     testDrivenEditIsExplicitlyRejected();
     testDriverChainAccessors();
     testComponentDiamondsAndSelections();
+    testParameterKeySetIsTheUnionOfComponentKeySets();
     testKeyframeGestureCreatesAndRemovesAnimation();
     testKeyframeGestureReachesEveryAnimatableSchema();
     testSelectedKeyframeInterpolation();

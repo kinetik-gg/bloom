@@ -73,9 +73,9 @@ struct ScalarKeyframe {
     double value = 0.0;
     KeyframeInterpolation outgoingInterpolation = KeyframeInterpolation::Linear;
     // Ease handles for the segments on either side of this key. The trailing position and the
-    // defaults keep every existing aggregate initializer valid. Only scalar and component keys
-    // carry handles; the legacy Vec2/Vec3/Color4 whole-value projections deliberately get none,
-    // because a whole-value key has no single scalar axis for a handle to offset.
+    // defaults keep every existing aggregate initializer valid. A handle offsets ONE scalar axis,
+    // which is exactly what a key is: scalar curves and the component curves of a vector or colour
+    // parameter hold ScalarKeyframes, and nothing else holds a key at all.
     KeyframeHandle outgoingHandle{};
     KeyframeHandle incomingHandle{};
 
@@ -104,37 +104,6 @@ struct ComponentAnimationCurve {
                            const ComponentAnimationCurve&) = default;
 };
 
-// Compatibility projections retained for pre-component callers. They are not the source of truth
-// for component-aware curves; new records use the `components` arrays below. Keeping these plain
-// value records lets the pre-KEY-2 timeline and older all-components commands continue to build
-// while the UI wiring migrates to KeyframeComponent selections.
-struct Vec2Keyframe {
-    KeyframeId id;
-    core::RationalTime time;
-    Vec2d value;
-    KeyframeInterpolation outgoingInterpolation = KeyframeInterpolation::Linear;
-
-    friend bool operator==(const Vec2Keyframe&, const Vec2Keyframe&) = default;
-};
-
-struct Vec3Keyframe {
-    KeyframeId id;
-    core::RationalTime time;
-    Vec3d value;
-    KeyframeInterpolation outgoingInterpolation = KeyframeInterpolation::Linear;
-
-    friend bool operator==(const Vec3Keyframe&, const Vec3Keyframe&) = default;
-};
-
-struct Color4Keyframe {
-    KeyframeId id;
-    core::RationalTime time;
-    core::Color4d value;
-    KeyframeInterpolation outgoingInterpolation = KeyframeInterpolation::Linear;
-
-    friend bool operator==(const Color4Keyframe&, const Color4Keyframe&) = default;
-};
-
 struct ScalarAnimationCurve {
     AnimationCurveId id;
     std::vector<ScalarKeyframe> keyframes;
@@ -142,21 +111,13 @@ struct ScalarAnimationCurve {
     friend bool operator==(const ScalarAnimationCurve&, const ScalarAnimationCurve&) = default;
 };
 
+// A vector or colour curve IS its components: one independent scalar curve per axis, addressed by
+// the AnimationComponent that names it. There is no whole-value key record and no derived
+// whole-value list -- "the parameter's keys" is the union of the component key sets, computed by
+// whoever asks, and every writer therefore has exactly one place to keep correct.
 struct Vec2AnimationCurve {
     AnimationCurveId id;
-    std::vector<Vec2Keyframe> keyframes{};
     std::array<ComponentAnimationCurve, 2> components{};
-
-    Vec2AnimationCurve() = default;
-    Vec2AnimationCurve(AnimationCurveId curveId, std::vector<Vec2Keyframe> legacyKeyframes)
-        : id(curveId), keyframes(std::move(legacyKeyframes)) {}
-    Vec2AnimationCurve(AnimationCurveId curveId,
-                       std::array<ComponentAnimationCurve, 2> componentCurves)
-        : id(curveId), components(std::move(componentCurves)) {}
-    Vec2AnimationCurve(AnimationCurveId curveId, std::vector<Vec2Keyframe> legacyKeyframes,
-                       std::array<ComponentAnimationCurve, 2> componentCurves)
-        : id(curveId), keyframes(std::move(legacyKeyframes)),
-          components(std::move(componentCurves)) {}
 
     [[nodiscard]] const ComponentAnimationCurve* component(AnimationComponent which) const noexcept;
     [[nodiscard]] ComponentAnimationCurve* component(AnimationComponent which) noexcept;
@@ -166,19 +127,7 @@ struct Vec2AnimationCurve {
 
 struct Vec3AnimationCurve {
     AnimationCurveId id;
-    std::vector<Vec3Keyframe> keyframes{};
     std::array<ComponentAnimationCurve, 3> components{};
-
-    Vec3AnimationCurve() = default;
-    Vec3AnimationCurve(AnimationCurveId curveId, std::vector<Vec3Keyframe> legacyKeyframes)
-        : id(curveId), keyframes(std::move(legacyKeyframes)) {}
-    Vec3AnimationCurve(AnimationCurveId curveId,
-                       std::array<ComponentAnimationCurve, 3> componentCurves)
-        : id(curveId), components(std::move(componentCurves)) {}
-    Vec3AnimationCurve(AnimationCurveId curveId, std::vector<Vec3Keyframe> legacyKeyframes,
-                       std::array<ComponentAnimationCurve, 3> componentCurves)
-        : id(curveId), keyframes(std::move(legacyKeyframes)),
-          components(std::move(componentCurves)) {}
 
     [[nodiscard]] const ComponentAnimationCurve* component(AnimationComponent which) const noexcept;
     [[nodiscard]] ComponentAnimationCurve* component(AnimationComponent which) noexcept;
@@ -188,19 +137,7 @@ struct Vec3AnimationCurve {
 
 struct Color4AnimationCurve {
     AnimationCurveId id;
-    std::vector<Color4Keyframe> keyframes{};
     std::array<ComponentAnimationCurve, 4> components{};
-
-    Color4AnimationCurve() = default;
-    Color4AnimationCurve(AnimationCurveId curveId, std::vector<Color4Keyframe> legacyKeyframes)
-        : id(curveId), keyframes(std::move(legacyKeyframes)) {}
-    Color4AnimationCurve(AnimationCurveId curveId,
-                         std::array<ComponentAnimationCurve, 4> componentCurves)
-        : id(curveId), components(std::move(componentCurves)) {}
-    Color4AnimationCurve(AnimationCurveId curveId, std::vector<Color4Keyframe> legacyKeyframes,
-                         std::array<ComponentAnimationCurve, 4> componentCurves)
-        : id(curveId), keyframes(std::move(legacyKeyframes)),
-          components(std::move(componentCurves)) {}
 
     [[nodiscard]] const ComponentAnimationCurve* component(AnimationComponent which) const noexcept;
     [[nodiscard]] ComponentAnimationCurve* component(AnimationComponent which) noexcept;
@@ -230,23 +167,16 @@ class AnimationCurveStore final {
     [[nodiscard]] bool erase(AnimationCurveId id);
 
     [[nodiscard]] bool insertKeyframe(AnimationCurveId curveId, ScalarKeyframe keyframe);
-    [[nodiscard]] bool insertKeyframe(AnimationCurveId curveId, Vec2Keyframe keyframe);
-    [[nodiscard]] bool insertKeyframe(AnimationCurveId curveId, Vec3Keyframe keyframe);
-    [[nodiscard]] bool insertKeyframe(AnimationCurveId curveId, Color4Keyframe keyframe);
     [[nodiscard]] bool insertKeyframe(AnimationCurveId curveId, AnimationComponent component,
                                       ScalarKeyframe keyframe);
     [[nodiscard]] bool updateKeyframe(AnimationCurveId curveId, ScalarKeyframe keyframe);
-    [[nodiscard]] bool updateKeyframe(AnimationCurveId curveId, Vec2Keyframe keyframe);
-    [[nodiscard]] bool updateKeyframe(AnimationCurveId curveId, Vec3Keyframe keyframe);
-    [[nodiscard]] bool updateKeyframe(AnimationCurveId curveId, Color4Keyframe keyframe);
     [[nodiscard]] bool updateKeyframe(AnimationCurveId curveId, AnimationComponent component,
                                       ScalarKeyframe keyframe);
+    // Erases one key by id. A scalar curve is searched directly; a vector or colour curve is
+    // searched component by component, because a KeyframeId belongs to exactly one component.
     [[nodiscard]] bool eraseKeyframe(AnimationCurveId curveId, KeyframeId keyframeId);
     [[nodiscard]] bool eraseKeyframe(AnimationCurveId curveId, AnimationComponent component,
                                      KeyframeId keyframeId);
-    // Refreshes the pre-component whole-value projection used by legacy callers. Component-aware
-    // records remain authoritative; the projection is only a compatibility view.
-    [[nodiscard]] bool synchronizeCompatibilityProjection(AnimationCurveId curveId);
 
     [[nodiscard]] ValidationResult validate() const;
 

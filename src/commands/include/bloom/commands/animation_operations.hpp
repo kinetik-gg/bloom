@@ -388,8 +388,8 @@ struct KeyframePaste {
     document::KeyframeInterpolation interpolation = document::KeyframeInterpolation::Linear;
     std::optional<document::AnimationComponent> component{};
     // Ease handles travel with a copied key, so paste and move reproduce the curve SHAPE and not
-    // only its times and values. A whole-value vector or colour paste leaves them at their defaults
-    // because such a key has no single scalar axis for a handle to offset.
+    // only its times and values. A component-less vector or colour paste leaves them at their
+    // defaults because such a paste names no single scalar axis for a handle to offset.
     document::KeyframeHandle outgoingHandle{};
     document::KeyframeHandle incomingHandle{};
 };
@@ -444,8 +444,8 @@ class SetKeyframesInterpolation final : public Operation {
 // forces that segment's LEFT key to Ease In-Out -- an outgoing handle is the key's own segment, an
 // incoming handle its predecessor's. The final key's outgoing handle and the first key's incoming
 // handle name no segment and are refused rather than silently dropped. Only scalar and component
-// addresses carry handles; a whole-value vector or colour address is refused for the same reason
-// the durable model gives those projections no handles.
+// addresses carry handles; a component-less vector or colour address is refused, because a handle
+// offsets one scalar axis and such an address names none.
 class SetKeyframeHandles final : public Operation {
   public:
     SetKeyframeHandles(document::CompositionId composition, std::vector<KeyframeHandleEdit> edits)

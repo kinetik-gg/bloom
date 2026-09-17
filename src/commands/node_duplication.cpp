@@ -7,6 +7,8 @@
 
 namespace bloom::commands {
 namespace {
+// Every stored key of one curve: a scalar curve's own, or every component key of a vector or
+// colour curve. There is no third place a key can live.
 template <typename Curve, typename Callback>
 void forEachStoredKeyframe(Curve& curve, Callback&& callback) {
     using CurveType = std::remove_cvref_t<Curve>;
@@ -14,16 +16,9 @@ void forEachStoredKeyframe(Curve& curve, Callback&& callback) {
         for (auto& keyframe : curve.keyframes)
             callback(keyframe);
     } else {
-        if (std::ranges::all_of(curve.components, [](const auto& component) {
-                return component.keyframes.empty();
-            })) {
-            for (auto& keyframe : curve.keyframes)
+        for (auto& component : curve.components)
+            for (auto& keyframe : component.keyframes)
                 callback(keyframe);
-        } else {
-            for (auto& component : curve.components)
-                for (auto& keyframe : component.keyframes)
-                    callback(keyframe);
-        }
     }
 }
 
@@ -52,11 +47,8 @@ std::optional<document::AnimationCurveId> copyCurve(document::Draft& draft,
             return allAllocated;
         },
         copy);
-    const auto copiedCurveId = document::animationCurveId(copy);
     if (!allocated || !composition.animationCurves().insert(std::move(copy)))
         return std::nullopt;
-    static_cast<void>(
-        composition.animationCurves().synchronizeCompatibilityProjection(copiedCurveId));
     return id;
 }
 } // namespace

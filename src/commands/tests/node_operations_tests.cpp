@@ -656,8 +656,10 @@ void testDuplicationOwnershipEdges(TestContext& test) {
     const auto* oldKeys = comp.animationCurves().findVec2(oldCurve);
     const auto* newKeys = comp.animationCurves().findVec2(newCurve);
     test.expect(oldCurve != newCurve && oldKeys && newKeys &&
-                    oldKeys->keyframes.front().id != newKeys->keyframes.front().id &&
-                    oldKeys->keyframes.front().value == newKeys->keyframes.front().value,
+                    oldKeys->components[0].keyframes.front().id !=
+                        newKeys->components[0].keyframes.front().id &&
+                    oldKeys->components[0].keyframes.front().value ==
+                        newKeys->components[0].keyframes.front().value,
                 "vec2 animation copies independently with fresh curve/key identities");
     const auto firstCopy =
         result.outputId<LayerId>("layer." + std::to_string(kFirstLayerId.value()));

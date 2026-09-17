@@ -33,13 +33,42 @@
 #include <exception>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace {
 
 using namespace bloom;
+
+// The component-era reading of "the Vec2 key at this exact time": since KEY-2 a vector key IS one
+// ScalarKeyframe per axis, so a whole-value assertion is an assertion about the X and Y keys that
+// share one exact time.
+[[nodiscard]] std::optional<document::Vec2d> vec2KeyAt(const document::Vec2AnimationCurve& curve,
+                                                       const core::RationalTime at) {
+    const auto x =
+        std::ranges::find(curve.components[0].keyframes, at, &document::ScalarKeyframe::time);
+    const auto y =
+        std::ranges::find(curve.components[1].keyframes, at, &document::ScalarKeyframe::time);
+    if (x == curve.components[0].keyframes.end() || y == curve.components[1].keyframes.end()) {
+        return std::nullopt;
+    }
+    return document::Vec2d{x->value, y->value};
+}
+
+// How many distinct exact times the curve holds keys at -- the parameter-level key count, which is
+// the union of the component key sets rather than a second stored list.
+[[nodiscard]] std::size_t vec2KeyTimeCount(const document::Vec2AnimationCurve& curve) {
+    std::set<core::RationalTime> times;
+    for (const auto& component : curve.components) {
+        for (const auto& key : component.keyframes) {
+            times.insert(key.time);
+        }
+    }
+    return times.size();
+}
 
 [[noreturn]] void fail(const std::string_view message) {
     std::cerr << "composition session position interaction test failed: " << message << '\n';
@@ -316,37 +345,26 @@ void testAnimatedParameterSampledBaseInsertsKeyAtCurrentTimeAndUndoRemovesOnlyIt
             "commit is exactly one transaction");
 
     const auto* curve = session.composition()->animationCurves().findVec2(*curveId);
-    require(curve != nullptr && curve->keyframes.size() == 3,
+    require(curve != nullptr && vec2KeyTimeCount(*curve) == 3,
             "commit INSERTS a new key at the current time rather than mutating an existing one");
-    if (curve == nullptr || curve->keyframes.size() != 3) {
+    if (curve == nullptr || vec2KeyTimeCount(*curve) != 3) {
         return;
     }
-    const auto inserted =
-        std::ranges::find(curve->keyframes, time(5), &document::Vec2Keyframe::time);
-    require(inserted != curve->keyframes.end() &&
-                inserted->value == document::Vec2d{8.0 + 10.0 / 100.0 * format.width(), 14.0},
+    require(vec2KeyAt(*curve, time(5)) ==
+                document::Vec2d{8.0 + 10.0 / 100.0 * format.width(), 14.0},
             "the inserted key holds the sampled-base-plus-displacement value at the exact current "
             "time");
-    const auto seed = std::ranges::find(curve->keyframes, time(0), &document::Vec2Keyframe::time);
-    const auto second =
-        std::ranges::find(curve->keyframes, time(10), &document::Vec2Keyframe::time);
-    require(seed != curve->keyframes.end() && seed->value == document::Vec2d{3.0, 4.0} &&
-                second != curve->keyframes.end() && second->value == document::Vec2d{13.0, 24.0},
+    require(vec2KeyAt(*curve, time(0)) == document::Vec2d{3.0, 4.0} &&
+                vec2KeyAt(*curve, time(10)) == document::Vec2d{13.0, 24.0},
             "the curve's other two keys are untouched by the insert");
 
     require(session.undo(), "the sampled-base commit undoes cleanly");
     curve = session.composition()->animationCurves().findVec2(*curveId);
-    require(curve != nullptr && curve->keyframes.size() == 2,
+    require(curve != nullptr && vec2KeyTimeCount(*curve) == 2,
             "undo removes EXACTLY the inserted key, restoring the original two");
     if (curve != nullptr) {
-        const auto seedAfterUndo =
-            std::ranges::find(curve->keyframes, time(0), &document::Vec2Keyframe::time);
-        const auto secondAfterUndo =
-            std::ranges::find(curve->keyframes, time(10), &document::Vec2Keyframe::time);
-        require(seedAfterUndo != curve->keyframes.end() &&
-                    seedAfterUndo->value == document::Vec2d{3.0, 4.0} &&
-                    secondAfterUndo != curve->keyframes.end() &&
-                    secondAfterUndo->value == document::Vec2d{13.0, 24.0},
+        require(vec2KeyAt(*curve, time(0)) == document::Vec2d{3.0, 4.0} &&
+                    vec2KeyAt(*curve, time(10)) == document::Vec2d{13.0, 24.0},
                 "undo leaves the curve's other keys exactly as they were");
     }
 }
@@ -385,16 +403,16 @@ void testAnimatedParameterExactKeyStillUpdatesThatKey() {
             "commit is exactly one transaction");
 
     const auto* curve = session.composition()->animationCurves().findVec2(*curveId);
-    require(curve != nullptr && curve->keyframes.size() == 1,
+    require(curve != nullptr && vec2KeyTimeCount(*curve) == 1,
             "the commit updates the existing seeded key rather than inserting a second one");
-    require(curve->keyframes.front().value ==
-                document::Vec2d{3.0 + 10.0 / 100.0 * format.width(), 4.0},
+    require(curve != nullptr && vec2KeyAt(*curve, time(0)) ==
+                                    document::Vec2d{3.0 + 10.0 / 100.0 * format.width(), 4.0},
             "the updated key holds the base-plus-displacement value");
 
     require(session.undo(), "the animated commit undoes cleanly");
     curve = session.composition()->animationCurves().findVec2(*curveId);
-    require(curve != nullptr && curve->keyframes.size() == 1 &&
-                curve->keyframes.front().value == document::Vec2d{3.0, 4.0},
+    require(curve != nullptr && vec2KeyTimeCount(*curve) == 1 &&
+                vec2KeyAt(*curve, time(0)) == document::Vec2d{3.0, 4.0},
             "undo restores the exact prior key value");
 }
 
@@ -711,7 +729,22 @@ void testParentedTransformsCommitAtomically() {
         require(source != nullptr, "parameter remains animated");
         const auto* curve = session.composition()->animationCurves().find(source->curveId);
         require(curve != nullptr, "curve exists");
-        return std::visit([](const auto& held) { return held.keyframes.size(); }, *curve);
+        // The parameter's key count is the number of DISTINCT component key times -- the union,
+        // which is what "how many keys does this parameter have" has meant since KEY-2.
+        return std::visit(
+            [](const auto& held) {
+                using Curve = std::decay_t<decltype(held)>;
+                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                    return held.keyframes.size();
+                } else {
+                    std::set<core::RationalTime> times;
+                    for (const auto& component : held.components)
+                        for (const auto& key : component.keyframes)
+                            times.insert(key.time);
+                    return times.size();
+                }
+            },
+            *curve);
     };
     require(keyCount(document::kPositionParameterRole) == 2 &&
                 keyCount(document::kSolidWidthParameterRole) == 2,

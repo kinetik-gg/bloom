@@ -67,6 +67,28 @@ scalarCurve(const document::Snapshot& snapshot, const document::AnimationCurveId
     return *result;
 }
 
+// A vector or colour parameter's key set is the UNION of its components' key times, computed by
+// whoever asks. These two readers are that computation, once, for the assertions below.
+template <typename Curve>
+[[nodiscard]] std::vector<core::RationalTime> componentKeyTimes(const Curve& curve) {
+    std::vector<core::RationalTime> times;
+    for (const auto& component : curve.components)
+        for (const auto& key : component.keyframes)
+            times.push_back(key.time);
+    std::ranges::sort(times);
+    times.erase(std::unique(times.begin(), times.end()), times.end());
+    return times;
+}
+
+// One component's key at an exact time, or nothing when that component has none there.
+template <typename Curve>
+[[nodiscard]] const document::ScalarKeyframe*
+componentKeyAt(const Curve& curve, const std::size_t componentIndex, const core::RationalTime at) {
+    const auto& keys = curve.components[componentIndex].keyframes;
+    const auto key = std::ranges::find(keys, at, &document::ScalarKeyframe::time);
+    return key == keys.end() ? nullptr : &*key;
+}
+
 // --- Task S5 source-parameter fixture -----------------------------------------------------------
 //
 // The shared makeProject() graph carries a Layer Stack and two Layer Outputs; the schemas task S5
@@ -129,7 +151,7 @@ color4Curve(const document::Snapshot& snapshot, const document::AnimationCurveId
     return *result;
 }
 
-void testComponentCompatibilityProjection(TestContext& test) {
+void testComponentKeyUnion(TestContext& test) {
     Document document(makeSourceProject());
     CommandStack stack(document);
     const auto execute = [&]<typename OperationType, typename... Args>(Args&&... args) {
@@ -143,52 +165,43 @@ void testComponentCompatibilityProjection(TestContext& test) {
     test.expect(id.has_value(), "component-only animation is created");
     if (!id)
         return;
-    const auto checkUnion = [&] {
-        const auto curve = vec2Curve(document.snapshot(), *id);
-        std::vector<core::RationalTime> times;
-        for (const auto& component : curve.components)
-            for (const auto& key : component.keyframes)
-                times.push_back(key.time);
-        std::ranges::sort(times);
-        times.erase(std::unique(times.begin(), times.end()), times.end());
-        std::vector<core::RationalTime> projected;
-        projected.reserve(curve.keyframes.size());
-        for (const auto& key : curve.keyframes)
-            projected.push_back(key.time);
-        test.expect(projected == times,
-                    "legacy projection equals the exact union of component times");
+    // The invariant every reader of an animated vector depends on: the parameter's key set is
+    // exactly the union of its components' key sets, with nothing derived alongside it.
+    const auto checkUnion = [&](const std::vector<core::RationalTime>& expected) {
+        test.expect(componentKeyTimes(vec2Curve(document.snapshot(), *id)) == expected,
+                    "the parameter key set is exactly the union of the component key sets");
     };
-    checkUnion();
+    checkUnion({time(0, 1)});
     test.expect(execute
                     .template operator()<SetKeyframeAtTimeForParameterComponent>(
                         kFirstPositionId, document::AnimationComponent::Y, time(1, 1), 17.0)
                     .changed(),
                 "inserting another component key succeeds");
-    checkUnion();
+    checkUnion({time(0, 1), time(1, 1)});
     test.expect(execute
                     .template operator()<SetKeyframeAtTimeForParameterComponent>(
                         kFirstPositionId, document::AnimationComponent::Y, time(1, 1), 23.0)
                     .changed(),
                 "updating a component key succeeds");
-    test.expect(vec2Curve(document.snapshot(), *id).keyframes.back().value.y == 23.0,
-                "component value updates refresh the projection");
+    test.expect(vec2Curve(document.snapshot(), *id).components[1].keyframes.back().value == 23.0,
+                "a component value update lands on that component's own key");
     const auto key = vec2Curve(document.snapshot(), *id).components[1].keyframes.back().id;
     test.expect(
         execute.template operator()<DeleteKeyframe>(*id, key, document::AnimationComponent::Y)
             .changed(),
         "component delete succeeds");
-    checkUnion();
+    checkUnion({time(0, 1)});
     test.expect(stack.undo().changed(), "component deletion undoes");
-    checkUnion();
+    checkUnion({time(0, 1), time(1, 1)});
     test.expect(stack.redo().changed(), "component deletion redoes");
-    checkUnion();
+    checkUnion({time(0, 1)});
     test.expect(execute
                     .template operator()<PasteKeyframes>(std::vector<KeyframePaste>{
                         {kFirstPositionId, time(2, 1), 42.0,
                          document::KeyframeInterpolation::Linear, document::AnimationComponent::Y}})
                     .changed(),
                 "component paste succeeds");
-    checkUnion();
+    checkUnion({time(0, 1), time(2, 1)});
 }
 
 // Task S5, item 1: a colour parameter takes a colour curve seeded from its own constant, and every
@@ -208,8 +221,14 @@ void testColorKeyOperations(TestContext& test) {
     }
     {
         const auto& curve = color4Curve(document.snapshot(), *curveId);
-        test.expect(curve.keyframes.size() == 1 &&
-                        curve.keyframes.front().value == kFixtureSolidColor,
+        const std::array channels{kFixtureSolidColor.red, kFixtureSolidColor.green,
+                                  kFixtureSolidColor.blue, kFixtureSolidColor.alpha};
+        bool seeded = componentKeyTimes(curve) == std::vector{time(0, 1)};
+        for (std::size_t index = 0; index < channels.size(); ++index) {
+            const auto* key = componentKeyAt(curve, index, time(0, 1));
+            seeded = seeded && key != nullptr && key->value == channels[index];
+        }
+        test.expect(seeded,
                     "the seeded key holds the parameter's own constant exactly, so converting to "
                     "animation never changes the picture at the initial time");
     }
@@ -222,8 +241,9 @@ void testColorKeyOperations(TestContext& test) {
     test.expect(inserted.changed(), "a colour key inserts at a free exact time");
     {
         const auto& curve = color4Curve(document.snapshot(), *curveId);
-        test.expect(curve.keyframes.size() == 2 && curve.keyframes.back().outgoingInterpolation ==
-                                                       document::KeyframeInterpolation::Linear,
+        test.expect(componentKeyTimes(curve) == std::vector{time(0, 1), time(1, 1)} &&
+                        curve.components[0].keyframes.back().outgoingInterpolation ==
+                            document::KeyframeInterpolation::Linear,
                     "and the final key's interpolation stays canonical Linear");
     }
 
@@ -237,7 +257,8 @@ void testColorKeyOperations(TestContext& test) {
                 "a colour key outside the authoring-colour domain is rejected");
 
     // SetKeyframeAtTime's colour overload: updates the exact-time key, preserving its KeyframeId.
-    const auto originalKeyId = color4Curve(document.snapshot(), *curveId).keyframes.front().id;
+    const auto originalKeyId =
+        color4Curve(document.snapshot(), *curveId).components[0].keyframes.front().id;
     Transaction set("Set colour at time", document.snapshot().revision());
     set.emplace<SetKeyframeAtTime>(kCompositionId, *curveId, time(0, 1),
                                    core::Color4d{0.1, 0.2, 0.3, 1.0});
@@ -498,10 +519,11 @@ void testCreateAnimationOutputsUndoAndRedo(TestContext& test) {
     if (positionCurveId.has_value()) {
         const auto positionSnapshot = positionDocument.snapshot();
         const auto& positionCurve = vec2Curve(positionSnapshot, *positionCurveId);
-        test.expect(positionCurve.keyframes.size() == 1 &&
-                        positionCurve.keyframes.front().time ==
-                            core::RationalTime::fromInteger(-2) &&
-                        positionCurve.keyframes.front().value == document::Vec2d{0.0, 0.0},
+        const auto* x = componentKeyAt(positionCurve, 0, core::RationalTime::fromInteger(-2));
+        const auto* y = componentKeyAt(positionCurve, 1, core::RationalTime::fromInteger(-2));
+        test.expect(componentKeyTimes(positionCurve) ==
+                            std::vector{core::RationalTime::fromInteger(-2)} &&
+                        x != nullptr && x->value == 0.0 && y != nullptr && y->value == 0.0,
                     "position creation preserves exact out-of-range time and Vec2 value");
     }
 
@@ -742,10 +764,12 @@ void testVec2KeyOperations(TestContext& test) {
     const auto setResult = stack.execute(std::move(set));
     const auto setSnapshot = document.snapshot();
     const auto& setCurve = vec2Curve(setSnapshot, curve);
-    const auto key = std::ranges::find(setCurve.keyframes, keyframe, &document::Vec2Keyframe::id);
+    const auto* x = componentKeyAt(setCurve, 0, time(5, 2));
+    const auto* y = componentKeyAt(setCurve, 1, time(5, 2));
     test.expect(setResult.outputId<document::KeyframeId>(kKeyframeOutput) == keyframeId &&
-                    key != setCurve.keyframes.end() && key->value == document::Vec2d{9.0, 8.0} &&
-                    key->outgoingInterpolation == document::KeyframeInterpolation::Hold,
+                    x != nullptr && x->id == keyframe && x->value == 9.0 && y != nullptr &&
+                    y->value == 8.0 &&
+                    x->outgoingInterpolation == document::KeyframeInterpolation::Hold,
                 "Vec2 exact-time upsert preserves ID and interpolation");
 
     Transaction wrongKind("Reject scalar on Vec2", document.snapshot().revision());
@@ -822,8 +846,12 @@ void testBatchKeyframeTransactions(TestContext& test) {
     std::vector<KeyframeMove> moves{
         {{opacity, scalar.keyframes[0].id}, time(1, 1)},
         {{opacity, scalar.keyframes[1].id}, time(0, 1)},
-        {{position, vec2Curve(seeded, position).keyframes[0].id}, time(2, 1)},
-        {{color, composition(seeded).animationCurves().findColor4(color)->keyframes[0].id},
+        {{position, vec2Curve(seeded, position).components[0].keyframes[0].id,
+          document::AnimationComponent::X},
+         time(2, 1)},
+        {{color,
+          composition(seeded).animationCurves().findColor4(color)->components[0].keyframes[0].id,
+          document::AnimationComponent::Red},
          time(2, 1)}};
     const auto beforeMove = stack.size();
     test.expect(
@@ -848,8 +876,15 @@ void testBatchKeyframeTransactions(TestContext& test) {
     for (const auto& record : composition(document.snapshot()).animationCurves().records())
         std::visit(
             [&](const auto& curve) {
-                for (const auto& key : curve.keyframes)
-                    selected.push_back({curve.id, key.id});
+                using Curve = std::decay_t<decltype(curve)>;
+                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                    for (const auto& key : curve.keyframes)
+                        selected.push_back({curve.id, key.id});
+                } else {
+                    for (const auto& component : curve.components)
+                        for (const auto& key : component.keyframes)
+                            selected.push_back({curve.id, key.id});
+                }
             },
             record);
     const auto beforeInterpolation = stack.size();
@@ -862,11 +897,21 @@ void testBatchKeyframeTransactions(TestContext& test) {
     for (const auto& record : composition(edited).animationCurves().records())
         std::visit(
             [&](const auto& curve) {
-                test.expect(curve.keyframes.front().outgoingInterpolation ==
-                                    document::KeyframeInterpolation::EaseInOut &&
-                                curve.keyframes.back().outgoingInterpolation ==
-                                    document::KeyframeInterpolation::Linear,
-                            "final keys stay canonical; every outgoing interval is edited");
+                using Curve = std::decay_t<decltype(curve)>;
+                const auto edits = [&](const auto& keys) {
+                    test.expect(keys.front().outgoingInterpolation ==
+                                        document::KeyframeInterpolation::EaseInOut &&
+                                    keys.back().outgoingInterpolation ==
+                                        document::KeyframeInterpolation::Linear,
+                                "final keys stay canonical; every outgoing interval is edited");
+                };
+                if constexpr (std::is_same_v<Curve, document::ScalarAnimationCurve>) {
+                    edits(curve.keyframes);
+                } else {
+                    for (const auto& component : curve.components)
+                        if (!component.keyframes.empty())
+                            edits(component.keyframes);
+                }
             },
             record);
     test.expect(stack.undo().changed() &&
@@ -1023,7 +1068,7 @@ int main() {
         bloom::commands::test::testColorKeyOperations(test);
         bloom::commands::test::testComponentKeyOperations(test);
         bloom::commands::test::testComponentUpdateRefusesNonFiniteValues(test);
-        bloom::commands::test::testComponentCompatibilityProjection(test);
+        bloom::commands::test::testComponentKeyUnion(test);
         bloom::commands::test::testTextSizeAnimationRespectsItsSchemaDomain(test);
         bloom::commands::test::testSetKeyframeInterpolation(test);
         bloom::commands::test::testKeyframeHandleAndValueOperations(test);

@@ -43,15 +43,6 @@ struct CompiledScalarKeyframe final {
     friend bool operator==(const CompiledScalarKeyframe&, const CompiledScalarKeyframe&) = default;
 };
 
-struct CompiledVec2Keyframe final {
-    document::KeyframeId id;
-    core::RationalTime time;
-    document::Vec2d value;
-    CompiledKeyframeInterpolation outgoingInterpolation = CompiledKeyframeInterpolation::Linear;
-
-    friend bool operator==(const CompiledVec2Keyframe&, const CompiledVec2Keyframe&) = default;
-};
-
 struct CompiledScalarCurve final {
     document::AnimationCurveId id;
     std::vector<CompiledScalarKeyframe> keyframes;
@@ -59,62 +50,30 @@ struct CompiledScalarCurve final {
     friend bool operator==(const CompiledScalarCurve&, const CompiledScalarCurve&) = default;
 };
 
+// A compiled vector or colour curve is a table PER COMPONENT plus the parameter's own default for
+// a component that carries no key at all. There is no whole-value table: sampling composes the
+// typed value from the components, which is what kAnimationSamplingSemanticsVersion 2 already
+// describes.
 struct CompiledVec2Curve final {
     document::AnimationCurveId id;
-    std::vector<CompiledVec2Keyframe> keyframes;
     std::array<std::vector<CompiledScalarKeyframe>, 2> components{};
     document::Vec2d defaultValue{};
-
-    CompiledVec2Curve() = default;
-    CompiledVec2Curve(document::AnimationCurveId curveId,
-                      std::vector<CompiledVec2Keyframe> legacyKeyframes)
-        : id(curveId), keyframes(std::move(legacyKeyframes)) {}
 
     friend bool operator==(const CompiledVec2Curve&, const CompiledVec2Curve&) = default;
 };
 
-struct CompiledVec3Keyframe final {
-    document::KeyframeId id;
-    core::RationalTime time;
-    document::Vec3d value;
-    CompiledKeyframeInterpolation outgoingInterpolation = CompiledKeyframeInterpolation::Linear;
-
-    friend bool operator==(const CompiledVec3Keyframe&, const CompiledVec3Keyframe&) = default;
-};
-
 struct CompiledVec3Curve final {
     document::AnimationCurveId id;
-    std::vector<CompiledVec3Keyframe> keyframes;
     std::array<std::vector<CompiledScalarKeyframe>, 3> components{};
     document::Vec3d defaultValue{};
-
-    CompiledVec3Curve() = default;
-    CompiledVec3Curve(document::AnimationCurveId curveId,
-                      std::vector<CompiledVec3Keyframe> legacyKeyframes)
-        : id(curveId), keyframes(std::move(legacyKeyframes)) {}
 
     friend bool operator==(const CompiledVec3Curve&, const CompiledVec3Curve&) = default;
 };
 
-struct CompiledColor4Keyframe final {
-    document::KeyframeId id;
-    core::RationalTime time;
-    core::Color4d value;
-    CompiledKeyframeInterpolation outgoingInterpolation = CompiledKeyframeInterpolation::Linear;
-
-    friend bool operator==(const CompiledColor4Keyframe&, const CompiledColor4Keyframe&) = default;
-};
-
 struct CompiledColor4Curve final {
     document::AnimationCurveId id;
-    std::vector<CompiledColor4Keyframe> keyframes;
     std::array<std::vector<CompiledScalarKeyframe>, 4> components{};
     core::Color4d defaultValue{};
-
-    CompiledColor4Curve() = default;
-    CompiledColor4Curve(document::AnimationCurveId curveId,
-                        std::vector<CompiledColor4Keyframe> legacyKeyframes)
-        : id(curveId), keyframes(std::move(legacyKeyframes)) {}
 
     friend bool operator==(const CompiledColor4Curve&, const CompiledColor4Curve&) = default;
 };

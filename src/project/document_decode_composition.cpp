@@ -60,7 +60,6 @@ using document::AnimationComponent;
 using document::AnimationCurveId;
 using document::AnimationCurveRecord;
 using document::Color4AnimationCurve;
-using document::Color4Keyframe;
 using document::ComponentAnimationCurve;
 using document::EdgeId;
 using document::EdgeRecord;
@@ -83,7 +82,6 @@ using document::ScalarAnimationCurve;
 using document::ScalarKeyframe;
 using document::Vec2AnimationCurve;
 using document::Vec2d;
-using document::Vec2Keyframe;
 using document::Vec3AnimationCurve;
 using document::Vec3d;
 
@@ -655,127 +653,6 @@ void appendPresentHandleKeys(const JsonValue& node, const DecodeState& state,
     return decodeHandleMembers(members, keys, knownCount, state, path, out);
 }
 
-[[nodiscard]] bool decodeVec2Keyframe(const JsonValue& node, DecodeState& state,
-                                      const std::string& path, Vec2Keyframe& out) {
-    static constexpr std::array<std::string_view, 4> keys{"id", "time", "value",
-                                                          "outgoingInterpolation"};
-    std::vector<const JsonValue*> members;
-    std::vector<RetainedJsonMember> trailing;
-    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
-        return false;
-    }
-
-    document::KeyframeId id;
-    if (!decodeObjectId(*members[0], state, joinPath(path, "id"), id)) {
-        return false;
-    }
-
-    const AttachmentScope keyframeScope(state, RoundTripCollectionKind::Keyframe,
-                                        std::to_string(id.value()));
-    if (!trailing.empty() && state.roundTrip != nullptr) {
-        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
-    }
-
-    core::RationalTime time;
-    {
-        const AttachmentScope timeScope(state, "time");
-        if (!decodeRationalTimeValue(*members[1], state, joinPath(path, "time"), time)) {
-            return false;
-        }
-    }
-
-    const auto valuePath = joinPath(path, "value");
-    static constexpr std::array<std::string_view, 2> valueKeys{"x", "y"};
-    std::vector<const JsonValue*> valueMembers;
-    Vec2d value;
-    {
-        const AttachmentScope valueScope(state, "value");
-        if (!matchOrderedMembers(*members[2], valueKeys, true, state, valuePath, valueMembers)) {
-            return false;
-        }
-        if (!decodeFloat64Member(*valueMembers[0], state, joinPath(valuePath, "x"), value.x)) {
-            return false;
-        }
-        if (!decodeFloat64Member(*valueMembers[1], state, joinPath(valuePath, "y"), value.y)) {
-            return false;
-        }
-    }
-
-    KeyframeInterpolation interpolation = KeyframeInterpolation::Linear;
-    if (!decodeInterpolation(*members[3], state, joinPath(path, "outgoingInterpolation"),
-                             interpolation)) {
-        return false;
-    }
-
-    out.id = id;
-    out.time = time;
-    out.value = value;
-    out.outgoingInterpolation = interpolation;
-    return true;
-}
-
-[[nodiscard]] bool decodeColor4Keyframe(const JsonValue& node, DecodeState& state,
-                                        const std::string& path, Color4Keyframe& out) {
-    static constexpr std::array<std::string_view, 4> keys{"id", "time", "value",
-                                                          "outgoingInterpolation"};
-    std::vector<const JsonValue*> members;
-    std::vector<RetainedJsonMember> trailing;
-    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
-        return false;
-    }
-
-    document::KeyframeId id;
-    if (!decodeObjectId(*members[0], state, joinPath(path, "id"), id)) {
-        return false;
-    }
-
-    const AttachmentScope keyframeScope(state, RoundTripCollectionKind::Keyframe,
-                                        std::to_string(id.value()));
-    if (!trailing.empty() && state.roundTrip != nullptr) {
-        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
-    }
-
-    core::RationalTime time;
-    {
-        const AttachmentScope timeScope(state, "time");
-        if (!decodeRationalTimeValue(*members[1], state, joinPath(path, "time"), time)) {
-            return false;
-        }
-    }
-
-    const auto valuePath = joinPath(path, "value");
-    static constexpr std::array<std::string_view, 4> valueKeys{"red", "green", "blue", "alpha"};
-    std::vector<const JsonValue*> valueMembers;
-    core::Color4d value;
-    {
-        const AttachmentScope valueScope(state, "value");
-        if (!matchOrderedMembers(*members[2], valueKeys, true, state, valuePath, valueMembers)) {
-            return false;
-        }
-        if (!decodeFloat64Member(*valueMembers[0], state, joinPath(valuePath, "red"), value.red) ||
-            !decodeFloat64Member(*valueMembers[1], state, joinPath(valuePath, "green"),
-                                 value.green) ||
-            !decodeFloat64Member(*valueMembers[2], state, joinPath(valuePath, "blue"),
-                                 value.blue) ||
-            !decodeFloat64Member(*valueMembers[3], state, joinPath(valuePath, "alpha"),
-                                 value.alpha)) {
-            return false;
-        }
-    }
-
-    KeyframeInterpolation interpolation = KeyframeInterpolation::Linear;
-    if (!decodeInterpolation(*members[3], state, joinPath(path, "outgoingInterpolation"),
-                             interpolation)) {
-        return false;
-    }
-
-    out.id = id;
-    out.time = time;
-    out.value = value;
-    out.outgoingInterpolation = interpolation;
-    return true;
-}
-
 [[nodiscard]] std::optional<AnimationComponent>
 componentFromText(const std::string_view text) noexcept {
     if (text == "x")
@@ -967,22 +844,15 @@ template <typename Keyframe, typename DecodeOne>
         }
         Vec2AnimationCurve curve;
         curve.id = id;
-        const auto& keyElements = members[2]->arrayElements();
-        const bool componentAware =
-            !keyElements.empty() && keyElements.front().findMember("component") != nullptr;
-        if (state.documentMinor >= 9 && componentAware) {
-            if (!decodeComponentKeyframeArray(
-                    *members[2], state, joinPath(path, "keyframes"),
-                    std::array{AnimationComponent::X, AnimationComponent::Y}, curve.components))
-                return false;
-        } else if (!decodeKeyframeArray(*members[2], state, joinPath(path, "keyframes"),
-                                        curve.keyframes, decodeVec2Keyframe)) {
+        if (!decodeComponentKeyframeArray(*members[2], state, joinPath(path, "keyframes"),
+                                          std::array{AnimationComponent::X, AnimationComponent::Y},
+                                          curve.components)) {
             return false;
         }
         out = std::move(curve);
         return true;
     }
-    if (kindText == "vec3" && state.documentMinor >= 9) {
+    if (kindText == "vec3") {
         static constexpr std::array<std::string_view, 3> keys{"id", "kind", "keyframes"};
         std::vector<const JsonValue*> members;
         if (!matchOrderedMembers(node, keys, true, state, path, members))
@@ -997,8 +867,7 @@ template <typename Keyframe, typename DecodeOne>
         out = std::move(curve);
         return true;
     }
-    // Same minor gate as the ease-in-out token above: the colour curve kind arrives in 1.3.
-    if (kindText == "color4" && state.documentMinor >= 3) {
+    if (kindText == "color4") {
         static constexpr std::array<std::string_view, 3> keys{"id", "kind", "keyframes"};
         std::vector<const JsonValue*> members;
         if (!matchOrderedMembers(node, keys, true, state, path, members)) {
@@ -1006,18 +875,11 @@ template <typename Keyframe, typename DecodeOne>
         }
         Color4AnimationCurve curve;
         curve.id = id;
-        const auto& keyElements = members[2]->arrayElements();
-        const bool componentAware =
-            !keyElements.empty() && keyElements.front().findMember("component") != nullptr;
-        if (state.documentMinor >= 9 && componentAware) {
-            if (!decodeComponentKeyframeArray(
-                    *members[2], state, joinPath(path, "keyframes"),
-                    std::array{AnimationComponent::Red, AnimationComponent::Green,
-                               AnimationComponent::Blue, AnimationComponent::Alpha},
-                    curve.components))
-                return false;
-        } else if (!decodeKeyframeArray(*members[2], state, joinPath(path, "keyframes"),
-                                        curve.keyframes, decodeColor4Keyframe)) {
+        if (!decodeComponentKeyframeArray(
+                *members[2], state, joinPath(path, "keyframes"),
+                std::array{AnimationComponent::Red, AnimationComponent::Green,
+                           AnimationComponent::Blue, AnimationComponent::Alpha},
+                curve.components)) {
             return false;
         }
         out = std::move(curve);

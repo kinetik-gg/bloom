@@ -176,11 +176,6 @@ struct Fixture final {
             }
         }
     }
-    for (const auto& key : curve->keyframes) {
-        if (!std::isfinite(key.value.x) || !std::isfinite(key.value.y)) {
-            return false;
-        }
-    }
     return true;
 }
 

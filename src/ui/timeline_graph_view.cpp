@@ -1,5 +1,6 @@
 #include <bloom/ui/timeline_graph_view.hpp>
 
+#include "animation_components.hpp"
 #include "timeline_graph_math.hpp"
 #include "timeline_key_glyph.hpp"
 #include "timeline_keyframe_time.hpp"
@@ -59,17 +60,6 @@ curveColor(const std::optional<document::AnimationComponent>& component) noexcep
 // The component vocabulary of one record kind, in canonical order. Named per kind rather than
 // derived from the enum, because X/Y/Z and R/G/B/A are different vocabularies that happen to share
 // numbering.
-template <typename Curve> [[nodiscard]] std::vector<document::AnimationComponent> componentsOf() {
-    if constexpr (std::is_same_v<Curve, document::Vec2AnimationCurve>)
-        return {document::AnimationComponent::X, document::AnimationComponent::Y};
-    else if constexpr (std::is_same_v<Curve, document::Vec3AnimationCurve>)
-        return {document::AnimationComponent::X, document::AnimationComponent::Y,
-                document::AnimationComponent::Z};
-    else
-        return {document::AnimationComponent::Red, document::AnimationComponent::Green,
-                document::AnimationComponent::Blue, document::AnimationComponent::Alpha};
-}
-
 [[nodiscard]] std::size_t componentIndex(const document::AnimationComponent component) noexcept {
     switch (component) {
     case document::AnimationComponent::X:
@@ -163,10 +153,10 @@ void TimelineGraphView::refreshCurves() {
                         if (!selectedComponent && std::ranges::find(curves, id) == curves.end())
                             curves.push_back(id);
                     } else {
-                        // Vector and colour keys are read from components[] ALWAYS. The legacy
-                        // whole-value projection cannot answer "which axis is this key on", which
-                        // is the only question a curve view asks.
-                        for (const auto component : componentsOf<Curve>())
+                        // Vector and colour keys are read from components[]: "which axis is
+                        // this key on" is the only question a curve view asks, and a component
+                        // curve is the one thing that answers it.
+                        for (const auto component : animationComponentsOf<Curve>())
                             if (const auto* lane = curve.component(component);
                                 lane != nullptr && !lane->keyframes.empty() &&
                                 (!selectedComponent || selectedComponent == component)) {
@@ -910,8 +900,8 @@ void TimelineGraphView::mousePressEvent(QMouseEvent* event) {
                                         pressed_->curve.component};
         const auto& selected = session_.selection().keyframes;
         if (extend || std::ranges::find(selected, address) == selected.end()) {
-            // The component overloads, always: a component key selected without its component
-            // would address the whole-value projection this view never reads.
+            // The component overloads, always: naming the component is half the address, and
+            // this view never has a key in hand whose component it does not already know.
             if (address.component.has_value())
                 session_.selectKeyframe(address.curveId, *address.component, address.keyframeId,
                                         extend);

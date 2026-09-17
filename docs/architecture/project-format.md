@@ -350,9 +350,8 @@ is enforced at both ends and never by terminating:
   to infinity, with `DocumentDecodeError::InvalidFloat64`. JSON has no NaN or infinity literal, so
   no well-formed archive can carry one.
 - **Before either.** The document model refuses non-finite values on admission (`ParameterStore`,
-  `AnimationCurveStore` insert/update, including a component curve's derived whole-value
-  projection) and `Document::commit()` re-runs `Project::validate()`, so a committed document
-  cannot hold one. The writer's refusal is the last line of defence, not the first.
+  and `AnimationCurveStore` insert/update on every scalar and component key) and
+  `Document::commit()` re-runs `Project::validate()`, so a committed document cannot hold one. The writer's refusal is the last line of defence, not the first.
 
 ### Unknown JSON Numbers
 
@@ -1263,8 +1262,8 @@ Both members are OPTIONAL and are emitted ONLY when the handle is non-default --
 `time = 1/3` and `value = 0`, tested BITWISE. An existing document therefore re-encodes
 byte-identically apart from its declared minor, and no identity or sampling version moves; see
 [`animation-and-time.md`](animation-and-time.md), "Ease handles", for what the handles mean and why
-a default-handled key still samples bit-for-bit as it did. The legacy whole-value `vec2`, `vec3` and
-`color4` keyframe projections carry no handles.
+a default-handled key still samples bit-for-bit as it did. A handle offsets one scalar axis, so
+only the scalar and component keyframe definitions carry the members at all.
 
 The document and manifest artifacts are `document-1.12.schema.json` and
 `manifest-1.12.schema.json`, whose `keyframeHandle-1.12` definition is referenced from the scalar
