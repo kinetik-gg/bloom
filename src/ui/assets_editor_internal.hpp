@@ -1,7 +1,9 @@
 #pragma once
+#include <QString>
 #include <QTreeWidget>
 #include <bloom/document/ids.hpp>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace bloom::ui {
@@ -28,6 +30,10 @@ class AssetTree final : public QTreeWidget {
   public:
     AssetTree(CompositionSession& session, QWidget* parent);
     void beginRename(QTreeWidgetItem* item);
+    // Test seam: overrides the GVFS root a dropped `smb://` URL resolves against (default:
+    // bloom::ui::defaultGvfsRoot()), so an offscreen test can drive a drop through a fake mount
+    // directory instead of this machine's real one.
+    void setGvfsRootForTest(QString root) { gvfsRoot_ = std::move(root); }
 
   protected:
     QStringList mimeTypes() const override;
@@ -44,6 +50,7 @@ class AssetTree final : public QTreeWidget {
     std::vector<document::AssetId> internalAssets(const QMimeData& mime) const;
     CompositionSession& session_;
     QByteArray token_;
+    QString gvfsRoot_;
 };
 } // namespace assets
 } // namespace bloom::ui

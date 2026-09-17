@@ -62,3 +62,27 @@ add_executable(bloom_commands_asset_organization_test asset_organization_tests.c
 target_link_libraries(bloom_commands_asset_organization_test PRIVATE bloom_commands)
 bloom_enable_warnings(bloom_commands_asset_organization_test)
 bloom_add_test(NAME bloom.commands.asset-organization COMMAND bloom_commands_asset_organization_test LABELS unit commands)
+
+# NETSHARE-1 (locator robustness): imports from, relinks within, and save/open round-trips a
+# simulated network-share mount (a temporary directory outside the project directory). Lives
+# under tests/integration/ rather than here (mirroring bloom_asset_operations_test just below)
+# because it deliberately crosses into bloom/project for the encode/decode/reconstruct round
+# trip, a dependency src/commands itself may not declare. Its own self-contained one-pixel PNG
+# writer links ZLIB::ZLIB directly for deflate/CRC32, mirroring src/project/CMakeLists.txt's and
+# src/host/CMakeLists.txt's existing from-scratch PNG/ZIP test fixtures rather than depending on
+# another module's test-only helpers.
+if(NOT TARGET ZLIB::ZLIB)
+    find_package(ZLIB REQUIRED)
+endif()
+add_executable(bloom_commands_network_share_locator_test
+    ${PROJECT_SOURCE_DIR}/tests/integration/network_share_locator_tests.cpp)
+target_include_directories(bloom_commands_network_share_locator_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(bloom_commands_network_share_locator_test
+    PRIVATE bloom_commands bloom_project bloom_media_image ZLIB::ZLIB
+)
+bloom_enable_warnings(bloom_commands_network_share_locator_test)
+bloom_add_test(
+    NAME bloom.commands.network-share-locator
+    COMMAND bloom_commands_network_share_locator_test
+    LABELS unit commands media
+)

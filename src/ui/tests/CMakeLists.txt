@@ -883,3 +883,14 @@ target_include_directories(bloom_assets_organization_test PRIVATE ${CMAKE_CURREN
 target_link_libraries(bloom_assets_organization_test PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_assets_organization_test)
 bloom_add_test(NAME bloom.ui.asset-organization COMMAND bloom_assets_organization_test LABELS unit ui)
+
+add_executable(bloom_network_share_paths_test network_share_paths_tests.cpp)
+target_include_directories(bloom_network_share_paths_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_network_share_paths_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_network_share_paths_test)
+bloom_add_test(
+    NAME bloom.ui.network-share-paths
+    COMMAND bloom_network_share_paths_test
+    LABELS unit ui media integration
+    TIMEOUT 60
+)

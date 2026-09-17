@@ -459,6 +459,13 @@ a changed or replaced project refuses a stale drag. Composition canvas drops rem
 with a user-visible message until composition sources are supported.
 
 File > Import, footer Import and file drops onto Assets all prepare one worker import transaction.
+A drop onto Assets also accepts an `smb://` URL a file manager hands Bloom for a mounted network
+share, resolving it through the same GVFS mount the file manager used; an `smb://` URL naming a
+share this machine has not mounted yet is still accepted (the cursor stays honest about there
+being something to do) but imports nothing, reporting "Connect to `<host>/<share>` in your file
+manager first" through the status bar's transient-message cell rather than dropping it silently.
+Import, Relink, Open Project, Save Project As and Export Frame file dialogs list every mounted
+network share in their sidebar alongside the platform's own entries.
 Dragging an image/sequence row to Nodes creates an Image source; dragging an Audio row creates an
 Audio source. Dropping media on Timeline creates the matching wired Layer. Image source cards and
 Properties use an Asset `KDropdown` listing the project's Image

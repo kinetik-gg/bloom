@@ -1,5 +1,6 @@
 #include <bloom/ui/project_host.hpp>
 
+#include "network_share_paths.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/project.hpp>
@@ -100,21 +101,28 @@ ProjectHost::ProjectHost(runtime::TaskScheduler& scheduler, QObject* parent)
             return UnsavedChangeDecision::Cancel;
         }
     };
+    // A real QFileDialog instance rather than the static getOpenFileName()/getSaveFileName()
+    // convenience: still native when the platform theme provides one (unchanged behaviour), but
+    // constructing it lets configureFileDialogSidebar() add the mounted network shares before
+    // exec(), which the static functions give no opportunity to do.
     openPathProvider_ = []() -> std::optional<std::filesystem::path> {
-        const auto chosen = QFileDialog::getOpenFileName(nullptr, tr("Open Project"), {},
-                                                         tr("Bloom Projects (*.bloom)"));
-        if (chosen.isEmpty()) {
+        QFileDialog dialog(nullptr, tr("Open Project"), {}, tr("Bloom Projects (*.bloom)"));
+        dialog.setAcceptMode(QFileDialog::AcceptOpen);
+        dialog.setFileMode(QFileDialog::ExistingFile);
+        configureFileDialogSidebar(dialog);
+        if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
             return std::nullopt;
         }
-        return std::filesystem::path(chosen.toStdString());
+        return std::filesystem::path(dialog.selectedFiles().front().toStdString());
     };
     saveAsPathProvider_ = []() -> std::optional<std::filesystem::path> {
-        const auto chosen = QFileDialog::getSaveFileName(nullptr, tr("Save Project As"), {},
-                                                         tr("Bloom Projects (*.bloom)"));
-        if (chosen.isEmpty()) {
+        QFileDialog dialog(nullptr, tr("Save Project As"), {}, tr("Bloom Projects (*.bloom)"));
+        dialog.setAcceptMode(QFileDialog::AcceptSave);
+        configureFileDialogSidebar(dialog);
+        if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
             return std::nullopt;
         }
-        return std::filesystem::path(chosen.toStdString());
+        return std::filesystem::path(dialog.selectedFiles().front().toStdString());
     };
 
     recoveryDecisionProvider_ = [](const std::filesystem::path& recoveryPath) {

@@ -1,3 +1,4 @@
+#include "network_share_paths.hpp"
 #include <QDir>
 #include <QFileDialog>
 #include <QUrl>
@@ -220,11 +221,20 @@ AssetController::audioBuffer(const document::AssetId id) const {
 void AssetController::requestImport(QWidget* parent) {
     if (!host_.canSave())
         return;
-    const auto paths = QFileDialog::getOpenFileNames(
-        parent, tr("Import Media"), {},
-        tr("Media (*.png *.jpg *.jpeg *.wav *.mp3 *.PNG *.JPG *.JPEG *.WAV *.MP3)"));
-    if (!paths.empty())
-        importFiles(paths);
+    // A real QFileDialog instance rather than the static getOpenFileNames() convenience: it is
+    // still native when the platform theme provides one (unchanged behaviour), but constructing
+    // it lets configureFileDialogSidebar() add the mounted network shares before exec(), which
+    // the static function gives no opportunity to do.
+    QFileDialog dialog(parent, tr("Import Media"), {},
+                       tr("Media (*.png *.jpg *.jpeg *.wav *.mp3 *.PNG *.JPG *.JPEG *.WAV *.MP3)"));
+    dialog.setAcceptMode(QFileDialog::AcceptOpen);
+    dialog.setFileMode(QFileDialog::ExistingFiles);
+    configureFileDialogSidebar(dialog);
+    if (dialog.exec() == QDialog::Accepted) {
+        const auto paths = dialog.selectedFiles();
+        if (!paths.empty())
+            importFiles(paths);
+    }
 }
 void AssetController::importFiles(const QStringList& paths) { prepare(paths); }
 void AssetController::relink(document::AssetId id, QWidget* parent) {
@@ -232,12 +242,15 @@ void AssetController::relink(document::AssetId id, QWidget* parent) {
         return;
     const auto* asset = session_.snapshot().project().findAsset(id);
     const bool font = asset != nullptr && asset->kind == document::AssetKind::Font;
-    const auto path = QFileDialog::getOpenFileName(
-        parent, font ? tr("Relink Font") : tr("Relink Media"), {},
-        font ? tr("Fonts (*.ttf *.otf *.ttc *.TTF *.OTF *.TTC)")
-             : tr("Media (*.png *.jpg *.jpeg *.wav *.mp3 *.PNG *.JPG *.JPEG *.WAV *.MP3)"));
-    if (!path.isEmpty())
-        prepare({path}, id);
+    QFileDialog dialog(parent, font ? tr("Relink Font") : tr("Relink Media"), {},
+                       font ? tr("Fonts (*.ttf *.otf *.ttc *.TTF *.OTF *.TTC)")
+                            : tr("Media (*.png *.jpg *.jpeg *.wav *.mp3 *.PNG *.JPG *.JPEG "
+                                 "*.WAV *.MP3)"));
+    dialog.setAcceptMode(QFileDialog::AcceptOpen);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    configureFileDialogSidebar(dialog);
+    if (dialog.exec() == QDialog::Accepted && !dialog.selectedFiles().isEmpty())
+        prepare({dialog.selectedFiles().front()}, id);
 }
 void AssetController::remove(document::AssetId id) {
     if (!host_.canSave())
