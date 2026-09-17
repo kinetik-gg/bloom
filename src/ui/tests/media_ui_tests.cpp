@@ -1,4 +1,5 @@
 #include "asset_drop.hpp"
+#include "node_editor_add.hpp"
 #include "node_editor_items.hpp"
 #include "timeline_property_rows.hpp"
 #include <QApplication>
@@ -15,9 +16,11 @@
 #include <QUrl>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/layer_operations.hpp>
+#include <bloom/document/new_project.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
@@ -41,6 +44,83 @@ bool drop(QWidget& target, const QMimeData& mime) {
     QDropEvent event(QPointF(50, 50), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(&target, &event);
     return event.isAccepted();
+}
+void compositionDrops() {
+    auto initial =
+        document::makeNewProject("Composition drops", "Outer", core::RationalTime::fromInteger(10));
+    const auto outer = initial.initialCompositionId;
+    document::Document document(std::move(initial.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, outer);
+    commands::Transaction create("Create nested fixture", session.snapshot().revision());
+    create.emplace<commands::AddComposition>("Nested", document::CompositionFormat{},
+                                             core::RationalTime::fromInteger(3));
+    require(session.executeTransaction(std::move(create)).succeeded(), "create nested composition");
+    document::CompositionId nested;
+    for (const auto& composition : session.snapshot().project().compositions())
+        if (composition.id() != outer)
+            nested = composition.id();
+    require(nested.isValid(), "nested fixture identity");
+    ui::NodeGraphEditor nodes(session);
+    nodes.show();
+    QApplication::processEvents();
+    auto* view = nodes.findChild<QGraphicsView*>();
+    QMimeData mime;
+    mime.setData(ui::kCompositionMimeType,
+                 QByteArray::number(static_cast<qulonglong>(nested.value())));
+    const auto before = session.composition()->graph().nodes().size();
+    require(view && drop(*view->viewport(), mime), "composition canvas drop accepted");
+    require(session.composition()->graph().nodes().size() == before + 1 &&
+                session.composition()->graph().layerOutputs().empty(),
+            "canvas creates only one composition source");
+    document::NodeId source;
+    for (const auto& node : session.composition()->graph().nodes())
+        if (node.typeId == document::kCompositionSourceNodeType) {
+            source = node.id;
+            require(ui::compositionSourceId(*session.composition(), node) == nested,
+                    "drop preserves composition identity");
+        }
+    QApplication::processEvents();
+    bool named = false;
+    for (auto* item : view->scene()->items())
+        if (const auto* card = dynamic_cast<ui::node_editor::NodeItem*>(item);
+            card && card->id() == source)
+            named = card->title() == "Nested";
+    require(named, "composition node card displays the nested name");
+    session.selectNode(source);
+    ui::PropertiesEditor properties(session);
+    properties.show();
+    QApplication::processEvents();
+    auto* picker = properties.findChild<ui::kit::KDropdown*>("propertiesCompositionSource");
+    auto* open = properties.findChild<ui::kit::KButton*>("propertiesOpenComposition");
+    require(picker && picker->currentText() == "Nested" && open && open->isEnabled(),
+            "Properties names the source and offers Open");
+    open->click();
+    require(session.compositionId() == nested, "Open switches the active composition");
+    require(session.setComposition(outer), "restore outer composition");
+    require(session.undo(), "undo source drop");
+    require(session.composition()->graph().nodes().size() == before, "source drop is one undo");
+    QWidget timeline;
+    ui::installAssetDropTarget(timeline, session);
+    require(drop(timeline, mime), "composition timeline drop accepted");
+    const auto* composition = session.composition();
+    require(composition->graph().nodes().size() == before + 2 &&
+                composition->graph().layerOutputs().size() == 1,
+            "timeline creates source and one Layer");
+    const auto layer = composition->graph().layerOutputs().front();
+    require(layer.name == "Nested" &&
+                layer.endPoint(composition->duration()) == core::RationalTime::fromInteger(3),
+            "nested bar has the source name and duration");
+    require(composition->graph().layerStack().entries().size() == 1,
+            "image and audio share one Merge slot");
+    require(session.snapshot().project().validate().ok(), "drop produces valid project");
+    require(session.undo() && session.redo(), "nested layer undo and redo");
+    require(session.setComposition(nested), "activate nested for reverse drop");
+    mime.setData(ui::kCompositionMimeType,
+                 QByteArray::number(static_cast<qulonglong>(outer.value())));
+    const auto revision = session.snapshot().revision();
+    require(!drop(timeline, mime) && session.snapshot().revision() == revision,
+            "reverse drop refuses A to B to A without publication");
 }
 void run() {
     QTemporaryDir directory;
@@ -87,7 +167,7 @@ void run() {
     const auto nodeCount = session.composition()->graph().nodes().size();
     require(view && !drop(*view->viewport(), compositionMime) && !refused.isEmpty() &&
                 session.composition()->graph().nodes().size() == nodeCount,
-            "composition canvas drop is refused with a message and no graph edit");
+            "self-composition canvas drop is refused with a reason and no graph edit");
     require(view && drop(*view->viewport(), mime), "asset drop onto node canvas");
     document::NodeId source;
     for (const auto& node : session.composition()->graph().nodes())
@@ -327,6 +407,7 @@ void run() {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
+        compositionDrops();
         run();
         return 0;
     } catch (const std::exception& error) {

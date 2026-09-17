@@ -51,25 +51,37 @@ using bloom::media::audio::playback::AudioStatus;
     return static_cast<std::size_t>(std::floor(value));
 }
 
-[[nodiscard]] bool clipHasSample(const AudioClip& clip, const std::int64_t absoluteFrame,
-                                 const std::uint32_t outputRate) noexcept {
+[[nodiscard]] std::optional<std::size_t> clipSampleFrame(const AudioClip& clip,
+                                                         std::int64_t absoluteFrame,
+                                                         const std::uint32_t outputRate) noexcept {
     if (clip.muted || clip.buffer == nullptr || clip.buffer->rate == 0 ||
         clip.buffer->channels == 0 || clip.buffer->planes.size() != clip.buffer->channels) {
-        return false;
+        return std::nullopt;
+    }
+    if (clip.mapTime) {
+        const auto time = RationalTime::create(absoluteFrame, outputRate);
+        if (!time)
+            return std::nullopt;
+        const auto mapped = clip.mapTime(*time);
+        if (!mapped)
+            return std::nullopt;
+        absoluteFrame = timeToFrames(*mapped, outputRate);
     }
     const auto startFrame = timeToFrames(clip.startTime, outputRate);
     if (absoluteFrame < startFrame) {
-        return false;
+        return std::nullopt;
     }
     if (clip.endTime.has_value() && absoluteFrame >= timeToFrames(*clip.endTime, outputRate)) {
-        return false;
+        return std::nullopt;
     }
     const auto localFrame = absoluteFrame - startFrame;
     if (localFrame < 0) {
-        return false;
+        return std::nullopt;
     }
     const auto sourceFrame = sourceFrameFor(localFrame, clip.buffer->rate, outputRate);
-    return sourceFrame < clip.buffer->frames && sourceFrame < clip.buffer->planes.front().size();
+    if (sourceFrame >= clip.buffer->frames || sourceFrame >= clip.buffer->planes.front().size())
+        return std::nullopt;
+    return sourceFrame;
 }
 
 [[nodiscard]] AudioStatus errorStatus(const AudioErrorCode code) noexcept {
@@ -394,20 +406,19 @@ void AudioEngine::mixBlock(const std::uint64_t firstProducedFrame,
             return clip.solo && !clip.muted;
         });
         for (const auto& clip : clips_) {
-            if ((anySolo && !clip.solo) || !clipHasSample(clip, absoluteFrame, config_.rate)) {
+            if (anySolo && !clip.solo)
                 continue;
-            }
-            const auto clipStart = timeToFrames(clip.startTime, config_.rate);
-            const auto localFrame = absoluteFrame - clipStart;
-            const auto sourceFrame = sourceFrameFor(localFrame, clip.buffer->rate, config_.rate);
+            const auto sourceFrame = clipSampleFrame(clip, absoluteFrame, config_.rate);
+            if (!sourceFrame)
+                continue;
             for (std::size_t channel = 0; channel < config_.channels; ++channel) {
                 const auto sourceChannel = clip.buffer->channels == 1 ? std::size_t{0} : channel;
                 if (sourceChannel >= clip.buffer->planes.size() ||
-                    sourceFrame >= clip.buffer->planes[sourceChannel].size()) {
+                    *sourceFrame >= clip.buffer->planes[sourceChannel].size()) {
                     continue;
                 }
                 output[outputFrame * config_.channels + channel] +=
-                    clip.buffer->planes[sourceChannel][sourceFrame] * clip.level;
+                    clip.buffer->planes[sourceChannel][*sourceFrame] * clip.level;
             }
         }
     }

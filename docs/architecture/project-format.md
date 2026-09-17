@@ -268,9 +268,11 @@ extension data. A requirement names data capability needed to interpret some pro
 not persist an installed package version, download source, Python import path, or native ABI.
 Opening never installs, enables, imports, migrates, or executes a provider.
 
-The document schema `1.0` foundation node-type set is exactly `bloom.composition-output`,
-`bloom.layer-output`, `bloom.layer-stack`, `bloom.solid-source`, and `bloom.text-source`. These types
-are exempt from requirement coverage and must not appear in `providedNodeTypeIds`. For every other
+The foundation node-type set is derived from the built-in node-definition registry. It includes
+`bloom.composition-source` and the built-in structural, media, shape and value nodes. These types
+are exempt from requirement coverage and must not appear in `providedNodeTypeIds`. Composition
+sources store their references and time mapping as ordinary parameters; they add no document field
+and require no migration or schema increment beyond 1.16. For every other
 distinct `NodeRecord.typeId` in the complete project, exactly one requirement lists that exact ID.
 Conversely, every listed node type must occur in at least one `NodeRecord`; therefore the union of
 all lists is exactly the project's distinct non-foundation node-type set. Missing coverage,

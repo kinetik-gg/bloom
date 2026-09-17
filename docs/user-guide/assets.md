@@ -47,7 +47,18 @@ and imported default Timeline labels show the asset's display name. A layer name
 separately remains independent.
 
 Compositions stay in their own **Compositions** listing. Double-click one to open it. Dragging a
-composition onto the canvas is refused with a message until composition sources are supported.
+composition onto Nodes creates a Composition source. Connect its image or audio output as needed.
+Drop it onto Timeline to create one nested layer, initially as long as the source composition
+(up to the containing composition's duration). This is one undoable edit.
+
+Select the source or its layer to choose the referenced composition in Properties. **Open** switches
+to that composition so you can edit its contents. Changes appear wherever it is used. **Time Offset**
+delays the source in seconds; **Time Scale** sets its playback speed. **Hold** stops on the last frame,
+**Loop** repeats, and **Ping-pong** alternates forward and backward. Bloom refuses a reference that
+would create a cycle. If a source composition is deleted, choose a replacement in Properties.
+
+Nested audio follows the same offset, speed and loop settings. Multiple nested layers mix
+together; a composition without audio is silent. Layer mute, solo and time ranges apply.
 
 Folder edits, names, tags, moves and reorder are undoable. Saving records the organization in
 project schema 1.16. Opening a 1.15 project supplies the new defaults without changing its media

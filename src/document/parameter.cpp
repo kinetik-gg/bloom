@@ -216,6 +216,17 @@ constantMatchesSchema(const std::string_view schemaKey,
         return level != nullptr && std::isfinite(*level) &&
                isScalarWithinSchemaDomain(schemaKey, *level);
     }
+    if (schemaKey == "bloom.composition-source.composition" ||
+        schemaKey == "bloom.composition-source.loop-mode") {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value && *value >= 0 &&
+               (schemaKey == "bloom.composition-source.composition" || *value <= 2);
+    }
+    if (schemaKey == "bloom.composition-source.time-offset" ||
+        schemaKey == "bloom.composition-source.time-scale") {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value && std::isfinite(*value);
+    }
     if (schemaKey == "bloom.image.asset")
         return std::holds_alternative<std::string>(constant.value);
     if (schemaKey == "bloom.image.premultiply")

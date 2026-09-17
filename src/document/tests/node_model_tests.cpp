@@ -149,6 +149,53 @@ void nodeGroupRecords() {
     composition.nodeGroups().at(second).members.insert(NodeId::fromRaw(2));
     expect(groupIssues(composition) == 1, "composition reports overlapping membership");
 }
+void compositionNesting() {
+    const auto* definition = builtInNodeDefinitions().find(kCompositionSourceNodeType, 1);
+    expect(definition && definition->outputs.size() == 2 && definition->parameters.size() == 4 &&
+               definition->category == NodeCategory::Sources,
+           "composition source definition includes image, audio and time mapping");
+    if (!definition)
+        return;
+    const auto makeComposition = [&](const std::uint64_t id, const std::int64_t target) {
+        const auto nodeId = NodeId::fromRaw(id * 10);
+        CanonicalGraph graph(NodeId::fromRaw(id * 10 + 1));
+        NodeRecord source{nodeId, std::string(kCompositionSourceNodeType), {}, 1};
+        ParameterStore parameters;
+        std::uint64_t parameterId = id * 10;
+        for (const auto& schema : definition->parameters) {
+            const auto pid = ParameterId::fromRaw(parameterId++);
+            auto value = schema.defaultValue;
+            if (schema.role == "composition")
+                value = target;
+            expect(parameters.insert({pid, schema.schemaKey, ConstantValueSource{value}}),
+                   "source parameter inserted");
+            source.parameters.push_back({schema.role, pid});
+        }
+        expect(graph.addNode(std::move(source)), "composition source inserted");
+        Composition composition(CompositionId::fromRaw(id), "Nested",
+                                bloom::core::RationalTime::fromInteger(2), std::move(graph));
+        composition.parameters() = std::move(parameters);
+        return composition;
+    };
+    Project project(ProjectId::fromRaw(1), "Nesting");
+    expect(project.addComposition(makeComposition(1, 2)), "outer composition inserted");
+    expect(project.validateCompositionNesting().ok(), "missing composition is preservable");
+    expect(project.addComposition(makeComposition(2, 3)), "nested composition inserted");
+    expect(project.validateCompositionNesting().ok(), "acyclic nesting accepted");
+    expect(project.addComposition(makeComposition(3, 1)), "third composition inserted");
+    const auto validation = project.validateCompositionNesting();
+    expect(!validation.ok() &&
+               validation.issues().front().code == ValidationCode::CompositionNestingCycle,
+           "indirect nesting cycle has a typed reason");
+    auto self = makeComposition(4, 4);
+    const auto selfValidation =
+        self.graph().validate(self.parameters(), builtInNodeDefinitions(), self.id());
+    expect(std::ranges::any_of(selfValidation.issues(),
+                               [](const auto& issue) {
+                                   return issue.code == ValidationCode::CompositionNestingCycle;
+                               }),
+           "graph validation refuses direct self nesting");
+}
 } // namespace
 
 int main() {
@@ -167,6 +214,7 @@ int main() {
                !shapeConstantMatchesSchema("bloom.shape.kind", std::int64_t{7}),
            "shape closed domains");
 
+    compositionNesting();
     socketKinds();
     layoutRecords();
     nodeGroupRecords();

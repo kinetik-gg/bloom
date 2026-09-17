@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -81,6 +82,9 @@ struct AudioClip final {
     bool muted = false;
     bool solo = false;
     std::optional<core::RationalTime> endTime{};
+    // Optional; invocation must not allocate or throw. Runs on the mixer worker, never the device
+    // callback. nullopt means silence outside an enclosing composition/layer range.
+    std::function<std::optional<core::RationalTime>(core::RationalTime)> mapTime{};
 };
 
 class AudioEngine final {

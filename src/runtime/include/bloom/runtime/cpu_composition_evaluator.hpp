@@ -16,6 +16,16 @@ namespace bloom::runtime {
 
 // A device-free audio projection of one compiled composition. It carries only the source identity
 // and time-varying controls; decoding and device ownership stay at the media/audio boundary.
+struct AudioCompositionTimeMapping final {
+    double offset = 0.0;
+    double scale = 1.0;
+    std::int64_t loopMode = 0;
+    core::RationalTime duration{};
+    document::FrameRate frameRate = document::FrameRate::framesPerSecond24();
+    core::RationalTime inPoint{}, outPoint{};
+    friend bool operator==(const AudioCompositionTimeMapping&,
+                           const AudioCompositionTimeMapping&) = default;
+};
 struct AudioClipDescription final {
     document::NodeId sourceNodeId;
     document::AssetId assetId;
@@ -24,6 +34,7 @@ struct AudioClipDescription final {
     double level = 1.0;
     bool muted = false;
     bool solo = false;
+    std::vector<AudioCompositionTimeMapping> timeMappings{};
 
     friend bool operator==(const AudioClipDescription&, const AudioClipDescription&) = default;
 };
@@ -34,6 +45,11 @@ struct AudioMixDescription final {
 
     friend bool operator==(const AudioMixDescription&, const AudioMixDescription&) = default;
 };
+
+// Resolve an enclosing composition's transport time into this clip's leaf composition.
+// A time outside any enclosing Layer range contributes silence.
+[[nodiscard]] std::optional<core::RationalTime> mapAudioClipTime(const AudioClipDescription& clip,
+                                                                 core::RationalTime time);
 
 class CpuCompositionEvaluator final {
   public:

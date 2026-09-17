@@ -1,3 +1,4 @@
+#include <bloom/runtime/compiled_plan_cache.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 
 #include "snapshot_compiler_support.hpp"
@@ -72,9 +73,10 @@ class CompilePass final {
     CompilePass(const runtime::NodeDefinitionRegistry& registry,
                 const runtime::SnapshotCompileRequest& request,
                 const runtime::CancellationToken& cancellation,
-                runtime::detail::CompileCheckpointObserver* checkpointObserver)
+                runtime::detail::CompileCheckpointObserver* checkpointObserver,
+                runtime::CompiledPlanCache* planCache = nullptr)
         : registry_(registry), request_(request), cancellation_(cancellation),
-          checkpointObserver_(checkpointObserver) {}
+          checkpointObserver_(checkpointObserver), planCache_(planCache) {}
 
     [[nodiscard]] runtime::SnapshotCompileResult run() {
         if (cancelled()) {
@@ -87,6 +89,12 @@ class CompilePass final {
             return finishWithoutPlan();
         }
 
+        if (!request_.snapshot.project().validateCompositionNesting().ok()) {
+            addFailure(runtime::CompileDiagnosticCode::CompositionNestingCycle, {},
+                       "Composition nesting cycle",
+                       "Composition sources must form an acyclic graph.");
+            return finishWithoutPlan();
+        }
         for (const auto& composition : request_.snapshot.project().compositions()) {
             if (cancelled()) {
                 return result(runtime::SnapshotCompileStatus::Cancelled);
@@ -929,6 +937,9 @@ class CompilePass final {
     std::multimap<DiagnosticKey, runtime::CompileDiagnostic> diagnostics_;
     std::unordered_set<document::NodeId> emptyImages_;
     std::unordered_set<document::NodeId> transformParents_;
+    runtime::CompiledPlanCache* planCache_ = nullptr;
+    std::vector<std::shared_ptr<const runtime::CompiledCompositionPlan>> nestedPlans_;
+    std::unordered_map<document::NodeId, runtime::CompiledCompositionSource> compositionSources_;
     bool hasFailure_ = false;
     bool hasUnsupported_ = false;
 };
@@ -944,8 +955,13 @@ SnapshotCompileResult detail::compileSnapshot(
 }
 
 SnapshotCompileResult SnapshotCompiler::compile(const SnapshotCompileRequest& request,
-                                                const CancellationToken& cancellation) const {
-    return detail::compileSnapshot(registry_, request, cancellation, nullptr);
+                                                const CancellationToken& cancellation,
+                                                CompiledPlanCache* planCache) const {
+    if (!planCache) {
+        CompiledPlanCache cache;
+        return cache.compile(*this, request, cancellation);
+    }
+    return CompilePass(registry_, request, cancellation, nullptr, planCache).run();
 }
 
 } // namespace bloom::runtime

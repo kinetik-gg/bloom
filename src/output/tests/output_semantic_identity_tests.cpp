@@ -1,3 +1,6 @@
+// COMP-SRC: identity pins independently re-derived with s5-identity-oracle.py
+// at plan 6, animation 2, evaluator 8, primitives 7. Plan 5 reproduced the base
+// pins first; preimage lengths and pixels are unchanged.
 #include "output_semantic_identity.hpp"
 
 #include "output_analysis_analyzer_test_support.hpp"
@@ -61,11 +64,11 @@ using namespace std::chrono_literals;
 // oracle was validated by reproducing every previously checked-in golden set byte for byte --
 // including both lanes' own pre-merge sets -- when fed their version numbers.
 constexpr std::string_view kExpectedPngAnalysisDigest =
-    "eeb54717829e478c9523f9d3ccc23c1ad1bdf0ae919b900b4b157c1f0575d1ad";
+    "9748dab2456e2f86f41bf027fdae388ac2fd081121b4e9f8ca7c1b624b7b4f88";
 constexpr std::string_view kExpectedPngOutputDigest =
-    "3ec6635e6ce5951966860ffc9346e8b5c086560a108e10ffbb27049d6e4f744a";
+    "33141c76f9025247610a3e42a1fe3fbcb5a545c3a54295e2c517ca19d878047b";
 constexpr std::string_view kExpectedExrOutputDigest =
-    "adf3daeb04dccef0904efd1a0e7e6c3b79f5214e47e8d8d321381a12eb31f0fc";
+    "6a6b0d2fa653229d020958a72ce4857b54fdd97ec9de8042370e3e753981591b";
 constexpr std::uint64_t kExpectedPngPreimageBytes = 669;
 constexpr std::uint64_t kExpectedExrPreimageBytes = 567;
 

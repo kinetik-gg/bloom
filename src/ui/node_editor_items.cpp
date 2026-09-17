@@ -98,6 +98,10 @@ std::span<const QString> nodeCategoryOrder() {
 }
 
 QString displayTypeName(const std::string_view typeId) {
+    if (typeId == "timeOffset")
+        return QCoreApplication::translate("node_editor", "Time Offset");
+    if (typeId == "timeScale")
+        return QCoreApplication::translate("node_editor", "Time Scale");
     if (typeId == "startFrame")
         return QCoreApplication::translate("node_editor", "Start Frame");
     if (typeId == "loopMode")
@@ -151,6 +155,8 @@ QString displayTypeName(const std::string_view typeId) {
 QString nodeTypeDisplayName(const std::string_view typeId) {
     if (typeId == document::kShapeSourceNodeType)
         return QCoreApplication::translate("node_editor", "Shape");
+    if (typeId == document::kCompositionSourceNodeType)
+        return QObject::tr("Composition");
     if (typeId == "bloom.image-source")
         return QCoreApplication::translate("node_editor", "Image");
     if (typeId == "bloom.audio-source")

@@ -155,6 +155,20 @@ template <typename Definition>
                             ParameterValueKind::Integer) &&
                hasParameter(definition, 4, "premultiply", "bloom.image.premultiply",
                             ParameterValueKind::Boolean);
+    case NodeLoweringKind::CompositionSource:
+        return hasCanonicalKey(definition, kCompositionSourceNodeType, 1) &&
+               definition.inputs.empty() && definition.outputs.size() == 2 &&
+               hasImageOutput(definition, "image") &&
+               hasOutput(definition, "audio", SocketValueKind::Audio) &&
+               definition.parameters.size() == 4 &&
+               hasParameter(definition, 0, "composition", "bloom.composition-source.composition",
+                            ParameterValueKind::Integer) &&
+               hasParameter(definition, 1, "timeOffset", "bloom.composition-source.time-offset",
+                            ParameterValueKind::Float64, true) &&
+               hasParameter(definition, 2, "timeScale", "bloom.composition-source.time-scale",
+                            ParameterValueKind::Float64, true) &&
+               hasParameter(definition, 3, "loopMode", "bloom.composition-source.loop-mode",
+                            ParameterValueKind::Integer);
     case NodeLoweringKind::AudioSource:
         return hasCanonicalKey(definition, kAudioSourceNodeType, kAudioSourceNodeSchemaVersion) &&
                definition.outputs.size() == 1 &&
@@ -433,6 +447,25 @@ template <typename Definition>
             NodeCategory::Sources};
 }
 
+[[nodiscard]] NodeDefinition compositionSourceDefinition() {
+    using namespace bloom::document;
+    return {{std::string(kCompositionSourceNodeType), kCompositionSourceNodeSchemaVersion},
+            NodeLoweringKind::CompositionSource,
+            {},
+            {{"image", SocketValueKind::Image}, {"audio", SocketValueKind::Audio}},
+            {{"composition", "bloom.composition-source.composition", ParameterValueKind::Integer,
+              true, false, std::int64_t{0}},
+             {"timeOffset", "bloom.composition-source.time-offset", ParameterValueKind::Float64,
+              true, true, 0.0},
+             {"timeScale", "bloom.composition-source.time-scale", ParameterValueKind::Float64, true,
+              true, 1.0},
+             {"loopMode", "bloom.composition-source.loop-mode", ParameterValueKind::Integer, true,
+              false, std::int64_t{0}}},
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Sources};
+}
+
 [[nodiscard]] NodeDefinition audioDefinition() {
     using namespace bloom::document;
     return {{std::string(kAudioSourceNodeType), kAudioSourceNodeSchemaVersion},
@@ -593,7 +626,8 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
                                             compositionOutputDefinition(),
                                             textDefinition(),
                                             imageDefinition(),
-                                            audioDefinition()};
+                                            audioDefinition(),
+                                            compositionSourceDefinition()};
     // The value library is appended, not interleaved: the five above are the structural node types
     // a composition is built out of, and reading them first in one place is what makes the
     // registry's own contract legible.

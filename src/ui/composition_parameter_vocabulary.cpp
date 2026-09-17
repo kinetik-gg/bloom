@@ -134,7 +134,7 @@ QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view
         add(QObject::tr("Even-odd"), 1);
         return items;
     }
-    if (schemaKey == "bloom.image.loop-mode") {
+    if (schemaKey == "bloom.image.loop-mode" || schemaKey == "bloom.composition-source.loop-mode") {
         add(QObject::tr("Hold"), 0);
         add(QObject::tr("Loop"), 1);
         add(QObject::tr("Ping-pong"), 2);

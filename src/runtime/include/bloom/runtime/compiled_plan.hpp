@@ -17,6 +17,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -43,7 +44,9 @@ namespace bloom::runtime {
 // font-reference and box-layout grammar. Both numbers below also enter ProcessFrameIdentity and
 // therefore every cached/exported frame digest (src/output/process_frame_semantic_identity.cpp),
 // which is why the identity goldens were re-derived in the same change.
-inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 5;
+// COMP-SRC advances 5 -> 6: plans now own a table of nested composition plans,
+// indexed by source operations with composition-time mapping operands.
+inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 6;
 // Task S5 bumped this 1 -> 2: KeyframeInterpolation gained EaseInOut, so sampling can now produce a
 // value no version-1 sampler could, and the Color4 curve table added a third sampled value kind.
 inline constexpr std::uint32_t kAnimationSamplingSemanticsVersion = 2;
@@ -153,6 +156,24 @@ struct CompiledTextLayout {
     friend bool operator==(const CompiledTextLayout&, const CompiledTextLayout&) = default;
 };
 
+class CompiledCompositionPlan;
+
+struct CompiledCompositionTimeMapping final {
+    CompiledScalarParameter offset;
+    CompiledScalarParameter scale;
+    std::int64_t loopMode = 0;
+    friend bool operator==(const CompiledCompositionTimeMapping&,
+                           const CompiledCompositionTimeMapping&) = default;
+};
+
+struct CompiledCompositionSource final {
+    document::NodeId sourceNodeId;
+    std::size_t nestedPlanIndex = 0;
+    CompiledCompositionTimeMapping timeMapping;
+    friend bool operator==(const CompiledCompositionSource&,
+                           const CompiledCompositionSource&) = default;
+};
+
 struct CompiledImageSource {
     document::NodeId sourceNodeId;
     std::optional<document::AssetRecord> asset;
@@ -186,10 +207,19 @@ struct CompiledAudioLayer final {
 
 // Audio is intentionally a sibling of the image operation chain. It carries no device, decoded
 // samples, or filesystem state; the UI/audio boundary resolves the asset identity to a buffer.
+struct CompiledCompositionAudioLayer final {
+    CompiledCompositionSource source;
+    bool enabled = true;
+    bool solo = false;
+    core::RationalTime inPoint{}, outPoint{};
+    friend bool operator==(const CompiledCompositionAudioLayer&,
+                           const CompiledCompositionAudioLayer&) = default;
+};
 struct CompositionAudioMix final {
     document::NodeId outputNodeId;
     std::vector<CompiledAudioSource> sources;
     std::vector<CompiledAudioLayer> layers;
+    std::vector<CompiledCompositionAudioLayer> nestedLayers{};
 
     friend bool operator==(const CompositionAudioMix&, const CompositionAudioMix&) = default;
 };
@@ -324,7 +354,8 @@ struct CompiledCompositionOutput {
 
 using CompiledOperation =
     std::variant<CompiledSolid, CompiledText, CompiledImageSource, CompiledLayerOutput,
-                 CompiledMerge, CompiledCompositionOutput, CompiledShape>;
+                 CompiledMerge, CompiledCompositionOutput, CompiledShape,
+                 CompiledCompositionSource>;
 
 // Mutable construction storage is deliberately a distinct type. Publishing a plan copies or moves
 // this complete definition into private storage, so retaining or changing the definition cannot
@@ -351,6 +382,8 @@ struct CompiledCompositionPlanDefinition final {
 
     bool bypassOperationCache = false;
     CompositionAudioMix audioMix{};
+    std::vector<std::shared_ptr<const CompiledCompositionPlan>> nestedPlans{};
+    core::RationalTime duration{};
 
     friend bool operator==(const CompiledCompositionPlanDefinition&,
                            const CompiledCompositionPlanDefinition&) = default;
@@ -368,6 +401,11 @@ class CompiledCompositionPlan final {
     CompiledCompositionPlan& operator=(CompiledCompositionPlan&&) = delete;
     ~CompiledCompositionPlan() = default;
 
+    [[nodiscard]] std::span<const std::shared_ptr<const CompiledCompositionPlan>>
+    nestedPlans() const noexcept {
+        return nestedPlans_;
+    }
+    [[nodiscard]] core::RationalTime duration() const noexcept { return duration_; }
     [[nodiscard]] bool bypassOperationCache() const noexcept { return bypassOperationCache_; }
     [[nodiscard]] bool operationTimeDependent(OperationIndex index) const noexcept {
         return index.value() >= operationTimeDependent_.size() ||
@@ -443,6 +481,8 @@ class CompiledCompositionPlan final {
     std::uint32_t planSemanticsVersion_ = kCompiledCompositionPlanSemanticsVersion;
     std::uint32_t animationSamplingSemanticsVersion_ = kAnimationSamplingSemanticsVersion;
     CompositionAudioMix audioMix_{};
+    std::vector<std::shared_ptr<const CompiledCompositionPlan>> nestedPlans_;
+    core::RationalTime duration_{};
 };
 
 } // namespace bloom::runtime

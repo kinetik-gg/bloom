@@ -261,6 +261,11 @@ lower(const std::vector<document::NodeId>& order) {
         // the image operation variant or alter image evaluation semantics.
         if (definition->second->lowering == runtime::NodeLoweringKind::AudioSource)
             continue;
+        if (definition->second->lowering == runtime::NodeLoweringKind::CompositionSource &&
+            std::ranges::none_of(reachableEdges_, [&](const auto* edge) {
+                return edge->source.nodeId == nodeId && edge->source.port == "image";
+            }))
+            continue;
         if (emptyImages_.contains(nodeId) && !transformParents_.contains(nodeId))
             continue;
         if (isValueNode(nodeId))
@@ -367,7 +372,7 @@ lower(const std::vector<document::NodeId>& order) {
             std::move(valueOperations_), valueOutputCount_,
             runtime::kCompiledCompositionPlanSemanticsVersion,
             runtime::kAnimationSamplingSemanticsVersion, !request_.parameterOverrides.empty(),
-            *audioMix});
+            *audioMix, std::move(nestedPlans_), composition_->duration()});
 }
 
 [[nodiscard]] std::optional<runtime::CompositionAudioMix> lowerAudioMix() {
@@ -431,6 +436,16 @@ lower(const std::vector<document::NodeId>& order) {
         if (layerAudioEdgeIterator == graph.edges().end())
             return true;
         const auto* audioSource = findNode(layerAudioEdgeIterator->source.nodeId);
+        if (audioSource && audioSource->typeId == document::kCompositionSourceNodeType) {
+            const auto source = lowerCompositionSource(*audioSource);
+            if (!source)
+                return false;
+            mix.nestedLayers.push_back(
+                {*source,
+                 boundary->enabled && !isMuted(boundary->nodeId) && !isMuted(audioSource->id),
+                 boundary->solo, boundary->inPoint, boundary->endPoint(composition_->duration())});
+            return true;
+        }
         if (audioSource == nullptr || audioSource->typeId != document::kAudioSourceNodeType) {
             addTopologyFailure(layerAudioEdgeIterator->source.nodeId,
                                "Audio layer does not have an audio source.");
@@ -473,6 +488,14 @@ lower(const std::vector<document::NodeId>& order) {
             return std::nullopt;
         return mix;
     }
+    if (feed && feed->typeId == document::kCompositionSourceNodeType) {
+        const auto source = lowerCompositionSource(*feed);
+        if (!source)
+            return std::nullopt;
+        mix.nestedLayers.push_back(
+            {*source, !isMuted(feedNodeId), false, {}, composition_->duration()});
+        return mix;
+    }
     if (feed != nullptr && feed->typeId == document::kAudioSourceNodeType) {
         // An audio source wired straight into the output plays whole, from the composition start.
         const auto sourceIndex = appendSource(*feed);
@@ -494,6 +517,8 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     switch (definition.lowering) {
     case NodeLoweringKind::Solid:
         return lowerSolid(node);
+    case NodeLoweringKind::CompositionSource:
+        return lowerCompositionSource(node);
     case NodeLoweringKind::ImageSource:
         return lowerImageSource(node);
     case NodeLoweringKind::AudioSource:
@@ -554,6 +579,47 @@ lowerSolid(const document::NodeRecord& node) {
         return std::nullopt;
     }
     return runtime::CompiledSolid{node.id, *color, *width, *height};
+}
+
+[[nodiscard]] std::optional<runtime::CompiledCompositionSource>
+lowerCompositionSource(const document::NodeRecord& node) {
+    if (const auto found = compositionSources_.find(node.id); found != compositionSources_.end())
+        return found->second;
+    const auto* id = parameterConstant<std::int64_t>(findParameterBinding(node, "composition"));
+    const auto* loop = parameterConstant<std::int64_t>(findParameterBinding(node, "loopMode"));
+    const auto offset = compiledScalarParameter(findParameterBinding(node, "timeOffset"));
+    const auto scale = compiledScalarParameter(findParameterBinding(node, "timeScale"));
+    if (!id || !loop || !offset || !scale || *id < 0 || *loop < 0 || *loop > 2) {
+        addTopologyFailure(node.id, "Composition source parameters could not be lowered.");
+        return std::nullopt;
+    }
+    const auto nestedId = document::CompositionId::fromRaw(static_cast<std::uint64_t>(*id));
+    if (!request_.snapshot.project().findComposition(nestedId)) {
+        addFailure(runtime::CompileDiagnosticCode::CompositionNotFound, subject(node.id),
+                   "Source composition is missing",
+                   "Choose an existing composition for this source.");
+        return std::nullopt;
+    }
+    auto found = std::ranges::find_if(
+        nestedPlans_, [&](const auto& plan) { return plan->compositionId() == nestedId; });
+    std::size_t index = static_cast<std::size_t>(found - nestedPlans_.begin());
+    if (found == nestedPlans_.end()) {
+        runtime::SnapshotCompileRequest nestedRequest{request_.snapshot, nestedId};
+        auto nested =
+            planCache_ ? planCache_->compile(runtime::SnapshotCompiler(registry_), nestedRequest,
+                                             cancellation_)
+                       : runtime::SnapshotCompiler(registry_).compile(nestedRequest, cancellation_);
+        for (auto& diagnostic : nested.diagnostics)
+            diagnostics_.emplace(diagnosticKey(diagnostic), std::move(diagnostic));
+        if (!nested.plan) {
+            hasFailure_ = true;
+            return std::nullopt;
+        }
+        nestedPlans_.push_back(std::move(nested.plan));
+    }
+    runtime::CompiledCompositionSource source{node.id, index, {*offset, *scale, *loop}};
+    compositionSources_.emplace(node.id, source);
+    return source;
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

@@ -1,15 +1,19 @@
+#include "asset_drop.hpp"
 #include "composition_editor_support.hpp"
 #include "node_editor_items.hpp"
 #include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
 #include <QLabel>
 #include <QLineEdit>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/properties_editor.hpp>
+#include <limits>
 
 #include <array>
 #include <tuple>
@@ -80,6 +84,37 @@ void PropertiesEditor::configureRegistryRows() {
                 adoptSection(section, {});
                 auto* selectionLayout = qobject_cast<QVBoxLayout*>(selectionSection_->layout());
                 selectionLayout->insertWidget(selectionLayout->count() - 1, registryPanel_);
+            }
+            if (node->typeId == document::kCompositionSourceNodeType) {
+                auto* label = kit::makePropertyRowLabel(tr("Composition"), section->body());
+                auto* selector = new kit::KDropdown(section->body());
+                selector->setObjectName("propertiesCompositionSource");
+                auto* open = new kit::KButton(tr("Open"), section->body());
+                open->setObjectName("propertiesOpenComposition");
+                open->setControlSize(kit::KButton::ControlSize::Compact);
+                auto* row =
+                    new kit::KPropertyRow(label, nullptr, {selector, open}, section->body());
+                row->setProperty("rowLabel", tr("Composition"));
+                section->bodyLayout()->addWidget(row);
+                for (const auto& binding : node->parameters)
+                    if (binding.role == "composition") {
+                        const auto parameterId = binding.parameterId;
+                        connect(selector, &kit::KDropdown::currentIndexChanged, this,
+                                [this, selector, parameterId](int index) {
+                                    if (index >= 0 &&
+                                        !session_.setParameterValue(
+                                            parameterId,
+                                            static_cast<std::int64_t>(
+                                                selector->itemData(index).toLongLong()),
+                                            tr("Change Source Composition")))
+                                        configureRegistryRows();
+                                });
+                        break;
+                    }
+                connect(open, &kit::KButton::clicked, this, [this, selector] {
+                    (void)session_.setComposition(
+                        document::CompositionId::fromRaw(selector->currentData().toULongLong()));
+                });
             }
             if (node->typeId == "bloom.image-source") {
                 for (const auto& [name, object] :
@@ -166,7 +201,8 @@ void PropertiesEditor::configureRegistryRows() {
                      (declared.role == document::kTextParameterRole ||
                       declared.role == document::kTextSizeParameterRole ||
                       declared.role == document::kTextColorParameterRole));
-                if (handcrafted)
+                if (handcrafted || (node->typeId == document::kCompositionSourceNodeType &&
+                                    declared.role == "composition"))
                     continue;
                 const auto found = std::ranges::find(node->parameters, declared.role,
                                                      &document::ParameterBinding::role);
@@ -188,6 +224,30 @@ void PropertiesEditor::configureRegistryRows() {
                                    registryPanel_->property("hasValueOutputs").toBool());
     for (auto* row : registryRows_)
         row->refresh();
+    if (auto* selector = findChild<kit::KDropdown*>("propertiesCompositionSource");
+        selector && node && session_.composition()) {
+        const QSignalBlocker blocker(selector);
+        const auto target = compositionSourceId(*session_.composition(), *node);
+        selector->clearItems();
+        selector->addItem(tr("Choose Composition"), QVariant::fromValue(qlonglong{0}));
+        for (const auto& composition : session_.snapshot().project().compositions()) {
+            if (composition.id() == session_.compositionId() ||
+                composition.id().value() >
+                    static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+                continue;
+            selector->addItem(
+                QString::fromStdString(composition.name()),
+                QVariant::fromValue(static_cast<qlonglong>(composition.id().value())));
+        }
+        const auto stored = QVariant::fromValue(static_cast<qlonglong>(target.value()));
+        auto index = selector->findData(stored);
+        if (index < 0)
+            index = selector->addItem(tr("Missing composition"), stored);
+        selector->setCurrentIndex(index);
+        selector->setEnabled(!session_.composition()->nodeLocked(node->id));
+        if (auto* open = findChild<kit::KButton*>("propertiesOpenComposition"))
+            open->setEnabled(session_.snapshot().project().findComposition(target) != nullptr);
+    }
     if (auto* dimensions = findChild<kit::KLabel*>("propertiesImageDimensions")) {
         const document::AssetRecord* asset = nullptr;
         if (node)

@@ -1,5 +1,6 @@
 #include "generated_jpeg.hpp"
 #include "image_source.hpp"
+#include <algorithm>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
@@ -110,9 +111,41 @@ int main() {
     if (diskCache->statistics().hits == 0)
         return 14;
 
+    // A parent's cached source must include its child's resolved media dependencies. Removing
+    // an external file does not change the project revision or either compiled plan.
+    auto parentDefinition = compiled.plan->copyDefinition();
+    parentDefinition.compositionId = doc::CompositionId::fromRaw(composition.value() + 100);
+    parentDefinition.nestedPlans = {compiled.plan};
+    parentDefinition.operations = {runtime::CompiledCompositionSource{
+        doc::NodeId::fromRaw(10001),
+        0,
+        {{doc::ParameterId::fromRaw(10002), 0.0}, {doc::ParameterId::fromRaw(10003), 1.0}, 0}}};
+    parentDefinition.operations.push_back(runtime::CompiledMerge{
+        doc::NodeId::fromRaw(10004),
+        {{doc::LayerSlotId::fromRaw(10006), {}, runtime::OperationIndex::fromRaw(0)}}});
+    parentDefinition.operations.push_back(runtime::CompiledCompositionOutput{
+        doc::NodeId::fromRaw(10005), runtime::OperationIndex::fromRaw(1)});
+    parentDefinition.output = runtime::OperationIndex::fromRaw(2);
+    auto parent =
+        std::make_shared<const runtime::CompiledCompositionPlan>(std::move(parentDefinition));
+    auto parentRequest = request;
+    parentRequest.output = parent->output();
+    const auto nestedBefore = evaluator.evaluate(parent, parentRequest, {});
+    if (!nestedBefore.frame()) {
+        for (const auto& diagnostic : nestedBefore.diagnostics())
+            std::cerr << diagnostic.summary << '\n';
+        return 15;
+    }
     std::filesystem::remove(folder / "frame.0001.jpg");
     const auto missing = evaluator.evaluate(compiled.plan, request, {});
     if (!missing.frame() || missing.diagnostics().empty())
         return 9;
+    const auto nestedAfter = evaluator.evaluate(parent, parentRequest, {});
+    if (!nestedAfter.frame() || nestedAfter.diagnostics().empty())
+        return 16;
+    const auto beforePixels = nestedBefore.frame()->processImage().pixels();
+    const auto afterPixels = nestedAfter.frame()->processImage().pixels();
+    if (std::ranges::equal(beforePixels, afterPixels))
+        return 17;
     return 0;
 }

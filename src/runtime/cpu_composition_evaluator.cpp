@@ -3,6 +3,7 @@
 #include "layer_parent_transform.hpp"
 #include "operation_key.hpp"
 #include <bloom/render/path_raster.hpp>
+#include <bloom/runtime/composition_time.hpp>
 
 #include <bloom/core/rational_time.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
@@ -55,6 +56,9 @@ static_assert(document::kMaximumTextSizePixels == render::kMaximumTextPixelSize,
         Overloaded{
             [&subject](const CompiledShape& shape) { subject.nodeId = shape.sourceNodeId; },
             [&subject](const CompiledSolid& solid) { subject.nodeId = solid.sourceNodeId; },
+            [&subject](const CompiledCompositionSource& source) {
+                subject.nodeId = source.sourceNodeId;
+            },
             [&subject](const CompiledImageSource& image) { subject.nodeId = image.sourceNodeId; },
             [&subject](const CompiledText& text) { subject.nodeId = text.sourceNodeId; },
             [&subject](const CompiledLayerOutput& layer) {
@@ -324,6 +328,19 @@ enum class ScalarDomain : std::uint8_t {
                        hasValidScalarCurveReference(solid.width, plan, index, failure) &&
                        hasValidScalarCurveReference(solid.height, plan, index, failure);
             },
+            [&plan, index, &failure](const CompiledCompositionSource& source) {
+                const auto& mapping = source.timeMapping;
+                if (source.nestedPlanIndex >= plan.nestedPlans().size())
+                    return false;
+                const auto& nested = plan.nestedPlans()[source.nestedPlanIndex];
+                return nested && nested->projectId() == plan.projectId() &&
+                       nested->compositionId() != plan.compositionId() &&
+                       nested->sourceRevision() == plan.sourceRevision() &&
+                       nested->duration() > core::RationalTime{} && mapping.loopMode >= 0 &&
+                       mapping.loopMode <= 2 &&
+                       hasValidScalarCurveReference(mapping.offset, plan, index, failure) &&
+                       hasValidScalarCurveReference(mapping.scale, plan, index, failure);
+            },
             [](const CompiledImageSource& image) {
                 return image.loopMode >= 0 && image.loopMode <= 2 && image.colorSpace >= 0 &&
                        image.colorSpace <= 3 && (!image.asset || image.asset->validate().ok());
@@ -378,6 +395,7 @@ enum class ScalarDomain : std::uint8_t {
                            std::holds_alternative<CompiledShape>(input) ||
                            std::holds_alternative<CompiledText>(input) ||
                            std::holds_alternative<CompiledImageSource>(input) ||
+                           std::holds_alternative<CompiledCompositionSource>(input) ||
                            std::holds_alternative<CompiledLayerOutput>(input) ||
                            std::holds_alternative<CompiledMerge>(input);
                 };
@@ -1056,6 +1074,12 @@ template <typename Value>
                                       registerScalar(layer.opacity, "opacity", ScalarDomain::Unit,
                                                      operationSubject));
                 },
+                [&](const CompiledCompositionSource& source) {
+                    static_cast<void>(registerScalar(source.timeMapping.offset, "timeOffset",
+                                                     ScalarDomain::Unbounded, operationSubject) &&
+                                      registerScalar(source.timeMapping.scale, "timeScale",
+                                                     ScalarDomain::Unbounded, operationSubject));
+                },
                 [](const CompiledImageSource&) {},
                 [](const CompiledMerge&) {},
                 [](const CompiledCompositionOutput&) {},
@@ -1064,6 +1088,22 @@ template <typename Value>
     }
     if (parameterFailure.has_value()) {
         return PreflightOutcome::failure(std::move(*parameterFailure));
+    }
+    std::unordered_set<document::NodeId> registeredAudioMappings;
+    for (const auto& layer : plan->audioMix().nestedLayers) {
+        const auto& source = layer.source;
+        if (!registeredAudioMappings.insert(source.sourceNodeId).second)
+            continue;
+        const bool hasImage = std::ranges::any_of(plan->operations(), [&](const auto& operation) {
+            const auto* image = std::get_if<CompiledCompositionSource>(&operation);
+            return image && image->sourceNodeId == source.sourceNodeId;
+        });
+        if (!hasImage &&
+            !(registerScalar(source.timeMapping.offset, "timeOffset", ScalarDomain::Unbounded,
+                             {}) &&
+              registerScalar(source.timeMapping.scale, "timeScale", ScalarDomain::Unbounded, {})))
+            return PreflightOutcome::failure(parameterFailure.value_or(diagnostic(
+                EvaluationDiagnosticCode::InvalidPlan, "Invalid nested audio time mapping")));
     }
     // The VALUE graph references curves too (task FIX1, item G): a literal Scalar, Vector 2 or
     // Colour node whose authored value is on a curve lowers to a curve index, and its curve is as
@@ -1392,6 +1432,21 @@ audioStartTime(const std::int64_t frame, const document::FrameRate rate) noexcep
 
 } // namespace
 
+std::optional<core::RationalTime> mapAudioClipTime(const AudioClipDescription& clip,
+                                                   core::RationalTime time) {
+    for (const auto& mapping : clip.timeMappings) {
+        if (time < mapping.inPoint || time >= mapping.outPoint)
+            return std::nullopt;
+        const auto mapped =
+            mapCompositionTime(time, mapping.offset, mapping.scale, mapping.duration,
+                               mapping.frameRate, mapping.loopMode);
+        if (!mapped)
+            return std::nullopt;
+        time = *mapped;
+    }
+    return time;
+}
+
 std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
     const std::shared_ptr<const CompiledCompositionPlan>& plan, const core::RationalTime time,
     const CancellationToken& cancellation) const {
@@ -1400,8 +1455,15 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
 
     std::optional<ValueGraphEvaluation> valueGraph;
     const auto needsValueGraph =
-        std::ranges::any_of(plan->audioMix().sources, [](const auto& source) {
-            return std::holds_alternative<ValueOutputIndex>(source.level.source);
+        std::ranges::any_of(plan->audioMix().sources,
+                            [](const auto& source) {
+                                return std::holds_alternative<ValueOutputIndex>(
+                                    source.level.source);
+                            }) ||
+        std::ranges::any_of(plan->audioMix().nestedLayers, [](const auto& layer) {
+            return std::holds_alternative<ValueOutputIndex>(
+                       layer.source.timeMapping.offset.source) ||
+                   std::holds_alternative<ValueOutputIndex>(layer.source.timeMapping.scale.source);
         });
     if (needsValueGraph) {
         valueGraph = evaluateValueGraph(plan->valueOperations(), plan->valueOutputCount(), time,
@@ -1446,6 +1508,60 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
             return std::nullopt;
         description.clips.push_back({source.sourceNodeId, source.assetId, *start, layer.outPoint,
                                      level, !layer.enabled, layer.solo});
+    }
+    const auto sampleScalar =
+        [&](const CompiledScalarParameter& parameter) -> std::optional<double> {
+        if (const auto* constant = std::get_if<double>(&parameter.source))
+            return std::isfinite(*constant) ? std::optional{*constant} : std::nullopt;
+        if (const auto* curve = std::get_if<ScalarCurveIndex>(&parameter.source)) {
+            if (curve->value() >= plan->scalarCurves().size())
+                return std::nullopt;
+            return sampleAnimationCurve(plan->scalarCurves()[curve->value()], time).value;
+        }
+        const auto index = std::get<ValueOutputIndex>(parameter.source).value();
+        if (!valueGraph || index >= valueGraph->outputs.size())
+            return std::nullopt;
+        const auto* value = std::get_if<double>(&valueGraph->outputs[index]);
+        return value ? std::optional{*value} : std::nullopt;
+    };
+    const bool anySolo =
+        std::ranges::any_of(plan->audioMix().layers,
+                            [](const auto& layer) { return layer.solo && layer.enabled; }) ||
+        std::ranges::any_of(plan->audioMix().nestedLayers,
+                            [](const auto& layer) { return layer.solo && layer.enabled; });
+    for (auto& clip : description.clips) {
+        clip.muted = clip.muted || (anySolo && !clip.solo);
+        clip.solo = false;
+    }
+    for (const auto& layer : plan->audioMix().nestedLayers) {
+        const auto& source = layer.source;
+        if (cancellation.isCancellationRequested() ||
+            source.nestedPlanIndex >= plan->nestedPlans().size())
+            return std::nullopt;
+        const auto& nested = plan->nestedPlans()[source.nestedPlanIndex];
+        if (!nested)
+            return std::nullopt;
+        const auto offset = sampleScalar(source.timeMapping.offset);
+        const auto scale = sampleScalar(source.timeMapping.scale);
+        const auto mapped =
+            offset && scale
+                ? mapCompositionTime(time, *offset, *scale, nested->duration(),
+                                     nested->format().frameRate(), source.timeMapping.loopMode)
+                : std::nullopt;
+        if (!mapped)
+            return std::nullopt;
+        auto mix = evaluateAudioMix(nested, *mapped, cancellation);
+        if (!mix)
+            return std::nullopt;
+        for (auto& clip : mix->clips) {
+            clip.muted = clip.muted || !layer.enabled || (anySolo && !layer.solo);
+            clip.solo = false;
+            clip.timeMappings.insert(clip.timeMappings.begin(),
+                                     {*offset, *scale, source.timeMapping.loopMode,
+                                      nested->duration(), nested->format().frameRate(),
+                                      layer.inPoint, layer.outPoint});
+            description.clips.push_back(std::move(clip));
+        }
     }
     return description;
 }
@@ -1562,6 +1678,56 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             std::optional<EvaluationDiagnostic> operationFailure;
             bool operationCancelled = false;
 
+            std::shared_ptr<const ProcessFrame> nestedFrame;
+            std::optional<core::RationalTime> nestedTime;
+            if (const auto* source =
+                    std::get_if<CompiledCompositionSource>(&plan->operations()[index])) {
+                const auto offset =
+                    detail::resolveParameter(source->timeMapping.offset, *plan, resolved);
+                const auto scale =
+                    detail::resolveParameter(source->timeMapping.scale, *plan, resolved);
+                const auto& nested = plan->nestedPlans()[source->nestedPlanIndex];
+                if (offset && scale)
+                    nestedTime = mapCompositionTime(
+                        request.time, offset->value, scale->value, nested->duration(),
+                        nested->format().frameRate(), source->timeMapping.loopMode);
+                if (!nestedTime)
+                    return EvaluationResult::failed(diagnostic(
+                        EvaluationDiagnosticCode::ArithmeticOverflow,
+                        "Composition source time cannot be represented", {}, operationSubject));
+                // Resolve the child before parent memoization: child media dependencies and
+                // diagnostics can change without a document revision (for example a missing file).
+                auto nestedRequest = request;
+                nestedRequest.time = *nestedTime;
+                nestedRequest.output = nested->output();
+                nestedRequest.roi.reset();
+                nestedRequest.bypassOperationCache = cache == nullptr;
+                nestedRequest.pixelStorageByteLimit = remainingPixelBudget();
+                if (std::holds_alternative<ProxyResolution>(request.resolution)) {
+                    const auto extent = render::ImageExtent::create(
+                        static_cast<std::uint64_t>(std::max(
+                            1.0, std::ceil(nested->format().width() * resolved.horizontalScale))),
+                        static_cast<std::uint64_t>(std::max(
+                            1.0, std::ceil(nested->format().height() * resolved.verticalScale))));
+                    if (!extent)
+                        return EvaluationResult::failed(diagnostic(
+                            EvaluationDiagnosticCode::ArithmeticOverflow,
+                            "Nested composition extent is invalid", {}, operationSubject));
+                    nestedRequest.resolution = ProxyResolution{*extent.value()};
+                }
+                auto result = evaluate(nested, nestedRequest, cancellation, progress, rowBands);
+                if (!result.frame())
+                    return result;
+                imageWarnings.insert(imageWarnings.end(), result.diagnostics().begin(),
+                                     result.diagnostics().end());
+                nestedFrame = result.frame();
+                const auto& nestedStatistics = nestedFrame->operationCacheStatistics();
+                frameStatistics.hits += nestedStatistics.hits;
+                frameStatistics.misses += nestedStatistics.misses;
+                frameStatistics.evaluatedNodes.insert(frameStatistics.evaluatedNodes.end(),
+                                                      nestedStatistics.evaluatedNodes.begin(),
+                                                      nestedStatistics.evaluatedNodes.end());
+            }
             std::optional<detail::ImageSourceSelection> selectedImage;
             if (const auto* source = std::get_if<CompiledImageSource>(&plan->operations()[index])) {
                 selectedImage = detail::selectImageSource(
@@ -1685,6 +1851,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             key.add(step.strokeJoin);
                             key.add(step.strokeCap);
                             key.add(step.fillRule);
+                        } else if constexpr (std::is_same_v<Step, CompiledCompositionSource>) {
+                            const auto& nested = plan->nestedPlans()[step.nestedPlanIndex];
+                            key.add(nested->compositionId());
+                            key.add(nested->sourceRevision().value());
+                            key.add(*nestedTime);
+                            key.add(nested->planSemanticsVersion());
+                            key.add(nestedFrame->contentHash_);
                         } else if constexpr (std::is_same_v<Step, CompiledImageSource>) {
                             key.add(selectedImage->cacheKey);
                         } else if constexpr (std::is_same_v<Step, CompiledText>) {
@@ -1923,6 +2096,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 return;
                             }
                             produced.emplace(std::move(*frozen.value()));
+                        },
+                        [&](const CompiledCompositionSource& source) {
+                            const auto& nested = plan->nestedPlans()[source.nestedPlanIndex];
+                            slots[index] = nestedFrame->processImage_;
+                            bounds[index].local =
+                                nestedFrame->evaluatedBounds()[nested->output().value()].output;
+                            bounds[index].output = bounds[index].local;
                         },
                         [&](const CompiledImageSource&) {
                             if (!selectedImage || !selectedImage->available)
@@ -2879,9 +3059,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             .imagePrimitiveSemanticsVersion = render::kCpuImagePrimitiveSemanticsVersion,
             .roi = request.roi,
         };
-        auto frame = std::shared_ptr<const ProcessFrame>(
-            new ProcessFrame(std::move(identity), std::move(processImage), frameStatistics,
-                             std::move(bounds), std::move(resolved.valueOutputs)));
+        auto frame = std::shared_ptr<const ProcessFrame>(new ProcessFrame(
+            std::move(identity), std::move(processImage), frameStatistics, std::move(bounds),
+            std::move(resolved.valueOutputs), std::move(contentHashes[request.output.value()])));
         if (statistics)
             *statistics = std::move(frameStatistics);
         return EvaluationResult::evaluated(std::move(frame), std::move(imageWarnings));

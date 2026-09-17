@@ -1,6 +1,9 @@
 #include "node_editor_add.hpp"
 #include <algorithm>
 #include <array>
+#include <bloom/commands/layer_operations.hpp>
+#include <bloom/commands/operations.hpp>
+#include <limits>
 #include <type_traits>
 #include <utility>
 
@@ -15,7 +18,8 @@ document::Vec2d nodePosition(const document::Composition& composition, const doc
 
 void placeConnectedNode(document::Composition& composition, const document::NodeId node,
                         const std::optional<document::InputPortRef>& input,
-                        const std::optional<document::OutputPortRef>& output) {
+                        const std::optional<document::OutputPortRef>& output,
+                        std::optional<document::NodeId> pendingSource = {}) {
     const auto connected = input
                                ? std::optional(std::visit(
                                      [](const auto& port) {
@@ -42,6 +46,8 @@ void placeConnectedNode(document::Composition& composition, const document::Node
         if (existing.id != node && !occupied.contains(existing.id))
             occupied.emplace(existing.id, defaults.at(existing.id));
     occupied.erase(node);
+    if (pendingSource)
+        occupied.erase(*pendingSource);
     const auto placement =
         document::findNearestFreeNodePosition(occupied, {}, size, preferred, gap);
     auto record = composition.nodeLayout().at(node);
@@ -49,6 +55,90 @@ void placeConnectedNode(document::Composition& composition, const document::Node
     composition.nodeLayout()[node] = record;
 }
 } // namespace
+
+commands::OperationResult AddCompositionSource::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(composition_);
+    const auto* nested = draft.project().findComposition(source_);
+    if (!composition || !nested ||
+        source_.value() > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+        return commands::OperationResult::rejected(commands::OperationIssueCode::InvalidTarget,
+                                                   "Source composition does not exist");
+    const auto name = nested->name();
+    const auto duration = std::min(nested->duration(), composition->duration());
+    auto added = commands::AddNode(composition_, std::string(document::kCompositionSourceNodeType),
+                                   position_)
+                     .apply(draft);
+    if (added.status != commands::OperationStatus::Applied)
+        return added;
+    document::NodeId sourceNode;
+    for (const auto& output : added.outputs) {
+        if (output.name == commands::kAddNodeOutput)
+            sourceNode = std::get<document::NodeId>(output.id);
+        if (output.name == "parameter.composition") {
+            const auto result =
+                commands::SetParameterSource(
+                    composition_, std::get<document::ParameterId>(output.id),
+                    document::ConstantValueSource{static_cast<std::int64_t>(source_.value())})
+                    .apply(draft);
+            if (result.status == commands::OperationStatus::Rejected)
+                return result;
+        }
+    }
+    const auto nesting = draft.project().validateCompositionNesting();
+    if (!nesting.ok())
+        return commands::OperationResult::rejected(commands::OperationIssueCode::InvalidValue,
+                                                   nesting.issues().front().message);
+    if (!asLayer_)
+        return added;
+    const auto merge = composition->graph().outputMergeId();
+    if (!merge)
+        return commands::OperationResult::rejected(
+            commands::OperationIssueCode::InvalidTarget,
+            "Timeline layers need a Merge connected to Output");
+    auto layerResult = AddEditorNode(composition_, std::string(document::kLayerOutputNodeType), {},
+                                     document::LayerStackInputRef{*merge, {}, "content"})
+                           .apply(draft);
+    if (layerResult.status == commands::OperationStatus::Rejected)
+        return layerResult;
+    document::NodeId layerNode;
+    document::LayerId layerId;
+    for (const auto& output : layerResult.outputs) {
+        if (output.name == commands::kAddNodeOutput)
+            layerNode = std::get<document::NodeId>(output.id);
+        if (output.name == "layer")
+            layerId = std::get<document::LayerId>(output.id);
+    }
+    for (const auto* port : {"image", "audio"}) {
+        auto result = commands::ConnectPorts(composition_, {sourceNode, port},
+                                             document::NodeInputRef{layerNode, port})
+                          .apply(draft);
+        if (result.status == commands::OperationStatus::Rejected)
+            return result;
+    }
+    auto audio = commands::ConnectPorts(composition_, {layerNode, "audio"},
+                                        document::LayerStackInputRef{*merge, {}, "audio"})
+                     .apply(draft);
+    if (audio.status == commands::OperationStatus::Rejected)
+        return audio;
+    if (const auto& output = composition->graph().compositionOutput(); output) {
+        auto result = commands::ConnectPorts(composition_, {*merge, "audio"},
+                                             document::NodeInputRef{output->nodeId, "audio"})
+                          .apply(draft);
+        if (result.status == commands::OperationStatus::Rejected)
+            return result;
+    }
+    auto renamed = commands::RenameLayer(composition_, layerId, name).apply(draft);
+    if (renamed.status == commands::OperationStatus::Rejected)
+        return renamed;
+    auto range = commands::SetLayerRange(composition_, layerId, {}, duration).apply(draft);
+    if (range.status == commands::OperationStatus::Rejected)
+        return range;
+    placeConnectedNode(*composition, layerNode, document::LayerStackInputRef{*merge, {}, "content"},
+                       {}, sourceNode);
+    placeConnectedNode(*composition, sourceNode, document::NodeInputRef{layerNode, "image"}, {});
+    added.outputs.push_back({"layer", layerId});
+    return added;
+}
 
 commands::OperationResult AddEditorNode::apply(document::Draft& draft) const {
     const auto* composition = draft.project().findComposition(composition_);
