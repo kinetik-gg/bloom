@@ -9,6 +9,11 @@
 class QLabel;
 class QTimer;
 
+namespace bloom::media::cache {
+class MediaDiskCache;
+struct MediaDiskCacheStatistics;
+} // namespace bloom::media::cache
+
 namespace bloom::ui {
 
 class CompositionPreviewController;
@@ -58,14 +63,26 @@ struct PreviewColorState final {
 [[nodiscard]] QString previewCacheText(const CompositionPreviewController& previewController);
 [[nodiscard]] QString operationCacheText(const runtime::OperationCache& operationCache);
 
+// The disk cache's own cell (task CACHE-2, docs/architecture/media-io.md "Disk cache"), separate
+// from `previewCacheText()`'s in-memory RAM preview account above: "Disk 73% hit · 4.2 GB" once
+// it has served at least one lookup, "Disk cache off" when disabled, and empty (nothing to report
+// yet) before the first lookup. A hit rate is never invented from zero lookups.
+[[nodiscard]] QString mediaDiskCacheStatusText(const media::cache::MediaDiskCacheStatistics& stats,
+                                               bool enabled);
+
 class WindowStatusBar final : public kit::KSurface {
     Q_OBJECT
 
   public:
     // `previewController` may be null (a window built without a preview pipeline, as several tests
     // do): the preview-derived cells then stay empty rather than claiming anything.
+    // `mediaDiskCache` may also be null (disk cache disabled/unavailable for this session): the
+    // disk-cache cell then reports "Disk cache off" instead of polling.
+    // `operationCache` may also be null: the combined cache cell then shows only the RAM preview
+    // account, with no operation-cache statistics appended.
     WindowStatusBar(CompositionSession& session, CompositionPreviewController* previewController,
-                    QWidget* parent = nullptr, runtime::OperationCache* operationCache = nullptr);
+                    media::cache::MediaDiskCache* mediaDiskCache = nullptr,
+                    runtime::OperationCache* operationCache = nullptr, QWidget* parent = nullptr);
 
     // A notice that clears itself after five seconds -- a rejected command, an export that
     // finished, a cancellation. It takes precedence over the persistent message while it lasts.
@@ -80,25 +97,30 @@ class WindowStatusBar final : public kit::KSurface {
     [[nodiscard]] QString previewStateTextForTest() const;
     [[nodiscard]] QString droppedFrameTextForTest() const;
     [[nodiscard]] QString cacheTextForTest() const;
+    [[nodiscard]] QString mediaDiskCacheTextForTest() const;
     [[nodiscard]] QString messageTextForTest() const;
     [[nodiscard]] QString versionTextForTest() const;
 
   protected:
   private:
     void refreshPreviewCells();
+    void refreshMediaDiskCacheCell();
     void refreshMessage();
 
     CompositionSession& session_;
     CompositionPreviewController* previewController_ = nullptr;
     runtime::OperationCache* operationCache_ = nullptr;
+    media::cache::MediaDiskCache* mediaDiskCache_ = nullptr;
     QWidget* colorChip_ = nullptr;
     QLabel* previewState_ = nullptr;
     QLabel* droppedFrames_ = nullptr;
     QLabel* cache_ = nullptr;
+    QLabel* mediaDiskCacheCell_ = nullptr;
     QLabel* message_ = nullptr;
     QLabel* version_ = nullptr;
     QTimer* transientTimer_ = nullptr;
     QTimer* cacheRefreshTimer_ = nullptr;
+    QTimer* mediaDiskCacheTimer_ = nullptr;
     QString transientMessage_;
     QString persistentMessage_;
 };

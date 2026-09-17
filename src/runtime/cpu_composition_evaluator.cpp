@@ -1507,6 +1507,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
     auto* cache = (request.bypassOperationCache || (plan && plan->bypassOperationCache()))
                       ? nullptr
                       : cache_.get();
+    // Same gate as `cache` above: an interactive/overridden request's pixels belong to a gesture,
+    // not to a revision, so they are never written to or read from the disk cache either (media-
+    // io.md "Disk cache": "Never cache overridden/interactive frames").
+    const auto diskCacheHandle = mediaDiskCache();
+    auto* const diskCache = cache != nullptr ? diskCacheHandle.get() : nullptr;
     std::vector<EvaluationDiagnostic> imageWarnings;
     const auto mediaBase = assetBaseDirectory();
     try {
@@ -1914,8 +1919,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 return;
                             auto image = detail::evaluateImageSource(
                                 *selectedImage, resolved.imageDescriptor, resolved.horizontalScale,
-                                resolved.verticalScale, remainingPixelBudget(), cache,
-                                cancellation);
+                                resolved.verticalScale, remainingPixelBudget(), cache, cancellation,
+                                diskCache);
                             if (image.cancelled) {
                                 operationCancelled = true;
                                 return;

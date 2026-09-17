@@ -16,6 +16,10 @@ namespace bloom::runtime {
 class OperationCache;
 }
 
+namespace bloom::media::cache {
+class MediaDiskCache;
+} // namespace bloom::media::cache
+
 namespace bloom::ui {
 
 class CompositionPreviewController;
@@ -58,12 +62,20 @@ class MainWindow final : public QMainWindow {
     // `previewController` feeds the window status bar's preview cells (task VIEW-1) -- the colour
     // state, readiness, dropped frames and cache progress. Null builds the strip with those cells
     // empty rather than absent, which is what a window without a preview pipeline should show.
+    // `operationCache` feeds the window status bar's combined cache cell with hit/miss/retained-
+    // byte statistics for the evaluator's shared operation cache, appended beside the RAM preview
+    // text. Null leaves that cell showing only the RAM preview account.
+    // `mediaDiskCache` feeds the Composition menu's "Clear Media Cache…" command and the window
+    // status bar's disk-cache cell (docs/architecture/media-io.md "Disk cache"). Null leaves the
+    // menu item present but reporting "not enabled" rather than absent, matching `ramPreview`'s
+    // own null convention above.
     MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
                ProjectHost& projectHost, FrameExportController& frameExportController,
                RamPreviewController* ramPreview = nullptr,
                CompositionPreviewController* previewController = nullptr, QWidget* parent = nullptr,
                PlaybackController* playbackController = nullptr,
-               runtime::OperationCache* operationCache = nullptr);
+               runtime::OperationCache* operationCache = nullptr,
+               media::cache::MediaDiskCache* mediaDiskCache = nullptr);
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);
@@ -114,7 +126,10 @@ class MainWindow final : public QMainWindow {
     // window status bar's preview cells.
     CompositionPreviewController* previewController_ = nullptr;
     PlaybackController* playbackController_ = nullptr;
+    // Borrowed, may be null; owned by the application composition root.
     runtime::OperationCache* operationCache_ = nullptr;
+    // Borrowed, may be null; owned by the application composition root.
+    media::cache::MediaDiskCache* mediaDiskCache_ = nullptr;
     QMenuBar* menuBar_ = nullptr;
     QMenu* windowMenu_ = nullptr;
     QMenu* viewMenu_ = nullptr;
@@ -155,6 +170,7 @@ class MainWindow final : public QMainWindow {
     QAction* viewAudioEnabledAction_ = nullptr;
     QAction* reportIssueAction_ = nullptr;
     QAction* openSourceLicensesAction_ = nullptr;
+    QAction* clearMediaDiskCacheAction_ = nullptr;
     bool workspaceLayoutWritable_ = true;
     bool shutdownRequested_ = false;
 };

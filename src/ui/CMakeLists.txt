@@ -355,6 +355,7 @@ target_sources(
         asset_controller.cpp
         asset_drop.cpp
         asset_drop.hpp
+        media_disk_cache_settings.cpp
         node_editor.cpp
         node_editor_canvas.cpp
         node_editor_items.cpp
@@ -418,6 +419,7 @@ target_sources(
             include/bloom/ui/main_window.hpp
             include/bloom/ui/assets_editor.hpp
             include/bloom/ui/asset_controller.hpp
+            include/bloom/ui/media_disk_cache_settings.hpp
             include/bloom/ui/node_editor.hpp
             include/bloom/ui/playback_controller.hpp
             include/bloom/ui/preview_frame_cache.hpp
@@ -463,7 +465,7 @@ target_link_libraries(
         bloom_media_audio
         Qt6::Widgets
 )
-target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image)
+target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image bloom_media_cache)
 bloom_enable_warnings(bloom_ui)
 
 if(BUILD_TESTING)

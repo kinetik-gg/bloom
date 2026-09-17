@@ -13,6 +13,7 @@
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/licenses_window.hpp>
+#include <bloom/ui/media_disk_cache_settings.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
@@ -65,11 +66,12 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                        RamPreviewController* const ramPreview,
                        CompositionPreviewController* const previewController, QWidget* parent,
                        PlaybackController* const playbackController,
-                       runtime::OperationCache* const operationCache)
+                       runtime::OperationCache* const operationCache,
+                       media::cache::MediaDiskCache* const mediaDiskCache)
     : QMainWindow(parent), compositionSession_(compositionSession), projectHost_(projectHost),
       frameExportController_(frameExportController), ramPreview_(ramPreview),
       previewController_(previewController), playbackController_(playbackController),
-      operationCache_(operationCache) {
+      operationCache_(operationCache), mediaDiskCache_(mediaDiskCache) {
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
     resize(1600, 1000);
@@ -345,6 +347,18 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
                                                                 : "&RAM Preview");
         });
     }
+
+    // Clear Media Cache (task CACHE-2): the on-disk decoded-frame store, docs/architecture/
+    // media-io.md "Disk cache". Present even when `mediaDiskCache_` is null -- see
+    // confirmAndClearMediaDiskCache()'s own null handling -- so the command is discoverable rather
+    // than silently missing on a session that happens to have the disk cache disabled.
+    compositionMenu.addSeparator();
+    clearMediaDiskCacheAction_ = compositionMenu.addAction(tr("Clear Media Cache…"));
+    clearMediaDiskCacheAction_->setObjectName("compositionClearMediaDiskCacheAction");
+    connect(clearMediaDiskCacheAction_, &QAction::triggered, this, [this] {
+        if (confirmAndClearMediaDiskCache(this, mediaDiskCache_))
+            statusStrip_->showTransientMessage(tr("Media cache cleared"));
+    });
 }
 
 void MainWindow::updateCompositionActions() {
@@ -587,8 +601,8 @@ void MainWindow::createCentralStack() {
     auto* column = new QVBoxLayout(central);
     column->setContentsMargins(0, 0, 0, 0);
     column->setSpacing(0);
-    statusStrip_ =
-        new WindowStatusBar(compositionSession_, previewController_, central, operationCache_);
+    statusStrip_ = new WindowStatusBar(compositionSession_, previewController_, mediaDiskCache_,
+                                       operationCache_, central);
     column->addWidget(centralStack_, 1);
     column->addWidget(statusStrip_);
     setCentralWidget(central);

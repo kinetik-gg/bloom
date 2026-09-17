@@ -51,7 +51,6 @@ round-tripping, external codec processes, or a general proxy service. Files are 
 the closed sRGB/override rule in `color-management.md`, not by embedded profiles. The broader
 research below does not supersede this implemented boundary.
 
-
 ## Purpose
 
 Bloom needs reliable, performant media ingest and export without making one codec library, operating
@@ -351,6 +350,77 @@ derived sequence manifest binds the chosen rational rate and start label separat
 frame numbers. A source member changing invalidates only the affected identities and dependent
 caches, but a final render with an unapproved gap or stale member fails rather than silently using an
 old cached frame.
+
+## Disk cache
+
+Task CACHE-2 adds `src/media/cache` (Qt-free): a bounded, content-addressed, on-disk store of
+decoded `Rgba32fImage` frames that persists across restarts, complementing the two v0 in-process
+caches above (the evaluator's memory-only decoded-image LRU and the UI's memory-only 512-entry
+thumbnail cache). It is the same store both consult: `decodeThroughDiskCache()`
+(`bloom::media::cache`) is the one decode-through-caches entry point `evaluateImageSource()`
+(`src/runtime/image_source.cpp`) and the Asset Controller's proxy/thumbnail decode
+(`src/ui/asset_controller.cpp`) both call, so a frame decoded by one is a disk hit for the other.
+
+**Location.** The platform cache directory (`bloom::platform::userCacheDirectory()`, Linux
+`$XDG_CACHE_HOME/bloom` or `$HOME/.cache/bloom`) plus a `media` leaf, or a `media/disk-cache-directory`
+QSettings override (an absolute path; anything else falls back to the platform default). No
+in-app settings dialog exists yet for the RAM preview or operation-cache byte budgets either
+(`preview_frame_cache.hpp`'s own `ramPreviewByteBudgetFromSettings()`/
+`operationCacheByteBudgetFromSettings()`); the disk cache's `media/disk-cache-enabled`,
+`media/disk-cache-budget-bytes` and `media/disk-cache-directory` keys follow that same
+QSettings-only precedent (`bloom::ui::media_disk_cache_settings`) rather than adding a first
+Preferences surface for one feature.
+
+**Cache key.** Content-addressed and restart-stable, deliberately narrower than the evaluator's
+in-process operation-cache key: asset content digest, member/frame, interpretation (color space
+and alpha association), the Bloom Neutral config digest, and a decoder identity/version string
+(`bloom::media::cache::kImageDecoderIdentity`) bumped whenever the decode or Bloom-Neutral-
+conversion pipeline could change decoded pixels for the same source bytes -- a decoder upgrade
+therefore invalidates old entries by construction. The key omits the resolved path/relink hint and
+availability that the memory-cache key includes, so a relink of identical content still hits the
+disk entry.
+
+**Format (v0).** Uncompressed Float32 RGBA, matching the process image exactly: a small fixed
+header (data/display window, pixel aspect, payload byte count) plus the raw pixel payload, and a
+SHA-256 digest of the payload bytes stored alongside it and revalidated on every read. Any
+structural or digest mismatch (truncation, a flipped bit, an unrelated file) is treated as an
+ordinary miss and the entry is removed -- corruption never reaches a caller as pixels. A future
+task may add a lossless codec (LZ4/zstd) through the dependency intake; v0 deliberately does not,
+per the CACHE-2 task package.
+
+**Writes.** Atomic: a temp file in the entry's own shard directory, fsync'd where the platform
+supports it (Linux), then renamed over the target -- a reader never observes a torn file. An
+index file (`index.v1`, itself rewritten atomically) records each entry's byte size and last-use
+time so a restart rebuilds LRU order without re-stat'ing or re-hashing every entry. `store()`
+writes synchronously on the calling thread; `storeAsync()` -- what `evaluateImageSource()` uses on
+a disk miss -- hands the write to the cache's own single background writer thread and returns
+immediately, so evaluation never waits on the write. A full write queue drops the newest write
+(counted, never blocks): losing one write only means the next read decodes again.
+
+**Budget and eviction.** LRU under a byte budget (default `min(10% of the cache volume's free
+space, 32 GiB)`, `media/disk-cache-budget-bytes` overrides it) and, independently, a bounded entry
+count (`kDefaultMediaDiskCacheMaxEntries`, 200,000) so a cache of many tiny images cannot grow the
+index and directory-entry count without limit either. Both are enforced on every write.
+
+**Never cached.** An interactive or overridden evaluation request's pixels belong to a gesture,
+not to a revision (see `animation-and-time.md`'s "Direct Manipulation And Preview Overrides"); the
+same condition that already excludes such a request from the evaluator's memory operation cache
+(`request.bypassOperationCache` / `plan->bypassOperationCache()`) also passes a null disk cache
+into `evaluateImageSource()`, so an override is never read from or written to disk either.
+
+**Controls.** `media/disk-cache-enabled` (default on), `media/disk-cache-budget-bytes`, and
+`media/disk-cache-directory` in QSettings; "Clear Media Cache…" in the Composition menu asks for
+confirmation, then clears every entry and resets statistics. The window status bar's own disk-
+cache cell (`mediaDiskCacheStatusText()`, beside the existing RAM-preview cache cell) reports a
+lightweight-polled hit rate and resident byte count, or "Disk cache off" when disabled -- a
+second, independent budget from the RAM preview and operation caches `animation-and-time.md`
+documents.
+
+| Bound | v0 value |
+| --- | --- |
+| Media disk cache budget | `min(10% of free disk space, 32 GiB)` default; settings override |
+| Media disk cache entry count | 200,000 |
+| Media disk cache async write queue | 64 pending writes, oldest-blocking dropped when full |
 
 ## Export Pipeline
 

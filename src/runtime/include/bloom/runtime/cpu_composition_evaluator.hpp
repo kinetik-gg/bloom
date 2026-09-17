@@ -8,6 +8,10 @@
 #include <memory>
 #include <mutex>
 
+namespace bloom::media::cache {
+class MediaDiskCache;
+} // namespace bloom::media::cache
+
 namespace bloom::runtime {
 
 // A device-free audio projection of one compiled composition. It carries only the source identity
@@ -41,6 +45,18 @@ class CpuCompositionEvaluator final {
         std::lock_guard lock(assetContext_->mutex);
         return assetContext_->directory;
     }
+    // Owned by the host application (media-io.md "Disk cache"): a shared, bounded, on-disk store
+    // of decoded image frames. Null (the default) disables the disk-cache stage entirely --
+    // evaluateImageSource() falls back to memory-cache-or-decode exactly as before this store
+    // existed. Never consulted or written for an interactive/overridden request (see evaluate()).
+    void setMediaDiskCache(std::shared_ptr<media::cache::MediaDiskCache> diskCache) const {
+        std::lock_guard lock(assetContext_->mutex);
+        assetContext_->diskCache = std::move(diskCache);
+    }
+    [[nodiscard]] std::shared_ptr<media::cache::MediaDiskCache> mediaDiskCache() const {
+        std::lock_guard lock(assetContext_->mutex);
+        return assetContext_->diskCache;
+    }
     [[nodiscard]] const std::shared_ptr<OperationCache>& operationCache() const { return cache_; }
     // `rowBands` is the bounded pool the per-row kernels are spread across (the scheduler owns one;
     // TaskContext::rowBandExecutor() is where a task body gets it). Null evaluates every row band
@@ -68,6 +84,7 @@ class CpuCompositionEvaluator final {
     struct AssetContext {
         std::mutex mutex;
         std::filesystem::path directory;
+        std::shared_ptr<media::cache::MediaDiskCache> diskCache;
     };
     std::shared_ptr<AssetContext> assetContext_ = std::make_shared<AssetContext>();
     std::shared_ptr<OperationCache> cache_ = std::make_shared<OperationCache>();

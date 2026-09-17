@@ -1,4 +1,5 @@
 #include <bloom/media/audio/playback/audio_engine.hpp>
+#include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
@@ -18,6 +19,7 @@
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/main_window.hpp>
+#include <bloom/ui/media_disk_cache_settings.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/qualified_display_processor_bootstrap.hpp>
@@ -105,6 +107,15 @@ int main(int argc, char* argv[]) {
     {
         cpuEvaluator.operationCache()->setByteBudget(cacheBudgets.operationCacheByteBudget);
     }
+    // CACHE-2 (docs/architecture/media-io.md "Disk cache"): one instance shared by the evaluator
+    // and the Asset Controller's proxy/thumbnail decodes below -- "the same store". Built from
+    // settings alongside the operation cache's own settings-derived budget just above; null when
+    // disabled in settings or no cache directory can be resolved at all (never a startup failure).
+    const std::shared_ptr<bloom::media::cache::MediaDiskCache> mediaDiskCache = [] {
+        const QSettings mediaDiskCacheSettings;
+        return bloom::ui::makeMediaDiskCacheFromSettings(mediaDiskCacheSettings);
+    }();
+    cpuEvaluator.setMediaDiskCache(mediaDiskCache);
     bloom::runtime::CpuReferenceDisplayPreparer referenceDisplayPreparer;
     // Issue #97 (task C3): resolved and built once, on the shared TaskScheduler's blocking-I/O
     // lane, at this same session/pipeline-construction point (design decision 3). Declared before
@@ -113,7 +124,7 @@ int main(int argc, char* argv[]) {
     bloom::runtime::QualifiedDisplayProcessorProvider qualifiedDisplayProcessorProvider;
     bloom::ui::TaskUiBridge taskUiBridge(taskScheduler);
     bloom::ui::AssetController assetController(compositionSession, projectHost, taskScheduler,
-                                               taskUiBridge);
+                                               taskUiBridge, mediaDiskCache.get());
     const auto updateMediaDirectory = [&] {
         const auto path = projectHost.displayPath();
         cpuEvaluator.setAssetBaseDirectory(path ? path->parent_path() : std::filesystem::path{});
@@ -227,7 +238,8 @@ int main(int argc, char* argv[]) {
     // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,
                                  frameExportController, &ramPreviewController, &previewController,
-                                 nullptr, &playback, cpuEvaluator.operationCache().get());
+                                 nullptr, &playback, cpuEvaluator.operationCache().get(),
+                                 mediaDiskCache.get());
     playback.installWindowShortcut(window);
     QObject::connect(&ramPreviewController, &bloom::ui::RamPreviewController::stateChanged,
                      &playback, [&] {

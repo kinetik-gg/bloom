@@ -734,6 +734,19 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# Task CACHE-2: the media disk cache's QSettings surface and status-bar/menu-facing pure logic,
+# independent of a full evaluator or window (see main_window_chrome_tests.cpp and
+# window_status_bar's own coverage there for the widget-level wiring).
+add_executable(bloom_media_disk_cache_settings_test media_disk_cache_settings_tests.cpp)
+target_link_libraries(bloom_media_disk_cache_settings_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_media_disk_cache_settings_test)
+bloom_add_test(
+    NAME bloom.ui.media-disk-cache-settings
+    COMMAND bloom_media_disk_cache_settings_test
+    LABELS ui unit cache
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 add_executable(bloom_background_preview_test background_preview_tests.cpp)
 target_link_libraries(bloom_background_preview_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_background_preview_test)

@@ -1,7 +1,9 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/window_status_bar.hpp>
+#include <cmath>
 #include <memory>
 
+#include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/painting.hpp>
@@ -150,11 +152,30 @@ QString operationCacheText(const runtime::OperationCache& operationCache) {
         .arg(formatBytes(operationCache.retainedBytes()), formatBytes(operationCache.byteBudget()));
 }
 
+// CACHE-2 (docs/architecture/media-io.md "Disk cache"): kept as its own free function, separate
+// hunk and separate cell from previewCacheText() above -- the RAM preview cell reports the
+// in-memory frame cache, this one the on-disk decoded-frame store, and the two are independent
+// budgets an artist can reason about separately.
+QString mediaDiskCacheStatusText(const media::cache::MediaDiskCacheStatistics& stats,
+                                 const bool enabled) {
+    if (!enabled) {
+        return WindowStatusBar::tr("Disk cache off");
+    }
+    const auto total = stats.hits + stats.misses;
+    if (total == 0 && stats.entryCount == 0) {
+        return {};
+    }
+    return WindowStatusBar::tr("Disk %1% hit · %2")
+        .arg(static_cast<int>(std::lround(stats.hitRate() * 100.0)))
+        .arg(formatBytes(stats.storedBytes));
+}
+
 WindowStatusBar::WindowStatusBar(CompositionSession& session,
                                  CompositionPreviewController* const previewController,
-                                 QWidget* parent, runtime::OperationCache* const operationCache)
+                                 media::cache::MediaDiskCache* const mediaDiskCache,
+                                 runtime::OperationCache* const operationCache, QWidget* parent)
     : kit::KSurface(parent), session_(session), previewController_(previewController),
-      operationCache_(operationCache) {
+      operationCache_(operationCache), mediaDiskCache_(mediaDiskCache) {
     setObjectName(QStringLiteral("windowStatusBar"));
     setAccessibleName(tr("Application status"));
     setFixedHeight(kit::px(kit::Size::Control));
@@ -171,6 +192,10 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
                               kit::TypeRole::UiSmall, kit::Color::Warn, this);
     cache_ = makeCell(QStringLiteral("windowStatusBarCache"), kit::TypeRole::UiSmall,
                       kit::Color::Muted, this);
+    // CACHE-2: the on-disk decoded-frame cache's own cell, kept as its own makeCell() call rather
+    // than folded into `cache_` above so the two budgets stay independently readable.
+    mediaDiskCacheCell_ = makeCell(QStringLiteral("windowStatusBarMediaDiskCache"),
+                                   kit::TypeRole::UiSmall, kit::Color::Muted, this);
     message_ = makeCell(QStringLiteral("windowStatusBarMessage"), kit::TypeRole::UiSmall,
                         kit::Color::Foreground, this);
     message_->setAccessibleName(tr("Status message"));
@@ -184,12 +209,26 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     layout->addWidget(previewState_);
     layout->addWidget(droppedFrames_);
     layout->addWidget(cache_);
+    // CACHE-2: placed right beside the RAM preview cache cell it complements.
+    layout->addWidget(mediaDiskCacheCell_);
     layout->addWidget(message_, 1);
 
     transientTimer_ = new QTimer(this);
     transientTimer_->setSingleShot(true);
     transientTimer_->setInterval(kTransientMessageMs);
     connect(transientTimer_, &QTimer::timeout, this, &WindowStatusBar::clearTransientMessage);
+
+    // CACHE-2: the disk cache has no Qt signal of its own (it is a Qt-free module shared with the
+    // runtime evaluator), so a light poll is what keeps this cell honest without threading a
+    // notification channel through a module that otherwise never depends on Qt. Five seconds
+    // matches this bar's other non-urgent cadence (the transient-message lifetime above); a hit
+    // rate does not need sub-second freshness.
+    refreshMediaDiskCacheCell();
+    mediaDiskCacheTimer_ = new QTimer(this);
+    mediaDiskCacheTimer_->setInterval(5'000);
+    connect(mediaDiskCacheTimer_, &QTimer::timeout, this,
+            &WindowStatusBar::refreshMediaDiskCacheCell);
+    mediaDiskCacheTimer_->start();
 
     // A refused command is a notice, not a dialog: the artist asked for something the document
     // could not do, the command did not run, and the reason belongs where every other notice is.
@@ -258,6 +297,15 @@ void WindowStatusBar::refreshPreviewCells() {
                                               : previewText + tr(" · ") + operationText);
 }
 
+// CACHE-2: independent of refreshPreviewCells() above -- the disk cache is unrelated to the
+// preview pipeline and stays live even in a window built without one (previewController_ null).
+void WindowStatusBar::refreshMediaDiskCacheCell() {
+    mediaDiskCacheCell_->setText(mediaDiskCacheStatusText(
+        mediaDiskCache_ != nullptr ? mediaDiskCache_->statistics()
+                                   : media::cache::MediaDiskCacheStatistics{},
+        mediaDiskCache_ != nullptr && mediaDiskCache_->enabled()));
+}
+
 void WindowStatusBar::showTransientMessage(const QString& message) {
     transientMessage_ = message;
     refreshMessage();
@@ -292,6 +340,8 @@ QString WindowStatusBar::previewStateTextForTest() const { return previewState_-
 QString WindowStatusBar::droppedFrameTextForTest() const { return droppedFrames_->text(); }
 
 QString WindowStatusBar::cacheTextForTest() const { return cache_->text(); }
+
+QString WindowStatusBar::mediaDiskCacheTextForTest() const { return mediaDiskCacheCell_->text(); }
 
 QString WindowStatusBar::messageTextForTest() const { return message_->text(); }
 
