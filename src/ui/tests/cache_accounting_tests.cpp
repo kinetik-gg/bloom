@@ -16,12 +16,21 @@
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
+#include <bloom/media/video/session.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 
+#include <bloom/ui/asset_controller.hpp>
+#include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/project_host.hpp>
+#include <bloom/ui/task_ui_bridge.hpp>
+
+#include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QImage>
+#include <QTemporaryDir>
 
 #include <algorithm>
 #include <chrono>
@@ -240,6 +249,87 @@ void testTwoHundredUhdImportsStayInsideEveryBudget(Expectations& check) {
     }
 }
 
+// CACHEFIX-2: change the machine while imports continue, then keep offering frames after both
+// pressure polls. This catches a trim-only implementation that immediately refills the cache.
+void testContentionDuringTwoHundredImports(Expectations& check) {
+    constexpr auto gib = 1024 * kMebibyte;
+    constexpr auto operationBudget = 640 * kMebibyte;
+    constexpr auto videoBudget = 8 * kMebibyte;
+    constexpr auto queueBudget = 8 * kMebibyte;
+    constexpr auto trackedBudget = operationBudget + videoBudget + queueBudget;
+    constexpr auto slack = 256 * kMebibyte;
+    runtime::MemoryBudgetLedger ledger(16 * gib, 16 * gib);
+    runtime::OperationCache operations(operationBudget, ledger);
+    bloom::media::video::DecodedVideoCache video(videoBudget, ledger);
+    ScratchDirectory scratch("cachefix2-contention");
+    cache::MediaDiskCacheConfig config;
+    config.rootDirectory = scratch.path();
+    config.asyncQueueByteCapacity = queueBudget;
+    cache::MediaDiskCache disk(config, ledger);
+    const auto baseline = residentBytes();
+    auto peak = baseline;
+    std::size_t before = 0, first = 0, second = 0;
+    const auto tracked = [&] {
+        return operations.retainedBytes() + video.residentBytes() +
+               disk.statistics().asyncQueueBytes;
+    };
+    for (int index = 0; index < kImportedImages; ++index) {
+        auto image = makeUhdImage(static_cast<float>(index % 97) / 97.0F);
+        operations.store("contention:" + keyFor(index), {},
+                         {.image = image, .values = {}, .bounds = {}},
+                         index % 2 == 0 ? runtime::OperationCacheEntryKind::DecodedMedia
+                                        : runtime::OperationCacheEntryKind::Operation);
+        disk.storeAsync(keyFor(index), image);
+        auto frame = std::make_shared<bloom::media::provider::FrameProduct>();
+        frame->format = bloom::media::provider::PixelFormat::Rgba8;
+        frame->colour = {1, 1, 1, 1};
+        bloom::media::provider::CpuPlane plane;
+        plane.width = 1024;
+        plane.height = 512;
+        plane.stride = 4096;
+        plane.bytes.resize(static_cast<std::size_t>(plane.stride) * plane.height);
+        plane.digest = bloom::media::provider::digestBytes(plane.bytes);
+        frame->planes.push_back(std::move(plane));
+        video.store({{}, 0, static_cast<std::uint64_t>(index), 0}, std::move(frame));
+        image.reset();
+        peak = std::max(peak, residentBytes());
+        if (index == 99) {
+            before = tracked();
+            check.expect(
+                before > operationBudget / 2 && video.residentBytes() > videoBudget / 2,
+                "operation, decoded media and video caches hold real frames before pressure");
+            const auto state = ledger.poll({.availableBytes = 2 * gib},
+                                           runtime::MemoryBudgetLedger::Clock::time_point{});
+            first = tracked();
+            check.expect(state.retentionPercent == 25 && first <= trackedBudget / 4,
+                         "first contention poll trims all tracked caches below 25 percent");
+        }
+        if (index == 100) {
+            const auto state = ledger.poll({.availableBytes = 2 * gib},
+                                           runtime::MemoryBudgetLedger::Clock::time_point{} +
+                                               std::chrono::seconds(5));
+            second = tracked();
+            check.expect(state.retentionPercent == 10 && second < trackedBudget / 4,
+                         "within two polls tracked bytes are below 25 percent despite new offers");
+        }
+        if (index >= 100)
+            check.expect(tracked() <= trackedBudget / 10,
+                         "continuing imports cannot refill beyond the persistent pressure limit");
+    }
+    check.expect(operations.statistics().pressureDrops > 0, "real cache entries were evicted");
+    check.expect(disk.asyncQueueByteCapacity() <= queueBudget / 10,
+                 "disk queue admission follows the same ledger callback");
+    if (baseline != 0 && peak != 0)
+        check.expect(peak - baseline <= trackedBudget + slack,
+                     "contention RSS growth stays inside budgets plus transient-frame slack");
+    std::cout << "contention: 200 4K frames; tracked MiB "
+              << static_cast<double>(before) / kMebibyte << " -> "
+              << static_cast<double>(first) / kMebibyte << " (poll 1) -> "
+              << static_cast<double>(second) / kMebibyte << " (poll 2); RSS growth "
+              << static_cast<double>(peak - baseline) / kMebibyte << " MiB; budget + slack "
+              << static_cast<double>(trackedBudget + slack) / kMebibyte << " MiB\n";
+}
+
 // The pool the audit found. Before CACHEFIX-1 the queue's only bound was 64 ENTRIES, so this same
 // loop staged 64 x 126.6 MiB = 7.9 GiB of decoded pixels the memory ledger never saw -- and 31.6
 // GiB had the frames been 8K. The bound is now bytes, and it is applied before the memory is
@@ -364,14 +454,88 @@ void testDecodedAudioAggregateIsBounded(Expectations& check) {
                  "the cap admits real projects and refuses a project that would exhaust memory");
 }
 
+void testAssetProxyAndAudioParticipation(Expectations& check) {
+    QTemporaryDir directory;
+    QImage image(64, 64, QImage::Format_RGBA8888);
+    image.fill(0xffffffffU);
+    check.expect(image.save(directory.filePath("proxy.png")), "write proxy fixture");
+    const auto audioPath = directory.filePath("tone.wav");
+    {
+        std::ofstream wave(audioPath.toStdString(), std::ios::binary);
+        const auto le = [&wave](std::uint32_t value, unsigned bytes) {
+            for (unsigned index = 0; index < bytes; ++index) {
+                wave.put(static_cast<char>(value & 255));
+                value >>= 8;
+            }
+        };
+        wave.write("RIFF", 4);
+        le(36 + 8192, 4);
+        wave.write("WAVEfmt ", 8);
+        le(16, 4);
+        le(1, 2);
+        le(1, 2);
+        le(48000, 4);
+        le(96000, 4);
+        le(2, 2);
+        le(16, 2);
+        wave.write("data", 4);
+        le(8192, 4);
+        for (unsigned index = 0; index < 4096; ++index)
+            le(index % 32768, 2);
+    }
+    runtime::TaskSchedulerConfig config;
+    config.cpuWorkerCount = 1;
+    config.blockingIoWorkerCount = 1;
+    runtime::TaskScheduler scheduler(config);
+    bloom::ui::ProjectHost host(scheduler);
+    bloom::ui::CompositionSession session(*host.liveDocumentAndStack().first,
+                                          *host.liveDocumentAndStack().second,
+                                          host.lowestCompositionId());
+    bloom::ui::TaskUiBridge bridge(scheduler);
+    bloom::ui::AssetController assets(session, host, scheduler, bridge);
+    assets.importFiles({directory.filePath("proxy.png"), audioPath});
+    QElapsedTimer timer;
+    timer.start();
+    while ((assets.busy() || assets.proxyCacheBytes() == 0 || assets.decodedAudioBytes() == 0) &&
+           timer.elapsed() < 15000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    check.expect(assets.proxyCacheBytes() > 0 && assets.decodedAudioBytes() > 0,
+                 "real asset controller retains decoded proxy and audio bytes");
+    // Give another participant almost all the configured weight, so tiny real fixtures can test
+    // eviction without allocating gigabytes of audio. It owns no storage itself.
+    auto& ledger = runtime::processMemoryBudgetLedger();
+    const int competingPool = 0;
+    ledger.registerCache(
+        &competingPool, std::size_t{1} << 50U, [] { return 0; }, [](std::size_t) {});
+    static_cast<void>(ledger.poll({.availableBytes = 0}));
+    static_cast<void>(ledger.poll({.availableBytes = 0}));
+    check.expect(assets.proxyCacheBytes() == 0 && assets.decodedAudioBytes() == 0,
+                 "proxy and audio owners evict through the same ledger callbacks");
+    for (const auto& asset : session.snapshot().project().assets())
+        check.expect(assets.thumbnail(asset.id).isNull() && !assets.audioBuffer(asset.id),
+                     "eviction also releases thumbnail aliases and audio lookup handles");
+    ledger.unregisterCache(&competingPool);
+    assets.cancel();
+    bridge.beginShutdown();
+    scheduler.beginShutdown();
+    timer.restart();
+    while (!scheduler.isQuiescent() && timer.elapsed() < 15000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    check.expect(scheduler.isQuiescent(),
+                 "pressure cancellation leaves media tasks safe to shut down");
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    QCoreApplication app(argc, argv);
     Expectations check;
     testTwoHundredUhdImportsStayInsideEveryBudget(check);
+    testContentionDuringTwoHundredImports(check);
     testUnboundedAsyncQueueWouldHaveHeldGigabytes(check);
     testBadAllocOnInsertDropsTheEntryAndKeepsTheValue(check);
     testProxyCacheBoundIsMeasuredRatherThanAssumed(check);
     testDecodedAudioAggregateIsBounded(check);
+    testAssetProxyAndAudioParticipation(check);
     return check.failures() == 0 ? 0 : 1;
 }

@@ -4,6 +4,20 @@
 #include <new>
 
 namespace bloom::runtime {
+OperationCache::OperationCache(const std::size_t budget, MemoryBudgetLedger& ledger)
+    : ledger_(ledger), budget_(budget) {
+    ledger_.registerCache(
+        this, budget, [this] { return retainedBytes(); },
+        [this](const std::size_t bytes) {
+            const bool pressure = ledger_.state().retentionPercent < 100;
+            const std::lock_guard lock(mutex_);
+            budget_ = bytes;
+            std::uint64_t ordinaryDrops = 0;
+            evictToLocked(bytes, pressure ? statistics_.pressureDrops : ordinaryDrops);
+        });
+}
+OperationCache::~OperationCache() { ledger_.unregisterCache(this); }
+
 std::optional<OperationCacheValue> OperationCache::find(const std::string& content,
                                                         document::Revision revision) {
     const std::lock_guard lock(mutex_);
@@ -118,9 +132,7 @@ std::list<OperationCache::Entry>::iterator OperationCache::evictionCandidate() {
     return std::prev(entries_.end());
 }
 void OperationCache::setByteBudget(const std::size_t budget) {
-    const std::lock_guard lock(mutex_);
-    budget_ = budget;
-    evict();
+    static_cast<void>(ledger_.setCacheCeiling(this, budget));
 }
 std::size_t OperationCache::byteBudget() const {
     const std::lock_guard lock(mutex_);

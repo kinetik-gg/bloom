@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/render/image.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 
 #include <atomic>
 #include <condition_variable>
@@ -93,7 +94,8 @@ struct MediaDiskCacheStatistics final {
 // is evicted later than ideal, never that a corrupt or wrong entry is served.
 class MediaDiskCache final {
   public:
-    explicit MediaDiskCache(MediaDiskCacheConfig config);
+    explicit MediaDiskCache(MediaDiskCacheConfig config, runtime::MemoryBudgetLedger& ledger =
+                                                             runtime::processMemoryBudgetLedger());
     MediaDiskCache(const MediaDiskCache&) = delete;
     MediaDiskCache& operator=(const MediaDiskCache&) = delete;
     MediaDiskCache(MediaDiskCache&&) = delete;
@@ -131,7 +133,7 @@ class MediaDiskCache final {
     [[nodiscard]] MediaDiskCacheStatistics statistics() const;
     // The pending-write queue's byte capacity, as resolved from the config.
     [[nodiscard]] std::uint64_t asyncQueueByteCapacity() const noexcept {
-        return asyncQueueByteCapacity_;
+        return asyncQueueByteCapacity_.load(std::memory_order_relaxed);
     }
     void setByteBudget(std::uint64_t bytes);
     [[nodiscard]] std::uint64_t byteBudget() const;
@@ -171,11 +173,12 @@ class MediaDiskCache final {
                               const std::shared_ptr<const render::Rgba32fImage>& image);
     void writerLoop();
 
+    runtime::MemoryBudgetLedger& ledger_;
     mutable std::mutex mutex_;
     std::filesystem::path root_;
     std::uint64_t byteBudget_;
     std::uint64_t maxEntryCount_;
-    std::uint64_t asyncQueueByteCapacity_;
+    std::atomic<std::uint64_t> asyncQueueByteCapacity_;
     std::atomic<bool> enabled_;
     Lru lru_; // front = most recently used
     std::unordered_map<std::string, std::pair<IndexEntry, Lru::iterator>> index_;
@@ -183,13 +186,14 @@ class MediaDiskCache final {
     MediaDiskCacheStatistics statistics_;
     bool indexLoaded_ = false;
 
-    std::mutex queueMutex_;
+    mutable std::mutex queueMutex_;
     std::condition_variable queueCv_;
     std::condition_variable idleCv_;
     std::deque<AsyncWrite> queue_;
-    // Queued plus in-flight bytes. Guarded by queueMutex_, mirrored into statistics_ under mutex_
-    // so a reader sees one number rather than two that disagree.
+    // Queue accounting never takes the disk-index mutex: a UI pressure callback cannot wait on I/O.
     std::uint64_t queuedBytes_ = 0;
+    std::uint64_t peakQueuedBytes_ = 0;
+    std::uint64_t droppedAsyncWrites_ = 0;
     std::size_t inFlight_ = 0;
     bool stopping_ = false;
     std::thread writer_;

@@ -86,7 +86,8 @@ class WindowStatusBar final : public kit::KSurface {
     // account, with no operation-cache statistics appended.
     WindowStatusBar(CompositionSession& session, CompositionPreviewController* previewController,
                     media::cache::MediaDiskCache* mediaDiskCache = nullptr,
-                    runtime::OperationCache* operationCache = nullptr, QWidget* parent = nullptr);
+                    runtime::OperationCache* operationCache = nullptr, QWidget* parent = nullptr,
+                    runtime::MemoryBudgetLedger& ledger = runtime::processMemoryBudgetLedger());
 
     // A notice that clears itself after five seconds -- a rejected command, an export that
     // finished, a cancellation. It takes precedence over the persistent message while it lasts.
@@ -101,10 +102,12 @@ class WindowStatusBar final : public kit::KSurface {
     void cancelExportRequested();
 
   public:
-    // CACHEFIX-1 pressure response. Drives one poll with a given MemAvailable reading instead of
-    // the host's, so a test can exercise the trim and the notice on any machine. Mirrors the
-    // *ForTest precedent used elsewhere in this class.
+    // Injected memory samples and a monotonic clock keep pressure, recovery and notice tests
+    // independent of the host. The legacy byte-only overload treats zero as unavailable.
     void pollMemoryPressureForTest(std::size_t availableBytes);
+    void pollMemoryPressureForTest(runtime::MachineMemorySample sample,
+                                   runtime::MemoryBudgetLedger::Clock::time_point now);
+    [[nodiscard]] QString cacheToolTipForTest() const;
     [[nodiscard]] std::size_t memoryReserveBytesForTest() const noexcept {
         return memoryReserveBytes_;
     }
@@ -124,12 +127,15 @@ class WindowStatusBar final : public kit::KSurface {
     void refreshProbeCell(const ProbeReadout& readout);
     void refreshMediaDiskCacheCell();
     void refreshMessage();
-    // Reads the host's MemAvailable and hands it to applyMemoryPressure(). Driven by the same
+    // Reads host memory and swap use and polls the shared ledger. Driven by the same
     // five-second timer as the disk-cache cell -- a memory reading does not need sub-second
     // freshness either, and adding a second timer for it would only add a second cadence.
     void pollMemoryPressure();
-    void applyMemoryPressure(std::size_t availableBytes);
+    void applyMemoryPressure(runtime::MachineMemorySample sample,
+                             runtime::MemoryBudgetLedger::Clock::time_point now);
+    void refreshMemoryToolTip();
 
+    runtime::MemoryBudgetLedger& memoryLedger_;
     CompositionSession& session_;
     CompositionPreviewController* previewController_ = nullptr;
     runtime::OperationCache* operationCache_ = nullptr;
@@ -151,9 +157,8 @@ class WindowStatusBar final : public kit::KSurface {
     // max(8 GiB, 40% of physical) -- what the memory ledger left to the rest of the machine, and
     // therefore the line below which the machine is short of memory rather than merely busy.
     std::size_t memoryReserveBytes_ = 0;
-    // One notice per episode of pressure: set when the trim runs, cleared only when availability
-    // recovers above the reserve. A machine that stays busy is told once, not every five seconds.
-    bool memoryPressureActive_ = false;
+    // When swap starts the same episode, its distinct notice follows the ordinary trim notice.
+    bool pendingSwapNotice_ = false;
 };
 
 } // namespace bloom::ui

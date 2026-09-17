@@ -177,3 +177,9 @@ add_executable(bloom_composition_source_test composition_source_tests.cpp)
 target_link_libraries(bloom_composition_source_test PRIVATE bloom_runtime_evaluator bloom_runtime_compiler bloom_media_audio)
 bloom_enable_warnings(bloom_composition_source_test)
 bloom_add_test(NAME bloom.runtime.composition-source COMMAND bloom_composition_source_test LABELS unit)
+
+add_executable(bloom_runtime_memory_budget_ledger_test memory_budget_ledger_tests.cpp)
+target_link_libraries(bloom_runtime_memory_budget_ledger_test PRIVATE bloom_runtime)
+bloom_enable_warnings(bloom_runtime_memory_budget_ledger_test)
+bloom_add_test(NAME bloom.runtime.memory_budget_ledger COMMAND bloom_runtime_memory_budget_ledger_test
+              LABELS unit runtime TIMEOUT 30)
