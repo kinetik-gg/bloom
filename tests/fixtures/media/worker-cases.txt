@@ -1,0 +1,11 @@
+# Synthetic process fixture modes and expected typed failures; no encoded media assets.
+truncated Truncated
+oversized Oversized
+enum BadEnum
+length BadLength
+replay Replay
+version VersionMismatch
+lock IdentityMismatch
+digest DigestMismatch
+crash Crashed
+hang Timeout

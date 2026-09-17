@@ -29,6 +29,9 @@ allow-list, and an optional VA-API feature. `cmake/BloomDependencyPrefix.cmake` 
 explicit `qualified`/`developer-system` consumption with restricted package search, the
 ABI-relevant toolchain-agreement subset, and Linux shared-library SONAME inventory checks;
 `tests/dependency-consumption` exercises both the FFmpeg package wrapper and the desktop boundary.
+The supervised worker now exists with a synthetic provider only. Its
+[worker rpath policy](media-io.md#worker-rpath-policy) keeps each provider generation’s shared
+dependencies private; MEDIA-3 owns FFmpeg linkage and installed-package verification.
 Still pending: the production prefix manifest and its validator (with complete filesystem
 inventory and no-follow/hardlink/link-chain evidence), a trusted qualified identity capability,
 full Unicode collision data behind the ASCII tightening, exact tool-identity capture at the

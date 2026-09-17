@@ -138,7 +138,8 @@ proof needs their behavior rather than as empty speculative libraries.
 
 ## Module Composition
 
-- `apps/bloom` is the only application composition root.
+- `apps/bloom` is the desktop application composition root. `apps/bloom-media-worker` is the
+  isolated media-provider process root; it cannot own project or UI state.
 - Foundation modules have explicit public surfaces and acyclic dependencies.
 - Ordinary in-tree collaboration uses direct typed C++ APIs.
 - Registries are reserved for extensible vocabularies such as editor types, node definitions,

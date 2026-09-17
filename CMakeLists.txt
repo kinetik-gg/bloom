@@ -47,6 +47,7 @@ add_subdirectory(src/runtime)
 add_subdirectory(src/output)
 add_subdirectory(src/commands)
 add_subdirectory(src/host)
+add_subdirectory(apps/bloom-media-worker)
 
 add_custom_target(
     bloom-quality-check
