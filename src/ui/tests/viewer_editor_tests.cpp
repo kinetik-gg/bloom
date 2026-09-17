@@ -11,8 +11,11 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/graph.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/shape.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
@@ -1690,6 +1693,66 @@ void testViewerOverlayPixelsFollowTransformAndThreshold(Expectations& expectatio
 
 } // namespace
 
+// SHAPEFIX-1, deliverable 2: the viewer's Add menu (previously Solid/Text only) gains Rectangle,
+// Ellipse, Triangle, Polygon, Star, Line and Path entries that create a shape LAYER -- source +
+// Layer Output + stack slot + edges, exactly like addDefaultSolidLayer() -- rather than the node
+// editor's bare-node entries. AddShapeLayer's own topology (undo/redo, position, per-kind
+// defaults) is pinned exhaustively in src/commands/tests/structured_layer_tests.cpp; this test
+// pins only the menu wiring: the entry exists, triggers exactly one transaction, and that
+// transaction really is a shape layer of the requested kind, selected afterward.
+void testAddMenuOffersShapeLayers(Expectations& expectations) {
+    using namespace bloom;
+    ViewerFixture fixture(makeTestProject("Add Menu Shapes"));
+    fixture.viewer.show();
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "shape add-menu fixture ready");
+    auto* addMenu = fixture.viewer.findChild<QMenu*>("viewerAddMenu");
+    auto* rectangleAction = addMenu ? addMenu->findChild<QAction*>("viewerAddShape.0") : nullptr;
+    expectations.expect(addMenu != nullptr && rectangleAction != nullptr,
+                        "the viewer Add menu exposes a Rectangle shape entry");
+    if (rectangleAction != nullptr) {
+        const auto before = fixture.commands.size();
+        rectangleAction->trigger();
+        expectations.expect(fixture.commands.size() == before + 1,
+                            "the Rectangle entry authors exactly one transaction");
+        const auto* layerId = std::get_if<document::LayerId>(&fixture.session.selection().primary);
+        expectations.expect(layerId != nullptr, "the new shape layer is selected afterward");
+        const auto* composition = fixture.session.composition();
+        const auto sourceNode =
+            layerId != nullptr ? fixture.session.directSourceNodeForLayer(*layerId) : std::nullopt;
+        expectations.expect(sourceNode.has_value(), "the new layer has a direct source node");
+        const document::NodeRecord* node = sourceNode.has_value() && composition != nullptr
+                                               ? composition->graph().findNode(*sourceNode)
+                                               : nullptr;
+        expectations.expect(node != nullptr && node->typeId == document::kShapeSourceNodeType,
+                            "the Rectangle entry creates a shape source, not a bare node");
+        bool rectangleKindAuthored = false;
+        if (node != nullptr && composition != nullptr) {
+            for (const auto& binding : node->parameters) {
+                if (binding.role != "kind") {
+                    continue;
+                }
+                const auto* parameter = composition->parameters().find(binding.parameterId);
+                const auto* constant =
+                    parameter != nullptr
+                        ? std::get_if<document::ConstantValueSource>(&parameter->source)
+                        : nullptr;
+                const auto* kind =
+                    constant != nullptr ? std::get_if<std::int64_t>(&constant->value) : nullptr;
+                rectangleKindAuthored =
+                    kind != nullptr &&
+                    static_cast<document::ShapeKind>(*kind) == document::ShapeKind::Rectangle;
+            }
+        }
+        expectations.expect(rectangleKindAuthored,
+                            "the Rectangle entry authors document::ShapeKind::Rectangle");
+    }
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+                        "shape add-menu fixture shuts down");
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -1707,6 +1770,7 @@ int main(int argc, char** argv) {
     } catch (const std::exception& error) {
         expectations.expect(false, error.what());
     }
+    testAddMenuOffersShapeLayers(expectations);
     testSelectedBoundsOverlayPixels(expectations);
     testResolutionDropdownPersistsAndMovesWithFooter(expectations);
     testAutoFollowsFitResize(expectations);

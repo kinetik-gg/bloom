@@ -6,6 +6,7 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/shape.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
@@ -134,6 +135,77 @@ parameterForRole(const bloom::document::Composition& composition,
     taskUiBridge.beginShutdown();
     return paletteOk && require(waitUntil([&scheduler] { return scheduler.isQuiescent(); }),
                                 "solid palette fixture reaches scheduler quiescence");
+}
+
+// SHAPEFIX-1, deliverable 2: the timeline's Add menu (previously Solid/Text only) gains shape
+// entries that create a shape LAYER through the same commands::AddShapeLayer topology
+// addDefaultSolidLayer()/addDefaultTextLayer() already use, rather than the node editor's
+// bare-node entries. AddShapeLayer's own topology and per-kind defaults are pinned exhaustively
+// in src/commands/tests/structured_layer_tests.cpp; this pins only the timeline menu wiring.
+[[nodiscard]] bool runShapeAddMenuTest() {
+    using namespace bloom;
+    auto newProject = document::makeNewProject("Shape Add Menu Test", "Main",
+                                               core::RationalTime::fromInteger(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    runtime::TaskScheduler scheduler;
+    ui::TaskUiBridge taskUiBridge(scheduler, nullptr, std::chrono::milliseconds{1});
+    ui::CompositionPreviewController previewController(
+        session, scheduler, taskUiBridge,
+        [](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
+           const std::vector<runtime::SnapshotParameterOverride>&, runtime::TaskContext&) {
+            return runtime::TaskResult<ui::PreviewPreparationResultHandle>::cancelled();
+        });
+    ui::TimelineEditor timeline(session, previewController);
+    auto* addMenu = timeline.findChild<QMenu*>("addLayerMenu");
+    auto* starAction =
+        addMenu != nullptr ? addMenu->findChild<QAction*>("timelineAddShape.4") : nullptr;
+    if (!require(addMenu != nullptr && starAction != nullptr &&
+                     starAction->text() == QStringLiteral("Star"),
+                 "timeline Add menu exposes a Star shape entry")) {
+        return false;
+    }
+
+    const auto before = commands.size();
+    starAction->trigger();
+    const bool wiringOk =
+        require(commands.size() == before + 1, "the Star entry authors exactly one transaction");
+    const auto* layerId = std::get_if<document::LayerId>(&session.selection().primary);
+    const auto sourceNode =
+        layerId != nullptr ? session.directSourceNodeForLayer(*layerId) : std::nullopt;
+    const auto* node = sourceNode.has_value() && session.composition() != nullptr
+                           ? session.composition()->graph().findNode(*sourceNode)
+                           : nullptr;
+    const bool topologyOk =
+        require(layerId != nullptr, "the new shape layer is selected afterward") &&
+        require(node != nullptr && node->typeId == document::kShapeSourceNodeType,
+                "the Star entry creates a shape source, not a bare node");
+    bool starKindAuthored = false;
+    if (node != nullptr && session.composition() != nullptr) {
+        for (const auto& binding : node->parameters) {
+            if (binding.role != "kind") {
+                continue;
+            }
+            const auto* parameter = session.composition()->parameters().find(binding.parameterId);
+            const auto* constant =
+                parameter != nullptr
+                    ? std::get_if<document::ConstantValueSource>(&parameter->source)
+                    : nullptr;
+            const auto* kind =
+                constant != nullptr ? std::get_if<std::int64_t>(&constant->value) : nullptr;
+            starKindAuthored = kind != nullptr &&
+                               static_cast<document::ShapeKind>(*kind) == document::ShapeKind::Star;
+        }
+    }
+    const bool kindOk = require(starKindAuthored, "the Star entry authors ShapeKind::Star");
+
+    previewController.beginShutdown();
+    taskUiBridge.beginShutdown();
+    return wiringOk && topologyOk && kindOk &&
+           require(waitUntil([&scheduler] { return scheduler.isQuiescent(); }),
+                   "shape add-menu fixture reaches scheduler quiescence");
 }
 
 [[nodiscard]] bool runProjectionTest() {
@@ -512,7 +584,7 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     try {
-        return runSolidPaletteTest() && runProjectionTest() ? 0 : 1;
+        return runSolidPaletteTest() && runShapeAddMenuTest() && runProjectionTest() ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << "composition projection test failed with an exception: " << error.what()
                   << '\n';

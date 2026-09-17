@@ -167,7 +167,8 @@ class CompositionSession final : public QObject {
     Q_OBJECT
 
   public:
-    // The closed v1 colour schemas all declare reference linear sRGB. Unknown schemas fail closed.
+    // Every Color4d-valued schema (document::isColor4AnimatableSchemaKey()) plus the colour operand
+    // schema declares reference linear sRGB. An unrecognized schema key fails closed.
     [[nodiscard]] kit::KColorConverter
     colorConverter(std::string_view schemaKey = document::kSolidColorParameterSchemaKey);
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/core/blend_mode.hpp>
+#include <bloom/document/shape.hpp>
 #include <bloom/ui/composition_session.hpp>
 
 #include <QString>
@@ -57,6 +58,13 @@ class CompositionSession;
 
 [[nodiscard]] bool addDefaultSolidLayer(CompositionSession& session);
 [[nodiscard]] bool addDefaultTextLayer(CompositionSession& session);
+
+// One "Add <shape>" gesture, shared by the viewer's Add menu and the Timeline's Add menu (task
+// SHAPEFIX-1, deliverable 2): the composition-centred, default-sized shape layer
+// CompositionSession::addShapeLayer() already builds for the node editor's own Add > Shapes
+// entries, reused rather than re-specified so the three surfaces cannot offer three opinions about
+// what "Add > Rectangle" means.
+[[nodiscard]] bool addDefaultShapeLayer(CompositionSession& session, document::ShapeKind kind);
 
 // The AE keyframe diamond (task S5, item 0), shared by the Properties rows and the node card's
 // parameter rows for the same reason parameterSourceDescription() is shared: the gesture, the three

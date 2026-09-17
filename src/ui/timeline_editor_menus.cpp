@@ -3,6 +3,7 @@
 
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/document/shape.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
@@ -117,6 +118,15 @@ void TimelineEditor::createHeaderMenus() {
     auto* text = localAction(add, tr("Text"), QStringLiteral("addTextLayerAction"), {},
                              [this] { (void)addDefaultTextLayer(session_); });
     text->setToolTip(tr("Add a text layer"));
+    for (std::int64_t index = 0; index <= 6; ++index) {
+        const auto kind = static_cast<document::ShapeKind>(index);
+        auto* shapeAction =
+            localAction(add, QString::fromUtf8(document::shapeKindName(kind).data()),
+                        QStringLiteral("timelineAddShape.%1").arg(index), {},
+                        [this, kind] { (void)addDefaultShapeLayer(session_, kind); });
+        shapeAction->setToolTip(
+            tr("Add a %1 layer").arg(QString::fromUtf8(document::shapeKindName(kind).data())));
+    }
 
     auto* view = menu(tr("View"), QStringLiteral("timelineViewMenu"));
     localAction(view, tr("Zoom to Fit"), QStringLiteral("timelineZoomToFitAction"),

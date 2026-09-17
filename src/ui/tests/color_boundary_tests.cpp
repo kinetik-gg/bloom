@@ -1,6 +1,7 @@
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/shape.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/document_decode.hpp>
 #include <bloom/project/document_migration.hpp>
@@ -13,6 +14,7 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/color_picker.hpp>
 #include <bloom/ui/kit/theme.hpp>
@@ -195,6 +197,103 @@ void boundaryPins() {
     expect(waitUntil([&] { return scheduler.isQuiescent(); }), "preview shuts down safely");
 }
 
+// SHAPEFIX-1, deliverable 1: the registry-generated Color4d row (the shape source's fillColor and
+// strokeColor) has to behave exactly like the handcrafted Solid colour row above -- same chip
+// enablement so the picker actually opens, same "no reference suffix" for an in-range colour, and
+// the same channel-field geometry -- because both now go through the ONE shared
+// properties::addColorRow()/refreshColor() implementation and the one CompositionSession::
+// colorConverter() gate that decides which schemas may convert at all.
+void shapeColorPin() {
+    const auto format = document::CompositionFormat::create(4, 4);
+    if (!format)
+        std::abort();
+    auto project = document::makeNewProject("Shape Colour", "Main",
+                                            core::RationalTime::fromInteger(10), *format);
+    const auto id = project.initialCompositionId;
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, id);
+
+    expect(session.addSolidLayer("Solid", {0.2, 0.3, 0.4, 1}), "solid baseline fixture created");
+    const auto* solidLayerId = std::get_if<document::LayerId>(&session.selection().primary);
+    expect(solidLayerId != nullptr, "solid layer is selected after creation");
+    const auto solidLayer = solidLayerId ? *solidLayerId : document::LayerId{};
+
+    expect(session.addShapeLayer(document::ShapeKind::Rectangle), "shape fixture created");
+    const auto* shapeLayerId = std::get_if<document::LayerId>(&session.selection().primary);
+    expect(shapeLayerId != nullptr, "shape layer is selected after creation");
+    const auto shapeLayer = shapeLayerId ? *shapeLayerId : document::LayerId{};
+
+    expect(waitUntil([&] { return static_cast<bool>(session.colorConverter()); }),
+           "session converter prepares off-thread");
+    expect(static_cast<bool>(session.colorConverter("bloom.shape.fill-color")),
+           "the shape source's fill-color schema is a recognized colour schema");
+    expect(static_cast<bool>(session.colorConverter("bloom.shape.stroke-color")),
+           "the shape source's stroke-color schema is a recognized colour schema");
+
+    QWidget window;
+    auto* layout = new QVBoxLayout(&window);
+    auto* properties = new ui::PropertiesEditor(session, &window);
+    layout->addWidget(properties);
+    window.resize(900, 900);
+    window.show();
+    QCoreApplication::processEvents();
+
+    session.selectLayer(solidLayer);
+    QCoreApplication::processEvents();
+    auto* solidRed = properties->findChild<ui::kit::KValueField*>("solidColorRedEditor");
+    expect(solidRed != nullptr, "Solid row's red channel field is found");
+    // The channel row is a disclosure (hidden until the chevron expands it, per ui-grammar.md's
+    // "Expanded Properties RGBA fields..."), so its geometry is only meaningful once expanded --
+    // an unexpanded QWidget keeps whatever stale geometry it had before its first real layout pass.
+    auto* solidExpand = properties->findChild<ui::kit::KButton*>("propertiesSolidColorExpand");
+    expect(solidExpand != nullptr, "the Solid row's RGBA disclosure chevron is found");
+    if (solidExpand != nullptr)
+        solidExpand->setChecked(true);
+    QCoreApplication::processEvents();
+    const QPoint solidRedPos = solidRed ? solidRed->mapTo(properties, QPoint(0, 0)) : QPoint();
+
+    session.selectLayer(shapeLayer);
+    QCoreApplication::processEvents();
+    QWidget* fillRow = nullptr;
+    for (auto* row : properties->findChildren<QWidget*>(QStringLiteral("propertiesRegistryRow"))) {
+        if (row->property("role").toString() == QStringLiteral("fillColor")) {
+            fillRow = row;
+            break;
+        }
+    }
+    expect(fillRow != nullptr, "the shape's fillColor registry row is found");
+    auto* shapeChip =
+        fillRow ? fillRow->findChild<ui::kit::KColorChip*>("propertiesRegistryColor") : nullptr;
+    auto* shapeRed =
+        fillRow ? fillRow->findChild<ui::kit::KValueField*>("propertiesRegistryValue") : nullptr;
+    expect(shapeChip != nullptr && shapeRed != nullptr,
+           "the registry row's chip and red channel field are found");
+
+    expect(shapeChip != nullptr && shapeChip->isEnabled(),
+           "the registry colour row's chip is enabled, exactly like the Solid row's");
+    if (shapeChip != nullptr) {
+        shapeChip->openPicker();
+        expect(shapeChip->isPickerOpen(), "the registry colour row's chip click opens the picker");
+        shapeChip->closePicker();
+    }
+    expect(shapeRed != nullptr && shapeRed->unit().isEmpty(),
+           "the default in-range fillColor shows no 'reference' label overlapping the channels");
+
+    auto* shapeExpand =
+        fillRow ? fillRow->findChild<ui::kit::KButton*>("propertiesRegistryColorExpand") : nullptr;
+    expect(shapeExpand != nullptr, "the registry row's RGBA disclosure chevron is found");
+    if (shapeExpand != nullptr)
+        shapeExpand->setChecked(true);
+    QCoreApplication::processEvents();
+
+    if (solidRed != nullptr && shapeRed != nullptr) {
+        const QPoint shapeRedPos = shapeRed->mapTo(properties, QPoint(0, 0));
+        expect(solidRedPos.x() == shapeRedPos.x(),
+               "the registry row's channel field x position matches the Solid row's");
+    }
+}
+
 void migrationPin() {
     auto project = document::makeNewProject("Legacy", "Main", core::RationalTime::fromInteger(10));
     const auto id = project.initialCompositionId;
@@ -280,6 +379,7 @@ int main(int argc, char** argv) try {
     QCoreApplication::setApplicationName("ColourBoundary");
     ui::kit::installKinetikTheme(application);
     boundaryPins();
+    shapeColorPin();
     migrationPin();
     return failures == 0 ? 0 : 1;
 } catch (const std::exception& error) {
