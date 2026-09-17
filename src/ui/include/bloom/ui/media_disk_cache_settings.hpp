@@ -1,0 +1,47 @@
+#pragma once
+
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+
+class QSettings;
+class QWidget;
+
+namespace bloom::media::cache {
+class MediaDiskCache;
+} // namespace bloom::media::cache
+
+// Settings and lifecycle for the media disk cache (docs/architecture/media-io.md "Disk cache").
+// This app has no Preferences dialog today -- the RAM preview and operation-cache byte budgets
+// (preview_frame_cache.hpp's
+// ramPreviewByteBudgetFromSettings()/operationCacheByteBudgetFromSettings()) are QSettings-only in
+// exactly the same way, so these follow that established precedent rather than inventing a first
+// settings surface for one feature.
+namespace bloom::ui {
+
+// "media/disk-cache-enabled", default true.
+[[nodiscard]] bool mediaDiskCacheEnabledFromSettings(const QSettings& settings);
+
+// "media/disk-cache-directory": an absolute path override. Empty, missing, or relative reads as
+// "use the platform default" (bloom::platform::userCacheDirectory() plus a "media" leaf).
+[[nodiscard]] std::filesystem::path mediaDiskCacheDirectoryFromSettings(const QSettings& settings);
+
+// "media/disk-cache-budget-bytes": missing, zero, unparseable, or negative reads as `fallback`
+// (the caller resolves that from physical disk free space via
+// media::cache::defaultMediaDiskCacheByteBudget()).
+[[nodiscard]] std::uint64_t mediaDiskCacheByteBudgetFromSettings(const QSettings& settings,
+                                                                 std::uint64_t fallback);
+
+// Builds a MediaDiskCache from the current settings and the platform cache directory. Returns
+// nullptr when the cache is disabled in settings OR no directory can be resolved at all (no
+// override and no platform default) -- both are "disk cache unavailable this session", never a
+// startup failure (derived caches are optional runtime state per media-io.md).
+[[nodiscard]] std::unique_ptr<media::cache::MediaDiskCache>
+makeMediaDiskCacheFromSettings(const QSettings& settings);
+
+// The "Clear media cache" command body (Composition menu): asks for confirmation, then clears.
+// `cache` may be null (no disk cache configured for this session); the dialog then says so and
+// clears nothing. Returns true when the cache was actually cleared, for a status-bar notice.
+bool confirmAndClearMediaDiskCache(QWidget* parent, media::cache::MediaDiskCache* cache);
+
+} // namespace bloom::ui

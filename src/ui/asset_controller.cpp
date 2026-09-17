@@ -6,6 +6,7 @@
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/media/audio/audio.hpp>
+#include <bloom/media/cache/media_disk_cache_decode.hpp>
 #include <bloom/media/image.hpp>
 #include <bloom/platform/font_catalog.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
@@ -33,6 +34,11 @@ struct ThumbnailSelection {
     core::Sha256Digest digest;
     media::ImageInterpretation interpretation;
     std::string cacheKey;
+    // The same disk-cache key format image_source.cpp's selectImageSource() builds (see
+    // media::cache::buildImageCacheKey()): asset digest + member frame + interpretation + Bloom
+    // Neutral config digest + decoder identity, so a proxy decode here and a full evaluator decode
+    // of the same source share one disk entry (docs/architecture/media-io.md "Disk cache").
+    std::string diskCacheKey;
     bool available = false;
 };
 
@@ -133,6 +139,14 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
                         ":" +
                         std::to_string(static_cast<int>(selected.interpretation.alphaAssociation)) +
                         ":" + std::string(config.begin(), config.end());
+    media::cache::ImageCacheKeyInputs diskInputs;
+    diskInputs.contentDigest = selected.digest;
+    diskInputs.memberFrame = memberFrame;
+    diskInputs.colorSpace = selected.interpretation.colorSpace;
+    diskInputs.alphaAssociation = selected.interpretation.alphaAssociation;
+    diskInputs.configDigest = color::kBloomNeutralV1ConfigDigest;
+    selected.diskCacheKey =
+        media::cache::buildImageCacheKey(diskInputs, media::cache::kImageDecoderIdentity);
     return selected;
 }
 unsigned char srgb(float value) {
@@ -144,8 +158,9 @@ unsigned char srgb(float value) {
 } // namespace
 AssetController::AssetController(CompositionSession& session, ProjectHost& host,
                                  runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
-                                 QObject* parent)
-    : QObject(parent), session_(session), host_(host), scheduler_(scheduler), bridge_(bridge) {
+                                 media::cache::MediaDiskCache* mediaDiskCache, QObject* parent)
+    : QObject(parent), session_(session), host_(host), scheduler_(scheduler), bridge_(bridge),
+      mediaDiskCache_(mediaDiskCache) {
     dragToken_ = QUuid::createUuid().toByteArray();
     session_.setAssetController(this);
     connect(&bridge_, &TaskUiBridge::snapshotsPolled, this, &AssetController::poll);
@@ -354,8 +369,8 @@ void AssetController::refresh() {
             "Image thumbnails",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Background, runtime::TaskExecutor::BlockingIo),
-        [snapshot, directory, time, rate, sources = std::move(sources),
-         cached = thumbnailCache_](runtime::TaskContext& context) mutable {
+        [snapshot, directory, time, rate, sources = std::move(sources), cached = thumbnailCache_,
+         diskCache = mediaDiskCache_](runtime::TaskContext& context) mutable {
             auto results = std::make_shared<Thumbnails>();
             results->cache = std::move(cached);
             const auto decode = [&](const runtime::CompiledImageSource& source) {
@@ -371,10 +386,15 @@ void AssetController::refresh() {
                     preview.image = found->second;
                     return preview;
                 }
-                auto decoded = media::decodeImage(
-                    selected.path, selected.interpretation, {},
+                // The same disk cache the evaluator writes to (media-io.md "Disk cache"): this
+                // whole lambda already runs on a BlockingIo worker thread, so a disk-cache write
+                // here is synchronous (writeAsync = false) -- there is no evaluation thread to
+                // avoid blocking.
+                auto decoded = media::cache::decodeThroughDiskCache(
+                    selected.path, selected.interpretation, selected.digest, selected.diskCacheKey,
+                    diskCache, /*writeAsync=*/false,
                     [&] { return context.isCancellationRequested(); }, {},
-                    media::kMaxImageStorageBytes, selected.digest);
+                    media::kMaxImageStorageBytes);
                 preview.missing = !decoded.value.has_value();
                 if (decoded.value.has_value()) {
                     const auto& image = **decoded.value;

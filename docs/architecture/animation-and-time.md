@@ -772,6 +772,19 @@ retention never changes the pixel reference or semantic identity versions. See [
 memoization](evaluation-primitives.md#operation-memoization)
 for the complete key, ownership, concurrency and budget contract.
 
+### Media disk cache (task CACHE-2)
+
+Distinct from the operation cache above and from the RAM-preview frame cache: a THIRD, disk-backed
+cache of decoded source images sits beneath `evaluateImageSource()`'s own lookup into the shared
+memory `OperationCache` above (its `OperationCacheEntryKind::DecodedMedia` entries;
+`src/runtime/image_source.cpp`, `src/media/cache`). A memory miss consults it before decoding; a
+decode-on-disk-miss writes back off the calling thread so scrubbing never waits on the write.
+Unlike the memory caches, it persists across restarts, which is what makes a second RAM Preview
+run or a reopened project's second scrub pass over the same footage a disk read rather than a
+re-decode. It follows the same "never cache overridden/interactive frames" rule as the operation
+cache above, gated by the identical `bypassOperationCache` condition. See [`media-io.md`'s "Disk
+cache"](media-io.md#disk-cache) for the complete key, format, eviction, and settings contract.
+
 ## Animated Parent Transforms And Bounds
 
 A layer samples its own position, anchor, scale and rotation at composition time, then composes

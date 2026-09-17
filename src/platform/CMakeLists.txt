@@ -28,6 +28,7 @@ add_library(bloom_platform STATIC)
 target_sources(
     bloom_platform
     PRIVATE
+        cache_directory.cpp
         font_catalog.cpp
         staged_artifact.cpp
         staged_artifact_platform.hpp
@@ -47,6 +48,7 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/platform/cache_directory.hpp
             include/bloom/platform/font_catalog.hpp
             include/bloom/platform/staged_artifact.hpp
 )
@@ -76,5 +78,13 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         NAME bloom.platform.staged_artifact
         COMMAND bloom_platform_staged_artifact_test
         LABELS unit platform persistence output
+    )
+    add_executable(bloom_platform_cache_directory_test tests/cache_directory_tests.cpp)
+    target_link_libraries(bloom_platform_cache_directory_test PRIVATE bloom_platform)
+    bloom_enable_warnings(bloom_platform_cache_directory_test)
+    bloom_add_test(
+        NAME bloom.platform.cache_directory
+        COMMAND bloom_platform_cache_directory_test
+        LABELS unit platform cache
     )
 endif()

@@ -10,6 +10,9 @@
 #include <map>
 
 class QWidget;
+namespace bloom::media::cache {
+class MediaDiskCache;
+} // namespace bloom::media::cache
 namespace bloom::ui {
 class CompositionSession;
 class ProjectHost;
@@ -17,8 +20,14 @@ class TaskUiBridge;
 class AssetController final : public QObject {
     Q_OBJECT
   public:
+    // `mediaDiskCache` is the same content-addressed disk cache the runtime evaluator consults
+    // (docs/architecture/media-io.md "Disk cache"): proxy/thumbnail decodes go through it too, so
+    // an asset the evaluator already decoded to disk never re-decodes here, and vice versa. Null
+    // (the default) disables the disk-cache stage; nothing about the existing QImage proxy cache
+    // changes either way.
     AssetController(CompositionSession& session, ProjectHost& host,
                     runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
+                    media::cache::MediaDiskCache* mediaDiskCache = nullptr,
                     QObject* parent = nullptr);
     ~AssetController() override;
     void requestImport(QWidget* parent = nullptr);
@@ -68,6 +77,7 @@ class AssetController final : public QObject {
     ProjectHost& host_;
     runtime::TaskScheduler& scheduler_;
     TaskUiBridge& bridge_;
+    media::cache::MediaDiskCache* mediaDiskCache_ = nullptr;
     runtime::TaskHandle<OperationHandle> import_;
     runtime::TaskHandle<std::shared_ptr<Thumbnails>> preview_;
     std::optional<document::Snapshot> base_;

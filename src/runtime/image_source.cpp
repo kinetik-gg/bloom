@@ -2,6 +2,7 @@
 #include "operation_key.hpp"
 #include <algorithm>
 #include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/media/cache/media_disk_cache_decode.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <charconv>
 #include <cmath>
@@ -9,6 +10,7 @@
 #include <utility>
 
 namespace bloom::runtime::detail {
+
 ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::RationalTime time,
                                        document::FrameRate rate, const std::filesystem::path& base,
                                        const CancellationToken& cancel) {
@@ -86,23 +88,38 @@ ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::
     key.add(locator->path);
     key.add(locator->relinkHint);
     selected.cacheKey = key.bytes();
+    // Content-addressed and restart-stable (docs/architecture/media-io.md "Disk cache"): asset
+    // digest + member frame + interpretation + Bloom Neutral config digest + decoder identity, so
+    // it deliberately omits `path`/`relinkHint`/`available` -- a relink of the same content should
+    // still hit the disk cache, and an unavailable selection never reaches evaluateImageSource().
+    media::cache::ImageCacheKeyInputs diskInputs;
+    diskInputs.contentDigest = selected.digest;
+    diskInputs.memberFrame = memberFrame;
+    diskInputs.colorSpace = selected.interpretation.colorSpace;
+    diskInputs.alphaAssociation = selected.interpretation.alphaAssociation;
+    diskInputs.configDigest = color::kBloomNeutralV1ConfigDigest;
+    selected.diskCacheKey =
+        media::cache::buildImageCacheKey(diskInputs, media::cache::kImageDecoderIdentity);
     return selected;
 }
 media::ImageResult<render::Rgba32fImage>
 evaluateImageSource(const ImageSourceSelection& selected,
                     render::Rgba32fImageDescriptor composition, double horizontalScale,
                     double verticalScale, std::size_t budget, OperationCache* cache,
-                    const CancellationToken& cancel) {
+                    const CancellationToken& cancel, media::cache::MediaDiskCache* diskCache) {
     if (!selected.available)
         return {{}, selected.warning};
     auto cached =
         cache != nullptr ? cache->find(selected.cacheKey, document::Revision{}) : std::nullopt;
     std::shared_ptr<const render::Rgba32fImage> image = cached ? cached->image : nullptr;
     if (!image) {
-        auto decoded = media::decodeImage(
-            selected.path, selected.interpretation, {},
-            [&] { return cancel.isCancellationRequested(); }, {},
-            std::min(budget, media::kMaxImageStorageBytes), selected.digest);
+        // Memory -> disk -> decode. A disk hit skips decodeImage() entirely; a disk miss decodes
+        // and hands the write to the disk cache's own background thread (writeAsync = true) so
+        // this call -- running on an evaluation thread -- never waits on it.
+        auto decoded = media::cache::decodeThroughDiskCache(
+            selected.path, selected.interpretation, selected.digest, selected.diskCacheKey,
+            diskCache, /*writeAsync=*/true, [&] { return cancel.isCancellationRequested(); }, {},
+            std::min(budget, media::kMaxImageStorageBytes));
         if (!decoded.value.has_value())
             return {{}, decoded.diagnostic, decoded.cancelled};
         image = std::move(*decoded.value);

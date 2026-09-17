@@ -349,7 +349,8 @@ void testWindowStatusBarIsAKitStripWithEveryCell(Expectations& expectations) {
                         "whichever central page is authoritative");
     for (const char* cell :
          {"windowStatusBarColorChip", "windowStatusBarPreviewState", "windowStatusBarDroppedFrames",
-          "windowStatusBarCache", "windowStatusBarMessage", "windowStatusBarVersion"}) {
+          "windowStatusBarCache", "windowStatusBarMediaDiskCache", "windowStatusBarMessage",
+          "windowStatusBarVersion"}) {
         expectations.expect(strip->findChild<QWidget*>(QString::fromLatin1(cell)) != nullptr,
                             std::string{"status bar: it carries the "} + cell + " cell");
     }
@@ -374,6 +375,27 @@ void testWindowStatusBarIsAKitStripWithEveryCell(Expectations& expectations) {
                             cacheLabel->toolTip().contains(QStringLiteral("operation-cache")),
                         "status bar: the dense cache cell explains its two cache accounts in a "
                         "tooltip");
+    // CACHE-2: the window is built with no disk cache (this fixture matches Timeline/window
+    // fixtures elsewhere that pass no ninth argument), so the cell reports "off" rather than an
+    // invented hit rate.
+    expectations.expect(strip->mediaDiskCacheTextForTest() == QStringLiteral("Disk cache off"),
+                        "status bar: a window built without a media disk cache reports it as off");
+}
+
+// CACHE-2: "Clear Media Cache…" lives in the Composition menu beside RAM Preview, present (though
+// reporting "not enabled" if triggered) even for a window built without a disk cache -- see
+// confirmAndClearMediaDiskCache()'s own null handling. Not triggered here: it opens a modal
+// QMessageBox, which this offscreen suite has no driver for.
+void testClearMediaCacheActionExists(Expectations& expectations) {
+    bool ok = false;
+    Fixture fixture(&ok);
+    expectations.expect(ok, "clear media cache: stand-in editors register");
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
+                      fixture.frameExportController);
+    auto* action =
+        window.findChild<QAction*>(QStringLiteral("compositionClearMediaDiskCacheAction"));
+    expectations.expect(action != nullptr && action->text() == QStringLiteral("Clear Media Cache…"),
+                        "clear media cache: the Composition menu carries the command");
 }
 
 // A transient notice clears itself; a persistent one does not. The five-second life is asserted by
@@ -448,6 +470,7 @@ int main(int argc, char** argv) {
     testWindowStatusBarIsAKitStripWithEveryCell(expectations);
     testWindowStatusBarMessagesClearThemselves(expectations);
     testRejectedCommandsBecomeStatusBarNotices(expectations);
+    testClearMediaCacheActionExists(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
 

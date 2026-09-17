@@ -2,11 +2,13 @@
 #include "image_source.hpp"
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 
 int main() {
     namespace doc = bloom::document;
@@ -80,6 +82,34 @@ int main() {
     const auto ping = runtime::detail::selectImageSource(loop, *atTwo, *rate, folder, {});
     if (!ping.available || ping.path.filename() != "frame.0003.jpg")
         return 8;
+
+    // CACHE-2 (docs/architecture/media-io.md "Disk cache"): two INDEPENDENT evaluator instances
+    // sharing one disk cache -- a fresh evaluator's own in-process memory cache is cold, so a
+    // decode served to it without touching `frame.0001.jpg` again proves the disk path rather than
+    // the memory one. Deliberately not reusing `evaluator` above: its memory cache already holds
+    // this frame from the very first evaluate() call, which would hide the disk cache entirely.
+    namespace cache = bloom::media::cache;
+    cache::MediaDiskCacheConfig diskCacheConfig;
+    diskCacheConfig.rootDirectory = folder / "disk-cache";
+    auto diskCache = std::make_shared<cache::MediaDiskCache>(diskCacheConfig);
+    runtime::CpuCompositionEvaluator diskWriter;
+    diskWriter.setAssetBaseDirectory(folder);
+    diskWriter.setMediaDiskCache(diskCache);
+    const auto written = diskWriter.evaluate(compiled.plan, request, {});
+    if (!written.frame() || written.diagnostics().empty())
+        return 11;
+    diskCache->flush();
+    if (diskCache->statistics().entryCount == 0)
+        return 12;
+    runtime::CpuCompositionEvaluator diskReader;
+    diskReader.setAssetBaseDirectory(folder);
+    diskReader.setMediaDiskCache(diskCache);
+    const auto read = diskReader.evaluate(compiled.plan, request, {});
+    if (!read.frame() || read.diagnostics().empty())
+        return 13;
+    if (diskCache->statistics().hits == 0)
+        return 14;
+
     std::filesystem::remove(folder / "frame.0001.jpg");
     const auto missing = evaluator.evaluate(compiled.plan, request, {});
     if (!missing.frame() || missing.diagnostics().empty())
