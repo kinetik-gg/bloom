@@ -135,8 +135,8 @@ only because a particular area happens to be focused.
 Namespace organization is discoverability, not permission enforcement. SCRIPT-1 runs trusted local
 scripts with the launcher's filesystem and network permissions; it does not provide add-on scopes
 or a Python sandbox. Scoped command, task, file, network, render and UI authorization remains part
-of the future add-on host. A known but unavailable operation remains inspectable and returns its
-structured unsupported diagnostic.
+of the future add-on host. An operation whose target the session cannot supply is rejected with the
+context value it was missing, not with a bare missing-keyword error.
 
 This follows Blender's useful distinction between
 [`bpy.context`](https://docs.blender.org/api/current/bpy.context.html),
@@ -200,9 +200,16 @@ interpreter itself is not intaken into the dependency lock.
 
 The typed pure-Python package supplies `app`, live GUI/headless `context`, read-only `data` proxies,
 registry-driven `ops`, atomic `transactions`, `tasks`, immutable file-render results and pumped
-`events`. `.pyi` files and `py.typed` ship with it. The 75 operation IDs are discoverable; eleven
-registry factories are implemented, including parameter animation, component keyframes and direct
-node removal. Other IDs preserve their structured unsupported diagnostic. `ui`, `addons`, `props` and contribution
+`events`. `.pyi` files and `py.typed` ship with it, and `ops.pyi` is regenerated from the live
+registry and compared against the checked-in file by the Python conformance test. Every registered
+operation ID has a complete argument schema and a working factory, so the discoverable set and the
+callable set are the same. Operations accept positional arguments in schema order and keywords
+alike; `Proxy` objects and raw stable IDs are interchangeable for ID arguments; tuples and lists
+read as vectors and colours; and a time is a whole frame, a `Fraction`, a float or an exact
+`(numerator, denominator)` pair. Arguments marked contextual in the schema -- `composition`, `time`,
+`layer`, `selection` -- default to the live `bloom.context` values, which `help()` states and the
+CLI and MCP clients apply identically. `Proxy.__repr__` reads `<Composition 1 'Composition 1'>` and
+`bloom.context` summarises project, composition, selection and time. `ui`, `addons`, `props` and contribution
 `types` are reserved stubs that raise `NotImplementedError` with ADR references. The registered Script editor uses kit controls and a shared interpreter owned by a scripting
 thread. A revocable live `SessionBinding` supplies immutable snapshots and plain context values;
 transactions and history calls queue to the UI thread. New/Open revokes the old generation before

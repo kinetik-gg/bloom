@@ -62,9 +62,8 @@ SCRIPT-1 development prerequisite rather than a newly bundled or qualified depen
 The pure-Python layer derives keyword signatures from registry descriptors, projects read-only
 stable IDs, groups operations with expected revisions, and delivers event callbacks only through
 the subscribing thread's pump. Native task tickets observe Python work running on a separate
-Python worker. The evaluator and render kernels remain native. The 75-ID registry currently has
-eleven implemented factories; unsupported IDs retain their diagnostic instead of acquiring a
-client-specific implementation. The animation/component-keying and node-removal adapters live in this shared registry.
+Python worker. The evaluator and render kernels remain native. Every registered ID carries an
+implemented factory in this shared registry rather than a client-specific implementation.
 
 The Script editor borrows the live host through `SessionBinding`: immutable snapshot and context
 callbacks, queued transaction/history callbacks, a native event stream and the existing publication
@@ -88,3 +87,22 @@ export runner and event subscriptions. Input schemas, bounded memory/queues, req
 and protocol errors belong to this client; project validation, undo, preservation analysis and
 publication remain in their existing owners. It does not expose an HTTP service or Python source
 execution. The user guides record protocol versions, limits and platform-dependent export support.
+
+## SCRIPT-2 ergonomics addendum (2026-09-18)
+
+Every registered operation ID now has a complete argument schema and a working factory, so
+discovery and callability are the same set. Each `ArgumentSchema` names its kind, carries a one-line
+summary and an example value of that kind, and the schema publishes the shortest working call. A
+rejection therefore names the operation, the argument, what was expected and a call the artist can
+paste, identically in Python, MCP and the JSON/CLI path.
+
+Arguments that name the object an artist is already looking at carry a `ContextSource`
+(`composition`, `time`, `layer`, `selection`, `project`). The host fills an omitted contextual
+argument from the live session before the factory runs, so every client applies the same defaults
+and reports them from the same flag; a context that cannot answer produces a rejection that says so
+rather than a bare missing-keyword error. Explicit targets are never overwritten, which keeps
+headless and pipeline calls deterministic.
+
+`ValueKind` gains `time` (a whole frame or an exact numerator/denominator pair) and `value` (an
+authoring value whose width the operation decides from the parameter it edits). These name argument
+shapes the registry already accepted ad hoc; they add no document schema and no new identity.

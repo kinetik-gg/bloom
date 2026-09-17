@@ -60,4 +60,8 @@ if(BUILD_TESTING)
     bloom_add_test(NAME bloom.scripting.python-embedding
         COMMAND bloom-cli run "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/embedding.py"
         LABELS scripting python integration)
+    # The recipe in docs/user-guide/python.md, run the way an artist runs it.
+    bloom_add_test(NAME bloom.scripting.python-first-five-minutes
+        COMMAND bloom-cli run "${PROJECT_SOURCE_DIR}/examples/scripting/first_five_minutes.py"
+        LABELS scripting python integration)
 endif()

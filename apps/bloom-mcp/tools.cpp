@@ -7,8 +7,8 @@
 
 namespace bloom::mcp {
 namespace {
-constexpr std::array<std::string_view, 9> kKinds{"bool", "int",    "float", "str",  "vec2",
-                                                 "vec3", "color4", "id",    "array"};
+constexpr std::array<std::string_view, 6> kContextSources{"",     "project", "composition",
+                                                          "time", "layer",   "selection"};
 
 scripting::Value value(yyjson_val* item, const std::size_t depth = 0) {
     if (depth > 16)
@@ -56,6 +56,12 @@ bool matches(yyjson_val* value, const scripting::ValueKind kind) {
         return yyjson_is_uint(value) && yyjson_get_uint(value) != 0;
     case Kind::Array:
         return yyjson_is_arr(value);
+    case Kind::Time:
+        return yyjson_is_int(value) || (yyjson_is_arr(value) && yyjson_arr_size(value) == 2 &&
+                                        yyjson_is_int(yyjson_arr_get_first(value)));
+    case Kind::Value:
+        return yyjson_is_num(value) ||
+               (yyjson_is_arr(value) && yyjson_arr_size(value) >= 2 && yyjson_arr_size(value) <= 4);
     case Kind::Vec2:
     case Kind::Vec3:
     case Kind::Color4: {
@@ -120,6 +126,7 @@ yyjson_mut_val* Server::transact(Json& out, yyjson_val* arguments) {
     if (!yyjson_is_arr(operations) || yyjson_arr_size(operations) == 0)
         throw InvalidInput("Expected operations");
     commands::Transaction transaction(label, document::Revision::fromRaw(revision));
+    const auto context = session_->operationContext();
     yyjson_arr_iter iterator = yyjson_arr_iter_with(operations);
     while (auto* operation = yyjson_arr_iter_next(&iterator)) {
         members(operation, {"op", "args"}, {"op", "args"});
@@ -149,7 +156,7 @@ yyjson_mut_val* Server::transact(Json& out, yyjson_val* arguments) {
                                      ? scripting::Value(scripting::StableId{integer(item)})
                                      : value(item));
         }
-        auto created = facade_.operations.create(id, values);
+        auto created = facade_.operations.create(id, std::move(values), context);
         if (!created) {
             auto* result = out.object();
             out.set(result, "succeeded", out.boolean(false));
@@ -198,11 +205,16 @@ yyjson_mut_val* Server::query(Json& out, yyjson_val* arguments) {
             for (const auto& argument : descriptor.schema.arguments) {
                 auto* item = out.object();
                 out.set(item, "name", out.text(argument.name));
-                out.set(item, "kind", out.text(kKinds.at(static_cast<std::size_t>(argument.kind))));
+                out.set(item, "kind", out.text(scripting::valueKindName(argument.kind)));
                 out.set(item, "required", out.boolean(argument.required));
+                out.set(item, "contextual", out.boolean(argument.contextual()));
+                out.set(item, "context",
+                        out.text(kContextSources.at(static_cast<std::size_t>(argument.context))));
+                out.set(item, "summary", out.text(argument.summary));
                 out.append(schema, item);
             }
             out.set(record, "arguments", schema);
+            out.set(record, "example", out.text(scripting::exampleCall(descriptor.schema)));
             out.append(records, record);
         }
     } else if (kind == "compositions") {

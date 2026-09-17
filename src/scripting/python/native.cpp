@@ -35,8 +35,8 @@ nb::dict failure(const OperationDiagnostic& diagnostic) {
     return row;
 }
 
-constexpr std::array<const char*, 9> kKinds{"bool", "int",    "float", "str",  "vec2",
-                                            "vec3", "color4", "id",    "array"};
+constexpr std::array<const char*, 6> kContextSources{"",     "project", "composition",
+                                                     "time", "layer",   "selection"};
 
 } // namespace
 
@@ -69,6 +69,25 @@ nb::dict NativeHost::snapshot() const {
     return projectSnapshot(facade_->query.snapshot());
 }
 
+OperationContext NativeHost::operationContext() const {
+    if (contextProvider) {
+        const auto live = contextProvider();
+        OperationContext context;
+        context.project = live.project;
+        if (live.composition != 0) {
+            context.composition = live.composition;
+        }
+        context.selection = live.selection;
+        context.time = live.time;
+        if (context.composition.has_value()) {
+            context.layers =
+                selectedLayers(facade_->query.snapshot(), *context.composition, context.selection);
+        }
+        return context;
+    }
+    return session_->operationContext();
+}
+
 nb::dict NativeHost::context() const {
     const auto access = lockSession();
     if (contextProvider) {
@@ -80,6 +99,12 @@ nb::dict NativeHost::context() const {
         for (const auto id : context.selection)
             selection.append(id);
         result["selection"] = nb::tuple(selection);
+        nb::list layers;
+        for (const auto id :
+             selectedLayers(facade_->query.snapshot(), context.composition, context.selection)) {
+            layers.append(id);
+        }
+        result["layers"] = nb::tuple(layers);
         result["time"] = nb::make_tuple(context.time.numerator(), context.time.denominator());
         return result;
     }
@@ -90,6 +115,7 @@ nb::dict NativeHost::context() const {
                                 ? nb::none()
                                 : nb::cast(snapshot.project().compositions().front().id().value());
     result["selection"] = nb::tuple();
+    result["layers"] = nb::tuple();
     result["time"] = nb::make_tuple(0, 1);
     return result;
 }
@@ -103,11 +129,18 @@ nb::list NativeHost::schemas() const {
         for (const auto& argument : descriptor.schema.arguments) {
             nb::dict value;
             value["name"] = argument.name;
-            value["kind"] = kKinds.at(static_cast<std::size_t>(argument.kind));
+            value["kind"] = std::string(valueKindName(argument.kind));
             value["required"] = argument.required;
+            value["contextual"] = argument.contextual();
+            value["context"] = kContextSources.at(static_cast<std::size_t>(argument.context));
+            value["summary"] = argument.summary;
+            value["example"] = argument.example.has_value()
+                                   ? nb::cast(pythonLiteral(*argument.example))
+                                   : nb::none();
             arguments.append(value);
         }
         row["arguments"] = arguments;
+        row["example"] = exampleCall(descriptor.schema);
         result.append(row);
     }
     return result;
@@ -160,6 +193,7 @@ nb::dict NativeHost::transact(const nb::list& operations, const std::string& lab
         throw nb::value_error("A transaction needs 1..4096 operations and a bounded label");
     }
     const auto access = lockSession();
+    const auto context = operationContext();
     commands::Transaction transaction(label, document::Revision::fromRaw(revision));
     for (const auto item : operations) {
         const auto request = nb::cast<nb::dict>(item);
@@ -191,7 +225,7 @@ nb::dict NativeHost::transact(const nb::list& operations, const std::string& lab
             }
             arguments.emplace(name, std::move(converted));
         }
-        auto created = facade_->operations.create(id, arguments);
+        auto created = facade_->operations.create(id, std::move(arguments), context);
         if (!created) {
             return failure(*created.diagnostic());
         }

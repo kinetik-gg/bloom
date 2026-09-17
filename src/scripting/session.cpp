@@ -219,13 +219,46 @@ SessionCommandResult Session::redo() {
     return makeCommandResult(session_->redo());
 }
 
+std::vector<std::uint64_t> selectedLayers(const document::Snapshot& snapshot,
+                                          const std::uint64_t composition,
+                                          const std::span<const std::uint64_t> selection) {
+    std::vector<std::uint64_t> layers;
+    const auto* found =
+        snapshot.project().findComposition(document::CompositionId::fromRaw(composition));
+    if (found == nullptr) {
+        return layers;
+    }
+    for (const auto node : selection) {
+        for (const auto& boundary : found->graph().layerOutputs()) {
+            if (boundary.nodeId.value() == node) {
+                layers.push_back(boundary.layerId.value());
+            }
+        }
+    }
+    return layers;
+}
+
+OperationContext Session::operationContext() const {
+    OperationContext context;
+    if (!isValid()) {
+        return context;
+    }
+    const auto view = snapshot();
+    context.project = view.project().id().value();
+    if (!view.project().compositions().empty()) {
+        context.composition = view.project().compositions().front().id().value();
+    }
+    context.time = core::RationalTime::fromInteger(0);
+    return context;
+}
+
 SessionCommandResult Session::executeJsonOperation(const std::string_view operation,
                                                    const Arguments& arguments,
                                                    const std::optional<std::string>& label) {
     if (!isValid()) {
         return {};
     }
-    auto created = registry_.create(operation, arguments);
+    auto created = registry_.create(operation, arguments, operationContext());
     if (!created) {
         SessionCommandResult result;
         result.diagnostic = *created.diagnostic();
