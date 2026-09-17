@@ -1,5 +1,6 @@
 #include <bloom/runtime/compiled_plan.hpp>
 
+#include <algorithm>
 #include <utility>
 
 namespace bloom::runtime {
@@ -16,7 +17,8 @@ CompiledCompositionPlan::CompiledCompositionPlan(CompiledCompositionPlanDefiniti
       valueOutputCount_(definition.valueOutputCount),
       planSemanticsVersion_(definition.planSemanticsVersion),
       animationSamplingSemanticsVersion_(definition.animationSamplingSemanticsVersion),
-      audioMix_(std::move(definition.audioMix)) {
+      audioMix_(std::move(definition.audioMix)), nestedPlans_(std::move(definition.nestedPlans)),
+      duration_(definition.duration) {
     analyzeTimeDependence();
 }
 
@@ -30,7 +32,11 @@ bool operator==(const CompiledCompositionPlan& lhs, const CompiledCompositionPla
            lhs.valueOutputCount_ == rhs.valueOutputCount_ &&
            lhs.planSemanticsVersion_ == rhs.planSemanticsVersion_ &&
            lhs.animationSamplingSemanticsVersion_ == rhs.animationSamplingSemanticsVersion_ &&
-           lhs.audioMix_ == rhs.audioMix_;
+           lhs.audioMix_ == rhs.audioMix_ && lhs.duration_ == rhs.duration_ &&
+           std::ranges::equal(lhs.nestedPlans_, rhs.nestedPlans_,
+                              [](const auto& left, const auto& right) {
+                                  return left == right || (left && right && *left == *right);
+                              });
 }
 
 CompiledCompositionPlanDefinition CompiledCompositionPlan::copyDefinition() const {
@@ -49,7 +55,9 @@ CompiledCompositionPlanDefinition CompiledCompositionPlan::copyDefinition() cons
             .planSemanticsVersion = planSemanticsVersion_,
             .animationSamplingSemanticsVersion = animationSamplingSemanticsVersion_,
             .bypassOperationCache = bypassOperationCache_,
-            .audioMix = audioMix_};
+            .audioMix = audioMix_,
+            .nestedPlans = nestedPlans_,
+            .duration = duration_};
 }
 
 } // namespace bloom::runtime

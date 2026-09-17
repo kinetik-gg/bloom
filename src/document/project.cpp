@@ -99,7 +99,7 @@ ValidationResult Composition::validate() const {
     result.append("parameters", parameters_.validate());
     result.append("animationCurves", animationCurves_.validate());
     result.append("", validateAnimationCurveReferences(parameters_, animationCurves_));
-    result.append("graph", graph_.validate(parameters_));
+    result.append("graph", graph_.validate(parameters_, builtInNodeDefinitions(), id_));
     result.append("", validateNodeLayout(nodeLayout_, graph_));
     result.append("", validateNodeGroups(nodeGroups_, graph_));
     return result;
@@ -203,6 +203,55 @@ bool Project::removeExtensionRecord(const ExtensionRecordId id) {
     }
     extensionRecords_.erase(iterator);
     return true;
+}
+
+ValidationResult Project::validateCompositionNesting() const {
+    // Kahn's algorithm bounds stack use even for deeply nested or untrusted projects.
+    std::unordered_map<CompositionId, std::size_t> incoming;
+    std::unordered_map<CompositionId, std::vector<CompositionId>> references;
+    for (const auto& composition : compositions_)
+        incoming.emplace(composition.id(), 0);
+    for (const auto& composition : compositions_) {
+        for (const auto& node : composition.graph().nodes()) {
+            if (node.typeId != kCompositionSourceNodeType)
+                continue;
+            for (const auto& binding : node.parameters) {
+                if (binding.role != "composition")
+                    continue;
+                const auto* parameter = composition.parameters().find(binding.parameterId);
+                const auto* constant =
+                    parameter ? std::get_if<ConstantValueSource>(&parameter->source) : nullptr;
+                const auto* value =
+                    constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;
+                if (!value || *value <= 0)
+                    continue;
+                const auto target = CompositionId::fromRaw(static_cast<std::uint64_t>(*value));
+                // Missing compositions remain preservable; compilation diagnoses the reference.
+                if (!incoming.contains(target))
+                    continue;
+                references[composition.id()].push_back(target);
+                ++incoming[target];
+            }
+        }
+    }
+    std::vector<CompositionId> ready;
+    for (const auto& [id, count] : incoming)
+        if (count == 0)
+            ready.push_back(id);
+    std::size_t visited = 0;
+    while (!ready.empty()) {
+        const auto id = ready.back();
+        ready.pop_back();
+        ++visited;
+        for (const auto target : references[id])
+            if (--incoming[target] == 0)
+                ready.push_back(target);
+    }
+    ValidationResult result;
+    if (visited != incoming.size())
+        result.add(ValidationCode::CompositionNestingCycle, "compositions",
+                   "Composition source references form a nesting cycle");
+    return result;
 }
 
 ValidationResult Project::validate() const {
@@ -345,6 +394,7 @@ ValidationResult Project::validate() const {
                                                  "Layer Stack slot", layerSlotDeclarations, result);
             }
     }
+    result.append("", validateCompositionNesting());
     result.append("", validateExtensionRecords(*this));
     return result;
 }

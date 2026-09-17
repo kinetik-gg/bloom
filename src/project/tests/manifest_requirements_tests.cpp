@@ -88,6 +88,15 @@ void testFoundationAndExactNodeCoverage(Expectations& expectations) {
     auto foundationOnly = makeProject();
     expectations.expect(bloom::project::validateManifestRequirements(foundationOnly, {}).ok(),
                         "foundation-only project truth requires no provider manifest entries");
+    addCustomNode(foundationOnly, "bloom.composition-source");
+    expectations.expect(bloom::project::validateManifestRequirements(foundationOnly, {}).ok(),
+                        "composition sources are reserved built-ins without provider requirements");
+    const std::vector compositionClaim{
+        requirement("vendor.package", "vendor.package.nodes", {"bloom.composition-source"})};
+    expectations.expect(
+        hasIssue(bloom::project::validateManifestRequirements(foundationOnly, compositionClaim),
+                 ValidationCode::InvalidValue),
+        "providers cannot claim the reserved composition-source type");
 
     auto custom = makeProject();
     addCustomNode(custom, "vendor.nodes.blur");

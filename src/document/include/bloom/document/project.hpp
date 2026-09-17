@@ -115,6 +115,7 @@ class Project final {
     [[nodiscard]] bool removeExtensionRecord(ExtensionRecordId id);
 
     [[nodiscard]] ValidationResult validate() const;
+    [[nodiscard]] ValidationResult validateCompositionNesting() const;
 
   private:
     ProjectId id_;

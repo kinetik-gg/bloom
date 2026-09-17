@@ -59,7 +59,8 @@ struct DriverReference final {
         case runtime::NodeLoweringKind::Solid:
         case runtime::NodeLoweringKind::Shape:
         case runtime::NodeLoweringKind::Text:
-        case runtime::NodeLoweringKind::ImageSource:
+        case runtime::NodeLoweringKind::CompositionSource:
+    case runtime::NodeLoweringKind::ImageSource:
         case runtime::NodeLoweringKind::LayerOutput:
         case runtime::NodeLoweringKind::LayerStack:
         case runtime::NodeLoweringKind::CompositionOutput:
@@ -539,6 +540,7 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     }
     case runtime::NodeLoweringKind::Shape:
     case runtime::NodeLoweringKind::Solid:
+    case runtime::NodeLoweringKind::CompositionSource:
     case runtime::NodeLoweringKind::ImageSource:
     case runtime::NodeLoweringKind::AudioSource:
     case runtime::NodeLoweringKind::Text:

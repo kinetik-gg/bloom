@@ -106,13 +106,47 @@ and opacity are editable, while plain-image Normal/100% values are read-only.
 
 Only Output and the Merge directly feeding it are protected from removal. Other Merges can be
 added, duplicated, disconnected or deleted through ordinary commands. There is no secondary layer
-list or generated Merge chain to synchronize. Composition-as-source is deferred.
+list or generated Merge chain to synchronize. Composition sources provide nesting across composition graphs, as described below.
 
-Plan semantics is 4: `CompiledMergeInput` admits an absent Layer identity and a plain image
+The Merge and parenting changes introduced plan semantics 4: `CompiledMergeInput` admits an absent Layer identity and a plain image
 operation, changing the previous Layer-only operand grammar. Layer Output also carries an optional
 parent operation index. Evaluator semantics remains 6 and
-primitive semantics remains 5; existing unparented pixel behavior is unchanged. Output identities
-use plan 4, animation 2, evaluator 6 and primitives 5.
+primitive semantics remains 5; existing unparented pixel behavior is unchanged. Current output identities use plan 6, animation 2, evaluator 8 and primitives 7.
+
+### Composition Sources
+
+`bloom.composition-source` is a Sources node with image and audio outputs. Its ordinary parameters
+are the constant Integer `composition` ID, animatable Float64 `timeOffset` (seconds, default 0)
+and `timeScale` (default 1), and constant Integer `loopMode` (Hold/Loop/PingPong as 0/1/2).
+No additional document record is needed; the document schema remains 1.16. The built-in registry
+also reserves this type for manifest purposes.
+
+A composition may reference another composition at any nesting depth within runtime resource limits.
+Graph validation rejects self-reference, and project validation rejects indirect cycles with
+`CompositionNestingCycle`, including references on disconnected source nodes. Missing composition
+IDs remain valid saved data and produce a node-addressed `CompositionNotFound` compile diagnostic.
+Deleting a referenced composition therefore preserves the source for later repair.
+
+Compilation retains nested immutable plans in a table indexed by `CompiledCompositionSource`.
+The runtime-owned `CompiledPlanCache` shares those plans by project, composition and revision;
+its UI aliases preserve the existing preview callers. Evaluation runs the same evaluator at the
+[mapped time](animation-and-time.md#composition-source-time-mapping), retaining the nested output
+image and its evaluated content bounds. Nested compositions keep their own format and frame rate.
+Operation-cache keys include the nested composition ID, revision and mapped time, and request
+cancellation, resolution, pixel-budget and cache-bypass rules apply recursively. Plan semantics
+advances from 5 to 6 for the nested-plan table; existing pixel semantics remain unchanged.
+
+The runtime projects nested audio clips with ordered time mappings and enclosing Layer ranges.
+Desktop playback applies these mappings to each sample on the mixer worker before selecting the
+leaf clip sample. Nested layers sum with their level, mute and solo controls; a composition with
+no audio contributes silence. Cycle-rejected drafts cannot publish an audio mix.
+
+Dragging a composition from Assets onto Nodes creates one source. Dropping it onto Timeline creates
+the source, a Layer and one Merge slot carrying both image and audio, in one undoable transaction.
+The Layer is placed beside its Merge and the source beside the Layer using the common free-space
+placement rule. Its initial range is the nested duration, capped by the containing composition.
+The nested content remains one timeline bar. Properties shows the referenced name and an Open
+action; node cards show the same composition name.
 
 ### Transform Parenting
 

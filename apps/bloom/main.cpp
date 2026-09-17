@@ -226,6 +226,10 @@ int main(int argc, char* argv[]) {
                              .muted = description.muted,
                              .solo = description.solo,
                              .endTime = description.endTime});
+            if (!description.timeMappings.empty())
+                clips.back().mapTime = [description](const bloom::core::RationalTime time) {
+                    return bloom::runtime::mapAudioClipTime(description, time);
+                };
         }
         playback.setAudioMix(*mix, std::move(clips));
     };

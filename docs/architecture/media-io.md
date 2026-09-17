@@ -335,6 +335,14 @@ change, and follows `positionNow()` through `FrameTimeMapping` while audio is ac
 decoded sample is owned by the evaluator, and the wall-clock transport remains the fallback for an
 empty mix or unavailable device.
 
+Composition sources retain the evaluator's ordered offset, scale and loop mappings on each leaf
+clip. The application attaches a time mapper alongside the shared decoded buffer; the mixer worker
+applies it per output sample before the leaf clip's start/end checks and sample-rate conversion. An
+enclosing Layer outside its range contributes silence. Nested clips sum with resolved mute and
+solo controls, and an empty nested mix clears previously published clips. The mapper performs no
+I/O or allocation and never runs on the device callback. The evaluator and the playback engine
+remain independent: the application supplies the runtime mapping through the clip adapter.
+
 ### 5. Proxies, Thumbnails, And Waveforms
 
 Proxies are derived assets with a manifest binding source content, selected streams, interpretation,

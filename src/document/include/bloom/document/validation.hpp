@@ -24,6 +24,7 @@ enum class ValidationCode {
     SharedReference,
     DuplicateInput,
     GraphCycle,
+    CompositionNestingCycle,
     InvalidLayerBoundary,
     InvalidLayerStack,
     MissingCompositionOutput,

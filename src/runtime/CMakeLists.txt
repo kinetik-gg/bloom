@@ -35,6 +35,8 @@ target_sources(
     PRIVATE
         compile_diagnostics.cpp
         compiled_plan.cpp
+        compiled_plan_cache.cpp
+        composition_time.cpp
         plan_time_dependence.cpp
         curve_compilation.cpp
         snapshot_compiler.cpp
@@ -46,6 +48,8 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/runtime/compiled_plan.hpp
+            include/bloom/runtime/compiled_plan_cache.hpp
+            include/bloom/runtime/composition_time.hpp
             include/bloom/runtime/compiled_value_graph.hpp
             include/bloom/runtime/operation_index.hpp
             include/bloom/runtime/curve_compilation.hpp

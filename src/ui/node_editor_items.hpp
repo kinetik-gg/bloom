@@ -1,3 +1,4 @@
+#include "asset_drop.hpp"
 #include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
 #include "properties_value_edits.hpp"
@@ -346,6 +347,12 @@ class NodeItem final : public QGraphicsObject {
         setData(kNodeMutedRole, layout.muted);
         setData(kNodeCollapsedRole, layout.collapsed);
         title_ = nodeDisplayName(composition, node);
+        if (node.typeId == document::kCompositionSourceNodeType && session_) {
+            const auto* nested = session_->snapshot().project().findComposition(
+                compositionSourceId(composition, node));
+            title_ = nested ? QString::fromStdString(nested->name())
+                            : QObject::tr("Missing composition");
+        }
         if ((imageSource_ || audioSource_) && session_)
             if (const auto* asset = session_->snapshot().project().findAsset(imageAsset_))
                 title_ = imageAssetDisplayName(*asset);
@@ -755,6 +762,9 @@ class NodeItem final : public QGraphicsObject {
         std::vector<std::string> roles;
         roles.reserve(node.parameters.size());
         for (const auto& binding : node.parameters) {
+            if (node.typeId == document::kCompositionSourceNodeType &&
+                binding.role == "composition")
+                continue;
             if (!shapeSource_ || document::shapeRoleVisible(shapeKind_, binding.role))
                 roles.push_back(binding.role);
         }

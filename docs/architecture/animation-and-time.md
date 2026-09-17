@@ -845,3 +845,32 @@ viewer overlay polygon at the same time as its pixels. Cache dependencies includ
 parent transform; changing an ancestor cannot reuse stale child geometry or imagery. Parent opacity,
 enabled/solo state and time range do not suppress or fade children. The child's own range and opacity
 continue to apply independently.
+
+
+## Composition Source Time Mapping
+
+A composition source samples its offset and scale at the containing composition's time, then uses
+`sourceTime = (compositionTime - timeOffset) * timeScale`. Offset is in seconds; a positive offset
+delays the source. Scale 1 plays at normal speed, 2 plays twice as fast, and a negative scale reverses
+the direction around the offset. Scale 0 freezes the first frame. The referenced composition's own
+frame rate determines its final frame start, independently of the parent's frame rate.
+
+As with image sequences, negative mapped time holds the first frame. Hold clamps positive time to
+the last frame start. Loop wraps at the half-open composition duration. PingPong reflects around
+the last frame start, with a period twice that time, so endpoints are not duplicated. A one-frame
+composition holds its only frame. The evaluator preserves rational time through checked arithmetic.
+If Float64 denominators overflow an exact intermediate, source time is rounded to nanoseconds;
+a mapping still outside representable time produces an arithmetic diagnostic instead of wrapping integers.
+Nested composition parameters and animation are sampled at that mapped time. Audio descriptions
+retain the same ordered mappings for every nested clip, with each enclosing Layer's range and
+participation controls. Playback applies the mappings in order to every output sample before
+selecting the leaf audio sample. Multiple nested layers contribute separate clips to the sum.
+Hold and zero scale repeat the sample at the held time; Loop and PingPong map sample times
+continuously through the same boundaries used for image evaluation. No nested audio means silence.
+
+Compiled plans retain nested plans at the same project revision. Mapped time participates in the
+composition-source operation-cache key; nested evaluation also uses the evaluator's shared cache.
+Time overrides bypass retention throughout the evaluation. The plan grammar is version 6; animation
+sampling remains 2, evaluator semantics remains 8, and image primitives remain 7. The independent
+identity oracle reproduced plan-5 base digests before deriving plan-6 replacements; existing pixel
+pins and all preimage lengths remain unchanged.

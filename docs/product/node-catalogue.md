@@ -50,6 +50,7 @@ level's dependencies.
 
 | Level | Planned nodes | Important behavior |
 | --- | --- | --- |
+| `F1` | Composition Source | Built: nested image, offset/scale, Hold/Loop/PingPong, cycle validation, shared evaluation and caches. Nested audio playback uses the same time mappings and sums participating layers. |
 | `F1` | Image, Image Sequence | Stable asset identity, source interpretation, windows, channels, and missing-frame policy |
 | `C1` | Video Clip | Explicit stream, time base, orientation, color, alpha, and decode policy |
 | `C1` | Shape | Built: one parametric/path source with shared fill and stroke; viewer drawing tools follow |

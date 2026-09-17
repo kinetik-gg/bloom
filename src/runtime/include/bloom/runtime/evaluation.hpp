@@ -186,8 +186,9 @@ class ProcessFrame final {
     ProcessFrame(ProcessFrameIdentity identity,
                  std::shared_ptr<const render::Rgba32fImage> processImage,
                  OperationCacheStatistics statistics, std::vector<EvaluatedOperationBounds> bounds,
-                 std::vector<CompiledValue> valueOutputs) noexcept;
+                 std::vector<CompiledValue> valueOutputs, std::string contentHash) noexcept;
 
+    std::string contentHash_;
     std::vector<EvaluatedOperationBounds> bounds_;
     std::vector<CompiledValue> valueOutputs_;
     OperationCacheStatistics statistics_;

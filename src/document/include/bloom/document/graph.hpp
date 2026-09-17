@@ -25,6 +25,8 @@ inline constexpr std::string_view kLayerStackNodeType = "bloom.layer-stack";
 inline constexpr std::string_view kSolidSourceNodeType = "bloom.solid-source";
 inline constexpr std::string_view kTextSourceNodeType = "bloom.text-source";
 inline constexpr std::string_view kCompositionOutputNodeType = "bloom.composition-output";
+inline constexpr std::string_view kCompositionSourceNodeType = "bloom.composition-source";
+inline constexpr std::uint32_t kCompositionSourceNodeSchemaVersion = 1;
 inline constexpr std::string_view kAudioSourceNodeType = "bloom.audio-source";
 // Bumped to 2 by the layer transform breadth slice (task S4): a Layer Output now binds anchor,
 // scale, and rotation alongside position and opacity. A version-1 node is not rejected -- Project
@@ -193,7 +195,8 @@ class CanonicalGraph final {
 
     [[nodiscard]] ValidationResult
     validate(const ParameterStore& parameters,
-             const NodeDefinitionRegistry& registry = builtInNodeDefinitions()) const;
+             const NodeDefinitionRegistry& registry = builtInNodeDefinitions(),
+             CompositionId owner = {}) const;
 
   private:
     [[nodiscard]] std::optional<SocketValueKind>

@@ -1,3 +1,6 @@
+// COMP-SRC: identity pins independently re-derived with s5-identity-oracle.py
+// at plan 6, animation 2, evaluator 8, primitives 7. Plan 5 reproduced the base
+// pins first; preimage lengths and pixels are unchanged.
 #include <bloom/output/output_analysis_digest.hpp>
 
 #include <bloom/color/display_processor_identity.hpp>
@@ -116,9 +119,9 @@ constexpr core::Sha256Digest::Bytes kRevisionBytes{
 // links no Bloom code; it was re-validated against every previously checked-in golden set,
 // including both lanes' pre-merge sets, before its combined values were trusted.
 constexpr std::string_view kExpectedExrDigest =
-    "d9685fedd4e86ce8268794254ce90e070d6e9ec84ee217e15163276af06646ee";
+    "653dc4f7e71c1be340ffd382f7dd51292c0ae91e5a1950afe16091f964630082";
 constexpr std::string_view kExpectedPngDigest =
-    "eeb54717829e478c9523f9d3ccc23c1ad1bdf0ae919b900b4b157c1f0575d1ad";
+    "9748dab2456e2f86f41bf027fdae388ac2fd081121b4e9f8ca7c1b624b7b4f88";
 
 class Expectations final {
   public:

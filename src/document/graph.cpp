@@ -25,6 +25,12 @@ struct ExpectedParameterBinding final {
     bool required = true;
 };
 
+constexpr std::array kCompositionSourceBindings{
+    ExpectedParameterBinding{"composition", "bloom.composition-source.composition"},
+    ExpectedParameterBinding{"timeOffset", "bloom.composition-source.time-offset"},
+    ExpectedParameterBinding{"timeScale", "bloom.composition-source.time-scale"},
+    ExpectedParameterBinding{"loopMode", "bloom.composition-source.loop-mode"},
+};
 constexpr std::array kSolidSourceBindings{
     ExpectedParameterBinding{bloom::document::kSolidColorParameterRole,
                              bloom::document::kSolidColorParameterSchemaKey},
@@ -77,6 +83,8 @@ constexpr std::array kLayerOutputBindings{
 [[nodiscard]] std::span<const ExpectedParameterBinding>
 expectedBindings(const bloom::document::NodeRecord& node) noexcept {
     using namespace bloom::document;
+    if (node.typeId == kCompositionSourceNodeType)
+        return kCompositionSourceBindings;
     if (node.typeId == kSolidSourceNodeType &&
         (node.schemaVersion == kSolidSourceNodeSchemaVersion || node.schemaVersion == 1)) {
         return std::span(kSolidSourceBindings).first(node.schemaVersion == 1 ? 1 : 3);
@@ -345,7 +353,8 @@ bool CanonicalGraph::renameLayer(const LayerId id, std::string name) {
 }
 
 ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
-                                          const NodeDefinitionRegistry& registry) const {
+                                          const NodeDefinitionRegistry& registry,
+                                          const CompositionId owner) const {
     ValidationResult result;
     std::unordered_set<LayerSlotId> slots;
     for (const auto& stack : layerStacks_) {
@@ -393,6 +402,23 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
             }
         }
         validateExpectedBindings(node, parameters, path, result);
+        if (node.typeId == kCompositionSourceNodeType) {
+            for (const auto& binding : node.parameters) {
+                if (binding.role != "composition" && binding.role != "loopMode")
+                    continue;
+                const auto* parameter = parameters.find(binding.parameterId);
+                const auto* constant =
+                    parameter ? std::get_if<ConstantValueSource>(&parameter->source) : nullptr;
+                if (parameter && !constant)
+                    result.add(ValidationCode::InvalidValue, path + "." + binding.role,
+                               "Composition identity and loop mode must be constant");
+                const auto* id = constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;
+                if (binding.role == "composition" && id && *id > 0 && owner.isValid() &&
+                    static_cast<std::uint64_t>(*id) == owner.value())
+                    result.add(ValidationCode::CompositionNestingCycle, path + ".composition",
+                               "A composition cannot contain itself");
+            }
+        }
     }
 
     for (const auto& stack : layerStacks_) {

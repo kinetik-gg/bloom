@@ -6,6 +6,8 @@ std::string_view compileDiagnosticCodeId(const CompileDiagnosticCode code) noexc
     switch (code) {
     case CompileDiagnosticCode::RegistryNotFrozen:
         return "bloom.runtime.compile.registry-not-frozen";
+    case CompileDiagnosticCode::CompositionNestingCycle:
+        return "bloom.runtime.compile.composition-nesting-cycle";
     case CompileDiagnosticCode::CompositionNotFound:
         return "bloom.runtime.compile.composition-not-found";
     case CompileDiagnosticCode::UnknownNodeType:

@@ -1,4 +1,5 @@
 #include "asset_drop.hpp"
+#include "node_editor_add.hpp"
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QGraphicsView>
@@ -26,6 +27,30 @@ document::AssetId assetFromMime(const QMimeData& mime, const CompositionSession&
     if (expected.isEmpty() || data != expected)
         return {};
     return session.snapshot().project().findAsset(id) ? id : document::AssetId{};
+}
+document::CompositionId compositionFromMime(const QMimeData& mime,
+                                            const CompositionSession& session) {
+    bool valid = false;
+    const auto raw = mime.data(kCompositionMimeType).toULongLong(&valid);
+    const auto id = document::CompositionId::fromRaw(raw);
+    return valid && session.snapshot().project().findComposition(id) ? id
+                                                                     : document::CompositionId{};
+}
+document::CompositionId compositionSourceId(const document::Composition& composition,
+                                            const document::NodeRecord& node) {
+    if (node.typeId != document::kCompositionSourceNodeType)
+        return {};
+    for (const auto& binding : node.parameters) {
+        if (binding.role != "composition")
+            continue;
+        const auto* parameter = composition.parameters().find(binding.parameterId);
+        const auto* constant =
+            parameter ? std::get_if<document::ConstantValueSource>(&parameter->source) : nullptr;
+        const auto* value = constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;
+        if (value && *value > 0)
+            return document::CompositionId::fromRaw(static_cast<std::uint64_t>(*value));
+    }
+    return {};
 }
 namespace {
 class AddImageNode final : public commands::Operation {
@@ -130,9 +155,26 @@ class AssetDropTarget final : public QObject {
             return false;
         auto* drop = static_cast<QDropEvent*>(event);
         if (drop->mimeData()->hasFormat(kCompositionMimeType)) {
-            if (event->type() == QEvent::DragEnter || event->type() == QEvent::Drop)
-                emit session_.commandRejected(tr("Compositions cannot be used as sources yet."));
-            drop->ignore();
+            const auto id = compositionFromMime(*drop->mimeData(), session_);
+            if (!id.isValid()) {
+                drop->ignore();
+                return true;
+            }
+            if (event->type() == QEvent::Drop) {
+                const auto point =
+                    view_ ? view_->mapToScene(drop->position().toPoint()) : QPointF{};
+                commands::Transaction transaction(view_ ? "Add Composition Source"
+                                                        : "Add Composition Layer",
+                                                  session_.snapshot().revision());
+                transaction.emplace<node_editor::AddCompositionSource>(
+                    session_.compositionId(), id, document::Vec2d{point.x(), point.y()},
+                    view_ == nullptr);
+                if (!session_.executeTransaction(std::move(transaction)).succeeded()) {
+                    drop->ignore();
+                    return true;
+                }
+            }
+            drop->acceptProposedAction();
             return true;
         }
         const auto id = assetFromMime(*drop->mimeData(), session_);

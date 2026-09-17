@@ -14,6 +14,8 @@
 
 namespace bloom::runtime {
 
+class CompiledPlanCache;
+
 enum class SnapshotCompileStatus {
     Compiled,
     Unsupported,
@@ -24,6 +26,7 @@ enum class SnapshotCompileStatus {
 enum class CompileDiagnosticCode {
     RegistryNotFrozen,
     CompositionNotFound,
+    CompositionNestingCycle,
     UnknownNodeType,
     UnsupportedNodeVersion,
     UnsupportedNode,
@@ -97,7 +100,8 @@ class SnapshotCompiler final {
         : registry_(registry) {}
 
     [[nodiscard]] SnapshotCompileResult compile(const SnapshotCompileRequest& request,
-                                                const CancellationToken& cancellation) const;
+                                                const CancellationToken& cancellation,
+                                                CompiledPlanCache* planCache = nullptr) const;
 
   private:
     const NodeDefinitionRegistry& registry_;

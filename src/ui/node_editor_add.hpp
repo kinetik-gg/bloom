@@ -4,6 +4,22 @@
 namespace bloom::ui::node_editor {
 // Resolves freshly allocated IDs inside one command operation, delegating every durable write to
 // N1/N2 commands. This keeps add + cursor layout + optional connection in one undo entry.
+class AddCompositionSource final : public commands::Operation {
+  public:
+    AddCompositionSource(document::CompositionId composition, document::CompositionId source,
+                         document::Vec2d position = {}, bool asLayer = false)
+        : composition_(composition), source_(source), position_(position), asLayer_(asLayer) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.node.add-composition-source";
+    }
+    [[nodiscard]] commands::OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId composition_, source_;
+    document::Vec2d position_;
+    bool asLayer_;
+};
+
 class AddEditorNode final : public commands::Operation {
   public:
     AddEditorNode(document::CompositionId composition, std::string type, document::Vec2d position,

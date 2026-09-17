@@ -164,6 +164,8 @@ QString toggleToolTip(const int index) {
                       document::kAudioSourceNodeSchemaVersion)) {
         return TimelineEditor::tr("Audio");
     }
+    if (sourceNode && sourceNode->typeId == document::kCompositionSourceNodeType)
+        return TimelineEditor::tr("Composition");
     return TimelineEditor::tr("Layer");
 }
 
@@ -199,6 +201,8 @@ QString toggleToolTip(const int index) {
 [[nodiscard]] kit::Color layerClipColorToken(const CompositionSession& session,
                                              const document::LayerId layerId) {
     const auto* sourceNode = directSourceNode(session, layerId);
+    if (sourceNode && sourceNode->typeId == document::kCompositionSourceNodeType)
+        return kit::Color::DataComposition;
     if (sourceNode && sourceNode->typeId == "bloom.image-source") {
         for (const auto& binding : sourceNode->parameters)
             if (binding.role == "asset") {
