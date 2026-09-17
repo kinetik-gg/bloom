@@ -35,6 +35,32 @@ std::string fileUri(const std::filesystem::path& path) {
     }
     return uri;
 }
+// document::AssetRecord::validate() (src/document/asset.cpp's validLocator()) forbids a literal
+// ':' or '\\' anywhere in a "project-relative" locator path -- a portability guard against a
+// Windows drive-letter/separator colliding with a path this schema promises is a plain relative
+// join. A GVFS network-share mount is named literally with a colon on this platform (e.g.
+// `smb-share:server=10.10.10.20,share=production`), which a purely lexical relative path can't
+// avoid when the source lives outside the project directory (NETSHARE-1, deliverable 4). Percent-
+// encoding just those two characters keeps the stored path schema-valid without changing the
+// schema itself: on resolve, media::resolveImagePath()'s project-relative candidate then simply
+// doesn't exist on disk (no directory is literally named with a "%3A") and falls through to the
+// always-correct absolute relinkHint below -- the same fallback every other moved/foreign source
+// already relies on. Ordinary imports (no ':' or '\\' anywhere in the relative path) are
+// byte-for-byte unaffected.
+std::string sanitizeRelativePathComponents(const std::string& raw) {
+    std::string encoded;
+    encoded.reserve(raw.size());
+    constexpr std::string_view hex = "0123456789ABCDEF";
+    for (const char character : raw) {
+        if (character == ':' || character == '\\') {
+            encoded += '%';
+            encoded += hex[static_cast<unsigned char>(character) >> 4U];
+            encoded += hex[static_cast<unsigned char>(character) & 15U];
+        } else
+            encoded += character;
+    }
+    return encoded;
+}
 document::AssetLocator locator(const std::filesystem::path& path,
                                const std::filesystem::path& base) {
     const auto absolute = std::filesystem::absolute(path).lexically_normal();
@@ -42,7 +68,8 @@ document::AssetLocator locator(const std::filesystem::path& path,
         absolute.lexically_relative(std::filesystem::absolute(base).lexically_normal());
     if (relative.empty())
         throw std::runtime_error("Image and project must share a filesystem root");
-    return {"file", "project-relative", utf8(relative), fileUri(absolute)};
+    return {"file", "project-relative", sanitizeRelativePathComponents(utf8(relative)),
+            fileUri(absolute)};
 }
 std::optional<core::Sha256Digest> digestFile(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);

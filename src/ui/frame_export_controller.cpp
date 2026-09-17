@@ -1,6 +1,7 @@
 #include <bloom/ui/frame_export_controller.hpp>
 
 #include "composition_editor_support.hpp"
+#include "network_share_paths.hpp"
 
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -222,13 +223,18 @@ FrameExportController::FrameExportController(
     // entry -- is what actually selects the preset (presetForDestination() above), so a path typed
     // by hand behaves identically to one picked through a filter. OpenEXR stays first so the
     // dialog's default selection, and therefore every existing artist habit, is unchanged.
+    // A real QFileDialog instance rather than the static getSaveFileName() convenience: still
+    // native when the platform theme provides one (unchanged behaviour), but constructing it lets
+    // configureFileDialogSidebar() add the mounted network shares before exec(), which the static
+    // function gives no opportunity to do.
     destinationProvider_ = []() -> std::optional<std::filesystem::path> {
-        const auto chosen = QFileDialog::getSaveFileName(nullptr, tr("Export Frame"), {},
-                                                         tr("OpenEXR (*.exr);;PNG (*.png)"));
-        if (chosen.isEmpty()) {
+        QFileDialog dialog(nullptr, tr("Export Frame"), {}, tr("OpenEXR (*.exr);;PNG (*.png)"));
+        dialog.setAcceptMode(QFileDialog::AcceptSave);
+        configureFileDialogSidebar(dialog);
+        if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
             return std::nullopt;
         }
-        return std::filesystem::path(chosen.toStdString());
+        return std::filesystem::path(dialog.selectedFiles().front().toStdString());
     };
 
     // The range seam: one save dialog for the sequence's base name, then two spin prompts for the
@@ -237,12 +243,13 @@ FrameExportController::FrameExportController(
     // closed mapping presetForDestination() owns, so a ".png" base name behaves exactly as a
     // single-frame PNG export does.
     rangeProvider_ = [this]() -> std::optional<FrameExportRangeRequest> {
-        const auto chosen = QFileDialog::getSaveFileName(nullptr, tr("Export Frame Range"), {},
-                                                         tr("PNG sequence (*.png)"));
-        if (chosen.isEmpty()) {
+        QFileDialog dialog(nullptr, tr("Export Frame Range"), {}, tr("PNG sequence (*.png)"));
+        dialog.setAcceptMode(QFileDialog::AcceptSave);
+        configureFileDialogSidebar(dialog);
+        if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
             return std::nullopt;
         }
-        std::filesystem::path destination(chosen.toStdString());
+        std::filesystem::path destination(dialog.selectedFiles().front().toStdString());
         if (presetForDestination(destination) != output::OutputPresetV1::PngRgba8SrgbV1) {
             destination.replace_extension(".png");
         }

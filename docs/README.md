@@ -44,6 +44,8 @@ provide research or rationale, but they are not binding until adopted here.
 ## User Guides
 
 - [Organizing Assets](user-guide/assets.md) — folders, display names, tags, search and drag order.
+- [Import from network shares](user-guide/network-shares.md) — mounting an SMB share and
+  importing from it on Linux, macOS and Windows.
 
 ## Current Checkpoint
 

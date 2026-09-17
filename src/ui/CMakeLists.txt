@@ -359,6 +359,8 @@ target_sources(
         asset_controller.cpp
         asset_drop.cpp
         asset_drop.hpp
+        network_share_paths.cpp
+        network_share_paths.hpp
         media_disk_cache_settings.cpp
         node_editor.cpp
         node_layout_arrange.cpp

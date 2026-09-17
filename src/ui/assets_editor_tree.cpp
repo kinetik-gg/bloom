@@ -1,5 +1,6 @@
 #include "asset_drop.hpp"
 #include "assets_editor_internal.hpp"
+#include "network_share_paths.hpp"
 #include <QDrag>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -20,6 +21,17 @@
 
 namespace bloom::ui::assets {
 namespace {
+// True when at least one URL in `mime` is something a drop can actually act on: a local file, a
+// resolvable `smb://` mount, or an `smb://` URL naming a share this machine has not mounted yet
+// (dropEvent() turns that last case into a "Connect to <host>/<share>" notice rather than a
+// silent no-op). Anything else -- another scheme entirely, or a malformed `smb://` URL with no
+// share segment -- is not something this tree can do anything with, so the cursor must say so.
+bool anyActionableUrl(const QMimeData& mime, const QString& gvfsRoot) {
+    for (const auto& url : mime.urls())
+        if (localPathForUrl(url, gvfsRoot) || smbShareLabel(url))
+            return true;
+    return false;
+}
 class AssetNameDelegate final : public QStyledItemDelegate {
   public:
     using QStyledItemDelegate::QStyledItemDelegate;
@@ -34,8 +46,8 @@ class AssetNameDelegate final : public QStyledItemDelegate {
 } // namespace
 
 AssetTree::AssetTree(CompositionSession& session, QWidget* parent)
-    : QTreeWidget(parent), session_(session),
-      token_(QUuid::createUuid().toByteArray(QUuid::Id128)) {
+    : QTreeWidget(parent), session_(session), token_(QUuid::createUuid().toByteArray(QUuid::Id128)),
+      gvfsRoot_(defaultGvfsRoot()) {
     connect(&session_, &CompositionSession::snapshotChanged, this,
             [this] { token_ = QUuid::createUuid().toByteArray(QUuid::Id128); });
     setStyleSheet(QStringLiteral("QTreeView::item:selected { background: %1; }")
@@ -120,9 +132,12 @@ std::vector<document::AssetId> AssetTree::internalAssets(const QMimeData& mime) 
     return ids;
 }
 void AssetTree::dragEnterEvent(QDragEnterEvent* event) {
-    if (event->mimeData()->hasUrls())
-        event->acceptProposedAction();
-    else if (!internalAssets(*event->mimeData()).empty()) {
+    if (event->mimeData()->hasUrls()) {
+        if (anyActionableUrl(*event->mimeData(), gvfsRoot_))
+            event->acceptProposedAction();
+        else
+            event->ignore();
+    } else if (!internalAssets(*event->mimeData()).empty()) {
         event->setDropAction(Qt::MoveAction);
         event->accept();
     } else
@@ -130,7 +145,10 @@ void AssetTree::dragEnterEvent(QDragEnterEvent* event) {
 }
 void AssetTree::dragMoveEvent(QDragMoveEvent* event) {
     if (event->mimeData()->hasUrls()) {
-        event->acceptProposedAction();
+        if (anyActionableUrl(*event->mimeData(), gvfsRoot_))
+            event->acceptProposedAction();
+        else
+            event->ignore();
         return;
     }
     const auto* item = itemAt(event->position().toPoint());
@@ -146,13 +164,27 @@ void AssetTree::dragMoveEvent(QDragMoveEvent* event) {
 void AssetTree::dropEvent(QDropEvent* event) {
     if (event->mimeData()->hasUrls()) {
         QStringList files;
-        for (const auto& url : event->mimeData()->urls())
-            if (url.isLocalFile())
-                files.push_back(url.toLocalFile());
-        if (auto* controller = session_.assetController(); controller && !files.empty()) {
-            controller->importFiles(files);
-            event->acceptProposedAction();
+        QStringList unresolvedShares;
+        for (const auto& url : event->mimeData()->urls()) {
+            if (auto local = localPathForUrl(url, gvfsRoot_)) {
+                files.push_back(*local);
+                continue;
+            }
+            if (auto label = smbShareLabel(url); label && !unresolvedShares.contains(*label))
+                unresolvedShares.push_back(*label);
         }
+        if (auto* controller = session_.assetController(); controller && !files.empty())
+            controller->importFiles(files);
+        // No mount for this share yet: say so explicitly through the same notice path a refused
+        // command uses (CompositionSession::commandRejected -> WindowStatusBar's transient
+        // message), rather than dropping the URL on the floor.
+        for (const auto& label : unresolvedShares)
+            emit session_.commandRejected(
+                tr("Connect to %1 in your file manager first").arg(label));
+        if (!files.empty() || !unresolvedShares.empty())
+            event->acceptProposedAction();
+        else
+            event->ignore();
         return;
     }
     const auto ids = internalAssets(*event->mimeData());
