@@ -1151,12 +1151,66 @@ void testObjectSwitchesAuthorTheLayerBoundary(Expectations& expectations) {
     expectations.expect(restored != nullptr && !restored->solo, "undo restores the Solo flag");
 }
 
+// CRASH-2 (2026-09-17): a font row's PropertiesRegistryRow::pollFontCatalogue() re-armed itself
+// via QTimer::singleShot every 50 ms for as long as the (process-wide) font catalogue scan stayed
+// in flight, and configureRegistryRows()/configureUpstream() tear a stale row down with
+// setParent(nullptr) + deleteLater() -- deleteLater() only destroys the row once the event loop
+// gets back around to its DeferredDelete event, which is not guaranteed to beat the row's own
+// pending poll. When that poll fired after the CompositionSession it referenced had already been
+// destroyed, the read landed on freed/reused stack memory: ASan reported stack-use-after-return,
+// and on the CI runner it crashed bloom_properties_editor_test with SIGSEGV (no test output
+// before the crash, since the row that fired belonged to a PREVIOUS, already-returned test
+// function). Must run FIRST in main(), before any other test constructs a font row, so the
+// once-per-process font catalogue scan (kicked off lazily by the first font row ever built) is
+// still pending when the row below is torn down without draining the event loop first.
+void testTornDownFontRowNeverPollsItsDeadSession(Expectations& expectations) {
+    {
+        auto newProject = document::makeNewProject("Font Poll Test", "Main", time(10));
+        const auto compositionId = newProject.initialCompositionId;
+        document::Document document(std::move(newProject.project));
+        commands::CommandStack stack(document);
+
+        ui::CompositionSession session(document, stack, compositionId);
+        prepareColor(session);
+        expectations.expect(session.addTextLayer(QStringLiteral("Title"), QStringLiteral("Hello"),
+                                                 48.0, core::Color4d{0.25, 0.5, 0.75, 1.0}),
+                            "a text layer can be added to exercise the font row");
+        ui::PropertiesEditor properties(session);
+        expectations.expect(
+            properties.findChild<ui::kit::KDropdown*>("textFontName") != nullptr,
+            "the text selection exposes a font row, whose catalogue poll is now armed");
+
+        // Selecting a solid layer tears the font row down through the exact rebuild path a real
+        // selection change uses (PropertiesEditor::rebuild() runs synchronously off
+        // CompositionSession::selectionChanged, a direct connection), WITHOUT pumping the event
+        // loop afterwards. Before the fix, this leaves the row alive -- parent() == nullptr, not
+        // yet destroyed -- with its poll still armed.
+        expectations.expect(
+            session.addSolidLayer(QStringLiteral("Plate"), core::Color4d{0.9, 0.1, 0.5, 1.0}),
+            "swapping the selection tears the font row down through the normal rebuild path");
+        // session, document, stack and properties are all destroyed here. Before the fix, the
+        // orphaned font row survives this: nothing but its own pending deleteLater() owns it.
+    }
+    // Give a still-armed 50 ms poll every chance to fire against the now-dangling session.
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < 500) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+    }
+    expectations.expect(true, "a torn-down font row's poll never touches a session that no longer "
+                              "exists (PropertiesRegistryRow::detachFromSession)");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     Expectations expectations;
+    // Must run before any other test in this binary builds a font row (see the comment on its
+    // definition): it depends on the process-wide font catalogue scan still being in flight.
+    testTornDownFontRowNeverPollsItsDeadSession(expectations);
     testSelectionShowsGroupedRowsWithValuesAndUnits(expectations);
     testAnimatedParameterShowsGoldStaticShowsDim(expectations);
     testRowNeverPaintsWholeRowHover(expectations);
