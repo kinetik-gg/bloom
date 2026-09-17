@@ -17,6 +17,10 @@ inline constexpr SchemaVersion kColorSettingsSchemaVersionV1{1, 0};
 inline constexpr SchemaVersion kOcioConfigReferenceSchemaVersionV1{1, 0};
 inline constexpr std::string_view kProcessColorSpaceIdV1 = "lin_rec709_scene";
 inline constexpr std::string_view kBloomNeutralConfigUriV1 = "bloom://ocio/neutral-v1/config.ocio";
+inline constexpr std::string_view kAcesCgConfigUriV1 =
+    "ocio://cg-config-v1.0.0_aces-v1.3_ocio-v2.1";
+inline constexpr std::string_view kAcesCgSceneLinearColorSpaceIdV1 = "ACEScg";
+inline constexpr std::size_t kMaxWorkingColorSpaceIdBytes = 256;
 
 inline constexpr std::size_t kMaxOcioProjectRelativePathBytes = 4'096;
 inline constexpr std::size_t kMaxOcioExternalUriBytes = 16'384;
@@ -107,6 +111,10 @@ struct ColorSettings final {
 
     friend bool operator==(const ColorSettings&, const ColorSettings&) = default;
 };
+
+// Structural document validation cannot inspect an OCIO Config. The color boundary additionally
+// proves that this id names a non-data scene-linear color space in the selected config.
+[[nodiscard]] ValidationResult validateWorkingColorSpaceId(std::string_view id);
 
 // Constructs the exact version 1 new-project value around a revision supplied by the qualified
 // Bloom Neutral build profile. This function does not discover, provision, or qualify that asset.

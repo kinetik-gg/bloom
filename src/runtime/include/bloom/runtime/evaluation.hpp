@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/core/rational_time.hpp>
+#include <bloom/core/sha256.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
@@ -41,8 +42,18 @@ enum class EvaluationQuality : std::uint8_t {
     Reference,
 };
 
-enum class EvaluationColorIntent : std::uint8_t {
-    LinearRec709Scene,
+inline constexpr std::string_view kLinearRec709SceneColorSpaceId = "lin_rec709_scene";
+
+struct EvaluationColorIntent final {
+    std::string_view workingColorSpaceId{kLinearRec709SceneColorSpaceId};
+    core::Sha256Digest ocioConfigRevision{};
+
+    // Compatibility spelling for existing request builders. Its value is the generalized
+    // identity {lin_rec709_scene, empty revision}; new plans should carry the selected config
+    // revision alongside the working-space id.
+    static const EvaluationColorIntent LinearRec709Scene;
+
+    friend bool operator==(const EvaluationColorIntent&, const EvaluationColorIntent&) = default;
 };
 
 enum class EvaluationProvider : std::uint8_t {

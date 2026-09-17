@@ -262,9 +262,10 @@ ValidationResult OcioConfigReference::validate() const {
             [&result](const auto& value) {
                 using Locator = std::remove_cvref_t<decltype(value)>;
                 if constexpr (std::is_same_v<Locator, BuiltInOcioConfigLocator>) {
-                    if (value.uri != kBloomNeutralConfigUriV1) {
+                    if (value.uri != kBloomNeutralConfigUriV1 && value.uri != kAcesCgConfigUriV1) {
                         result.add(ValidationCode::InvalidValue, "locator.uri",
-                                   "Built-in OCIO URI must name immutable Bloom Neutral v1");
+                                   "Built-in OCIO URI must name immutable Bloom Neutral v1 or the "
+                                   "pinned ACES 1.3 CG config");
                     }
                 } else if constexpr (std::is_same_v<Locator, ProjectRelativeOciozLocator>) {
                     if (!isValidProjectRelativeOciozPath(value.path)) {
@@ -336,11 +337,21 @@ ValidationResult ColorSettings::validate() const {
         result.add(ValidationCode::InvalidValue, "schemaVersion",
                    "Color settings schema version must be exactly 1.0");
     }
-    if (processColorSpaceId != kProcessColorSpaceIdV1) {
+    if (!validateWorkingColorSpaceId(processColorSpaceId).ok()) {
         result.add(ValidationCode::InvalidValue, "processColorSpaceId",
-                   "Version 1 process color space must be lin_rec709_scene");
+                   "Working color space id must be non-empty, valid UTF-8, and at most 256 bytes");
     }
     result.append("ocioConfig", ocioConfig.validate());
+    return result;
+}
+
+ValidationResult validateWorkingColorSpaceId(const std::string_view id) {
+    ValidationResult result;
+    if (id.empty() || id.size() > kMaxWorkingColorSpaceIdBytes || !core::isValidUtf8(id) ||
+        id.find('\0') != std::string_view::npos) {
+        result.add(ValidationCode::InvalidValue, "id",
+                   "Working color space id must be non-empty, valid UTF-8, and at most 256 bytes");
+    }
     return result;
 }
 

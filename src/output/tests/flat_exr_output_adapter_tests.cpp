@@ -12,6 +12,8 @@
 // comparison -- it never uses this header's writer/verifier seam types.
 #include "output_semantic_identity.hpp"
 
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/output/flat_exr_output_adapter.hpp>
 #include <bloom/output/output_analysis.hpp>
 #include <bloom/output/output_analysis_analyzer.hpp>
@@ -118,6 +120,40 @@ void testHeaderConformance(support::Expectations& expectations) {
                               (static_cast<std::uint32_t>(rawHeader[7]) << 24U);
     expectations.expect((versionField & 0xFFU) == 2U && (versionField & 0xFFFFFF00U) == 0U,
                         "version field is 2 with every feature flag clear");
+}
+
+void testAcesCgHeaderConformance(support::Expectations& expectations) {
+    const auto revision = bloom::color::ocioBuiltInContentRevision(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
+    expectations.expect(revision.has_value(), "the ACES CG export fixture has a revision");
+    if (!revision.has_value())
+        return;
+    auto fixture = support::roundTripFixture();
+    fixture.identity.colorIntent = {.workingColorSpaceId = "ACEScg",
+                                    .ocioConfigRevision = *revision};
+    const support::ScratchDirectory scratch("aces-header-conformance");
+    const auto destination = scratch.file("aces.exr");
+    auto frame = support::publish(std::move(fixture));
+    const output::FlatExrRgba32fLinRec709SceneWriterV1 writer;
+    const auto written = writer.write(*frame, destination, {});
+    expectations.expect(written.status() == output::FlatExrWriteStatusV1::Written,
+                        "an ACEScg frame writes successfully");
+    if (written.status() != output::FlatExrWriteStatusV1::Written)
+        return;
+    Imf::InputFile input(destination.string().c_str());
+    const auto& header = input.header();
+    const auto& chroma = Imf::chromaticities(header);
+    const std::array<std::uint32_t, 8> chromaBits{
+        std::bit_cast<std::uint32_t>(chroma.red.x),   std::bit_cast<std::uint32_t>(chroma.red.y),
+        std::bit_cast<std::uint32_t>(chroma.green.x), std::bit_cast<std::uint32_t>(chroma.green.y),
+        std::bit_cast<std::uint32_t>(chroma.blue.x),  std::bit_cast<std::uint32_t>(chroma.blue.y),
+        std::bit_cast<std::uint32_t>(chroma.white.x), std::bit_cast<std::uint32_t>(chroma.white.y),
+    };
+    expectations.expect(chromaBits == bloom::color::kAcesCgV1ChromaticityBits,
+                        "ACEScg export carries the exact AP1 chromaticities");
+    const auto* colorInteropId = header.findTypedAttribute<Imf::StringAttribute>("colorInteropID");
+    expectations.expect(colorInteropId != nullptr && colorInteropId->value() == "ACEScg",
+                        "ACEScg export records its working colour-space identity");
 }
 
 void testWindowBoundsAtSigned32Extremes(support::Expectations& expectations) {
@@ -320,6 +356,7 @@ void testScratchDirectoryIsolation(support::Expectations& expectations) {
 int main() {
     support::Expectations expectations;
     testHeaderConformance(expectations);
+    testAcesCgHeaderConformance(expectations);
     testWindowBoundsAtSigned32Extremes(expectations);
     testNonPositiveOrNanPixelAspectRejected(expectations);
     testPixelAspectExactVersusApproximated(expectations);

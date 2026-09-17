@@ -633,6 +633,8 @@ using document::SchemaVersion;
         keys.push_back("workArea");
     if (state.documentMinor >= 10)
         keys.push_back("backgroundColor");
+    if (state.documentMinor >= 19 && node.findMember("workingColorSpaceId") != nullptr)
+        keys.push_back("workingColorSpaceId");
     std::vector<const JsonValue*> members;
     // A composition is a collection element (identity: numeric CompositionId), and that identity
     // is one of its own known members (`id`) -- not yet decoded at this point -- so this closed
@@ -751,6 +753,20 @@ using document::SchemaVersion;
                 return false;
             }
             *channels[index] = *parsed.value();
+        }
+    }
+    if (state.documentMinor >= 19) {
+        if (const auto* workingColorSpaceId = node.findMember("workingColorSpaceId")) {
+            std::string_view id;
+            if (!decodeStringMember(*workingColorSpaceId, state,
+                                    joinPath(path, "workingColorSpaceId"), id))
+                return false;
+            out.workingColorSpaceId = std::string(id);
+            if (!document::validateWorkingColorSpaceId(*out.workingColorSpaceId).ok()) {
+                state.fail(DocumentDecodeError::DomainViolation,
+                           joinPath(path, "workingColorSpaceId"));
+                return false;
+            }
         }
     }
     return true;

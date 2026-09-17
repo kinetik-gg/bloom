@@ -4,14 +4,48 @@ Status: accepted
 
 Implementation status: version 1 durable value validation, the domain-separated content revision
 primitives, the canonical display-processor identity, the built-in registry with concrete
-built-in resolution, and in-process Bloom Neutral CPU display processing (config parse, processor
-construction, and the checked alpha/pixel flow) are implemented and qualified on Linux. The separable
+Bloom Neutral and ACES 1.3 CG built-in resolution, in-process CPU display processing, project and
+composition working-space selection, and the checked alpha/pixel flow are implemented and qualified
+on Linux. The separable
 blend modes under "Blend modes" below are implemented in the CPU reference compositing kernel and
 qualified by per-mode goldens. The
 supervised helper, the archive and loose locator kinds, viewer/staged-graph integration, the
 processor cache, and cross-platform qualification remain pending.
 
 Updated: 2026-09-15
+
+## Current Version 1.19 Decisions — Working Colour Space
+
+Document schema 1.19 revises the earlier fixed-process-space decision. `ColorSettings.processColorSpaceId`
+is the project's working colour space: it must resolve, in the selected OCIO configuration, to a
+non-data scene-linear colour space. The durable identity is the colour-space id together with the
+selected configuration's content revision. A composition may carry an optional
+`workingColorSpaceId`; absent means inherit the project value. An override is accepted only when the
+same selected configuration exposes that exact scene-linear colour space. A failed or unavailable
+resolution is typed and fail-closed; Bloom never silently falls back to an ambient OCIO config.
+
+New projects use Bloom Neutral v1 and `lin_rec709_scene`. Project Settings → Colour can select that
+default or OCIO 2.5's built-in ACES 1.3 CG configuration
+`ocio://cg-config-v1.0.0_aces-v1.3_ocio-v2.1`; its revision is derived from OCIO's serialized
+content. The working-space picker is populated from the selected config, with the `scene_linear`
+role preselected. External `config.ocio` and `.ocioz` references remain explicit durable locators;
+`$OCIO` is only a suggested picker path and is never an evaluation fallback.
+
+Authored Solid, Text, and Shape colours are numeric values in the effective working space. The colour
+picker edits sRGB-encoded values and converts through the selected config's `sRGB - Texture` colour
+space. Changing the working space re-interprets existing numbers; “convert existing colours” is the
+opt-in undoable path for preserving appearance.
+
+The process/display split remains: process evaluation and blending use the effective working space,
+flat EXR records its primaries in `chromaticities`, and display-referred PNG/viewer output applies the
+working-space-to-display transform. Projects that remain on `lin_rec709_scene` retain the previous
+process-frame and reference-display golden bytes.
+
+### Historical Version 1 Decision
+
+The original version 1 contract fixed every process image to `lin_rec709_scene` and required every
+qualified config to expose that exact interop id. That text is retained below as design history; the
+1.19 decision above is authoritative for current documents.
 
 ## Purpose
 
@@ -20,12 +54,12 @@ project identity, image ownership, task execution, and error behavior in Bloom-o
 management is an explicit pipeline boundary; it is not ambient process state and it is not hidden
 inside image storage.
 
-The version 1 process interpretation is closed: a canonical process image is finite premultiplied
+The historical version 1 process interpretation was closed: a canonical process image was finite premultiplied
 `RGBA32F` in scene-referred, linear-light Rec.709 primaries with a D65 white point. Its Color
 Interop Forum identifier is exactly `lin_rec709_scene`. The identifier is the durable semantic
 identity; a display, view, look, monitor, or output choice does not change it.
 
-Every qualified OCIO configuration must resolve exactly one non-data color space whose declared
+Every qualified OCIO configuration then had to resolve exactly one non-data color space whose declared
 Color Interop ID is `lin_rec709_scene`. Matching a display name, role, alias, or approximate
 chromaticities is not a substitute. A config without that exact unambiguous mapping is `Invalid`
 for Bloom v1, even if it could produce a visually plausible result.
@@ -82,7 +116,8 @@ color operation used that config; the fixed v1 Solid-to-process path does not. A
 
 Project color settings own:
 
-- `colorSettings.processColorSpaceId`, exactly `lin_rec709_scene` in project schema 1.0; and
+- `colorSettings.processColorSpaceId`, the effective project working-space id in document schema
+  1.19 (historical 1.18 projects retain `lin_rec709_scene`); and
 - `colorSettings.ocioConfig`, a Bloom-owned `OcioConfigReference`.
 
 `OcioConfigReference` contains:
@@ -110,9 +145,11 @@ published qualified reference.
 Bloom v1 stores references and digests only. A `.bloom` container never embeds an OCIO config,
 `.ocioz`, LUT, or other color resource. Project-relative `.ocioz`, external `.ocioz`, external loose
 configs, and concrete built-ins remain explicit dependencies. New v1 projects always use Bloom
-Neutral v1; an explicit relink command may later publish another qualified reference without
-changing the fixed process interpretation. Mutable aliases and ambient registry defaults are not
-persisted.
+Neutral v1; an explicit relink command may later publish another qualified reference. Mutable aliases
+and ambient registry defaults are not persisted. ACES 1.3 CG's exact OCIO built-in URI is a supported
+immutable registry entry; its digest is computed from the serialized OCIO configuration using the
+same content-revision algorithm. A composition override is not a second config reference: it reuses
+the project reference and changes only the effective working-space id.
 
 ### OCIO Content Revision Version 1
 
@@ -481,14 +518,17 @@ There is no process-global mutable OCIO config or unbounded processor history.
 
 ## UI Colour Boundary
 
-Authoring colour parameters remain straight `Color4d` values in
-`bloom.reference.linear-srgb`. Solid, Text, Color value and Color operand schemas use this same
-reference encoding. Opening or migrating a document never reinterprets or rewrites its stored
-colour numbers to compensate for earlier UI presentation.
+Authoring colour parameters remain straight `Color4d` values whose numeric interpretation is the
+effective project/composition working space. Solid, Text, Shape, Color value and Color operand
+schemas retain the historical `bloom.reference.linear-srgb` authoring label for schema
+compatibility; it no longer means that the stored numbers are permanently Rec.709 values. Opening
+or migrating a document never rewrites those numbers. Changing the working space re-interprets
+them, while the explicit Convert Existing Colours command preserves appearance as an undoable
+operation.
 
 The qualified `PreparedCpuDisplayProcessorHandle` exposes `referenceToDisplay(Color4d)` and
-`displayToReference(Color4d)`. Both use the resolved Bloom Neutral v1 OCIO display/view; no UI
-implements a transfer function. They operate on straight RGB, preserve binary64 alpha exactly,
+`displayToReference(Color4d)`. Both use the resolved project OCIO display/view; no UI implements a
+transfer function. They operate on straight RGB, preserve binary64 alpha exactly,
 and reject invalid/non-finite input, float overflow and incompatible floating-point environments.
 The forward result clamps RGB to [0, 1]. The inverse retains extended range and uses OCIO's
 lossless optimization mode so display white does not acquire artificial HDR values. The existing

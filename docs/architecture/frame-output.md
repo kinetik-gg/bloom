@@ -18,6 +18,18 @@ helper and non-built-in locator kinds remain pending color-side work.
 
 Updated: 2026-09-17
 
+## Working-Space Output Contract
+
+The effective working colour space comes from project `ColorSettings.processColorSpaceId` or the
+active composition's optional override. It is carried with the OCIO config revision in evaluation
+intent and is part of the process/output semantic identity for generalized projects. The legacy
+`lin_rec709_scene` intent keeps the previous identity bytes and goldens.
+
+PNG uses the qualified transform from the effective working space to the selected display/view. EXR
+does not transform pixels: it writes the working-space id as `colorInteropID` and writes the exact
+working-space primaries/white point into `chromaticities` (ACEScg uses AP1; `lin_rec709_scene` uses
+the existing Rec.709/D65 bits). An unsupported mapping fails before staging.
+
 ## Purpose
 
 Bloom's first delivery surface renders one immutable composition frame to a deterministic PNG or a
@@ -37,11 +49,11 @@ can replace the destination.
 ## Input Boundary
 
 Frame output consumes `ProcessFrame`, not a Viewer screenshot and not a display buffer
-bundled into evaluation. The process frame owns finite premultiplied `lin_rec709_scene` `RGBA32F`,
+bundled into evaluation. The process frame owns finite premultiplied scene-linear `RGBA32F`,
 signed data/display windows, pixel aspect, composition/time/output identity, document revision,
-primitive-semantics versions, and process cache identity. Its color identity is exactly
-`lin_rec709_scene`: scene-referred linear-light Rec.709 primaries with a D65 white point. A config
-alias, role, display name, or approximate transform does not reinterpret that v1 process frame.
+primitive-semantics versions, and process cache identity. Its color identity is the effective
+working-space id plus the qualified OCIO config revision. A config alias, role, display name, or
+approximate transform does not reinterpret that process frame.
 
 The frame presets are closed, versioned contracts:
 
@@ -604,7 +616,8 @@ are not expected to round-trip as file metadata; their semantic effect is what v
 - exact signed data and display windows after checked conversion to the OpenEXR coordinate domain;
 - increasing-Y scanline order and lossless ZIP compression;
 - the pixel-aspect rational rounded once to the OpenEXR Float32 attribute; and
-- `colorInteropID=lin_rec709_scene` plus the exact Rec.709/D65 chromaticity bits defined below.
+- `colorInteropID` equal to the effective working-space id plus the exact chromaticity bits for that
+  space (the legacy Rec.709/D65 values remain byte-identical for `lin_rec709_scene`).
 
 The version-field value is OpenEXR version `2` with every feature flag clear: regular single-part
 scanline storage, short names, non-deep, non-tiled, non-multipart. The header contains exactly these
@@ -624,7 +637,7 @@ time code, owner, comments, software, capture date, or host data, fails preset v
 | `chromaticities` | `chromaticities` | values below, in OpenEXR red/green/blue/white order |
 | `colorInteropID` | `string` | exact UTF-8 bytes `lin_rec709_scene` |
 
-The `chromaticities` binary32 bit patterns are exact: red `(3f23d70a, 3ea8f5c3)`, green
+The legacy `lin_rec709_scene` `chromaticities` binary32 bit patterns are exact: red `(3f23d70a, 3ea8f5c3)`, green
 `(3e99999a, 3f19999a)`, blue `(3e19999a, 3d75c28f)`, and D65 white
 `(3ea01a37, 3ea872b0)`. They are the round-to-nearest, ties-to-even binary32 encodings of Rec.709
 `(0.64, 0.33)`, `(0.30, 0.60)`, `(0.15, 0.06)` and D65 `(0.3127, 0.3290)`; implementations write
@@ -635,6 +648,11 @@ ties-to-even, with gradual underflow and preserved signed zero. NaN, infinity, a
 result, or finite overflow fails before staging. The same conversion rule governs any declared
 binary64-to-binary32 output boundary; it must not inherit ambient rounding or flush subnormals.
 Process samples are already binary32 and are copied bit-for-bit rather than numerically converted.
+
+For the ACES 1.3 CG built-in, the `ACEScg` working-space header uses AP1 red/green/blue
+chromaticity bits `(3f36872b, 3e960419)`, `(3e28f5c3, 3f547ae1)`, `(3e03126f, 3d343958)` and
+D60 white `(3ea4b33e, 3eace315)`. These values are pinned from the qualified OCIO config and are
+verified by the ACEScg export golden.
 
 Version 1 additionally bounds every data- and display-window coordinate to a magnitude strictly
 below `1073741823` (`INT32_MAX/2`) — the validated coordinate ceiling the qualified OpenEXR

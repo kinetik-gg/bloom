@@ -199,6 +199,7 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     QLabel* documentFrameRate_ = nullptr;
     QLabel* documentDuration_ = nullptr;
     QLabel* documentPixelAspect_ = nullptr;
+    kit::KDropdown* documentWorkingColorSpace_ = nullptr;
 
     QWidget* dataBlockSection_ = nullptr;
     QLabel* dataBlockKind_ = nullptr;

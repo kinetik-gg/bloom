@@ -116,6 +116,7 @@ class MainWindow final : public QMainWindow {
     void updateContentSurface();
     void updateCompositionActions();
     void toggleFullScreen();
+    void showProjectColorSettings();
 
     CompositionSession& compositionSession_;
     ProjectHost& projectHost_;
@@ -147,6 +148,7 @@ class MainWindow final : public QMainWindow {
     QAction* saveProjectAction_ = nullptr;
     QAction* saveProjectAsAction_ = nullptr;
     QAction* saveProjectCopyAction_ = nullptr;
+    QAction* projectColorSettingsAction_ = nullptr;
     QAction* exportFrameAction_ = nullptr;
     // Task S5, item 3a: the frame-range export, and the cancel a long sequence needs -- the single
     // frame export never had one because it is one attempt plus one publish.

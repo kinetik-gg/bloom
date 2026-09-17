@@ -165,7 +165,9 @@ checkAttributeAllowlist(const Imf::Header& header) noexcept {
 [[nodiscard]] std::optional<output::FlatExrVerifyDiagnosticV1>
 checkAttributeValues(const Imf::Header& header, const Imath::Box2i& expectedDataWindow,
                      const Imath::Box2i& expectedDisplayWindow,
-                     const std::uint32_t expectedPixelAspectBits) noexcept {
+                     const std::uint32_t expectedPixelAspectBits,
+                     const std::string_view expectedColorSpaceId,
+                     const std::array<std::uint32_t, 8>& expectedChromaticityBits) noexcept {
     using output::FlatExrVerifyErrorCodeV1;
     if (header.dataWindow() != expectedDataWindow) {
         return ::diag(FlatExrVerifyErrorCodeV1::WindowMismatch, "dataWindow");
@@ -200,12 +202,12 @@ checkAttributeValues(const Imf::Header& header, const Imath::Box2i& expectedData
         std::bit_cast<std::uint32_t>(chroma.blue.x),  std::bit_cast<std::uint32_t>(chroma.blue.y),
         std::bit_cast<std::uint32_t>(chroma.white.x), std::bit_cast<std::uint32_t>(chroma.white.y),
     };
-    if (chromaBits != output::kFlatExrRec709D65ChromaticitiesBitsV1) {
+    if (chromaBits != expectedChromaticityBits) {
         return ::diag(FlatExrVerifyErrorCodeV1::AttributeValueMismatch, "chromaticities");
     }
     const auto* colorInteropId = header.findTypedAttribute<Imf::StringAttribute>("colorInteropID");
     if (colorInteropId == nullptr ||
-        std::string_view(colorInteropId->value()) != output::detail::kFlatExrColorInteropIdV1) {
+        std::string_view(colorInteropId->value()) != expectedColorSpaceId) {
         return ::diag(FlatExrVerifyErrorCodeV1::AttributeValueMismatch, "colorInteropID");
     }
     return std::nullopt;
@@ -335,8 +337,16 @@ FlatExrVerifyResultV1 FlatExrRgba32fLinRec709SceneReopenVerifierV1::verify(
             return FlatExrVerifyResultV1::failed(
                 ::diag(FlatExrVerifyErrorCodeV1::InternalInvariant));
         }
+        const auto expectedChromaticities =
+            output::detail::flatExrChromaticityBitsForWorkingColorSpaceV1(
+                frame->identity().colorIntent.workingColorSpaceId);
+        if (!expectedChromaticities.has_value()) {
+            return FlatExrVerifyResultV1::failed(
+                ::diag(FlatExrVerifyErrorCodeV1::InternalInvariant));
+        }
         if (const auto valueDiag = ::checkAttributeValues(
-                header, *expectedDataBox, *expectedDisplayBox, expectedRounded->bits)) {
+                header, *expectedDataBox, *expectedDisplayBox, expectedRounded->bits,
+                frame->identity().colorIntent.workingColorSpaceId, *expectedChromaticities)) {
             return FlatExrVerifyResultV1::failed(*valueDiag);
         }
         if (const auto channelDiag = ::checkChannelList(header)) {
@@ -450,6 +460,20 @@ FlatExrVerifyResultV1 FlatExrRgba32fLinRec709SceneReopenVerifierV1::verify(
                               static_cast<std::int32_t>(header.displayWindow().max.x),
                               static_cast<std::int32_t>(header.displayWindow().max.y)},
             .pixelAspectRatioBits = std::bit_cast<std::uint32_t>(header.pixelAspectRatio()),
+            .chromaticityBits =
+                [&] {
+                    const auto& chroma = Imf::chromaticities(header);
+                    return std::array<std::uint32_t, 8>{
+                        std::bit_cast<std::uint32_t>(chroma.red.x),
+                        std::bit_cast<std::uint32_t>(chroma.red.y),
+                        std::bit_cast<std::uint32_t>(chroma.green.x),
+                        std::bit_cast<std::uint32_t>(chroma.green.y),
+                        std::bit_cast<std::uint32_t>(chroma.blue.x),
+                        std::bit_cast<std::uint32_t>(chroma.blue.y),
+                        std::bit_cast<std::uint32_t>(chroma.white.x),
+                        std::bit_cast<std::uint32_t>(chroma.white.y),
+                    };
+                }(),
         };
 
         auto verifiedProduct =

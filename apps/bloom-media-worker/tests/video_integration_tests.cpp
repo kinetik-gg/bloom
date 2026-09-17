@@ -139,11 +139,11 @@ void run(const std::filesystem::path& directory) {
     const auto colors = document::makeBloomNeutralColorSettingsV1({});
     auto archive = project::buildVerifiedSaveArchive(
         {}, {.snapshot = &saved, .colorSettings = &colors}, {}, memory());
-    check(static_cast<bool>(archive), "video archive writes schema 1.18");
+    check(static_cast<bool>(archive), "video archive writes schema 1.19");
     auto opened = project::openProjectArchive(archive.archive()->bytes(), {}, memory());
     check(opened.outcome() == project::OpenArchiveOutcome::Opened, "video archive reopens");
     auto restored = std::move(opened).takeOpened();
-    check(restored.schemaMinor == 18 &&
+    check(restored.schemaMinor == 19 &&
               *restored.document->snapshot().project().findAsset(asset.id) == asset,
           "video streams, timing and identity round trip");
     {

@@ -236,16 +236,21 @@ FlatExrWriteResultV1 FlatExrRgba32fLinRec709SceneWriterV1::write(
         header.channels().insert("B", Imf::Channel(Imf::FLOAT));
         header.channels().insert("A", Imf::Channel(Imf::FLOAT));
 
+        const auto chromaticities = detail::flatExrChromaticityBitsForWorkingColorSpaceV1(
+            frame.identity().colorIntent.workingColorSpaceId);
+        if (!chromaticities.has_value()) {
+            return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination,
+                          destinationCreated);
+        }
         std::array<Imath::V2f, 4> chromaBits{};
         for (std::size_t index = 0; index < 4; ++index) {
-            chromaBits[index] = Imath::V2f(
-                std::bit_cast<float>(kFlatExrRec709D65ChromaticitiesBitsV1[index * 2]),
-                std::bit_cast<float>(kFlatExrRec709D65ChromaticitiesBitsV1[index * 2 + 1]));
+            chromaBits[index] = Imath::V2f(std::bit_cast<float>((*chromaticities)[index * 2]),
+                                           std::bit_cast<float>((*chromaticities)[index * 2 + 1]));
         }
         Imf::addChromaticities(header, Imf::Chromaticities(chromaBits[0], chromaBits[1],
                                                            chromaBits[2], chromaBits[3]));
-        header.insert("colorInteropID",
-                      Imf::StringAttribute(std::string(detail::kFlatExrColorInteropIdV1)));
+        header.insert("colorInteropID", Imf::StringAttribute(std::string(
+                                            frame.identity().colorIntent.workingColorSpaceId)));
 
         destinationCreated = true;
         Imf::OutputFile outputFile(destination.string().c_str(), header, 1);

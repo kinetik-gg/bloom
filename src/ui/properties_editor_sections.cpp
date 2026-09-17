@@ -23,6 +23,8 @@
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
 
+#include <bloom/color/bloom_neutral_builtin.hpp>
+
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
@@ -539,6 +541,21 @@ void PropertiesEditor::buildDocumentSection(QVBoxLayout* layout) {
     addReadOnly(documentPixelAspect_, QStringLiteral("documentPixelAspect"),
                 tr("Composition pixel aspect ratio"), tr("Pixel Aspect"), kit::TypeRole::Value);
 
+    documentWorkingColorSpace_ = new kit::KDropdown(body);
+    documentWorkingColorSpace_->setObjectName(QStringLiteral("compositionWorkingColorSpace"));
+    documentWorkingColorSpace_->setAccessibleName(tr("Working space"));
+    addRow(rows, body, makeRowLabel(tr("Working space"), body), nullptr,
+           documentWorkingColorSpace_);
+    connect(documentWorkingColorSpace_, &kit::KDropdown::currentIndexChanged, this,
+            [this](const int index) {
+                if (rebuilding_ || index < 0 || session_.composition() == nullptr)
+                    return;
+                const auto value = documentWorkingColorSpace_->itemData(index).toString();
+                (void)session_.setWorkingColorSpaceOverride(
+                    value.isEmpty() ? std::optional<std::string>{}
+                                    : std::optional<std::string>{value.toStdString()});
+            });
+
     documentBackground_ = new kit::KColorChip(body);
     documentBackground_->setObjectName(QStringLiteral("compositionBackgroundColor"));
     documentBackground_->setAccessibleName(tr("Background Colour"));
@@ -554,10 +571,6 @@ void PropertiesEditor::buildDocumentSection(QVBoxLayout* layout) {
                                   static_cast<double>(color.alpha)});
                 static_cast<void>(session_.executeTransaction(std::move(transaction)));
             });
-    // Color settings (process space + config name) are read from ProjectSession, not from anything
-    // CompositionSession exposes -- document::Composition/Snapshot carry no ColorSettings at all.
-    // Per issue #120 decision 3 ("if a listed fact is not reachable via existing read-only API,
-    // omit it and report rather than adding API"), the color settings summary row is omitted here.
     panelLayout->addStretch(1);
     layout->addWidget(documentSection_);
 }

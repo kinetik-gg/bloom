@@ -399,6 +399,20 @@ OperationResult SetCompositionBackgroundColor::apply(document::Draft& draft) con
     return OperationResult::applied();
 }
 
+OperationResult SetCompositionWorkingColorSpace::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(composition_);
+    if (composition == nullptr)
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "Composition does not exist");
+    if (colorSpaceId_.has_value() && !document::validateWorkingColorSpaceId(*colorSpaceId_).ok())
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Invalid working colour space id");
+    if (composition->workingColorSpaceId() == colorSpaceId_)
+        return OperationResult::noChange();
+    composition->setWorkingColorSpaceId(colorSpaceId_);
+    return OperationResult::applied();
+}
+
 OperationResult AddAudioLayer::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
     const auto* asset = draft.project().findAsset(asset_);

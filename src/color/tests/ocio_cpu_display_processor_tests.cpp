@@ -158,10 +158,39 @@ void testNeutralIdentityGolden(Expectations& expectations) {
                         "execution provenance records a nonempty OCIO processor cache ID");
 }
 
+void testAcesCgWhiteDisplay(Expectations& expectations) {
+    const auto revision = bloom::color::ocioBuiltInContentRevision(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
+    expectations.expect(revision.has_value(), "the ACES CG built-in has a content revision");
+    if (!revision.has_value())
+        return;
+    auto resolution = bloom::color::resolveOcioBuiltIn(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri,
+        *revision, bloom::color::kAcesCgV1SceneLinearColorSpaceId);
+    expectations.expect(resolution.ready(), "the ACES CG built-in resolves its ACEScg space");
+    auto resolved = std::move(resolution).takeResolved();
+    if (!resolved.has_value())
+        return;
+    auto built = bloom::color::buildBloomNeutralCpuDisplayProcessor(*resolved);
+    expectations.expect(built.succeeded(), "the ACEScg CPU display processor builds");
+    if (!built.succeeded())
+        return;
+    const auto displayed = built.handle()->referenceToDisplay({1.0, 1.0, 1.0, 1.0});
+    expectations.expect(displayed.has_value(), "an ACEScg authored white reaches the display");
+    if (displayed.has_value()) {
+        constexpr double kAcesSdrWhite = 0.811975;
+        expectations.expect(std::abs(displayed->red - kAcesSdrWhite) < 1e-5 &&
+                                std::abs(displayed->green - kAcesSdrWhite) < 1e-5 &&
+                                std::abs(displayed->blue - kAcesSdrWhite) < 1e-5,
+                            "ACEScg/AP1 white follows the ACES SDR display transform");
+    }
+}
+
 } // namespace
 
 int main() {
     Expectations expectations;
     testNeutralIdentityGolden(expectations);
+    testAcesCgWhiteDisplay(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

@@ -695,7 +695,8 @@ template <typename Value>
             "Recompile the document snapshot with the current runtime semantics."));
     }
     if (request.quality != EvaluationQuality::Reference ||
-        request.colorIntent != EvaluationColorIntent::LinearRec709Scene) {
+        request.colorIntent.workingColorSpaceId.empty() ||
+        request.colorIntent.workingColorSpaceId.find('\0') != std::string::npos) {
         return PreflightOutcome::failure(
             diagnostic(EvaluationDiagnosticCode::InvalidRequest,
                        "Evaluation request uses an unsupported intent"));

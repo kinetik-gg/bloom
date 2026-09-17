@@ -176,10 +176,10 @@ void testSchemaProcessAndRevisionContract(Expectations& expectations) {
         hasIssueAt(settings.validate(), ValidationCode::InvalidValue, "schemaVersion"),
         "color settings require exact schema 1.0");
     settings = bloom::document::makeBloomNeutralColorSettingsV1(testDigest());
-    settings.processColorSpaceId = "role_scene_linear";
+    settings.processColorSpaceId.clear();
     expectations.expect(
         hasIssueAt(settings.validate(), ValidationCode::InvalidValue, "processColorSpaceId"),
-        "a role or alias cannot replace lin_rec709_scene");
+        "an empty value cannot replace a config-resolved working color space");
 
     constexpr std::string_view uppercase =
         "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD";

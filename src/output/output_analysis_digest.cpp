@@ -102,12 +102,17 @@ reportSourceMatchesProcessFrame(const output::OutputAnalysisReportV1View report,
     const auto& data = report.facets[5].sourceDescriptor;
     const auto& display = report.facets[6].sourceDescriptor;
     const auto& aspect = report.facets[7].sourceDescriptor;
+    constexpr std::string_view colorPrefix = "color-id=id:";
+    const auto& sourceColor = report.facets[2].sourceDescriptor;
+    const auto expectedColor = processFrame.identity().colorIntent.workingColorSpaceId;
     return descriptorUnsignedEquals(pixels, "height", dataWindow.extent().height()) &&
            descriptorUnsignedEquals(pixels, "width", dataWindow.extent().width()) &&
            windowDescriptorMatches(data, dataWindow) &&
            windowDescriptorMatches(display, displayWindow) &&
            descriptorUnsignedEquals(aspect, "numerator", pixelAspect.numerator()) &&
-           descriptorUnsignedEquals(aspect, "denominator", pixelAspect.denominator());
+           descriptorUnsignedEquals(aspect, "denominator", pixelAspect.denominator()) &&
+           sourceColor.starts_with(colorPrefix) &&
+           sourceColor.substr(colorPrefix.size()) == expectedColor;
 }
 
 [[nodiscard]] bool

@@ -73,6 +73,14 @@ CompositionPreviewController::CompositionPreviewController(
             &CompositionPreviewController::handleTransformInteractionChanged);
     connect(&session_, &CompositionSession::liveValueChanged, this,
             &CompositionPreviewController::handleLiveValueChanged);
+    connect(&session_, &CompositionSession::colorSettingsChanged, this, [this] {
+        const auto intent = session_.colorIntent();
+        if (settings_.colorIntent == intent) {
+            return;
+        }
+        settings_.colorIntent = intent;
+        requestRefresh();
+    });
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this,
             &CompositionPreviewController::consumeReadyResult);
     interactiveCadenceTimer_.setSingleShot(true);

@@ -9,6 +9,7 @@
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/animation.hpp>
+#include <bloom/document/color_settings.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
@@ -173,6 +174,13 @@ class CompositionSession final : public QObject {
     // schema declares reference linear sRGB. An unrecognized schema key fails closed.
     [[nodiscard]] kit::KColorConverter
     colorConverter(std::string_view schemaKey = document::kSolidColorParameterSchemaKey);
+    [[nodiscard]] const document::ColorSettings& colorSettings() const& noexcept {
+        return colorSettings_;
+    }
+    const document::ColorSettings& colorSettings() const&& = delete;
+    [[nodiscard]] runtime::EvaluationColorIntent colorIntent() const noexcept;
+    void setColorSettings(document::ColorSettings settings);
+    [[nodiscard]] bool setWorkingColorSpaceOverride(std::optional<std::string> colorSpaceId);
 
     void setAssetController(AssetController* controller) noexcept { assetController_ = controller; }
     [[nodiscard]] AssetController* assetController() const noexcept { return assetController_; }
@@ -552,6 +560,7 @@ class CompositionSession final : public QObject {
     void liveValueChanged();
     // Task DRIVE-1: a fresh resolution of the composition's driven parameters has landed.
     void drivenValuesChanged();
+    void colorSettingsChanged();
 
   private:
     struct CommandObserverState;
@@ -680,6 +689,7 @@ class CompositionSession final : public QObject {
     // ProjectSession content. A reference member cannot be reseated; both are set at construction
     // and by rebind(), and are never null while this object is alive.
     std::shared_ptr<SessionColorConverterState> colorConverterState_;
+    document::ColorSettings colorSettings_;
     document::Document* document_;
     commands::CommandStack* commandStack_;
     commands::CommandObserverId commandObserverId_ = 0;

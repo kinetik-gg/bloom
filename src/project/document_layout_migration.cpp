@@ -144,7 +144,8 @@ enum class Step {
     TextCapability,
     AssetOrganization,
     Video,
-    DataBlocks
+    DataBlocks,
+    WorkingColorSpace
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -165,6 +166,8 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
         step == Step::Merges || step == Step::ContentBounds || step == Step::Audio ||
         step == Step::KeyframeHandles || step == Step::LayerParenting || step == Step::Paths ||
         step == Step::TextCapability || step == Step::Video)
+        return false;
+    if (step == Step::WorkingColorSpace)
         return false;
     if (scope == Scope::Composition) {
         return value.findMember(step == Step::NodeLayout   ? "nodeLayout"
@@ -212,7 +215,8 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::TextCapability    ? "{\"major\":1,\"minor\":15}"
                            : step == Step::AssetOrganization ? "{\"major\":1,\"minor\":16}"
                            : step == Step::Video             ? "{\"major\":1,\"minor\":17}"
-                                                             : "{\"major\":1,\"minor\":18}");
+                           : step == Step::DataBlocks        ? "{\"major\":1,\"minor\":18}"
+                                                             : "{\"major\":1,\"minor\":19}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
                 return false;
@@ -444,6 +448,16 @@ MigrationStepOutcome migrateDataBlocksV1_17(const JsonValue& root, std::pmr::mem
         return MigrationStepOutcome::failure("/schemaVersion");
     if (!transform(root, Scope::Root, Step::DataBlocks, output))
         return MigrationStepOutcome::failure("/project/dataBlocks");
+    return MigrationStepOutcome::success();
+}
+
+MigrationStepOutcome migrateWorkingColorSpaceV1_18(const JsonValue& root,
+                                                   std::pmr::memory_resource*, Buffer& output) {
+    // Existing projects already inherit their project working space. The new optional composition
+    // member therefore needs no inferred JSON value; only the schema version advances.
+    if (!sourceVersionIs(root, "18") ||
+        !transform(root, Scope::Root, Step::WorkingColorSpace, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }
 } // namespace bloom::project

@@ -143,11 +143,13 @@ inline constexpr std::string_view kStringPadSideParameterSchemaKey = "bloom.stri
 inline constexpr std::string_view kIntegerOperationParameterSchemaKey = "bloom.integer.operation";
 inline constexpr std::string_view kBooleanOperationParameterSchemaKey = "bloom.boolean.operation";
 
-// The initial solid schema owns straight/unassociated RGBA authoring values in this encoding.
-// Evaluation converts them to the canonical premultiplied image representation. The text color
-// schema (kTextColorParameterSchemaKey) authors in exactly this same encoding with exactly the same
-// straight-alpha meaning -- a text color is a solid color that glyph coverage then scales -- so it
-// reuses this one constant rather than declaring a second, identical encoding name.
+// The initial solid schema owns straight/unassociated RGBA authoring values and retains this
+// historical encoding label for document compatibility. Numeric values are interpreted in the
+// effective project/composition working space; evaluation converts them to the canonical
+// premultiplied image representation. The text color schema (kTextColorParameterSchemaKey)
+// authors in exactly this same label with exactly the same straight-alpha meaning -- a text color
+// is a solid color that glyph coverage then scales -- so it reuses this one constant rather than
+// declaring a second, identical encoding name.
 inline constexpr std::string_view kSolidColorEncoding = "bloom.reference.linear-srgb";
 
 // Text size bounds, in pixels per em, owned by the text size parameter schema. The lower bound is
@@ -237,7 +239,8 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 }
 
 // The Color4d-valued animatable schemas (task S5): a solid's colour and a text layer's colour.
-// Both author straight RGBA in kSolidColorEncoding, so one curve kind serves both.
+// Both author straight RGBA under the historical kSolidColorEncoding label, so one curve kind
+// serves both.
 //
 // Task FIX1, item G: the value LIBRARY's own literals join all four sets. A Scalar node, a Vector
 // 2/3 node and a Colour node hold exactly the kinds these curves carry, so animating one is

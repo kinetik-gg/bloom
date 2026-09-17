@@ -1,5 +1,6 @@
 #include "output_semantic_identity.hpp"
 
+#include "flat_exr_preset_contract.hpp"
 #include "output_analysis_numeric.hpp"
 #include "output_semantic_identity_internal.hpp"
 
@@ -29,7 +30,6 @@ namespace runtime = bloom::runtime;
 
 constexpr char kOutputSemanticIdentityDomain[] = "BloomOutputSemanticIdentity";
 constexpr std::string_view kPngColorId = "srgb_rec709_display";
-constexpr std::string_view kExrColorId = "lin_rec709_scene";
 constexpr std::uint8_t kPngPayloadKind = 1;
 constexpr std::uint8_t kExrPayloadKind = 2;
 constexpr std::uint8_t kPackedRgba8 = 1;
@@ -44,7 +44,6 @@ constexpr std::size_t kExrPayloadChunkBytes = kPayloadChunkPixels * 4U * sizeof(
 
 static_assert(sizeof(kOutputSemanticIdentityDomain) == 28);
 static_assert(kPngColorId.size() == 19);
-static_assert(kExrColorId.size() == 16);
 static_assert(kExrPayloadChunkBytes == 16'384);
 static_assert(std::numeric_limits<float>::is_iec559 && sizeof(float) == sizeof(std::uint32_t));
 
@@ -197,8 +196,8 @@ struct ProcessDescriptorPreflight final {
         return preflightFailure<ProcessDescriptorPreflight>(Error::MissingProcessIdentity);
     }
     const auto canonicalBytes = identity->canonicalBytes();
-    if (canonicalBytes.size() != output::kCompositionProcessFrameSemanticIdentityV1Bytes &&
-        canonicalBytes.size() != output::kProxyProcessFrameSemanticIdentityV1Bytes) {
+    if (canonicalBytes.empty() ||
+        canonicalBytes.size() > output::kMaximumProcessFrameSemanticIdentityV1Bytes) {
         return preflightFailure<ProcessDescriptorPreflight>(Error::InvalidProcessIdentity);
     }
     const auto& frame = identity->processFrame();
@@ -358,6 +357,17 @@ preflightPng(const output::PngRgba8SrgbOutputSemanticIdentityInputV1& input) noe
         return preflightFailure<ExrPreflight>(process.error);
     }
     const auto& metadata = verifiedProduct.metadata();
+    const auto& processFrame = boundAnalysis->processIdentity()->processFrame();
+    if (processFrame == nullptr) {
+        return preflightFailure<ExrPreflight>(Error::InvalidProcessIdentity);
+    }
+    const auto workingColorSpaceId = processFrame->identity().colorIntent.workingColorSpaceId;
+    const auto expectedChromaticities =
+        output::detail::flatExrChromaticityBitsForWorkingColorSpaceV1(workingColorSpaceId);
+    if (!expectedChromaticities.has_value() ||
+        metadata.chromaticityBits != *expectedChromaticities) {
+        return preflightFailure<ExrPreflight>(Error::InvalidSemanticPayload);
+    }
     const auto dataPixelCount =
         output::detail::flatExrInclusiveWindowPixelCountV1(metadata.dataWindow);
     const auto displayPixelCount =
@@ -414,7 +424,7 @@ preflightPng(const output::PngRgba8SrgbOutputSemanticIdentityInputV1& input) noe
                                                  2U + 8U * sizeof(std::uint32_t) +
                                                  sizeof(std::uint64_t);
     if (!preimageSize || !addChecked(*preimageSize, fixedMetadataBytes) ||
-        !addTextSize(*preimageSize, kExrColorId) ||
+        !addTextSize(*preimageSize, workingColorSpaceId) ||
         !addTextSize(*preimageSize, output::kFlatExrRgba32fSemanticProfileV1) ||
         !addChecked(*preimageSize, *payloadBytes)) {
         return preflightFailure<ExrPreflight>(Error::HashInputTooLarge);
@@ -510,6 +520,9 @@ hashExr(const output::FlatExrRgba32fLinRec709SceneOutputSemanticIdentityInputV1&
         const ExrPreflight& preflight, const runtime::CancellationToken& cancellation,
         const output::OutputSemanticIdentityProgressCallbackV1& progress) noexcept {
     const auto& metadata = input.verifiedProduct.metadata();
+    const auto& processIdentity = *input.verifiedProduct.boundAnalysis()->processIdentity();
+    const auto& workingColorSpaceId =
+        processIdentity.processFrame()->identity().colorIntent.workingColorSpaceId;
     DigestStream stream;
     bool streamed =
         streamCommon(stream, preflight.common, {}, kExrPayloadKind) &&
@@ -520,8 +533,8 @@ hashExr(const output::FlatExrRgba32fLinRec709SceneOutputSemanticIdentityInputV1&
         stream.integer(metadata.displayWindow.xMax) &&
         stream.integer(metadata.displayWindow.yMax) &&
         stream.integer(metadata.pixelAspectRatioBits) && stream.integer(kZipCompression) &&
-        stream.integer(kIncreasingY) && stream.text(kExrColorId);
-    for (const auto bits : output::kFlatExrRec709D65ChromaticitiesBitsV1) {
+        stream.integer(kIncreasingY) && stream.text(workingColorSpaceId);
+    for (const auto bits : metadata.chromaticityBits) {
         streamed = streamed && stream.integer(bits);
     }
     streamed = streamed && stream.text(output::kFlatExrRgba32fSemanticProfileV1) &&

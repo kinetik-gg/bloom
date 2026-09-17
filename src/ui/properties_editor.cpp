@@ -783,6 +783,32 @@ void PropertiesEditor::configureDocumentProperties() {
     documentFormat_->setText(formatCompositionFormat(format));
     documentFrameRate_->setText(formatFrameRate(format.frameRate()));
     documentPixelAspect_->setText(formatPixelAspect(format.pixelAspect()));
+    {
+        const QSignalBlocker blockWorkingSpace(documentWorkingColorSpace_);
+        documentWorkingColorSpace_->clearItems();
+        documentWorkingColorSpace_->addItem(tr("Inherit"), QString{});
+        const auto& settings = session_.colorSettings();
+        const bool aces =
+            std::holds_alternative<document::BuiltInOcioConfigLocator>(
+                settings.ocioConfig.locator) &&
+            std::get<document::BuiltInOcioConfigLocator>(settings.ocioConfig.locator).uri ==
+                color::kAcesCgV1ConfigUri;
+        const std::array<std::string_view, 5> spaces =
+            aces ? std::array<std::string_view, 5>{"ACEScg", "ACES2065-1", "Linear Rec.709 (sRGB)",
+                                                   "Linear P3-D65", "Linear Rec.2020"}
+                 : std::array<std::string_view, 5>{settings.processColorSpaceId, {}, {}, {}, {}};
+        for (const auto id : spaces) {
+            if (!id.empty())
+                documentWorkingColorSpace_->addItem(
+                    QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size())),
+                    QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size())));
+        }
+        const auto& overrideId = composition->workingColorSpaceId();
+        documentWorkingColorSpace_->setCurrentIndex(
+            overrideId.has_value()
+                ? documentWorkingColorSpace_->findData(QString::fromStdString(*overrideId))
+                : 0);
+    }
     const auto context = frameContextFor(session_);
     documentDuration_->setText(context.has_value() ? formatDuration(*context)
                                                    : QStringLiteral("—"));

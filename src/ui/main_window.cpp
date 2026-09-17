@@ -5,12 +5,15 @@
 #include <bloom/ui/main_window.hpp>
 #include <memory>
 
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/licenses_window.hpp>
 #include <bloom/ui/media_disk_cache_settings.hpp>
@@ -25,6 +28,9 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDesktopServices>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLatin1StringView>
@@ -37,7 +43,9 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <array>
 #include <filesystem>
+#include <string_view>
 
 namespace {
 
@@ -474,6 +482,11 @@ void MainWindow::createFileMenu(QMenu& fileMenu) {
     connect(saveProjectCopyAction_, &QAction::triggered, &projectHost_,
             &ProjectHost::requestSaveCopy);
 
+    projectColorSettingsAction_ = fileMenu.addAction(tr("Project Settings…"));
+    projectColorSettingsAction_->setObjectName(QStringLiteral("projectColorSettingsAction"));
+    connect(projectColorSettingsAction_, &QAction::triggered, this,
+            &MainWindow::showProjectColorSettings);
+
     fileMenu.addSeparator();
 
     // "Export Frame…" (task F3, issue #103): no default shortcut, its own group below the
@@ -513,6 +526,109 @@ void MainWindow::createFileMenu(QMenu& fileMenu) {
     quitAction_->setShortcut(QKeySequence::Quit);
     quitAction_->setShortcutContext(Qt::WindowShortcut);
     connect(quitAction_, &QAction::triggered, this, &QWidget::close);
+}
+
+void MainWindow::showProjectColorSettings() {
+    const auto* current = projectHost_.colorSettings();
+    if (current == nullptr)
+        return;
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Project Settings — Colour"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout;
+    layout->addLayout(form);
+    auto* config = new kit::KDropdown(&dialog);
+    config->setObjectName(QStringLiteral("projectColorConfigPicker"));
+    config->addItem(tr("Bloom Neutral v1"), QStringLiteral("neutral"));
+    config->addItem(tr("ACES 1.3 CG (OCIO built-in)"), QStringLiteral("aces"));
+    const auto* const currentBuiltin =
+        std::get_if<document::BuiltInOcioConfigLocator>(&current->ocioConfig.locator);
+    const auto currentUri = currentBuiltin == nullptr ? std::string_view{} : currentBuiltin->uri;
+    config->setCurrentIndex(config->findData(currentUri == color::kAcesCgV1ConfigUri
+                                                 ? QVariant{QStringLiteral("aces")}
+                                                 : QVariant{QStringLiteral("neutral")}));
+    form->addRow(tr("OCIO config"), config);
+
+    auto* working = new kit::KDropdown(&dialog);
+    working->setObjectName(QStringLiteral("projectWorkingColorSpacePicker"));
+    form->addRow(tr("Working colour space"), working);
+    auto* summary = new kit::KLabel(&dialog);
+    summary->setObjectName(QStringLiteral("projectColorSummary"));
+    summary->setWordWrap(true);
+    form->addRow(tr("Summary"), summary);
+    auto* hint = new kit::KLabel(
+        tr("For an external config.ocio, choose the file suggested by $OCIO in the project "
+           "browser. External configs retain their durable file reference and are resolved by "
+           "the supervised colour helper."),
+        &dialog);
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+
+    const auto populate = [config, working, summary] {
+        const auto digestText = [](const core::Sha256Digest& digest) {
+            const auto hex = digest.toLowercaseHex();
+            return QString::fromUtf8(hex.data(), static_cast<qsizetype>(hex.size()));
+        };
+        const bool aces = config->currentData().toString() == QStringLiteral("aces");
+        const std::array<std::string_view, 5> acesSpaces{
+            "ACEScg", "ACES2065-1", "Linear Rec.709 (sRGB)", "Linear P3-D65", "Linear Rec.2020"};
+        working->clearItems();
+        if (aces) {
+            for (const auto id : acesSpaces)
+                working->addItem(QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size())),
+                                 QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size())));
+            const auto revision = color::ocioBuiltInContentRevision(
+                color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
+            summary->setText(
+                QObject::tr("Config: cg-config-v1.0.0_aces-v1.3_ocio-v2.1\n"
+                            "Revision: %1\nDisplays: sRGB - Display (ACES 1.0 - SDR Video, "
+                            "Un-tone-mapped, Raw)")
+                    .arg(revision.has_value() ? digestText(*revision)
+                                              : QObject::tr("unavailable")));
+        } else {
+            working->addItem(QStringLiteral("lin_rec709_scene"),
+                             QStringLiteral("lin_rec709_scene"));
+            summary->setText(QObject::tr("Config: Bloom Neutral v1\nRevision: %1\nDisplays: "
+                                         "sRGB - Display")
+                                 .arg(digestText(color::kBloomNeutralV1ConfigDigest)));
+        }
+        working->setCurrentIndex(0);
+    };
+    connect(config, &kit::KDropdown::currentIndexChanged, &dialog, [populate] { populate(); });
+    populate();
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    const auto selected = config->currentData().toString();
+    document::ColorSettings settings;
+    if (selected == QStringLiteral("aces")) {
+        const auto revision = color::ocioBuiltInContentRevision(
+            color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
+        if (!revision.has_value())
+            return;
+        settings = {.schemaVersion = document::kColorSettingsSchemaVersionV1,
+                    .processColorSpaceId = working->currentData().toString().toStdString(),
+                    .ocioConfig = {
+                        .schemaVersion = document::kOcioConfigReferenceSchemaVersionV1,
+                        .locator = document::BuiltInOcioConfigLocator{std::string(
+                            color::kAcesCgV1ConfigUri)},
+                        .expectedRevision = {.algorithm = document::OcioRevisionAlgorithm::Sha256,
+                                             .digest = *revision},
+                        .portability = document::OcioConfigPortability::BuiltIn,
+                        .contextVariables = {}}};
+    } else {
+        settings = document::makeBloomNeutralColorSettingsV1(color::kBloomNeutralV1ConfigDigest);
+    }
+    const auto status = projectHost_.setColorSettings(std::move(settings));
+    if (status == host::ProjectSessionColorSettingsStatus::InvalidSettings)
+        QMessageBox::warning(this, tr("Project Settings"),
+                             tr("The selected colour configuration could not be resolved."));
 }
 
 void MainWindow::updateFileActions() {

@@ -64,6 +64,14 @@ registryDiagnostic(const bloom::color::OcioBuiltInResolutionResult& result) {
                 "bloom.runtime.qualified-display-processor.registry-display-view-ambiguous",
                 "The embedded Bloom Neutral display configuration has no unambiguous display/"
                 "view mapping");
+        case OcioBuiltInInvalidReason::WorkingColorSpaceMissing:
+            return diagnostic(
+                "bloom.runtime.qualified-display-processor.working-space-missing",
+                "The selected working color space is not present in the OCIO configuration");
+        case OcioBuiltInInvalidReason::WorkingColorSpaceNotSceneLinear:
+            return diagnostic(
+                "bloom.runtime.qualified-display-processor.working-space-not-scene-linear",
+                "The selected working color space is not a scene-linear OCIO color space");
         case OcioBuiltInInvalidReason::None:
             break;
         }

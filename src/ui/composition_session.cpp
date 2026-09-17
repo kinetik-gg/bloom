@@ -2,6 +2,8 @@
 
 #include "animation_components.hpp"
 
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/result.hpp>
@@ -41,6 +43,32 @@ struct SessionColorConverterState final {
     bool finished = false;
 };
 
+[[nodiscard]] std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle>
+buildColorProcessor(const document::ColorSettings& settings) {
+    const auto* builtIn =
+        std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator);
+    if (builtIn == nullptr ||
+        settings.ocioConfig.expectedRevision.algorithm != document::OcioRevisionAlgorithm::Sha256) {
+        return {};
+    }
+    auto resolution = color::resolveOcioBuiltIn(
+        color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri,
+        settings.ocioConfig.expectedRevision.digest, settings.processColorSpaceId);
+    if (!resolution.ready()) {
+        return {};
+    }
+    auto resolved = std::move(resolution).takeResolved();
+    if (!resolved.has_value()) {
+        return {};
+    }
+    auto built = color::buildBloomNeutralCpuDisplayProcessor(*resolved);
+    auto handle = std::move(built).takeHandle();
+    if (!handle.has_value()) {
+        return {};
+    }
+    return std::make_shared<const color::PreparedCpuDisplayProcessorHandle>(std::move(*handle));
+}
+
 kit::KColorConverter CompositionSession::colorConverter(const std::string_view schemaKey) {
     static_assert(document::kSolidColorEncoding == "bloom.reference.linear-srgb");
     // Every Color4d-valued schema -- including the shape source's fillColor/strokeColor and any
@@ -53,16 +81,27 @@ kit::KColorConverter CompositionSession::colorConverter(const std::string_view s
     if (!colorConverterState_) {
         colorConverterState_ = std::make_shared<SessionColorConverterState>();
         const auto state = colorConverterState_;
+        auto settings = colorSettings_;
+        if (const auto* currentComposition = composition();
+            currentComposition != nullptr &&
+            currentComposition->workingColorSpaceId().has_value()) {
+            settings.processColorSpaceId = *currentComposition->workingColorSpaceId();
+        }
         connect(this, &QObject::destroyed, [state] { state->cancelled.store(true); });
         // Only the immutable, bounded built-in runs here. No widget/session pointer crosses
         // into the worker. Destruction cancels publication and never waits on the UI thread.
-        QThreadPool::globalInstance()->start([state] {
+        QThreadPool::globalInstance()->start([state, settings] {
             if (state->cancelled.load())
                 return;
-            const auto result = runtime::buildBloomNeutralQualifiedDisplayProcessor();
+            std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> result;
+            try {
+                result = buildColorProcessor(settings);
+            } catch (...) {
+                result.reset();
+            }
             const std::lock_guard lock(state->mutex);
             if (!state->cancelled.load()) {
-                state->processor = result.handle();
+                state->processor = result;
                 state->finished = true;
             }
         });
@@ -107,6 +146,66 @@ kit::KColorConverter CompositionSession::colorConverter(const std::string_view s
                                      static_cast<float>(converted->green),
                                      static_cast<float>(converted->blue), input.alpha, target);
     };
+}
+
+runtime::EvaluationColorIntent CompositionSession::colorIntent() const noexcept {
+    const auto* currentComposition = composition();
+    const auto workingColorSpaceId =
+        currentComposition != nullptr && currentComposition->workingColorSpaceId().has_value()
+            ? std::string_view{*currentComposition->workingColorSpaceId()}
+            : std::string_view{colorSettings_.processColorSpaceId};
+    return {.workingColorSpaceId = workingColorSpaceId,
+            .ocioConfigRevision = colorSettings_.ocioConfig.expectedRevision.digest};
+}
+
+void CompositionSession::setColorSettings(document::ColorSettings settings) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (colorSettings_ == settings) {
+        return;
+    }
+    if (colorConverterState_ != nullptr) {
+        colorConverterState_->cancelled.store(true);
+    }
+    colorConverterState_.reset();
+    colorSettings_ = std::move(settings);
+    emit colorSettingsChanged();
+    emit snapshotChanged();
+}
+
+bool CompositionSession::setWorkingColorSpaceOverride(std::optional<std::string> colorSpaceId) {
+    const auto* currentComposition = composition();
+    if (currentComposition == nullptr) {
+        reportUnavailable(QStringLiteral("No composition is available"));
+        return false;
+    }
+    if (colorSpaceId.has_value()) {
+        if (!document::validateWorkingColorSpaceId(*colorSpaceId).ok()) {
+            reportUnavailable(QStringLiteral("Invalid working colour space id"));
+            return false;
+        }
+        const auto* builtIn =
+            std::get_if<document::BuiltInOcioConfigLocator>(&colorSettings_.ocioConfig.locator);
+        if (builtIn == nullptr || colorSettings_.ocioConfig.expectedRevision.algorithm !=
+                                      document::OcioRevisionAlgorithm::Sha256) {
+            reportUnavailable(QStringLiteral("The selected OCIO configuration needs its colour "
+                                             "helper before this override can be used"));
+            return false;
+        }
+        const auto resolution = color::resolveOcioBuiltIn(
+            color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri,
+            colorSettings_.ocioConfig.expectedRevision.digest, *colorSpaceId);
+        if (!resolution.ready()) {
+            reportUnavailable(QStringLiteral("The selected colour space is not a scene-linear "
+                                             "space in this configuration"));
+            return false;
+        }
+    }
+    commands::Transaction transaction("Set Composition Working Space", snapshot_.revision());
+    transaction.emplace<commands::SetCompositionWorkingColorSpace>(compositionId_,
+                                                                   std::move(colorSpaceId));
+    const auto result = executeTransaction(std::move(transaction));
+    return result.status == commands::CommandStatus::Succeeded ||
+           result.status == commands::CommandStatus::NoChange;
 }
 
 // The ParameterSample alternatives a CURVE can hold. sampleParameterValue() returns only these
@@ -212,8 +311,10 @@ struct CompositionSession::CommandObserverState final {
 CompositionSession::CompositionSession(document::Document& document,
                                        commands::CommandStack& commandStack,
                                        document::CompositionId compositionId, QObject* parent)
-    : QObject(parent), document_(&document), commandStack_(&commandStack),
-      snapshot_(document.snapshot()), compositionId_(compositionId) {
+    : QObject(parent),
+      colorSettings_(document::makeBloomNeutralColorSettingsV1(color::kBloomNeutralV1ConfigDigest)),
+      document_(&document), commandStack_(&commandStack), snapshot_(document.snapshot()),
+      compositionId_(compositionId) {
     attachCommandObserver();
     if (composition() == nullptr && !snapshot_.project().compositions().empty()) {
         compositionId_ = lowestCompositionId(snapshot_.project());

@@ -1,8 +1,8 @@
 # Bloom Project Format
 
-The current document schema is 1.18. It adds the additive `project.dataBlocks` collection and the
-`dataBlock` allocator namespace. See [data blocks](data-blocks.md) for the model and provenance
-contract.
+The current document schema is 1.19. It adds an optional per-composition working colour-space
+override on top of the 1.18 `project.dataBlocks` collection and `dataBlock` allocator namespace.
+See [data blocks](data-blocks.md) for the model and provenance contract.
 
 Status: accepted
 
@@ -42,13 +42,13 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.18`.
+The container version remains `1.0`; the current document schema is `1.19`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. Versioned artifacts through `1.11` remain checked as
-historical fixtures, with the current `1.18` contract also enforced by the canonical writer and
+historical fixtures, with the current `1.19` contract also enforced by the canonical writer and
 decoder tests. The manifest artifact still requires container `1.0`; its document
 declaration follows the current document minor. Every historical artifact from `1.0` through `1.11`,
 manifest and document, remains checked, and each version's checker validates what its own minor adds
@@ -471,12 +471,20 @@ exact order:
 
 The built-in URI above is exact; the all-zero digest illustrates the 64-hex-character shape only and
 must be replaced by the qualified build profile's real revision. `processColorSpaceId` is owned by
-`colorSettings`, is the Color Interop Forum identifier, and is exactly `lin_rec709_scene` in document
-schema `1.0`. `expectedRevision` is owned by `colorSettings.ocioConfig`; it identifies the referenced
+`colorSettings` and is the selected scene-linear working-space identifier in document schema 1.19.
+Existing 1.18 projects retain `lin_rec709_scene` during the 1.18 → 1.19 migration.
+`expectedRevision` is owned by `colorSettings.ocioConfig`; it identifies the referenced
 configuration bytes and never replaces or duplicates the process-space ID. The process encoding is
 therefore known even while the referenced OCIO configuration is missing. Changing a display, view,
 look, or monitor does not alter either durable value; those selections are session or render-request
 state.
+
+Each composition may additionally carry `workingColorSpaceId`. It is omitted for inheritance, or is
+an exact scene-linear colour-space id exposed by the project's selected OCIO config. The document
+codec validates its UTF-8/length shape; the colour boundary validates that the chosen config resolves
+the id. A missing or non-scene-linear id fails closed rather than being replaced with the project
+value. The effective id is written into evaluation intent and output identity, while the project
+config revision remains the shared configuration identity.
 
 `OcioConfigReference` has `schemaVersion`, `locator`, `expectedRevision`, `portability`, then
 `contextVariables`. The locator is exactly one of these known-member shapes:
@@ -852,9 +860,11 @@ schema-version path. Reconstruction applies the same registry validation to deco
 names the node ID. Old or future versions of a known kind are never silently upgraded, downgraded,
 or interpreted through another definition. No parameters or IDs are injected and no edges are dropped.
 
-The canonical writer is **1.18** and the load floor is **1.15**. Opening 1.15 applies the additive
-asset metadata defaults during typed decoding and reports the resulting document as 1.18. The
-registered 1.15 → 1.16, 1.16 → 1.17, and 1.17 → 1.18 DOM transforms are tested against the same decoded result.
+The canonical writer is **1.19** and the load floor is **1.15**. Opening 1.15 applies the additive
+asset metadata defaults during typed decoding and reports the resulting document as 1.19. The
+registered 1.15 → 1.16, 1.16 → 1.17, 1.17 → 1.18, and 1.18 → 1.19 DOM transforms are tested
+against the same decoded result; the last step adds no override, preserving inheritance and
+`lin_rec709_scene`.
 No node version,
 parameter source or rendering meaning changes. The earlier numbered ladder remains independently
 tested bookkeeping and does not admit files below the load floor. Historical schema

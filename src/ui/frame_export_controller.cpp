@@ -656,7 +656,7 @@ bool FrameExportController::beginAttempt(
                        .output = plan->output(),
                        .resolution = runtime::CompositionFormatResolution{},
                        .quality = runtime::EvaluationQuality::Reference,
-                       .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
+                       .colorIntent = session_.colorIntent(),
                        .pixelStorageByteLimit = kDefaultPreviewPixelStorageByteLimit},
         .targetPath = pendingDestination_,
         .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,

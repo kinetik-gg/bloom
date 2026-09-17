@@ -7,7 +7,9 @@
 // from docs/architecture/frame-output.md ("Flat OpenEXR Preset Version 1"), not from each other.
 
 #include <array>
+#include <bloom/color/bloom_neutral_builtin.hpp>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 namespace bloom::output::detail {
@@ -44,6 +46,46 @@ struct FlatExrHeaderAttributeContractV1 final {
 };
 
 inline constexpr std::string_view kFlatExrColorInteropIdV1 = "lin_rec709_scene";
+
+inline constexpr std::array<std::uint32_t, 8> kFlatExrRec709D65ChromaticityBitsV1{
+    0x3F23D70AU, 0x3EA8F5C3U, 0x3E99999AU, 0x3F19999AU,
+    0x3E19999AU, 0x3D75C28FU, 0x3EA01A37U, 0x3EA872B0U,
+};
+
+inline constexpr std::array<std::uint32_t, 8> kFlatExrAces2065ChromaticityBitsV1{
+    0x3F3C154DU, 0x3E87D567U, 0x00000000U, 0x3F800000U,
+    0x38D1B717U, 0xBD9DB22DU, 0x3EA4B33EU, 0x3EACE315U,
+};
+
+inline constexpr std::array<std::uint32_t, 8> kFlatExrP3D65ChromaticityBitsV1{
+    0x3F2E147BU, 0x3EA3D70AU, 0x3E87AE14U, 0x3F30A3D7U,
+    0x3E19999AU, 0x3D75C28FU, 0x3EA01A37U, 0x3EA872B0U,
+};
+
+inline constexpr std::array<std::uint32_t, 8> kFlatExrRec2020ChromaticityBitsV1{
+    0x3F353F7DU, 0x3E958106U, 0x3E2E147BU, 0x3F4C0831U,
+    0x3E0624DDU, 0x3D3C6A7FU, 0x3EA01A37U, 0x3EA872B0U,
+};
+
+[[nodiscard]] constexpr std::optional<std::array<std::uint32_t, 8>>
+flatExrChromaticityBitsForWorkingColorSpaceV1(const std::string_view id) noexcept {
+    if (id == bloom::color::kAcesCgV1SceneLinearColorSpaceId) {
+        return bloom::color::kAcesCgV1ChromaticityBits;
+    }
+    if (id == "ACES2065-1") {
+        return kFlatExrAces2065ChromaticityBitsV1;
+    }
+    if (id == "lin_rec709_scene" || id == "Linear Rec.709 (sRGB)") {
+        return kFlatExrRec709D65ChromaticityBitsV1;
+    }
+    if (id == "Linear P3-D65") {
+        return kFlatExrP3D65ChromaticityBitsV1;
+    }
+    if (id == "Linear Rec.2020") {
+        return kFlatExrRec2020ChromaticityBitsV1;
+    }
+    return std::nullopt;
+}
 
 // The closed version 1 header allowlist: exactly these ten attributes, nothing else. The
 // verifier enumerates every attribute the reopened file actually carries and fails closed on

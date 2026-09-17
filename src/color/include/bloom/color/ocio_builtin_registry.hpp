@@ -11,9 +11,9 @@
 #include <string>
 #include <string_view>
 
-// The Bloom Neutral v1 in-process built-in OCIO registry (issue #95, design decision 2 of the
-// task package): resolves EXACTLY the URI bloom://ocio/neutral-v1/config.ocio to the payload
-// embedded at build time from assets/ocio/neutral-v1/config.ocio, per
+// The in-process built-in OCIO registry (issue #95, design decision 2 of the task package):
+// resolves the immutable Bloom Neutral v1 payload and OCIO 2.5's pinned ACES 1.3 CG built-in,
+// per
 // docs/architecture/color-management.md's "Durable OCIO Configuration Identity" and "Supervised
 // OCIO Execution" (Bloom Neutral is the sole in-process trust class; every other locator kind
 // remains routed to the not-yet-implemented bloom-color-worker helper). This header exposes only
@@ -64,6 +64,8 @@ enum class OcioBuiltInInvalidReason : std::uint8_t {
     ProcessColorSpaceNotUniquelyMapped,
     OutputColorSpaceNotUniquelyMapped,
     DisplayViewNotUniquelyMapped,
+    WorkingColorSpaceMissing,
+    WorkingColorSpaceNotSceneLinear,
 };
 
 class ResolvedBloomNeutralConfig;
@@ -78,6 +80,21 @@ class OcioBuiltInResolutionResult;
 [[nodiscard]] OcioBuiltInResolutionResult
 resolveBloomNeutralV1BuiltIn(OcioConfigLocatorKind locatorKind, std::string_view locatorValue,
                              const core::Sha256Digest& expectedRevision) noexcept;
+
+// Resolves one supported immutable OCIO built-in and proves the requested working space is a
+// scene-linear, non-data color space in that exact config. An empty workingColorSpaceId selects
+// the config's scene_linear role. The old Bloom Neutral entry point remains as a compatibility
+// wrapper for callers that have not yet selected a non-default working space.
+[[nodiscard]] OcioBuiltInResolutionResult
+resolveOcioBuiltIn(OcioConfigLocatorKind locatorKind, std::string_view locatorValue,
+                   const core::Sha256Digest& expectedRevision,
+                   std::string_view workingColorSpaceId = {}) noexcept;
+
+// Returns the content revision of a supported immutable built-in without accepting it as a
+// project setting. This is used by the project colour picker when it proposes a durable reference.
+[[nodiscard]] std::optional<core::Sha256Digest>
+ocioBuiltInContentRevision(OcioConfigLocatorKind locatorKind,
+                           std::string_view locatorValue) noexcept;
 
 // The exact byte span of the payload embedded at build time from
 // assets/ocio/neutral-v1/config.ocio. Exposed so tests and the registry itself can verify the
@@ -113,6 +130,8 @@ class ResolvedBloomNeutralConfig final {
     [[nodiscard]] std::string_view displayName() const&& = delete;
     [[nodiscard]] std::string_view viewName() const& noexcept;
     [[nodiscard]] std::string_view viewName() const&& = delete;
+    [[nodiscard]] std::string_view configName() const& noexcept;
+    [[nodiscard]] std::string_view configName() const&& = delete;
 
     // Opaque handle consumed only by ocio_cpu_display_processor.hpp's processor builder within
     // this same library; not part of the public color-value surface.
@@ -124,10 +143,14 @@ class ResolvedBloomNeutralConfig final {
     friend OcioBuiltInResolutionResult
     resolveBloomNeutralV1BuiltIn(OcioConfigLocatorKind, std::string_view,
                                  const core::Sha256Digest&) noexcept;
+    friend OcioBuiltInResolutionResult resolveOcioBuiltIn(OcioConfigLocatorKind, std::string_view,
+                                                          const core::Sha256Digest&,
+                                                          std::string_view) noexcept;
 
     ResolvedBloomNeutralConfig(std::unique_ptr<Impl> impl, core::Sha256Digest expectedRevision,
                                std::string processColorSpaceId, std::string outputColorSpaceId,
-                               std::string displayName, std::string viewName) noexcept;
+                               std::string displayName, std::string viewName,
+                               std::string configName) noexcept;
 
     std::unique_ptr<Impl> impl_;
     core::Sha256Digest expectedRevision_;
@@ -135,6 +158,7 @@ class ResolvedBloomNeutralConfig final {
     std::string outputColorSpaceId_;
     std::string displayName_;
     std::string viewName_;
+    std::string configName_;
 };
 
 class [[nodiscard]] OcioBuiltInResolutionResult final {
@@ -170,6 +194,9 @@ class [[nodiscard]] OcioBuiltInResolutionResult final {
     friend OcioBuiltInResolutionResult
     resolveBloomNeutralV1BuiltIn(OcioConfigLocatorKind, std::string_view,
                                  const core::Sha256Digest&) noexcept;
+    friend OcioBuiltInResolutionResult resolveOcioBuiltIn(OcioConfigLocatorKind, std::string_view,
+                                                          const core::Sha256Digest&,
+                                                          std::string_view) noexcept;
 
     explicit OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome outcome) noexcept
         : outcome_(outcome) {}

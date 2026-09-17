@@ -143,6 +143,7 @@ struct DecodedComposition final {
     document::NodeGroups nodeGroups;
     document::SafeAreaSettings safeAreas{};
     std::optional<document::WorkArea> workArea{};
+    std::optional<std::string> workingColorSpaceId{};
 
     friend bool operator==(const DecodedComposition&, const DecodedComposition&) = default;
 };
