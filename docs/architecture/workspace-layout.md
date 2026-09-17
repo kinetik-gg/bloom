@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-09-15
+Updated: 2026-09-17
 
 ## Purpose
 
@@ -15,9 +15,10 @@ the first Compositing workspace proof.
 
 ## Runtime Structure
 
-- `WorkspaceHost` owns one recursive binary tree.
-- A split is a non-collapsible `QSplitter` with an orientation, two children, and proportional
-  weights.
+- `WorkspaceHost` owns one recursive split tree.
+- A normal split is a non-collapsible `QSplitter` with an orientation, at least two children, and
+  proportional weights. The authored default uses one four-child horizontal top row and one
+  two-child vertical workspace-row split.
 - A leaf is an `EditorArea` with a stable area ID and one selected stable editor type ID.
 - `EditorArea` instantiates only its selected editor. Switching type destroys the old editor widget
   and creates the selected editor without mutating project data.
@@ -42,7 +43,7 @@ The first slice supports:
 - split the active area left/right or top/bottom
 - close an area while preserving at least one leaf
 - maximize and restore an area without rewriting the underlying tree
-- reset the Compositing workspace to the sketch-derived five-area layout
+- reset the Compositing workspace to the owner's five-area layout
 - save and restore topology, proportions, area IDs, active area, and editor type IDs
 
 Split, close, maximize, restore, and reset are available through visible Window-menu actions. Area
@@ -66,7 +67,7 @@ The Compositing layout is stored through `QSettings` as versioned compact JSON w
 
 This data is user/session preference state, not part of a `.bloom` project.
 
-Restoration validates format, schema, depth, node count, binary split shape, identities,
+Restoration validates format, schema, depth, node count, split child counts, identities,
 orientations, and weights before replacing the live layout. Invalid data leaves the safe default
 layout intact. A future unsupported schema is not overwritten automatically when Bloom exits.
 
@@ -77,12 +78,26 @@ areas continue to restore normally.
 Editor-internal session state, pinned context, zoom, scroll positions, detached windows, and
 multi-monitor geometry are not yet part of schema version 2.
 
-## Version 2 migration
+## Authored default and Version 2 migration
 
-Schema version 2 adopts the [UI grammar's layout tokens](../ux/ui-grammar.md#layout-and-specialized-metrics).
-The sidebar spans the full workspace height with Assets over Properties; Timeline sits only below
-Viewer and Nodes. Assets is pinned into the default and migrated layout, while editor areas remain
-replaceable during use. The menu bar remains the only fixed application surface.
+The first-run and `Window → Reset Workspace` arrangement is authored in `WorkspaceHost` as
+per-mille splitter weights, applied after the complete tree receives its window extent:
+
+| Split | Children, left-to-right or top-to-bottom | Weights |
+| --- | --- | --- |
+| Top row | Assets, Viewer, Nodes, Properties | 160 / 310 / 320 / 190 (16% / 31% / 32% / 19%) |
+| Workspace rows | Top row, Timeline | 680 / 320 (68% / 32%) |
+
+The Timeline layer-table/lanes divider defaults to 37% of the Timeline width. Its persisted pixel
+width remains authoritative for an existing session; Reset Workspace clears that width and writes
+the newly resolved 37% default together with the workspace tree. Viewer starts at RGBA/Fit, Nodes
+starts fitted, and Properties shows Composition when there is no selection. These are editor-owned
+presentation defaults and do not enter document state.
+
+Schema version 2 stores this five-area default as a direct four-child top row over Timeline. The
+sidebar no longer spans the workspace height. Assets is pinned into the default and migrated
+layout, while editor areas remain replaceable during use. The menu bar remains the only fixed
+application surface.
 
 The application first validates and restores a legacy version-1 layout, then replaces its panel
 arrangement with this complete default. Window geometry is retained. This intentional reset prevents

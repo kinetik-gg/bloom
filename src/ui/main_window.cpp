@@ -17,6 +17,7 @@
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
+#include <bloom/ui/timeline_editor.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
@@ -32,6 +33,7 @@
 #include <QMessageBox>
 #include <QSettings>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -40,6 +42,7 @@
 namespace {
 
 constexpr auto workspaceLayoutKey = "workspace/compositing/layout";
+constexpr auto timelineLayerColumnWidthKey = "timeline/layer-column-width";
 constexpr auto windowGeometryKey = "window/main/geometry";
 constexpr auto chromeModeKey = "appearance/chrome";
 constexpr auto issueTrackerUrl = "https://github.com/kinetik-gg/bloom/issues/new";
@@ -634,19 +637,32 @@ QWidget* MainWindow::createReadOnlyPlaceholderPage() {
     return page;
 }
 
-void MainWindow::resetCompositingLayout() {
-    workspaceHost_->resetToSingleArea("bloom.viewer");
-    auto* viewer = workspaceHost_->activeArea();
-    auto* assets = workspaceHost_->splitArea(*viewer, Qt::Horizontal, "bloom.assets",
-                                             kit::Layout::SidebarShare);
-    (void)workspaceHost_->splitArea(*assets, Qt::Vertical, "bloom.properties",
-                                    kit::Layout::PropertiesShare);
-    (void)workspaceHost_->splitArea(*viewer, Qt::Vertical, "bloom.timeline",
-                                    kit::Layout::TimelineShare);
-    (void)workspaceHost_->splitArea(*viewer, Qt::Horizontal, "bloom.nodes",
-                                    kit::Layout::NodesShare);
-    workspaceHost_->setActiveArea(viewer);
+void MainWindow::resetCompositingLayout(const bool persist) {
+    if (persist) {
+        // TimelineEditor owns the divider's live geometry. Removing its persisted width before
+        // rebuilding the tree makes the new editor apply its 37% default, while the ordinary
+        // constructor path leaves an existing artist width untouched.
+        QSettings settings;
+        settings.remove(QLatin1StringView(timelineLayerColumnWidthKey));
+    }
+
+    workspaceHost_->resetToDefaultLayout(
+        {"bloom.assets", "bloom.viewer", "bloom.nodes", "bloom.properties"}, "bloom.timeline");
     workspaceLayoutWritable_ = true;
+
+    if (persist) {
+        const auto persistResetState = [this] {
+            QSettings settings;
+            workspaceHost_->persistLayout(settings, QLatin1StringView(workspaceLayoutKey));
+            if (auto* timeline = workspaceHost_->findChild<TimelineEditor*>())
+                timeline->persistLayerColumnWidth();
+        };
+        persistResetState();
+        // replaceRoot() has the tree in the host immediately, but QSplitter's final sizes are
+        // resolved after the host's layout pass. Persist once more on the next turn so Reset
+        // records the ratio-based sizes rather than construction-time placeholders.
+        QTimer::singleShot(0, workspaceHost_, persistResetState);
+    }
 }
 
 void MainWindow::createWorkspaceActions() {
@@ -679,10 +695,10 @@ void MainWindow::createWorkspaceActions() {
             [this] { workspaceHost_->toggleMaximizeActiveArea(); });
 
     windowMenu_->addSeparator();
-    auto* resetLayoutAction = windowMenu_->addAction("Reset Compositing Layout");
-    resetLayoutAction->setObjectName("resetCompositingLayoutAction");
+    auto* resetLayoutAction = windowMenu_->addAction("Reset Workspace");
+    resetLayoutAction->setObjectName("resetWorkspaceAction");
     connect(resetLayoutAction, &QAction::triggered, this, [this] {
-        resetCompositingLayout();
+        resetCompositingLayout(true);
         updateWorkspaceActions();
     });
 

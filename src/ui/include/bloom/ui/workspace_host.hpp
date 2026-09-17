@@ -6,7 +6,10 @@
 #include <QList>
 #include <QPointer>
 
+#include <array>
+#include <cstddef>
 #include <string>
+#include <string_view>
 
 class QSettings;
 class QSplitter;
@@ -35,6 +38,11 @@ class WorkspaceHost final : public QFrame {
     [[nodiscard]] int areaCount() const;
     void setActiveArea(EditorArea* area);
     void resetToSingleArea(std::string_view editorId = {});
+    // Builds the application's five-area first-run arrangement. The host owns the proportions and
+    // topology; callers supply editor identities so the generic split tree remains replaceable.
+    void resetToDefaultLayout(const std::array<std::string_view, 4>& topRowEditorIds,
+                              std::string_view bottomRowEditorId,
+                              std::size_t activeTopRowIndex = 1);
 
     EditorArea* splitActiveArea(Qt::Orientation orientation);
     EditorArea* splitArea(EditorArea& area, Qt::Orientation orientation,

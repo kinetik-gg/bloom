@@ -22,8 +22,10 @@
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
+#include <numeric>
 #include <utility>
 
 namespace {
@@ -33,6 +35,49 @@ constexpr int layoutSchema = bloom::ui::kit::Layout::WorkspaceVersion;
 constexpr int maximumLayoutDepth = 64;
 constexpr int maximumAreaCount = 64;
 constexpr int defaultSplitWeight = 1000;
+// First-run / Reset Workspace proportions in per mille of the usable splitter extent: the top
+// row is Assets 16%, Viewer 31%, Nodes 32%, Properties 19%; the bottom Timeline row is 32% below
+// the 68% top row. These are weights, never pixels, so the arrangement follows the window size.
+constexpr std::array<int, 4> defaultTopRowWeights{160, 310, 320, 190};
+constexpr std::array<int, 2> defaultWorkspaceRowWeights{680, 320};
+
+template <std::size_t count>
+void setWeightedSizes(QSplitter& splitter, const std::array<int, count>& weights) {
+    QList<int> initialSizes;
+    initialSizes.reserve(static_cast<qsizetype>(count));
+    for (const int weight : weights) {
+        initialSizes.push_back(weight);
+    }
+    splitter.setSizes(initialSizes);
+
+    // Minimum widths are meaningful only after the complete default tree has received its window
+    // extent. Reapply the same weights from the real usable extent on the next event turn; the
+    // splitter itself then performs its normal minimum-size adjustment.
+    QTimer::singleShot(0, &splitter, [&splitter, weights] {
+        const int extent =
+            splitter.orientation() == Qt::Horizontal ? splitter.width() : splitter.height();
+        const int available = std::max(0, extent - splitter.handleWidth());
+        const int totalWeight = std::accumulate(weights.cbegin(), weights.cend(), 0);
+        if (available <= 0 || totalWeight <= 0) {
+            return;
+        }
+
+        QList<int> sizes;
+        sizes.reserve(static_cast<qsizetype>(count));
+        int assigned = 0;
+        for (std::size_t index = 0; index < count; ++index) {
+            const bool last = index + 1 == count;
+            const int size =
+                last
+                    ? available - assigned
+                    : static_cast<int>(std::lround(static_cast<double>(available) * weights[index] /
+                                                   static_cast<double>(totalWeight)));
+            sizes.push_back(std::max(0, size));
+            assigned += size;
+        }
+        splitter.setSizes(sizes);
+    });
+}
 
 bool containsArea(QWidget* widget, const bloom::ui::EditorArea* area) {
     if (widget == area) {
@@ -282,6 +327,33 @@ void WorkspaceHost::resetToSingleArea(const std::string_view editorId) {
     emit areaCountChanged(1);
 }
 
+void WorkspaceHost::resetToDefaultLayout(const std::array<std::string_view, 4>& topRowEditorIds,
+                                         const std::string_view bottomRowEditorId,
+                                         const std::size_t activeTopRowIndex) {
+    restoreMaximizedArea();
+
+    auto* topRow = createSplitter(Qt::Horizontal);
+    std::array<EditorArea*, 4> topRowAreas{};
+    for (std::size_t index = 0; index < topRowEditorIds.size(); ++index) {
+        topRowAreas[index] = createArea(topRowEditorIds[index]);
+        topRow->addWidget(topRowAreas[index]);
+    }
+    setWeightedSizes(*topRow, defaultTopRowWeights);
+
+    auto* bottomRow = createArea(bottomRowEditorId);
+    auto* root = createSplitter(Qt::Vertical);
+    root->addWidget(topRow);
+    root->addWidget(bottomRow);
+    setWeightedSizes(*root, defaultWorkspaceRowWeights);
+
+    replaceRoot(root);
+    activeArea_.clear();
+    const auto selectedIndex = std::min(activeTopRowIndex, topRowAreas.size() - 1);
+    setActiveArea(topRowAreas[selectedIndex]);
+    updateAreaControls();
+    emit areaCountChanged(areaCount());
+}
+
 EditorArea* WorkspaceHost::splitActiveArea(Qt::Orientation orientation) {
     if (activeArea_ == nullptr) {
         return nullptr;
@@ -354,7 +426,7 @@ bool WorkspaceHost::closeArea(EditorArea& area) {
         return false;
     }
     auto* parentSplitter = qobject_cast<QSplitter*>(area.parentWidget());
-    if (parentSplitter == nullptr || parentSplitter->count() != 2) {
+    if (parentSplitter == nullptr || parentSplitter->count() < 2) {
         return false;
     }
 
@@ -369,6 +441,25 @@ bool WorkspaceHost::closeArea(EditorArea& area) {
     if (activeArea_ == &area) {
         activeArea_->setAreaActive(false);
         activeArea_.clear();
+    }
+
+    if (parentSplitter->count() > 2) {
+        const auto parentSizes = usableSizes(*parentSplitter);
+        area.hide();
+        area.setParent(nullptr);
+        QList<int> remainingSizes;
+        remainingSizes.reserve(parentSizes.size() - 1);
+        for (int index = 0; index < parentSizes.size(); ++index) {
+            if (index != areaIndex) {
+                remainingSizes.push_back(parentSizes[index]);
+            }
+        }
+        parentSplitter->setSizes(remainingSizes);
+        area.deleteLater();
+        setActiveArea(nextActiveArea);
+        updateAreaControls();
+        emit areaCountChanged(areaCount());
+        return true;
     }
 
     auto* survivor = parentSplitter->widget(1 - areaIndex);
@@ -514,7 +605,7 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutState(const QByteArray&
         }
 
         const auto children = node.value("children").toArray();
-        if (children.size() != 2) {
+        if (children.size() < 2 || children.size() > maximumAreaCount) {
             valid = false;
             return nullptr;
         }

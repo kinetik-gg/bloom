@@ -484,7 +484,7 @@ int testMainWindow(const EditorRegistry& registry,
     auto* splitAction = window.findChild<QAction*>("splitAreaLeftRightAction");
     auto* closeAction = window.findChild<QAction*>("closeAreaAction");
     auto* maximizeAction = window.findChild<QAction*>("maximizeAreaAction");
-    auto* resetAction = window.findChild<QAction*>("resetCompositingLayoutAction");
+    auto* resetAction = window.findChild<QAction*>("resetWorkspaceAction");
     auto* undoAction = window.findChild<QAction*>("undoAction");
     auto* redoAction = window.findChild<QAction*>("redoAction");
     if (!require(splitAction != nullptr && closeAction != nullptr && maximizeAction != nullptr &&
