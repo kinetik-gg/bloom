@@ -124,6 +124,21 @@ bool CompositionSession::updateValueEdit(document::ParameterValue value) {
     return true;
 }
 
+bool CompositionSession::beginTextEdit(const document::ParameterId parameter) {
+    const auto* current = composition();
+    const auto* record = current ? current->parameters().find(parameter) : nullptr;
+    if (!record || record->schemaKey != document::kTextParameterSchemaKey)
+        return false;
+    if (valueEdit_ && isValueEditing(parameter)) {
+        valueEdit_->text = true;
+        return true;
+    }
+    if (!beginValueEdit(parameter) || !valueEdit_)
+        return false;
+    valueEdit_->text = true;
+    return true;
+}
+
 bool CompositionSession::beginPathEdit(const document::ParameterId parameter) {
     if (!beginValueEdit(parameter) || !valueEdit_)
         return false;
@@ -189,7 +204,7 @@ bool CompositionSession::commitValueEdit() {
     valueEdit_.reset();
     bool result = edit.revision == snapshot_.revision() && edit.time == currentTime_;
     if (result && edit.value != edit.base) {
-        commands::Transaction transaction("Set Parameter", edit.revision);
+        commands::Transaction transaction(edit.text ? "Edit Text" : "Set Parameter", edit.revision);
         const auto* parameter = composition()->parameters().find(edit.parameter);
         if (edit.component && parameter &&
             std::holds_alternative<document::AnimationCurveSource>(parameter->source)) {

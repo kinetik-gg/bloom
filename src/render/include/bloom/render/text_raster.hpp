@@ -61,6 +61,42 @@ class TextRasterParameters final {
     double verticalPixelSize_ = 0.0;
 };
 
+// Source byte ranges are half-open UTF-8 offsets. Soft wraps retain source offsets even
+// when the rasterizer collapses whitespace. Coordinates use the rasterizer's text origin;
+// advance widths include inter-glyph kerning/spacing up to the next pen position.
+struct TextLayout final {
+    struct ByteRange final {
+        std::size_t begin = 0;
+        std::size_t end = 0;
+    };
+    struct Rect final {
+        double x = 0;
+        double y = 0;
+        double width = 0;
+        double height = 0;
+    };
+    struct Line final {
+        std::size_t index = 0;
+        ByteRange byteRange;
+        Rect box;
+    };
+    struct Glyph final {
+        std::size_t line = 0;
+        std::size_t byteOffset = 0;
+        Rect advanceRect;
+    };
+    std::vector<Line> lines;
+    std::vector<Glyph> glyphs;
+    double caretHeight = 0;
+};
+
+// Uses the same placements as coverage and outlines, without rasterizing glyphs. Call on
+// a worker for large content; cancellation is checked during placement.
+[[nodiscard]] ImageResult<TextLayout> layoutText(const TextFont& font, std::string_view content,
+                                                 TextRasterParameters parameters,
+                                                 TextLayoutOptions options = {},
+                                                 PathCancellation cancelled = {});
+
 // One rasterized single-line string as 8-bit area coverage.
 //
 // GAMMA RULE (the one rule this whole path depends on): a coverage byte is a LINEAR area fraction

@@ -69,8 +69,14 @@ void PropertiesEditor::configureTextSource() {
         return;
     }
 
-    const auto contentValue = session_.constantStringValue(content->id);
-    textContent_->setEnabled(contentValue.has_value());
+    if (!session_.isValueEditing(content->id)) {
+        textContent_->setProperty("ownsTextEdit", false);
+        if (auto* multiline = findChild<QWidget*>("propertiesTextMultiline"))
+            multiline->setProperty("ownsTextEdit", false);
+    }
+    const auto contentValue = session_.effectiveStringValue(content->id);
+    textContent_->setEnabled(contentValue.has_value() && !session_.driverBindingFor(content->id) &&
+                             !session_.composition()->parameterLocked(content->id));
     if (contentValue.has_value() && textContent_->text() != *contentValue) {
         const QSignalBlocker blocker(textContent_);
         textContent_->setText(*contentValue);

@@ -394,7 +394,11 @@ target_sources(
         timeline_navigation.cpp
         composition_commands.cpp
         viewer_overlays.cpp
+        viewer_overlays_text.cpp
         viewer_editor.cpp
+        viewer_editor_text.cpp
+        viewer_editor_text_input.cpp
+        viewer_editor_text_layout.cpp
         window_status_bar.cpp
         workspace_host.cpp
         "${BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP}"

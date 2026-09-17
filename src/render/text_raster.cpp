@@ -109,10 +109,13 @@ void fontRasterizeGlyph(const Face& face, const std::span<std::uint8_t> output, 
 
 template <typename Face>
 [[nodiscard]] double measureGlyphRun(const Face& face, const std::u32string& run,
-                                     const float scaleX, const double letterSpacing) {
+                                     const float scaleX, const double letterSpacing,
+                                     const bloom::render::PathCancellation& cancelled) {
     double width = 0.0;
     int previous = -1;
     for (const auto scalar : run) {
+        if (cancelled && cancelled())
+            return 0.0;
         const auto glyph = fontGlyphIndex(face, scalar);
         if (previous >= 0)
             width += static_cast<double>(fontGlyphKernAdvance(face, previous, glyph)) *
@@ -128,10 +131,13 @@ template <typename Face>
 template <typename Face>
 [[nodiscard]] std::string wrappedText(const Face& face, const std::string_view content,
                                       const float scaleX, const double letterSpacing,
-                                      const double boxWidth) {
+                                      const double boxWidth,
+                                      const bloom::render::PathCancellation& cancelled) {
     std::vector<std::u32string> lines;
     std::u32string current;
     for (std::size_t cursor = 0; cursor < content.size();) {
+        if (cancelled && cancelled())
+            return {};
         const auto scalar = bloom::core::decodeUtf8Scalar(content, cursor);
         cursor += scalar.length;
         if (scalar.value == U'\r')
@@ -150,6 +156,8 @@ template <typename Face>
         std::u32string line;
         std::size_t cursor = 0;
         while (cursor < source.size()) {
+            if (cancelled && cancelled())
+                return {};
             while (cursor < source.size() && (source[cursor] == U' ' || source[cursor] == U'\t'))
                 ++cursor;
             if (cursor == source.size())
@@ -163,15 +171,17 @@ template <typename Face>
                 candidate.push_back(U' ');
             candidate += word;
             if (!line.empty() &&
-                measureGlyphRun(face, candidate, scaleX, letterSpacing) > boxWidth) {
+                measureGlyphRun(face, candidate, scaleX, letterSpacing, cancelled) > boxWidth) {
                 wrapped.push_back(std::move(line));
                 line = word;
             } else if (line.empty() &&
-                       measureGlyphRun(face, word, scaleX, letterSpacing) > boxWidth) {
+                       measureGlyphRun(face, word, scaleX, letterSpacing, cancelled) > boxWidth) {
                 for (const auto scalar : word) {
+                    if (cancelled && cancelled())
+                        return {};
                     std::u32string one{scalar};
-                    if (!line.empty() &&
-                        measureGlyphRun(face, line + one, scaleX, letterSpacing) > boxWidth) {
+                    if (!line.empty() && measureGlyphRun(face, line + one, scaleX, letterSpacing,
+                                                         cancelled) > boxWidth) {
                         wrapped.push_back(std::move(line));
                         line = {};
                     }
@@ -248,7 +258,7 @@ ImageResult<TextCoverageBitmap>
 rasterizeFontText(const Face& face, const std::string_view utf8Content,
                   const TextRasterParameters parameters, const std::size_t coverageByteLimit,
                   const TextLayoutOptions layout, std::vector<Path>* outlines = nullptr,
-                  const PathCancellation& cancelled = {}) {
+                  const PathCancellation& cancelled = {}, TextLayout* query = nullptr) {
     if (!core::isValidUtf8(utf8Content) || !std::isfinite(layout.lineHeight) ||
         layout.lineHeight <= 0.0 || !std::isfinite(layout.letterSpacing) ||
         layout.alignment > TextAlignment::Right || !std::isfinite(layout.boxWidth) ||
@@ -271,10 +281,41 @@ rasterizeFontText(const Face& face, const std::string_view utf8Content,
             codeError(ImageErrorCode::InvalidParameter));
     }
 
-    const auto effectiveContent =
-        layout.wrap && layout.boxWidth > 0.0
-            ? wrappedText(face, utf8Content, scaleX, layout.letterSpacing, layout.boxWidth)
-            : std::string(utf8Content);
+    const auto effectiveContent = layout.wrap && layout.boxWidth > 0.0
+                                      ? wrappedText(face, utf8Content, scaleX, layout.letterSpacing,
+                                                    layout.boxWidth, cancelled)
+                                      : std::string(utf8Content);
+
+    if (cancelled && cancelled())
+        return ImageResult<TextCoverageBitmap>::failure(codeError(ImageErrorCode::InvalidState));
+    std::vector<std::size_t> sourceOffsets;
+    if (query) {
+        sourceOffsets.resize(effectiveContent.size() + 1, utf8Content.size());
+        std::size_t source = 0;
+        for (std::size_t cursor = 0; cursor < effectiveContent.size();) {
+            if (cancelled && cancelled())
+                return ImageResult<TextCoverageBitmap>::failure(
+                    codeError(ImageErrorCode::InvalidState));
+            const auto scalar = core::decodeUtf8Scalar(effectiveContent, cursor);
+            if (layout.wrap && layout.boxWidth > 0.0) {
+                // Wrapping collapses whitespace and inserts line breaks, but preserves the
+                // order and bytes of every word. Breaks map to the start of skipped whitespace.
+                if (scalar.value != U'\n' && scalar.value != U' ') {
+                    while (source < utf8Content.size() &&
+                           core::decodeUtf8Scalar(utf8Content, source).value != scalar.value)
+                        source += core::decodeUtf8Scalar(utf8Content, source).length;
+                }
+                sourceOffsets[cursor] = source;
+                if (source < utf8Content.size() &&
+                    core::decodeUtf8Scalar(utf8Content, source).value == scalar.value)
+                    source += core::decodeUtf8Scalar(utf8Content, source).length;
+            } else {
+                sourceOffsets[cursor] = cursor;
+            }
+            cursor += scalar.length;
+        }
+        query->caretHeight = parameters.verticalPixelSize();
+    }
 
     // The baseline is snapped to a whole row once, for the whole line, and the sub-pixel fraction
     // is spent on the horizontal pen position only: a per-glyph vertical sub-pixel shift would make
@@ -297,6 +338,9 @@ rasterizeFontText(const Face& face, const std::string_view utf8Content,
     std::vector<double> lineWidths(1, 0.0);
     int measurePrevious = -1;
     for (std::size_t cursor = 0; cursor < effectiveContent.size();) {
+        if (cancelled && cancelled())
+            return ImageResult<TextCoverageBitmap>::failure(
+                codeError(ImageErrorCode::InvalidState));
         const auto scalar = core::decodeUtf8Scalar(effectiveContent, cursor);
         cursor += scalar.length;
         if (layout.multiline && scalar.value == U'\n') {
@@ -346,6 +390,18 @@ rasterizeFontText(const Face& face, const std::string_view utf8Content,
         std::abs(verticalOffset) > static_cast<double>(kCoordinateBound))
         return ImageResult<TextCoverageBitmap>::failure(
             codeError(ImageErrorCode::ArithmeticOverflow));
+    if (query) {
+        for (std::size_t index = 0; index < lineWidths.size(); ++index) {
+            const auto row = static_cast<double>(index) * lineStep + verticalOffset;
+            if (!std::isfinite(row) || std::abs(row) > static_cast<double>(kCoordinateBound))
+                return ImageResult<TextCoverageBitmap>::failure(
+                    codeError(ImageErrorCode::ArithmeticOverflow));
+            query->lines.push_back({index,
+                                    {0, 0},
+                                    {lineOffset(index), static_cast<double>(std::lround(row)),
+                                     lineWidths[index], query->caretHeight}});
+        }
+    }
     std::int64_t lineRow = static_cast<std::int64_t>(std::lround(verticalOffset));
     double pen = lineOffset(line);
     int previousGlyph = -1;
@@ -359,9 +415,14 @@ rasterizeFontText(const Face& face, const std::string_view utf8Content,
             return ImageResult<TextCoverageBitmap>::failure(
                 codeError(ImageErrorCode::InvalidState));
         }
+        const auto byteOffset = query ? sourceOffsets[offset] : 0;
         offset += scalar.length;
 
         if (layout.multiline && scalar.value == U'\n') {
+            if (query) {
+                query->lines[line].byteRange.end = byteOffset;
+                query->lines[line + 1].byteRange.begin = sourceOffsets[offset];
+            }
             ++line;
             const auto row = static_cast<double>(line) * lineStep + verticalOffset;
             if (!std::isfinite(row) || row > static_cast<double>(kCoordinateBound))
@@ -389,6 +450,20 @@ rasterizeFontText(const Face& face, const std::string_view utf8Content,
                 codeError(ImageErrorCode::ArithmeticOverflow));
         }
 
+        const auto advance =
+            static_cast<double>(fontGlyphHorizontalMetrics(face, glyph).advanceWidth) *
+            static_cast<double>(scaleX);
+        if (query) {
+            if (!query->glyphs.empty() && query->glyphs.back().line == line)
+                query->glyphs.back().advanceRect.width = pen - query->glyphs.back().advanceRect.x;
+            query->glyphs.push_back(
+                {line,
+                 byteOffset,
+                 {pen, static_cast<double>(lineRow), advance, query->caretHeight}});
+            pen += advance;
+            previousGlyph = glyph;
+            continue;
+        }
         if (outlines) {
             auto paths = [&] {
                 if constexpr (std::is_same_v<Face, EmbeddedFace>)
@@ -438,7 +513,9 @@ rasterizeFontText(const Face& face, const std::string_view utf8Content,
         previousGlyph = glyph;
     }
 
-    if (outlines || placements.empty()) {
+    if (query)
+        query->lines.back().byteRange.end = utf8Content.size();
+    if (query || outlines || placements.empty()) {
         return ImageResult<TextCoverageBitmap>::success(TextCoverageBitmap::empty());
     }
 
@@ -496,6 +573,21 @@ rasterizeFontText(const Face& face, const std::string_view utf8Content,
     return ImageResult<TextCoverageBitmap>::success(
         TextCoverageBitmap(minimumLeft, minimumTop, extent.value()->width(),
                            extent.value()->height(), std::move(coverage)));
+}
+
+ImageResult<TextLayout> layoutText(const TextFont& font, const std::string_view content,
+                                   const TextRasterParameters parameters,
+                                   const TextLayoutOptions options, PathCancellation cancelled) {
+    TextLayout layout;
+    const auto result = std::visit(
+        [&](const auto& face) {
+            return rasterizeFontText(face, content, parameters, 0, options, nullptr, cancelled,
+                                     &layout);
+        },
+        font);
+    if (!result)
+        return ImageResult<TextLayout>::failure(*result.error());
+    return ImageResult<TextLayout>::success(std::move(layout));
 }
 
 ImageResult<std::vector<Path>> textOutlines(const TextFont& font, std::string_view content,

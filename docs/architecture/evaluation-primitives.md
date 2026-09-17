@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-09-13
+Updated: 2026-09-17
 
 ## Purpose And Scope
 
@@ -627,3 +627,19 @@ nonzero winding, and native text-box clipping is transformed with the glyphs. Th
 text coverage routine and its byte goldens remain unchanged. CPU evaluator semantics 8 selects
 this coverage for transformed vector-only Layer Output chains and retains bilinear sampling at
 raster boundaries.
+
+## Text layout query
+
+`render::layoutText(font, content, parameters, options)` returns a checked, Qt-free `TextLayout`:
+line indices, half-open source UTF-8 byte ranges, text-space line boxes, glyph line/byte positions
+and advance rectangles, plus caret height. It uses the same pen placements as native coverage and
+transformed glyph outlines, including kerning, letter spacing, horizontal alignment, point anchors,
+word wrapping, snapped line rows and vertical box alignment. Advance rectangles include the gap to
+the next glyph's pen; their widths sum to the line advance. Empty content retains one empty line
+and a caret at the text anchor. Explicit empty lines retain their source ranges.
+
+Wrapping retains original byte positions even where its established whitespace normalization omits
+source whitespace or inserts a soft break. Consumers convert source bytes to their input toolkit's
+cursor units; Qt UTF-16 positions never enter the render API. The query returns logical advance
+geometry without allocating a coverage bitmap, and shares validation and cancellation with the
+placement path. It changes no rendering semantics, schema versions or existing pixel goldens.

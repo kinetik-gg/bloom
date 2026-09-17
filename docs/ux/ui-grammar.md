@@ -116,8 +116,8 @@ Pen clicks append straight anchors; dragging an anchor during creation sets symm
 handles. Clicking the first anchor closes a path with at least three anchors; Enter finishes an
 open path with at least two. Escape discards the draft. Selected Path layers display screen-sized
 anchor squares and handle circles. Dragging edits the live path, Alt moves a handle independently,
-and Delete removes the selected anchor. Text clicks create a layer and focus its text field in
-Properties, expanding and scrolling the containing section. There is no canvas text editing here.
+and Delete removes the selected anchor. Text clicks create a layer and enter canvas text editing
+with the placeholder selected. Properties mirrors the live text.
 
 All glyphs use the DPR-exact SVG renderer and kit state tints. Rectangle, Pen and Text retain their
 Phosphor assets; the four added shape glyphs are Bloom-authored SVG paths.
@@ -472,6 +472,32 @@ Properties, node cards and timeline fields use the same kit gesture signals. The
 its text/caret or scrub base while peer fields show the live number. Colour-picker spatial drags and
 channel edits use the same live/commit/cancel boundary; closing an active picker accepts its edit.
 Preview rendering runs independently of these control readbacks.
+
+## Canvas text editing
+
+Double-click a text layer with Select, press Enter on a selected text layer, or click with Text to
+place a new layer and type. The caret and selection use the render layout's UTF-8 byte positions,
+including wrapped lines and vertical alignment, mapped through the evaluated world transform and
+viewer zoom. The caret uses `Color::Accent` and a cosmetic `Size::Hairline`, snapped to device-pixel
+centres. Selection uses Accent with `kDisabledOpacity`; IME preedit uses an Accent underline.
+These are display overlays and do not appear in rendered frames or exports.
+
+Click or drag to position/extend the selection. Arrows, Home/End and Shift move/select within text;
+Ctrl+Left/Right move by word, Ctrl+A selects all, and platform Copy/Cut/Paste bindings work. On macOS,
+Command also works for the control-modified editing commands. Delete and Backspace edit the string;
+layer deletion, nudging, playback and tool shortcuts are suspended while the canvas owns text input.
+
+Enter accepts point text on one line. Box text, existing multiline text, and text made multiline
+with Shift+Enter use Enter for a line break and Ctrl+Enter (Command+Enter on macOS) to accept.
+Focus loss accepts; Escape restores the original string without history. A completed gesture is
+one `Edit Text` transaction. The Properties single-line and expanded text fields use the same
+live/commit/cancel seam. Time, composition and revision changes cancel stale canvas input.
+
+Font resolution and layout run on a cancellable worker with one active and one newest request.
+The canvas reports preparation or a diagnostic while geometry is unavailable; typing and Properties
+readback remain responsive. Native input-method composition previews through the String override,
+then replaces its preedit exactly once on commit. Uncommitted preedit is discarded on cancellation
+or teardown. The native input-method candidate rectangle follows the transformed caret.
 
 ## Native geometry handles
 

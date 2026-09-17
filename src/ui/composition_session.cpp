@@ -932,6 +932,8 @@ bool CompositionSession::setSelectedTextContent(const QString& content,
         reportUnavailable(QStringLiteral("Disconnect the driven text content before editing it"));
         return false;
     }
+    if (isValueEditing(parameter->id))
+        return updateValueEdit(utf8);
     if (*std::get_if<std::string>(&constantSource->value) == utf8) {
         return true;
     }

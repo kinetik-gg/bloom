@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "composition_editor_support.hpp"
+#include "viewer_editor_text_layout.hpp"
 
 #include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/window_status_bar.hpp>
@@ -1387,7 +1388,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     addTool(Tool::Hand, kit::IconId::Pan, tr("Hand: drag to pan (H)"), "viewerHandTool");
     addTool(Tool::Zoom, kit::IconId::Zoom, tr("Zoom: click to zoom in; Alt-click to zoom out (Z)"),
             "viewerZoomTool");
-    addTool(Tool::Text, kit::IconId::Text, tr("Text: click to place and edit in Properties (T)"),
+    addTool(Tool::Text, kit::IconId::Text, tr("Text: click to place and type on the canvas (T)"),
             "viewerTextTool");
     addTool(Tool::Rectangle, kit::IconId::Rectangle,
             tr("Rectangle: drag; Shift constrains; Alt draws from centre (R)"),
@@ -1427,7 +1428,23 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
         selectedAnchor_.reset();
         update();
     });
-    connect(&session_, &CompositionSession::liveValueChanged, this, [this] { update(); });
+    connect(&session_, &CompositionSession::liveValueChanged, this, [this] {
+        if (textEdit_ && !session_.isValueEditing(textEdit_->parameter))
+            finishTextEditing(false);
+        update();
+    });
+    connect(&session_, &CompositionSession::snapshotChanged, this, [this] {
+        // Color readiness also refreshes projections without changing the document revision.
+        // The session invalidates its value edit before publishing an actual revision change.
+        if (textEdit_ && !session_.isValueEditing(textEdit_->parameter))
+            finishTextEditing(false);
+    });
+    connect(&session_, &CompositionSession::compositionChanged, this,
+            [this] { finishTextEditing(false); });
+    connect(&session_, &CompositionSession::currentTimeChanged, this,
+            [this] { finishTextEditing(false); });
+    connect(&session_, &CompositionSession::selectionChanged, this,
+            [this] { finishTextEditing(true); });
     playback_ = &previewController.playbackController();
     buildHeader();
     buildFooter(ramPreview);
@@ -1518,6 +1535,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
 }
 
 ViewerEditor::~ViewerEditor() {
+    finishTextEditing(true);
     cancelCreation();
     QObject::disconnect(focusConnection_);
 }
@@ -1889,6 +1907,12 @@ void ViewerEditor::updatePreviewResolution() {
 }
 
 bool ViewerEditor::event(QEvent* event) {
+    if (textEdit_ && event->type() == QEvent::ShortcutOverride) {
+        event->accept();
+        return true;
+    }
+    if (textEdit_ && (event->type() == QEvent::WindowDeactivate || event->type() == QEvent::Hide))
+        finishTextEditing(true);
     if (event->type() == QEvent::UngrabMouse || event->type() == QEvent::WindowDeactivate ||
         event->type() == QEvent::Hide || event->type() == QEvent::DevicePixelRatioChange)
         cancelCreation();
@@ -2021,7 +2045,10 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                             painter.setClipRect(contentRect());
                             paintViewerOverlays(
                                 painter, frame, mapping, effectiveZoom(displayRect, *geometry),
-                                overlayOptions_, bounds, pointTextLayers(session_, bounds));
+                                overlayOptions_,
+                                textEdit_ ? std::span<const runtime::EvaluatedOperationBounds>{}
+                                          : bounds,
+                                pointTextLayers(session_, bounds));
                             painter.restore();
                         }
                     }
@@ -2032,6 +2059,7 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
 
     paintCreation(painter);
     paintPathTools(painter);
+    paintTextEditing(painter);
 
     // Readiness and diagnostics remain in the status bar. Selection geometry is derived from
     // the delivered process frame and painted in screen space above the composition.
@@ -2187,6 +2215,7 @@ void ViewerEditor::beginPan(const Qt::MouseButton button, const QPointF screenPo
 }
 
 void ViewerEditor::selectTool(const Tool tool) {
+    finishTextEditing(true);
     cancelCreation();
     if (dragActive_)
         endDrag(false);
@@ -2212,6 +2241,8 @@ void ViewerEditor::updatePanCursor() {
 }
 
 void ViewerEditor::mousePressEvent(QMouseEvent* event) {
+    if (textEditPress(event))
+        return;
     if (textPress(event))
         return;
     if (pathPress(event))
@@ -2299,6 +2330,12 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
 }
 
 void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
+    if (textEdit_) {
+        if (textEdit_->dragging)
+            moveTextCaret(event->position(), true);
+        event->accept();
+        return;
+    }
     if (pathMove(event))
         return;
     if (creationMove(event))
@@ -2364,6 +2401,11 @@ void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
+    if (textEdit_ && event->button() == Qt::LeftButton) {
+        textEdit_->dragging = false;
+        event->accept();
+        return;
+    }
     if (pathRelease(event))
         return;
     if (creationRelease(event))
@@ -2410,6 +2452,13 @@ void ViewerEditor::wheelEvent(QWheelEvent* event) {
 }
 
 void ViewerEditor::keyPressEvent(QKeyEvent* event) {
+    if (textEditKey(event))
+        return;
+    if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) &&
+        tool_ == Tool::Select && beginTextEditing()) {
+        event->accept();
+        return;
+    }
     if (pathKey(event))
         return;
     if (!dragActive_ && !panActive_ && event->modifiers() == Qt::NoModifier) {

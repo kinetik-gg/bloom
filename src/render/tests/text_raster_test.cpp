@@ -418,6 +418,52 @@ void testBoxTypographyGoldens(Expectations& expectations) {
                         "wrapped centred bottom-aligned box coverage golden");
 }
 
+void testLayoutQuery(Expectations& expectations) {
+    using namespace bloom::render;
+    const auto created = TextRasterParameters::create(16, 16);
+    const auto parameters = *created.value();
+    const auto point = layoutText(EmbeddedFace::DejaVuSans, "AVé", parameters);
+    expectations.expect(point && point.value()->glyphs.size() == 3,
+                        "layout reports glyphs with UTF-8 source offsets");
+    if (!point)
+        return;
+    const auto& glyphs = point.value()->glyphs;
+    expectations.expect(glyphs[2].byteOffset == 2 &&
+                            glyphs[2].advanceRect.x ==
+                                glyphs[0].advanceRect.width + glyphs[1].advanceRect.width &&
+                            point.value()->lines[0].box.width ==
+                                glyphs[2].advanceRect.x + glyphs[2].advanceRect.width,
+                        "caret after N bytes equals advances including kerning");
+    TextLayoutOptions options;
+    options.boxWidth = 32;
+    options.boxHeight = 64;
+    options.wrap = true;
+    options.verticalAlignment = TextLayoutOptions::VerticalAlignment::Bottom;
+    const auto wrapped = layoutText(EmbeddedFace::DejaVuSans, "A A A", parameters, options);
+    expectations.expect(wrapped && wrapped.value()->lines.size() == 2 &&
+                            wrapped.value()->lines[0].box.y == 32 &&
+                            wrapped.value()->lines[1].box.y == 48 &&
+                            wrapped.value()->lines[1].byteRange.begin == 4 &&
+                            wrapped.value()->glyphs.back().byteOffset == 4,
+                        "wrapped lines share raster positions and retain original byte offsets");
+    const auto blank = layoutText(EmbeddedFace::DejaVuSans, "", parameters);
+    expectations.expect(
+        blank && blank.value()->lines.size() == 1 && blank.value()->glyphs.empty() &&
+            blank.value()->caretHeight == 16 && blank.value()->lines[0].box.x == 0 &&
+            blank.value()->lines[0].box.y == 0 && blank.value()->lines[0].byteRange.end == 0,
+        "empty content retains a caret at the anchor");
+    const auto breaks = layoutText(EmbeddedFace::DejaVuSans, "é\n\nA", parameters);
+    expectations.expect(breaks && breaks.value()->lines.size() == 3 &&
+                            breaks.value()->lines[0].byteRange.end == 2 &&
+                            breaks.value()->lines[1].byteRange.begin == 3 &&
+                            breaks.value()->lines[1].byteRange.end == 3 &&
+                            breaks.value()->glyphs.back().byteOffset == 4,
+                        "explicit empty lines retain byte ranges");
+    expectations.expect(
+        !layoutText(EmbeddedFace::DejaVuSans, "A", parameters, {}, [] { return true; }),
+        "layout observes cancellation");
+}
+
 void testOutlineScale(Expectations& expectations) {
     using namespace bloom::render;
     const auto parameters = TextRasterParameters::create(16, 16);
@@ -447,6 +493,7 @@ void testOutlineScale(Expectations& expectations) {
 int main() {
     try {
         Expectations expectations;
+        testLayoutQuery(expectations);
         testOutlineScale(expectations);
         testTypographyGoldens(expectations);
         testEmbeddedFont(expectations);
