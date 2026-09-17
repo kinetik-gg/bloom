@@ -624,7 +624,11 @@ void testManyCreatedLayersUseCollisionFreeSlots(TestContext& test) {
         created.emplace_back(*source, *layer);
     }
     const auto elapsed = std::chrono::steady_clock::now() - start;
-    test.expect(elapsed < std::chrono::seconds(5),
+    // The loop executes 200 full transactions (snapshot copies included) through the command
+    // stack, so the wall-clock bound only guards against a placement search that degrades to
+    // quadratic or worse: a Debug clang-tidy build on a slow CI runner needs ~6.5 s for the
+    // whole test, while a degenerate search takes minutes.
+    test.expect(elapsed < std::chrono::seconds(60),
                 "200 layer placement stays within the bounded stress-test time");
 
     const auto& compositionAfter = composition(document.snapshot());
