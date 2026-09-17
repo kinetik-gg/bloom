@@ -203,6 +203,58 @@ ImageResult<PathRaster> PathRaster::create(const Path& path, const PathStroke st
         return failure();
     return ImageResult<PathRaster>::success(std::move(raster));
 }
+ImageResult<PathRaster> PathRaster::transformed(std::span<const Path> paths, PathStroke stroke,
+                                                PathMatrix matrix, double scaleX, double scaleY,
+                                                const PathCancellation& cancelled,
+                                                std::optional<PathBounds> clip) {
+    // Frobenius norm bounds the maximum stretch, including shear and reflections.
+    const double norm = std::hypot(std::hypot(matrix.a, matrix.b), std::hypot(matrix.c, matrix.d));
+    if (!std::isfinite(norm) || !std::isfinite(matrix.x) || !std::isfinite(matrix.y) || norm == 0 ||
+        !std::isfinite(scaleX) || !std::isfinite(scaleY) || scaleX <= 0 || scaleY <= 0)
+        return ImageResult<PathRaster>::failure(
+            ImageError::codeOnly(ImageErrorCode::InvalidParameter));
+    PathRaster result;
+    result.scaleX_ = scaleX;
+    result.scaleY_ = scaleY;
+    const auto transform = [&](auto& points) {
+        for (auto& point : points) {
+            point = matrix.map(point);
+            if (!finite(point))
+                return false;
+        }
+        return true;
+    };
+    std::size_t total = 0;
+    for (const auto& path : paths) {
+        auto native = create(path, stroke, scaleX * norm, scaleY * norm, cancelled);
+        if (!native)
+            return native;
+        auto& raster = *native.value();
+        result.align_ = raster.align_;
+        total += raster.fill_.size();
+        if (total > kMaximumSegments || !transform(raster.fill_))
+            return ImageResult<PathRaster>::failure(
+                ImageError::codeOnly(ImageErrorCode::InvalidParameter));
+        result.contours_.push_back(std::move(raster.fill_));
+        for (auto& outline : raster.outlines_) {
+            total += outline.size();
+            if (total > kMaximumSegments || !transform(outline))
+                return ImageResult<PathRaster>::failure(
+                    ImageError::codeOnly(ImageErrorCode::InvalidParameter));
+            result.outlines_.push_back(std::move(outline));
+        }
+    }
+    if (clip) {
+        result.clip_ = {{clip->left, clip->top},
+                        {clip->right, clip->top},
+                        {clip->right, clip->bottom},
+                        {clip->left, clip->bottom}};
+        if (!transform(result.clip_))
+            return ImageResult<PathRaster>::failure(
+                ImageError::codeOnly(ImageErrorCode::InvalidParameter));
+    }
+    return ImageResult<PathRaster>::success(std::move(result));
+}
 PathBounds PathRaster::bounds(bool fill, bool stroke) const noexcept {
     PathBounds bounds;
     bool first = true;
@@ -219,8 +271,11 @@ PathBounds PathRaster::bounds(bool fill, bool stroke) const noexcept {
             }
         }
     };
-    if (fill || (stroke && align_ == PathStrokeAlign::Inside))
+    if (fill || (stroke && align_ == PathStrokeAlign::Inside)) {
         include(fill_);
+        for (const auto& contour : contours_)
+            include(contour);
+    }
     if (stroke && align_ != PathStrokeAlign::Inside)
         for (const auto& outline : outlines_)
             include(outline);
@@ -230,7 +285,7 @@ bool PathRaster::coverageRow(std::int64_t x, std::int64_t y, std::span<std::uint
                              PathFillRule rule, bool stroke,
                              const PathCancellation& cancelled) const {
     std::fill(row.begin(), row.end(), 0);
-    std::vector<Crossing> fill, outline;
+    std::vector<Crossing> fill, outline, clip;
     for (int sy = 0; sy < 4; ++sy) {
         if (stopped(cancelled))
             return false;
@@ -238,15 +293,21 @@ bool PathRaster::coverageRow(std::int64_t x, std::int64_t y, std::span<std::uint
             (static_cast<double>(y) + (static_cast<double>(sy) + 0.5) / 4) / scaleY_;
         fill.clear();
         outline.clear();
-        if (!stroke || align_ != PathStrokeAlign::Center)
+        clip.clear();
+        crossings(clip_, sampleY, clip);
+        sortCrossings(clip);
+        if (!stroke || align_ != PathStrokeAlign::Center) {
             crossings(fill_, sampleY, fill);
+            for (const auto& contour : contours_)
+                crossings(contour, sampleY, fill);
+        }
         if (stroke)
             for (const auto& polygon : outlines_)
                 crossings(polygon, sampleY, outline);
         sortCrossings(fill);
         sortCrossings(outline);
-        std::size_t fi = 0, si = 0;
-        int fw = 0, sw = 0;
+        std::size_t fi = 0, si = 0, ci = 0;
+        int fw = 0, sw = 0, cw = 0;
         for (std::size_t px = 0; px < row.size(); ++px) {
             if (px % 256 == 0 && stopped(cancelled))
                 return false;
@@ -258,12 +319,14 @@ bool PathRaster::coverageRow(std::int64_t x, std::int64_t y, std::span<std::uint
                     fw += fill[fi++].winding;
                 while (si < outline.size() && outline[si].x <= sampleX)
                     sw += outline[si++].winding;
+                while (ci < clip.size() && clip[ci].x <= sampleX)
+                    cw += clip[ci++].winding;
                 const bool inFill = inside(fw, rule);
                 const bool covered =
                     stroke ? sw != 0 && (align_ == PathStrokeAlign::Center ||
                                          (align_ == PathStrokeAlign::Inside ? inFill : !inFill))
                            : inFill;
-                if (covered)
+                if (covered && (clip_.empty() || cw != 0))
                     ++row[px];
             }
         }

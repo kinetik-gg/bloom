@@ -639,6 +639,9 @@ class CompositionSession final : public QObject {
         double rotation = 0;
         QTransform inverseParent;
         std::vector<runtime::SnapshotParameterOverride> overrides;
+        enum class NativeKind { Raster, Size, Solid, PointText, BoxText, Line, Path };
+        NativeKind nativeKind = NativeKind::Raster;
+        std::vector<std::pair<document::ParameterId, document::ParameterValue>> native;
     };
 
     [[nodiscard]] bool appendParameterEdit(commands::Transaction& transaction,

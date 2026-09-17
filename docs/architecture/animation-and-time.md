@@ -4,6 +4,17 @@ Status: accepted
 
 Updated: 2026-09-17
 
+## Geometry and transform levels
+
+- **NATIVE SIZE** is the source geometry in its own units: rectangle width/height, text box,
+  font size, line endpoints and path anchors. Stroke width, corner radius and points are authored
+  in these units; changing native dimensions does not stretch them.
+- **LOCAL TRANSFORM** is the layer's Position/Anchor/Scale/Rotation in parent space. Scale is an
+  animatable percentage that stretches the finished shape, including its strokes. Vector Scale
+  is edited only through Properties or timeline fields, never through handles.
+- **WORLD TRANSFORM** is LOCAL TRANSFORM composed with every ancestor. It is derived, never
+  authored. The gizmo works in this space and maps pointer motion back through the parent.
+
 ## Purpose And Ownership
 
 This document defines Bloom's first durable animation model, exact sampling semantics, session time,
@@ -587,8 +598,8 @@ geometry. It also captures composition format, evaluation resolution and display
 Only a frame for the current composition, revision and time can start a gesture. Resize, DPI,
 format, proxy, display-descriptor or view-transform changes invalidate the frozen mapping.
 
-A selection box has eight scale handles, an anchor crosshair, and rotation hit regions outside its
-corners. Hover identifies move, scale, rotate and anchor regions. The viewer takes focus on click.
+A selection box has native-size corner and edge handles, an anchor crosshair, and rotation hit
+regions outside its corners. Point text has corner handles only. Hover identifies move, scale, rotate and anchor regions. The viewer takes focus on click.
 Gesture begin samples position, anchor, scale and rotation at exact session time, including between
 keys; it freezes the revision, target IDs, evaluated local bounds/world polygon and pointer origin.
 A missing or singular transform, locked layer, or driven transform parameter refuses the gesture.
@@ -596,9 +607,13 @@ No evaluation or media work runs on the UI thread.
 
 - **Move:** convert total screen displacement through `ViewerMapping`, then the inverse parent
   linear transform, and add it to the sampled position.
-- **Scale:** corner and edge handles update the corresponding scale axes. Position compensates so
-  the opposite handle stays fixed. Shift applies a common scale factor; Alt uses the anchor as
-  the fixed point. Negative scale remains valid.
+- **Native size:** Shape and Solid handles edit source dimensions; box-text handles edit the box
+  and preserve font size. Point-text corners edit font size uniformly, with no edge handles.
+  Edges change one dimension and corners change both; Shift preserves aspect. Line and path
+  handles author endpoints and anchors. Stroke width, corner radius and transform Scale remain
+  unchanged. Position compensates in parent space to pin the opposite handle; Alt pins the anchor.
+  Raster sources without native editable geometry retain transform Scale handles. Vector Scale
+  remains available only in Properties and timeline fields.
 - **Rotate:** measure the pointer angle around the evaluated anchor in parent space. Shift snaps
   the resulting authored rotation to 15-degree steps. Turns remain continuous across the angle
   seam. Positive rotation is clockwise with Y down.

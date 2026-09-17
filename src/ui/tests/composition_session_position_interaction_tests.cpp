@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -49,6 +50,12 @@ void require(const bool condition, const std::string_view message) {
     if (!condition) {
         fail(message);
     }
+}
+
+template <typename T> T requiredValue(const std::optional<T>& value) {
+    if (!value)
+        fail("required optional test value is missing");
+    return *value;
 }
 
 [[nodiscard]] core::RationalTime time(const std::int64_t numerator,
@@ -598,8 +605,8 @@ void testParentedTransformsCommitAtomically() {
     const auto scaled = evaluatedBounds(session, child);
     requireNear(scaled.polygon[2], original.polygon[2],
                 "scale keeps the opposite corner in world space");
-    require(session.transformInteractionOverrides().size() == 2,
-            "scale previews scale and position together");
+    require(session.transformInteractionOverrides().size() == 3,
+            "native solid resize previews width, height and position together");
     require(session.commitTransformInteraction() &&
                 session.undoLabel() == QStringLiteral("Scale Layer"),
             "scale commits one transaction");
@@ -635,9 +642,12 @@ void testParentedTransformsCommitAtomically() {
     requireNear(evaluatedBounds(session, child).anchor, original.anchor,
                 "Alt scale fixes the anchor");
     const auto overrides = session.transformInteractionOverrides();
-    const auto* scale = std::get_if<document::Vec2d>(&overrides.back().value);
-    require(scale && std::abs(scale->x / 0.4 - scale->y / 0.6) < 1e-8,
-            "Shift scales both axes uniformly");
+    const auto* width = std::get_if<double>(&overrides[0].value);
+    const auto* height = std::get_if<double>(&overrides[1].value);
+    require(width && height && std::abs(*width - *height) < 1e-8,
+            "Shift resizes both native dimensions uniformly");
+    requireNear(requiredValue(session.effectiveVec2Value(document::kScaleParameterRole)),
+                {0.4, 0.6}, "native handles preserve authored transform Scale");
     session.cancelTransformInteraction();
 
     const auto beforeRotationClick = session.snapshot().revision();
@@ -684,7 +694,7 @@ void testParentedTransformsCommitAtomically() {
     session.cancelTransformInteraction();
 
     require(session.toggleKeyframe(document::kPositionParameterRole), "animate position");
-    require(session.toggleKeyframe(document::kScaleParameterRole), "animate scale");
+    require(session.toggleKeyframe(document::kSolidWidthParameterRole), "animate native width");
     require(session.setCurrentTime(time(2)), "move between authored keys");
     session.selectLayer(child);
     const auto animatedBounds = evaluatedBounds(session, child);
@@ -699,24 +709,26 @@ void testParentedTransformsCommitAtomically() {
         const auto* source =
             parameter ? std::get_if<document::AnimationCurveSource>(&parameter->source) : nullptr;
         require(source != nullptr, "parameter remains animated");
-        const auto* curve = std::get_if<document::Vec2AnimationCurve>(
-            session.composition()->animationCurves().find(source->curveId));
-        require(curve != nullptr, "Vec2 curve exists");
-        return curve->keyframes.size();
+        const auto* curve = session.composition()->animationCurves().find(source->curveId);
+        require(curve != nullptr, "curve exists");
+        return std::visit([](const auto& held) { return held.keyframes.size(); }, *curve);
     };
     require(keyCount(document::kPositionParameterRole) == 2 &&
-                keyCount(document::kScaleParameterRole) == 2,
+                keyCount(document::kSolidWidthParameterRole) == 2,
             "one scale gesture inserts exact-time keys for both touched parameters");
     require(session.undo(), "undo animated scale");
     require(keyCount(document::kPositionParameterRole) == 1 &&
-                keyCount(document::kScaleParameterRole) == 1,
+                keyCount(document::kSolidWidthParameterRole) == 1,
             "one undo removes both newly inserted keys");
 }
 
+#include "native_size_interaction_tests.ipp"
+
 } // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) try {
     QCoreApplication application(argc, argv);
+    testNativeShapeAndTextResize();
     testParentedTransformsCommitAtomically();
     testDisplacementMathNonSquareNegativeAndBaseTotal();
     testBeginRejectionsAndFreezing();
@@ -728,4 +740,6 @@ int main(int argc, char** argv) {
     testCancelClearsState();
     testInvalidationOnCompositionSwitchAndStaleRevision();
     return 0;
+} catch (const std::exception& error) {
+    fail(error.what());
 }

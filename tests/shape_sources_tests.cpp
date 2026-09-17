@@ -216,9 +216,31 @@ void creationAndPathOverrides() {
     expect(!stack.execute(std::move(bad)).succeeded() && stack.size() == count,
            "invalid initial shape geometry is rejected atomically");
 }
+void transformedStroke() {
+    Fixture fixture(document::ShapeKind::Line);
+    auto definition = fixture.compile()->copyDefinition();
+    for (auto& operation : definition.operations)
+        if (auto* layer = std::get_if<runtime::CompiledLayerOutput>(&operation))
+            layer->scale.source = document::Vec2d{2, 2};
+    const auto plan =
+        std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
+    const auto result =
+        fixture.evaluator.evaluate(plan,
+                                   {{},
+                                    plan->output(),
+                                    runtime::CompositionFormatResolution{},
+                                    runtime::EvaluationQuality::Reference,
+                                    runtime::EvaluationColorIntent::LinearRec709Scene,
+                                    1U << 20U},
+                                   {});
+    expect(alpha(result, 4, 1) == 0 && alpha(result, 4, 2) == 1 && alpha(result, 4, 5) == 1 &&
+               alpha(result, 4, 6) == 0,
+           "transform Scale doubles the native two-unit stroke without softening its edge");
+}
 } // namespace
 int main() {
     try {
+        transformedStroke();
         pixelsAndBounds();
         animation();
         creationAndPathOverrides();

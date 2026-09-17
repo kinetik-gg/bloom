@@ -10,6 +10,12 @@ struct PathPoint {
     double x = 0, y = 0;
     friend bool operator==(const PathPoint&, const PathPoint&) = default;
 };
+struct PathMatrix {
+    double a = 1, b = 0, c = 0, d = 1, x = 0, y = 0;
+    [[nodiscard]] PathPoint map(PathPoint p) const noexcept {
+        return {a * p.x + b * p.y + x, c * p.x + d * p.y + y};
+    }
+};
 struct PathAnchor {
     PathPoint point;
     std::optional<PathPoint> inHandle, outHandle;
@@ -42,6 +48,11 @@ class PathRaster final {
     [[nodiscard]] static ImageResult<PathRaster> create(const Path& path, PathStroke stroke,
                                                         double scaleX, double scaleY,
                                                         PathCancellation cancelled = {});
+    // Flatten and construct strokes in native units, then transform their geometry before coverage.
+    [[nodiscard]] static ImageResult<PathRaster>
+    transformed(std::span<const Path> paths, PathStroke stroke, PathMatrix matrix, double scaleX,
+                double scaleY, const PathCancellation& cancelled = {},
+                std::optional<PathBounds> clip = std::nullopt);
     [[nodiscard]] PathBounds bounds(bool fill, bool stroke) const noexcept;
     [[nodiscard]] bool coverageRow(std::int64_t x, std::int64_t y, std::span<std::uint8_t> row,
                                    PathFillRule rule, bool stroke,
@@ -49,6 +60,8 @@ class PathRaster final {
 
   private:
     std::vector<PathPoint> fill_;
+    std::vector<std::vector<PathPoint>> contours_;
+    std::vector<PathPoint> clip_;
     std::vector<std::vector<PathPoint>> outlines_;
     PathStrokeAlign align_ = PathStrokeAlign::Center;
     double scaleX_ = 1, scaleY_ = 1;

@@ -28,7 +28,8 @@ namespace bloom::render {
 // ProcessFrameIdentity carries for every CPU pixel primitive (imagePrimitiveSemanticsVersion); the
 // text rasterizer deliberately does not define a second version of its own, which could drift out
 // of that identity.
-inline constexpr std::uint32_t kCpuImagePrimitiveSemanticsVersion = 6;
+// VECTOR-1: semantics 7 adds affine path coverage and font glyph outlines.
+inline constexpr std::uint32_t kCpuImagePrimitiveSemanticsVersion = 7;
 
 // Checked authored layer parameters for the RETAINED pre-S4 translate-only primitive. Translation
 // remains Float64 pixel-center displacement; opacity is deliberately rounded once to the Float32

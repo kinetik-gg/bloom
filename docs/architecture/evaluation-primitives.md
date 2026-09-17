@@ -197,14 +197,14 @@ identity. Full curve ownership, extrapolation, commands, diagnostics, and the po
 rational conversion contract are defined in
 [`animation-and-time.md`](animation-and-time.md).
 
-## CPU Image Primitive Vocabulary Semantics Version 6
+## CPU Image Primitive Vocabulary Semantics Version 7
 
 `bloom_render` now provides the allocation-free CPU reference row kernels used by the first
-composition evaluator. Their semantics version is `6`; the evaluator and process-frame cache
+composition evaluator. Their semantics version is `7`; the evaluator and process-frame cache
 identity record that version explicitly. Version 3 added the text coverage kernel and the glyph
 rasterizer below; version 4 replaced the translate-only layer resample with the affine one described
 under "Layer Transform Resampling"; version 5 added the per-mode blend kernel described under
-"Blending"; version 6 adds the path coverage and stroke outlines below. One number covers them all: neither the rasterizer, the resampler, nor the
+"Blending"; version 6 adds the path coverage and stroke outlines below; version 7 adds affine vector coverage. One number covers them all: neither the rasterizer, the resampler, nor the
 blend kernel carries a second semantics version that could drift out of the identity a published
 frame records.
 
@@ -371,7 +371,7 @@ operation and scanline boundaries, and cancelled/failed evaluation publishes no 
 Operation memoization includes dimension, typography, and dependency values and retains matching
 evaluated geometry. Display preparation remains a separate typed stage.
 
-Evaluator semantics 7, primitive semantics 6, plan semantics 5, and animation semantics 2 are the
+Evaluator semantics 8, primitive semantics 7, plan semantics 5, and animation semantics 2 are the
 current identities. TEXT-2 moved the plan version for the text reference/layout grammar and SHAPE-1
 moved the evaluator and primitive versions for path rasterization; the two lanes landed together, so
 all three steps are reflected in one set of re-derived identity goldens. Existing point-text pixels
@@ -459,7 +459,7 @@ canonicalizes RGB to exact zero. A qualified OCIO config must resolve that exact
 operation that needs an OCIO transform; a matching alias, role, or display name is insufficient.
 
 The live `ColorEncoding::LinearRec709Scene`, `EvaluationColorIntent::LinearRec709Scene`, CPU image
-primitive semantics version `6`, CPU evaluator semantics version `7`, and reference display-mapper
+primitive semantics version `7`, CPU evaluator semantics version `8`, and reference display-mapper
 semantics version `2` implement this process identity. They supersede the scaffold's ambiguous
 reference-linear naming; cache identity rejects the older semantic versions rather than treating
 the rename as metadata-only.
@@ -599,6 +599,15 @@ Compiled Solid dimensions, Text layout operands and Shape geometry operands are 
 bounds include the enabled fill and stroke. Layer transforms always place the
 local-bounds anchor at the authored position, and Merge always unions its inputs' bounds. Plans
 carry no historical evaluation selector. Unsupported document node versions are rejected before
-compilation. Current identity uses plan semantics 5, animation sampling 2, evaluator 7, and render
-primitives 6. SHAPE-1 adds shape pixels and TEXT-2 adds box-text pixels, both while preserving all
+compilation. Current identity uses plan semantics 5, animation sampling 2, evaluator 8, and render
+primitives 7. SHAPE-1 adds shape pixels and TEXT-2 adds box-text pixels, both while preserving all
 existing source pixel goldens.
+
+## Transformed vector coverage
+
+Image primitive semantics 7 adds affine path coverage and glyph outlines. Curves flatten with an
+output-space error bound; stroke outlines are built before the affine map. Compound contours use
+nonzero winding, and native text-box clipping is transformed with the glyphs. The original native
+text coverage routine and its byte goldens remain unchanged. CPU evaluator semantics 8 selects
+this coverage for transformed vector-only Layer Output chains and retains bilinear sampling at
+raster boundaries.

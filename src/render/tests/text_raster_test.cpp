@@ -418,11 +418,36 @@ void testBoxTypographyGoldens(Expectations& expectations) {
                         "wrapped centred bottom-aligned box coverage golden");
 }
 
+void testOutlineScale(Expectations& expectations) {
+    using namespace bloom::render;
+    const auto parameters = TextRasterParameters::create(16, 16);
+    const auto paths = textOutlines(EmbeddedFace::DejaVuSans, "H", *parameters.value());
+    expectations.expect(static_cast<bool>(paths), "glyph outlines are available");
+    if (!paths)
+        return;
+    const auto raster = PathRaster::transformed(*paths.value(), {}, {4, 0, 0, 4, 0, 0}, 1, 1);
+    expectations.expect(static_cast<bool>(raster), "400 percent text rasterizes outlines");
+    if (!raster)
+        return;
+    std::array<std::uint8_t, 64> row{};
+    expectations.expect(raster.value()->coverageRow(0, 20, row, PathFillRule::NonZero, false),
+                        "scaled H row");
+    // DejaVu H's left vertical stem begins at design x=201/2048 em: 6.28125 output pixels.
+    // It covers 3/4 samples in column 6 and is fully opaque in column 7. A 4x bilinear
+    // enlargement spreads that edge over several columns and cannot satisfy this contrast pin.
+    expectations.expect(row[5] == 0 && row[6] == 191 && row[7] == 255,
+                        "400 percent glyph stem has a one-pixel coverage transition");
+    const auto cancelled =
+        textOutlines(EmbeddedFace::DejaVuSans, "H", *parameters.value(), {}, [] { return true; });
+    expectations.expect(!cancelled, "outline work observes cancellation");
+}
+
 } // namespace
 
 int main() {
     try {
         Expectations expectations;
+        testOutlineScale(expectations);
         testTypographyGoldens(expectations);
         testEmbeddedFont(expectations);
         testParameterValidation(expectations);

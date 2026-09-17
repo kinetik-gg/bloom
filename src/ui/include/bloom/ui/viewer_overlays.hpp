@@ -52,7 +52,8 @@ viewerHandlePoints(const ViewerMapping& mapping, const runtime::EvaluatedOperati
 [[nodiscard]] ViewerHit
 hitTestViewer(const ViewerMapping& mapping, QPointF screenPoint,
               std::span<const runtime::EvaluatedOperationBounds> topmostFirst,
-              std::span<const runtime::EvaluatedOperationBounds> selected);
+              std::span<const runtime::EvaluatedOperationBounds> selected,
+              std::span<const document::LayerId> pointText = {});
 
 enum class ViewerSafeAreaPreset : unsigned char {
     Broadcast,
@@ -77,6 +78,7 @@ struct ViewerOverlayOptions final {
 // document export; `bounds` is the immutable, already-evaluated selection diagnostic only.
 void paintViewerOverlays(QPainter& painter, const QRectF& canvasRect, const ViewerMapping& mapping,
                          double effectiveZoom, const ViewerOverlayOptions& options,
-                         std::span<const runtime::EvaluatedOperationBounds> bounds);
+                         std::span<const runtime::EvaluatedOperationBounds> bounds,
+                         std::span<const document::LayerId> pointText = {});
 
 } // namespace bloom::ui

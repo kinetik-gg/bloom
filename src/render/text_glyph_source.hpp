@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/render/embedded_fonts.hpp>
+#include <bloom/render/path_raster.hpp>
 
 #include <cstdint>
 #include <span>
@@ -79,6 +80,9 @@ struct GlyphBitmapBox final {
 void embeddedFontRasterizeGlyph(EmbeddedFace face, std::span<std::uint8_t> output, int width,
                                 int height, int strideBytes, float scaleX, float scaleY,
                                 float shiftX, float shiftY, int glyph) noexcept;
+
+[[nodiscard]] std::vector<Path> embeddedFontGlyphOutlines(EmbeddedFace face, int glyph);
+[[nodiscard]] std::vector<Path> externalFontGlyphOutlines(const ExternalFontFile& font, int glyph);
 
 using ExternalFontFile = bloom::render::ExternalFontFile;
 [[nodiscard]] bool externalFontIsParsed(const ExternalFontFile& font) noexcept;

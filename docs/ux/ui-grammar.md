@@ -8,6 +8,17 @@ Bloom's mechanical interface contract is owned here and implemented by `src/ui/k
 [ADR 0021](../decisions/0021-ui-grammar.md) records its rationale and extension procedure.
 This contract supersedes conflicting component metrics in [Visual Language](visual-language.md).
 
+## Geometry and transform levels
+
+- **NATIVE SIZE** is the source geometry in its own units: rectangle width/height, text box,
+  font size, line endpoints and path anchors. Stroke width, corner radius and points are authored
+  in these units; changing native dimensions does not stretch them.
+- **LOCAL TRANSFORM** is the layer's Position/Anchor/Scale/Rotation in parent space. Scale is an
+  animatable percentage that stretches the finished shape, including its strokes. Vector Scale
+  is edited only through Properties or timeline fields, never through handles.
+- **WORLD TRANSFORM** is LOCAL TRANSFORM composed with every ancestor. It is derived, never
+  authored. The gizmo works in this space and maps pointer motion back through the parent.
+
 ## Control vocabulary
 
 Every interactive control is a kit class: `KDropdown`, `KMenuButton`, `KButton`,
@@ -446,3 +457,23 @@ Properties, node cards and timeline fields use the same kit gesture signals. The
 its text/caret or scrub base while peer fields show the live number. Colour-picker spatial drags and
 channel edits use the same live/commit/cancel boundary; closing an active picker accepts its edit.
 Preview rendering runs independently of these control readbacks.
+
+## Native geometry handles
+
+Viewer corner and edge handles edit NATIVE SIZE for Shape, Solid and boxed text. Edges resize one
+axis; corners resize both, and Shift preserves aspect. Point text shows corners only and resizes
+font size uniformly. Box text resizes the wrapping box while keeping font size. Line endpoints and
+path anchors are source geometry; path anchors and tangent handles appear on selection without an
+edit mode or double-click. Stroke width and corner radius remain native authored values.
+
+LOCAL TRANSFORM Scale remains a percentage field in Properties and timeline and stretches the
+finished geometry, strokes included. No vector handle gesture edits it. Raster images, video and
+nested compositions have no editable native geometry and retain Scale handles. Rotation and anchor
+handles always edit transforms. The gizmo uses WORLD TRANSFORM, including every ancestor, and
+compensates Position so the opposite resize handle stays fixed. A gesture previews live and commits
+one undo transaction. Properties and timeline keep their existing source-size and transform rows.
+
+During a native-size or transform gesture, source-size and Scale readbacks in Properties and timeline
+refresh from the same session overrides as the viewer. Source-size gestures leave Scale unchanged;
+transform field edits leave native size unchanged. Cancel restores readbacks without history, and
+release commits the frozen-start values as one transaction. No property rows are added or renamed.
