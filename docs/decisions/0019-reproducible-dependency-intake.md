@@ -87,6 +87,17 @@ distribution obligations across all three targets.
 - Keep third-party types out of Bloom public interfaces unless another accepted decision explicitly
   makes that external ABI part of Bloom's contract.
 
+### Lock schema 1.1 review note (2026-09-17)
+
+The reviewed lock remains a backward-compatible minor revision of the v1 artifact contract. Schema
+1.1 keeps the canonical root and graph shape while adding optional component `configureArguments`
+for non-CMake recipes, optional source archive size/retrieval metadata, `static`/`shared` linkage,
+and the explicit `none`/`corresponding-source` source-obligation vocabulary. A component carrying
+`corresponding-source` must record `correspondingSourceArchiveSha256` equal to its locked source
+archive digest. Existing static components remain unchanged; the first shared component is the
+worker-only FFmpeg intake. The generated production lock is `dependencies/dependencies.lock.json`,
+and the reviewed schema copy is `dependencies/schemas/dependency-lock-1.1.schema.json`.
+
 The detailed file shape, qualification workflow, and current intake candidates are maintained in
 [`../architecture/dependency-intake.md`](../architecture/dependency-intake.md).
 

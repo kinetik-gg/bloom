@@ -6,9 +6,11 @@ cmake_minimum_required(VERSION 3.25)
 
 project(BloomDependencyConsumptionSmoke LANGUAGES CXX)
 
+include(CTest)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/BloomDependencyPrefix.cmake")
 bloom_consume_dependency_prefix()
 bloom_find_dependency(yyjson)
+bloom_find_dependency(FFmpeg)
 
 file(WRITE "${CMAKE_BINARY_DIR}/consume_smoke.cpp" [[
 #include <yyjson.h>
@@ -25,3 +27,35 @@ int main() {
 add_executable(bloom_consume_smoke "${CMAKE_BINARY_DIR}/consume_smoke.cpp")
 target_link_libraries(bloom_consume_smoke PRIVATE yyjson::yyjson)
 target_compile_features(bloom_consume_smoke PRIVATE cxx_std_20)
+
+file(WRITE "${CMAKE_BINARY_DIR}/ffmpeg_consume_smoke.cpp" [[
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+}
+
+int main() {
+    return avcodec_version() != 0 && avformat_version() != 0 ? 0 : 1;
+}
+]])
+
+add_executable(bloom_ffmpeg_consume_smoke "${CMAKE_BINARY_DIR}/ffmpeg_consume_smoke.cpp")
+target_link_libraries(bloom_ffmpeg_consume_smoke PRIVATE FFmpeg::avcodec FFmpeg::avformat)
+target_compile_features(bloom_ffmpeg_consume_smoke PRIVATE cxx_std_20)
+
+add_test(NAME bloom.dependency.ffmpeg-consume COMMAND bloom_ffmpeg_consume_smoke)
+set_tests_properties(bloom.dependency.ffmpeg-consume PROPERTIES
+    ENVIRONMENT "LD_LIBRARY_PATH=${BLOOM_DEPENDENCY_PREFIX}/lib")
+
+get_filename_component(BLOOM_REPOSITORY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+set(BLOOM_DESKTOP_BINARY_ARGUMENT)
+if(DEFINED BLOOM_DESKTOP_BINARY)
+    list(APPEND BLOOM_DESKTOP_BINARY_ARGUMENT
+        -DBLOOM_DESKTOP_BINARY=${BLOOM_DESKTOP_BINARY})
+endif()
+add_test(
+    NAME bloom.dependency.desktop-no-ffmpeg
+    COMMAND ${CMAKE_COMMAND}
+        -DBLOOM_REPOSITORY_ROOT=${BLOOM_REPOSITORY_ROOT}
+        ${BLOOM_DESKTOP_BINARY_ARGUMENT}
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/desktop-no-ffmpeg.cmake")

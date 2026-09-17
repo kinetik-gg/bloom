@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Generate the canonical dependency lock from the reviewed lock inputs.
+
+The checked-in lock is an output artifact. Existing records are carried forward from the
+previous lock, while new component records are supplied as separate reviewed JSON inputs. This
+keeps schema migrations and component intake reproducible without hand-editing the lock bytes.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from collections import OrderedDict
+from pathlib import Path
+
+
+def read_json(path: Path) -> OrderedDict[str, object]:
+    with path.open(encoding="utf-8") as stream:
+        value = json.load(stream, object_pairs_hook=OrderedDict)
+    if not isinstance(value, OrderedDict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return value
+
+
+def upgrade_schema(lock: OrderedDict[str, object]) -> None:
+    version = lock.get("schemaVersion")
+    if not isinstance(version, dict) or version.get("major") != 1:
+        raise ValueError("the input lock must have schema major version 1")
+    version["minor"] = 1
+
+    components = lock.get("components")
+    if not isinstance(components, list):
+        raise ValueError("the input lock must contain a components array")
+    for component in components:
+        if not isinstance(component, dict):
+            raise ValueError("component records must be objects")
+        license_record = component.get("license")
+        if not isinstance(license_record, dict):
+            raise ValueError("component records must contain a license object")
+        if license_record.get("sourceObligation") in {
+            "ship-corresponding-source",
+            "ship-source-offer",
+        }:
+            raise ValueError("legacy source-obligation values require an explicit reviewed input")
+
+
+def add_component(lock: OrderedDict[str, object], component_path: Path) -> None:
+    component = read_json(component_path)
+    components = lock["components"]
+    if not isinstance(components, list):
+        raise ValueError("the input lock must contain a components array")
+    names = {entry.get("name") for entry in components if isinstance(entry, dict)}
+    name = component.get("name")
+    if not isinstance(name, str) or name in names:
+        raise ValueError(f"component name is missing or already present: {name!r}")
+    components.append(component)
+    components.sort(key=lambda entry: entry["name"])
+
+
+def add_configure_arguments(component: OrderedDict[str, object], arguments_path: Path) -> None:
+    arguments = [
+        line.strip()
+        for line in arguments_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not arguments:
+        raise ValueError(f"{arguments_path} must contain at least one argument")
+    if "configureArguments" in component:
+        raise ValueError("component metadata must not duplicate generated configureArguments")
+    reordered = OrderedDict()
+    for key, value in component.items():
+        reordered[key] = value
+        if key == "version":
+            reordered["configureArguments"] = arguments
+    component.clear()
+    component.update(reordered)
+
+
+def write_lock(lock: OrderedDict[str, object], output_path: Path) -> None:
+    encoded = json.dumps(lock, ensure_ascii=False, separators=(",", ":"))
+    output_path.write_text(encoded, encoding="utf-8", newline="")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--component", type=Path, action="append", default=[])
+    parser.add_argument("--configure-arguments", type=Path)
+    args = parser.parse_args()
+
+    lock = read_json(args.input)
+    upgrade_schema(lock)
+    for component_path in args.component:
+        add_component(lock, component_path)
+    if args.configure_arguments is not None:
+        components = lock["components"]
+        ffmpeg = next(component for component in components if component.get("name") == "ffmpeg")
+        add_configure_arguments(ffmpeg, args.configure_arguments)
+    write_lock(lock, args.output)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

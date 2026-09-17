@@ -151,6 +151,18 @@ void testSchemaArtifacts(const Fixture& fixture, Expectations& expectations) {
             "schema-object", [&] { dependency::validateSchemaArtifact(schema.value, kind); },
             "schema object closure is structural, not hash-only");
     }
+    auto lockSchema11 = dependency::loadSchemaArtifact(
+        fixture.root / "dependencies/schemas/dependency-lock-1.1.schema.json");
+    dependency::validateSchemaArtifact(lockSchema11.value, dependency::ArtifactKind::LockV1_1);
+    expectations.expect(lockSchema11.value.at("title").asString() == "Bloom Dependency Lock 1.1" &&
+                            lockSchema11.value.at("$defs")
+                                    .at("fixedVersion")
+                                    .at("properties")
+                                    .at("minor")
+                                    .at("const")
+                                    .asNumber()
+                                    .spelling == "1",
+                        "minor lock schema records the 1.1 version and accepts optional members");
     auto lockSchema = dependency::loadSchemaArtifact(
         fixture.root / "dependencies/schemas/dependency-lock-1.0.schema.json");
     replace(lockSchema.value.at("properties").at("schemaVersion"), "$ref", number(7));

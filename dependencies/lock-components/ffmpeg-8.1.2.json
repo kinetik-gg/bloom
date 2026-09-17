@@ -1,0 +1,102 @@
+{
+  "name": "ffmpeg",
+  "version": "8.1.2",
+  "source": {
+    "url": "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz",
+    "archiveSha256": "sha256:464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c",
+    "archiveSizeBytes": 11710924,
+    "retrievedAt": "2026-09-17",
+    "commit": null,
+    "provenancePolicy": "required",
+    "provenanceReview": {
+      "path": "dependencies/licenses/ffmpeg/provenance.md",
+      "sha256": "sha256:9dc3f1a5345d8ab32c36bf8ace4bb983be839382483adea511d50a8659395316"
+    },
+    "provenance": [
+      {
+        "kind": "detached-signature",
+        "evidence": {
+          "path": "dependencies/licenses/ffmpeg/ffmpeg-8.1.2.tar.xz.asc",
+          "sha256": "sha256:0a0963fccd70597838073f3e31b20f4a4d8cc2b5e577472c9a5a1f22624246f8"
+        },
+        "identity": "FCF986EA15E6E293A5644F10B4322F04D67658D8",
+        "issuer": "FFmpeg release signing key <ffmpeg-devel@ffmpeg.org>",
+        "policy": "Official FFmpeg release detached signature verified with the published release key"
+      }
+    ]
+  },
+  "license": {
+    "spdxExpression": "LGPL-2.1-or-later",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/ffmpeg/LICENSE",
+        "sha256": "sha256:2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "corresponding-source",
+    "correspondingSourceArchiveSha256": "sha256:464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/ffmpeg/review.md",
+      "sha256": "sha256:c3f8386ddb7f23de839a130e74aa16bf3f48fc4a2d26b634aad51b517f945868"
+    },
+    "reviewedAt": "2026-09-17"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [
+    {
+      "profileId": "bloom.linux-x86-64-clang-release",
+      "linkage": "shared",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.ffmpeg-vaapi",
+          "state": "enabled",
+          "reason": "libva is present in the qualified Linux profile; the recipe has an explicit OFF fallback"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.ffmpeg",
+        "bloom.capability.ffmpeg.decode",
+        "bloom.capability.ffmpeg.encode",
+        "bloom.capability.ffmpeg.prores-preview",
+        "bloom.capability.ffmpeg.vaapi"
+      ],
+      "shippingRoles": [
+        "library",
+        "license",
+        "notice",
+        "source"
+      ],
+      "conformanceFixtureSets": []
+    }
+  ],
+  "securityReview": {
+    "reviewedAt": "2026-09-17",
+    "record": {
+      "path": "dependencies/licenses/ffmpeg/security.md",
+      "sha256": "sha256:654c660185e9940f182534e38fe26a967f99f5598ed52363f9dbd33cb7609102"
+    },
+    "vulnerabilities": [
+      {
+        "id": "cve-2026-30999",
+        "disposition": "mitigated",
+        "record": {
+          "path": "dependencies/licenses/ffmpeg/security.md",
+          "sha256": "sha256:654c660185e9940f182534e38fe26a967f99f5598ed52363f9dbd33cb7609102"
+        }
+      },
+      {
+        "id": "cve-2026-8461",
+        "disposition": "mitigated",
+        "record": {
+          "path": "dependencies/licenses/ffmpeg/security.md",
+          "sha256": "sha256:654c660185e9940f182534e38fe26a967f99f5598ed52363f9dbd33cb7609102"
+        }
+      }
+    ]
+  }
+}
