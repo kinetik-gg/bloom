@@ -7,19 +7,39 @@ Updated: 2026-09-17
 ## v0 implemented boundary
 
 The accepted v0 amendment in ADR 0020 admits the image pipeline under `src/media/image`:
-a private, pinned stb_image PNG/JPEG decoder compiled in process with hard input and allocation
-limits. PNG16 is included. Images and numbered sequences become asset records; authoring source
-nodes reference stable asset IDs. Broad time-based media remains the working research below.
+a private, pinned stb_image PNG/JPEG decoder and a bounded OpenEXR reader compiled in process with
+hard input and allocation limits. PNG16 is included. Images and numbered sequences become asset
+records; authoring source nodes reference stable asset IDs. Broad time-based media remains the
+working research below.
 The v0 gap rule is hold-previous with a visible warning; it supersedes the policy-selection
 research below for this closed image profile. See the component security review for limits.
 
-The implemented APIs are `probeImage`, `decodeImage`, and `scanSequence`. Selection admits PNG
-(including 16-bit samples) and JPEG. The scanner recognizes a final fixed-width number in
+The implemented APIs are `probeImage`, `decodeImage`, `encodeImage`, and `scanSequence`. Selection
+admits PNG (including 16-bit samples), JPEG, and the bounded EXR subset. The scanner recognizes a final fixed-width number in
 any name whose stem ends in, or contains, a run of digits: the last digit run is the frame number, everything before it is the prefix and everything after it the suffix, and both must match for members to belong together (`shot.0001.png`, `shot_0001.png`, `shot0001.png`, `0001.png`, `shot0001_left.png`); padding may differ between members and is reported once; two or more matching members create one
 sequence asset. Different padding is diagnosed rather than merged. A manifest records explicit
 members, SHA-256 digests, first/last frame and gaps. Hold repeats the nearest endpoint; Loop and
 PingPong wrap after the end, while time before the node start always holds the first member.
 A missing or changed selected member produces transparent pixels and a warning; it is not a gap.
+
+### OpenEXR image boundary
+
+EXR intake is deliberately narrower than the format. The in-process reader accepts version 2
+single-part scanline files and single-level tiled files with RGB, RGBA, Y, or YA channels, all
+half or all float, within the image limits above. It honors the data window, retains the display
+window offset in the Bloom image descriptor, defaults alpha to associated/premultiplied, and maps
+the optional chromaticities attribute to the linear color tag (or records the absent-metadata
+scene-linear assumption in the probe). Deep, multipart, multi-level tiled, unknown-channel,
+subsampled, mixed-type, malformed, and truncated files return typed diagnostics and never become
+project truth. EXR decode runs on a worker and uses the same disk-cache key and thumbnail path as
+PNG/JPEG.
+
+TIFF is content-probed by classic and BigTIFF magic, but its read and write operations are provider
+operations. `ImageProvider` carries explicit Decode and Encode callbacks matching the worker image
+product; no global registry is consulted. Until MEDIA-3 supplies the callback, TIFF returns
+`ProviderMissing` and the `TiffRgba16SrgbV1` export preset is listed as unavailable with that reason.
+The output contract is fixed as RGBA16, sRGB, straight alpha; enabling it later requires the
+worker provider to satisfy that contract and its reopen/verification path.
 
 | Bound | v0 value |
 | --- | --- |

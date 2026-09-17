@@ -19,6 +19,7 @@ inline constexpr std::uint16_t kOutputAnalysisAllFacetsPermittedV1 = 0x07FFU;
 enum class OutputPresetV1 : std::uint8_t {
     PngRgba8SrgbV1 = 1,
     FlatExrRgba32fLinRec709SceneV1 = 2,
+    TiffRgba16SrgbV1 = 3,
 };
 
 enum class OutputFacetIdV1 : std::uint8_t {
@@ -51,11 +52,14 @@ enum class OutputPreservationStateV1 : std::uint8_t {
 enum class OutputFacetStableCodeV1 : std::uint8_t {
     None,
     PngDisplayTransformClampQuantize,
+    TiffDisplayTransformClampQuantize,
     ProcessFrameMissing,
     PixelsUnsupported,
     PngFloat32ToUint8,
+    TiffFloat32ToUint16,
     PrecisionUnsupported,
     PngLinRec709SceneToSrgb,
+    TiffLinRec709SceneToSrgb,
     OcioMissing,
     OcioChanged,
     OcioInvalid,
@@ -63,12 +67,16 @@ enum class OutputFacetStableCodeV1 : std::uint8_t {
     OcioVersionUnsupported,
     ColorUnsupported,
     PngPremultipliedToStraight,
+    TiffPremultipliedToStraight,
     AlphaUnsupported,
     ChannelsUnsupported,
     PngOriginWindowRequired,
+    TiffOriginWindowRequired,
     WindowOutOfRange,
     PngEqualWindowRequired,
+    TiffEqualWindowRequired,
     PngSquarePixelRequired,
+    TiffSquarePixelRequired,
     ExrParRoundedBinary32,
     PixelAspectUnsupported,
     CompressionUnavailable,
@@ -97,6 +105,7 @@ struct OutputFacetStableCodeRuleV1 final {
     OutputPreservationStateV1 requiredState;
     bool validForPng;
     bool validForFlatExr;
+    bool validForTiff;
     bool presetPermits;
 
     [[nodiscard]] constexpr bool appliesToFacet(const OutputFacetIdV1 facet) const noexcept {
@@ -107,8 +116,14 @@ struct OutputFacetStableCodeRuleV1 final {
     }
 };
 
+struct OutputPresetAvailabilityV1 final {
+    bool available = false;
+    std::string_view reason;
+};
+
 [[nodiscard]] std::optional<OutputPresetIdentityV1>
 outputPresetIdentityV1(OutputPresetV1 preset) noexcept;
+[[nodiscard]] OutputPresetAvailabilityV1 outputPresetAvailabilityV1(OutputPresetV1 preset) noexcept;
 [[nodiscard]] std::optional<OutputFacetDescriptorSchemasV1>
 outputFacetDescriptorSchemasV1(OutputPresetV1 preset, OutputFacetIdV1 facet) noexcept;
 [[nodiscard]] std::optional<OutputFacetStableCodeRuleV1>

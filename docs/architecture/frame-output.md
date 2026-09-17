@@ -13,7 +13,10 @@ publication job), the interactive frame-export command with explicit digest appr
 constrained PNG codec with strict chunk-profile verification and kind-1 identity issuance, and
 the PNG export path end to end (attempt color preparation, prepared-stream production, and the
 export command's preset choice) are implemented. The supervised external-config helper and the
-non-built-in locator kinds remain the pending color-side work.
+export command's preset choice) are implemented. TIFF's typed RGBA16/sRGB preset and media-provider
+seam are represented, but remain unavailable until MEDIA-3 supplies the worker adapter. The
+supervised external-config helper and the non-built-in locator kinds remain the pending color-side
+work.
 
 Updated: 2026-08-31
 
@@ -46,6 +49,7 @@ The two initial presets are closed, versioned contracts:
 
 - `PngRgba8SrgbV1`
 - `FlatExrRgba32fLinRec709SceneV1`
+- `TiffRgba16SrgbV1` (provider unavailable until MEDIA-3)
 
 Their typed identity derives every portable string and version; callers never provide the fields
 independently and enum ordinals are never serialized:
@@ -54,11 +58,14 @@ independently and enum ordinals are never serialized:
 | --- | --- | ---: | --- | --- | --- |
 | `PngRgba8SrgbV1` | exact text `PngRgba8SrgbV1` | `1` | `bloom.output.png-rgba8-srgb.semantic.v1` | exactly 32 bytes | required |
 | `FlatExrRgba32fLinRec709SceneV1` | exact text `FlatExrRgba32fLinRec709SceneV1` | `1` | `bloom.output.exr-rgba32f-lin-rec709-scene.semantic.v1` | zero bytes | zero bytes |
+| `TiffRgba16SrgbV1` | exact text `TiffRgba16SrgbV1` | `1` | `bloom.output.tiff-rgba16-srgb.semantic.v1` | zero bytes | zero bytes |
 
 A mismatched preset ID, version, or profile tuple is invalid. For PNG, the separate expected OCIO
 revision must equal both the revision embedded in the canonical `DisplayProcessorIdentity` and the
 64 lowercase hexadecimal digits in the target external-dependency descriptor. The EXR preset
-rejects a nonempty OCIO revision or display identity.
+rejects a nonempty OCIO revision or display identity. TIFF has the same zero-byte identity shape
+while its external-dependencies facet is `adapter.unavailable` until the provider seam is wired;
+it cannot be approved or published in this wave.
 
 A preset version participates in analysis, semantic output identity, verification, and
 reproducibility.

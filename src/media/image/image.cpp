@@ -1,3 +1,4 @@
+#include "exr_backend.hpp"
 #include "stb_image_adapter.hpp"
 #include <algorithm>
 #include <array>
@@ -44,6 +45,32 @@ ImageResult<std::vector<std::byte>> readImage(const std::filesystem::path& path,
            static_cast<std::uint64_t>(info.width) * static_cast<std::uint64_t>(info.height) <=
                kMaxImagePixels;
 }
+
+[[nodiscard]] bool isExrMagic(const std::span<const std::byte> bytes) {
+    return bytes.size() >= 4 && static_cast<unsigned char>(bytes[0]) == 0x76U &&
+           static_cast<unsigned char>(bytes[1]) == 0x2fU &&
+           static_cast<unsigned char>(bytes[2]) == 0x31U &&
+           static_cast<unsigned char>(bytes[3]) == 0x01U;
+}
+
+[[nodiscard]] bool isTiffMagic(const std::span<const std::byte> bytes) {
+    if (bytes.size() < 4)
+        return false;
+    const auto byte = [&](const std::size_t index) {
+        return static_cast<unsigned char>(bytes[index]);
+    };
+    return (byte(0) == 'I' && byte(1) == 'I' &&
+            ((byte(2) == 42U && byte(3) == 0U) || (byte(2) == 43U && byte(3) == 0U))) ||
+           (byte(0) == 'M' && byte(1) == 'M' &&
+            ((byte(2) == 0U && byte(3) == 42U) || (byte(2) == 0U && byte(3) == 43U)));
+}
+
+template <typename T> [[nodiscard]] ImageResult<T> providerMissing() {
+    return {{},
+            "TIFF provider is missing; MEDIA-3 must provide the worker adapter",
+            false,
+            ImageDiagnosticCode::ProviderMissing};
+}
 } // namespace
 std::filesystem::path resolveImagePath(std::string_view relativePath, std::string_view relinkHint,
                                        const std::filesystem::path& projectDirectory) {
@@ -79,21 +106,50 @@ std::filesystem::path resolveImagePath(std::string_view relativePath, std::strin
     return std::filesystem::path(
         std::u8string(reinterpret_cast<const char8_t*>(path.data()), path.size()));
 }
-ImageResult<ImageProbe> probeImage(const std::filesystem::path& path,
-                                   const CancelImageWork& cancel) {
+ImageResult<ImageProbe> probeImage(const std::filesystem::path& path, const CancelImageWork& cancel,
+                                   const ImageProvider* provider) {
     try {
         auto bytes = readImage(path, cancel);
         if (!bytes.value.has_value())
             return {{}, bytes.diagnostic, bytes.cancelled};
+        const auto digest = core::Sha256Hasher::hash(*bytes.value);
+        if (!digest)
+            return {{}, "Image digest failed", false, ImageDiagnosticCode::FileReadFailed};
+        if (isExrMagic(*bytes.value))
+            return detail::probeExr(path, *digest, cancel);
+        if (isTiffMagic(*bytes.value)) {
+            if (provider == nullptr || !provider->decode)
+                return providerMissing<ImageProbe>();
+            const auto response = provider->decode({.path = path,
+                                                    .interpretation = {},
+                                                    .pixelBudget = kMaxImageStorageBytes,
+                                                    .expectedDigest = digest});
+            if (!response.value.has_value())
+                return {{},
+                        response.diagnostic,
+                        response.cancelled,
+                        response.code == ImageDiagnosticCode::None
+                            ? ImageDiagnosticCode::ProviderFailed
+                            : response.code};
+            return {response.value->probe, {}};
+        }
         detail::ImageInfo info;
         if (!detail::imageInfo(*bytes.value, info) || !validInfo(info))
             return {{}, "Invalid PNG/JPEG header or image dimensions exceed limits"};
-        const auto digest = core::Sha256Hasher::hash(*bytes.value);
-        if (!digest)
-            return {{}, "Image digest failed"};
+        const auto png = bytes.value->size() >= 8 &&
+                         static_cast<unsigned char>((*bytes.value)[0]) == 137U &&
+                         static_cast<unsigned char>((*bytes.value)[1]) == 'P' &&
+                         static_cast<unsigned char>((*bytes.value)[2]) == 'N' &&
+                         static_cast<unsigned char>((*bytes.value)[3]) == 'G';
         return {ImageProbe{static_cast<std::uint32_t>(info.width),
                            static_cast<std::uint32_t>(info.height),
-                           static_cast<std::uint8_t>(info.sixteenBit ? 16 : 8), *digest},
+                           static_cast<std::uint8_t>(info.sixteenBit ? 16 : 8),
+                           *digest,
+                           png ? ImageFormat::Png : ImageFormat::Jpeg,
+                           ImageColorSpace::Srgb,
+                           ImageAlphaAssociation::Straight,
+                           "srgb_rec709_display",
+                           {}},
                 {}};
     } catch (const std::exception&) {
         return {{}, "Image probe allocation or I/O failed"};
@@ -103,15 +159,45 @@ ImageResult<std::shared_ptr<const render::Rgba32fImage>>
 decodeImage(const std::filesystem::path& path, ImageInterpretation interpretation,
             std::shared_ptr<const color::CpuInputProcessor> processor,
             const CancelImageWork& cancel, const ImageProgress& progress, std::size_t pixelBudget,
-            std::optional<core::Sha256Digest> expectedDigest) {
+            std::optional<core::Sha256Digest> expectedDigest, const ImageProvider* provider) {
     try {
         if (progress)
             progress(0, 0);
         auto bytes = readImage(path, cancel);
         if (!bytes.value.has_value())
             return {{}, bytes.diagnostic, bytes.cancelled};
-        if (expectedDigest && core::Sha256Hasher::hash(*bytes.value) != expectedDigest)
-            return {{}, "Image content changed; relink the asset"};
+        const auto digest = core::Sha256Hasher::hash(*bytes.value);
+        if (!digest)
+            return {{}, "Image digest failed", false, ImageDiagnosticCode::FileReadFailed};
+        if (expectedDigest && *digest != *expectedDigest)
+            return {{},
+                    "Image content changed; relink the asset",
+                    false,
+                    ImageDiagnosticCode::DigestMismatch};
+        if (isExrMagic(*bytes.value))
+            return detail::decodeExr(path, interpretation, std::move(processor), cancel, progress,
+                                     pixelBudget, expectedDigest);
+        if (isTiffMagic(*bytes.value)) {
+            if (provider == nullptr || !provider->decode)
+                return providerMissing<std::shared_ptr<const render::Rgba32fImage>>();
+            const auto response = provider->decode({.path = path,
+                                                    .interpretation = interpretation,
+                                                    .pixelBudget = pixelBudget,
+                                                    .expectedDigest = expectedDigest});
+            if (!response.value.has_value())
+                return {{},
+                        response.diagnostic,
+                        response.cancelled,
+                        response.code == ImageDiagnosticCode::None
+                            ? ImageDiagnosticCode::ProviderFailed
+                            : response.code};
+            if (!response.value->image)
+                return {{},
+                        "TIFF provider returned no image",
+                        false,
+                        ImageDiagnosticCode::ProviderFailed};
+            return {response.value->image, {}};
+        }
         detail::ImageInfo info;
         if (!detail::imageInfo(*bytes.value, info) || !validInfo(info))
             return {{}, "Invalid PNG/JPEG header or image dimensions exceed limits"};
@@ -178,6 +264,29 @@ decodeImage(const std::filesystem::path& path, ImageInterpretation interpretatio
         return {std::make_shared<const render::Rgba32fImage>(std::move(*image.value())), {}};
     } catch (const std::exception&) {
         return {{}, "Image decode allocation or I/O failed"};
+    }
+}
+
+ImageResult<ImageProviderEncodeResponse> encodeImage(const ImageProviderEncodeRequest& request,
+                                                     const ImageProvider* provider) {
+    if (provider == nullptr || !provider->encode)
+        return providerMissing<ImageProviderEncodeResponse>();
+    try {
+        const auto response = provider->encode(request);
+        if (!response.value.has_value())
+            return {{},
+                    response.diagnostic,
+                    response.cancelled,
+                    response.code == ImageDiagnosticCode::None ? ImageDiagnosticCode::ProviderFailed
+                                                               : response.code};
+        if (!response.value->written)
+            return {{},
+                    "Image provider did not write the requested artifact",
+                    false,
+                    ImageDiagnosticCode::ProviderFailed};
+        return {response.value, {}};
+    } catch (...) {
+        return {{}, "Image provider failed", false, ImageDiagnosticCode::ProviderFailed};
     }
 }
 } // namespace bloom::media

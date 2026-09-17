@@ -146,6 +146,19 @@ void testNominalPresetsAndDigestGoldens(Expectations& expectations) {
             hasDigest(exrDigest.digest(),
                       "653dc4f7e71c1be340ffd382f7dd51292c0ae91e5a1950afe16091f964630082"),
         "the analyzer-produced EXR report preserves the independent digest golden");
+
+    const auto tiff = analyzeTiffRgba16SrgbV1(
+        {.process = readySource(identity), .adapter = OutputAnalysisAdapterStateV1::Unavailable});
+    expectations.expect(tiff && tiff.report() != nullptr && !tiff.report()->approvable(),
+                        "the TIFF analysis remains non-approvable while MEDIA-3 is absent");
+    if (tiff && tiff.report() != nullptr) {
+        expectations.expect(tiff.report()->view().preset == OutputPresetV1::TiffRgba16SrgbV1 &&
+                                facet(*tiff.report(), Facet::Precision).targetDescriptor ==
+                                    "component-type=id:uint16" &&
+                                facet(*tiff.report(), Facet::ExternalDependencies).stableCode ==
+                                    Code::AdapterUnavailable,
+                            "the TIFF report preserves its uint16 contract and provider reason");
+    }
 }
 
 void testMissingSourceIsolation(Expectations& expectations) {

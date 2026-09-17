@@ -73,6 +73,16 @@ struct FlatExrRgba32fLinRec709SceneAnalysisInputV1 final {
         OutputAnalysisOtherDependencyStateV1::Available;
 };
 
+struct TiffRgba16SrgbAnalysisInputV1 final {
+    OutputAnalysisProcessSourceV1 process;
+    // TIFF remains unavailable until MEDIA-3 supplies the worker adapter. Keeping this state in
+    // the closed analysis input makes the report truthful without inventing an encoder here.
+    OutputAnalysisAdapterStateV1 adapter = OutputAnalysisAdapterStateV1::Unavailable;
+    OutputAnalysisCompressionStateV1 compression = OutputAnalysisCompressionStateV1::Available;
+    OutputAnalysisOtherDependencyStateV1 otherDependency =
+        OutputAnalysisOtherDependencyStateV1::Available;
+};
+
 enum class OutputAnalysisAnalyzerErrorCodeV1 : std::uint8_t {
     None,
     InvalidProcessSourceState,
@@ -177,6 +187,9 @@ analyzePngRgba8SrgbV1(PngRgba8SrgbAnalysisInputV1 input) noexcept;
 
 [[nodiscard]] OutputAnalysisAnalyzerResultV1
 analyzeFlatExrRgba32fLinRec709SceneV1(FlatExrRgba32fLinRec709SceneAnalysisInputV1 input) noexcept;
+
+[[nodiscard]] OutputAnalysisAnalyzerResultV1
+analyzeTiffRgba16SrgbV1(TiffRgba16SrgbAnalysisInputV1 input) noexcept;
 
 static_assert(!std::is_default_constructible_v<OutputAnalysisReportV1>);
 static_assert(!std::is_copy_constructible_v<OutputAnalysisReportV1>);

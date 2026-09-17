@@ -165,7 +165,8 @@ class FrameExportController final : public QObject {
     [[nodiscard]] std::uint64_t chargedResourceBytes() const noexcept;
 
     // Seam setters (ProjectHost's decision-4 precedent). Defaults are installed at construction (a
-    // real QFileDialog::getSaveFileName offering both closed presets' ".exr"/".png" filters; a real
+    // real QFileDialog::getSaveFileName offering the closed ".exr"/".png"/".tiff" filters; TIFF is
+    // shown as unavailable until MEDIA-3 provides its worker callback; a real
     // QMessageBox Export/Cancel prompt naming the selected preset), so
     // offscreen tests can drive the whole flow without a real dialog appearing.
     void setDestinationProvider(FrameExportDestinationProvider provider);
@@ -181,10 +182,10 @@ class FrameExportController final : public QObject {
                       std::uint64_t lastIndex);
 
     // The typed preset a destination path selects: the closed extension->preset mapping the export
-    // command uses (design decision 3: "the chosen extension selects the preset"). Exactly ".png"
-    // (ASCII case-insensitive) selects PngRgba8SrgbV1; every other extension -- including ".exr",
-    // no extension at all, and an unrecognized one -- keeps the flat OpenEXR preset this command
-    // has always used, so no pre-existing destination changes meaning.
+    // command uses (design decision 3: "the chosen extension selects the preset"). ".png", ".tif",
+    // and ".tiff" (ASCII case-insensitive) select their typed presets; every other extension --
+    // including ".exr", no extension at all, and an unrecognized one -- keeps the flat OpenEXR
+    // preset this command has always used, so no pre-existing destination changes meaning.
     [[nodiscard]] static output::OutputPresetV1
     presetForDestination(const std::filesystem::path& destination);
 

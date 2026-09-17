@@ -375,13 +375,17 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                 // not resolution succeeded; when resolution DID succeed it byte-equals the revision
                 // embedded in the retained canonical DisplayProcessorIdentity, which the digest
                 // stage independently re-checks.
-                auto analyzed =
+                output::OutputAnalysisAnalyzerResultV1 analyzed =
                     preset == output::OutputPresetV1::PngRgba8SrgbV1
                         ? output::analyzePngRgba8SrgbV1(
                               {.process = processSource,
                                .expectedOcioRevision = color::kBloomNeutralV1ConfigDigest,
                                .colorResolution = resolved->color.colorResolution,
                                .adapter = resolved->color.adapter})
+                    : preset == output::OutputPresetV1::TiffRgba16SrgbV1
+                        ? output::analyzeTiffRgba16SrgbV1(
+                              {.process = processSource,
+                               .adapter = output::OutputAnalysisAdapterStateV1::Unavailable})
                         : output::analyzeFlatExrRgba32fLinRec709SceneV1({.process = processSource});
                 if (!analyzed.hasReport()) {
                     return runtime::TaskResult<BuildOutcomeV1>::succeeded(

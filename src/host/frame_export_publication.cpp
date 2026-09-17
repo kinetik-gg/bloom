@@ -255,6 +255,7 @@ FrameExportPublicationResultV1 executeExportPublication(
     // stage before allocation or file creation"). EXR exposes the retained rows directly and adds
     // nothing here, which is why its peak arithmetic below is unchanged.
     const bool isPng = attempt.preset() == output::OutputPresetV1::PngRgba8SrgbV1;
+    const bool isTiff = attempt.preset() == output::OutputPresetV1::TiffRgba16SrgbV1;
     std::uint64_t preparedBytes = 0;
     if (isPng) {
         const auto counted = output::checkedPngPreparedByteCountV1(attempt);
@@ -318,8 +319,9 @@ FrameExportPublicationResultV1 executeExportPublication(
     // (synchronous, uninterruptible from here) call returns -- runtime::CancellationToken exposes
     // no caller-side "request my own cancellation" seam, and changing task_scheduler.hpp is out of
     // this task's scope. See the implementor's report for the full limitation.
-    const ScratchFileGuard scratch(
-        uniqueScratchFilePath(scratchDirectory, isPng ? ".png" : ".exr"));
+    const ScratchFileGuard scratch(uniqueScratchFilePath(scratchDirectory, isPng    ? ".png"
+                                                                           : isTiff ? ".tiff"
+                                                                                    : ".exr"));
     const auto stageProgressSink = [&](const output::OutputExportProgressV1& stageProgress) {
         lastProgress = clock();
         context.reportProgress({.phase = exportStagePhase(stageProgress.stage),
@@ -345,6 +347,15 @@ FrameExportPublicationResultV1 executeExportPublication(
         } else if (!writeVerify.cancelled) {
             writeVerify.stage = pngFailureStage(pngResult.error());
             writeVerify.payload = pngResult.error();
+        }
+    } else if (isTiff) {
+        const output::TiffExportWriterV1 writer;
+        const auto tiffResult = writer.run(attempt, scratch.path());
+        writeVerify.cancelled = tiffResult.cancelled;
+        writeVerify.written = tiffResult.written;
+        if (!writeVerify.written && !writeVerify.cancelled) {
+            writeVerify.stage = FrameExportPublicationStageV1::Writing;
+            writeVerify.payload = tiffResult.error;
         }
     } else {
         const output::FlatExrExportWriterV1 writer;

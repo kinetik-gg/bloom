@@ -226,7 +226,8 @@ void AssetController::requestImport(QWidget* parent) {
     // it lets configureFileDialogSidebar() add the mounted network shares before exec(), which
     // the static function gives no opportunity to do.
     QFileDialog dialog(parent, tr("Import Media"), {},
-                       tr("Media (*.png *.jpg *.jpeg *.wav *.mp3 *.PNG *.JPG *.JPEG *.WAV *.MP3)"));
+                       tr("Media (*.png *.jpg *.jpeg *.exr *.tif *.tiff *.wav *.mp3 "
+                          "*.PNG *.JPG *.JPEG *.EXR *.TIF *.TIFF *.WAV *.MP3)"));
     dialog.setAcceptMode(QFileDialog::AcceptOpen);
     dialog.setFileMode(QFileDialog::ExistingFiles);
     configureFileDialogSidebar(dialog);
@@ -242,10 +243,11 @@ void AssetController::relink(document::AssetId id, QWidget* parent) {
         return;
     const auto* asset = session_.snapshot().project().findAsset(id);
     const bool font = asset != nullptr && asset->kind == document::AssetKind::Font;
-    QFileDialog dialog(parent, font ? tr("Relink Font") : tr("Relink Media"), {},
-                       font ? tr("Fonts (*.ttf *.otf *.ttc *.TTF *.OTF *.TTC)")
-                            : tr("Media (*.png *.jpg *.jpeg *.wav *.mp3 *.PNG *.JPG *.JPEG "
-                                 "*.WAV *.MP3)"));
+    QFileDialog dialog(
+        parent, font ? tr("Relink Font") : tr("Relink Media"), {},
+        font ? tr("Fonts (*.ttf *.otf *.ttc *.TTF *.OTF *.TTC)")
+             : tr("Media (*.png *.jpg *.jpeg *.exr *.tif *.tiff *.wav *.mp3 *.PNG *.JPG *.JPEG "
+                  "*.EXR *.TIF *.TIFF *.WAV *.MP3)"));
     dialog.setAcceptMode(QFileDialog::AcceptOpen);
     dialog.setFileMode(QFileDialog::ExistingFile);
     configureFileDialogSidebar(dialog);

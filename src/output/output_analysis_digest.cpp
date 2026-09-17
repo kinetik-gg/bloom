@@ -324,7 +324,8 @@ computeOutputAnalysisDigestV1(const ProcessFrameSemanticIdentityV1& processIdent
         }
         revisionBytes = std::as_bytes(dependencies.expectedOcioRevision->bytes());
         displayIdentityBytes = displayView->canonicalBytes();
-    } else if (report.preset == OutputPresetV1::FlatExrRgba32fLinRec709SceneV1) {
+    } else if (report.preset == OutputPresetV1::FlatExrRgba32fLinRec709SceneV1 ||
+               report.preset == OutputPresetV1::TiffRgba16SrgbV1) {
         if (dependencies.expectedOcioRevision) {
             return OutputAnalysisDigestV1Result::failure(
                 OutputAnalysisDigestErrorCodeV1::UnexpectedExrExpectedOcioRevision);

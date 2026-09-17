@@ -606,7 +606,11 @@ void testDestinationExtensionSelectsPreset(Expectations& expectations) {
     expectations.expect(preset("/tmp/frame") ==
                             output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
                         "extension routing: no extension keeps the flat OpenEXR preset");
-    expectations.expect(preset("/tmp/frame.tiff") ==
+    expectations.expect(preset("/tmp/frame.tif") == output::OutputPresetV1::TiffRgba16SrgbV1 &&
+                            preset("/tmp/frame.tiff") == output::OutputPresetV1::TiffRgba16SrgbV1 &&
+                            preset("/tmp/frame.TIFF") == output::OutputPresetV1::TiffRgba16SrgbV1,
+                        "extension routing: TIFF extensions select the typed TIFF preset");
+    expectations.expect(preset("/tmp/frame.bmp") ==
                             output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
                         "extension routing: an unrecognized extension keeps the flat OpenEXR "
                         "preset, never a silently different one");

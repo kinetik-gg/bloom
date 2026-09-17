@@ -20,7 +20,7 @@ namespace bloom::media::cache {
 // source bytes and interpretation -- an entry keyed on the old identity is never read back
 // (docs/architecture/media-io.md "Disk cache": "cache key includes the decoder's identity so a
 // decoder upgrade invalidates entries").
-inline constexpr std::string_view kImageDecoderIdentity = "bloom-image-decode-1";
+inline constexpr std::string_view kImageDecoderIdentity = "bloom-image-decode-2";
 
 // The inputs that make a decoded image's on-disk identity: everything selectImageSource() /
 // selectThumbnail() already resolve per docs/architecture/media-io.md's cache-key contract (asset
