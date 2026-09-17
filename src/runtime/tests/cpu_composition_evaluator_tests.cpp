@@ -273,6 +273,68 @@ oneTextPlan(const core::Color4d color = {0.5, 0.25, 0.75, 1.0},
             std::move(operations), runtime::OperationIndex::fromRaw(3)});
 }
 
+[[nodiscard]] runtime::EvaluationRequest
+requestFor(const runtime::CompiledCompositionPlan& plan, std::size_t budget = 1U << 20U,
+           runtime::EvaluationResolution resolution = runtime::CompositionFormatResolution{});
+
+void addLayerBoundsReadout(runtime::CompiledCompositionPlanDefinition& definition,
+                           const runtime::OperationIndex operationIndex,
+                           const document::NodeId nodeId) {
+    definition.valueOperations.push_back({nodeId, runtime::ValueOutputIndex::fromRaw(0), 4,
+                                          runtime::CompiledBoundsReadout{operationIndex}, true});
+    definition.valueOutputCount = 4;
+}
+
+void testLayerBoundsReadout(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    auto solidDefinition =
+        oneSolidPlan({1.0, 0.0, 0.0, 1.0}, {960.0, 540.0}, 1.0, document::CompositionFormat{})
+            ->copyDefinition();
+    auto& layer = std::get<runtime::CompiledLayerOutput>(solidDefinition.operations[1]);
+    layer.anchor.source = document::Vec2d{12.0, 18.0};
+    addLayerBoundsReadout(solidDefinition, runtime::OperationIndex::fromRaw(1),
+                          document::NodeId::fromRaw(900));
+    const auto solidPlan = publishPlan(std::move(solidDefinition));
+    const auto solid = evaluator.evaluate(solidPlan, requestFor(*solidPlan, 1U << 28U), {});
+    expectations.expect(solid.frame() != nullptr,
+                        "a 1920x1080 Solid Layer Bounds readout evaluates");
+    if (solid.frame() != nullptr) {
+        const auto values = solid.frame()->valueOutputs();
+        const auto vec2 = [&](const std::size_t index) {
+            return index < values.size() ? std::get_if<document::Vec2d>(&values[index]) : nullptr;
+        };
+        expectations.expect(vec2(0) != nullptr && *vec2(0) == document::Vec2d{1920.0, 1080.0},
+                            "a Solid readout reports its full size");
+        expectations.expect(vec2(1) != nullptr && *vec2(1) == document::Vec2d{-12.0, -18.0},
+                            "a Solid readout reports the authored-anchor origin");
+        expectations.expect(vec2(2) != nullptr && *vec2(2) == document::Vec2d{960.0, 540.0},
+                            "a Solid readout reports the evaluated anchor");
+        expectations.expect(vec2(3) != nullptr && *vec2(3) == document::Vec2d{948.0, 522.0},
+                            "a Solid readout reports the evaluated bounds center");
+    }
+
+    auto shortTextDefinition = oneTextPlan({1.0, 1.0, 1.0, 1.0}, "A")->copyDefinition();
+    addLayerBoundsReadout(shortTextDefinition, runtime::OperationIndex::fromRaw(0),
+                          document::NodeId::fromRaw(901));
+    auto longTextDefinition = oneTextPlan({1.0, 1.0, 1.0, 1.0}, "AB")->copyDefinition();
+    addLayerBoundsReadout(longTextDefinition, runtime::OperationIndex::fromRaw(0),
+                          document::NodeId::fromRaw(902));
+    const auto shortTextPlan = publishPlan(std::move(shortTextDefinition));
+    const auto longTextPlan = publishPlan(std::move(longTextDefinition));
+    const auto shortText = evaluator.evaluate(shortTextPlan, requestFor(*shortTextPlan), {});
+    const auto longText = evaluator.evaluate(longTextPlan, requestFor(*longTextPlan), {});
+    const auto* shortSize =
+        shortText.frame() && !shortText.frame()->valueOutputs().empty()
+            ? std::get_if<document::Vec2d>(&shortText.frame()->valueOutputs().front())
+            : nullptr;
+    const auto* longSize =
+        longText.frame() && !longText.frame()->valueOutputs().empty()
+            ? std::get_if<document::Vec2d>(&longText.frame()->valueOutputs().front())
+            : nullptr;
+    expectations.expect(shortSize != nullptr && longSize != nullptr && *shortSize != *longSize,
+                        "changing Text content changes the Layer Bounds size on the next frame");
+}
+
 // Two opaque-format layers whose straight authoring colours premultiply to exactly the values the
 // blend-kernel goldens use: the top layer is straight (1, 0.5, 0.25) at half alpha -- premultiplied
 // (0.5, 0.25, 0.125, 0.5) -- over an opaque (0.25, 0.5, 0.75) backdrop. Both positions are the
@@ -355,9 +417,9 @@ twoSolidBlendPlan(const core::BlendMode topMode, const core::BlendMode bottomMod
     return std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
 }
 
-[[nodiscard]] runtime::EvaluationRequest
-requestFor(const runtime::CompiledCompositionPlan& plan, const std::size_t budget = 1U << 20U,
-           runtime::EvaluationResolution resolution = runtime::CompositionFormatResolution{}) {
+[[nodiscard]] runtime::EvaluationRequest requestFor(const runtime::CompiledCompositionPlan& plan,
+                                                    const std::size_t budget,
+                                                    runtime::EvaluationResolution resolution) {
     return {.time = core::RationalTime::fromInteger(0),
             .output = plan.output(),
             .resolution = resolution,
@@ -2140,6 +2202,7 @@ int main(int argc, char* argv[]) {
         testParentedBounds(expectations);
         testContentBounds(expectations);
         testContentBoundsEdgeCases(expectations);
+        testLayerBoundsReadout(expectations);
         testMemoryBudgetLedger(expectations);
         testOperationCacheLifecycle(expectations);
         testOperationMemoization(expectations);

@@ -125,6 +125,9 @@ class CompilePass final {
         if (!topologicalOrder.has_value()) {
             return finishWithoutPlan();
         }
+        if (!validateBoundsReadoutRule(*topologicalOrder)) {
+            return finishWithoutPlan();
+        }
         auto plan = lower(*topologicalOrder);
         if (cancelled()) {
             return result(runtime::SnapshotCompileStatus::Cancelled);
@@ -263,7 +266,27 @@ class CompilePass final {
             incoming[destinationNode(edge.destination)].push_back(&edge);
         }
 
+        // A Layer Bounds node is a value-graph readback root: it can be selected in Properties
+        // without driving an image parameter, so composition-output reachability alone would
+        // otherwise prune the very node the artist asked to inspect. Keep the reverse driver map
+        // beside the ordinary incoming-edge index so value nodes downstream of that readout are
+        // retained as well. Image consumers are intentionally retained too; the later read-rule
+        // pass names and refuses that feedback instead of silently pruning it.
+        std::unordered_map<document::NodeId, std::vector<document::NodeId>> driverConsumers;
+        std::vector<document::NodeId> readoutRoots;
+        for (const auto& node : graph.nodes()) {
+            if (const auto* definition = registry_.find(node.typeId, node.schemaVersion);
+                definition != nullptr &&
+                definition->lowering == runtime::NodeLoweringKind::ValueBoundsReadout) {
+                readoutRoots.push_back(node.id);
+            }
+            for (const auto& reference : driverReferences(node)) {
+                driverConsumers[reference.source.nodeId].push_back(node.id);
+            }
+        }
+
         std::vector<document::NodeId> pending{rootId};
+        pending.insert(pending.end(), readoutRoots.begin(), readoutRoots.end());
         std::unordered_set<document::NodeId> visited;
         std::map<document::NodeId, const document::NodeRecord*> reachableNodes;
         std::map<document::EdgeId, const document::EdgeRecord*> reachableEdges;
@@ -310,6 +333,10 @@ class CompilePass final {
                     return false;
                 }
                 pending.push_back(reference.source.nodeId);
+            }
+            if (const auto consumers = driverConsumers.find(nodeId);
+                consumers != driverConsumers.end()) {
+                pending.insert(pending.end(), consumers->second.begin(), consumers->second.end());
             }
         }
 
@@ -896,6 +923,8 @@ class CompilePass final {
     std::unordered_map<document::AnimationCurveId, runtime::Color4CurveIndex> color4CurveIndices_;
     std::vector<runtime::CompiledValueOperation> valueOperations_;
     std::map<ValueOutputKey, runtime::ValueOutputIndex> valueOutputs_;
+    std::unordered_map<document::NodeId, document::NodeId> pendingBoundsReadouts_;
+    std::vector<std::uint8_t> postImageValueOutputs_;
     std::size_t valueOutputCount_ = 0;
     std::multimap<DiagnosticKey, runtime::CompileDiagnostic> diagnostics_;
     std::unordered_set<document::NodeId> emptyImages_;

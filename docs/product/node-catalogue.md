@@ -159,7 +159,8 @@ keeps display transforms out of scene/process pixels.
 
 | Level | Planned nodes | Important behavior |
 | --- | --- | --- |
-| `M1` | Sample Image, Bounds | Typed data outputs with explicit coordinate space |
+| `F0` | Layer Bounds | Evaluated size, origin, anchor, and center readouts from an Image input; post-image value pass and no image-parameter feedback |
+| `M1` | Sample Image | Typed data outputs with explicit coordinate space |
 | `M1` | Histogram, Image Statistics | Reduction operations with declared channel and color domain |
 | `V1` | Point Track, Planar Track | Analysis result is durable, inspectable data; solving is cancellable work |
 | `V1` | Stabilize, Match Move | Applies explicit tracking data through ordinary transform primitives |

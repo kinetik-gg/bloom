@@ -7,6 +7,9 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <functional>
 #include <map>
+#include <string>
+#include <utility>
+#include <vector>
 class QTimer;
 namespace bloom::ui {
 class CompositionSession;
@@ -16,7 +19,11 @@ class CompositionSession;
 // different strings, because there is one string.
 class DrivenValueResolver final : public QObject {
   public:
-    using Values = std::map<document::ParameterId, QString>;
+    using ValueOutputKey = std::pair<document::NodeId, std::string>;
+    struct Values final {
+        std::map<document::ParameterId, QString> parameters;
+        std::map<ValueOutputKey, QString> outputs;
+    };
     explicit DrivenValueResolver(CompositionSession& session, QObject* parent);
     ~DrivenValueResolver() override;
     void request(std::vector<document::ParameterId> parameters);

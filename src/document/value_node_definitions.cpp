@@ -583,6 +583,21 @@ valueUtilityDefinition(const bloom::document::ValueUtilityDescriptor& descriptor
             NodeCategory::Utilities};
 }
 
+[[nodiscard]] NodeDefinition layerBoundsDefinition() {
+    using namespace bloom::document;
+    return {{std::string(kLayerBoundsNodeType), kValueNodeSchemaVersion},
+            NodeLoweringKind::ValueBoundsReadout,
+            {{std::string(kLayerBoundsImagePortName), SocketValueKind::Image, true}},
+            {result(kLayerBoundsSizePortName, SocketValueKind::Vector2),
+             result(kLayerBoundsOriginPortName, SocketValueKind::Vector2),
+             result(kLayerBoundsAnchorPortName, SocketValueKind::Vector2),
+             result(kLayerBoundsCenterPortName, SocketValueKind::Vector2)},
+            {},
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Values};
+}
+
 } // namespace
 
 namespace bloom::document::detail {
@@ -626,6 +641,8 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     }
     const bool carriesImages = definition.lowering == NodeLoweringKind::ValueReroute &&
                                isRerouteNodeType(definition.key.typeId);
+    const bool hasImageTransportInput =
+        carriesImages || definition.lowering == NodeLoweringKind::ValueBoundsReadout;
     for (const auto& output : definition.outputs) {
         if ((output.valueKind == SocketValueKind::Image) != carriesImages) {
             return false;
@@ -635,14 +652,19 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
         return std::ranges::find(definition.parameters, role, &ParameterDefinition::role);
     };
     for (const auto& input : definition.inputs) {
-        if ((input.valueKind == SocketValueKind::Image) != carriesImages) {
+        const bool imageInput = input.valueKind == SocketValueKind::Image;
+        if (imageInput != hasImageTransportInput ||
+            (definition.lowering == NodeLoweringKind::ValueBoundsReadout &&
+             (&input != &definition.inputs.front()))) {
             return false;
         }
         const auto backing = findParameter(input.name);
         if (backing == definition.parameters.end()) {
             // The only socket with no parameter behind it is a Reroute's pass-through, which is
             // required precisely because nothing else can supply it.
-            if (definition.lowering != NodeLoweringKind::ValueReroute || !input.required) {
+            if ((definition.lowering != NodeLoweringKind::ValueReroute &&
+                 definition.lowering != NodeLoweringKind::ValueBoundsReadout) ||
+                !input.required) {
                 return false;
             }
             continue;
@@ -761,6 +783,18 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
         return inputs == 1 && outputs == 1 && definition.parameters.empty() &&
                definition.inputs.front().valueKind == definition.outputs.front().valueKind &&
                definition.inputs.front().name == definition.outputs.front().name;
+    case NodeLoweringKind::ValueBoundsReadout:
+        return inputs == 1 && outputs == 4 && definition.parameters.empty() &&
+               definition.inputs.front().name == kLayerBoundsImagePortName &&
+               definition.inputs.front().valueKind == SocketValueKind::Image &&
+               definition.inputs.front().required &&
+               definition.outputs[0].name == kLayerBoundsSizePortName &&
+               definition.outputs[1].name == kLayerBoundsOriginPortName &&
+               definition.outputs[2].name == kLayerBoundsAnchorPortName &&
+               definition.outputs[3].name == kLayerBoundsCenterPortName &&
+               std::ranges::all_of(definition.outputs, [](const auto& output) {
+                   return output.valueKind == SocketValueKind::Vector2;
+               });
     case NodeLoweringKind::Shape:
     case NodeLoweringKind::Solid:
     case NodeLoweringKind::ImageSource:
@@ -848,6 +882,7 @@ std::vector<NodeDefinition> valueNodeDefinitions() {
     // what CanonicalGraph::outputKind()/inputKind() answer for this type and what every
     // connect-time and compile-time check therefore asks.
     definitions.push_back(rerouteDefinition());
+    definitions.push_back(layerBoundsDefinition());
 
     // Task UTIL-1: one definition per descriptor, in the table's own order.
     for (const auto& descriptor : valueUtilityDescriptors()) {

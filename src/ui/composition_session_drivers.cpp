@@ -136,15 +136,25 @@ QString CompositionSession::drivenValueText(const document::ParameterId paramete
     return found == drivenText_.end() ? QString{} : found->second;
 }
 
+QString CompositionSession::valueOutputText(const document::NodeId nodeId,
+                                            const std::string_view outputPort) const {
+    const auto found = valueOutputText_.find({nodeId, std::string(outputPort)});
+    return found == valueOutputText_.end() ? QString{} : found->second;
+}
+
 void CompositionSession::refreshDrivenValues() {
     const auto* current = composition();
     std::vector<document::ParameterId> driven;
+    bool hasBoundsReadout = false;
     if (current != nullptr) {
         for (const auto& parameter : current->parameters().records()) {
             if (std::holds_alternative<document::DriverBindingSource>(parameter.source)) {
                 driven.push_back(parameter.id);
             }
         }
+        hasBoundsReadout = std::ranges::any_of(current->graph().nodes(), [](const auto& node) {
+            return node.typeId == document::kLayerBoundsNodeType;
+        });
     }
     // The signature is what the answer would depend on: the document it is read from, the instant
     // it is read at, and the parameters asked about. An identical request starts nothing, which is
@@ -156,13 +166,19 @@ void CompositionSession::refreshDrivenValues() {
     for (const auto id : driven) {
         signature += QString("/%1").arg(id.value());
     }
+    if (hasBoundsReadout) {
+        for (const auto& node : current->graph().nodes())
+            if (node.typeId == document::kLayerBoundsNodeType)
+                signature += QString("/bounds:%1").arg(node.id.value());
+    }
     if (signature == drivenRequest_) {
         return;
     }
     drivenRequest_ = signature;
-    if (driven.empty()) {
-        if (!drivenText_.empty()) {
+    if (driven.empty() && !hasBoundsReadout) {
+        if (!drivenText_.empty() || !valueOutputText_.empty()) {
             drivenText_.clear();
+            valueOutputText_.clear();
             Q_EMIT drivenValuesChanged();
         }
         return;
@@ -170,7 +186,8 @@ void CompositionSession::refreshDrivenValues() {
     if (drivenValues_ == nullptr) {
         drivenValues_ = new DrivenValueResolver(*this, this);
         drivenValues_->ready = [this](const DrivenValueResolver::Values& values) {
-            drivenText_ = values;
+            drivenText_ = values.parameters;
+            valueOutputText_ = values.outputs;
             Q_EMIT drivenValuesChanged();
         };
     }

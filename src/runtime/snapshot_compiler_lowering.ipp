@@ -339,6 +339,10 @@ lower(const std::vector<document::NodeId>& order) {
         indices.emplace(nodeId, index);
     }
 
+    if (!resolveBoundsReadouts(indices)) {
+        return {};
+    }
+
     const auto& compositionOutput = composition_->graph().compositionOutput();
     if (!compositionOutput.has_value()) {
         addTopologyFailure({}, "Composition output disappeared before lowering.");
@@ -523,6 +527,7 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::ValueCombine:
     case NodeLoweringKind::ValueRandom:
     case NodeLoweringKind::ValueReroute:
+    case NodeLoweringKind::ValueBoundsReadout:
     case NodeLoweringKind::ValueUtility:
         break;
     }

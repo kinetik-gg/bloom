@@ -204,6 +204,7 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         LibraryName{document::kSeparateRgbaNodeType, "Separate RGBA"},
         LibraryName{document::kCombineRgbaNodeType, "Combine RGBA"},
         LibraryName{document::kRandomNodeType, "Random"},
+        LibraryName{document::kLayerBoundsNodeType, "Layer Bounds"},
         LibraryName{document::kRerouteNodeType, "Reroute"},
     };
     const auto* const match = std::ranges::find(kLibraryNames, typeId, &LibraryName::typeId);

@@ -29,6 +29,15 @@ void PropertiesEditor::configureRegistryRows() {
             signature += QString("/%1:%2")
                              .arg(QString::fromStdString(binding.role))
                              .arg(binding.parameterId.value());
+    if (node) {
+        if (const auto* definition =
+                document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion)) {
+            for (const auto& output : definition->outputs)
+                signature += QString("/output:%1:%2")
+                                 .arg(QString::fromStdString(output.name))
+                                 .arg(static_cast<int>(output.valueKind));
+        }
+    }
     if (signature != registrySignature_) {
         for (auto* row : registryRows_) {
             for (auto* section : sections_)
@@ -110,6 +119,29 @@ void PropertiesEditor::configureRegistryRows() {
                     section->bodyLayout()->addWidget(row);
                 }
             }
+            bool hasValueOutputs = false;
+            for (const auto& output : definition->outputs) {
+                if (output.valueKind == document::SocketValueKind::Image ||
+                    output.valueKind == document::SocketValueKind::Audio)
+                    continue;
+                hasValueOutputs = true;
+                const auto label = node_editor::displayTypeName(output.name);
+                auto* rowLabel = kit::makePropertyRowLabel(label, section->body());
+                auto* readout = new kit::KLabel(section->body());
+                readout->setObjectName(QStringLiteral("propertiesValueOutput.%1")
+                                           .arg(QString::fromStdString(output.name)));
+                readout->setProperty(
+                    "valueOutputNodeId",
+                    QVariant::fromValue(static_cast<qulonglong>(node->id.value())));
+                readout->setProperty("valueOutputPort", QString::fromStdString(output.name));
+                const auto resolved = session_.valueOutputText(node->id, output.name);
+                readout->setText(resolved.isEmpty() ? tr("Resolving…") : resolved);
+                auto* row = new kit::KPropertyRow(rowLabel, nullptr, {readout}, section->body());
+                row->setProperty("rowLabel", label);
+                section->bodyLayout()->addWidget(row);
+            }
+            if (registryPanel_)
+                registryPanel_->setProperty("hasValueOutputs", hasValueOutputs);
             int textRowIndex = 3;
             for (const auto& declared : definition->parameters) {
                 if (propertiesRowVisibility(declared.role, declared.schemaKey) ==
@@ -149,7 +181,8 @@ void PropertiesEditor::configureRegistryRows() {
         }
     }
     if (registryPanel_)
-        registryPanel_->setVisible(!registryRows_.empty());
+        registryPanel_->setVisible(!registryRows_.empty() ||
+                                   registryPanel_->property("hasValueOutputs").toBool());
     for (auto* row : registryRows_)
         row->refresh();
     if (auto* dimensions = findChild<kit::KLabel*>("propertiesImageDimensions")) {

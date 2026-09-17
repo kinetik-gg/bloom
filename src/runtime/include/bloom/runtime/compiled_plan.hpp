@@ -10,6 +10,7 @@
 #include <bloom/render/embedded_fonts.hpp>
 #include <bloom/runtime/compiled_curves.hpp>
 #include <bloom/runtime/compiled_value_graph.hpp>
+#include <bloom/runtime/operation_index.hpp>
 
 #include <array>
 #include <bloom/document/asset.hpp>
@@ -79,22 +80,6 @@ struct CompiledColorParameter final {
     std::variant<core::Color4d, Color4CurveIndex, ValueOutputIndex> source;
 
     friend bool operator==(const CompiledColorParameter&, const CompiledColorParameter&) = default;
-};
-
-class OperationIndex final {
-  public:
-    [[nodiscard]] static constexpr OperationIndex fromRaw(const std::size_t value) noexcept {
-        return OperationIndex(value);
-    }
-
-    [[nodiscard]] constexpr std::size_t value() const noexcept { return value_; }
-    friend constexpr auto operator<=>(const OperationIndex&,
-                                      const OperationIndex&) noexcept = default;
-
-  private:
-    explicit constexpr OperationIndex(const std::size_t value) noexcept : value_(value) {}
-
-    std::size_t value_ = 0;
 };
 
 // Content rectangles use pixel-edge coordinates in full-resolution local space.

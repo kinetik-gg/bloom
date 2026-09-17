@@ -638,6 +638,93 @@ void testValueGraphCycleRefusal(Expectations& expectations) {
                         "a parameter driven by its own node is refused as a graph cycle");
 }
 
+void testLayerBoundsReadoutAndFeedbackRefusal(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+
+    constexpr auto boundsNode = NodeId::fromRaw(90);
+    constexpr auto boundsEdge = EdgeId::fromRaw(90);
+    auto project = makeProject();
+    auto* composition = project.findComposition(kCompositionId);
+    require(composition != nullptr, "Layer Bounds fixture composition must exist");
+    require(composition->graph().addNode(
+                {boundsNode, std::string(kLayerBoundsNodeType), {}, kValueNodeSchemaVersion}),
+            "Layer Bounds fixture node must be accepted");
+    require(composition->graph().addEdge(
+                {boundsEdge,
+                 {kFirstLayerNode, std::string(kLayerOutputOutputPort)},
+                 NodeInputRef{boundsNode, std::string(kLayerBoundsImagePortName)}}),
+            "Layer Bounds fixture image edge must be accepted");
+    require(project.validate().ok(), "an unconnected Layer Bounds readout is valid document truth");
+
+    const auto result = compile(std::move(project), registry);
+    expectations.expect(result.status == runtime::SnapshotCompileStatus::Compiled && result.plan,
+                        "a Layer Bounds node connected to a Layer output compiles");
+    if (result.plan) {
+        const auto& plan = *result.plan;
+        const auto value = std::ranges::find_if(plan.valueOperations(), [&](const auto& operation) {
+            return operation.sourceNodeId == boundsNode;
+        });
+        expectations.expect(
+            value != plan.valueOperations().end() &&
+                std::holds_alternative<runtime::CompiledBoundsReadout>(value->kernel),
+            "the compiler emits a CompiledBoundsReadout kernel");
+        const auto layer = std::ranges::find_if(plan.operations(), [](const auto& operation) {
+            return std::holds_alternative<runtime::CompiledLayerOutput>(operation);
+        });
+        expectations.expect(
+            value != plan.valueOperations().end() && layer != plan.operations().end() &&
+                std::get<runtime::CompiledBoundsReadout>(value->kernel).operationIndex ==
+                    runtime::OperationIndex::fromRaw(
+                        static_cast<std::size_t>(std::distance(plan.operations().begin(), layer))),
+            "the readout is patched to its connected image operation");
+
+        runtime::CpuCompositionEvaluator evaluator;
+        const auto evaluated =
+            evaluator.evaluate(result.plan,
+                               {.time = core::RationalTime::fromInteger(0),
+                                .output = plan.output(),
+                                .resolution = runtime::CompositionFormatResolution{},
+                                .quality = runtime::EvaluationQuality::Reference,
+                                .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
+                                .pixelStorageByteLimit = 1U << 28U},
+                               runtime::CancellationToken{});
+        const auto* size = evaluated.frame() && !evaluated.frame()->valueOutputs().empty()
+                               ? std::get_if<Vec2d>(&evaluated.frame()->valueOutputs()[0])
+                               : nullptr;
+        expectations.expect(
+            size != nullptr && *size == Vec2d{1920.0, 1080.0},
+            "a compiled 1920x1080 Solid Layer readout reaches frame Properties values");
+    }
+
+    auto refusedProject = makeProject();
+    auto* refusedComposition = refusedProject.findComposition(kCompositionId);
+    require(refusedComposition != nullptr, "feedback fixture composition must exist");
+    require(refusedComposition->graph().addNode(
+                {boundsNode, std::string(kLayerBoundsNodeType), {}, kValueNodeSchemaVersion}),
+            "feedback Layer Bounds node must be accepted");
+    require(refusedComposition->graph().addEdge(
+                {boundsEdge,
+                 {kFirstLayerNode, std::string(kLayerOutputOutputPort)},
+                 NodeInputRef{boundsNode, std::string(kLayerBoundsImagePortName)}}),
+            "feedback Layer Bounds image edge must be accepted");
+    require(refusedComposition->parameters().setSource(
+                kSecondPosition,
+                DriverBindingSource{boundsNode, std::string(kLayerBoundsOriginPortName)}),
+            "feedback Layer Bounds driver must be accepted");
+    require(refusedProject.validate().ok(),
+            "cross-layer Layer Bounds feedback remains valid document truth before compile");
+    const auto refused = compile(std::move(refusedProject), registry);
+    expectations.expect(
+        refused.status != runtime::SnapshotCompileStatus::Compiled &&
+            hasDiagnostic(refused,
+                          runtime::CompileDiagnosticCode::BoundsReadoutDrivesImageOperation,
+                          kSecondLayerNode),
+        "Layer Bounds feedback into an image operation is refused with its destination");
+}
+
 void testParentOrder(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
     populateRegistry(registry);
@@ -1772,6 +1859,7 @@ int main() {
         testCompositionReadoutsLowerToConstants(expectations);
         testFrameNumberReadoutIsResolvedPerFrame(expectations);
         testValueGraphCycleRefusal(expectations);
+        testLayerBoundsReadoutAndFeedbackRefusal(expectations);
         testDeterministicTypedPlan(expectations);
         testCustomSolidLoweringRemainsSupported(expectations);
         testReachabilityAndUnsupportedNodes(expectations);

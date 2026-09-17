@@ -281,6 +281,13 @@ class NodeItem final : public QGraphicsObject {
                 if (node)
                     refreshValues(*node, *composition);
             });
+        if (session_)
+            connect(session_, &CompositionSession::drivenValuesChanged, this, [this] {
+                const auto* composition = session_->composition();
+                const auto* node = composition ? composition->graph().findNode(id_) : nullptr;
+                if (node)
+                    refreshValues(*node, *composition);
+            });
         setData(kNodeItemKindRole, QStringLiteral("node"));
         setData(kNodeStableIdRole, QVariant::fromValue<qulonglong>(id.value()));
         setFlags(ItemIsSelectable | ItemSendsGeometryChanges);
@@ -948,6 +955,25 @@ class NodeItem final : public QGraphicsObject {
             imageRange_->setObjectName("nodeImageRange");
             prepareField(imageRange_);
             valueRows_.push_back({tr("Range"), imageRange_, nullptr, {}});
+        }
+        if (node.typeId == document::kLayerBoundsNodeType) {
+            for (const auto& port :
+                 {document::kLayerBoundsSizePortName, document::kLayerBoundsOriginPortName,
+                  document::kLayerBoundsAnchorPortName, document::kLayerBoundsCenterPortName}) {
+                const auto label = displayTypeName(port);
+                readOnlyRows_.push_back({label, QString{}});
+                auto* value =
+                    new kit::KLabel(QStringLiteral("Unavailable"), nullptr, kit::TypeRole::Value);
+                value->setObjectName(
+                    QStringLiteral("nodeValueOutput.%1")
+                        .arg(QString::fromUtf8(port.data(), static_cast<qsizetype>(port.size()))));
+                value->setProperty(
+                    "valueOutputPort",
+                    QString::fromUtf8(port.data(), static_cast<qsizetype>(port.size())));
+                value->setMinimumWidth(0);
+                prepareField(value);
+                readOnlyLabels_.push_back(value);
+            }
         }
         for (auto& row : valueRows_) {
             if (row.component) {
@@ -1630,6 +1656,16 @@ class NodeItem final : public QGraphicsObject {
         }
         for (std::size_t index = 0; index < readOnlyLabels_.size(); ++index)
             readOnlyLabels_[index]->setElidedText(readOnlyRows_[index].second);
+        if (session_) {
+            for (auto* label : readOnlyLabels_) {
+                const auto port = label->property("valueOutputPort").toString();
+                if (port.isEmpty())
+                    continue;
+                const auto text = session_->valueOutputText(node.id, port.toStdString());
+                label->setElidedText(text.isEmpty() ? tr("Resolving…") : text);
+                label->setToolTip(label->text());
+            }
+        }
         if (imageDimensions_ && session_) {
             const auto* asset = session_->snapshot().project().findAsset(imageAsset_);
             imageDimensions_->setText(imageDimensionsText(asset));

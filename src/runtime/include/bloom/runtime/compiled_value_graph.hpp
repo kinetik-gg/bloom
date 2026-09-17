@@ -7,6 +7,7 @@
 #include <bloom/document/value_operations.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/runtime/compiled_curves.hpp>
+#include <bloom/runtime/operation_index.hpp>
 
 #include <compare>
 #include <cstddef>
@@ -18,8 +19,9 @@
 
 namespace bloom::runtime {
 
-// The value graph: a second, much smaller compiled program that runs ONCE PER FRAME, before any
-// image operation reads a parameter.
+// The value graph: a second, much smaller compiled program that runs once per frame. Ordinary
+// values run before image operations; Layer Bounds readouts and their dependants run in the
+// post-image pass.
 //
 // It is deliberately parallel to the image chain rather than part of it. CompiledOperation is a
 // closed variant of Image-producing steps addressed by OperationIndex, and every one of them is
@@ -257,12 +259,21 @@ struct CompiledValueUtility final {
     friend bool operator==(const CompiledValueUtility&, const CompiledValueUtility&) = default;
 };
 
+// Image bounds are produced by the image pass, so this readout is the one value kernel whose
+// source is an image operation address rather than a value operand. It expands to four Vec2
+// outputs: size, origin, authored anchor, and evaluated center.
+struct CompiledBoundsReadout final {
+    OperationIndex operationIndex;
+
+    friend bool operator==(const CompiledBoundsReadout&, const CompiledBoundsReadout&) = default;
+};
+
 using CompiledValueKernel =
     std::variant<CompiledValuePassthrough, CompiledValueTime, CompiledValueScalarMath,
                  CompiledValueVectorMath, CompiledValueVectorReduce, CompiledValueMapRange,
                  CompiledValueClamp, CompiledValueMix, CompiledValueCompare, CompiledValueSwitch,
                  CompiledValueSeparate, CompiledValueCombine, CompiledValueRandom,
-                 CompiledValuePromotion, CompiledValueUtility>;
+                 CompiledValuePromotion, CompiledValueUtility, CompiledBoundsReadout>;
 
 // Every operand one kernel reads, in declaration order. Written once, here beside the kernels, so a
 // caller that has to walk them -- the evaluator's preflight, which has to know which animation
@@ -272,7 +283,8 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
     std::visit(
         [&visit](const auto& step) {
             using Step = std::decay_t<decltype(step)>;
-            if constexpr (std::is_same_v<Step, CompiledValueTime>) {
+            if constexpr (std::is_same_v<Step, CompiledValueTime> ||
+                          std::is_same_v<Step, CompiledBoundsReadout>) {
                 // The one kernel with no operands: its value is the frame being rendered.
             } else if constexpr (std::is_same_v<Step, CompiledValuePassthrough> ||
                                  std::is_same_v<Step, CompiledValueSeparate> ||
@@ -333,6 +345,9 @@ struct CompiledValueOperation final {
     ValueOutputIndex firstOutput;
     std::uint8_t outputCount = 1;
     CompiledValueKernel kernel;
+    // A bounds readout and every value operation transitively fed by it run after the image pass.
+    // Existing aggregate initializers remain valid because this additive flag has a default.
+    bool requiresPostImage = false;
 
     friend bool operator==(const CompiledValueOperation&, const CompiledValueOperation&) = default;
 };

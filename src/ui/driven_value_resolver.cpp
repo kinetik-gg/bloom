@@ -2,6 +2,7 @@
 #include "composition_driver_probe.hpp"
 #include <QTimer>
 #include <algorithm>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/ui/composition_authoring.hpp>
@@ -84,10 +85,6 @@ void DrivenValueResolver::request(std::vector<document::ParameterId> parameters)
         start();
 }
 void DrivenValueResolver::start() {
-    if (parameters_.empty()) {
-        timer_->stop();
-        return;
-    }
     if (!scheduler_) {
         auto config = runtime::TaskSchedulerConfig::defaults();
         config.cpuWorkerCount = 1;
@@ -115,7 +112,7 @@ void DrivenValueResolver::start() {
         [snapshot, compositionId, time, parameters](runtime::TaskContext& context) {
             auto values = std::make_shared<Values>();
             for (auto parameter : parameters)
-                (*values)[parameter] = QObject::tr("Unavailable");
+                values->parameters[parameter] = QObject::tr("Unavailable");
             const auto compiled =
                 compileDriverProbe(snapshot, compositionId, parameters, context.cancellation());
             if (context.isCancellationRequested())
@@ -123,12 +120,53 @@ void DrivenValueResolver::start() {
             const auto* composition = snapshot.project().findComposition(compositionId);
             if (compiled.plan && composition) {
                 const auto& plan = *compiled.plan;
-                runtime::ValueGraphMemoization memoization;
-                memoization.cancellation = &context.cancellation();
-                const auto evaluated = runtime::evaluateValueGraph(
-                    plan.valueOperations(), plan.valueOutputCount(), time,
-                    composition->format().frameRate(),
-                    {plan.scalarCurves(), plan.vec2Curves(), plan.color4Curves()}, memoization);
+                std::vector<runtime::CompiledValue> evaluatedOutputs;
+                std::vector<runtime::ValueGraphDiagnostic> valueDiagnostics;
+                const bool hasPostImageValues =
+                    std::ranges::any_of(plan.valueOperations(), [](const auto& operation) {
+                        return operation.requiresPostImage;
+                    });
+                if (hasPostImageValues) {
+                    runtime::CpuCompositionEvaluator evaluator;
+                    const auto evaluation = evaluator.evaluate(
+                        compiled.plan,
+                        {.time = time,
+                         .output = plan.output(),
+                         .resolution = runtime::CompositionFormatResolution{},
+                         .quality = runtime::EvaluationQuality::Reference,
+                         .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
+                         .pixelStorageByteLimit = std::size_t{512} * 1024U * 1024U},
+                        context.cancellation());
+                    if (evaluation.frame() != nullptr) {
+                        const auto outputSpan = evaluation.frame()->valueOutputs();
+                        evaluatedOutputs.assign(outputSpan.begin(), outputSpan.end());
+                    }
+                } else {
+                    runtime::ValueGraphMemoization memoization;
+                    memoization.cancellation = &context.cancellation();
+                    const auto evaluated = runtime::evaluateValueGraph(
+                        plan.valueOperations(), plan.valueOutputCount(), time,
+                        composition->format().frameRate(),
+                        {plan.scalarCurves(), plan.vec2Curves(), plan.color4Curves()}, memoization);
+                    evaluatedOutputs = evaluated.outputs;
+                    valueDiagnostics = evaluated.diagnostics;
+                }
+                for (const auto& operation : plan.valueOperations()) {
+                    if (!operation.sourceNodeId.isValid())
+                        continue;
+                    const auto* node = composition->graph().findNode(operation.sourceNodeId);
+                    const auto* definition = node ? document::builtInNodeDefinitions().find(
+                                                        node->typeId, node->schemaVersion)
+                                                  : nullptr;
+                    if (node == nullptr || definition == nullptr)
+                        continue;
+                    for (std::size_t slot = 0; slot < definition->outputs.size(); ++slot) {
+                        const auto index = operation.firstOutput.value() + slot;
+                        if (index < evaluatedOutputs.size())
+                            values->outputs[{node->id, definition->outputs[slot].name}] =
+                                valueText(evaluatedOutputs[index]);
+                    }
+                }
                 for (auto id : parameters) {
                     const auto* parameter = composition->parameters().find(id);
                     const auto* driver =
@@ -152,17 +190,17 @@ void DrivenValueResolver::start() {
                         const auto index =
                             operation.firstOutput.value() +
                             static_cast<std::size_t>(output - definition->outputs.begin());
-                        if (index < evaluated.outputs.size())
-                            (*values)[id] = valueText(
-                                promotedValue(evaluated.outputs[index], parameter->schemaKey));
+                        if (index < evaluatedOutputs.size())
+                            values->parameters[id] = valueText(
+                                promotedValue(evaluatedOutputs[index], parameter->schemaKey));
                     }
-                    for (const auto& diagnostic : evaluated.diagnostics)
+                    for (const auto& diagnostic : valueDiagnostics)
                         if (diagnostic.nodeId == driver->sourceNodeId)
-                            (*values)[id] +=
+                            values->parameters[id] +=
                                 QString(" · %1").arg(QString::fromStdString(diagnostic.summary));
                 }
             } else if (!compiled.diagnostics.empty()) {
-                for (auto& [id, text] : *values) {
+                for (auto& [id, text] : values->parameters) {
                     (void)id;
                     text = QString::fromStdString(compiled.diagnostics.front().summary);
                 }
@@ -189,7 +227,7 @@ void DrivenValueResolver::poll() {
                         ? tr("Unavailable")
                         : QString::fromStdString(result->diagnostics().front().summary);
                 for (auto id : parameters_)
-                    unavailable[id] = message;
+                    unavailable.parameters[id] = message;
                 ready(unavailable);
             }
             timer_->stop();

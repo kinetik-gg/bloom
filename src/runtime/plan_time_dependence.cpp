@@ -13,6 +13,7 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
         const auto* utility = std::get_if<CompiledValueUtility>(&operation.kernel);
         bool dependent =
             std::holds_alternative<CompiledValueTime>(operation.kernel) ||
+            std::holds_alternative<CompiledBoundsReadout>(operation.kernel) ||
             (utility != nullptr && utility->operation == document::ValueUtilityKernel::FrameNumber);
         forEachValueOperand(operation.kernel, [&](const CompiledValueOperand& operand) {
             if (const auto* input = std::get_if<ValueOutputIndex>(&operand.source))

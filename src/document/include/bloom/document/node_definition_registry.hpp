@@ -222,6 +222,10 @@ enum class NodeLoweringKind {
     ValueCombine,
     ValueRandom,
     ValueReroute,
+    // The image-pass readout is evaluated after image bounds exist. It is still a value node, but
+    // it has a transport Image input rather than a parameter-backed operand, so it has its own
+    // lowering instead of being forced through the generic utility descriptor table.
+    ValueBoundsReadout,
     // Task UTIL-1's conversion, string, logic, numeric and readout library. ONE lowering for all of
     // it, because every one of those nodes has the same shape -- a fixed operand list in, a fixed
     // output list out, and a kernel selected by the node's own TYPE rather than by a stored
@@ -251,6 +255,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::ValueCombine:
     case NodeLoweringKind::ValueRandom:
     case NodeLoweringKind::ValueReroute:
+    case NodeLoweringKind::ValueBoundsReadout:
     case NodeLoweringKind::ValueUtility:
         return true;
     case NodeLoweringKind::Shape:
