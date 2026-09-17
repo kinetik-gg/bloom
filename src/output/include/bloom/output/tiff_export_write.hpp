@@ -1,0 +1,45 @@
+#pragma once
+
+#include <bloom/media/image.hpp>
+#include <bloom/output/output_analysis_attempt.hpp>
+
+#include <filesystem>
+
+namespace bloom::output {
+
+enum class TiffExportWriteErrorCodeV1 : std::uint8_t {
+    None,
+    ProviderMissing,
+    ProviderFailed,
+    Cancelled,
+};
+
+struct TiffExportWriteResultV1 final {
+    bool written = false;
+    bool cancelled = false;
+    TiffExportWriteErrorCodeV1 error = TiffExportWriteErrorCodeV1::None;
+
+    [[nodiscard]] static TiffExportWriteResultV1 writtenResult() noexcept {
+        return {.written = true, .cancelled = false, .error = TiffExportWriteErrorCodeV1::None};
+    }
+    [[nodiscard]] static TiffExportWriteResultV1 cancelledResult() noexcept {
+        return {
+            .written = false, .cancelled = true, .error = TiffExportWriteErrorCodeV1::Cancelled};
+    }
+    [[nodiscard]] static TiffExportWriteResultV1
+    failed(const TiffExportWriteErrorCodeV1 diagnostic) noexcept {
+        return {.written = false, .cancelled = false, .error = diagnostic};
+    }
+};
+
+// TIFF is intentionally only a bridge to the provider-neutral media seam. MEDIA-3 supplies the
+// callback later; an absent callback returns ImageDiagnosticCode::ProviderMissing before a worker
+// or filesystem encoder is invoked.
+class TiffExportWriterV1 final {
+  public:
+    [[nodiscard]] TiffExportWriteResultV1
+    run(const OutputAnalysisAttemptV1& attempt, const std::filesystem::path& destination,
+        const media::ImageProvider* provider = nullptr) const noexcept;
+};
+
+} // namespace bloom::output

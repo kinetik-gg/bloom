@@ -8,6 +8,7 @@
 #include <bloom/output/output_export_stage.hpp>
 #include <bloom/output/output_limits.hpp>
 #include <bloom/output/png_export_write.hpp>
+#include <bloom/output/tiff_export_write.hpp>
 #include <bloom/platform/staged_artifact.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
@@ -190,12 +191,11 @@ struct FrameExportResourceExhaustedV1 final {};
 struct FrameExportPreparedBytesExceededV1 final {};
 struct FrameExportUnexpectedFailureV1 final {};
 
-using FrameExportPublicationFailurePayloadV1 =
-    std::variant<std::monostate, platform::StagedArtifactError,
-                 output::FlatExrExportWriteErrorCodeV1, output::PngExportWriteErrorCodeV1,
-                 PublicationGuardStatus, FrameExportDeadlineExceededV1,
-                 FrameExportNoProgressExceededV1, FrameExportResourceExhaustedV1,
-                 FrameExportPreparedBytesExceededV1, FrameExportUnexpectedFailureV1>;
+using FrameExportPublicationFailurePayloadV1 = std::variant<
+    std::monostate, platform::StagedArtifactError, output::FlatExrExportWriteErrorCodeV1,
+    output::PngExportWriteErrorCodeV1, output::TiffExportWriteErrorCodeV1, PublicationGuardStatus,
+    FrameExportDeadlineExceededV1, FrameExportNoProgressExceededV1, FrameExportResourceExhaustedV1,
+    FrameExportPreparedBytesExceededV1, FrameExportUnexpectedFailureV1>;
 
 class FrameExportPublicationFailureV1 final {
   public:

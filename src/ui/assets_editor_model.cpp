@@ -217,11 +217,16 @@ void AssetsEditor::rebuild() {
         const bool font = asset.kind == document::AssetKind::Font;
         const bool audio = asset.kind == document::AssetKind::Audio;
         const bool sequence = asset.kind == document::AssetKind::Sequence;
+        const auto extension = asset.locator.path.substr(asset.locator.path.find_last_of('.') + 1);
+        const bool exr = extension == "exr" || extension == "EXR";
         item->setText(0, QString::fromStdString(asset.name));
-        item->setText(1, font       ? tr("Font · %1").arg(QString::fromStdString(asset.fontStyle))
-                         : sequence ? tr("Sequence [%1]").arg(asset.manifest.members.size())
-                         : audio    ? tr("Audio · %1 s").arg(asset.duration.toSeconds(), 0, 'f', 2)
-                                    : tr("Image"));
+        item->setText(1, font ? tr("Font · %1").arg(QString::fromStdString(asset.fontStyle))
+                         : sequence
+                             ? (exr ? tr("EXR · %1 frames").arg(asset.manifest.members.size())
+                                    : tr("Sequence [%1]").arg(asset.manifest.members.size()))
+                         : audio ? tr("Audio · %1 s").arg(asset.duration.toSeconds(), 0, 'f', 2)
+                         : exr   ? tr("EXR")
+                                 : tr("Image"));
         item->setData(0, assets::kAssetRole, QVariant::fromValue<qulonglong>(asset.id.value()));
         item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable |
                        Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled);

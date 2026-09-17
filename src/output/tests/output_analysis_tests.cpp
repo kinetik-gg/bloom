@@ -148,6 +148,14 @@ void testPresetIdentityAndSchemaMatrix(Expectations& expectations) {
                             exr->outputPixelSemanticsProfileId ==
                                 "bloom.output.exr-rgba32f-lin-rec709-scene.semantic.v1",
                         "the EXR typed preset derives its exact portable identity tuple");
+    const auto tiff = output::outputPresetIdentityV1(Preset::TiffRgba16SrgbV1);
+    const auto tiffAvailability = output::outputPresetAvailabilityV1(Preset::TiffRgba16SrgbV1);
+    expectations.expect(tiff && tiff->serializedId == "TiffRgba16SrgbV1" && tiff->version == 1 &&
+                            tiff->outputPixelSemanticsProfileId ==
+                                "bloom.output.tiff-rgba16-srgb.semantic.v1" &&
+                            !tiffAvailability.available &&
+                            tiffAvailability.reason.find("provider") != std::string_view::npos,
+                        "the TIFF preset identity is frozen and unavailable without MEDIA-3");
     expectations.expect(!output::outputPresetIdentityV1(enumWithBits<Preset>(0xFFU)),
                         "an unknown preset fails closed");
 
@@ -223,16 +231,22 @@ void testStableCodeMapping(Expectations& expectations) {
              true},
         Case{Code::PngDisplayTransformClampQuantize, "png.display-transform-clamp-quantize",
              State::Approximated, bit(Facet::Pixels), true, false, true},
+        Case{Code::TiffDisplayTransformClampQuantize, "tiff.display-transform-clamp-quantize",
+             State::Approximated, bit(Facet::Pixels), false, false, true},
         Case{Code::ProcessFrameMissing, "process-frame.missing", State::Missing, bit(Facet::Pixels),
              true, true, false},
         Case{Code::PixelsUnsupported, "pixels.unsupported", State::Unsupported, bit(Facet::Pixels),
              true, true, false},
         Case{Code::PngFloat32ToUint8, "png.float32-to-uint8", State::Approximated,
              bit(Facet::Precision), true, false, true},
+        Case{Code::TiffFloat32ToUint16, "tiff.float32-to-uint16", State::Approximated,
+             bit(Facet::Precision), false, false, true},
         Case{Code::PrecisionUnsupported, "precision.unsupported", State::Unsupported,
              bit(Facet::Precision), true, true, false},
         Case{Code::PngLinRec709SceneToSrgb, "png.lin-rec709-scene-to-srgb", State::Approximated,
              bit(Facet::Color), true, false, true},
+        Case{Code::TiffLinRec709SceneToSrgb, "tiff.lin-rec709-scene-to-srgb", State::Approximated,
+             bit(Facet::Color), false, false, true},
         Case{Code::OcioMissing, "ocio.missing", State::Missing, bit(Facet::Color), true, false,
              false},
         Case{Code::OcioChanged, "ocio.changed", State::Missing, bit(Facet::Color), true, false,
@@ -247,19 +261,27 @@ void testStableCodeMapping(Expectations& expectations) {
              true, true, false},
         Case{Code::PngPremultipliedToStraight, "png.premultiplied-to-straight", State::Approximated,
              bit(Facet::AlphaAssociation), true, false, true},
+        Case{Code::TiffPremultipliedToStraight, "tiff.premultiplied-to-straight",
+             State::Approximated, bit(Facet::AlphaAssociation), false, false, true},
         Case{Code::AlphaUnsupported, "alpha.unsupported", State::Unsupported,
              bit(Facet::AlphaAssociation), true, true, false},
         Case{Code::ChannelsUnsupported, "channels.unsupported", State::Unsupported,
              bit(Facet::Channels), true, true, false},
         Case{Code::PngOriginWindowRequired, "png.origin-window-required", State::Unsupported,
              bit(Facet::DataWindow), true, false, false},
+        Case{Code::TiffOriginWindowRequired, "tiff.origin-window-required", State::Unsupported,
+             bit(Facet::DataWindow), false, false, false},
         Case{Code::WindowOutOfRange, "window.out-of-range", State::Unsupported,
              static_cast<std::uint16_t>(bit(Facet::DataWindow) | bit(Facet::DisplayWindow)), true,
              true, false},
         Case{Code::PngEqualWindowRequired, "png.equal-window-required", State::Unsupported,
              bit(Facet::DisplayWindow), true, false, false},
+        Case{Code::TiffEqualWindowRequired, "tiff.equal-window-required", State::Unsupported,
+             bit(Facet::DisplayWindow), false, false, false},
         Case{Code::PngSquarePixelRequired, "png.square-pixel-required", State::Unsupported,
              bit(Facet::PixelAspect), true, false, false},
+        Case{Code::TiffSquarePixelRequired, "tiff.square-pixel-required", State::Unsupported,
+             bit(Facet::PixelAspect), false, false, false},
         Case{Code::ExrParRoundedBinary32, "exr.par-rounded-binary32", State::Approximated,
              bit(Facet::PixelAspect), false, true, true},
         Case{Code::PixelAspectUnsupported, "pixel-aspect.unsupported", State::Unsupported,

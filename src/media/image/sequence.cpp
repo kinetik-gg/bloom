@@ -27,7 +27,7 @@ std::optional<NumberedName> numberedName(const std::filesystem::path& path) {
     std::ranges::transform(lowered, lowered.begin(), [](const unsigned char ch) {
         return static_cast<char>(std::tolower(ch));
     });
-    if (lowered != ".png" && lowered != ".jpg" && lowered != ".jpeg")
+    if (lowered != ".png" && lowered != ".jpg" && lowered != ".jpeg" && lowered != ".exr")
         return {};
     const auto stem = path.stem().string();
     const auto isDigit = [](const char ch) { return ch >= '0' && ch <= '9'; };

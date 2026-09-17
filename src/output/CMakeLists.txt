@@ -25,6 +25,7 @@ target_sources(
         png_preset_contract.hpp
         png_reopen_verifier.cpp
         process_frame_semantic_identity.cpp
+        tiff_export_write.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -44,6 +45,7 @@ target_sources(
             include/bloom/output/png_output_adapter.hpp
             include/bloom/output/png_reopen_verifier.hpp
             include/bloom/output/process_frame_semantic_identity.hpp
+            include/bloom/output/tiff_export_write.hpp
 )
 
 target_compile_features(bloom_output PUBLIC cxx_std_20)
@@ -66,7 +68,7 @@ target_link_libraries(
     # use explicit. No OpenColorIO type crosses either boundary (bloom_color_ocio links
     # OpenColorIO::OpenColorIO PRIVATE), and {"output", "color"} was already present in
     # tools/quality/repository_checks/repository_checks.cpp's kAllowedModuleDependencies allowlist.
-    PUBLIC bloom_color bloom_color_ocio bloom_core bloom_platform bloom_render
+    PUBLIC bloom_color bloom_color_ocio bloom_core bloom_media_image bloom_platform bloom_render
            bloom_runtime_evaluator
 )
 bloom_enable_warnings(bloom_output)

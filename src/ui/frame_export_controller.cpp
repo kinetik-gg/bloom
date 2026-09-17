@@ -185,9 +185,11 @@ exportFailureOutcome(const host::FrameExportPublicationFailureV1* failure) {
         return QString::fromUtf8(identity->serializedId.data(),
                                  static_cast<int>(identity->serializedId.size()));
     }
-    return preset == output::OutputPresetV1::PngRgba8SrgbV1
-               ? QStringLiteral("PngRgba8SrgbV1")
-               : QStringLiteral("FlatExrRgba32fLinRec709SceneV1");
+    if (preset == output::OutputPresetV1::PngRgba8SrgbV1)
+        return QStringLiteral("PngRgba8SrgbV1");
+    if (preset == output::OutputPresetV1::TiffRgba16SrgbV1)
+        return QStringLiteral("TiffRgba16SrgbV1");
+    return QStringLiteral("FlatExrRgba32fLinRec709SceneV1");
 }
 
 } // namespace
@@ -198,8 +200,11 @@ FrameExportController::presetForDestination(const std::filesystem::path& destina
     for (auto& character : extension) {
         character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
     }
-    return extension == ".png" ? output::OutputPresetV1::PngRgba8SrgbV1
-                               : output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1;
+    if (extension == ".png")
+        return output::OutputPresetV1::PngRgba8SrgbV1;
+    if (extension == ".tif" || extension == ".tiff")
+        return output::OutputPresetV1::TiffRgba16SrgbV1;
+    return output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1;
 }
 
 FrameExportController::FrameExportController(
@@ -219,7 +224,8 @@ FrameExportController::FrameExportController(
 
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this, &FrameExportController::pollOnce);
 
-    // Both closed version 1 presets are offered; the chosen extension -- not the selected filter
+    // All closed version 1 presets are listed; TIFF is visibly offered but unavailable until the
+    // MEDIA-3 worker adapter exists. The chosen extension -- not the selected filter
     // entry -- is what actually selects the preset (presetForDestination() above), so a path typed
     // by hand behaves identically to one picked through a filter. OpenEXR stays first so the
     // dialog's default selection, and therefore every existing artist habit, is unchanged.
@@ -228,7 +234,8 @@ FrameExportController::FrameExportController(
     // configureFileDialogSidebar() add the mounted network shares before exec(), which the static
     // function gives no opportunity to do.
     destinationProvider_ = []() -> std::optional<std::filesystem::path> {
-        QFileDialog dialog(nullptr, tr("Export Frame"), {}, tr("OpenEXR (*.exr);;PNG (*.png)"));
+        QFileDialog dialog(nullptr, tr("Export Frame"), {},
+                           tr("OpenEXR (*.exr);;PNG (*.png);;TIFF (*.tif *.tiff)"));
         dialog.setAcceptMode(QFileDialog::AcceptSave);
         configureFileDialogSidebar(dialog);
         if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
@@ -497,6 +504,13 @@ void FrameExportController::beginExport(std::filesystem::path destination) {
 
     pendingDestination_ = std::move(destination);
     pendingPreset_ = presetForDestination(pendingDestination_);
+    const auto availability = output::outputPresetAvailabilityV1(pendingPreset_);
+    if (!availability.available) {
+        emit exportFinished(FrameExportOutcome::Refused,
+                            QString::fromUtf8(availability.reason.data(),
+                                              static_cast<int>(availability.reason.size())));
+        return;
+    }
 
     runtime::TaskRequest request(
         "Compile composition for frame export",

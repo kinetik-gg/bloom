@@ -30,8 +30,23 @@ std::optional<OutputPresetIdentityV1> outputPresetIdentityV1(const OutputPresetV
     case OutputPresetV1::FlatExrRgba32fLinRec709SceneV1:
         return OutputPresetIdentityV1{"FlatExrRgba32fLinRec709SceneV1", kOutputPresetVersionV1,
                                       "bloom.output.exr-rgba32f-lin-rec709-scene.semantic.v1"};
+    case OutputPresetV1::TiffRgba16SrgbV1:
+        return OutputPresetIdentityV1{"TiffRgba16SrgbV1", kOutputPresetVersionV1,
+                                      "bloom.output.tiff-rgba16-srgb.semantic.v1"};
     }
     return std::nullopt;
+}
+
+OutputPresetAvailabilityV1 outputPresetAvailabilityV1(const OutputPresetV1 preset) noexcept {
+    switch (preset) {
+    case OutputPresetV1::PngRgba8SrgbV1:
+    case OutputPresetV1::FlatExrRgba32fLinRec709SceneV1:
+        return {.available = true, .reason = {}};
+    case OutputPresetV1::TiffRgba16SrgbV1:
+        return {.available = false,
+                .reason = "TIFF provider is missing; MEDIA-3 must provide the worker adapter"};
+    }
+    return {};
 }
 
 std::optional<OutputFacetDescriptorSchemasV1>
@@ -64,9 +79,9 @@ outputFacetDescriptorSchemasV1(const OutputPresetV1 preset, const OutputFacetIdV
         break;
     case OutputFacetIdV1::PixelAspect:
         source = OutputFacetDescriptorSchemaV1::PixelAspectRational;
-        target = preset == OutputPresetV1::PngRgba8SrgbV1
-                     ? OutputFacetDescriptorSchemaV1::PixelAspectRational
-                     : OutputFacetDescriptorSchemaV1::PixelAspectBinary32;
+        target = preset == OutputPresetV1::FlatExrRgba32fLinRec709SceneV1
+                     ? OutputFacetDescriptorSchemaV1::PixelAspectBinary32
+                     : OutputFacetDescriptorSchemaV1::PixelAspectRational;
         break;
     case OutputFacetIdV1::Compression:
         source = OutputFacetDescriptorSchemaV1::Absent;
@@ -86,32 +101,45 @@ std::optional<OutputFacetStableCodeRuleV1>
 outputFacetStableCodeRuleV1(const OutputFacetStableCodeV1 code) noexcept {
     const auto one = [](const std::string_view text, const OutputFacetIdV1 facet,
                         const OutputPreservationStateV1 state, const bool png, const bool exr,
-                        const bool permits) noexcept {
-        return OutputFacetStableCodeRuleV1{text, facetBit(facet), state, png, exr, permits};
+                        const bool permits, const bool tiff = false) noexcept {
+        return OutputFacetStableCodeRuleV1{text, facetBit(facet), state, png, exr, tiff, permits};
     };
     switch (code) {
     case OutputFacetStableCodeV1::None:
-        return OutputFacetStableCodeRuleV1{
-            "",  kOutputAnalysisAllFacetsPermittedV1, OutputPreservationStateV1::Exact, true, true,
-            true};
+        return OutputFacetStableCodeRuleV1{"",
+                                           kOutputAnalysisAllFacetsPermittedV1,
+                                           OutputPreservationStateV1::Exact,
+                                           true,
+                                           true,
+                                           true,
+                                           true};
+    case OutputFacetStableCodeV1::TiffDisplayTransformClampQuantize:
+        return one("tiff.display-transform-clamp-quantize", OutputFacetIdV1::Pixels,
+                   OutputPreservationStateV1::Approximated, false, false, true, true);
     case OutputFacetStableCodeV1::PngDisplayTransformClampQuantize:
         return one("png.display-transform-clamp-quantize", OutputFacetIdV1::Pixels,
                    OutputPreservationStateV1::Approximated, true, false, true);
     case OutputFacetStableCodeV1::ProcessFrameMissing:
         return one("process-frame.missing", OutputFacetIdV1::Pixels,
-                   OutputPreservationStateV1::Missing, true, true, false);
+                   OutputPreservationStateV1::Missing, true, true, false, true);
     case OutputFacetStableCodeV1::PixelsUnsupported:
         return one("pixels.unsupported", OutputFacetIdV1::Pixels,
-                   OutputPreservationStateV1::Unsupported, true, true, false);
+                   OutputPreservationStateV1::Unsupported, true, true, false, true);
     case OutputFacetStableCodeV1::PngFloat32ToUint8:
         return one("png.float32-to-uint8", OutputFacetIdV1::Precision,
                    OutputPreservationStateV1::Approximated, true, false, true);
+    case OutputFacetStableCodeV1::TiffFloat32ToUint16:
+        return one("tiff.float32-to-uint16", OutputFacetIdV1::Precision,
+                   OutputPreservationStateV1::Approximated, false, false, true, true);
     case OutputFacetStableCodeV1::PrecisionUnsupported:
         return one("precision.unsupported", OutputFacetIdV1::Precision,
-                   OutputPreservationStateV1::Unsupported, true, true, false);
+                   OutputPreservationStateV1::Unsupported, true, true, false, true);
     case OutputFacetStableCodeV1::PngLinRec709SceneToSrgb:
         return one("png.lin-rec709-scene-to-srgb", OutputFacetIdV1::Color,
                    OutputPreservationStateV1::Approximated, true, false, true);
+    case OutputFacetStableCodeV1::TiffLinRec709SceneToSrgb:
+        return one("tiff.lin-rec709-scene-to-srgb", OutputFacetIdV1::Color,
+                   OutputPreservationStateV1::Approximated, false, false, true, true);
     case OutputFacetStableCodeV1::OcioMissing:
         return one("ocio.missing", OutputFacetIdV1::Color, OutputPreservationStateV1::Missing, true,
                    false, false);
@@ -129,19 +157,25 @@ outputFacetStableCodeRuleV1(const OutputFacetStableCodeV1 code) noexcept {
                    OutputPreservationStateV1::Missing, true, false, false);
     case OutputFacetStableCodeV1::ColorUnsupported:
         return one("color.unsupported", OutputFacetIdV1::Color,
-                   OutputPreservationStateV1::Unsupported, true, true, false);
+                   OutputPreservationStateV1::Unsupported, true, true, false, true);
     case OutputFacetStableCodeV1::PngPremultipliedToStraight:
         return one("png.premultiplied-to-straight", OutputFacetIdV1::AlphaAssociation,
                    OutputPreservationStateV1::Approximated, true, false, true);
+    case OutputFacetStableCodeV1::TiffPremultipliedToStraight:
+        return one("tiff.premultiplied-to-straight", OutputFacetIdV1::AlphaAssociation,
+                   OutputPreservationStateV1::Approximated, false, false, true, true);
     case OutputFacetStableCodeV1::AlphaUnsupported:
         return one("alpha.unsupported", OutputFacetIdV1::AlphaAssociation,
-                   OutputPreservationStateV1::Unsupported, true, true, false);
+                   OutputPreservationStateV1::Unsupported, true, true, false, true);
     case OutputFacetStableCodeV1::ChannelsUnsupported:
         return one("channels.unsupported", OutputFacetIdV1::Channels,
-                   OutputPreservationStateV1::Unsupported, true, true, false);
+                   OutputPreservationStateV1::Unsupported, true, true, false, true);
     case OutputFacetStableCodeV1::PngOriginWindowRequired:
         return one("png.origin-window-required", OutputFacetIdV1::DataWindow,
                    OutputPreservationStateV1::Unsupported, true, false, false);
+    case OutputFacetStableCodeV1::TiffOriginWindowRequired:
+        return one("tiff.origin-window-required", OutputFacetIdV1::DataWindow,
+                   OutputPreservationStateV1::Unsupported, false, false, false, true);
     case OutputFacetStableCodeV1::WindowOutOfRange:
         return OutputFacetStableCodeRuleV1{
             "window.out-of-range",
@@ -150,40 +184,47 @@ outputFacetStableCodeRuleV1(const OutputFacetStableCodeV1 code) noexcept {
             OutputPreservationStateV1::Unsupported,
             true,
             true,
+            true,
             false};
     case OutputFacetStableCodeV1::PngEqualWindowRequired:
         return one("png.equal-window-required", OutputFacetIdV1::DisplayWindow,
                    OutputPreservationStateV1::Unsupported, true, false, false);
+    case OutputFacetStableCodeV1::TiffEqualWindowRequired:
+        return one("tiff.equal-window-required", OutputFacetIdV1::DisplayWindow,
+                   OutputPreservationStateV1::Unsupported, false, false, false, true);
     case OutputFacetStableCodeV1::PngSquarePixelRequired:
         return one("png.square-pixel-required", OutputFacetIdV1::PixelAspect,
                    OutputPreservationStateV1::Unsupported, true, false, false);
+    case OutputFacetStableCodeV1::TiffSquarePixelRequired:
+        return one("tiff.square-pixel-required", OutputFacetIdV1::PixelAspect,
+                   OutputPreservationStateV1::Unsupported, false, false, false, true);
     case OutputFacetStableCodeV1::ExrParRoundedBinary32:
         return one("exr.par-rounded-binary32", OutputFacetIdV1::PixelAspect,
                    OutputPreservationStateV1::Approximated, false, true, true);
     case OutputFacetStableCodeV1::PixelAspectUnsupported:
         return one("pixel-aspect.unsupported", OutputFacetIdV1::PixelAspect,
-                   OutputPreservationStateV1::Unsupported, true, true, false);
+                   OutputPreservationStateV1::Unsupported, true, true, false, true);
     case OutputFacetStableCodeV1::CompressionUnavailable:
         return one("compression.unavailable", OutputFacetIdV1::Compression,
-                   OutputPreservationStateV1::Missing, true, true, false);
+                   OutputPreservationStateV1::Missing, true, true, false, true);
     case OutputFacetStableCodeV1::CompressionUnsupported:
         return one("compression.unsupported", OutputFacetIdV1::Compression,
-                   OutputPreservationStateV1::Unsupported, true, true, false);
+                   OutputPreservationStateV1::Unsupported, true, true, false, true);
     case OutputFacetStableCodeV1::MetadataUnsupported:
         return one("metadata.unsupported", OutputFacetIdV1::Metadata,
-                   OutputPreservationStateV1::Unsupported, true, true, false);
+                   OutputPreservationStateV1::Unsupported, true, true, false, true);
     case OutputFacetStableCodeV1::PngOcioExternalReference:
         return one("png.ocio-external-reference", OutputFacetIdV1::ExternalDependencies,
                    OutputPreservationStateV1::ExternalReference, true, false, true);
     case OutputFacetStableCodeV1::DependencyMissing:
         return one("dependency.missing", OutputFacetIdV1::ExternalDependencies,
-                   OutputPreservationStateV1::Missing, true, true, false);
+                   OutputPreservationStateV1::Missing, true, true, false, true);
     case OutputFacetStableCodeV1::AdapterUnavailable:
         return one("adapter.unavailable", OutputFacetIdV1::ExternalDependencies,
-                   OutputPreservationStateV1::Missing, true, true, false);
+                   OutputPreservationStateV1::Missing, true, true, false, true);
     case OutputFacetStableCodeV1::ResourceLimitExceeded:
         return one("resource.limit-exceeded", OutputFacetIdV1::ExternalDependencies,
-                   OutputPreservationStateV1::Missing, true, true, false);
+                   OutputPreservationStateV1::Missing, true, true, false, true);
     }
     return std::nullopt;
 }

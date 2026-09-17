@@ -231,8 +231,11 @@ template <typename Assessment, typename Source, typename Target>
 [[nodiscard]] bool setAssessment(Assessment& assessment, const Preset preset, const Facet facet,
                                  const Code code, Source&& source, Target&& target) {
     const auto rule = output::outputFacetStableCodeRuleV1(code);
-    if (!rule || !rule->appliesToFacet(facet) ||
-        (preset == Preset::PngRgba8SrgbV1 ? !rule->validForPng : !rule->validForFlatExr)) {
+    const bool acceptsPreset =
+        rule && (preset == Preset::PngRgba8SrgbV1                   ? rule->validForPng
+                 : preset == Preset::FlatExrRgba32fLinRec709SceneV1 ? rule->validForFlatExr
+                                                                    : rule->validForTiff);
+    if (!rule || !rule->appliesToFacet(facet) || !acceptsPreset) {
         return false;
     }
     assessment = {.facet = facet,
@@ -354,13 +357,14 @@ class OutputAnalysisAnalyzerV1 final {
                 AnalyzerError::InvalidOtherDependencyState);
         }
         const bool png = preset == OutputPresetV1::PngRgba8SrgbV1;
+        const bool tiff = preset == OutputPresetV1::TiffRgba16SrgbV1;
         if (png) {
             if (!input.expectedOcioRevision.has_value() || !input.colorResolution.has_value() ||
                 !known(*input.colorResolution)) {
                 return OutputAnalysisAnalyzerResultV1::failure(
                     AnalyzerError::InvalidColorResolutionState);
             }
-        } else if (preset != OutputPresetV1::FlatExrRgba32fLinRec709SceneV1 ||
+        } else if ((!tiff && preset != OutputPresetV1::FlatExrRgba32fLinRec709SceneV1) ||
                    input.expectedOcioRevision.has_value() || input.colorResolution.has_value()) {
             return OutputAnalysisAnalyzerResultV1::failure(AnalyzerError::InternalInvariant);
         }
@@ -386,10 +390,14 @@ class OutputAnalysisAnalyzerV1 final {
 
             std::array<OutputAnalysisReportV1::OwnedAssessment, kOutputAnalysisFacetCountV1>
                 assessments;
-            const auto pixelCode =
-                !source.processReady ? Code::ProcessFrameMissing
-                                     : (png ? Code::PngDisplayTransformClampQuantize : Code::None);
-            const auto colorCode = png ? pngColorCode(*input.colorResolution) : Code::None;
+            const auto pixelCode = !source.processReady
+                                       ? Code::ProcessFrameMissing
+                                       : (png    ? Code::PngDisplayTransformClampQuantize
+                                          : tiff ? Code::TiffDisplayTransformClampQuantize
+                                                 : Code::None);
+            const auto colorCode = png    ? pngColorCode(*input.colorResolution)
+                                   : tiff ? Code::TiffLinRec709SceneToSrgb
+                                          : Code::None;
             const auto compressionCode =
                 input.compression == OutputAnalysisCompressionStateV1::Available
                     ? Code::None
@@ -400,24 +408,27 @@ class OutputAnalysisAnalyzerV1 final {
             if (!pngTargetWindow) {
                 return OutputAnalysisAnalyzerResultV1::failure(AnalyzerError::InternalInvariant);
             }
+            const bool zeroOriginTarget = png || tiff;
             const auto targetDataWindow =
-                png ? windowDescriptor(*pngTargetWindow.value()) : sourceDataWindow;
+                zeroOriginTarget ? windowDescriptor(*pngTargetWindow.value()) : sourceDataWindow;
             const auto targetDisplayWindow =
-                png ? windowDescriptor(*pngTargetWindow.value()) : sourceDisplayWindow;
+                zeroOriginTarget ? windowDescriptor(*pngTargetWindow.value()) : sourceDisplayWindow;
 
             Code dataWindowCode = Code::None;
             Code displayWindowCode = Code::None;
-            if (png) {
+            if (zeroOriginTarget) {
                 if (dataExtent.width() > detail::kOutputAnalysisPngMaximumDimensionV1 ||
                     dataExtent.height() > detail::kOutputAnalysisPngMaximumDimensionV1) {
                     dataWindowCode = Code::WindowOutOfRange;
                     displayWindowCode = Code::WindowOutOfRange;
                 } else {
                     if (sourceDataWindow != targetDataWindow) {
-                        dataWindowCode = Code::PngOriginWindowRequired;
+                        dataWindowCode =
+                            tiff ? Code::TiffOriginWindowRequired : Code::PngOriginWindowRequired;
                     }
                     if (sourceDisplayWindow != targetDisplayWindow) {
-                        displayWindowCode = Code::PngEqualWindowRequired;
+                        displayWindowCode =
+                            tiff ? Code::TiffEqualWindowRequired : Code::PngEqualWindowRequired;
                     }
                 }
             } else {
@@ -432,10 +443,13 @@ class OutputAnalysisAnalyzerV1 final {
                 return OutputAnalysisAnalyzerResultV1::failure(AnalyzerError::InternalInvariant);
             }
             const auto pixelAspectCode =
-                png ? (pixelAspect == core::PixelAspectRatio::square()
-                           ? Code::None
-                           : Code::PngSquarePixelRequired)
-                    : (roundedAspect->exact ? Code::None : Code::ExrParRoundedBinary32);
+                png    ? (pixelAspect == core::PixelAspectRatio::square()
+                              ? Code::None
+                              : Code::PngSquarePixelRequired)
+                : tiff ? (pixelAspect == core::PixelAspectRatio::square()
+                              ? Code::None
+                              : Code::TiffSquarePixelRequired)
+                       : (roundedAspect->exact ? Code::None : Code::ExrParRoundedBinary32);
 
             Code dependencyCode = png ? Code::PngOcioExternalReference : Code::None;
             if (exceedsResourceLimits(descriptor)) {
@@ -451,23 +465,32 @@ class OutputAnalysisAnalyzerV1 final {
             bool valid = true;
             valid = valid &&
                     setAssessment(assessments[0], preset, Facet::Pixels, pixelCode, sourcePixels,
-                                  pixelsDescriptor(dataExtent, png ? "uint8" : "binary32"));
+                                  pixelsDescriptor(dataExtent, png    ? "uint8"
+                                                               : tiff ? "uint16"
+                                                                      : "binary32"));
             valid = valid && setAssessment(assessments[1], preset, Facet::Precision,
-                                           png ? Code::PngFloat32ToUint8 : Code::None,
+                                           png    ? Code::PngFloat32ToUint8
+                                           : tiff ? Code::TiffFloat32ToUint16
+                                                  : Code::None,
                                            std::string(kSourcePrecision),
-                                           png ? std::string("component-type=id:uint8")
-                                               : std::string(kSourcePrecision));
-            valid = valid && setAssessment(assessments[2], preset, Facet::Color, colorCode,
-                                           std::string(kSourceColor),
-                                           png ? std::string("color-id=id:srgb_rec709_display")
-                                               : std::string(kSourceColor));
-            valid =
-                valid &&
-                setAssessment(
-                    assessments[3], preset, Facet::AlphaAssociation,
-                    png ? Code::PngPremultipliedToStraight : Code::None, std::string(kSourceAlpha),
-                    png ? std::string("association=id:straight;zero-alpha=id:canonical-zero")
-                        : std::string(kSourceAlpha));
+                                           png    ? std::string("component-type=id:uint8")
+                                           : tiff ? std::string("component-type=id:uint16")
+                                                  : std::string(kSourcePrecision));
+            valid = valid &&
+                    setAssessment(assessments[2], preset, Facet::Color, colorCode,
+                                  std::string(kSourceColor),
+                                  (png || tiff) ? std::string("color-id=id:srgb_rec709_display")
+                                                : std::string(kSourceColor));
+            valid = valid &&
+                    setAssessment(
+                        assessments[3], preset, Facet::AlphaAssociation,
+                        png    ? Code::PngPremultipliedToStraight
+                        : tiff ? Code::TiffPremultipliedToStraight
+                               : Code::None,
+                        std::string(kSourceAlpha),
+                        (png || tiff)
+                            ? std::string("association=id:straight;zero-alpha=id:canonical-zero")
+                            : std::string(kSourceAlpha));
             valid = valid && setAssessment(assessments[4], preset, Facet::Channels, Code::None,
                                            std::string(kChannels), std::string(kChannels));
             valid = valid && setAssessment(assessments[5], preset, Facet::DataWindow,
@@ -475,21 +498,24 @@ class OutputAnalysisAnalyzerV1 final {
             valid =
                 valid && setAssessment(assessments[6], preset, Facet::DisplayWindow,
                                        displayWindowCode, sourceDisplayWindow, targetDisplayWindow);
-            valid = valid && setAssessment(assessments[7], preset, Facet::PixelAspect,
-                                           pixelAspectCode, sourcePixelAspect,
-                                           png ? std::string("denominator=u:1;numerator=u:1")
-                                               : binary32Descriptor(roundedAspect->bits));
+            valid =
+                valid && setAssessment(assessments[7], preset, Facet::PixelAspect, pixelAspectCode,
+                                       sourcePixelAspect,
+                                       (png || tiff) ? std::string("denominator=u:1;numerator=u:1")
+                                                     : binary32Descriptor(roundedAspect->bits));
             valid = valid &&
                     setAssessment(assessments[8], preset, Facet::Compression, compressionCode, "",
-                                  png ? std::string("method=id:deflate-level-6-filter-none")
-                                      : std::string("method=id:zip"));
+                                  png    ? std::string("method=id:deflate-level-6-filter-none")
+                                  : tiff ? std::string("method=id:tiff-provider")
+                                         : std::string("method=id:zip"));
             valid = valid && setAssessment(assessments[9], preset, Facet::Metadata, Code::None,
                                            std::string(kMetadata), std::string(kMetadata));
-            valid =
-                valid && setAssessment(assessments[10], preset, Facet::ExternalDependencies,
-                                       dependencyCode, std::string(kNoDependencies),
-                                       png ? ocioDependencyDescriptor(*input.expectedOcioRevision)
-                                           : std::string(kNoDependencies));
+            valid = valid &&
+                    setAssessment(assessments[10], preset, Facet::ExternalDependencies,
+                                  dependencyCode, std::string(kNoDependencies),
+                                  png    ? ocioDependencyDescriptor(*input.expectedOcioRevision)
+                                  : tiff ? std::string("kind=id:tiff-provider;revision=id:none")
+                                         : std::string(kNoDependencies));
             if (!valid) {
                 return OutputAnalysisAnalyzerResultV1::failure(AnalyzerError::InternalInvariant);
             }
@@ -583,6 +609,18 @@ OutputAnalysisAnalyzerResultV1
 analyzeFlatExrRgba32fLinRec709SceneV1(FlatExrRgba32fLinRec709SceneAnalysisInputV1 input) noexcept {
     return detail::analyzeFlatExrRgba32fLinRec709SceneV1WithFaultForTest(
         std::move(input), detail::OutputAnalysisAnalyzerFaultV1::None);
+}
+
+OutputAnalysisAnalyzerResultV1
+analyzeTiffRgba16SrgbV1(TiffRgba16SrgbAnalysisInputV1 input) noexcept {
+    return detail::OutputAnalysisAnalyzerV1::analyze(OutputPresetV1::TiffRgba16SrgbV1,
+                                                     {.process = std::move(input.process),
+                                                      .adapter = input.adapter,
+                                                      .compression = input.compression,
+                                                      .otherDependency = input.otherDependency,
+                                                      .expectedOcioRevision = std::nullopt,
+                                                      .colorResolution = std::nullopt},
+                                                     detail::OutputAnalysisAnalyzerFaultV1::None);
 }
 
 } // namespace bloom::output

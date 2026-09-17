@@ -204,6 +204,18 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
             asset.contentDigest = probe.value->contentDigest;
             asset.width = probe.value->width;
             asset.height = probe.value->height;
+            asset.interpretation.colorSpace =
+                probe.value->colorSpace == media::ImageColorSpace::Srgb
+                    ? document::AssetColorSpace::Srgb
+                : probe.value->colorSpace == media::ImageColorSpace::Linear
+                    ? document::AssetColorSpace::Linear
+                : probe.value->colorSpace == media::ImageColorSpace::Raw
+                    ? document::AssetColorSpace::Raw
+                    : document::AssetColorSpace::Auto;
+            asset.interpretation.alphaAssociation =
+                probe.value->alphaAssociation == media::ImageAlphaAssociation::Premultiplied
+                    ? document::AssetAlphaAssociation::Premultiplied
+                    : document::AssetAlphaAssociation::Straight;
             if (sequence.value->members.size() > 1) {
                 asset.kind = document::AssetKind::Sequence;
                 const auto& scan = *sequence.value;

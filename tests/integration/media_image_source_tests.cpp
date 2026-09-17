@@ -1,5 +1,9 @@
 #include "generated_jpeg.hpp"
 #include "image_source.hpp"
+#include <ImfChannelList.h>
+#include <ImfFrameBuffer.h>
+#include <ImfHeader.h>
+#include <ImfOutputFile.h>
 #include <algorithm>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
@@ -10,6 +14,32 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+
+namespace {
+void writeExr(const std::filesystem::path& path) {
+    Imf::Header header(1, 1);
+    header.channels().insert("R", Imf::Channel(Imf::FLOAT));
+    header.channels().insert("G", Imf::Channel(Imf::FLOAT));
+    header.channels().insert("B", Imf::Channel(Imf::FLOAT));
+    header.channels().insert("A", Imf::Channel(Imf::FLOAT));
+    const std::array<float, 1> red{0.25F};
+    const std::array<float, 1> green{0.125F};
+    const std::array<float, 1> blue{0.0625F};
+    const std::array<float, 1> alpha{0.5F};
+    Imf::FrameBuffer buffer;
+    const auto insert = [&](const char* name, const std::array<float, 1>& samples) {
+        buffer.insert(name, Imf::Slice::Make(Imf::FLOAT, samples.data(), header.dataWindow(),
+                                             sizeof(float), sizeof(float)));
+    };
+    insert("R", red);
+    insert("G", green);
+    insert("B", blue);
+    insert("A", alpha);
+    Imf::OutputFile output(path.string().c_str(), header, 1);
+    output.setFrameBuffer(buffer);
+    output.writePixels(1);
+}
+} // namespace
 
 int main() {
     namespace doc = bloom::document;
@@ -31,6 +61,8 @@ int main() {
     };
     write("frame.0001.jpg");
     write("frame.0003.jpg");
+    writeExr(folder / "exr.0001.exr");
+    writeExr(folder / "exr.0003.exr");
     const auto duration = bloom::core::RationalTime::create(1, 1);
     const auto atFour = bloom::core::RationalTime::create(4, 24);
     const auto atTwo = bloom::core::RationalTime::create(2, 24);
@@ -147,5 +179,40 @@ int main() {
     const auto afterPixels = nestedAfter.frame()->processImage().pixels();
     if (std::ranges::equal(beforePixels, afterPixels))
         return 17;
+
+    // The same Layer -> image source -> CPU composite path also accepts the in-process EXR
+    // backend. This is deliberately evaluated at a non-default scrub time to cover the sequence
+    // member selection and the layer composite together.
+    auto exrSeed = doc::makeNewProject("EXR image test", "Main", *duration);
+    const auto exrComposition = exrSeed.initialCompositionId;
+    doc::Document exrDocument(std::move(exrSeed.project));
+    auto exrSnapshot = exrDocument.snapshot();
+    auto exrDraft = exrDocument.draft(exrSnapshot);
+    commands::ImportAssets exrImport({folder / "exr.0001.exr"}, folder);
+    if (exrImport.apply(exrDraft).status != commands::OperationStatus::Applied)
+        return 18;
+    const auto exrAsset = exrDraft.project().assets().front().id;
+    if (commands::AddImageLayer(exrComposition, exrAsset).apply(exrDraft).status !=
+        commands::OperationStatus::Applied)
+        return 19;
+    if (!exrDocument.commit(exrSnapshot.revision(), std::move(exrDraft)).committed())
+        return 20;
+    const auto exrCompiled = compiler.compile({exrDocument.snapshot(), exrComposition}, {});
+    if (!exrCompiled.plan)
+        return 21;
+    runtime::CpuCompositionEvaluator exrEvaluator;
+    exrEvaluator.setAssetBaseDirectory(folder);
+    const auto scrubTime = bloom::core::RationalTime::create(1, 2);
+    if (!scrubTime)
+        return 22;
+    const auto exrResult =
+        exrEvaluator.evaluate(exrCompiled.plan,
+                              {.time = *scrubTime,
+                               .output = exrCompiled.plan->output(),
+                               .resolution = {},
+                               .pixelStorageByteLimit = std::size_t{128} * 1024 * 1024},
+                              {});
+    if (!exrResult.frame() || exrResult.frame()->processImage().pixels().empty())
+        return 23;
     return 0;
 }

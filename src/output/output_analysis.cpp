@@ -61,7 +61,7 @@ using bloom::output::OutputPresetV1;
     if (preset == OutputPresetV1::FlatExrRgba32fLinRec709SceneV1) {
         return true;
     }
-    if (preset != OutputPresetV1::PngRgba8SrgbV1) {
+    if (preset != OutputPresetV1::PngRgba8SrgbV1 && preset != OutputPresetV1::TiffRgba16SrgbV1) {
         return false;
     }
     switch (facet) {
@@ -89,6 +89,8 @@ using bloom::output::OutputPresetV1;
         return rule.validForPng;
     case OutputPresetV1::FlatExrRgba32fLinRec709SceneV1:
         return rule.validForFlatExr;
+    case OutputPresetV1::TiffRgba16SrgbV1:
+        return rule.validForTiff;
     }
     return false;
 }
@@ -227,8 +229,10 @@ checkedMultiply(const std::uint64_t left, const std::uint64_t right) noexcept {
 exceedsHardResourceLimits(const bloom::output::OutputAnalysisReportV1View report) noexcept {
     const auto& pixelFacet = report.facets[0];
     const auto sourcePixels = parsePixels(pixelFacet.sourceDescriptor, "binary32");
-    const std::string_view targetSample =
-        report.preset == OutputPresetV1::PngRgba8SrgbV1 ? "uint8" : "binary32";
+    const std::string_view targetSample = report.preset == OutputPresetV1::PngRgba8SrgbV1 ? "uint8"
+                                          : report.preset == OutputPresetV1::TiffRgba16SrgbV1
+                                              ? "uint16"
+                                              : "binary32";
     const auto targetPixels = parsePixels(pixelFacet.targetDescriptor, targetSample);
     const auto sourceDataWindow = parseWindow(report.facets[5].sourceDescriptor);
     const auto targetDataWindow = parseWindow(report.facets[5].targetDescriptor);
@@ -343,8 +347,10 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
     const auto& facet = report.facets[facetIndex];
     const auto& pixelFacet = report.facets[0];
     const auto sourcePixels = parsePixels(pixelFacet.sourceDescriptor, "binary32");
-    const std::string_view targetSample =
-        report.preset == OutputPresetV1::PngRgba8SrgbV1 ? "uint8" : "binary32";
+    const std::string_view targetSample = report.preset == OutputPresetV1::PngRgba8SrgbV1 ? "uint8"
+                                          : report.preset == OutputPresetV1::TiffRgba16SrgbV1
+                                              ? "uint16"
+                                              : "binary32";
     const auto targetPixels = parsePixels(pixelFacet.targetDescriptor, targetSample);
 
     switch (facet.facet) {
@@ -366,6 +372,8 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
         }
         return facet.targetDescriptor == (report.preset == OutputPresetV1::PngRgba8SrgbV1
                                               ? "component-type=id:uint8"
+                                          : report.preset == OutputPresetV1::TiffRgba16SrgbV1
+                                              ? "component-type=id:uint16"
                                               : "component-type=id:binary32")
                    ? VocabularyValidation::Valid
                    : VocabularyValidation::VocabularyMismatch;
@@ -373,7 +381,8 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
         if (facet.sourceDescriptor != "color-id=id:lin_rec709_scene") {
             return VocabularyValidation::VocabularyMismatch;
         }
-        return facet.targetDescriptor == (report.preset == OutputPresetV1::PngRgba8SrgbV1
+        return facet.targetDescriptor == (report.preset == OutputPresetV1::PngRgba8SrgbV1 ||
+                                                  report.preset == OutputPresetV1::TiffRgba16SrgbV1
                                               ? "color-id=id:srgb_rec709_display"
                                               : "color-id=id:lin_rec709_scene")
                    ? VocabularyValidation::Valid
@@ -382,8 +391,10 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
         if (facet.sourceDescriptor != sourceAlpha) {
             return VocabularyValidation::VocabularyMismatch;
         }
-        return facet.targetDescriptor ==
-                       (report.preset == OutputPresetV1::PngRgba8SrgbV1 ? pngAlpha : sourceAlpha)
+        return facet.targetDescriptor == (report.preset == OutputPresetV1::PngRgba8SrgbV1 ||
+                                                  report.preset == OutputPresetV1::TiffRgba16SrgbV1
+                                              ? pngAlpha
+                                              : sourceAlpha)
                    ? VocabularyValidation::Valid
                    : VocabularyValidation::VocabularyMismatch;
     case OutputFacetIdV1::Channels:
@@ -433,9 +444,15 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
             *pixelWidth > bloom::output::detail::kOutputAnalysisPngMaximumDimensionV1) {
             requiredCode = OutputFacetStableCodeV1::WindowOutOfRange;
         } else if (facet.sourceDescriptor != facet.targetDescriptor) {
-            requiredCode = facet.facet == OutputFacetIdV1::DataWindow
-                               ? OutputFacetStableCodeV1::PngOriginWindowRequired
-                               : OutputFacetStableCodeV1::PngEqualWindowRequired;
+            if (facet.facet == OutputFacetIdV1::DataWindow) {
+                requiredCode = report.preset == OutputPresetV1::TiffRgba16SrgbV1
+                                   ? OutputFacetStableCodeV1::TiffOriginWindowRequired
+                                   : OutputFacetStableCodeV1::PngOriginWindowRequired;
+            } else {
+                requiredCode = report.preset == OutputPresetV1::TiffRgba16SrgbV1
+                                   ? OutputFacetStableCodeV1::TiffEqualWindowRequired
+                                   : OutputFacetStableCodeV1::PngEqualWindowRequired;
+            }
         }
         return facet.stableCode == requiredCode ? VocabularyValidation::Valid
                                                 : VocabularyValidation::RelationshipMismatch;
@@ -445,7 +462,8 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
         if (!source) {
             return VocabularyValidation::VocabularyMismatch;
         }
-        if (report.preset == OutputPresetV1::PngRgba8SrgbV1) {
+        if (report.preset == OutputPresetV1::PngRgba8SrgbV1 ||
+            report.preset == OutputPresetV1::TiffRgba16SrgbV1) {
             if (facet.targetDescriptor != "denominator=u:1;numerator=u:1") {
                 return VocabularyValidation::VocabularyMismatch;
             }
@@ -474,6 +492,8 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
         }
         return facet.targetDescriptor == (report.preset == OutputPresetV1::PngRgba8SrgbV1
                                               ? "method=id:deflate-level-6-filter-none"
+                                          : report.preset == OutputPresetV1::TiffRgba16SrgbV1
+                                              ? "method=id:tiff-provider"
                                               : "method=id:zip")
                    ? VocabularyValidation::Valid
                    : VocabularyValidation::VocabularyMismatch;
@@ -488,6 +508,11 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
         }
         if (report.preset == OutputPresetV1::FlatExrRgba32fLinRec709SceneV1) {
             return facet.targetDescriptor == noDependencies
+                       ? VocabularyValidation::Valid
+                       : VocabularyValidation::VocabularyMismatch;
+        }
+        if (report.preset == OutputPresetV1::TiffRgba16SrgbV1) {
+            return facet.targetDescriptor == "kind=id:tiff-provider;revision=id:none"
                        ? VocabularyValidation::Valid
                        : VocabularyValidation::VocabularyMismatch;
         }
