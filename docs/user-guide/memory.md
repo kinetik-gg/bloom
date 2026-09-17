@@ -2,7 +2,8 @@
 
 Bloom keeps intermediate graph results in its **operation cache** and finished display frames in
 its **RAM preview**. The status bar reports each as "held / budget". Decoded video, audio,
-thumbnail images and queued disk-cache writes also share the memory allowance.
+thumbnail images, queued disk-cache writes and the export frame queue also share the memory
+allowance.
 
 ## How much memory Bloom gives itself
 
@@ -67,6 +68,12 @@ shows **Swap pressure: caches trimmed** as a separate notice. Your project and c
 settings are unchanged; evicted results can be computed again. Active decoding, playback and disk
 writes may still hold references until that work releases them, so process memory need not fall
 by exactly the cache counter's change.
+
+The export queue's usual 4 GiB concurrent allowance also falls with the shared cap; each job
+still has a 2 GiB limit. Bloom keeps memory already reserved by active exports. New export
+reservations, or requests for more memory by an existing export, are refused if they would exceed
+the reduced allowance. Admission becomes possible again when active exports release enough
+memory or recovery raises the allowance. Trimming never frees a live export product.
 
 After the machine recovers, Bloom waits ten seconds, then restores budgets one step every ten
 seconds: 10% to 25%, then 50%, then 100%. The effective cap itself grows by at most 25% per

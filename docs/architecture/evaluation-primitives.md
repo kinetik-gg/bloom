@@ -685,14 +685,25 @@ registered pools:
    the same 10% hysteresis. Renewed pressure immediately interrupts recovery.
 
 Operation and decoded-media entries, display previews, decoded video frames, the disk write
-queue, proxy thumbnails and decoded audio all use the same callback boundary. Proxy eviction
-also drops image aliases in asset/node preview maps. Audio from both standalone audio assets and
-video clips participates. A reduced allowance cancels pending thumbnail work; publication checks
-the current limits again so an old result cannot refill the caches. In-flight decode work and
-references already handed to a viewer or playback are active work, not reclaimable cache entries.
+queue, proxy thumbnails, decoded audio and the export frame queue all use the same callback
+boundary. Proxy eviction also drops image aliases in asset/node preview maps. Audio from both
+standalone audio assets and video clips participates. A reduced allowance cancels pending thumbnail
+work; publication checks the current limits again so an old result cannot refill the caches.
+In-flight decode work and references already handed to a viewer or playback are active work, not
+reclaimable cache entries.
 An active disk write keeps its byte charge until it finishes; queued writes are dropped and new
 writes are refused while its charge exceeds the allowance. Pressure callbacks never perform disk
 I/O or wait for the writer.
+
+`ExportResourceLedgerV1` registers its shared reservation state directly with the memory ledger
+through the existing `output` → `runtime` dependency. Its 4 GiB concurrent allowance is a ceiling
+and proportional weight within the cap; the 2 GiB per-job limit still applies. Pressure lowers
+admission without freeing live products or reducing active reservation charges. New reservations
+and growing expansions that would exceed the current allowance return
+`ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded`. Admission becomes possible as jobs
+release their charges or the ledger gradually restores the allowance. Registration survives the
+facade while reservations remain, and unregisters when the last owner of that shared state is
+destroyed, serialized against any in-progress callback.
 
 The bar reports **Memory pressure: caches trimmed** once per pressure episode. Swap pressure
 also produces a distinct **Swap pressure: caches trimmed** notice; if both start together, it
@@ -720,6 +731,7 @@ status bar shows the operation/preview accounts; other counters support tests an
 | `MediaDiskCache` pending async writes | 64 entries **and** up to 256 MiB, scaled by ledger | `statistics().asyncQueueBytes`, `peakAsyncQueueBytes` |
 | `AssetController` proxy thumbnails | 512 entries **and** up to 8 MiB, scaled by ledger | `proxyCacheBytes()` |
 | `AssetController` decoded audio buffers | up to 2 GiB aggregate, scaled by ledger | `decodedAudioBytes()` |
+| `ExportResourceLedgerV1` export frame queue | up to 4 GiB concurrent, scaled by ledger; 2 GiB per job | `chargedBytes()`, `concurrentAllowance()` |
 | Viewer display buffers | one retained frame plus at most one channel-remap copy, per open viewer | -- |
 
 The disk cache's pending-write queue is the pool that mattered. It was bounded at 64 entries and

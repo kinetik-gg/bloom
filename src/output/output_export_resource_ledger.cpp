@@ -1,4 +1,5 @@
 #include <bloom/output/output_export_resource_ledger.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 
 #include <limits>
 #include <mutex>
@@ -7,9 +8,16 @@
 namespace bloom::output::detail {
 
 struct ExportResourceLedgerState final {
-    explicit ExportResourceLedgerState(const std::uint64_t allowance) noexcept
-        : concurrentAllowance(allowance) {}
+    ExportResourceLedgerState(runtime::MemoryBudgetLedger& memoryBudget,
+                              const std::uint64_t allowance) noexcept
+        : memoryBudget(memoryBudget), concurrentAllowance(allowance) {}
+    ~ExportResourceLedgerState() {
+        // Removal waits for callbacks while the state and its mutex are still alive. Never call
+        // the memory ledger with this state's mutex held.
+        memoryBudget.unregisterCache(this);
+    }
 
+    runtime::MemoryBudgetLedger& memoryBudget;
     std::mutex mutex;
     std::uint64_t concurrentAllowance = 0;
     std::uint64_t chargedBytes = 0;
@@ -34,7 +42,27 @@ struct ExportResourceLedgerState final {
 namespace bloom::output {
 
 ExportResourceLedgerV1::ExportResourceLedgerV1(const std::uint64_t concurrentAllowance) noexcept
-    : state_(std::make_shared<detail::ExportResourceLedgerState>(concurrentAllowance)) {}
+    : ExportResourceLedgerV1(runtime::processMemoryBudgetLedger(), concurrentAllowance) {}
+
+ExportResourceLedgerV1::ExportResourceLedgerV1(runtime::MemoryBudgetLedger& memoryBudget,
+                                               const std::uint64_t concurrentAllowance) noexcept
+    : state_(
+          std::make_shared<detail::ExportResourceLedgerState>(memoryBudget, concurrentAllowance)) {
+    // Reservations can outlive the facade. Raw callbacks avoid a shared-ownership cycle; the
+    // state's destructor unregisters them before destroying any of their referenced members.
+    auto* state = state_.get();
+    memoryBudget.registerCache(
+        state, static_cast<std::size_t>(concurrentAllowance),
+        [state] {
+            std::lock_guard lock(state->mutex);
+            return static_cast<std::size_t>(state->chargedBytes);
+        },
+        [state](const std::size_t bytes) {
+            std::lock_guard lock(state->mutex);
+            // Live products keep their charges; only further admission is constrained.
+            state->concurrentAllowance = bytes;
+        });
+}
 
 std::shared_ptr<ExportResourceReservationV1>
 ExportResourceLedgerV1::reserve(const std::uint64_t bytes, ExportResourceAdmissionStatusV1& status,
@@ -68,6 +96,7 @@ std::uint64_t ExportResourceLedgerV1::chargedBytes() const noexcept {
 }
 
 std::uint64_t ExportResourceLedgerV1::concurrentAllowance() const noexcept {
+    std::lock_guard lock(state_->mutex);
     return state_->concurrentAllowance;
 }
 
