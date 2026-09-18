@@ -2,6 +2,10 @@
 #include <array>
 #include <bloom/media/provider/ffmpeg_launch.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
+#if defined(__APPLE__)
+#include <bloom/media/provider/videotoolbox_manifest.hpp>
+#include <mach-o/dyld.h>
+#endif
 #include <bloom/media/video/session.hpp>
 #include <cctype>
 #include <fstream>
@@ -18,6 +22,22 @@ bool isVideoExtension(const std::filesystem::path& path) {
 
 namespace {
 using namespace provider;
+// The video read provider is chosen by platform: the Apple-framework VideoToolbox provider on
+// macOS, FFmpeg elsewhere. The host and its worker build the same handshake, so validation agrees.
+Handshake providerHandshake() {
+#if defined(__APPLE__)
+    return videoToolboxHandshake();
+#else
+    return ffmpegHandshake();
+#endif
+}
+PipelineQualificationV1 providerPipeline(const ProviderDeclaration& declaration) {
+#if defined(__APPLE__)
+    return videoToolboxPipeline(declaration);
+#else
+    return ffmpegPipeline(declaration);
+#endif
+}
 runtime::TaskSchedulerConfig schedulerConfig() {
     runtime::TaskSchedulerConfig c;
     c.cpuWorkerCount = 1;
@@ -63,7 +83,7 @@ template <typename T> Result<T> product(WorkerReply reply) {
 } // namespace
 struct VideoDecodeSession::State {
     std::filesystem::path path;
-    Handshake hello = ffmpegHandshake();
+    Handshake hello = providerHandshake();
     CapabilityRegistry registry;
     runtime::TaskScheduler scheduler{schedulerConfig()};
     MediaWorkerPool pool;
@@ -72,7 +92,7 @@ struct VideoDecodeSession::State {
         : path(std::move(source)), pool(options(std::move(worker))) {
         for (const auto& declaration : hello.declarations) {
             (void)registry.registerProvider(declaration);
-            (void)registry.qualifyPipeline(ffmpegPipeline(declaration));
+            (void)registry.qualifyPipeline(providerPipeline(declaration));
         }
     }
     WorkerPoolOptions options(std::string executable) {
@@ -95,6 +115,17 @@ std::string VideoDecodeSession::defaultWorker() {
     if (!error) {
         const auto installed = executable.parent_path().parent_path() /
                                "libexec/bloom/media/ffmpeg-v1/bloom-media-worker";
+        if (std::filesystem::is_regular_file(installed, error) && !error)
+            return installed.string();
+    }
+#elif defined(__APPLE__)
+    // Installed macOS worker: <Bloom.app>/Contents/libexec/bloom/media/videotoolbox-v1/.
+    char path[4096] = {};
+    std::uint32_t size = sizeof(path);
+    if (_NSGetExecutablePath(path, &size) == 0) {
+        std::error_code error;
+        const auto installed = std::filesystem::path(path).parent_path().parent_path() /
+                               "libexec/bloom/media/videotoolbox-v1/bloom-media-worker";
         if (std::filesystem::is_regular_file(installed, error) && !error)
             return installed.string();
     }
@@ -121,7 +152,7 @@ WorkerReply VideoDecodeSession::call(Role role, const ProbeResult* source, std::
     });
     if (found == state_->hello.declarations.end())
         return Unavailable{Error::Unavailable, "No qualified video read capability"};
-    auto attempt = state_->registry.begin(ffmpegPipeline(*found));
+    auto attempt = state_->registry.begin(providerPipeline(*found));
     if (const auto* error = std::get_if<Unavailable>(&attempt))
         return *error;
     CallRequest request;

@@ -3,11 +3,29 @@
 #include <bloom/media/provider/ffmpeg_launch.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/provider/openh264_runtime.hpp>
+#if defined(__APPLE__)
+#include <bloom/media/provider/videotoolbox_manifest.hpp>
+#include <mach-o/dyld.h>
+#endif
 #include <filesystem>
 #include <random>
 
 namespace bloom::media::provider {
 namespace {
+// The encode provider is chosen by platform: VideoToolbox/AVAssetWriter on macOS, FFmpeg
+// elsewhere. The macOS provider owns H.264 internally, so no OpenH264 install is required.
+Handshake providerHandshake(const bool vaapi, const bool h264Software,
+                            const std::string& openh264Version, const std::string& openh264Digest) {
+#if defined(__APPLE__)
+    (void)vaapi;
+    (void)h264Software;
+    (void)openh264Version;
+    (void)openh264Digest;
+    return videoToolboxHandshake();
+#else
+    return ffmpegHandshake(vaapi, h264Software, openh264Version, openh264Digest);
+#endif
+}
 Unavailable processFailure(const platform::ProcessFailure& e) {
     switch (e.code) {
     case platform::ProcessError::Unavailable:
@@ -42,7 +60,7 @@ template <typename T> Result<T> take(Payload payload) {
 struct EncodeSessionV1::State {
     EncodeSessionOptionsV1 options;
     platform::ProcessCancellation cancel;
-    Handshake hello = ffmpegHandshake();
+    Handshake hello = providerHandshake(false, false, {}, {});
     std::unique_ptr<platform::ProcessSupervisor> process;
     std::unique_ptr<HostProtocol> protocol;
     std::uint64_t session = 1, sequence = 0;
@@ -109,6 +127,9 @@ std::optional<Unavailable> EncodeSessionV1::begin(const EncodeSettingsV1& settin
     const bool h264 = settings.videoCodec == "h264";
     const bool h264Software = h264 && !s.options.vaapi;
     OpenH264RuntimeStatus openh264;
+#if defined(__APPLE__)
+    (void)h264Software;
+#else
     if (h264Software) {
         const auto root = s.options.openh264Directory.empty()
                               ? std::filesystem::path{}
@@ -120,12 +141,14 @@ std::optional<Unavailable> EncodeSessionV1::begin(const EncodeSettingsV1& settin
         s.options.openh264Version = openh264.version;
         s.options.openh264Digest = openh264.digest;
     }
-    s.hello = ffmpegHandshake(s.options.vaapi, h264Software, s.options.openh264Version,
-                              s.options.openh264Digest);
+#endif
+    s.hello = providerHandshake(s.options.vaapi, h264Software, s.options.openh264Version,
+                                s.options.openh264Digest);
     if (s.options.executable.empty())
         s.options.executable = defaultWorker();
     platform::ProcessOptions options;
     options.executable = s.options.executable;
+#if !defined(__APPLE__)
     if (s.options.vaapi)
         options.arguments.push_back("--vaapi");
     if (h264Software) {
@@ -133,6 +156,9 @@ std::optional<Unavailable> EncodeSessionV1::begin(const EncodeSettingsV1& settin
                                  {"--openh264-dir", s.options.openh264Directory,
                                   "--openh264-sha256", s.options.openh264Digest});
     }
+#else
+    (void)h264;
+#endif
     configureFfmpegWorkerEnvironment(options, options.executable,
                                      h264Software
                                          ? std::filesystem::path(s.options.openh264Directory)
@@ -191,6 +217,16 @@ std::string EncodeSessionV1::defaultWorker() {
     if (!error) {
         const auto installed = executable.parent_path().parent_path() /
                                "libexec/bloom/media/ffmpeg-v1/bloom-media-worker";
+        if (std::filesystem::is_regular_file(installed, error) && !error)
+            return installed.string();
+    }
+#elif defined(__APPLE__)
+    char path[4096] = {};
+    std::uint32_t size = sizeof(path);
+    if (_NSGetExecutablePath(path, &size) == 0) {
+        std::error_code error;
+        const auto installed = std::filesystem::path(path).parent_path().parent_path() /
+                               "libexec/bloom/media/videotoolbox-v1/bloom-media-worker";
         if (std::filesystem::is_regular_file(installed, error) && !error)
             return installed.string();
     }

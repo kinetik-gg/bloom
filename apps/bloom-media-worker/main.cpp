@@ -1,5 +1,8 @@
 #ifdef BLOOM_FAKE_WORKER
 #include "fake_provider.hpp"
+#elif defined(BLOOM_VIDEOTOOLBOX_WORKER)
+#include "videotoolbox_provider.hpp"
+#include <bloom/media/provider/videotoolbox_manifest.hpp>
 #else
 #include "ffmpeg_provider.hpp"
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
@@ -19,6 +22,11 @@ int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
     const auto handshake = fake::handshake();
+#elif defined(BLOOM_VIDEOTOOLBOX_WORKER)
+    (void)argc;
+    (void)argv;
+    const auto handshake = provider::videoToolboxHandshake(videotoolbox::hardwareEncodeAvailable());
+    videotoolbox::Encoder encoder;
 #else
     bool hardware = false;
     std::string openh264Directory;
@@ -91,6 +99,11 @@ int main(int argc, char** argv) {
             if (message->kind != provider::MessageKind::Call)
                 return 8;
             auto payload = fake::call(std::get<provider::CallRequest>(message->payload));
+#elif defined(BLOOM_VIDEOTOOLBOX_WORKER)
+            auto payload =
+                message->kind == provider::MessageKind::Call
+                    ? videotoolbox::call(std::get<provider::CallRequest>(message->payload))
+                    : encoder.call(message->kind, message->payload);
 #else
             auto payload =
                 message->kind == provider::MessageKind::Call
