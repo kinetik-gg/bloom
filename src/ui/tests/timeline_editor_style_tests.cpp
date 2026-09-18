@@ -34,6 +34,7 @@
 #include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/split_handle.hpp>
+#include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/properties_editor.hpp>
@@ -336,6 +337,7 @@ void testHeaderSplitInEditorArea(Expectations& expectations) {
         auto* editor = area.findChild<ui::TimelineEditor*>();
         auto* ruler = editor->rulerForTest();
         auto* lanes = editor->laneRegionForTest();
+        auto* stack = editor->layerStackForTest();
         auto* header = area.findChild<QWidget*>("editorHeader");
         auto* name = area.findChild<QWidget*>("timelineCompositionName");
         auto* fullscreen = area.findChild<QToolButton*>("maximizeAreaButton");
@@ -349,9 +351,12 @@ void testHeaderSplitInEditorArea(Expectations& expectations) {
                                     header->height(),
                             "the ruler fits entirely inside the header");
         expectations.expect(name == nullptr, "the composition dropdown is absent from the header");
-        expectations.expect(fullscreen->mapTo(&area, QPoint(fullscreen->width(), 0)).x() >=
-                                area.width() - ui::kit::px(ui::kit::Spacing::ChromePadding) - 1,
-                            "fullscreen stays at the panel right edge");
+        const int fullscreenRight = fullscreen->mapTo(&area, QPoint(fullscreen->width(), 0)).x();
+        const int tableRight = stack->mapTo(&area, QPoint(stack->width(), 0)).x();
+        expectations.expect(fullscreenRight <= tableRight &&
+                                tableRight - fullscreenRight <=
+                                    ui::kit::px(ui::kit::Spacing::ChromePadding) + 1,
+                            "fullscreen sits at the layer table edge beside the splitter");
         auto* columns = editor->findChild<QWidget*>("timelineColumnHeaderRow");
         expectations.expect(columns->mapTo(editor, QPoint()).y() == 0,
                             "column headings are the body's first row");
@@ -426,6 +431,10 @@ void testTimeViewportGestures(Expectations& expectations) {
             "keyframe hit testing follows the zoomed shared axis");
         sendMouse(*keyRow, QEvent::MouseButtonRelease, keyAxis.pixelForTime(time(3)),
                   keyRow->height() / 2.0);
+        const auto keyImage = keyRow->grab().toImage();
+        expectations.expect(keyImage.pixelColor(keyRow->width() - 2, keyRow->height() - 1) ==
+                                ui::kit::color(ui::kit::Color::Background),
+                            "property lanes use the same window-background row separator");
     }
     const auto rects = ruler->majorTickLabelRectsForTest();
     for (std::size_t i = 1; i < rects.size(); ++i) {
@@ -441,8 +450,13 @@ void testTimeViewportGestures(Expectations& expectations) {
         expectations.expect(navigator->isVisible() &&
                                 navigator->windowRect().height() ==
                                     ui::kit::px(ui::kit::Size::TimelineNavigatorThumb),
-                            "the zoomed navigator shows a 6px thumb");
+                            "the zoomed navigator uses the shared thumb-height token");
         const auto window = navigator->windowRect();
+        const auto footerImage = navigator->parentWidget()->grab().toImage();
+        expectations.expect(
+            footerImage.pixelColor(navigator->x() + 1, navigator->y() + navigator->height() / 2) ==
+                ui::kit::color(ui::kit::Color::Surface),
+            "horizontal scrollbar has no separately painted background track");
         sendMouse(*navigator, QEvent::MouseButtonPress, window.center().x(), window.center().y());
         sendMouse(*navigator, QEvent::MouseMove, window.center().x() + 30, window.center().y());
         expectations.expect(getAxis().t0 > 2.0, "dragging the navigator window pans");
@@ -485,8 +499,8 @@ void testTimeViewportGestures(Expectations& expectations) {
     axis = getAxis();
     expectations.expect(axis.t0 == before.t0 && axis.t1 == before.t1,
                         "Zoom to Fit restores the entire duration");
-    expectations.expect(navigator != nullptr && navigator->isVisible(),
-                        "the footer navigator remains available at full composition zoom");
+    expectations.expect(navigator != nullptr && !navigator->isVisible(),
+                        "the horizontal scrollbar hides at full composition zoom");
     expectations.expect(fixture.session.currentTime() == originalTime &&
                             fixture.session.snapshot().revision() == revision,
                         "all navigation is presentation-only");
@@ -743,7 +757,7 @@ void testRowsAreFlatThirtyTwoPixelRows(Expectations& expectations) {
                             "every row spans the whole layer column");
     }
 
-    // Rows alternate between the two low-contrast surface steps. A new layer lands on TOP, so the
+    // Rows use a flat surface. A new layer lands on TOP, so the
     // row addSolidLayer selected is row 0 and the unselected pair is rows 1 and 2.
     const QImage laneImage = lanes->grab().toImage();
     const QColor surface = ui::kit::color(ui::kit::Color::Surface);
@@ -752,10 +766,13 @@ void testRowsAreFlatThirtyTwoPixelRows(Expectations& expectations) {
                             near(laneImage.pixelColor(sampleX, 64 + 1), surface, 2),
                         "unselected lane rows share the flat Surface fill");
 
-    // The hairline separator closes each row, in Border.
-    const QColor border = ui::kit::color(ui::kit::Color::Border);
-    expectations.expect(near(laneImage.pixelColor(sampleX, 31), border, 6),
-                        "a Border hairline closes the row at its last pixel row");
+    // The hairline separator closes each row in the window background color.
+    const QColor border = ui::kit::color(ui::kit::Color::Background);
+    expectations.expect(near(laneImage.pixelColor(sampleX, 31), border, 1),
+                        "a window-background hairline closes each lane row");
+    const QImage stackImage = stack->grab().toImage();
+    expectations.expect(near(stackImage.pixelColor(stackImage.width() / 2, 31), border, 1),
+                        "layer-table separators use the same window background color");
 
     delete editor;
     finishFixture(fixture);
@@ -978,7 +995,8 @@ void testToggleColumnsCommitLayerFlags(Expectations& expectations) {
     const int toggleWidth = ui::kit::px(ui::kit::Size::ToggleCell);
     static constexpr std::array<const char*, 4> kFragments{"visibility", "audio", "solo", "lock"};
     for (int index = 0; index < 4; ++index) {
-        const int x = index * toggleWidth + toggleWidth / 2;
+        const int x = ui::kit::px(ui::kit::Spacing::ChromePadding) +
+                      index * (toggleWidth + ui::kit::px(ui::kit::Spacing::XS)) + toggleWidth / 2;
         const QString headerTip = ui::TimelineColumnHeaders::toolTipAtX(x);
         const QString rowTip = stack->toolTipAt(QPoint(x, 16));
         expectations.expect(headerTip == rowTip,
@@ -1001,7 +1019,10 @@ void testToggleColumnsCommitLayerFlags(Expectations& expectations) {
     const auto before = fixture.commands.size();
     for (const int index : {0, 2, 3})
         QTest::mouseClick(stack, Qt::LeftButton, Qt::NoModifier,
-                          QPoint(index * toggleWidth + toggleWidth / 2, 16));
+                          QPoint(ui::kit::px(ui::kit::Spacing::ChromePadding) +
+                                     index * (toggleWidth + ui::kit::px(ui::kit::Spacing::XS)) +
+                                     toggleWidth / 2,
+                                 16));
     const auto* layer = fixture.session.composition()->graph().findLayer(layerId);
     expectations.expect(layer && !layer->enabled && layer->solo && layer->locked &&
                             fixture.commands.size() == before + 3,
@@ -2500,8 +2521,19 @@ void testTimelinePolishInteractions(Expectations& expectations) {
         if (!audio || !solo)
             continue;
         expectations.expect(solo->x() == ui::kit::px(ui::kit::Spacing::ChromePadding) +
-                                             2 * ui::kit::px(ui::kit::Size::ToggleCell),
+                                             2 * (ui::kit::px(ui::kit::Size::ToggleCell) +
+                                                  ui::kit::px(ui::kit::Spacing::XS)),
                             "hidden audio retains its column so solo stays aligned");
+        for (int column = 0; column < 4; ++column) {
+            auto* toggle =
+                row->findChild<QWidget*>(QStringLiteral("timelineLayerToggle%1").arg(column));
+            auto* heading =
+                editor.findChild<QWidget*>(QStringLiteral("timelineHeaderToggle%1").arg(column));
+            expectations.expect(toggle && heading &&
+                                    toggle->mapTo(&editor, QPoint()).x() ==
+                                        heading->mapTo(&editor, QPoint()).x(),
+                                "guttered switch boxes align exactly with the header icons");
+        }
         expectations.expect(audio->isVisible() == entry.audioNodeId.isValid(),
                             "only media with an audio stream shows a speaker");
         if (entry.kind == "Video" && entry.audioNodeId.isValid()) {
@@ -2544,6 +2576,11 @@ void testTimelinePolishInteractions(Expectations& expectations) {
     }
     auto* zoom = editor.findChild<ui::kit::KSlider*>("timelineZoomSlider");
     expectations.expect(zoom != nullptr, "split footer provides a zoom slider");
+    expectations.expect(editor.findChild<QWidget*>("timelineFooterFit") == nullptr,
+                        "the footer has no Fit button");
+    expectations.expect(editor.findChild<QWidget*>("timelineFooterZoomIn") == nullptr &&
+                            editor.findChild<QWidget*>("timelineFooterZoomOut") == nullptr,
+                        "the footer uses only a slider, without plus or minus buttons");
     if (zoom) {
         zoom->setValue(0.5);
         const auto axis = editor.rulerForTest()->axisForWidth(editor.rulerForTest()->width());
@@ -2556,10 +2593,16 @@ void testTimelinePolishInteractions(Expectations& expectations) {
     QCoreApplication::processEvents();
     expectations.expect(editor.verticalScrollBarForTest()->isVisible(),
                         "scrollbar appears when layer rows overflow");
+    expectations.expect(editor.findChild<QWidget*>("timelineBodyScrollGutter")->width() ==
+                            ui::kit::px(ui::kit::Size::ScrollBarHover),
+                        "overflow reserves only the shared scrollbar hover width");
     editor.resize(1200, 500);
     QCoreApplication::processEvents();
     expectations.expect(!editor.verticalScrollBarForTest()->isVisible(),
                         "scrollbar hides again when the viewport grows");
+    auto* lanes = editor.laneRegionForTest();
+    expectations.expect(lanes->mapTo(&editor, QPoint(lanes->width(), 0)).x() == editor.width(),
+                        "without vertical overflow lanes reach the panel's right edge");
     finishFixture(fixture);
 }
 
@@ -2590,6 +2633,11 @@ void writeTimelineScreenshotIfRequested(Expectations& expectations) {
         QCoreApplication::processEvents();
         expectations.expect(host.grab().save(destination + ".expanded.png"),
                             "expanded timeline screenshot saves");
+        (void)fixture.session.setCurrentTime(time(5));
+        timeline->rulerForTest()->zoomToRange(2, 7);
+        QCoreApplication::processEvents();
+        expectations.expect(host.grab().save(destination + ".zoomed.png"),
+                            "zoomed playhead and trackless scrollbar screenshot saves");
     }
     delete editor;
     finishFixture(fixture);
@@ -2600,6 +2648,7 @@ void writeTimelineScreenshotIfRequested(Expectations& expectations) {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    bloom::ui::kit::installKinetikTheme(application);
     QCoreApplication::setOrganizationName("BloomTests");
     QCoreApplication::setApplicationName("TimelineEditorStyle");
     QTemporaryDir settingsDirectory;

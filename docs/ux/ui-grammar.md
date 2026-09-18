@@ -80,7 +80,10 @@ provider interfaces are removed. Object names remain stable for interaction and 
 Timeline declares a split `footerCanvas`, composed with `EditorArea::buildSplitChrome` and kit
 controls, which EditorArea hosts as the panel footer. Its left cell follows the layer-table
 divider and contains Split at Playhead and Delete Layer actions, enabled for the current selection.
-Its right cell contains horizontal zoom out/slider/in, the draggable range navigator, and Fit.
+Both footer cells use the same EditorChromeRowSpec/buildChromeRow path as other panels. The
+right cell contains only the shared horizontal zoom slider and, when zoomed in, a draggable
+horizontal range scrollbar. There are no plus/minus buttons.
+Zoom to Fit remains in View; no Fit button occupies the footer.
 The slider maps the full composition through a logarithmic range down to individual frames.
 
 `KRow` owns list layout: fixed-pitch toggle cells, flexible name, fixed-width dropdown columns
@@ -335,7 +338,8 @@ Expanded RGBA rows use a blank-label KPropertyRow so controls align beneath the 
 
 Timeline switches retain ToggleCell squares (24), with IconChrome (16) glyphs: unchecked is an
 empty neutral bordered box, checked uses the same Regular glyph as the column heading. Hidden
-audio controls retain their column width. Headers and rows share the ChromePadding left inset,
+audio retains its cell; Spacing::XS separates switch boxes in both header and layer rows.
+Headers and rows share the ChromePadding left inset,
 column geometry, and Ui text role. Layer and nested-property disclosures are unboxed 24px hit
 targets with their existing 16px chevrons and an XS gap before the text. KDiamond uses the Bold
 outline at every DPR. Colour parameter rows show only the swatch; expanding the parameter exposes
@@ -355,7 +359,11 @@ persists under `timeline/graph-editor`. View exposes checkable Keyframes and Gra
 enabling either turns the other off, and both may be off to show plain layer lanes.
 `timeline/keyframes-visible` and `timeline/snapping` persist Keyframes and Snap to Frames.
 These controls appear only in View, with no header tool buttons. Header menu order is Add, View,
-Select; the composition dropdown is absent. Keys off hides both key lanes and collapsed summary
+Select, with text-only menu buttons and no caret indicators; the composition dropdown is absent.
+These are the unchanged shared KMenuButton/EditorChromeRowSpec controls and application theme used
+by Assets, Viewer and Nodes: no Timeline-specific menu painting, stylesheet or background palette.
+Timeline's fullscreen button sits at the right edge of the layer-table header, beside the divider.
+Keys off hides both key lanes and collapsed summary
 glyphs. Empty key-lane labels paint no chip. Lane snapping is `snapping && !Shift`.
 
 Timeline lanes use `LanePadding` (12) on both sides of their time axis. The layer column/lanes split
@@ -368,15 +376,22 @@ width; an existing `timeline/layer-column-width` pixel value wins, and a double-
 Workspace returns to the 37% ratio. All timeline rows share TimelineRow pitch and a zero origin;
 the 28px KPropertyRow is centered within that pitch.
 Selected rows use SurfaceRaised with no edge stripe. Every populated and empty row uses a
-Border hairline separator, without alternating fills. The work-area slider occupies the lane half
+Background hairline separator (the window color, never a lighter border), without alternating fills.
+The work-area slider occupies the lane half
 of the layer-column header row, directly below the ruler. Its active range uses SurfaceRaised,
 matching selected layer rows; outside the range stays Surface, with accent endpoint handles.
 Cached-frame strips use green Ok. Ruler tick labels and the current-frame readout are centered on
-their needles; the readout reserves its rectangle against tick labels. The footer navigator stays
-available at fit and uses a muted 6px thumb. Clip trim edges show SizeHorCursor using the same
+their needles. The Accent playhead has a solid tab with a downward-pointing tip below its readout,
+joining the single-pixel line through the work area and lanes; the readout never paints over it.
+The readout reserves its rectangle against tick labels. The footer navigator hides
+at fit, keeping the zoom slider visible. It uses a rounded 10px neutral BorderHover thumb with no
+painted background or track; hover/drag uses BorderActive. Its ends advertise resizing, and its
+body advertises panning.
+Clip trim edges show SizeHorCursor using the same
 hit tolerance as trimming; locked layers do not advertise trimming. The vertical scrollbar appears
-only when the expanded row content exceeds the viewport, retaining its gutter while hidden.
-The shared `TimelineChromeGutter` (32) reserves room for the panel maximize at the right edge.
+only when the expanded row content exceeds the viewport. Only then does a ScrollBarHover-width
+gutter reserve its space in the ruler, work-area and body rows together. Otherwise lanes extend
+to the panel's right edge, with no fullscreen or scrollbar gutter.
 Object, Transform, Source groups are collapsible Title Case rows, joined by one group per upstream
 value node driving the layer, titled by that node's display name. KPropertyRow's leading-indicator
 layout places the diamond or disclosure in a ToggleCell column, then the compact label and

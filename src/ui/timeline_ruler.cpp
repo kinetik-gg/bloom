@@ -248,10 +248,9 @@ class TimelineKeyframeRow final : public QWidget {
         Q_UNUSED(event)
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
-        // One step up the surface ladder from the ruler's own Surface (decision 1's "row striping
-        // via surface ladder" carried down into the lane rows, which sit directly beneath it).
+        // Property lanes share the layer rows' flat surface and window-background separator.
         painter.fillRect(rect(), kit::color(kit::Color::Surface));
-        kit::applyHairlinePen(painter, kit::color(kit::Color::Border));
+        kit::applyHairlinePen(painter, kit::color(kit::Color::Background));
         painter.drawLine(QPointF(0.0, height() - 0.5), QPointF(width(), height() - 0.5));
 
         const auto* composition = session_.composition();
@@ -719,7 +718,8 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
     }
 
     painter.setFont(tickFont());
-    const auto labelAreaHeight = static_cast<qreal>(height()) - kMajorTickHeight;
+    const auto labelAreaHeight =
+        static_cast<qreal>(height()) - 2 * kPlayheadMarkerHeight - kit::px(kit::Spacing::XXS);
     const auto majorLabels = computeMajorTickLabels(*axis, labelAreaHeight, timecodeLabels_);
     const auto minorStep = minorTickStepFrames(*axis);
 
@@ -770,16 +770,6 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
     // Playhead: the shared 1px Accent stroke, with its single marker and frame readout in this
     // ruler. The label follows the marker and uses the same Value role as the tick labels.
     paintPlayheadLine(painter, *axis, session_.currentTime(), height());
-    const qreal playheadX = std::floor(axis->pixelForTime(session_.currentTime())) + 0.5;
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(kit::color(kit::Color::Accent));
-    QPolygonF marker;
-    marker << QPointF(playheadX - kPlayheadMarkerHalfWidth, 0.0)
-           << QPointF(playheadX + kPlayheadMarkerHalfWidth, 0.0)
-           << QPointF(playheadX, kPlayheadMarkerHeight);
-    painter.drawPolygon(marker);
-
     const auto frame =
         nearestFrameIndexForTime(axis->frameRate, axis->duration, session_.currentTime())
             .value_or(0);
@@ -788,6 +778,22 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
     painter.setFont(tickFont());
     painter.setPen(kit::color(kit::Color::Foreground));
     painter.drawText(currentLabel, Qt::AlignCenter, frameLabel);
+
+    // A tab with a downward point joins the ruler to the playhead line. Paint it after the
+    // readout, in its own band, so the readout background cannot erase the head.
+    const qreal playheadX = std::floor(axis->pixelForTime(session_.currentTime())) + 0.5;
+    const qreal tipY = height() - kit::px(kit::Spacing::XXS);
+    const qreal shoulderY = tipY - kPlayheadMarkerHeight;
+    const qreal topY = shoulderY - kPlayheadMarkerHeight;
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(kit::color(kit::Color::Accent));
+    QPolygonF marker;
+    marker << QPointF(playheadX - kPlayheadMarkerHalfWidth, topY)
+           << QPointF(playheadX + kPlayheadMarkerHalfWidth, topY)
+           << QPointF(playheadX + kPlayheadMarkerHalfWidth, shoulderY) << QPointF(playheadX, tipY)
+           << QPointF(playheadX - kPlayheadMarkerHalfWidth, shoulderY);
+    painter.drawPolygon(marker);
 }
 
 QRectF TimelineRuler::playheadLabelRect() const {
@@ -801,7 +807,8 @@ QRectF TimelineRuler::playheadLabelRect() const {
     const qreal extent = metrics.horizontalAdvance(
         formatTimelineFrameLabel(frame, axis->frameRate, timecodeLabels_));
     const qreal x = axis->pixelForTime(session_.currentTime());
-    return {x - extent / 2, 0, extent, static_cast<qreal>(height()) - kMajorTickHeight};
+    return {x - extent / 2, 0, extent,
+            static_cast<qreal>(height()) - 2 * kPlayheadMarkerHeight - kit::px(kit::Spacing::XXS)};
 }
 
 std::vector<QRectF> TimelineRuler::cachedFrameRects() const {
@@ -856,7 +863,8 @@ std::vector<QRectF> TimelineRuler::majorTickLabelRectsForTest() const {
     if (!axis.has_value()) {
         return rects;
     }
-    const auto labelAreaHeight = static_cast<qreal>(height()) - kMajorTickHeight;
+    const auto labelAreaHeight =
+        static_cast<qreal>(height()) - 2 * kPlayheadMarkerHeight - kit::px(kit::Spacing::XXS);
     for (const auto& label : computeMajorTickLabels(*axis, labelAreaHeight, timecodeLabels_)) {
         if (!label.rect.intersects(
                 playheadLabelRect().adjusted(-kMajorLabelGapPixels, 0, kMajorLabelGapPixels, 0)))

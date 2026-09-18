@@ -1132,7 +1132,12 @@ void testRulerPlayheadPaintsAOnePixelAccentLine(Expectations& expectations) {
     }
     expectations.expect(sawAccent, "the playhead paints an Accent-colored line at its exact pixel");
 
-    const int sampleY = ruler.height() - 3;
+    const int headY = ruler.height() - ui::kit::px(ui::kit::Spacing::XXS) -
+                      2 * static_cast<int>(ui::kPlayheadMarkerHeight) + 1;
+    expectations.expect(near(image.pixelColor(playheadX - 3, headY), accent, 1) &&
+                            near(image.pixelColor(playheadX + 3, headY), accent, 1),
+                        "the playhead has a solid tab head that the frame readout cannot erase");
+    const int sampleY = ruler.height() - 1;
     int accentColumns = 0;
     for (int x = 0; x < image.width(); ++x) {
         if (near(image.pixelColor(x, sampleY), accent, 24)) {

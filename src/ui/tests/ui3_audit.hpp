@@ -21,9 +21,15 @@ template <typename Expect> void auditUi3(WindowFixture& fixture, const Expect& e
     for (auto* panel : window->findChildren<EditorArea*>()) {
         auto* header = panel->findChild<QWidget*>("editorHeader");
         auto* maximize = panel->findChild<QWidget*>("maximizeAreaButton");
-        expect(maximize->mapTo(header, QPoint()).x() + maximize->width() >=
-                   header->width() - px(Spacing::ChromePadding) - px(Size::Hairline),
-               maximize, "A/D18 maximize occupies the panel's right edge");
+        const auto* timeline = panel->findChild<TimelineEditor*>();
+        const int trailingEdge = timeline
+                                     ? timeline->layerStackForTest()->mapTo(panel, QPoint()).x() +
+                                           timeline->layerStackForTest()->width()
+                                     : header->mapTo(panel, QPoint()).x() + header->width();
+        const int maximizeRight = maximize->mapTo(panel, QPoint()).x() + maximize->width();
+        expect(maximizeRight <= trailingEdge &&
+                   maximizeRight >= trailingEdge - px(Spacing::ChromePadding) - px(Size::Hairline),
+               maximize, "maximize occupies the trailing edge of its shared header cell");
         if (auto* footer = panel->findChild<QWidget*>("editorFooter")) {
             const auto image = panel->grab().toImage();
             const auto ratio = panel->devicePixelRatioF();

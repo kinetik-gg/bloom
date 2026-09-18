@@ -26,7 +26,7 @@ class KRow : public QWidget {
   public:
     explicit KRow(QWidget* parent = nullptr);
     void setCells(const QList<QWidget*>& toggles, QWidget* name, const QList<QWidget*>& columns,
-                  QWidget* trailing = nullptr);
+                  QWidget* trailing = nullptr, int toggleGap = 0);
     void setRowState(int index, bool selected);
     void setLeadingInset(int inset);
     void setName(const QString& text, std::optional<IconId> disclosure = std::nullopt);

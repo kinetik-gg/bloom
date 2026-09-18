@@ -36,10 +36,27 @@ int run(int argc, char** argv) {
         }
     };
     const auto panels = fixture.window->findChildren<EditorArea*>();
+    fixture.clearInteraction();
     expect(panels.size() == 5, fixture.window.get(), "fixture must exercise all five panels");
     for (auto* panel : panels) {
         auto* header = panel->findChild<QWidget*>("editorHeader");
         expect(header && header->height() == kit::px(kit::Size::HeaderRow), panel, "header token");
+        const auto headerImage = header->grab().toImage();
+        const auto headerDpr = headerImage.devicePixelRatio();
+        for (auto* button : header->findChildren<kit::KMenuButton*>()) {
+            if (!button->isVisible())
+                continue;
+            auto* menuStrip = button->parentWidget();
+            expect(menuStrip->styleSheet().isEmpty() && button->styleSheet().isEmpty(), button,
+                   "panel menus use the shared theme, without local styling");
+            const auto corner = button->mapTo(header, QPoint());
+            const auto above = corner - QPoint(0, 1);
+            expect(headerImage.pixelColor(qRound(corner.x() * headerDpr),
+                                          qRound(corner.y() * headerDpr)) ==
+                       headerImage.pixelColor(qRound(above.x() * headerDpr),
+                                              qRound(above.y() * headerDpr)),
+                   button, "menu backgrounds match their enclosing panel header");
+        }
         if (auto* footer = panel->findChild<QWidget*>("editorFooter"))
             expect(footer->height() == kit::px(kit::Size::FooterRow), footer, "footer token");
         // A1: the rounded frame overlay exists and is the panel's topmost child widget, so no
@@ -197,7 +214,14 @@ int run(int argc, char** argv) {
                "D12 ruler labels avoid playhead readout");
     auto* navigatorRow = fixture.window->findChild<QWidget*>("timelineLaneFooter");
     expect(navigatorRow && navigatorRow->isVisible(), fixture.window.get(),
-           "D17 fitted composition retains its footer zoom and navigator");
+           "D17 fitted composition retains its footer zoom");
+    expect(!fixture.window->findChild<QWidget*>("timelineNavigator")->isVisible(), navigatorRow,
+           "horizontal scrollbar hides when the full composition fits");
+    for (const auto* name : {"timelineFooterSplitLayer", "timelineFooterDeleteLayer"}) {
+        auto* button = fixture.window->findChild<kit::KIconButton*>(name);
+        expect(button && !button->icon().isNull(), button ? button : navigatorRow,
+               "footer action updates preserve shared icon-only controls");
+    }
     auto* status = fixture.window->statusStrip();
     expect(status && status->isVisible(), fixture.window.get(), "status remains visible");
     for (auto* cell : status->findChildren<kit::KLabel*>()) {
@@ -341,6 +365,12 @@ int run(int argc, char** argv) {
     std::cout << "Audited " << panels.size() << " panels, " << controls << " controls, " << icons
               << " icons at DPR " << fixture.window->devicePixelRatioF() << '\n';
     test::auditUi3(fixture, expect);
+    const auto capture = qEnvironmentVariable("BLOOM_PANEL_COMPARISON_SCREENSHOT");
+    if (!capture.isEmpty()) {
+        fixture.clearInteraction();
+        expect(fixture.window->grab().save(capture), fixture.window.get(),
+               "shared-panel comparison screenshot saves");
+    }
     return failures == 0 ? 0 : 1;
 }
 

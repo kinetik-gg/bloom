@@ -679,12 +679,42 @@ void testPropertiesIsHostedInsideAnIgnoredScrollArea(Expectations& expectations)
         "the scroll area host is torn down, not left behind, once Properties is no longer hosted");
 }
 
+void testSharedFooterExpansionAndSuppression(Expectations& expectations) {
+    QWidget host;
+    EditorChromeRowSpec spec;
+    auto* fixed = new kit::KIconButton(&host);
+    auto* flexible = new QWidget(&host);
+    spec.addWidget(fixed);
+    spec.addExpandingWidget(flexible);
+    auto* footer = EditorArea::buildChromeRow(spec, &host, true);
+    host.resize(600, kit::px(kit::Size::FooterRow));
+    host.show();
+    for (int width : {600, 300}) {
+        footer->resize(width, kit::px(kit::Size::FooterRow));
+        footer->show();
+        QCoreApplication::processEvents();
+        const int padding = kit::px(kit::Spacing::ChromePadding);
+        expectations.expect(fixed->x() == padding &&
+                                flexible->geometry().right() == width - padding - 1,
+                            "shared footer fills available space and retains chrome padding");
+        expectations.expect(flexible->x() - fixed->geometry().right() - 1 ==
+                                kit::px(kit::Spacing::ChromeGap),
+                            "expanding footer controls reuse the shared gap");
+        flexible->setProperty("chromeSuppressed", true);
+        expectations.expect(!flexible->isVisible() && fixed->isVisible(),
+                            "suppression hides only the optional footer control immediately");
+        flexible->setProperty("chromeSuppressed", false);
+        expectations.expect(flexible->isVisible(), "optional footer controls reappear immediately");
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     const QApplication application(argc, argv);
     Expectations expectations;
+    testSharedFooterExpansionAndSuppression(expectations);
     testTheOldHeaderButtonsAreReallyGone(expectations);
     testTheMaximizeButtonIsTheOnlyRemainingHeaderButtonAndIsAFullscreenToggle(expectations);
     testTheHeaderQToolButtonsAreSquare(expectations);

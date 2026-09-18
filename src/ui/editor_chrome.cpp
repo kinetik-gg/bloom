@@ -1,3 +1,4 @@
+#include <QDynamicPropertyChangeEvent>
 #include <QHBoxLayout>
 #include <QPalette>
 #include <QResizeEvent>
@@ -10,6 +11,9 @@
 namespace bloom::ui {
 void EditorChromeRowSpec::addWidget(QWidget* control) {
     entries.push_back({control, false, true, trailing});
+}
+void EditorChromeRowSpec::addExpandingWidget(QWidget* control) {
+    entries.push_back({control, false, true, trailing, true});
 }
 QToolButton* EditorChromeRowSpec::addMenuButton(const QString& title, QMenu* menu,
                                                 const QString& name, bool visible) {
@@ -46,6 +50,7 @@ class ChromeRow final : public QWidget {
         setPalette(colors);
         for (auto& entry : entries_) {
             entry.control->setParent(this);
+            entry.control->installEventFilter(this);
             if (entry.menu) {
                 if (auto* button = qobject_cast<QToolButton*>(entry.control);
                     button && button->menu())
@@ -85,6 +90,12 @@ class ChromeRow final : public QWidget {
     QSize sizeHint() const override { return {measure(), height()}; }
 
   protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::DynamicPropertyChange &&
+            static_cast<QDynamicPropertyChangeEvent*>(event)->propertyName() == "chromeSuppressed")
+            arrange();
+        return QWidget::eventFilter(watched, event);
+    }
     void resizeEvent(QResizeEvent*) override { arrange(); }
     void showEvent(QShowEvent*) override { arrange(); }
 
@@ -127,8 +138,12 @@ class ChromeRow final : public QWidget {
             width() - padding_ - padding_ -
             std::max(0, static_cast<int>(visible.size()) - 1) * kit::px(kit::Spacing::ChromeGap);
         int total = 0;
+        int expandingCount = 0;
         for (auto* control : visible)
             total += preferred(control);
+        for (const auto& entry : entries_)
+            if (entry.expanding && visible.contains(entry.control))
+                ++expandingCount;
         int x = padding_;
         bool trailingPlaced = false;
         for (auto* control : visible) {
@@ -142,6 +157,13 @@ class ChromeRow final : public QWidget {
             }
             const int preferredWidth = preferred(control);
             int extent = preferredWidth;
+            const bool expanding = std::ranges::any_of(entries_, [control](const auto& entry) {
+                return entry.control == control && entry.expanding;
+            });
+            if (expanding && expandingCount > 0) {
+                extent += std::max(0, remaining - total) / expandingCount;
+                --expandingCount;
+            }
             if (total > remaining && !qobject_cast<QToolButton*>(control)) {
                 extent = std::max(control->minimumWidth(), preferredWidth - (total - remaining));
             }

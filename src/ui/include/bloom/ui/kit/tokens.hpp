@@ -209,7 +209,7 @@ enum class Size : int {
     EditorHeader = HeaderRow,
     TimelineRow = 32,
     TimelineBar = 20,
-    TimelineToggleColumn = 4 * ToggleCell,
+    TimelineToggleColumn = 4 * ToggleCell + 3 * static_cast<int>(Spacing::XS),
     TimelineNameMin = 120,
     TimelineNameDefault = 280,
     TimelineLeftColumn = TimelineToggleColumn + TimelineNameDefault + 2 * DropdownWidth,
@@ -222,7 +222,7 @@ enum class Size : int {
     SplitHandle = 6,
     TimelineChromeGutter = 32,
     TimelineWorkAreaHandle = 6,
-    TimelineNavigatorThumb = 6,
+    TimelineNavigatorThumb = 10,
     // GRAPH-1: the graph editor's left value-axis gutter, and the dot that terminates an ease
     // handle's hairline.
     GraphValueAxis = 48,

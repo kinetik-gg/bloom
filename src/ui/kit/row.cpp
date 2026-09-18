@@ -147,8 +147,10 @@ KRow::KRow(QWidget* parent) : QWidget(parent), row_(new QHBoxLayout(this)) {
     nameLayout->addWidget(name_, 1, Qt::AlignVCenter);
 }
 void KRow::setCells(const QList<QWidget*>& toggles, QWidget* name, const QList<QWidget*>& columns,
-                    QWidget* trailing) {
+                    QWidget* trailing, int toggleGap) {
     for (auto* cell : toggles) {
+        if (cell != toggles.front())
+            row_->addSpacing(toggleGap);
         cell->setFixedSize(px(Size::ToggleCell), px(Size::ToggleCell));
         cell->setProperty("rowCell", "toggle");
         row_->addWidget(cell, 0, Qt::AlignVCenter);
@@ -193,7 +195,7 @@ void KRow::setLeadingInset(int inset) {
 void KRow::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     painter.fillRect(rect(), color(selected_ ? Color::SurfaceRaised : Color::Surface));
-    painter.setPen(color(Color::Border));
+    painter.setPen(color(Color::Background));
     painter.drawLine(rect().bottomLeft(), rect().bottomRight());
 }
 } // namespace bloom::ui::kit

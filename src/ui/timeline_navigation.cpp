@@ -226,6 +226,7 @@ bool TimelineWorkAreaRow::event(QEvent* event) {
 TimelineNavigator::TimelineNavigator(TimelineRuler& ruler, QWidget* parent)
     : QWidget(parent), ruler_(ruler) {
     setObjectName("timelineNavigator");
+    setMouseTracking(true);
     setAccessibleName(tr("Timeline visible range"));
     setToolTip(tr("Drag the window to scroll; drag either edge to zoom. Escape cancels."));
     setFixedHeight(kit::px(kit::Size::Control));
@@ -234,9 +235,20 @@ TimelineNavigator::TimelineNavigator(TimelineRuler& ruler, QWidget* parent)
     updateVisibility();
 }
 
-void TimelineNavigator::updateVisibility() { update(); }
+void TimelineNavigator::updateVisibility() {
+    const auto axis = ruler_.axisForWidth(ruler_.width());
+    const bool needed = axis && axis->t1 - axis->t0 < axis->duration.toSeconds() - 1e-10;
+    setProperty("chromeSuppressed", !needed);
+    setVisible(needed);
+    update();
+}
 
 bool TimelineNavigator::event(QEvent* event) {
+    if (event->type() == QEvent::Enter || event->type() == QEvent::Leave) {
+        if (event->type() == QEvent::Leave)
+            unsetCursor();
+        update();
+    }
     if (event->type() == QEvent::ShortcutOverride && drag_ != Drag::None &&
         static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
         event->accept();
@@ -259,12 +271,13 @@ QRectF TimelineNavigator::windowRect() const {
 
 void TimelineNavigator::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    painter.fillRect(rect(), kit::color(kit::Color::SurfaceSunken));
     const auto window = windowRect();
     if (window.isEmpty()) {
         return;
     }
-    painter.fillRect(window, kit::color(kit::Color::Muted));
+    const auto ink =
+        underMouse() || drag_ != Drag::None ? kit::Color::BorderActive : kit::Color::BorderHover;
+    kit::fillRoundedSurface(painter, window, kit::color(ink), QColor{}, kit::Radius::Full);
 }
 
 void TimelineNavigator::mousePressEvent(QMouseEvent* event) {
@@ -294,6 +307,11 @@ void TimelineNavigator::mousePressEvent(QMouseEvent* event) {
 
 void TimelineNavigator::mouseMoveEvent(QMouseEvent* event) {
     if (drag_ == Drag::None) {
+        const auto window = windowRect();
+        const auto x = event->position().x();
+        const bool edge = std::abs(x - window.left()) <= kit::px(kit::Spacing::S) ||
+                          std::abs(x - window.right()) <= kit::px(kit::Spacing::S);
+        setCursor(edge ? Qt::SizeHorCursor : Qt::OpenHandCursor);
         QWidget::mouseMoveEvent(event);
         return;
     }

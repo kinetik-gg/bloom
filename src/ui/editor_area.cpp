@@ -491,14 +491,16 @@ void EditorArea::rebuildEditor(int editorIndex) {
             // timeline_editor.cpp), and the ruler above must stay flush with the lanes below it.
             headerCellsLayout_->addSpacing(kit::px(kit::Size::SplitHandle));
             headerCellsLayout_->addWidget(headerRight_, 1);
-            headerLayout_->removeWidget(maximizeButton_);
-            auto* gutter =
-                headerRight_->layout()->itemAt(headerRight_->layout()->count() - 1)->widget();
-            auto* actions = new QHBoxLayout(gutter);
-            const auto padding = kit::px(kit::Spacing::ChromePadding);
-            actions->setContentsMargins(padding, padding, padding, padding);
-            actions->setSpacing(kit::px(kit::Spacing::ChromeGap));
-            actions->addWidget(maximizeButton_, 0, Qt::AlignRight | Qt::AlignVCenter);
+            if (!spec.maximizeInLeadingHeader) {
+                headerLayout_->removeWidget(maximizeButton_);
+                auto* gutter =
+                    headerRight_->layout()->itemAt(headerRight_->layout()->count() - 1)->widget();
+                auto* actions = new QHBoxLayout(gutter);
+                const auto padding = kit::px(kit::Spacing::ChromePadding);
+                actions->setContentsMargins(padding, padding, padding, padding);
+                actions->setSpacing(kit::px(kit::Spacing::ChromeGap));
+                actions->addWidget(maximizeButton_, 0, Qt::AlignRight | Qt::AlignVCenter);
+            }
             watchForActivation(headerRight_);
         }
     }

@@ -38,6 +38,7 @@ struct EditorChromeRowSpec {
         bool menu = false;
         bool visible = true;
         bool trailing = false;
+        bool expanding = false;
     };
     QString objectName;
     QString overflowButtonName;
@@ -47,6 +48,7 @@ struct EditorChromeRowSpec {
     QWidget* owner = nullptr;
     bool trailing = false;
     void addWidget(QWidget* control);
+    void addExpandingWidget(QWidget* control);
     void addStretch(int = 1) { trailing = true; }
     QToolButton* addMenuButton(const QString& title, QMenu* menu, const QString& name = {},
                                bool visible = true);
@@ -75,6 +77,7 @@ struct EditorChromeSpec {
     QWidget* headerCanvas = nullptr;
     // Optional split canvas footer, built through the same chrome helpers as the header.
     QWidget* footerCanvas = nullptr;
+    bool maximizeInLeadingHeader = false;
     std::function<int()> splitPosition;
     // task TL-FIX2: EditorArea fixes headerLeft_'s width to splitPosition() once, at rebuild time
     // (see EditorArea::rebuildEditor()). A provider whose split moves later -- the timeline's

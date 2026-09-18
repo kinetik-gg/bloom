@@ -192,7 +192,8 @@ void TimelineEditor::createFooter() {
         auto* button = new kit::KIconButton(this);
         button->setObjectName(name);
         button->setDefaultAction(action);
-        button->setIcon(kit::icon(icon, kit::IconRole::Chrome));
+        action->setIcon(kit::icon(icon, kit::IconRole::Chrome));
+        button->setToolButtonStyle(Qt::ToolButtonIconOnly);
         button->setToolTip(action->text());
         button->setAccessibleName(action->text());
         layerControls.addWidget(button);
@@ -200,31 +201,15 @@ void TimelineEditor::createFooter() {
     actionButton(splitLayerAction_, kit::IconId::SplitHorizontal, "timelineFooterSplitLayer");
     actionButton(deleteLayerAction_, kit::IconId::Delete, "timelineFooterDeleteLayer");
     auto* left = EditorArea::buildChromeRow(layerControls, this, true);
-    auto* right = new QWidget(this);
-    right->setObjectName("timelineLaneFooter");
-    auto* row = new QHBoxLayout(right);
-    row->setContentsMargins(kit::px(kit::Spacing::ChromePadding), 0,
-                            kit::px(kit::Spacing::ChromePadding), 0);
-    row->setSpacing(kit::px(kit::Spacing::ChromeGap));
-    const auto zoomButton = [&](const QString& label, const QString& name, double factor) {
-        auto* button = new kit::KIconButton(right);
-        button->setText(label);
-        button->setObjectName(name);
-        button->setAccessibleName(factor > 1 ? tr("Zoom in") : tr("Zoom out"));
-        button->setToolTip(button->accessibleName());
-        connect(button, &QToolButton::clicked, this,
-                [this, factor] { ruler_->zoomBy(factor, ruler_->width() / 2.0); });
-        row->addWidget(button);
-    };
-    zoomButton(QStringLiteral("−"), "timelineFooterZoomOut", 0.8);
-    auto* zoom = new kit::KSlider(right);
+    EditorChromeRowSpec laneControls;
+    laneControls.objectName = "timelineLaneFooter";
+    auto* zoom = new kit::KSlider(this);
     zoom->setObjectName("timelineZoomSlider");
     zoom->setAccessibleName(tr("Horizontal timeline zoom"));
     zoom->setToolTip(tr("Horizontal zoom: full composition to individual frames"));
     zoom->setFixedWidth(kit::px(kit::Size::DropdownWidth));
     zoom->setRange(0, 1);
-    row->addWidget(zoom);
-    zoomButton(QStringLiteral("+"), "timelineFooterZoomIn", 1.25);
+    laneControls.addWidget(zoom);
     connect(zoom, &kit::KSlider::valueChanged, this, [this](double value) {
         const auto axis = ruler_->axisForWidth(ruler_->width());
         if (!axis)
@@ -249,14 +234,8 @@ void TimelineEditor::createFooter() {
     };
     connect(ruler_, &TimelineRuler::axisChanged, zoom, refreshZoom);
     refreshZoom();
-    row->addWidget(new TimelineNavigator(*ruler_, right), 1);
-    auto* fit = new kit::KIconButton(right);
-    fit->setObjectName("timelineFooterFit");
-    fit->setText(tr("Fit"));
-    fit->setAccessibleName(tr("Fit composition"));
-    fit->setToolTip(fit->accessibleName());
-    connect(fit, &QToolButton::clicked, ruler_, &TimelineRuler::zoomToFit);
-    row->addWidget(fit);
+    laneControls.addExpandingWidget(new TimelineNavigator(*ruler_, this));
+    auto* right = EditorArea::buildChromeRow(laneControls, this, true);
     chrome_.footerCanvas = EditorArea::buildSplitChrome(left, right, layerColumnWidth_, this);
     chrome_.footerCanvas->setObjectName("timelineFooter");
     chrome_.footerCanvas->setFixedHeight(kit::px(kit::Size::FooterRow));

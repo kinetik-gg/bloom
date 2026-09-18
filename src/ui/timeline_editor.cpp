@@ -99,10 +99,12 @@ constexpr auto kLayerColumnWidthSetting = "timeline/layer-column-width";
 // not its resting one: the kit stylesheet grows a hovered vertical scrollbar from Size::ScrollBar
 // to Size::ScrollBarHover, and if that growth came out of the lane region's own width the ruler
 // above it would stop agreeing with the lanes about where a frame is the instant the pointer
-// touched the scrollbar. Reserving the larger extent once means the time axis never moves.
-constexpr int kScrollGutterWidth = kit::px(kit::Size::TimelineChromeGutter);
+// touched the scrollbar. Reserve the larger extent only while rows overflow vertically.
+constexpr int kScrollGutterWidth = kit::px(kit::Size::ScrollBarHover);
 
-[[nodiscard]] int toggleCellX(const int index) { return kToggleStripX + index * kToggleCellWidth; }
+[[nodiscard]] int toggleCellX(const int index) {
+    return kToggleStripX + index * (kToggleCellWidth + kCellGap);
+}
 [[nodiscard]] int nameCellWidth(const int width) {
     return std::max(kNameCellMinWidth, width - kNameCellX - 2 * kColumnWidth);
 }
@@ -282,7 +284,7 @@ kit::KDropdown* makeBlendingDropdown(QWidget* parent) {
 // -- task T1 replaces task U7's surface ladder), so the separator is the only thing giving the grid
 // its rhythm.
 void paintRowSeparator(QPainter& painter, const int top, const int widthPixels) {
-    kit::applyHairlinePen(painter, kit::color(kit::Color::Border));
+    kit::applyHairlinePen(painter, kit::color(kit::Color::Background));
     const auto y = static_cast<qreal>(top + kTimelineRowHeight) - 0.5;
     painter.drawLine(QPointF(0.0, y), QPointF(static_cast<qreal>(widthPixels), y));
 }
@@ -347,7 +349,7 @@ class TimelineLayerRow final : public kit::KRow {
             connect(toggle, &QToolButton::clicked, this,
                     [this, index] { activateAt(toggleCellX(index) + kToggleCellWidth / 2); });
         }
-        setCells(cells, nullptr, {blending_, parentDropdown_});
+        setCells(cells, nullptr, {blending_, parentDropdown_}, nullptr, kCellGap);
         disclosureButton()->setAccessibleName(TimelineEditor::tr("Expand layer properties"));
         connect(disclosureButton(), &QToolButton::clicked, this,
                 [this] { activateAt(kNameCellX + kit::px(kit::Spacing::S) + kCellGap); });
@@ -500,6 +502,7 @@ TimelineColumnHeaders::TimelineColumnHeaders(QWidget* parent) : QWidget(parent) 
     QList<QWidget*> glyphs;
     for (int index = 0; index < kToggleCellCount; ++index) {
         auto* glyph = new kit::KIconButton(row);
+        glyph->setObjectName(QStringLiteral("timelineHeaderToggle%1").arg(index));
         glyph->setIcon(kit::icon(toggleIcon(index), kit::Size::IconChrome, kit::Color::Muted,
                                  kit::IconWeight::Regular));
         glyph->setIconSize(QSize(kit::px(kit::Size::IconChrome), kit::px(kit::Size::IconChrome)));
@@ -515,7 +518,7 @@ TimelineColumnHeaders::TimelineColumnHeaders(QWidget* parent) : QWidget(parent) 
     auto* blending = makeBlendingDropdown(row);
     auto* blendingLabel = new kit::KLabel(tr("Blending"), row);
     auto* parentLabel = new kit::KLabel(tr("Parent"), row);
-    row->setCells(glyphs, name, {blendingLabel, parentLabel});
+    row->setCells(glyphs, name, {blendingLabel, parentLabel}, nullptr, kCellGap);
     blendingLabel->setFixedWidth(
         std::max(kit::px(kit::Size::DropdownWidth), blending->minimumSizeHint().width()));
     delete blending;
@@ -729,9 +732,10 @@ void TimelineLayerStack::mousePressEvent(QMouseEvent* event) {
     const auto* layer = composition ? composition->graph().findLayer(id) : nullptr;
     if (!layer)
         return;
-    const int toggle = (static_cast<int>(event->position().x()) - kToggleStripX) / kToggleCellWidth;
-    if (event->position().x() >= kToggleStripX &&
-        event->position().x() < kToggleStripX + kToggleCellCount * kToggleCellWidth) {
+    const int toggleX = static_cast<int>(event->position().x()) - kToggleStripX;
+    const int togglePitch = kToggleCellWidth + kCellGap;
+    const int toggle = toggleX / togglePitch;
+    if (toggleX >= 0 && toggle < kToggleCellCount && toggleX % togglePitch < kToggleCellWidth) {
         if (toggle == static_cast<int>(ToggleCell::Audio)) {
             if (!entry.audioNodeId.isValid() || layer->locked)
                 return;
@@ -1629,6 +1633,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
 
     createHeaderMenus();
     chrome_.splitPosition = [this] { return layerColumnWidth_; };
+    chrome_.maximizeInLeadingHeader = true;
     chrome_.hosted = [this] {
         headerFallback_->hide();
         for (auto* action : actions())
@@ -1849,8 +1854,6 @@ void TimelineEditor::setLayerColumnWidth(const int width, const bool persist) {
         chrome_.refreshSplit();
     if (auto* fallbackSplit = findChild<QWidget*>("timelineHeaderFallbackSplit"))
         fallbackSplit->setFixedWidth(layerColumnWidth_);
-    if (auto* navigatorCell = findChild<QWidget*>("timelineNavigatorLeftCell"))
-        navigatorCell->setFixedWidth(layerColumnWidth_);
     if (persist) {
         QSettings settings;
         settings.setValue(QLatin1StringView(kLayerColumnWidthSetting), layerColumnWidth_);
@@ -1947,6 +1950,12 @@ void TimelineEditor::updateScrollRange() {
     const int maximum = std::max(0, stack_->contentHeight() - viewport);
     scrollBar_->setRange(0, maximum);
     scrollBar_->setVisible(maximum > 0);
+    const int gutterWidth = maximum > 0 ? kScrollGutterWidth : 0;
+    for (const auto* name : {"timelineRulerScrollGutter", "timelineBodyScrollGutter"})
+        if (auto* gutter = findChild<QWidget*>(QLatin1String(name)))
+            gutter->setFixedWidth(gutterWidth);
+    if (auto* gutter = headerRight_->findChild<QWidget*>("timelineHeaderScrollGutter"))
+        gutter->setFixedWidth(gutterWidth);
     scrollBar_->setPageStep(std::max(1, viewport));
     scrollBar_->setSingleStep(kTimelineRowHeight);
 }
