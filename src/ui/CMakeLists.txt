@@ -346,6 +346,8 @@ target_sources(
         editor_area.cpp
         editor_chrome.cpp
         editor_registry.cpp
+        script_panel.cpp
+        script_panel.hpp
         frame_export_controller.cpp
         frame_export_controller_composition.cpp
         composition_export_dialog.cpp
@@ -486,6 +488,12 @@ target_link_libraries(
 )
 target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image bloom_media_cache)
 bloom_enable_warnings(bloom_ui)
+
+if(BLOOM_BUILD_PYTHON)
+    target_sources(bloom_ui PRIVATE script_panel_runtime.cpp script_panel_runtime.hpp)
+    target_link_libraries(bloom_ui PRIVATE bloom_python_runtime)
+    target_compile_definitions(bloom_ui PRIVATE BLOOM_BUILD_PYTHON=1)
+endif()
 
 if(BUILD_TESTING)
     add_subdirectory(tests)

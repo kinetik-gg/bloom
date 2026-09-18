@@ -3,8 +3,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <limits>
 #include <ranges>
+#include <set>
 #include <utility>
 
 namespace bloom::scripting {
@@ -212,6 +214,15 @@ format(const Arguments& arguments, const std::string& operationId, OperationCrea
         number(arguments, operationId, "frameRateNumerator", error, false);
     const auto frameRateDenominator =
         number(arguments, operationId, "frameRateDenominator", error, false);
+    for (const auto component : {frameRateNumerator, frameRateDenominator}) {
+        if (component && (!std::isfinite(*component) || *component < 1 ||
+                          *component > std::numeric_limits<std::uint32_t>::max() ||
+                          std::floor(*component) != *component)) {
+            error = failure(operationId, "frameRate",
+                            "Frame-rate components must be positive uint32 integers");
+            return std::nullopt;
+        }
+    }
     const auto frameRate = document::FrameRate::create(
         frameRateNumerator.has_value() ? static_cast<std::uint32_t>(*frameRateNumerator) : 24U,
         frameRateDenominator.has_value() ? static_cast<std::uint32_t>(*frameRateDenominator) : 1U);
@@ -533,6 +544,72 @@ OperationRegistry OperationRegistry::builtIn() {
                    },
                    {{"dataBlock", ValueKind::Id, true}, {"tags", ValueKind::Array, true}});
 
+    replaceFactory("bloom.animation.create-for-parameter",
+                   [](const std::string& operationId, const Arguments& arguments) {
+                       OperationCreateResult error(nullptr, std::nullopt);
+                       const auto composition = id(arguments, operationId, "composition", error);
+                       const auto parameter = id(arguments, operationId, "parameter", error);
+                       const auto time = rational(arguments, operationId, "time", error);
+                       if (!composition || !parameter || !time)
+                           return error;
+                       return OperationCreateResult(
+                           std::make_unique<commands::CreateAnimationForParameter>(
+                               document::CompositionId::fromRaw(*composition),
+                               document::ParameterId::fromRaw(*parameter), *time),
+                           std::nullopt);
+                   },
+                   {{"composition", ValueKind::Id, true},
+                    {"parameter", ValueKind::Id, true},
+                    {"time", ValueKind::Array, true}});
+    replaceFactory(
+        "bloom.animation.set-keyframe-at-time-for-parameter-component",
+        [](const std::string& operationId, const Arguments& arguments) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(arguments, operationId, "composition", error);
+            const auto parameter = id(arguments, operationId, "parameter", error);
+            const auto component = integer(arguments, operationId, "component", error);
+            const auto time = rational(arguments, operationId, "time", error);
+            const auto value = number(arguments, operationId, "value", error);
+            if (!composition || !parameter || !component || !time || !value)
+                return error;
+            if (*component < 0 || *component > 6 || !std::isfinite(*value))
+                return failure(operationId, "value", "Expected component 0..6 and a finite value");
+            return OperationCreateResult(
+                std::make_unique<commands::SetKeyframeAtTimeForParameterComponent>(
+                    document::CompositionId::fromRaw(*composition),
+                    document::ParameterId::fromRaw(*parameter),
+                    static_cast<document::AnimationComponent>(*component), *time, *value),
+                std::nullopt);
+        },
+        {{"composition", ValueKind::Id, true},
+         {"parameter", ValueKind::Id, true},
+         {"component", ValueKind::Integer, true},
+         {"time", ValueKind::Array, true},
+         {"value", ValueKind::Double, true}});
+    replaceFactory(
+        "bloom.node.remove",
+        [](const std::string& operationId, const Arguments& arguments) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(arguments, operationId, "composition", error);
+            const auto* value = findArgument(arguments, "nodes");
+            const auto* array = value ? std::get_if<ValueArray>(&value->storage) : nullptr;
+            if (!composition)
+                return error;
+            if (!array || array->empty() || array->size() > 4096)
+                return failure(operationId, "nodes", "Expected 1..4096 node IDs");
+            std::set<document::NodeId> nodes;
+            for (const auto& item : *array) {
+                const auto* number = std::get_if<std::int64_t>(&item.storage);
+                if (!number || *number <= 0)
+                    return failure(operationId, "nodes", "Expected positive node IDs");
+                nodes.insert(document::NodeId::fromRaw(static_cast<std::uint64_t>(*number)));
+            }
+            return OperationCreateResult(
+                std::make_unique<commands::RemoveNodes>(
+                    document::CompositionId::fromRaw(*composition), std::move(nodes)),
+                std::nullopt);
+        },
+        {{"composition", ValueKind::Id, true}, {"nodes", ValueKind::Array, true}});
     return registry;
 }
 

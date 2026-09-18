@@ -104,7 +104,7 @@ struct WindowFixture {
         exporter = std::make_unique<FrameExportController>(session, scheduler, bridge, compiler,
                                                            projectHost.publicationCoordinator(),
                                                            projectHost.artifactCoordinator());
-        if (!registerFoundationEditors(registry, session, *preview))
+        if (!registerFoundationEditors(registry, session, *preview, nullptr, &projectHost))
             throw std::runtime_error("Editor registration failed");
         window = std::make_unique<MainWindow>(registry, session, projectHost, *exporter, nullptr,
                                               preview.get(), nullptr, nullptr,

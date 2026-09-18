@@ -1,3 +1,7 @@
+#if defined(BLOOM_BUILD_PYTHON)
+#include "runtime.hpp"
+#endif
+
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/output/output_analysis.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
@@ -25,8 +29,9 @@ namespace runtime = bloom::runtime;
 namespace scripting = bloom::scripting;
 
 void printUsage() {
-    std::cerr << "usage: bloom-cli new <file> | open <file> | run <script.json> | "
-                 "render [--project <file>] (--frame N | --range A-B) --preset <id> --out <dir>\n";
+    std::cerr << "usage: bloom-cli new <file> | open <file> | run <script.json|script.py> | "
+                 "python | render [--project <file>] (--frame N | --range A-B) --preset <id> --out "
+                 "<dir>\n";
 }
 
 [[nodiscard]] std::optional<std::string> readText(const std::filesystem::path& path) {
@@ -234,6 +239,26 @@ frameRange(std::string_view value) {
 } // namespace
 
 int main(int argc, char** argv) {
+#if defined(BLOOM_BUILD_PYTHON)
+    if ((argc == 2 && std::string_view(argv[1]) == "python") ||
+        (argc == 3 && std::string_view(argv[1]) == "run" &&
+         std::filesystem::path(argv[2]).extension() == ".py")) {
+        try {
+            scripting::python::EmbeddedPython python(std::filesystem::absolute(argv[0]));
+            return argc == 2 ? python.interactive() : python.runFile(argv[2]);
+        } catch (const std::exception& error) {
+            std::cerr << "error[bloom-cli.python]: " << error.what() << '\n';
+            return 4;
+        }
+    }
+#else
+    if ((argc == 2 && std::string_view(argv[1]) == "python") ||
+        (argc == 3 && std::string_view(argv[1]) == "run" &&
+         std::filesystem::path(argv[2]).extension() == ".py")) {
+        std::cerr << "error[bloom-cli.python-disabled]: rebuild with BLOOM_BUILD_PYTHON=ON\n";
+        return 2;
+    }
+#endif
     if (argc < 3) {
         printUsage();
         return 2;

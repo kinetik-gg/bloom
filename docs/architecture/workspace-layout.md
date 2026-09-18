@@ -131,3 +131,10 @@ The following remain deferred:
 
 These deferred features must extend the same session-state and editor-registry contracts rather
 than creating a second workspace mechanism.
+
+## Script editor
+
+`bloom.script` is a replaceable registered editor with kit input, history, output and shared editor
+header/footer controls. It is offered by the panel switcher without changing the five-area default
+layout. Python-enabled builds attach it to the live host; other builds show an explicit unavailable
+state. See [Scripting Bloom with Python](../user-guide/python.md) for execution and undo behavior.

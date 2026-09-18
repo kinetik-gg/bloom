@@ -913,3 +913,17 @@ bloom_add_test(
     LABELS unit ui media integration
     TIMEOUT 60
 )
+
+if(BLOOM_BUILD_PYTHON)
+    add_executable(bloom_script_panel_test script_panel_tests.cpp)
+    target_include_directories(bloom_script_panel_test PRIVATE ..)
+    target_link_libraries(bloom_script_panel_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+    target_compile_definitions(bloom_script_panel_test PRIVATE
+        BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build"
+        BLOOM_SCRIPT_CLI="$<TARGET_FILE:bloom-cli>")
+    add_dependencies(bloom_script_panel_test bloom-cli)
+    bloom_enable_warnings(bloom_script_panel_test)
+    bloom_add_test(NAME bloom.ui.script-panel COMMAND bloom_script_panel_test
+        LABELS ui scripting python integration TIMEOUT 120
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+endif()

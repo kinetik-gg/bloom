@@ -48,6 +48,8 @@ provide research or rationale, but they are not binding until adopted here.
   importing from it on Linux, macOS and Windows.
 - [Memory](user-guide/memory.md) — the cache budgets Bloom chooses, the two override keys, and what
   "Memory pressure: caches trimmed" means.
+- [Scripting Bloom with Python](user-guide/python.md) — Python package, transactions and embedding.
+- [Using Bloom from an agent](user-guide/mcp.md) — stdio MCP tools and request limits.
 - [Headless scripting](user-guide/scripting.md) — `bloom-cli`, JSON transactions, and headless
   frame/range rendering.
 

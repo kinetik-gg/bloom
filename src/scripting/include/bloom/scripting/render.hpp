@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -21,6 +22,7 @@ struct RenderRequest final {
     std::optional<std::pair<std::uint64_t, std::uint64_t>> range;
     output::OutputPresetV1 preset = output::OutputPresetV1::PngRgba8SrgbV1;
     std::filesystem::path destination;
+    std::function<bool()> cancelled = {};
 };
 
 struct RenderResult final {

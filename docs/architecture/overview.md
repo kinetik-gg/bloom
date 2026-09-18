@@ -166,6 +166,14 @@ The complete contract and game-engine pipeline fitness test are defined in
 - The menu bar is the only fixed application surface.
 - Long-running decode, evaluation, render, import, export, media scan, and proxy work never runs on
   the UI thread.
+- A widget torn down with `setParent(nullptr)` + `deleteLater()` is not destroyed synchronously: it
+  stays alive, and any self-rescheduling `QTimer::singleShot` chain armed on it keeps firing, until
+  the event loop gets back around to its `DeferredDelete` event -- a race the deletion is not
+  guaranteed to win. Code that arms such a chain against a reference whose owner can be destroyed
+  independently (a session, a document) must explicitly cancel it at the same point it orphans the
+  object, not rely on the pending deletion outrunning it (CRASH-2: a Properties font row's
+  catalogue poll fired against an already-destroyed `CompositionSession` this way; fixed by
+  `PropertiesRegistryRow::detachFromSession()`).
 
 ## C++ Ownership Rules
 

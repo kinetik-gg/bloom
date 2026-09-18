@@ -135,7 +135,19 @@ SessionCreateResult Session::fromHostSession(std::unique_ptr<Session> base,
     return SessionCreateResult(std::move(base), {});
 }
 
-bool Session::isValid() const noexcept { return session_ != nullptr && session_->isValid(); }
+SessionCreateResult Session::attach(SessionBinding binding) {
+    if (!binding.valid || !binding.snapshot || !binding.execute || !binding.history ||
+        !binding.events || !binding.publication || !binding.artifacts || !binding.valid()) {
+        return failure("bloom.scripting.invalid-binding", "A live host binding is required");
+    }
+    auto result = std::unique_ptr<Session>(new Session());
+    result->binding_ = std::move(binding);
+    return SessionCreateResult(std::move(result), {});
+}
+
+bool Session::isValid() const noexcept {
+    return binding_ ? binding_->valid() : session_ != nullptr && session_->isValid();
+}
 
 host::ProjectSessionStateSnapshot Session::state() const {
     return session_ == nullptr ? host::ProjectSessionStateSnapshot{} : session_->stateSnapshot();
@@ -149,6 +161,11 @@ host::DecodedProjectSnapshotResult Session::snapshotResult() const {
 }
 
 document::Snapshot Session::snapshot() const {
+    if (binding_) {
+        if (!isValid())
+            throw std::runtime_error("The scripting session was closed or replaced");
+        return binding_->snapshot();
+    }
     const auto result = snapshotResult();
     if (!result) {
         throw std::logic_error("Bloom scripting session has no decoded document");
@@ -176,6 +193,8 @@ SessionCommandResult Session::makeCommandResult(host::ProjectSessionCommandResul
 }
 
 SessionCommandResult Session::execute(commands::Transaction transaction) {
+    if (binding_)
+        return isValid() ? binding_->execute(std::move(transaction)) : SessionCommandResult{};
     if (session_ == nullptr) {
         return {};
     }
@@ -183,6 +202,8 @@ SessionCommandResult Session::execute(commands::Transaction transaction) {
 }
 
 SessionCommandResult Session::undo() {
+    if (binding_)
+        return isValid() ? binding_->history(false) : SessionCommandResult{};
     if (session_ == nullptr) {
         return {};
     }
@@ -190,6 +211,8 @@ SessionCommandResult Session::undo() {
 }
 
 SessionCommandResult Session::redo() {
+    if (binding_)
+        return isValid() ? binding_->history(true) : SessionCommandResult{};
     if (session_ == nullptr) {
         return {};
     }
@@ -199,7 +222,7 @@ SessionCommandResult Session::redo() {
 SessionCommandResult Session::executeJsonOperation(const std::string_view operation,
                                                    const Arguments& arguments,
                                                    const std::optional<std::string>& label) {
-    if (session_ == nullptr) {
+    if (!isValid()) {
         return {};
     }
     auto created = registry_.create(operation, arguments);
@@ -241,6 +264,11 @@ SessionSaveResult Session::saveAs(const std::filesystem::path& path) {
 }
 
 SessionSaveResult Session::saveTo(const std::filesystem::path& path, const bool saveAsOperation) {
+    if (binding_) {
+        return {.status = SessionSaveStatus::ReadOnly,
+                .code = "bloom.scripting.use-host-save",
+                .message = "Use the live host's project Save command"};
+    }
     if (!isValid()) {
         return {.status = SessionSaveStatus::InvalidSession,
                 .code = "bloom.scripting.invalid-session",

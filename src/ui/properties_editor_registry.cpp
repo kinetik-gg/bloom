@@ -46,6 +46,9 @@ void PropertiesEditor::configureRegistryRows() {
         for (auto* row : registryRows_) {
             for (auto* section : sections_)
                 disconnect(section, nullptr, row, nullptr);
+            // CRASH-2: cancel any in-flight font-catalogue poll before orphaning the row -- see
+            // PropertiesRegistryRow::detachFromSession().
+            row->detachFromSession();
             row->setEnabled(false);
             row->hide();
             row->setParent(nullptr);

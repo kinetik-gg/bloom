@@ -191,7 +191,7 @@ int main(int argc, char* argv[]) {
     // all it takes to offer the panel again -- so Jobs is reachable programmatically and simply
     // not on offer in the interface.
     const bool editorsRegistered = bloom::ui::registerFoundationEditors(
-        editorRegistry, compositionSession, previewController, &ramPreviewController);
+        editorRegistry, compositionSession, previewController, &ramPreviewController, &projectHost);
     if (!editorsRegistered) {
         QEventLoop shutdownLoop;
         QObject::connect(&shutdownCoordinator,
