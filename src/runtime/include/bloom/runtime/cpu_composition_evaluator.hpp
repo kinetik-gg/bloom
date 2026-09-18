@@ -15,7 +15,8 @@ class MediaDiskCache;
 namespace bloom::runtime {
 namespace detail {
 class VideoSourceContext;
-}
+class ImageEffectContext;
+} // namespace detail
 
 // A device-free audio projection of one compiled composition. It carries only the source identity
 // and time-varying controls; decoding and device ownership stay at the media/audio boundary.
@@ -56,6 +57,7 @@ struct AudioMixDescription final {
 
 class CpuCompositionEvaluator final {
   public:
+    [[nodiscard]] std::shared_ptr<detail::ImageEffectContext> imageEffectContext() const;
     void setVideoCacheByteBudget(std::size_t budget) const;
     [[nodiscard]] std::shared_ptr<detail::VideoSourceContext> videoContext() const;
     void setAssetBaseDirectory(std::filesystem::path directory) const {
@@ -107,6 +109,7 @@ class CpuCompositionEvaluator final {
         std::filesystem::path directory;
         std::shared_ptr<media::cache::MediaDiskCache> diskCache;
         std::shared_ptr<detail::VideoSourceContext> video;
+        std::shared_ptr<detail::ImageEffectContext> effects;
     };
     std::shared_ptr<AssetContext> assetContext_ = std::make_shared<AssetContext>();
     std::shared_ptr<OperationCache> cache_ = std::make_shared<OperationCache>();

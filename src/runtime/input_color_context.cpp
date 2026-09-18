@@ -23,7 +23,7 @@ namespace {
     case color::OcioColorSpaceProcessorError::InputColorSpaceIsData:
         return "the selected input colour space is a data space";
     case color::OcioColorSpaceProcessorError::WorkingColorSpaceInvalid:
-        return "the selected working colour space is not scene-linear";
+        return "the selected destination colour space is a data space";
     case color::OcioColorSpaceProcessorError::TransformBuildFailed:
         return "the OCIO colour-space transform could not be built";
     case color::OcioColorSpaceProcessorError::CpuProcessorUnavailable:

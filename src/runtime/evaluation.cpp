@@ -40,6 +40,14 @@ std::string_view evaluationDiagnosticCodeId(const EvaluationDiagnosticCode code)
         return "bloom.runtime.evaluation.unsupported-floating-point-environment";
     case EvaluationDiagnosticCode::IncompatibleImageDescriptor:
         return "bloom.runtime.evaluation.incompatible-image-descriptor";
+    case EvaluationDiagnosticCode::ColorSpaceMissing:
+        return "bloom.runtime.evaluation.color-space-missing";
+    case EvaluationDiagnosticCode::ColorSpaceIsData:
+        return "bloom.runtime.evaluation.color-space-is-data";
+    case EvaluationDiagnosticCode::ColorTransformFailed:
+        return "bloom.runtime.evaluation.color-transform-failed";
+    case EvaluationDiagnosticCode::OcioConfigUnavailable:
+        return "bloom.runtime.evaluation.ocio-config-unavailable";
     case EvaluationDiagnosticCode::InternalInvariant:
         return "bloom.runtime.evaluation.internal-invariant";
     }

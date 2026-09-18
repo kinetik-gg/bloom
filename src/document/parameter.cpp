@@ -230,6 +230,12 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<double>(&constant.value);
         return value && std::isfinite(*value);
     }
+    if (schemaKey == "bloom.ocio-cst.from" || schemaKey == "bloom.ocio-cst.to") {
+        const auto* value = std::get_if<std::string>(&constant.value);
+        return value && value->size() <= 256 && value->find('\0') == std::string::npos;
+    }
+    if (schemaKey == "bloom.ocio-effect.bypass")
+        return std::holds_alternative<bool>(constant.value);
     if (schemaKey == "bloom.image.asset")
         return std::holds_alternative<std::string>(constant.value);
     if (schemaKey == kImageInputColorSpaceIdParameterSchemaKey ||
@@ -307,7 +313,7 @@ constantMatchesSchema(const std::string_view schemaKey,
 
 [[nodiscard]] bool isValidSourceForSchema(const std::string_view schemaKey,
                                           const bloom::document::ParameterSource& source) {
-    if (schemaKey == "bloom.shape.path" &&
+    if ((schemaKey.starts_with("bloom.ocio-") || schemaKey == "bloom.shape.path") &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))
         return false;
     if (!isGenericallyValidSource(source)) {

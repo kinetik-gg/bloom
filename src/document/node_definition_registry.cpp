@@ -474,6 +474,20 @@ template <typename Definition>
             NodeCategory::Sources};
 }
 
+[[nodiscard]] NodeDefinition cstDefinition() {
+    return {
+        {"bloom.ocio-colour-space-transform", 1},
+        NodeLoweringKind::ImageEffect,
+        {{"input", SocketValueKind::Image}},
+        {{"image", SocketValueKind::Image}},
+        {{"from", "bloom.ocio-cst.from", ParameterValueKind::String, true, false, std::string{}},
+         {"to", "bloom.ocio-cst.to", ParameterValueKind::String, true, false, std::string{}},
+         {"bypass", "bloom.ocio-effect.bypass", ParameterValueKind::Boolean, true, false, false}},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Color};
+}
+
 [[nodiscard]] NodeDefinition imageDefinition() {
     using namespace bloom::document;
     return {
@@ -676,6 +690,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
                                             compositionOutputDefinition(),
                                             textDefinition(),
                                             imageDefinition(),
+                                            cstDefinition(),
                                             videoDefinition(),
                                             audioDefinition(),
                                             compositionSourceDefinition()};

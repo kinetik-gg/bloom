@@ -637,7 +637,15 @@ lowerImageEffect(const document::NodeRecord& node,
         addTopologyFailure(node.id, "Image effect input could not be lowered.");
         return std::nullopt;
     }
-    return runtime::CompiledImageEffect{node.id, *input, runtime::IdentityImageKernel{}, false};
+    if (node.typeId == "bloom.ocio-colour-space-transform") {
+        const auto* from = parameterConstant<std::string>(findParameterBinding(node, "from"));
+        const auto* to = parameterConstant<std::string>(findParameterBinding(node, "to"));
+        const auto* bypass = parameterConstant<bool>(findParameterBinding(node, "bypass"));
+        if (from && to && bypass)
+            return runtime::CompiledImageEffect{node.id, *input, runtime::CstKernel{*from, *to}, *bypass};
+    }
+    addTopologyFailure(node.id, "Image effect kernel or parameters are unsupported.");
+    return std::nullopt;
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

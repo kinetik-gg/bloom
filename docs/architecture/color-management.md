@@ -708,3 +708,16 @@ Bloom Neutral config revision. Display/view changes remain display-cache concern
 semantics advances once, 5 → 6, to identify image input and sequence evaluation. Primitive 5,
 plan 3, animation 2 and Bloom Neutral v1 identities stay fixed. Output identity goldens were
 independently derived using the S5 byte-envelope oracle with those four version values.
+
+## Explicit Colour Space Transform
+
+`bloom.ocio-colour-space-transform` uses the shared image-effect operation. Its constant String
+parameters `from` and `to` select non-data colour-space ids from the exact project OCIO config;
+an empty id means the effective working space. `bypass` defaults to false. Explicit transforms
+may target nonlinear spaces such as ACEScct; the project working space remains scene-linear.
+
+The evaluator shares prepared CPU processors by config revision, source id, and destination id.
+It transforms straight RGB and preserves alpha under the image-effect alpha contract. Missing ids,
+data spaces, or unavailable processors pass the image through with a node-addressed typed warning,
+including on warm cache hits. The existing preview diagnostic path exposes that reason in the Viewer
+and status line. Bypass and true identity share the input pixels exactly.

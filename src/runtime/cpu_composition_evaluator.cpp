@@ -1,4 +1,5 @@
 #include "cpu_composition_evaluator_support.hpp"
+#include "image_effect.hpp"
 #include "image_source.hpp"
 #include "layer_parent_transform.hpp"
 #include "operation_key.hpp"
@@ -1699,6 +1700,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             std::optional<render::Rgba32fImage> produced;
             std::optional<EvaluationDiagnostic> operationFailure;
             bool operationCancelled = false;
+            bool effectApplicationFailed = false;
 
             std::shared_ptr<const ProcessFrame> nestedFrame;
             std::optional<core::RationalTime> nestedTime;
@@ -1749,6 +1751,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 frameStatistics.evaluatedNodes.insert(frameStatistics.evaluatedNodes.end(),
                                                       nestedStatistics.evaluatedNodes.begin(),
                                                       nestedStatistics.evaluatedNodes.end());
+            }
+            std::optional<detail::PreparedImageEffect> preparedEffect;
+            if (const auto* effect = std::get_if<CompiledImageEffect>(&plan->operations()[index])) {
+                preparedEffect = imageEffectContext()->prepare(*effect, request.colorIntent);
+                if (preparedEffect->diagnostic) {
+                    auto warning = *preparedEffect->diagnostic;
+                    warning.subject = operationSubject;
+                    imageWarnings.push_back(std::move(warning));
+                }
             }
             std::optional<detail::ImageSourceSelection> selectedImage;
             if (const auto* source = std::get_if<CompiledImageSource>(&plan->operations()[index])) {
@@ -1802,7 +1813,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 std::holds_alternative<CompiledShape>(operation) ||
                 std::holds_alternative<CompiledText>(operation))
                 vectors[index] = VectorChain{index, {}, 1};
-            if (const auto* effect = std::get_if<CompiledImageEffect>(&operation))
+            if (const auto* effect = std::get_if<CompiledImageEffect>(&operation);
+                effect && preparedEffect->identity())
                 vectors[index] = vectors[effect->input.value()];
             if (const auto* layer = std::get_if<CompiledLayerOutput>(&operation)) {
                 const auto& inputVector = vectors[layer->input.value()];
@@ -1898,7 +1910,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             key.add(nested->planSemanticsVersion());
                             key.add(nestedFrame->contentHash_);
                         } else if constexpr (std::is_same_v<Step, CompiledImageEffect>) {
+                            key.add(std::string(request.colorIntent.ocioConfigUri));
                             key.add(step.kernel.index());
+                            if (const auto* cst = std::get_if<CstKernel>(&step.kernel)) {
+                                key.add(cst->fromId);
+                                key.add(cst->toId);
+                            }
                             key.add(step.bypass);
                             key.add(std::string(request.colorIntent.workingColorSpaceId));
                             const auto revision =
@@ -2185,6 +2202,23 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             slots[index] = slots[effect.input.value()];
                             bounds[index].local = bounds[effect.input.value()].output;
                             bounds[index].output = bounds[index].local;
+                            if (slots[index] && !preparedEffect->identity()) {
+                                auto result = detail::applyImageEffect(
+                                    *preparedEffect, *slots[index], remainingPixelBudget(),
+                                    cancellation, operationIndex, progress);
+                                if (result.cancelled) {
+                                    operationCancelled = true;
+                                    return;
+                                }
+                                if (result.diagnostic) {
+                                    result.diagnostic->subject = operationSubject;
+                                    imageWarnings.push_back(std::move(*result.diagnostic));
+                                    effectApplicationFailed = true;
+                                    contentHashes[index] += ":effect-failed";
+                                } else if (result.image) {
+                                    slots[index] = std::move(result.image);
+                                }
+                            }
                             reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
                                                       .operation = operationIndex,
                                                       .completed = 1,
@@ -3068,7 +3102,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     slots[index] =
                         std::make_shared<const render::Rgba32fImage>(std::move(*produced));
                 }
-                if (cache && (!selectedVideo || slots[index]))
+                if (cache && !effectApplicationFailed && (!selectedVideo || slots[index]))
                     cache->store(
                         key.bytes(), plan->sourceRevision(),
                         {.image = index == request.output.value() ? processImage : slots[index],

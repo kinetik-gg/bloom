@@ -126,6 +126,10 @@ enum class EvaluationDiagnosticCode : std::uint8_t {
     UnsupportedFloatingPointEnvironment,
     IncompatibleImageDescriptor,
     InternalInvariant,
+    ColorSpaceMissing,
+    ColorSpaceIsData,
+    ColorTransformFailed,
+    OcioConfigUnavailable,
 };
 
 [[nodiscard]] std::string_view evaluationDiagnosticCodeId(EvaluationDiagnosticCode code) noexcept;

@@ -181,7 +181,12 @@ struct CompiledCompositionSource final {
 struct IdentityImageKernel final {
     friend bool operator==(const IdentityImageKernel&, const IdentityImageKernel&) = default;
 };
-using ImageEffectKernel = std::variant<IdentityImageKernel>;
+struct CstKernel final {
+    std::string fromId;
+    std::string toId;
+    friend bool operator==(const CstKernel&, const CstKernel&) = default;
+};
+using ImageEffectKernel = std::variant<IdentityImageKernel, CstKernel>;
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
     OperationIndex input;
