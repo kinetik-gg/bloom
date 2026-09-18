@@ -67,6 +67,8 @@ target_sources(
     bloom_runtime_evaluator
     PRIVATE
         operation_cache.cpp
+        video_source.cpp
+        video_source.hpp
         image_source.cpp
         image_source.hpp
         layer_parent_transform.hpp
@@ -116,10 +118,16 @@ target_compile_features(bloom_runtime_evaluator PUBLIC cxx_std_20)
 # their own public signatures, exactly like the existing PUBLIC bloom_render dependency below.
 target_link_libraries(bloom_runtime_evaluator PUBLIC bloom_runtime_compiler bloom_render
                                                      bloom_color_ocio bloom_media_image
-                                                     bloom_media_cache)
+                                                     bloom_media_cache bloom_media_video bloom_color_video)
 bloom_enable_warnings(bloom_runtime_evaluator)
 bloom_enable_strict_floating_point(bloom_runtime_evaluator)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
+
+add_library(bloom_runtime_video_asset STATIC video_asset.cpp)
+target_include_directories(bloom_runtime_video_asset PUBLIC include)
+target_link_libraries(bloom_runtime_video_asset PUBLIC bloom_document bloom_media_provider)
+bloom_enable_warnings(bloom_runtime_video_asset)
+target_link_libraries(bloom_runtime_evaluator PUBLIC bloom_runtime_video_asset)

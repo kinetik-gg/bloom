@@ -80,6 +80,7 @@ void forEachInput(const CompiledOperation& operation, Function&& function) {
                    [](const CompiledSolid&) {},
                    [](const CompiledText&) {},
                    [](const CompiledImageSource&) {},
+                   [](const CompiledVideoSource&) {},
                    [](const CompiledCompositionSource&) {},
                    [&function](const CompiledLayerOutput& layer) {
                        function(layer.input);

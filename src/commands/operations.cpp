@@ -327,6 +327,7 @@ struct StructuredLayerDescriptor {
     std::uint32_t sourceNodeSchemaVersion;
     std::string_view sourceOutputPort;
     std::vector<StructuredSourceParameter> sourceParameters;
+    bool audio = false;
 };
 
 struct StructuredLayerOutputNames {
@@ -506,6 +507,33 @@ addStructuredLayer(document::Draft& draft, document::Composition& composition,
                                          "Layer topology could not be inserted");
     }
 
+    if (descriptor.audio) {
+        const auto sourceAudio = draft.ids().allocateEdge(),
+                   layerAudio = draft.ids().allocateEdge();
+        if (!sourceAudio || !layerAudio ||
+            !graph.addEdge({*sourceAudio,
+                            {ids->sourceNodeId, "audio"},
+                            document::NodeInputRef{ids->layerOutputNodeId, "audio"}}) ||
+            !graph.addEdge(
+                {*layerAudio,
+                 {ids->layerOutputNodeId, "audio"},
+                 document::LayerStackInputRef{graph.layerStack().nodeId(), ids->slotId, "audio"}}))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Video audio edges could not be inserted");
+        const auto output = graph.compositionOutput();
+        if (output && std::ranges::none_of(graph.edges(), [&](const auto& edge) {
+                const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
+                return input && input->nodeId == output->nodeId && input->port == "audio";
+            })) {
+            const auto edge = draft.ids().allocateEdge();
+            if (!edge || !graph.addEdge({*edge,
+                                         {graph.layerStack().nodeId(), "audio"},
+                                         document::NodeInputRef{output->nodeId, "audio"}}))
+                return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                 "Video audio output could not be connected");
+        }
+    }
+
     // Structured layer creation owns two new cards. Anchor the Layer Output to the Merge it feeds
     // and the source to the Layer Output, then use the same gap-aware spatial index for each card.
     // The existing layout is never rewritten; a crowded row grows down, then up, and only then
@@ -666,22 +694,35 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
         asset->kind == document::AssetKind::Sequence
             ? asset->manifest.pattern
             : asset->locator.path.substr(asset->locator.path.find_last_of('/') + 1);
-    return addStructuredLayer(
-        draft, *composition, name,
-        {"bloom.image-source",
-         1,
-         "image",
-         {{"asset", "bloom.image.asset", std::to_string(asset_.value()), "assetParameter"},
-          {"startFrame", "bloom.image.start-frame", std::int64_t{0}, "startFrameParameter"},
-          {"loopMode", "bloom.image.loop-mode", std::int64_t{0}, "loopModeParameter"},
-          {"colorSpace", "bloom.image.color-space", std::int64_t{0}, "colorSpaceParameter"},
-          {"premultiply", "bloom.image.premultiply", true, "premultiplyParameter"}}},
-        {static_cast<double>(composition->format().width()) / 2.0,
-         static_cast<double>(composition->format().height()) / 2.0},
-        1.0,
-        {"layer", "slot", "imageNode", "layerOutputNode", "positionParameter", "anchorParameter",
-         "scaleParameter", "rotationParameter", "opacityParameter", "blendModeParameter",
-         "imageToLayerEdge", "layerToStackEdge"});
+    const bool video = asset->kind == document::AssetKind::Video;
+    if (!video && asset->kind != document::AssetKind::Image &&
+        asset->kind != document::AssetKind::Sequence)
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "Asset is not visual media");
+    StructuredLayerDescriptor source{
+        video ? "bloom.video-source" : "bloom.image-source",
+        1,
+        "image",
+        {{"asset", video ? "bloom.video.asset" : "bloom.image.asset",
+          std::to_string(asset_.value()), "assetParameter"},
+         {"startFrame", video ? "bloom.video.start-frame" : "bloom.image.start-frame",
+          std::int64_t{0}, "startFrameParameter"},
+         {"loopMode", video ? "bloom.video.loop-mode" : "bloom.image.loop-mode", std::int64_t{0},
+          "loopModeParameter"},
+         {"colorSpace", video ? "bloom.video.color-space" : "bloom.image.color-space",
+          std::int64_t{0}, "colorSpaceParameter"}},
+        video && asset->channels > 0};
+    if (!video)
+        source.sourceParameters.push_back(
+            {"premultiply", "bloom.image.premultiply", true, "premultiplyParameter"});
+    return addStructuredLayer(draft, *composition, name, std::move(source),
+                              {static_cast<double>(composition->format().width()) / 2.0,
+                               static_cast<double>(composition->format().height()) / 2.0},
+                              1.0,
+                              {"layer", "slot", "imageNode", "layerOutputNode", "positionParameter",
+                               "anchorParameter", "scaleParameter", "rotationParameter",
+                               "opacityParameter", "blendModeParameter", "imageToLayerEdge",
+                               "layerToStackEdge"});
 }
 
 std::string_view AddTextLayer::typeId() const noexcept { return "bloom.layer.add-text"; }

@@ -9,8 +9,9 @@ Updated: 2026-09-17
 The accepted v0 amendment in ADR 0020 admits the image pipeline under `src/media/image`:
 a private, pinned stb_image PNG/JPEG decoder and a bounded OpenEXR reader compiled in process with
 hard input and allocation limits. PNG16 is included. Images and numbered sequences become asset
-records; authoring source nodes reference stable asset IDs. Broad time-based media remains the
-working research below.
+records; authoring source nodes reference stable asset IDs. Linux video preview read is implemented
+by MEDIA-3, described in [Video Read Implementation](#video-read-implementation-media-3). Other
+provider and delivery paths remain working research below.
 The v0 gap rule is hold-previous with a visible warning; it supersedes the policy-selection
 research below for this closed image profile. See the component security review for limits.
 
@@ -520,9 +521,9 @@ provider without a reviewed preset version.
 
 ### Implemented MEDIA-K1 Contract And Worker
 
-Status: implemented for the synthetic provider and Linux process backend (2026-09-17).
-The following sections remain the larger qualification contract; the implementation slice is
-explicitly limited to the values and operations described here. No real codec is advertised.
+Status: MEDIA-K1 established the synthetic provider and Linux process backend (2026-09-17).
+MEDIA-3 adds the FFmpeg read provider described under "Video Read Implementation" below.
+The larger qualification contract continues to govern which real-codec paths are admitted.
 
 `bloom_media_provider` owns the Qt-free, codec-free contract, canonical identities, registry,
 and protocol. It depends only on `bloom_core`. `bloom_media_worker_host`, also located under
@@ -530,8 +531,8 @@ and protocol. It depends only on `bloom_core`. `bloom_media_worker_host`, also l
 core-only `bloom_runtime` scheduler target. The evaluator is a separate target; neither the
 scheduler nor the contract library depends on the host facade, so target dependencies remain
 acyclic. The repository module allowlist permits that narrow scheduling edge. The desktop
-must never link `bloom_media_fake_worker_provider`, the worker-private provider target that
-will later acquire codec adapters. No UI or durable document schema is involved.
+must never link `bloom_media_fake_worker_provider` or `bloom_media_ffmpeg_worker_provider`.
+MEDIA-3 adds video document records and UI projections above this codec-free contract.
 
 The five records in `include/bloom/media/provider/contract.hpp` are frozen as follows:
 
@@ -570,16 +571,17 @@ requests within these ceilings. Expanding a ceiling requires a reviewed profile/
 | Default pool slots / call deadline | 2 / 5 seconds |
 | Default cancellation message / SIGTERM grace | 50 ms / 100 ms |
 
-Video CPU formats currently close to RGBA8, RGBA32F, and YUV420P8. Plane dimensions, stride,
+Video CPU formats currently close to RGBA8, RGBA32F, YUV420P8 and YUVA444P16. Plane dimensions, stride,
 byte count, chroma extents, aggregate allocation, and SHA-256 are revalidated by the host.
 Probe streams preserve original H.273 color tags with -1 for absence. This does not resolve
 color interpretation. Audio values use finite planar floats, explicit unique channel roles,
-matching sample counts, and bounded rates; audio transport/decoding is not implemented yet.
+matching sample counts, and bounded rates; MEDIA-3 implements this audio transport and decode.
 
 The wire envelope is `u32 body_length`, `u32 magic=0x314d4c42`, `u16 protocol=1`,
-`u16 schema=1`, `u8 kind`, `u64 session`, `u64 sequence`, then payload. The fixed body header
+`u16 schema=2`, `u8 kind`, `u64 session`, `u64 sequence`, then payload. The fixed body header
 is 25 bytes. Every response echoes the host's nonzero session nonce and next sequence.
 Handshake, Call, Probe, Frame, Cancel, Shutdown, Ack and Failure use kind values 1 through 8.
+Index and Audio use 9 and 10.
 The host checks the complete expected execution identity, including provider/build, lock digest,
 OS/architecture/SDK/driver/device, generation, software/hardware use, transport, synchronization,
 resource profile, entitlement, availability and trust domain. The handshake also binds exact
@@ -622,12 +624,12 @@ cases live under `tests/fixtures/media`; no binary media is checked in.
 
 Installed worker generations occupy `libexec/bloom/media/<provider-generation>/`, with private
 shared dependencies under their own `lib/`. Linux worker install rpath is exactly `$ORIGIN/lib`;
-CMake does not append link directories. The synthetic worker uses the same explicit rpath in build and install trees, avoiding empty
-loader-search entries.
-The current fake worker needs no codec library. MEDIA-3 must place the reviewed shared FFmpeg
-closure in its worker generation's private directory and validate the installed binary and
-transitive library rpaths. The desktop must continue to pass `desktop-no-ffmpeg`; loader paths
-and codec-bearing worker targets must never be propagated through `bloom_media_provider`.
+CMake does not append link directories. The FFmpeg worker uses this same rpath in build and
+install trees, avoiding empty loader-search entries; its private libraries use `$ORIGIN`.
+The synthetic test worker needs no codec library and is not installed. MEDIA-3 places the
+reviewed shared FFmpeg closure in its worker generation's private directory. The desktop must
+continue to pass `desktop-no-ffmpeg`; loader paths and codec-bearing worker targets must never
+be propagated through `bloom_media_provider`.
 macOS and Windows packaging policies will be qualified with their process/provider backends.
 
 ### Internal Boundary
@@ -1166,3 +1168,63 @@ by Apple, FFmpeg, SMPTE, EBU, ITU, or any SDK vendor.
 - [`platform-support.md`](platform-support.md)
 - [`../standards/strategy.md`](../standards/strategy.md)
 - [ADR 0020](../decisions/0020-qualified-media-codec-providers.md)
+
+### Video Read Implementation (MEDIA-3)
+
+Linux uses FFmpeg 8.1.2 exclusively inside `bloom-media-worker`. Only
+`apps/bloom-media-worker/ffmpeg_provider.cpp` includes FFmpeg headers. The desktop links the
+provider-neutral protocol and client; it loads no libav library. The worker installs under
+`libexec/bloom/media/ffmpeg-v1`, with its shared closure in `lib/` and relative loader paths.
+macOS and Windows currently return typed `Unavailable`; their native providers remain pending.
+
+Protocol 1, schema 2 adds bounded stream metadata, keyframe indices and planar float audio blocks.
+Probe retains codec/profile identifiers, exact rational timebase and rate, dimensions, original
+pixel-format spelling, H.273 colour tags, channel layout, sample rate, duration and timecode.
+`DemuxIndex` records stream IDs and exact key-packet PTS/DTS. Software video verifies constant
+packet-presentation cadence, then seeks backward to a keyframe and decodes forward until the
+exact requested CFR presentation timestamp. A missing exact timestamp, unsupported layout or
+unavailable rate is a typed refusal. Variable-frame-rate ordinal indexing and interlaced preview
+are not yet qualified. Audio requests name a starting sample and exact count; decoding from
+the beginning preserves codec priming and refuses timestamp gaps or overlaps. Audio sample zero
+uses the first video presentation timestamp, including for containers with a nonzero origin.
+
+All four read roles run behind the existing process supervisor, cancellation, bounded queue and
+watchdog. Limits include 16 GiB source files, 256 streams, one million index entries, 16,384 per
+image dimension, 16,777,216 pixels, 256 MiB of CPU planes, and 65,536 audio samples per block.
+The preview audio buffer also obeys the existing audio sample budget. Malformed input, changed
+content, oversize products, worker crashes and timeouts remain typed failures. A failed worker
+request cannot publish a partial product; a later request starts a fresh worker.
+
+Software decode declares `DecodedSemanticExact` for the intake's admitted codec paths. The
+separate VA-API execution key declares `NoDeterminismClaim`, carries Development/Incomplete
+evidence and is excluded from normal qualified selection until device-specific testing passes.
+Hardware provides acceleration only; it never changes project semantics or grants qualification.
+FFmpeg ProRes evidence explicitly records `apple_authorized=false` and no delivery qualification.
+Assets expose this exact note:
+
+> Decoded by FFmpeg; not an Apple-authorized ProRes implementation
+
+`VideoDecodeSession` serializes each asset's requests through `MediaWorkerPool`; concurrent calls
+receive `Busy`. The evaluator retains at most four sessions. `DecodedVideoCache` has a separate
+LRU byte budget and keys frames by content digest, stream, frame index and interpretation. The
+application reserves the smaller of 256 MiB and one quarter of the ledger's operation-cache
+allowance, deducting that reservation before assigning the operation cache. A zero budget disables
+retention. File content is rehashed before a cache hit, so edits cannot reuse stale decoded pixels.
+Thumbnail and waveform/audio buffers reuse the existing bounded preview storage after the same
+content check; scrubbing does not decode the complete audio clip again.
+No operation-cache or memory-ledger implementation changes are required.
+
+Colour conversion preserves stream tags when a decoder omits them from its frame. The provider
+copies YUV420P8 directly or expands YUV/alpha to bounded YUVA444P16 planes. `src/color` owns the
+Rec.709 matrix/range arithmetic and inverse Rec.709 or sRGB transfer to scene-linear Rec.709;
+`src/media/video` adapts the checked planes and premultiplies retained alpha. No missing primaries,
+matrix or range is inferred. Rec.2020, HLG and PQ return typed `Unavailable`, including when a
+transfer override is supplied. Raw and linear overrides change transfer interpretation only.
+
+Tests generate 48-frame H.264 MP4 and ProRes 422 MOV fixtures with burned-in frame numbers and
+48 kHz PCM, using the intake libraries in a worker-only fixture generator. An additional ProRes 4444
+fixture checks half-opacity alpha. Qualification evidence hashes the generator source; the
+execution key separately binds the dependency lock and provider build. The H.264 fixture uses
+baseline I_PCM macroblocks because the intake intentionally contains no H.264 encoder or FFmpeg
+CLI. The MOV muxer writes its MP4-compatible `isom` sample entry. Generated provenance describes
+the synthetic pixels, audio samples and tool version; no binary fixture is checked in.

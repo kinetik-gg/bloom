@@ -116,7 +116,7 @@ void PropertiesEditor::configureRegistryRows() {
                         document::CompositionId::fromRaw(selector->currentData().toULongLong()));
                 });
             }
-            if (node->typeId == "bloom.image-source") {
+            if ((node->typeId == "bloom.image-source" || node->typeId == "bloom.video-source")) {
                 for (const auto& [name, object] :
                      std::array{std::pair{tr("Dimensions"), "propertiesImageDimensions"},
                                 std::pair{tr("Range"), "propertiesImageRange"}}) {

@@ -462,6 +462,26 @@ void registryRows() {
                "Merge and Output stop upstream traversal");
     }
 }
+void videoRows() {
+    auto seed =
+        document::makeNewProject("Video Properties", "Main", core::RationalTime::fromInteger(2));
+    const auto composition = seed.initialCompositionId;
+    document::Document document(std::move(seed.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, composition);
+    const auto video = addNode(session, "bloom.video-source");
+    expect(video.isValid(), "Video node registers for Properties");
+    session.selectNode(video);
+    ui::PropertiesEditor panel(session);
+    for (const auto* role : {"asset", "startFrame", "loopMode", "colorSpace"})
+        expect(row(panel, role) != nullptr, "Video Properties uses every registry parameter");
+    expect(row(panel, "premultiply") == nullptr, "Video alpha association comes from its decoder");
+    if (auto* loop = row(panel, "loopMode")) {
+        auto* selector = loop->findChild<ui::kit::KDropdown*>();
+        expect(selector && selector->count() == 3,
+               "Video loop modes use the shared registry selector");
+    }
+}
 } // namespace
 int main(int argc, char** argv) try {
     QApplication application(argc, argv);
@@ -472,6 +492,7 @@ int main(int argc, char** argv) try {
     upstreamRows();
     drivenTextContent();
     widthRule();
+    videoRows();
     QSettings().clear();
     return failures ? 1 : 0;
 }

@@ -65,7 +65,13 @@ class AddImageNode final : public commands::Operation {
         if (!draft.project().findAsset(asset_))
             return commands::OperationResult::rejected(commands::OperationIssueCode::InvalidTarget,
                                                        "Image asset does not exist");
-        auto added = commands::AddNode(composition_, "bloom.image-source", position_).apply(draft);
+        const auto* asset = draft.project().findAsset(asset_);
+        auto added = commands::AddNode(composition_,
+                                       asset && asset->kind == document::AssetKind::Video
+                                           ? "bloom.video-source"
+                                           : "bloom.image-source",
+                                       position_)
+                         .apply(draft);
         if (added.status != commands::OperationStatus::Applied)
             return added;
         for (const auto& output : added.outputs)
@@ -185,10 +191,14 @@ class AssetDropTarget final : public QObject {
         if (event->type() == QEvent::Drop) {
             const auto* asset = session_.snapshot().project().findAsset(id);
             const bool audio = asset != nullptr && asset->kind == document::AssetKind::Audio;
-            commands::Transaction transaction(
-                view_ ? (audio ? "Add Audio Source" : "Add Image Source")
-                      : (audio ? "Add Audio Layer" : "Add Image Layer"),
-                session_.snapshot().revision());
+            const bool video = asset != nullptr && asset->kind == document::AssetKind::Video;
+            commands::Transaction transaction(view_ ? (audio   ? "Add Audio Source"
+                                                       : video ? "Add Video Source"
+                                                               : "Add Image Source")
+                                                    : (audio   ? "Add Audio Layer"
+                                                       : video ? "Add Video Layer"
+                                                               : "Add Image Layer"),
+                                              session_.snapshot().revision());
             if (view_) {
                 const auto point = view_->mapToScene(drop->position().toPoint());
                 if (audio)

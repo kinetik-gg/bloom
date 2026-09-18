@@ -5,7 +5,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 
 namespace bloom::media::provider {
-using WorkerReply = std::variant<ProbeResult, FrameProduct, Unavailable>;
+using WorkerReply = std::variant<ProbeResult, FrameProduct, DemuxIndex, AudioBlock, Unavailable>;
 struct WorkerPoolOptions {
     platform::ProcessOptions process;
     Handshake expected;

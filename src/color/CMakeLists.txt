@@ -174,3 +174,10 @@ if(BUILD_TESTING)
         LABELS unit color ocio render
     )
 endif()
+
+# Provider-neutral video colour conversion; no codec library enters this target.
+add_library(bloom_color_video STATIC video_colour.cpp)
+target_include_directories(bloom_color_video PUBLIC include)
+target_link_libraries(bloom_color_video PUBLIC bloom_core)
+bloom_enable_warnings(bloom_color_video)
+bloom_enable_strict_floating_point(bloom_color_video)

@@ -157,6 +157,8 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Shape");
     if (typeId == document::kCompositionSourceNodeType)
         return QObject::tr("Composition");
+    if (typeId == "bloom.video-source")
+        return QCoreApplication::translate("node_editor", "Video");
     if (typeId == "bloom.image-source")
         return QCoreApplication::translate("node_editor", "Image");
     if (typeId == "bloom.audio-source")

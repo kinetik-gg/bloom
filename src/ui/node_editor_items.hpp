@@ -329,7 +329,8 @@ class NodeItem final : public QGraphicsObject {
         shapeSource_ = node.typeId == document::kShapeSourceNodeType;
         if (shapeSource_)
             shapeKind_ = nodeShapeKind(composition, node);
-        imageSource_ = node.typeId == "bloom.image-source";
+        videoSource_ = node.typeId == "bloom.video-source";
+        imageSource_ = node.typeId == "bloom.image-source" || videoSource_;
         audioSource_ = node.typeId == "bloom.audio-source";
         imageAsset_ = {};
         if ((imageSource_ || audioSource_) && session_)
@@ -342,7 +343,8 @@ class NodeItem final : public QGraphicsObject {
         const auto* imageRecord = imageSource_ && session_
                                       ? session_->snapshot().project().findAsset(imageAsset_)
                                       : nullptr;
-        imageSequence_ = imageRecord && imageRecord->kind == document::AssetKind::Sequence;
+        imageSequence_ = imageRecord && (imageRecord->kind == document::AssetKind::Sequence ||
+                                         imageRecord->kind == document::AssetKind::Video);
         reroute_ = document::isRerouteNodeType(node.typeId);
         setData(kNodeMutedRole, layout.muted);
         setData(kNodeCollapsedRole, layout.collapsed);
@@ -1033,7 +1035,9 @@ class NodeItem final : public QGraphicsObject {
 
         const bool fontSelector = declared->schemaKey == document::kTextFontParameterSchemaKey;
         if (const auto items = selectorItems(declared->schemaKey);
-            fontSelector || !items.isEmpty() || declared->schemaKey == "bloom.image.asset") {
+            fontSelector || !items.isEmpty() ||
+            (declared->schemaKey == "bloom.image.asset" ||
+             declared->schemaKey == "bloom.video.asset")) {
             row.selector = new kit::KDropdown;
             row.selector->setObjectName(declared->schemaKey == "bloom.image.asset"
                                             ? "nodeImageAsset"
@@ -1385,8 +1389,8 @@ class NodeItem final : public QGraphicsObject {
                             if (selected >= 0)
                                 row.selector->setCurrentIndex(selected);
                         } else {
-                            refreshImageAssetSelector(*row.selector, *session_,
-                                                      QString::fromStdString(*stored));
+                            (videoSource_ ? refreshVideoAssetSelector : refreshImageAssetSelector)(
+                                *row.selector, *session_, QString::fromStdString(*stored));
                         }
                     }
                 if (const auto* stored = std::get_if<std::int64_t>(value)) {
@@ -1948,6 +1952,7 @@ class NodeItem final : public QGraphicsObject {
     bool shapeSource_ = false;
     document::ShapeKind shapeKind_ = document::ShapeKind::Rectangle;
     bool imageSource_ = false;
+    bool videoSource_ = false;
     bool audioSource_ = false;
     bool imageSequence_ = false;
     kit::KLabel* imageDimensions_ = nullptr;

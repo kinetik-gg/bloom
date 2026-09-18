@@ -800,14 +800,14 @@ void testRoundTrippedNewerMinorSurvivesFullCycle(Expectations& expectations) {
     if (!written) {
         return;
     }
-    const std::string anchor = "\"minor\": 16\n  },\n  \"project\"";
+    const std::string anchor = "\"minor\": 17\n  },\n  \"project\"";
     const auto anchorPos = text.find(anchor);
     expectations.expect(anchorPos != std::string::npos,
                         "round-tripped cycle: root schemaVersion anchor is located");
     if (anchorPos == std::string::npos) {
         return;
     }
-    text.replace(anchorPos, std::string_view("\"minor\": 16").size(), "\"minor\": 17");
+    text.replace(anchorPos, std::string_view("\"minor\": 17").size(), "\"minor\": 18");
     expectations.expect(text.size() >= 2 && text.back() == '\n' && text[text.size() - 2] == '}',
                         "round-tripped cycle: baseline ends with the root's closing brace");
     if (text.size() < 2 || text.back() != '\n' || text[text.size() - 2] != '}') {
@@ -836,11 +836,11 @@ void testRoundTrippedNewerMinorSurvivesFullCycle(Expectations& expectations) {
         return;
     }
     auto reconstructedSnapshot = reconstructed.value()->document->snapshot();
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 17}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 18}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &reconstructedSnapshot,
                                             .colorSettings = &reconstructed.value()->colorSettings,
                                             .roundTrip = decoded.roundTrip(),
-                                            .schemaMinor = 17};
+                                            .schemaMinor = 18};
     auto built =
         buildVerifiedSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
     expectations.expect(static_cast<bool>(built), "round-tripped cycle: fixture archive builds");
@@ -922,7 +922,7 @@ void testRoundTrippedNewerMinorSurvivesFullCycle(Expectations& expectations) {
     }
     auto finalValue = std::move(reopenedArchive).takeOpened();
     expectations.expect(
-        finalValue.schemaMinor == 17,
+        finalValue.schemaMinor == 18,
         "round-tripped cycle: the final published file still declares the preserved future minor");
     expectations.expect(
         finalValue.roundTrip.has_value(),

@@ -105,8 +105,10 @@ WorkerReply execute(const WorkerPoolOptions& options, const CallRequest& request
         stop();
         return *e;
     }
-    const auto expectedKind =
-        request.capability.role == Role::Probe ? MessageKind::Probe : MessageKind::Frame;
+    const auto expectedKind = request.capability.role == Role::Probe         ? MessageKind::Probe
+                              : request.capability.role == Role::DemuxIndex  ? MessageKind::Index
+                              : request.capability.role == Role::AudioDecode ? MessageKind::Audio
+                                                                             : MessageKind::Frame;
     auto response =
         connection.exchange({MessageKind::Call, session, 2, request}, host, expectedKind);
     if (const auto* e = std::get_if<Unavailable>(&response)) {
@@ -135,15 +137,20 @@ WorkerReply execute(const WorkerPoolOptions& options, const CallRequest& request
     if (cancel())
         return Unavailable{Error::Cancelled, "Cancelled before product publication"};
     if (auto* probe = std::get_if<ProbeResult>(&message.payload)) {
-        if (probe->container != request.capability.container ||
-            std::ranges::any_of(probe->streams, [&](const auto& stream) {
-                return stream.kind == MediaKind::Video &&
-                       (stream.width != request.width || stream.height != request.height ||
-                        stream.codec != request.capability.codec);
-            }))
+        if (request.capability.mapping != "bounded-discovery-v1" &&
+            (probe->container != request.capability.container ||
+             std::ranges::any_of(probe->streams, [&](const auto& stream) {
+                 return stream.kind == MediaKind::Video &&
+                        (stream.width != request.width || stream.height != request.height ||
+                         stream.codec != request.capability.codec);
+             })))
             return Unavailable{Error::IdentityMismatch, "Probe does not match the requested tuple"};
         return std::move(*probe);
     }
+    if (auto* index = std::get_if<DemuxIndex>(&message.payload))
+        return std::move(*index);
+    if (auto* audio = std::get_if<AudioBlock>(&message.payload))
+        return std::move(*audio);
     const auto& frame = std::get<FrameProduct>(message.payload);
     if (frame.planes.front().width != request.width ||
         frame.planes.front().height != request.height)
@@ -198,7 +205,9 @@ WorkerTicket MediaWorkerPool::submit(runtime::TaskScheduler& scheduler, runtime:
     }
     if (!attempt.accepts(step, state_->options.expected.execution) ||
         attempt.pipeline().providers[step].capability != request.capability ||
-        (request.capability.role != Role::Probe && request.capability.role != Role::VideoDecode)) {
+        (request.capability.role != Role::Probe && request.capability.role != Role::VideoDecode &&
+         request.capability.role != Role::DemuxIndex &&
+         request.capability.role != Role::AudioDecode)) {
         reject({Error::Unavailable, "Call does not match pinned execution and capability"});
         return ticket;
     }

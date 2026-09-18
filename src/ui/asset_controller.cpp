@@ -9,9 +9,13 @@
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/media/cache/media_disk_cache_decode.hpp>
 #include <bloom/media/image.hpp>
+#include <bloom/media/video/audio.hpp>
+#include <bloom/media/video/colour.hpp>
+#include <bloom/media/video/session.hpp>
 #include <bloom/platform/font_catalog.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
+#include <bloom/runtime/video_asset.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/project_host.hpp>
@@ -245,9 +249,11 @@ void AssetController::requestImport(QWidget* parent) {
     // still native when the platform theme provides one (unchanged behaviour), but constructing
     // it lets configureFileDialogSidebar() add the mounted network shares before exec(), which
     // the static function gives no opportunity to do.
-    QFileDialog dialog(parent, tr("Import Media"), {},
-                       tr("Media (*.png *.jpg *.jpeg *.exr *.tif *.tiff *.wav *.mp3 "
-                          "*.PNG *.JPG *.JPEG *.EXR *.TIF *.TIFF *.WAV *.MP3)"));
+    QFileDialog dialog(
+        parent, tr("Import Media"), {},
+        tr("Media (*.png *.jpg *.jpeg *.exr *.tif *.tiff *.wav *.mp3 *.mp4 *.mov *.mkv *.mxf "
+           "*.m4v *.mts *.m2ts *.ts *.PNG *.JPG *.JPEG *.EXR *.TIF *.TIFF *.WAV *.MP3 "
+           "*.MP4 *.MOV *.MKV *.MXF)"));
     dialog.setAcceptMode(QFileDialog::AcceptOpen);
     dialog.setFileMode(QFileDialog::ExistingFiles);
     configureFileDialogSidebar(dialog);
@@ -265,9 +271,11 @@ void AssetController::relink(document::AssetId id, QWidget* parent) {
     const bool font = asset != nullptr && asset->kind == document::AssetKind::Font;
     QFileDialog dialog(
         parent, font ? tr("Relink Font") : tr("Relink Media"), {},
-        font ? tr("Fonts (*.ttf *.otf *.ttc *.TTF *.OTF *.TTC)")
-             : tr("Media (*.png *.jpg *.jpeg *.exr *.tif *.tiff *.wav *.mp3 *.PNG *.JPG *.JPEG "
-                  "*.EXR *.TIF *.TIFF *.WAV *.MP3)"));
+        font
+            ? tr("Fonts (*.ttf *.otf *.ttc *.TTF *.OTF *.TTC)")
+            : tr("Media (*.png *.jpg *.jpeg *.exr *.tif *.tiff *.wav *.mp3 *.mp4 *.mov *.mkv *.mxf "
+                 "*.m4v *.mts *.m2ts *.ts *.PNG *.JPG *.JPEG *.EXR *.TIF *.TIFF *.WAV *.MP3 "
+                 "*.MP4 *.MOV *.MKV *.MXF)"));
     dialog.setAcceptMode(QFileDialog::AcceptOpen);
     dialog.setFileMode(QFileDialog::ExistingFile);
     configureFileDialogSidebar(dialog);
@@ -368,7 +376,7 @@ void AssetController::refresh() {
     std::vector<runtime::CompiledImageSource> sources;
     if (composition)
         for (const auto& node : composition->graph().nodes()) {
-            if (node.typeId != "bloom.image-source")
+            if (node.typeId != "bloom.image-source" && node.typeId != "bloom.video-source")
                 continue;
             runtime::CompiledImageSource source;
             source.sourceNodeId = node.id;
@@ -401,10 +409,11 @@ void AssetController::refresh() {
         }
     auto submission = scheduler_.submit<std::shared_ptr<Thumbnails>>(
         runtime::TaskRequest(
-            "Image thumbnails",
+            "Media thumbnails",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Background, runtime::TaskExecutor::BlockingIo),
         [snapshot, directory, time, rate, sources = std::move(sources), cached = thumbnailCache_,
+         cachedAudio = audioBuffers_, cachedWaveforms = waveforms_, cachedPreviews = previews_,
          diskCache = mediaDiskCache_](runtime::TaskContext& context) mutable {
             auto results = std::make_shared<Thumbnails>();
             results->cache = std::move(cached);
@@ -487,7 +496,7 @@ void AssetController::refresh() {
             std::uint64_t completed = 0;
             const auto progress = [&] {
                 context.reportProgress(
-                    {.phase = "Image thumbnails",
+                    {.phase = "Media thumbnails",
                      .subphase = "Decoding proxies",
                      .completed = ++completed,
                      .total = snapshot.project().assets().size() + sources.size()});
@@ -495,7 +504,110 @@ void AssetController::refresh() {
             for (const auto& asset : snapshot.project().assets()) {
                 if (context.isCancellationRequested())
                     return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
-                if (asset.kind == document::AssetKind::Audio) {
+                if (asset.kind == document::AssetKind::Video) {
+                    Preview preview;
+                    preview.missing = true;
+                    const auto digest = asset.contentDigest.toLowercaseHex();
+                    preview.key =
+                        std::string(digest.begin(), digest.end()) + ":video:" +
+                        std::to_string(static_cast<unsigned>(asset.interpretation.colorSpace));
+                    const auto path = media::resolveImagePath(asset.locator.path,
+                                                              asset.locator.relinkHint, directory);
+                    media::video::VideoDecodeSession video(path);
+                    const auto probe = runtime::video::probeMetadata(asset);
+                    const bool available = !video.verifySource(
+                        asset.contentDigest, [&] { return context.isCancellationRequested(); });
+                    const auto cachedPreview = results->cache.find(preview.key);
+                    if (available && cachedPreview != results->cache.end()) {
+                        preview.image = cachedPreview->second;
+                        preview.missing = false;
+                    }
+                    const auto stream =
+                        std::ranges::find(probe.streams, media::provider::MediaKind::Video,
+                                          &media::provider::StreamDescriptor::kind);
+                    if (available && preview.image.isNull() && stream != probe.streams.end()) {
+                        const auto frame = video.frame(probe, stream->id, 0, 0, nullptr, [&] {
+                            return context.isCancellationRequested();
+                        });
+                        if (const auto* product =
+                                std::get_if<std::shared_ptr<const media::provider::FrameProduct>>(
+                                    &frame)) {
+                            const auto window =
+                                render::ImageWindow::create(0, 0, asset.width, asset.height);
+                            if (window) {
+                                const auto descriptor = render::Rgba32fImageDescriptor::create(
+                                    *window.value(), *window.value(),
+                                    core::PixelAspectRatio::square());
+                                if (descriptor) {
+                                    const auto scale =
+                                        std::min(1.0, 64.0 / static_cast<double>(std::max(
+                                                                 asset.width, asset.height)));
+                                    const auto pixels = media::video::videoToSceneLinear(
+                                        **product,
+                                        static_cast<std::uint32_t>(asset.interpretation.colorSpace),
+                                        *descriptor.value(), scale, scale, 65536,
+                                        [&] { return context.isCancellationRequested(); });
+                                    if (const auto* image =
+                                            std::get_if<render::Rgba32fImage>(&pixels)) {
+                                        const auto extent =
+                                            image->descriptor()->dataWindow().extent();
+                                        preview.image = QImage(static_cast<int>(extent.width()),
+                                                               static_cast<int>(extent.height()),
+                                                               QImage::Format_RGBA8888);
+                                        for (std::uint32_t y = 0; y < extent.height(); ++y)
+                                            for (std::uint32_t x = 0; x < extent.width(); ++x) {
+                                                const auto& pixel =
+                                                    image->pixels()[static_cast<std::size_t>(y) *
+                                                                        extent.width() +
+                                                                    x];
+                                                const auto alpha = pixel.alpha();
+                                                auto* output =
+                                                    preview.image.scanLine(static_cast<int>(y)) +
+                                                    static_cast<std::ptrdiff_t>(x) * 4;
+                                                output[0] =
+                                                    srgb(alpha > 0 ? pixel.red() / alpha : 0);
+                                                output[1] =
+                                                    srgb(alpha > 0 ? pixel.green() / alpha : 0);
+                                                output[2] =
+                                                    srgb(alpha > 0 ? pixel.blue() / alpha : 0);
+                                                output[3] = static_cast<unsigned char>(
+                                                    std::lround(alpha * 255.0F));
+                                            }
+                                        preview.missing = false;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (!preview.image.isNull()) {
+                        if (results->cache.size() >= 512)
+                            results->cache.erase(results->cache.begin());
+                        results->cache.insert_or_assign(preview.key, preview.image);
+                    }
+                    const auto previous = cachedPreviews.find(asset.id);
+                    const auto cachedBuffer = cachedAudio.find(asset.id);
+                    const auto waveform = cachedWaveforms.find(asset.id);
+                    if (available && previous != cachedPreviews.end() &&
+                        previous->second.key == preview.key && cachedBuffer != cachedAudio.end() &&
+                        waveform != cachedWaveforms.end()) {
+                        results->audioBuffers.emplace(asset.id, cachedBuffer->second);
+                        results->waveforms.emplace(asset.id, waveform->second);
+                    } else if (available && asset.channels > 0) {
+                        auto decoded = media::video::decodeAudioClip(
+                            video, probe, [&] { return context.isCancellationRequested(); });
+                        if (auto* audio = std::get_if<media::audio::AudioBuffer>(&decoded)) {
+                            const auto summary = media::audio::waveformSummary(*audio, 256);
+                            if (summary.value())
+                                results->waveforms.emplace(
+                                    asset.id, std::make_shared<const media::audio::WaveformSummary>(
+                                                  *summary.value()));
+                            results->audioBuffers.emplace(
+                                asset.id, std::make_shared<const media::audio::AudioBuffer>(
+                                              std::move(*audio)));
+                        }
+                    }
+                    results->assets.emplace(asset.id, std::move(preview));
+                } else if (asset.kind == document::AssetKind::Audio) {
                     Preview preview;
                     preview.missing = true;
                     auto path = directory / asset.locator.path;
@@ -543,7 +655,12 @@ void AssetController::refresh() {
             for (const auto& source : sources) {
                 if (context.isCancellationRequested())
                     return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
-                results->nodes.emplace(source.sourceNodeId, decode(source));
+                if (source.asset && source.asset->kind == document::AssetKind::Video) {
+                    const auto asset = results->assets.find(source.asset->id);
+                    if (asset != results->assets.end())
+                        results->nodes.emplace(source.sourceNodeId, asset->second);
+                } else
+                    results->nodes.emplace(source.sourceNodeId, decode(source));
                 progress();
             }
             return runtime::TaskResult<std::shared_ptr<Thumbnails>>::succeeded(std::move(results));

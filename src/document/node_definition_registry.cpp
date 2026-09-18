@@ -141,6 +141,20 @@ template <typename Definition>
                             ParameterValueKind::Color4d,
                             isAnimatableSchemaKey(kSolidColorParameterSchemaKey)) &&
                hasParameterSockets(definition, 0) && !definition.layerSlotInput.has_value();
+    case NodeLoweringKind::VideoSource:
+        return hasCanonicalKey(definition, "bloom.video-source", 1) &&
+               hasOutput(definition, "image", SocketValueKind::Image) &&
+               hasOutput(definition, "audio", SocketValueKind::Audio) &&
+               definition.outputs.size() == 2 && definition.parameters.size() == 4 &&
+               definition.inputs.empty() &&
+               hasParameter(definition, 0, "asset", "bloom.video.asset",
+                            ParameterValueKind::String) &&
+               hasParameter(definition, 1, "startFrame", "bloom.video.start-frame",
+                            ParameterValueKind::Integer) &&
+               hasParameter(definition, 2, "loopMode", "bloom.video.loop-mode",
+                            ParameterValueKind::Integer) &&
+               hasParameter(definition, 3, "colorSpace", "bloom.video.color-space",
+                            ParameterValueKind::Integer);
     case NodeLoweringKind::ImageSource:
         return hasCanonicalKey(definition, "bloom.image-source", 1) &&
                hasImageOutput(definition, "image") && definition.parameters.size() == 5 &&
@@ -427,6 +441,24 @@ template <typename Definition>
             NodeCategory::Output};
 }
 
+[[nodiscard]] NodeDefinition videoDefinition() {
+    using namespace bloom::document;
+    return {{"bloom.video-source", 1},
+            NodeLoweringKind::VideoSource,
+            {},
+            {{"image", SocketValueKind::Image}, {"audio", SocketValueKind::Audio}},
+            {{"asset", "bloom.video.asset", ParameterValueKind::String, true, false, std::string{}},
+             {"startFrame", "bloom.video.start-frame", ParameterValueKind::Integer, true, false,
+              std::int64_t{0}},
+             {"loopMode", "bloom.video.loop-mode", ParameterValueKind::Integer, true, false,
+              std::int64_t{0}},
+             {"colorSpace", "bloom.video.color-space", ParameterValueKind::Integer, true, false,
+              std::int64_t{0}}},
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Sources};
+}
+
 [[nodiscard]] NodeDefinition imageDefinition() {
     using namespace bloom::document;
     return {{"bloom.image-source", 1},
@@ -626,6 +658,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
                                             compositionOutputDefinition(),
                                             textDefinition(),
                                             imageDefinition(),
+                                            videoDefinition(),
                                             audioDefinition(),
                                             compositionSourceDefinition()};
     // The value library is appended, not interleaved: the five above are the structural node types

@@ -3,6 +3,7 @@
 #include <QSignalBlocker>
 #include <QTreeWidgetItemIterator>
 #include <algorithm>
+#include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -82,6 +83,7 @@ void AssetsEditor::rebuild() {
         auto* row = new AssetRow(tree_);
         row->setObjectName(QStringLiteral("assetsRow"));
         row->setName(item->text(0), icon);
+        row->setToolTip(item->toolTip(0));
         auto* kind = new kit::KLabel(row);
         kind->setElidedText(item->text(1));
         QWidget* trailing = nullptr;
@@ -215,12 +217,19 @@ void AssetsEditor::rebuild() {
         auto* item = asset.folder ? new QTreeWidgetItem(folders.at(*asset.folder))
                                   : new QTreeWidgetItem(tree_);
         const bool font = asset.kind == document::AssetKind::Font;
+        const bool video = asset.kind == document::AssetKind::Video;
+        const auto seconds = static_cast<qulonglong>(std::max(0.0, asset.duration.toSeconds()));
+        const auto duration = QStringLiteral("%1:%2:%3")
+                                  .arg(seconds / 3600, 2, 10, QLatin1Char('0'))
+                                  .arg((seconds / 60) % 60, 2, 10, QLatin1Char('0'))
+                                  .arg(seconds % 60, 2, 10, QLatin1Char('0'));
         const bool audio = asset.kind == document::AssetKind::Audio;
         const bool sequence = asset.kind == document::AssetKind::Sequence;
         const auto extension = asset.locator.path.substr(asset.locator.path.find_last_of('.') + 1);
         const bool exr = extension == "exr" || extension == "EXR";
         item->setText(0, QString::fromStdString(asset.name));
-        item->setText(1, font ? tr("Font · %1").arg(QString::fromStdString(asset.fontStyle))
+        item->setText(1, font    ? tr("Font · %1").arg(QString::fromStdString(asset.fontStyle))
+                         : video ? tr("Video · %1").arg(duration)
                          : sequence
                              ? (exr ? tr("EXR · %1 frames").arg(asset.manifest.members.size())
                                     : tr("Sequence [%1]").arg(asset.manifest.members.size()))
@@ -238,8 +247,14 @@ void AssetsEditor::rebuild() {
         const bool missing = controller && controller->missing(asset.id);
         item->setToolTip(0, missing ? (font    ? tr("Missing font — Relink in Assets")
                                        : audio ? tr("Missing audio — Relink in Assets")
+                                       : video ? tr("Missing video — Relink in Assets")
                                                : tr("Missing image — Relink in Assets"))
                                     : QString::fromStdString(asset.locator.path));
+        if (video && std::ranges::any_of(asset.videoStreams, [](const auto& stream) {
+                return stream.codec == "prores";
+            }))
+            item->setToolTip(0, item->toolTip(0) + QStringLiteral("\n") +
+                                    QString::fromUtf8(media::provider::kProResPreviewNote));
         addRow(item,
                font       ? kit::IconId::Text
                : sequence ? kit::IconId::Images

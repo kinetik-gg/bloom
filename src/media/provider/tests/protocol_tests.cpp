@@ -83,6 +83,28 @@ void run() {
     auto excessivePlanes = encoded;
     excessivePlanes[62] = std::byte{5};
     rejected(excessivePlanes, Error::Oversized);
+    const AudioBlock audio{{0, 1}, 48000, {"FC"}, {{0.25F, -0.5F}}};
+    const DemuxIndex index{{{0, {0, 1}, {0, 1}}, {0, {1, 2}, {1, 2}}}};
+    for (const auto& message :
+         {Message{MessageKind::Audio, 42, 3, audio}, Message{MessageKind::Index, 42, 3, index}}) {
+        const auto original = std::get<Bytes>(encodeMessage(message));
+        for (std::size_t size = 0; size < original.size(); ++size)
+            test::check(
+                std::holds_alternative<Unavailable>(decodeMessage(std::span(original).first(size))),
+                "truncated read product refused");
+        for (std::size_t i = 0; i < original.size(); ++i)
+            for (unsigned bit = 0; bit < 8; ++bit) {
+                auto mutation = original;
+                mutation[i] ^= static_cast<std::byte>(1U << bit);
+                const auto decoded = decodeMessage(mutation);
+                if (const auto* accepted = std::get_if<Message>(&decoded)) {
+                    if (const auto* block = std::get_if<AudioBlock>(&accepted->payload))
+                        test::check(valid(*block), "hostile audio cannot bypass bounds");
+                    if (const auto* entries = std::get_if<DemuxIndex>(&accepted->payload))
+                        test::check(valid(*entries), "hostile index cannot bypass bounds");
+                }
+            }
+    }
     encoded.back() ^= std::byte{1};
     rejected(encoded, Error::DigestMismatch);
 }

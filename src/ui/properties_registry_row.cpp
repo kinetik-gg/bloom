@@ -157,6 +157,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         layout->addWidget(segments_);
         connect(segments_, &kit::KRadioGroup::currentIndexChanged, this, [this] { commit(); });
     } else if (!items.empty() || definition_.schemaKey == "bloom.image.asset" ||
+               definition_.schemaKey == "bloom.video.asset" ||
                definition_.schemaKey == "bloom.audio.asset" ||
                isFontSchema(definition_.schemaKey)) {
         selector_ = new kit::KDropdown(controls);
@@ -480,6 +481,8 @@ void PropertiesRegistryRow::refresh() {
         if (auto* boolean = std::get_if<bool>(&value); boolean && toggle_)
             toggle_->setChecked(*boolean);
         if (auto* text = std::get_if<std::string>(&value)) {
+            if (selector_ && definition_.schemaKey == "bloom.video.asset")
+                refreshVideoAssetSelector(*selector_, session_, QString::fromStdString(*text));
             if (selector_ && definition_.schemaKey == "bloom.image.asset")
                 refreshImageAssetSelector(*selector_, session_, QString::fromStdString(*text));
             if (selector_ && definition_.schemaKey == "bloom.audio.asset")
@@ -558,6 +561,7 @@ void PropertiesRegistryRow::commit() {
         refresh();
         return;
     } else if (selector_ && (definition_.schemaKey == "bloom.image.asset" ||
+                             definition_.schemaKey == "bloom.video.asset" ||
                              definition_.schemaKey == "bloom.audio.asset"))
         value = selector_->itemData(selector_->currentIndex()).toString().toStdString();
     else if (slider_)

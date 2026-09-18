@@ -164,6 +164,8 @@ QString toggleToolTip(const int index) {
                       document::kAudioSourceNodeSchemaVersion)) {
         return TimelineEditor::tr("Audio");
     }
+    if (sourceNode && sourceNode->typeId == "bloom.video-source")
+        return TimelineEditor::tr("Video");
     if (sourceNode && sourceNode->typeId == document::kCompositionSourceNodeType)
         return TimelineEditor::tr("Composition");
     return TimelineEditor::tr("Layer");
@@ -203,7 +205,8 @@ QString toggleToolTip(const int index) {
     const auto* sourceNode = directSourceNode(session, layerId);
     if (sourceNode && sourceNode->typeId == document::kCompositionSourceNodeType)
         return kit::Color::DataComposition;
-    if (sourceNode && sourceNode->typeId == "bloom.image-source") {
+    if (sourceNode && (sourceNode->typeId == "bloom.image-source" ||
+                       sourceNode->typeId == "bloom.video-source")) {
         for (const auto& binding : sourceNode->parameters)
             if (binding.role == "asset") {
                 const auto value = session.constantStringValue(binding.parameterId);
@@ -368,7 +371,7 @@ class TimelineLayerRow final : public kit::KRow {
         setRowState(rowIndex, selected);
         layerId_ = entry.layerId;
         collapsedImage_ = entry.imageNodeId.isValid();
-        audioLayer_ = entry.audioNodeId.isValid();
+        audioLayer_ = entry.audioNodeId.isValid() && !entry.imageNodeId.isValid();
         // `binding_` (not just a QSignalBlocker) because setCurrentIndex() is a projection of
         // document truth, never an edit: a blocked signal would still leave the lambda armed for a
         // nested change, and a row re-pointed during a scroll must author nothing at all.
@@ -1904,7 +1907,10 @@ void TimelineEditor::rebuild() {
                                .kind = layerKind(session_, entry.layerId),
                                .clipColor = layerClipColorToken(session_, entry.layerId)});
             if (const auto* source = directSourceNode(session_, entry.layerId);
-                source != nullptr && source->typeId == document::kAudioSourceNodeType) {
+                source != nullptr && (source->typeId == document::kAudioSourceNodeType ||
+                                      source->typeId == "bloom.video-source")) {
+                if (source->typeId == "bloom.video-source")
+                    entries.back().imageNodeId = source->id;
                 entries.back().audioNodeId = source->id;
                 if (auto* controller = session_.assetController()) {
                     for (const auto& binding : source->parameters) {

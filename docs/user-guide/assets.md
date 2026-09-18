@@ -61,6 +61,26 @@ Nested audio follows the same offset, speed and loop settings. Multiple nested l
 together; a composition without audio is silent. Layer mute, solo and time ranges apply.
 
 Folder edits, names, tags, moves and reorder are undoable. Saving records the organization in
-project schema 1.16. Opening a 1.15 project supplies the new defaults without changing its media
+project schema 1.17. Opening a 1.15 project supplies the new defaults without changing its media
 references; saving then writes the current schema. Use **Relink…** for missing media; relinking
 preserves the asset's name, folder, tags and order.
+
+## Importing Video
+
+On Linux, choose **Import** in Assets and select an MP4, MOV, MKV, MXF, M4V or supported
+transport-stream file. Bloom probes the file in its media worker and lists it as
+**Video · HH:MM:SS**. A malformed or unsupported file produces a diagnostic. Native video
+providers for macOS and Windows are not available yet.
+
+Drag the asset into the Timeline to create a Video source and Layer at the normal Arrange position.
+The Layer carries image and, when present, audio connections. Its node card shows the first frame;
+a video with audio also supplies a waveform. Properties exposes Asset, Start Frame, Loop Mode and
+Colour Space. Start Frame offsets both image and audio. Loop and Ping-pong affect the image;
+audio follows the ordinary clip duration.
+
+This preview path supports explicit Rec.709 matrix/primaries with Rec.709 or sRGB transfer.
+Rec.2020, HLG and PQ footage is currently unavailable. A file changed outside Bloom is marked
+unavailable until relinked, including when its old frame was cached.
+
+A ProRes asset's tooltip states: “Decoded by FFmpeg; not an Apple-authorized ProRes implementation”.
+This preview workflow carries no Apple authorization or ProRes delivery qualification.

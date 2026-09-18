@@ -77,15 +77,56 @@ ValidationResult AssetRecord::validate() const {
     if (interpretation.colorSpace > AssetColorSpace::Raw ||
         interpretation.alphaAssociation > AssetAlphaAssociation::Premultiplied)
         result.add(ValidationCode::InvalidValue, "interpretation", "Invalid image interpretation");
+    if (kind == AssetKind::Video) {
+        if (videoStreams.empty() || videoStreams.size() > 256 || duration <= core::RationalTime{} ||
+            frames == 0 || frames > 1000000 || !manifest.members.empty() ||
+            !manifest.pattern.empty())
+            result.add(ValidationCode::InvalidValue, "video", "Invalid video descriptor");
+        bool hasVideo = false;
+        for (std::size_t i = 0; i < videoStreams.size(); ++i) {
+            const auto& stream = videoStreams[i];
+            hasVideo = hasVideo || stream.kind == 1;
+            if (stream.id != i || stream.kind < 1 || stream.kind > 3 || stream.codec.empty() ||
+                stream.codec.size() > 4096 || stream.profile.size() > 4096 ||
+                stream.pixelFormat.size() > 4096 || stream.timecode.size() > 4096 ||
+                !core::isValidUtf8(stream.codec) || !core::isValidUtf8(stream.profile) ||
+                !core::isValidUtf8(stream.pixelFormat) || !core::isValidUtf8(stream.timecode) ||
+                stream.timebase <= core::RationalTime{} ||
+                stream.framePeriod <= core::RationalTime{} ||
+                stream.duration < core::RationalTime{} || stream.width == 0 || stream.height == 0 ||
+                stream.width > 16384 || stream.height > 16384 ||
+                static_cast<std::uint64_t>(stream.width) * stream.height > 16777216 ||
+                stream.channelLayout.size() > 64 || stream.sampleRate > 384000 ||
+                stream.primaries < -1 || stream.primaries > 255 || stream.transfer < -1 ||
+                stream.transfer > 255 || stream.matrix < -1 || stream.matrix > 255 ||
+                stream.range < -1 || stream.range > 2)
+                result.add(ValidationCode::InvalidValue, "video.streams",
+                           "Invalid stream metadata");
+            if (stream.kind == 2 && (stream.sampleRate == 0 || stream.channelLayout.empty()))
+                result.add(ValidationCode::InvalidValue, "video.streams",
+                           "Invalid audio stream descriptor");
+            if (stream.kind != 2 && (stream.sampleRate != 0 || !stream.channelLayout.empty()))
+                result.add(ValidationCode::InvalidValue, "video.streams",
+                           "Non-audio stream carries audio metadata");
+            for (const auto& channel : stream.channelLayout)
+                if (channel.empty() || channel.size() > 4096 || !core::isValidUtf8(channel))
+                    result.add(ValidationCode::InvalidValue, "video.streams",
+                               "Invalid channel name");
+        }
+        if (!hasVideo)
+            result.add(ValidationCode::InvalidValue, "video", "Video asset has no video stream");
+    } else if (!videoStreams.empty())
+        result.add(ValidationCode::InvalidValue, "video",
+                   "Only video assets carry stream metadata");
     if (kind == AssetKind::Font) {
         if (interpretation.colorSpace != AssetColorSpace::Auto ||
             interpretation.alphaAssociation != AssetAlphaAssociation::Straight)
             result.add(ValidationCode::InvalidValue, "interpretation",
                        "A font asset has no image interpretation");
-    } else if (kind == AssetKind::Image) {
+    } else if (kind == AssetKind::Image || kind == AssetKind::Video) {
         if (!manifest.members.empty() || !manifest.gaps.empty() || !manifest.pattern.empty())
             result.add(ValidationCode::InvalidValue, "manifest",
-                       "A still image has no sequence manifest");
+                       "A single media file has no sequence manifest");
     } else if (kind == AssetKind::Sequence) {
         if (manifest.members.size() < 2 || manifest.members.size() > 100000 || manifest.first < 0 ||
             manifest.last < manifest.first || manifest.last - manifest.first >= 100000 ||

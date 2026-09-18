@@ -10,6 +10,10 @@ QString imageDimensionsText(const document::AssetRecord* asset) {
                  : QObject::tr("Unavailable");
 }
 QString imageRangeText(const document::AssetRecord* asset) {
+    if (asset && asset->kind == document::AssetKind::Video)
+        return QObject::tr("%1 frames · %2 s")
+            .arg(asset->frames)
+            .arg(asset->duration.toSeconds(), 0, 'f', 2);
     if (!asset || asset->kind != document::AssetKind::Sequence)
         return {};
     return QObject::tr("%1 frames · %2–%3")
@@ -25,7 +29,7 @@ QString mediaLayerDisplayName(const CompositionSession& session, document::Layer
     const auto* layer = composition ? composition->graph().findLayer(id) : nullptr;
     const auto* source = directSourceNode(session, id);
     if (layer && source &&
-        (source->typeId == "bloom.image-source" ||
+        (source->typeId == "bloom.image-source" || source->typeId == "bloom.video-source" ||
          source->typeId == document::kAudioSourceNodeType)) {
         for (const auto& binding : source->parameters) {
             if (binding.role != "asset")
@@ -49,18 +53,21 @@ QString mediaLayerDisplayName(const CompositionSession& session, document::Layer
     return composition ? layerName(*composition, id) : QString{};
 }
 void refreshAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
-                          const QString& stored, const bool audioOnly) {
+                          const QString& stored, const bool audioOnly,
+                          const bool videoOnly = false) {
     const QSignalBlocker blocker(&selector);
     selector.clearItems();
     selector.addItem(QObject::tr("Choose Asset"), QString{});
     for (const auto& asset : session.snapshot().project().assets()) {
-        if (audioOnly != (asset.kind == document::AssetKind::Audio))
+        if (videoOnly != (asset.kind == document::AssetKind::Video) ||
+            audioOnly != (asset.kind == document::AssetKind::Audio))
             continue;
         const bool sequence = asset.kind == document::AssetKind::Sequence;
         const auto kind =
-            audioOnly  ? QObject::tr("Audio · %1 s").arg(asset.duration.toSeconds(), 0, 'f', 2)
-            : sequence ? QObject::tr("Sequence [%1]").arg(asset.manifest.members.size())
-                       : QObject::tr("Image");
+            videoOnly   ? QObject::tr("Video")
+            : audioOnly ? QObject::tr("Audio · %1 s").arg(asset.duration.toSeconds(), 0, 'f', 2)
+            : sequence  ? QObject::tr("Sequence [%1]").arg(asset.manifest.members.size())
+                        : QObject::tr("Image");
         selector.addItem(kit::icon(audioOnly  ? kit::IconId::Audio
                                    : sequence ? kit::IconId::Images
                                               : kit::IconId::Image,
@@ -83,6 +90,10 @@ void refreshAssetSelector(kit::KDropdown& selector, const CompositionSession& se
 void refreshImageAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
                                const QString& stored) {
     refreshAssetSelector(selector, session, stored, false);
+}
+void refreshVideoAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
+                               const QString& stored) {
+    refreshAssetSelector(selector, session, stored, false, true);
 }
 void refreshAudioAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
                                const QString& stored) {
@@ -134,13 +145,14 @@ QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view
         add(QObject::tr("Even-odd"), 1);
         return items;
     }
-    if (schemaKey == "bloom.image.loop-mode" || schemaKey == "bloom.composition-source.loop-mode") {
+    if (schemaKey == "bloom.image.loop-mode" || schemaKey == "bloom.video.loop-mode" ||
+        schemaKey == "bloom.composition-source.loop-mode") {
         add(QObject::tr("Hold"), 0);
         add(QObject::tr("Loop"), 1);
         add(QObject::tr("Ping-pong"), 2);
         return items;
     }
-    if (schemaKey == "bloom.image.color-space") {
+    if (schemaKey == "bloom.image.color-space" || schemaKey == "bloom.video.color-space") {
         add(QObject::tr("Auto"), 0);
         add(QObject::tr("sRGB"), 1);
         add(QObject::tr("Linear"), 2);

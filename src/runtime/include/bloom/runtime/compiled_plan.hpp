@@ -46,7 +46,7 @@ namespace bloom::runtime {
 // which is why the identity goldens were re-derived in the same change.
 // COMP-SRC advances 5 -> 6: plans now own a table of nested composition plans,
 // indexed by source operations with composition-time mapping operands.
-inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 6;
+inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 7;
 // Task S5 bumped this 1 -> 2: KeyframeInterpolation gained EaseInOut, so sampling can now produce a
 // value no version-1 sampler could, and the Color4 curve table added a third sampled value kind.
 inline constexpr std::uint32_t kAnimationSamplingSemanticsVersion = 2;
@@ -182,6 +182,15 @@ struct CompiledImageSource {
     std::int64_t colorSpace = 0;
     bool premultiply = true;
     friend bool operator==(const CompiledImageSource&, const CompiledImageSource&) = default;
+};
+
+struct CompiledVideoSource {
+    document::NodeId sourceNodeId;
+    std::optional<document::AssetRecord> asset;
+    std::int64_t startFrame = 0;
+    std::int64_t loopMode = 0;
+    std::int64_t colorSpace = 0;
+    friend bool operator==(const CompiledVideoSource&, const CompiledVideoSource&) = default;
 };
 
 struct CompiledAudioSource final {
@@ -353,8 +362,8 @@ struct CompiledCompositionOutput {
 };
 
 using CompiledOperation =
-    std::variant<CompiledSolid, CompiledText, CompiledImageSource, CompiledLayerOutput,
-                 CompiledMerge, CompiledCompositionOutput, CompiledShape,
+    std::variant<CompiledSolid, CompiledText, CompiledImageSource, CompiledVideoSource,
+                 CompiledLayerOutput, CompiledMerge, CompiledCompositionOutput, CompiledShape,
                  CompiledCompositionSource>;
 
 // Mutable construction storage is deliberately a distinct type. Publishing a plan copies or moves

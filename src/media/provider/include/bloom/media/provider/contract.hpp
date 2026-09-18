@@ -44,7 +44,7 @@ enum class Implementation : std::uint8_t { Software = 1, Hardware = 2 };
 enum class Availability : std::uint8_t { Available = 1, Unavailable = 2 };
 enum class QcResult : std::uint8_t { Pass = 1, Fail = 2, Incomplete = 3 };
 enum class MediaKind : std::uint8_t { Video = 1, Audio = 2, Data = 3 };
-enum class PixelFormat : std::uint8_t { Rgba8 = 1, Rgba32f = 2, Yuv420p8 = 3 };
+enum class PixelFormat : std::uint8_t { Rgba8 = 1, Rgba32f = 2, Yuv420p8 = 3, Yuva444p16 = 4 };
 enum class Error : std::uint8_t {
     InvalidValue = 1,
     Truncated,
@@ -62,7 +62,9 @@ enum class Error : std::uint8_t {
     Timeout,
     Crashed,
     Io,
-    Shutdown
+    Shutdown,
+    Corrupt,
+    SourceChanged
 };
 struct Unavailable {
     Error reason = Error::Unavailable;
@@ -74,6 +76,8 @@ template <typename T> using Result = std::variant<T, Unavailable>;
 struct Limits final {
     static constexpr std::uint32_t stringBytes = 4096;
     static constexpr std::uint32_t entries = 256;
+    static constexpr std::uint32_t indexEntries = 1000000;
+    static constexpr std::uint64_t sourceBytes = 16ULL * 1024U * 1024U * 1024U;
     static constexpr std::uint32_t planes = 4;
     static constexpr std::uint32_t dimension = 16384;
     static constexpr std::uint64_t pixels = 16777216;
@@ -165,6 +169,10 @@ struct StreamDescriptor {
     std::uint32_t width = 1, height = 1;
     PixelFormat format = PixelFormat::Rgba8;
     ColourTags colour;
+    Rational duration;
+    std::uint64_t frameCount = 0;
+    std::string pixelFormat = "unknown", timecode;
+    bool appleAuthorized = false;
     std::uint32_t sampleRate = 0;
     std::vector<std::string> channelLayout;
     friend bool operator==(const StreamDescriptor&, const StreamDescriptor&) = default;
@@ -175,6 +183,15 @@ struct ProbeResult {
     Digest sourceDigest;
     std::vector<StreamDescriptor> streams;
     friend bool operator==(const ProbeResult&, const ProbeResult&) = default;
+};
+struct IndexEntry {
+    std::uint32_t stream = 0;
+    Rational pts, dts;
+    friend bool operator==(const IndexEntry&, const IndexEntry&) = default;
+};
+struct DemuxIndex {
+    std::vector<IndexEntry> keyframes;
+    friend bool operator==(const DemuxIndex&, const DemuxIndex&) = default;
 };
 struct CpuPlane {
     std::uint32_t width = 0, height = 0, stride = 0;
@@ -199,6 +216,7 @@ struct AudioBlock {
 [[nodiscard]] bool valid(const ProbeResult& value);
 [[nodiscard]] bool valid(const FrameProduct& value);
 [[nodiscard]] bool valid(const AudioBlock& value);
+[[nodiscard]] bool valid(const DemuxIndex& value);
 [[nodiscard]] Digest digestBytes(std::span<const std::byte> bytes);
 // Domain string (u32 length + bytes), u16 schema=1, then declaration-order fields.
 // Integers are little-endian; enums/bools u8, counts/string lengths u32, digests 32 raw bytes.
