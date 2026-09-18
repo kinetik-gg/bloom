@@ -76,6 +76,13 @@ checkedAttemptRetainedBytes(const render::Rgba32fImageDescriptor& descriptor,
         }
         total += identityBytes;
     }
+    if (report.display()) {
+        const auto bytes = report.display()->processor().identity().canonicalBytes().size() +
+                           report.display()->description().size();
+        if (bytes > maximum - total)
+            return std::nullopt;
+        total += bytes;
+    }
     return total;
 }
 

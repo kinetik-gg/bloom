@@ -26,7 +26,8 @@ class PreparedFlatExrOutputV1 final {
 
   private:
     FlatExrRgba32fOptionsV1 options_;
-    runtime::EvaluationColorIntent source_;
+    std::string sourceColorSpaceId_;
+    core::Sha256Digest sourceRevision_;
     std::shared_ptr<const color::CpuColorSpaceProcessor> processor_;
 };
 [[nodiscard]] std::string_view flatExrCompressionNameV1(FlatExrCompressionV1) noexcept;

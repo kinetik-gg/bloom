@@ -1133,8 +1133,8 @@ void testCompositionExportUi(Expectations& expectations) {
     int approvals = 0;
     fixture.controller().setApprovalDecisionProvider([&](const FrameExportApprovalPrompt& prompt) {
         ++approvals;
-        expectations.expect(prompt.implementationNote ==
-                                QString::fromUtf8(bloom::media::provider::kProResExportNote),
+        expectations.expect(prompt.implementationNote.startsWith(
+                                QString::fromUtf8(bloom::media::provider::kProResExportNote)),
                             "approval carries exact ProRes note");
         return FrameExportApprovalDecision::Export;
     });

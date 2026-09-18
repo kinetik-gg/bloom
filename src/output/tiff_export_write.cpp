@@ -10,7 +10,7 @@ TiffExportWriterV1::run(const OutputAnalysisAttemptV1& attempt,
                         const runtime::CancellationToken& cancellation) const noexcept {
     using namespace media::provider;
     if (attempt.preset() != OutputPresetV1::TiffRgba16SrgbV1 || !attempt.frame() ||
-        !attempt.approvable())
+        !attempt.approvable() || !attempt.report()->display())
         return TiffExportWriteResultV1::failed(TiffExportWriteErrorCodeV1::ProviderFailed);
     // Retain the explicit injection seam for callers with their own qualified provider.
     if (provider && provider->encode) {
@@ -33,7 +33,8 @@ TiffExportWriterV1::run(const OutputAnalysisAttemptV1& attempt,
                                  : TiffExportWriteErrorCodeV1::ProviderFailed);
         };
         const auto cancel = [&] { return cancellation.isCancellationRequested(); };
-        auto prepared = prepareMediaRgba16V1(attempt.frame()->processImage(), {0, 1}, cancel);
+        auto prepared = prepareMediaRgba16V1(attempt.frame()->processImage(), {0, 1}, cancel,
+                                             attempt.report()->display().get());
         if (const auto* e = std::get_if<Unavailable>(&prepared))
             return fail(*e);
         auto frame = std::get<FrameProduct>(std::move(prepared));

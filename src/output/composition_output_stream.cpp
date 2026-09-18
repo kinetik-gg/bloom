@@ -182,7 +182,7 @@ std::optional<Unavailable> CompositionOutputStreamV1::writeFrame(const render::R
                 image,
                 fraction(frame * static_cast<std::uint64_t>(s.encoding.rate.denominator),
                          static_cast<std::uint64_t>(s.encoding.rate.numerator)),
-                s.cancellation));
+                s.cancellation, s.source.display.get()));
             checked(s.encoder->video(std::move(prepared)));
         }
         s.audio(context, samplesThrough);
@@ -220,7 +220,7 @@ Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& ana
         pipeline.toleranceProfile = analysis.toleranceProfile;
         pipeline.reopenPolicy = "same-provider-not-independent";
         pipeline.qcProfile = "first-last-layout-time-pcm-v1";
-        pipeline.conversionVersions = {"rgba16-srgb-v1", "audio-engine-mix-v1"};
+        pipeline.conversionVersions = {"rgba16-ocio-display-v1", "audio-engine-mix-v1"};
         pipeline.result = QcResult::Pass;
         for (const auto role :
              {Role::VideoEncode, Role::AudioEncode, Role::Mux, Role::ReopenDecode}) {

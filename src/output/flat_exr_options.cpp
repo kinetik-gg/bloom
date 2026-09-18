@@ -26,7 +26,8 @@ PreparedFlatExrOutputV1::prepare(const runtime::EvaluationColorIntent& source,
         return {};
     auto result = std::make_shared<PreparedFlatExrOutputV1>();
     result->options_ = std::move(options);
-    result->source_ = source;
+    result->sourceColorSpaceId_ = source.workingColorSpaceId;
+    result->sourceRevision_ = source.ocioConfigRevision;
     if (result->options_.outputColorSpaceId != source.workingColorSpaceId) {
         const auto revision = source.ocioConfigRevision == core::Sha256Digest{}
                                   ? color::kBloomNeutralV1ConfigDigest
@@ -48,8 +49,8 @@ PreparedFlatExrOutputV1::prepare(const runtime::EvaluationColorIntent& source,
     return result;
 }
 bool PreparedFlatExrOutputV1::matches(const runtime::EvaluationColorIntent& source) const noexcept {
-    return source.workingColorSpaceId == source_.workingColorSpaceId &&
-           source.ocioConfigRevision == source_.ocioConfigRevision;
+    return source.workingColorSpaceId == sourceColorSpaceId_ &&
+           source.ocioConfigRevision == sourceRevision_;
 }
 bool PreparedFlatExrOutputV1::apply(std::span<const render::Rgba32f> source,
                                     std::span<std::array<float, 4>> target) const noexcept {

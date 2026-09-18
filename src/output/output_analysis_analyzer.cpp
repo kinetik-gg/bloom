@@ -306,7 +306,7 @@ OutputAnalysisReportV1::OutputAnalysisReportV1(
 }
 
 OutputAnalysisReportV1::OutputAnalysisReportV1(OutputAnalysisReportV1&& other) noexcept
-    : exr_(std::move(other.exr_)), preset_(other.preset_),
+    : exr_(std::move(other.exr_)), display_(std::move(other.display_)), preset_(other.preset_),
       assessments_(std::move(other.assessments_)), permissionMask_(other.permissionMask_),
       descriptorByteCount_(other.descriptorByteCount_) {
     bindAssessmentViews();
@@ -391,6 +391,13 @@ class OutputAnalysisAnalyzerV1 final {
                  !input.exr->matches(
                      input.process.readyIdentity->processFrame()->identity().colorIntent)))
                 return OutputAnalysisAnalyzerResultV1::failure(AnalyzerError::InvalidProcessSource);
+            std::shared_ptr<const PreparedOutputDisplayV1> display;
+            if (tiff && input.process.readyIdentity) {
+                display = PreparedOutputDisplayV1::prepare(
+                    input.process.readyIdentity->processFrame()->identity().colorIntent);
+                if (!display)
+                    input.adapter = OutputAnalysisAdapterStateV1::Unavailable;
+            }
             const bool transform = input.exr && input.exr->processor();
             const auto& descriptor = *source.descriptor;
             const auto dataWindow = descriptor.dataWindow();
@@ -540,7 +547,7 @@ class OutputAnalysisAnalyzerV1 final {
                     setAssessment(assessments[10], preset, Facet::ExternalDependencies,
                                   dependencyCode, std::string(kNoDependencies),
                                   png    ? ocioDependencyDescriptor(*input.expectedOcioRevision)
-                                  : tiff ? std::string("kind=id:tiff-provider;revision=id:none")
+                                  : tiff ? (display ? [&] { const auto hex = display->digest().toLowercaseHex(); return "kind=id:tiff-provider;revision=id:" + std::string(hex.data(), hex.size()); }() : std::string("kind=id:tiff-provider;revision=id:none"))
                                   : transform ? ocioDependencyDescriptor(
                                                     input.exr->processor()->configRevision())
                                               : std::string(kNoDependencies));
@@ -585,6 +592,7 @@ class OutputAnalysisAnalyzerV1 final {
             auto report = std::shared_ptr<OutputAnalysisReportV1>(new OutputAnalysisReportV1(
                 preset, std::move(assessments), *permissionMask, descriptorByteCount));
             report->exr_ = std::move(input.exr);
+            report->display_ = std::move(display);
             const auto retainedValidation = validateOutputAnalysisReportV1(report->view());
             const auto retainedMask = retainedValidation.permissionMask();
             if (!retainedValidation || !retainedMask.has_value() ||

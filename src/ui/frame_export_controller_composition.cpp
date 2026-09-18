@@ -60,7 +60,10 @@ void FrameExportController::beginCompositionExport(CompositionExportRequest requ
         .worker = {},
         .startFrame = request.range.naming.startFrame,
         .framePadding = request.range.naming.framePadding,
-        .namePattern = request.range.naming.namePattern};
+        .namePattern = request.range.naming.namePattern,
+        .workingColorSpaceId = std::string(session_.colorIntent().workingColorSpaceId),
+        .ocioConfigRevision = session_.colorIntent().ocioConfigRevision,
+        .ocioConfigUri = std::string(session_.colorIntent().ocioConfigUri)};
     mediaExport_ = std::make_unique<host::SequenceExportRunnerV1>(
         scheduler_, compiler_, publicationCoordinator_, artifactCoordinator_, ledger_,
         std::move(captured));

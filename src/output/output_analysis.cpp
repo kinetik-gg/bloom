@@ -545,7 +545,17 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
                        : VocabularyValidation::VocabularyMismatch;
         }
         if (report.preset == OutputPresetV1::TiffRgba16SrgbV1) {
-            return facet.targetDescriptor == "kind=id:tiff-provider;revision=id:none"
+            constexpr std::string_view prefix = "kind=id:tiff-provider;revision=id:";
+            const auto suffix = facet.targetDescriptor.substr(
+                std::min(prefix.size(), facet.targetDescriptor.size()));
+            return facet.targetDescriptor.starts_with(prefix) &&
+                           (suffix == "none" ||
+                            (suffix.size() == 64 &&
+                             std::ranges::all_of(suffix,
+                                                 [](char c) {
+                                                     return (c >= '0' && c <= '9') ||
+                                                            (c >= 'a' && c <= 'f');
+                                                 })))
                        ? VocabularyValidation::Valid
                        : VocabularyValidation::VocabularyMismatch;
         }

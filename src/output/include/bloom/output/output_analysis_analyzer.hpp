@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/core/sha256.hpp>
+#include <bloom/output/display_output.hpp>
 #include <bloom/output/flat_exr_options.hpp>
 #include <bloom/output/output_analysis.hpp>
 #include <bloom/output/process_frame_semantic_identity.hpp>
@@ -122,11 +123,15 @@ class OutputAnalysisReportV1 final {
     [[nodiscard]] const std::shared_ptr<const PreparedFlatExrOutputV1>& exr() const noexcept {
         return exr_;
     }
+    [[nodiscard]] const std::shared_ptr<const PreparedOutputDisplayV1>& display() const noexcept {
+        return display_;
+    }
     [[nodiscard]] bool approvable() const noexcept { return permissionMask_.allPermitted(); }
     [[nodiscard]] std::size_t descriptorByteCount() const noexcept { return descriptorByteCount_; }
 
   private:
     std::shared_ptr<const PreparedFlatExrOutputV1> exr_;
+    std::shared_ptr<const PreparedOutputDisplayV1> display_;
     struct OwnedAssessment final {
         OutputFacetIdV1 facet = OutputFacetIdV1::Pixels;
         OutputPreservationStateV1 state = OutputPreservationStateV1::Exact;

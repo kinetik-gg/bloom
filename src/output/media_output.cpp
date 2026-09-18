@@ -23,8 +23,10 @@ H264RuntimeAvailabilityV1 installH264RuntimeV1(const bool explicitConsent,
             .directory = result.directory,
             .detail = result.detail};
 }
-Result<MediaOutputAnalysisV1> analyzeMediaOutputV1(OutputPresetV1 preset,
-                                                   EncodeSettingsV1 settings) {
+Result<MediaOutputAnalysisV1>
+analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,
+                     std::shared_ptr<const PreparedOutputDisplayV1> display,
+                     std::uint64_t lookEffects) {
     const bool prores = preset == OutputPresetV1::ProResMovV1;
     const bool dnx = preset == OutputPresetV1::DnxhrMxfV1;
     const bool pcm = preset == OutputPresetV1::PcmWavV1;
@@ -77,6 +79,21 @@ Result<MediaOutputAnalysisV1> analyzeMediaOutputV1(OutputPresetV1 preset,
          {F::ExternalDependencies, S::ExternalReference,
           prores ? kProResExportNote
                  : "FFmpeg worker; same-provider reopen; no independent delivery verification"}}};
+    if (!pcm) {
+        if (!display)
+            display = PreparedOutputDisplayV1::prepare({});
+        if (!display)
+            return Unavailable{Error::Unavailable, "Output display processor unavailable"};
+        result.display = std::move(display);
+        result.facets[0].description = "OCIO display/view; clamp; lossy video";
+        result.facets[2].description = result.display->description();
+        const auto look = "look: baked (" + std::to_string(lookEffects) + " look-tagged effects)";
+        result.facets[9].description += "; " + look;
+        result.implementationNote += "; " + result.display->description() + "; " + look;
+        const auto identityHex = result.display->digest().toLowercaseHex();
+        result.facets[10].description +=
+            "; display identity=" + std::string(identityHex.data(), identityHex.size());
+    }
     core::Sha256Hasher hasher;
     const std::string_view domain = "BloomMediaOutputAnalysisV1";
     (void)hasher.update(std::as_bytes(std::span(domain.data(), domain.size())));
@@ -96,7 +113,8 @@ Result<MediaOutputAnalysisV1> analyzeMediaOutputV1(OutputPresetV1 preset,
     return result;
 }
 Result<FrameProduct> prepareMediaRgba16V1(const render::Rgba32fImage& image, Rational pts,
-                                          const platform::ProcessCancellation& cancellation) {
+                                          const platform::ProcessCancellation& cancellation,
+                                          const PreparedOutputDisplayV1* display) {
     const auto* descriptor = image.descriptor();
     if (!descriptor || !valid(pts) || descriptor->dataWindow() != descriptor->displayWindow() ||
         descriptor->pixelAspect() != core::PixelAspectRatio::square())
@@ -107,6 +125,13 @@ Result<FrameProduct> prepareMediaRgba16V1(const render::Rgba32fImage& image, Rat
         window.extent().width() > Limits::dimension ||
         window.extent().height() > Limits::dimension || image.pixels().size() > Limits::pixels)
         return Unavailable{Error::Oversized, "Media output dimensions exceed provider limits"};
+    std::shared_ptr<const PreparedOutputDisplayV1> fallback;
+    if (!display) {
+        fallback = PreparedOutputDisplayV1::prepare({});
+        display = fallback.get();
+    }
+    if (!display)
+        return Unavailable{Error::Unavailable, "Output display processor unavailable"};
     FrameProduct result;
     result.format = PixelFormat::Rgba16;
     result.pts = pts;
@@ -121,16 +146,18 @@ Result<FrameProduct> prepareMediaRgba16V1(const render::Rgba32fImage& image, Rat
         if (offset % (std::size_t{64} * 1024U) == 0 && cancellation && cancellation())
             return Unavailable{Error::Cancelled, "Output preparation cancelled"};
         const double alpha = std::clamp(static_cast<double>(pixel.alpha()), 0.0, 1.0);
-        const std::array<double, 4> samples{
-            static_cast<double>(pixel.red()), static_cast<double>(pixel.green()),
-            static_cast<double>(pixel.blue()), static_cast<double>(pixel.alpha())};
-        for (std::size_t c = 0; c < samples.size(); ++c) {
-            double value = alpha;
-            if (c != 3) {
-                const double linear = alpha > 0 ? std::clamp(samples[c] / alpha, 0.0, 1.0) : 0;
-                value = linear <= 0.0031308 ? linear * 12.92
-                                            : 1.055 * std::pow(linear, 1.0 / 2.4) - 0.055;
-            }
+        const float sourceAlpha = pixel.alpha();
+        const auto straight = [&](float channel) -> double {
+            return sourceAlpha == 0.0F ? 0.0 : static_cast<double>(channel / sourceAlpha);
+        };
+        const auto converted = display->processor().referenceToDisplay(
+            {straight(pixel.red()), straight(pixel.green()), straight(pixel.blue()), alpha});
+        if (!converted)
+            return Unavailable{Error::InvalidValue, "Output display transform failed"};
+        const std::array<double, 4> samples{sourceAlpha == 0.0F ? 0.0 : converted->red,
+                                            sourceAlpha == 0.0F ? 0.0 : converted->green,
+                                            sourceAlpha == 0.0F ? 0.0 : converted->blue, alpha};
+        for (const auto value : samples) {
             const auto quantized =
                 static_cast<std::uint32_t>(std::floor(std::clamp(value, 0.0, 1.0) * 65535.0 + 0.5));
             plane.bytes[offset++] = static_cast<std::byte>(quantized & 255U);

@@ -21,6 +21,10 @@ struct SequenceExportRequestV1 {
     std::optional<std::uint64_t> startFrame = {};
     std::uint32_t framePadding = 4;
     std::string namePattern = "<base>.####.<ext>";
+    std::string workingColorSpaceId = std::string(runtime::kLinearRec709SceneColorSpaceId);
+    core::Sha256Digest ocioConfigRevision = {};
+    std::string ocioConfigUri = std::string(runtime::kBloomNeutralOcioConfigUri);
+    std::string displayName = {}, viewName = {};
     std::uint64_t queueByteLimit = 512ULL * 1024U * 1024U;
 };
 enum class SequenceExportStageV1 : std::uint8_t {
