@@ -24,6 +24,7 @@ namespace core = bloom::core;
 namespace detail = bloom::output::detail;
 namespace output = bloom::output;
 namespace render = bloom::render;
+namespace runtime = bloom::runtime;
 
 using AnalyzerError = output::OutputAnalysisAnalyzerErrorCodeV1;
 using Code = output::OutputFacetStableCodeV1;
@@ -32,7 +33,6 @@ using Fault = detail::OutputAnalysisAnalyzerFaultV1;
 using Preset = output::OutputPresetV1;
 
 constexpr std::string_view kSourcePrecision = "component-type=id:binary32";
-constexpr std::string_view kSourceColor = "color-id=id:lin_rec709_scene";
 constexpr std::string_view kSourceAlpha =
     "association=id:premultiplied;zero-alpha=id:canonical-zero";
 constexpr std::string_view kChannels =
@@ -148,6 +148,7 @@ known(const output::PngRgba8SrgbColorResolutionStateV1 state) noexcept {
 struct SourceDescriptorResult final {
     std::optional<render::Rgba32fImageDescriptor> descriptor;
     bool processReady = false;
+    std::string_view workingColorSpaceId = runtime::kLinearRec709SceneColorSpaceId;
     AnalyzerError error = AnalyzerError::InternalInvariant;
 };
 
@@ -172,7 +173,10 @@ resolveSourceDescriptor(const output::OutputAnalysisProcessSourceV1& process) no
                     .processReady = false,
                     .error = AnalyzerError::InvalidSourceDescriptor};
         }
-        return {.descriptor = *descriptor, .processReady = true, .error = AnalyzerError::None};
+        return {.descriptor = *descriptor,
+                .processReady = true,
+                .workingColorSpaceId = frameOwner->identity().colorIntent.workingColorSpaceId,
+                .error = AnalyzerError::None};
     }
     case output::OutputAnalysisProcessSourceStateV1::Missing:
         if (process.readyIdentity != nullptr || !process.missingDescriptor.has_value()) {
@@ -182,10 +186,12 @@ resolveSourceDescriptor(const output::OutputAnalysisProcessSourceV1& process) no
         }
         return {.descriptor = process.missingDescriptor,
                 .processReady = false,
+                .workingColorSpaceId = runtime::kLinearRec709SceneColorSpaceId,
                 .error = AnalyzerError::None};
     }
     return {.descriptor = std::nullopt,
             .processReady = false,
+            .workingColorSpaceId = runtime::kLinearRec709SceneColorSpaceId,
             .error = AnalyzerError::InvalidProcessSourceState};
 }
 
@@ -387,6 +393,8 @@ class OutputAnalysisAnalyzerV1 final {
             const auto sourceDataWindow = windowDescriptor(dataWindow);
             const auto sourceDisplayWindow = windowDescriptor(displayWindow);
             const auto sourcePixelAspect = pixelAspectDescriptor(pixelAspect);
+            std::string sourceColor = "color-id=id:";
+            sourceColor.append(source.workingColorSpaceId);
 
             std::array<OutputAnalysisReportV1::OwnedAssessment, kOutputAnalysisFacetCountV1>
                 assessments;
@@ -479,10 +487,9 @@ class OutputAnalysisAnalyzerV1 final {
                                            : tiff ? std::string("component-type=id:uint16")
                                                   : std::string(kSourcePrecision));
             valid = valid &&
-                    setAssessment(assessments[2], preset, Facet::Color, colorCode,
-                                  std::string(kSourceColor),
+                    setAssessment(assessments[2], preset, Facet::Color, colorCode, sourceColor,
                                   (png || tiff) ? std::string("color-id=id:srgb_rec709_display")
-                                                : std::string(kSourceColor));
+                                                : sourceColor);
             valid = valid &&
                     setAssessment(
                         assessments[3], preset, Facet::AlphaAssociation,

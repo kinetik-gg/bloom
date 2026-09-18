@@ -666,8 +666,7 @@ void testClosedSemanticValidationAndProviderNeutrality(Expectations& expectation
         "unknown evaluation-quality values fail closed during preflight");
 
     auto invalidColor = compositionFixture();
-    invalidColor.identity.colorIntent =
-        std::bit_cast<runtime::EvaluationColorIntent>(std::uint8_t{0xFF});
+    invalidColor.identity.colorIntent.workingColorSpaceId = {};
     expectations.expect(prepare(publishFixture(std::move(invalidColor))).error() ==
                             output::ProcessFrameSemanticIdentityErrorCode::UnsupportedColorIntent,
                         "unknown color-intent values fail closed during preflight");

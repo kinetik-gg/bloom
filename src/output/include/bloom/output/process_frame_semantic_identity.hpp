@@ -17,6 +17,9 @@ inline constexpr std::uint16_t kProcessPixelStreamSerializationVersion = 1;
 inline constexpr std::uint16_t kProcessFrameSemanticIdentitySerializationVersion = 1;
 inline constexpr std::size_t kCompositionProcessFrameSemanticIdentityV1Bytes = 249;
 inline constexpr std::size_t kProxyProcessFrameSemanticIdentityV1Bytes = 257;
+// The generalized color-intent extension carries a bounded working-space id and, for non-neutral
+// configs, a 32-byte OCIO revision in addition to the legacy 249/257-byte payloads.
+inline constexpr std::size_t kMaximumProcessFrameSemanticIdentityV1Bytes = 1'024;
 
 // Version 1 has no caller-provided text. Its color and process pixel-semantics identifiers are
 // fixed exact ASCII constants, so this boundary deliberately performs no Unicode normalization.
@@ -96,11 +99,11 @@ class ProcessFrameSemanticIdentityV1 final {
   private:
     ProcessFrameSemanticIdentityV1(
         std::shared_ptr<const runtime::ProcessFrame> processFrame,
-        std::array<std::byte, kProxyProcessFrameSemanticIdentityV1Bytes> canonicalBytes,
+        std::array<std::byte, kMaximumProcessFrameSemanticIdentityV1Bytes> canonicalBytes,
         std::size_t canonicalByteCount, core::Sha256Digest processPixelDigest) noexcept;
 
     std::shared_ptr<const runtime::ProcessFrame> processFrame_;
-    std::array<std::byte, kProxyProcessFrameSemanticIdentityV1Bytes> canonicalBytes_{};
+    std::array<std::byte, kMaximumProcessFrameSemanticIdentityV1Bytes> canonicalBytes_{};
     std::size_t canonicalByteCount_ = 0;
     core::Sha256Digest processPixelDigest_{};
 

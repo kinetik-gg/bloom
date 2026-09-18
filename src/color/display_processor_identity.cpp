@@ -352,7 +352,7 @@ validateDisplayProcessorIdentityV1(const DisplayProcessorIdentityV1InputView& in
     if (sourceError != DisplayProcessorIdentityError::None) {
         return DisplayProcessorIdentityV1Validation(sourceError);
     }
-    if (input.sourceColorSpaceId != kDisplayProcessorIdentitySourceColorSpaceId) {
+    if (input.sourceColorSpaceId.empty()) {
         return DisplayProcessorIdentityV1Validation(
             DisplayProcessorIdentityError::InvalidSourceColorSpaceId);
     }
@@ -410,18 +410,24 @@ validateDisplayProcessorIdentityV1(const DisplayProcessorIdentityV1InputView& in
         }
     }
 
-    const std::array<std::pair<std::string_view, std::string_view>, 4> fixedFields{{
-        {input.outputColorSpaceId, kDisplayProcessorIdentityOutputColorSpaceId},
+    const std::array<std::pair<std::string_view, std::string_view>, 3> fixedFields{{
         {input.qualityId, kDisplayProcessorIdentityQualityId},
         {input.semanticsProfileId, kDisplayProcessorIdentitySemanticsProfileId},
         {input.packingId, kDisplayProcessorIdentityPackingId},
     }};
-    const std::array<DisplayProcessorIdentityError, 4> fixedErrors{{
-        DisplayProcessorIdentityError::InvalidOutputColorSpaceId,
+    const std::array<DisplayProcessorIdentityError, 3> fixedErrors{{
         DisplayProcessorIdentityError::InvalidQualityId,
         DisplayProcessorIdentityError::InvalidSemanticsProfileId,
         DisplayProcessorIdentityError::InvalidPackingId,
     }};
+    const auto outputError = validateText(input.outputColorSpaceId);
+    if (outputError != DisplayProcessorIdentityError::None) {
+        return DisplayProcessorIdentityV1Validation(outputError);
+    }
+    if (input.outputColorSpaceId.empty()) {
+        return DisplayProcessorIdentityV1Validation(
+            DisplayProcessorIdentityError::InvalidOutputColorSpaceId);
+    }
     for (std::size_t index = 0; index < fixedFields.size(); ++index) {
         const auto fieldError = validateText(fixedFields[index].first);
         if (fieldError != DisplayProcessorIdentityError::None) {
@@ -587,10 +593,11 @@ parseDisplayProcessorIdentityV1(const std::span<const std::byte> canonicalBytes)
         return std::nullopt;
     };
 
-    if (const auto error =
-            readFixedText(kDisplayProcessorIdentitySourceColorSpaceId,
-                          DisplayProcessorIdentityError::InvalidSourceColorSpaceId)) {
-        return *error;
+    std::string_view sourceColorSpaceId;
+    if (!reader.readText(kDisplayProcessorIdentityMaximumTextBytes, true,
+                         DisplayProcessorIdentityError::InvalidSourceColorSpaceId,
+                         sourceColorSpaceId)) {
+        return rejectReaderError();
     }
 
     std::string_view displayName;
@@ -637,10 +644,11 @@ parseDisplayProcessorIdentityV1(const std::span<const std::byte> canonicalBytes)
         }
     }
 
-    if (const auto error =
-            readFixedText(kDisplayProcessorIdentityOutputColorSpaceId,
-                          DisplayProcessorIdentityError::InvalidOutputColorSpaceId)) {
-        return *error;
+    std::string_view outputColorSpaceId;
+    if (!reader.readText(kDisplayProcessorIdentityMaximumTextBytes, true,
+                         DisplayProcessorIdentityError::InvalidOutputColorSpaceId,
+                         outputColorSpaceId)) {
+        return rejectReaderError();
     }
     if (const auto error = readFixedText(kDisplayProcessorIdentityQualityId,
                                          DisplayProcessorIdentityError::InvalidQualityId)) {

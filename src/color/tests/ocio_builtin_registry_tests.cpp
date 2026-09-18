@@ -32,6 +32,37 @@ using bloom::color::OcioBuiltInRegistryOutcome;
 using bloom::color::OcioConfigLocatorKind;
 using bloom::color::resolveBloomNeutralV1BuiltIn;
 
+void testAcesCgBuiltIn(Expectations& expectations) {
+    const auto revision = bloom::color::ocioBuiltInContentRevision(
+        OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
+    expectations.expect(revision.has_value(), "the OCIO ACES CG built-in has a content revision");
+    if (!revision.has_value()) {
+        return;
+    }
+    auto result = bloom::color::resolveOcioBuiltIn(OcioConfigLocatorKind::BloomBuiltIn,
+                                                   bloom::color::kAcesCgV1ConfigUri, *revision,
+                                                   bloom::color::kAcesCgV1SceneLinearColorSpaceId);
+    expectations.expect(result.outcome() == OcioBuiltInRegistryOutcome::Ready,
+                        "the pinned ACES CG built-in resolves Ready");
+    const auto* resolved = result.resolved();
+    expectations.expect(resolved != nullptr && resolved->processColorSpaceId() == "ACEScg" &&
+                            resolved->configName() == bloom::color::kAcesCgV1BuiltinConfigName,
+                        "ACES CG resolves the requested ACEScg working space and stable name");
+
+    auto aces2065 =
+        bloom::color::resolveOcioBuiltIn(OcioConfigLocatorKind::BloomBuiltIn,
+                                         bloom::color::kAcesCgV1ConfigUri, *revision, "ACES2065-1");
+    expectations.expect(aces2065.outcome() == OcioBuiltInRegistryOutcome::Ready,
+                        "ACES2065-1 is accepted because the ACES CG config exposes it");
+    auto neutralAces2065 = bloom::color::resolveOcioBuiltIn(
+        OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kBloomNeutralV1ConfigUri,
+        bloom::color::kBloomNeutralV1ConfigDigest, "ACES2065-1");
+    expectations.expect(neutralAces2065.outcome() == OcioBuiltInRegistryOutcome::Invalid &&
+                            neutralAces2065.invalidReason() ==
+                                bloom::color::OcioBuiltInInvalidReason::WorkingColorSpaceMissing,
+                        "a composition override fails closed when the selected config lacks it");
+}
+
 void testReadyExactDigest(Expectations& expectations) {
     auto result = resolveBloomNeutralV1BuiltIn(OcioConfigLocatorKind::BloomBuiltIn,
                                                bloom::color::kBloomNeutralV1ConfigUri,
@@ -135,5 +166,6 @@ int main() {
     testMissingUnknownUri(expectations);
     testUnsupportedLocatorKindsTyped(expectations);
     testEmbeddedPayloadDigestEqualsProfileConstant(expectations);
+    testAcesCgBuiltIn(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

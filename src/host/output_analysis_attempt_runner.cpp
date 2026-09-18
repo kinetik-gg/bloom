@@ -95,9 +95,14 @@ retainDisplayProducts(std::shared_ptr<const color::PreparedCpuDisplayProcessorHa
 // modelled configuration/adapter state returns a populated outcome that the analyzer turns into a
 // truthful, non-approvable report.
 [[nodiscard]] std::optional<ColorResolutionOutcomeV1>
-resolvePngDisplayProducts(runtime::QualifiedDisplayProcessorProvider* const provider) noexcept {
+resolvePngDisplayProducts(runtime::QualifiedDisplayProcessorProvider* const provider,
+                          const runtime::EvaluationColorIntent& intent) noexcept {
     try {
-        if (provider != nullptr) {
+        const bool neutralWorkingSpace =
+            intent.workingColorSpaceId == runtime::kLinearRec709SceneColorSpaceId &&
+            (intent.ocioConfigRevision == core::Sha256Digest{} ||
+             intent.ocioConfigRevision == color::kBloomNeutralV1ConfigDigest);
+        if (neutralWorkingSpace && provider != nullptr) {
             const auto snapshot = provider->snapshot();
             if (snapshot.readiness == runtime::QualifiedDisplayProcessorReadiness::Ready &&
                 snapshot.handle != nullptr) {
@@ -112,9 +117,14 @@ resolvePngDisplayProducts(runtime::QualifiedDisplayProcessorProvider* const prov
             }
         }
 
-        auto resolution = color::resolveBloomNeutralV1BuiltIn(
-            color::OcioConfigLocatorKind::BloomBuiltIn, color::kBloomNeutralV1ConfigUri,
-            color::kBloomNeutralV1ConfigDigest);
+        const auto expectedRevision = intent.ocioConfigRevision == core::Sha256Digest{}
+                                          ? color::kBloomNeutralV1ConfigDigest
+                                          : intent.ocioConfigRevision;
+        const auto locator =
+            neutralWorkingSpace ? color::kBloomNeutralV1ConfigUri : color::kAcesCgV1ConfigUri;
+        auto resolution =
+            color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn, locator,
+                                      expectedRevision, intent.workingColorSpaceId);
         if (!resolution.ready()) {
             return ColorResolutionOutcomeV1{
                 .colorResolution = mapRegistryOutcome(resolution.outcome()),
@@ -379,7 +389,10 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                     preset == output::OutputPresetV1::PngRgba8SrgbV1
                         ? output::analyzePngRgba8SrgbV1(
                               {.process = processSource,
-                               .expectedOcioRevision = color::kBloomNeutralV1ConfigDigest,
+                               .expectedOcioRevision =
+                                   evaluation.colorIntent.ocioConfigRevision == core::Sha256Digest{}
+                                       ? color::kBloomNeutralV1ConfigDigest
+                                       : evaluation.colorIntent.ocioConfigRevision,
                                .colorResolution = resolved->color.colorResolution,
                                .adapter = resolved->color.adapter})
                     : preset == output::OutputPresetV1::TiffRgba16SrgbV1
@@ -486,14 +499,15 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
 
     const auto preset = state->request.preset;
     auto* const displayProvider = state->request.displayProcessorProvider;
+    const auto colorIntent = state->request.evaluation.colorIntent;
 
     runtime::TaskRequest resolvingRequest(
         "Resolve an export target", attemptOwner(state->request.owner),
         runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo);
     auto submission = scheduler.submit<ResolvingOutcomeV1>(
         std::move(resolvingRequest),
-        [&artifacts, targetPath, overwritePolicy, preset, displayProvider](
-            runtime::TaskContext& context) -> runtime::TaskResult<ResolvingOutcomeV1> {
+        [&artifacts, targetPath, overwritePolicy, preset, displayProvider,
+         colorIntent](runtime::TaskContext& context) -> runtime::TaskResult<ResolvingOutcomeV1> {
             if (context.isCancellationRequested()) {
                 return runtime::TaskResult<ResolvingOutcomeV1>::cancelled();
             }
@@ -527,7 +541,7 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
                                         .subphase = "",
                                         .completed = 0,
                                         .total = std::nullopt});
-                auto color = resolvePngDisplayProducts(displayProvider);
+                auto color = resolvePngDisplayProducts(displayProvider, colorIntent);
                 if (!color.has_value()) {
                     return runtime::TaskResult<ResolvingOutcomeV1>::succeeded(
                         {.succeeded = false, .colorStageFailed = true});

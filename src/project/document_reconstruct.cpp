@@ -183,6 +183,7 @@ ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope) 
         composition.setSafeAreas(decodedComposition.safeAreas);
         composition.setBackgroundColor(decodedComposition.backgroundColor);
         composition.setWorkArea(decodedComposition.workArea);
+        composition.setWorkingColorSpaceId(std::move(decodedComposition.workingColorSpaceId));
 
         if (!project.addComposition(std::move(composition))) {
             return ReconstructDocumentResult::failure({.stage = ReconstructionStage::CompositionAdd,

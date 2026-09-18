@@ -484,7 +484,7 @@ void testPlainSaveAfterSaveAs(Expectations& expectations) {
 
 // ---------------------------------------------------------------------------------------------
 // Round-tripped newer minor: install a RoundTripState (built via the real document decode path
-// over a spliced 1.2 fixture, mirroring save_archive_tests.cpp) + schemaMinor 2 at creation ->
+// over a spliced 1.20 fixture, mirroring save_archive_tests.cpp) + schemaMinor 20 at creation ->
 // save -> the manifest in the published file declares {1,2} and the unknown member survives
 // (reopen + decode assert).
 // ---------------------------------------------------------------------------------------------
@@ -525,14 +525,14 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
         return;
     }
 
-    const std::string anchor = "\"minor\": 18\n  },\n  \"project\"";
+    const std::string anchor = "\"minor\": 19\n  },\n  \"project\"";
     const auto anchorPos = text.find(anchor);
     expectations.expect(anchorPos != std::string::npos,
                         "round-tripped newer minor: root schemaVersion anchor is located");
     if (anchorPos == std::string::npos) {
         return;
     }
-    text.replace(anchorPos, std::string_view("\"minor\": 18").size(), "\"minor\": 19");
+    text.replace(anchorPos, std::string_view("\"minor\": 19").size(), "\"minor\": 20");
     expectations.expect(text.size() >= 2 && text.back() == '\n' && text[text.size() - 2] == '}',
                         "round-tripped newer minor: baseline ends with the root's closing brace");
     if (text.size() < 2 || text.back() != '\n' || text[text.size() - 2] != '}') {
@@ -576,7 +576,7 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
                          .displayPath = std::nullopt,
                          .persistedAllocatorHighWater = persistedHighWater,
                          .roundTrip = std::move(roundTrip),
-                         .schemaMinor = 19,
+                         .schemaMinor = 20,
                          .retainedRequirements = {}});
     expectations.expect(static_cast<bool>(sessionResult),
                         "round-tripped newer minor: the session installs the round-tripped "
@@ -624,8 +624,8 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
         expectations.expect(
             static_cast<bool>(decodedManifest) && decodedManifest.value() != nullptr &&
                 decodedManifest.value()->documentSchemaVersion ==
-                    bloom::document::SchemaVersion{1, 19},
-            "round-tripped newer minor: the published manifest declares document schema {1,19}");
+                    bloom::document::SchemaVersion{1, 20},
+            "round-tripped newer minor: the published manifest declares document schema {1,20}");
     }
 
     auto documentDom =

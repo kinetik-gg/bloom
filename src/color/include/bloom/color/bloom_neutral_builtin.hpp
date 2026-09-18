@@ -2,7 +2,9 @@
 
 #include <bloom/core/sha256.hpp>
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <string_view>
 
 namespace bloom::color {
@@ -23,6 +25,24 @@ namespace bloom::color {
 // already links both bloom_document and (via this header) bloom_color, cross-checks them for
 // exact equality.
 inline constexpr std::string_view kBloomNeutralV1ConfigUri = "bloom://ocio/neutral-v1/config.ocio";
+
+// OCIO 2.5's immutable ACES 1.3 CG config. OCIO owns the serialized payload; the registry
+// computes its durable content revision from Config::serialize() at runtime, so no generated
+// copy of the upstream config is checked into Bloom.
+inline constexpr std::string_view kAcesCgV1ConfigUri =
+    "ocio://cg-config-v1.0.0_aces-v1.3_ocio-v2.1";
+inline constexpr std::string_view kAcesCgV1BuiltinConfigName =
+    "cg-config-v1.0.0_aces-v1.3_ocio-v2.1";
+inline constexpr std::string_view kAcesCgV1SceneLinearColorSpaceId = "ACEScg";
+
+// OpenEXR stores chromaticities as binary32 xy pairs. These are the pinned ACES AP1 values used
+// by the OCIO 2.5 ACES 1.3 CG built-in for its ACEScg scene-linear space. Keeping the exact bits
+// here lets the output adapter write and re-open the same metadata without exposing OCIO types at
+// the output boundary.
+inline constexpr std::array<std::uint32_t, 8> kAcesCgV1ChromaticityBits{
+    0x3F36872BU, 0x3E960419U, 0x3E28F5C3U, 0x3F547AE1U,
+    0x3E03126FU, 0x3D343958U, 0x3EA4B33EU, 0x3EACE315U,
+};
 
 // Exact byte count of the checked-in assets/ocio/neutral-v1/config.ocio payload. The build-time
 // embed in ocio_builtin_registry.cpp statically asserts its generated array matches this count.

@@ -239,15 +239,13 @@ void testClosedInputValidation(Expectations& expectations) {
                         "an unknown look-mode representation fails closed");
 
     input = goldenInput();
-    input.sourceColorSpaceId = "lin_rec709_display";
-    expectations.expect(color::validateDisplayProcessorIdentityV1(input).error() ==
-                            Error::InvalidSourceColorSpaceId,
-                        "the source Color Interop ID is exact");
+    input.sourceColorSpaceId = "ACEScg";
+    expectations.expect(color::validateDisplayProcessorIdentityV1(input).succeeded(),
+                        "the source Color Interop ID accepts a selected working space");
     input = goldenInput();
-    input.outputColorSpaceId = "srgb_rec709_scene";
-    expectations.expect(color::validateDisplayProcessorIdentityV1(input).error() ==
-                            Error::InvalidOutputColorSpaceId,
-                        "the output Color Interop ID is exact");
+    input.outputColorSpaceId = "display";
+    expectations.expect(color::validateDisplayProcessorIdentityV1(input).succeeded(),
+                        "the output Color Interop ID accepts a selected display product");
     input = goldenInput();
     input.qualityId = "fast";
     expectations.expect(color::validateDisplayProcessorIdentityV1(input).error() ==
@@ -453,10 +451,10 @@ void testMalformedParserInputs(Expectations& expectations) {
                         "a parsed look count beyond the closed ceiling is rejected");
     malformed = kGoldenBytes;
     malformed[80] = std::byte{'X'};
-    expectations.expect(parseHasError(malformed, Error::InvalidSourceColorSpaceId, 80),
-                        "a changed fixed record value is rejected");
+    const auto generalizedSource = color::parseDisplayProcessorIdentityV1(malformed);
+    expectations.expect(generalizedSource && generalizedSource.identity() != nullptr,
+                        "a selected working-space identifier round-trips through the record");
     constexpr std::array fixedRecordMutations{
-        std::pair{std::size_t{123}, Error::InvalidOutputColorSpaceId},
         std::pair{std::size_t{146}, Error::InvalidQualityId},
         std::pair{std::size_t{159}, Error::InvalidSemanticsProfileId},
         std::pair{std::size_t{194}, Error::InvalidPackingId},

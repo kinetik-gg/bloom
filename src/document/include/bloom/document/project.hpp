@@ -3,6 +3,7 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/asset.hpp>
+#include <bloom/document/color_settings.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/data_block.hpp>
 #include <bloom/document/extension_records.hpp>
@@ -12,6 +13,7 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/validation.hpp>
 
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -53,6 +55,14 @@ class Composition final {
 
     [[nodiscard]] const std::optional<WorkArea>& workArea() const noexcept { return workArea_; }
     void setWorkArea(std::optional<WorkArea> area) noexcept { workArea_ = area; }
+    // Null means inherit the project's ColorSettings.processColorSpaceId. A present value is
+    // proved against the selected OCIO config by the color boundary before an edit is accepted.
+    [[nodiscard]] const std::optional<std::string>& workingColorSpaceId() const noexcept {
+        return workingColorSpaceId_;
+    }
+    void setWorkingColorSpaceId(std::optional<std::string> id) {
+        workingColorSpaceId_ = std::move(id);
+    }
     [[nodiscard]] core::Color4d backgroundColor() const noexcept { return backgroundColor_; }
     void setBackgroundColor(core::Color4d color) noexcept { backgroundColor_ = color; }
     [[nodiscard]] SafeAreaSettings safeAreas() const noexcept { return safeAreas_; }
@@ -67,6 +77,7 @@ class Composition final {
 
   private:
     std::optional<WorkArea> workArea_{};
+    std::optional<std::string> workingColorSpaceId_{};
     SafeAreaSettings safeAreas_{};
     core::Color4d backgroundColor_{0.0, 0.0, 0.0, 1.0};
     CompositionId id_;

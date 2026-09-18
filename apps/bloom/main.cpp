@@ -75,6 +75,9 @@ int main(int argc, char* argv[]) {
     }
     bloom::ui::CompositionSession compositionSession(*initialDocument, *initialCommandStack,
                                                      projectHost.lowestCompositionId());
+    if (const auto* settings = projectHost.colorSettings(); settings != nullptr) {
+        compositionSession.setColorSettings(*settings);
+    }
 
     // Projection rebinding (decision 2): every time ProjectHost replaces the live session content
     // (New or a successful Open install), rebind CompositionSession to whatever document/command-
@@ -87,14 +90,23 @@ int main(int argc, char* argv[]) {
     // the stale CompositionSession this lambda leaves bound is never shown to the artist. Returning
     // to decoded content (a New or an editable Open) switches the workspace back into view and this
     // lambda rebinds normally.
-    QObject::connect(&projectHost, &bloom::ui::ProjectHost::sessionReplaced, &compositionSession,
-                     [&projectHost, &compositionSession] {
-                         auto [document, commandStack] = projectHost.liveDocumentAndStack();
-                         if (document == nullptr || commandStack == nullptr) {
-                             return;
-                         }
-                         compositionSession.rebind(*document, *commandStack,
-                                                   projectHost.lowestCompositionId());
+    QObject::connect(
+        &projectHost, &bloom::ui::ProjectHost::sessionReplaced, &compositionSession,
+        [&projectHost, &compositionSession] {
+            auto [document, commandStack] = projectHost.liveDocumentAndStack();
+            if (document == nullptr || commandStack == nullptr) {
+                return;
+            }
+            compositionSession.rebind(*document, *commandStack, projectHost.lowestCompositionId());
+            if (const auto* settings = projectHost.colorSettings(); settings != nullptr) {
+                compositionSession.setColorSettings(*settings);
+            }
+        });
+    QObject::connect(&projectHost, &bloom::ui::ProjectHost::colorSettingsChanged,
+                     &compositionSession, [&projectHost, &compositionSession] {
+                         if (const auto* settings = projectHost.colorSettings();
+                             settings != nullptr)
+                             compositionSession.setColorSettings(*settings);
                      });
 
     bloom::runtime::NodeDefinitionRegistry nodeDefinitions;
@@ -158,7 +170,8 @@ int main(int argc, char* argv[]) {
         snapshotCompiler, cpuEvaluator, referenceDisplayPreparer, qualifiedDisplayProcessorProvider,
         compiledPlanCache);
     bloom::ui::CompositionPreviewController previewController(
-        compositionSession, taskScheduler, taskUiBridge, previewPipeline, {}, previewFrameCache);
+        compositionSession, taskScheduler, taskUiBridge, previewPipeline,
+        {.colorIntent = compositionSession.colorIntent()}, previewFrameCache);
     bloom::ui::BackgroundPreviewController backgroundPreviewController(
         compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline);
     bloom::ui::RamPreviewController ramPreviewController(

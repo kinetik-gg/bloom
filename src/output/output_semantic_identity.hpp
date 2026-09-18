@@ -50,6 +50,7 @@ struct FlatExrRgba32fSemanticMetadataV1 final {
     FlatExrInclusiveWindowV1 dataWindow;
     FlatExrInclusiveWindowV1 displayWindow;
     std::uint32_t pixelAspectRatioBits;
+    std::array<std::uint32_t, 8> chromaticityBits = kFlatExrRec709D65ChromaticitiesBitsV1;
 };
 
 namespace detail {

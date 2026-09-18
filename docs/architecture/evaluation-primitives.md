@@ -208,11 +208,11 @@ under "Layer Transform Resampling"; version 5 added the per-mode blend kernel de
 blend kernel carries a second semantics version that could drift out of the identity a published
 frame records.
 
-- Solid authoring colors are straight `Color4d` under the frozen authoring-encoding metadata
-  `bloom.reference.linear-srgb`. That metadata remains distinct from the process-image identity.
-  Version 1 Solid lowering explicitly declares the authoring encoding numerically equivalent to
-  `lin_rec709_scene`; a future authoring encoding requires an explicit qualified transform policy
-  instead of relabelling its numbers. The conversion validates the authored value, multiplies RGB
+- Solid, Text, and Shape authoring colours are straight `Color4d` values stored numerically in the
+  effective project/composition working space. The authoring metadata remains distinct from the
+  process-image identity. The picker presents sRGB-encoded editing values and converts through the
+  selected OCIO config's `sRGB - Texture` space; the evaluator receives only the validated working
+  space and resulting straight value. The conversion validates the authored value, multiplies RGB
   by alpha in Float64, then performs one checked Float32 conversion. Alpha that is authored as zero
   or rounds to Float32 zero produces exact transparent black.
 - The layer transform and opacity are validated once per operation. Bilinear sampling gathers
@@ -225,10 +225,11 @@ frame records.
 - Blending takes the same two rows plus the layer's own blend mode, and is what the Layer Stack stage
   actually calls; source-over remains the kernel the `Normal` mode delegates to, unchanged. See
   "Blending" below.
-- The temporary unqualified reference display mapper robustly unpremultiplies, clips only at the
-  display boundary, applies the `lin_rec709_scene` to sRGB transfer, and produces straight packed
-  RGBA8. Checked-in inverse-transfer half-code thresholds make byte quantization independent of
-  platform `libm`. Its prepared display product and identity are distinct from process evaluation.
+- The qualified display boundary consumes the evaluation intent's working-space id and OCIO config
+  revision. The historical reference mapper remains the byte-compatible path for
+  `lin_rec709_scene`; generalized projects use the selected working-space-to-display transform and
+  produce straight packed RGBA8. Its prepared display product and identity are distinct from process
+  evaluation.
 - Text coverage is rasterized from glyph outlines into 8-bit area coverage, then composited by a row
   kernel that scales an already-premultiplied process pixel by `coverage / 255`. **A coverage byte is
   a linear area fraction, not a gamma-encoded intensity**, so it is used directly as linear alpha and
@@ -237,10 +238,11 @@ frame records.
   too-thin text; the process space is scene-linear, so the correct result and the simple
   implementation coincide. Zero coverage is exactly transparent black and full coverage is exactly
   the unmodified process pixel, with no multiply that could round either endpoint away.
-- Text authoring colors use the same straight `Color4d` values and the same
-  `bloom.reference.linear-srgb` authoring-encoding metadata Solid colors use, converted by the same
-  Solid conversion above; the coverage kernel then scales that one pixel. A text color is a solid
-  color that glyph coverage attenuates, which is why there is no separate text color conversion.
+- Text authoring colors use the same straight `Color4d` values and the same historical
+  `bloom.reference.linear-srgb` authoring-encoding metadata Solid colors use; their numeric values
+  are interpreted in the effective working space and converted by the same Solid conversion above.
+  The coverage kernel then scales that one pixel. A text color is a solid color that glyph coverage
+  attenuates, which is why there is no separate text color conversion.
 - Every authored arithmetic boundary requires round-to-nearest with preserved subnormal inputs and
   results. Primitive rows allocate no storage, start no threads, and expose structured failures. The
   glyph rasterizer is the one text-path exception: it allocates its coverage bitmap, so it checks the
@@ -444,7 +446,8 @@ An image or color evaluation boundary carries:
   and other data
 - straight or premultiplied alpha association
 - data and display windows, pixel aspect, and coordinate convention where relevant
-- the processing space selected by the node, render request, or explicit color-transform operation
+- the processing space selected by the project/composition working-space plan, render request, or
+  explicit color-transform operation
 
 `Color4d` is a straight authoring value. RGB may be negative or HDR; alpha is finite in `[0, 1]`;
 its owning schema supplies encoding and role. `Color4d` performs no conversion and is never passed
@@ -454,15 +457,16 @@ numeric identity conversion to the process space. Authoring metadata is not rewr
 `lin_rec709_scene` merely because that conversion is currently an identity.
 
 Canonical `Rgba32f` process storage is premultiplied Float32 RGBA. RGB remains finite and unclamped,
-alpha remains finite in `[0, 1]`, the image descriptor carries `lin_rec709_scene`, and alpha zero
-canonicalizes RGB to exact zero. A qualified OCIO config must resolve that exact ID before any
-operation that needs an OCIO transform; a matching alias, role, or display name is insufficient.
+alpha remains finite in `[0, 1]`, and alpha zero canonicalizes RGB to exact zero. The frame's
+`EvaluationColorIntent` carries the working-space id and OCIO content revision. A qualified OCIO
+config must resolve that exact id as a non-data scene-linear colour space before any operation that
+needs an OCIO transform; a matching alias, role, or display name is insufficient.
 
-The live `ColorEncoding::LinearRec709Scene`, `EvaluationColorIntent::LinearRec709Scene`, CPU image
-primitive semantics version `7`, CPU evaluator semantics version `8`, and reference display-mapper
-semantics version `2` implement this process identity. They supersede the scaffold's ambiguous
-reference-linear naming; cache identity rejects the older semantic versions rather than treating
-the rename as metadata-only.
+The compatibility spelling `EvaluationColorIntent::LinearRec709Scene` still denotes the zero-revision
+`lin_rec709_scene` intent, preserving existing process-frame and reference-display bytes. Generalized
+intents add their working-space id and config revision to cache/output identity. CPU image primitive
+semantics version `7`, CPU evaluator semantics version `8`, and reference display-mapper semantics
+version `2` remain the relevant primitive contracts.
 
 Binding rules:
 

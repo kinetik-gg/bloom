@@ -1,5 +1,8 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/qualified_display_preparation.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
@@ -171,6 +174,42 @@ void reportQualifiedDisplayProgress(bloom::runtime::TaskContext& context,
                             .total = progress.total});
 }
 
+[[nodiscard]] bool isNeutralIntent(const bloom::runtime::EvaluationColorIntent& intent) noexcept {
+    return intent.workingColorSpaceId == bloom::runtime::kLinearRec709SceneColorSpaceId &&
+           (intent.ocioConfigRevision == bloom::core::Sha256Digest{} ||
+            intent.ocioConfigRevision == bloom::color::kBloomNeutralV1ConfigDigest);
+}
+
+[[nodiscard]] std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle>
+buildSelectedDisplayProcessor(const bloom::runtime::EvaluationColorIntent& intent) noexcept {
+    try {
+        const auto expectedRevision = intent.ocioConfigRevision == bloom::core::Sha256Digest{}
+                                          ? bloom::color::kBloomNeutralV1ConfigDigest
+                                          : intent.ocioConfigRevision;
+        const auto locator = isNeutralIntent(intent) ? bloom::color::kBloomNeutralV1ConfigUri
+                                                     : bloom::color::kAcesCgV1ConfigUri;
+        auto resolution =
+            bloom::color::resolveOcioBuiltIn(bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
+                                             locator, expectedRevision, intent.workingColorSpaceId);
+        if (!resolution.ready()) {
+            return {};
+        }
+        auto resolved = std::move(resolution).takeResolved();
+        if (!resolved.has_value()) {
+            return {};
+        }
+        auto built = bloom::color::buildBloomNeutralCpuDisplayProcessor(*resolved);
+        auto handle = std::move(built).takeHandle();
+        if (!handle.has_value()) {
+            return {};
+        }
+        return std::make_shared<const bloom::color::PreparedCpuDisplayProcessorHandle>(
+            std::move(*handle));
+    } catch (...) {
+        return {};
+    }
+}
+
 } // namespace
 
 namespace bloom::ui {
@@ -208,7 +247,8 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
         // substitutes the reference transform for a qualified request. This is checked before any
         // compilation/evaluation work so a permanently failed qualification does not keep spending
         // worker time on frames nothing will ever qualify to display.
-        if (qualifiedSnapshot.readiness == runtime::QualifiedDisplayProcessorReadiness::Failed) {
+        if (qualifiedSnapshot.readiness == runtime::QualifiedDisplayProcessorReadiness::Failed &&
+            isNeutralIntent(desiredIdentity.colorIntent)) {
             return TaskResult::failed(qualifiedSnapshot.failureDiagnostic);
         }
         if (desiredIdentity.projectId != snapshot.project().id() ||
@@ -302,8 +342,16 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
         // window (design decision 3) routes through the unchanged reference path otherwise -- the
         // permanently-Failed case already returned above, before evaluation even ran.
         std::optional<runtime::PreparedPreviewFrame> prepared;
-        if (qualifiedSnapshot.handle != nullptr) {
-            const runtime::CpuQualifiedDisplayPreparer qualifiedPreparer(*qualifiedSnapshot.handle);
+        std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> selectedHandle =
+            isNeutralIntent(desiredIdentity.colorIntent)
+                ? qualifiedSnapshot.handle
+                : buildSelectedDisplayProcessor(desiredIdentity.colorIntent);
+        if (!isNeutralIntent(desiredIdentity.colorIntent) && selectedHandle == nullptr) {
+            return TaskResult::failed(missingResultDiagnostic(
+                "The selected OCIO working space could not prepare a qualified display transform"));
+        }
+        if (selectedHandle != nullptr) {
+            const runtime::CpuQualifiedDisplayPreparer qualifiedPreparer(*selectedHandle);
             const runtime::QualifiedDisplayPreparationRequest qualifiedRequest{
                 .aggregatePixelStorageByteLimit = pixelStorageByteLimit,
                 .viewAdjust = desiredIdentity.viewAdjust,

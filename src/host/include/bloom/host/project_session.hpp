@@ -346,6 +346,14 @@ enum class ProjectSessionCommandStatus : std::uint8_t {
     InvalidSession,
 };
 
+enum class ProjectSessionColorSettingsStatus : std::uint8_t {
+    Updated,
+    NoChange,
+    ReadOnly,
+    InvalidSession,
+    InvalidSettings,
+};
+
 struct ProjectSessionCommandResult final {
     ProjectSessionCommandStatus status = ProjectSessionCommandStatus::InvalidSession;
     std::optional<commands::CommandResult> command;
@@ -665,6 +673,13 @@ class ProjectSession final {
     [[nodiscard]] bool isValid() const noexcept;
     [[nodiscard]] ProjectSessionStateSnapshot stateSnapshot() const;
     [[nodiscard]] DecodedProjectSnapshotResult decodedSnapshot() const;
+    // Borrowed current project colour settings for UI projections. Null for preserved read-only
+    // content; the pointer remains valid until the next session replacement.
+    [[nodiscard]] const document::ColorSettings* colorSettings() const noexcept {
+        return colorSettings_.has_value() ? &*colorSettings_ : nullptr;
+    }
+    [[nodiscard]] ProjectSessionColorSettingsStatus
+    setColorSettings(document::ColorSettings settings);
 
     // Design decision 2 (task U1, issue #72): the narrow UI-only "projection binding" seam. A UI
     // projection (src/ui's CompositionSession::rebind()) needs raw, non-owning access to this
@@ -781,6 +796,7 @@ class ProjectSession final {
     // captureSaveInput() must still refuse cleanly rather than save an absent value if some
     // future construction path is added that does not supply one.
     std::optional<document::ColorSettings> colorSettings_;
+    bool colorSettingsDirty_ = false;
     // Owning, nullable, shared (design decision 1 -- see the file-level comment above): swapped
     // wholesale on a replacement install; a shared_ptr copy already handed out by
     // captureSaveInput() (SessionSaveInput::roundTripView()) keeps the OLD pointee alive

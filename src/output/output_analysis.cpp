@@ -2,6 +2,7 @@
 
 #include "output_analysis_numeric.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -154,6 +155,18 @@ struct WindowDescriptorParts final {
     std::string_view originY;
     std::string_view width;
 };
+
+[[nodiscard]] bool isColorDescriptor(const std::string_view descriptor) noexcept {
+    constexpr std::string_view prefix = "color-id=id:";
+    if (!descriptor.starts_with(prefix)) {
+        return false;
+    }
+    const auto id = descriptor.substr(prefix.size());
+    return !id.empty() && id.size() <= 256U && std::ranges::all_of(id, [](const char value) {
+        const auto byte = static_cast<unsigned char>(value);
+        return byte >= 0x20U && byte <= 0x7EU;
+    });
+}
 
 [[nodiscard]] std::optional<WindowDescriptorParts>
 parseWindow(const std::string_view descriptor) noexcept {
@@ -382,13 +395,13 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
                    ? VocabularyValidation::Valid
                    : VocabularyValidation::VocabularyMismatch;
     case OutputFacetIdV1::Color:
-        if (facet.sourceDescriptor != "color-id=id:lin_rec709_scene") {
+        if (!isColorDescriptor(facet.sourceDescriptor)) {
             return VocabularyValidation::VocabularyMismatch;
         }
         return facet.targetDescriptor == (report.preset == OutputPresetV1::PngRgba8SrgbV1 ||
                                                   report.preset == OutputPresetV1::TiffRgba16SrgbV1
                                               ? "color-id=id:srgb_rec709_display"
-                                              : "color-id=id:lin_rec709_scene")
+                                              : facet.sourceDescriptor)
                    ? VocabularyValidation::Valid
                    : VocabularyValidation::VocabularyMismatch;
     case OutputFacetIdV1::AlphaAssociation:

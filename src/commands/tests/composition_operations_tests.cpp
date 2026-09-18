@@ -202,6 +202,29 @@ void testSafeAreaSettingsAreUndoableAndDuplicated(TestContext& test) {
                 "DuplicateComposition carries per-composition safe-area settings");
 }
 
+void testWorkingColorSpaceOverrideIsUndoable(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    Transaction setWorkingSpace("Set Working Space", document.snapshot().revision());
+    setWorkingSpace.emplace<SetCompositionWorkingColorSpace>(kCompositionId,
+                                                             std::optional<std::string>{"ACEScg"});
+    const auto changed = stack.execute(std::move(setWorkingSpace));
+    const auto* composition = document.snapshot().project().findComposition(kCompositionId);
+    test.expect(changed.changed() && composition != nullptr &&
+                    composition->workingColorSpaceId() == std::optional<std::string>{"ACEScg"},
+                "SetCompositionWorkingColorSpace writes the override");
+    test.expect(
+        stack.undo().changed() &&
+            document.snapshot().project().findComposition(kCompositionId)->workingColorSpaceId() ==
+                std::nullopt,
+        "working colour-space override is one undo step");
+    test.expect(
+        stack.redo().changed() &&
+            document.snapshot().project().findComposition(kCompositionId)->workingColorSpaceId() ==
+                std::optional<std::string>{"ACEScg"},
+        "redo restores the working colour-space override");
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -212,6 +235,7 @@ int main() {
         bloom::commands::test::testDeleteCompositionGuardsLastAndUndoRedo(test);
         bloom::commands::test::testDuplicateCompositionRemapsDeepDocumentState(test);
         bloom::commands::test::testSafeAreaSettingsAreUndoableAndDuplicated(test);
+        bloom::commands::test::testWorkingColorSpaceOverrideIsUndoable(test);
     } catch (const std::exception& error) {
         test.fail(std::string("unexpected test exception: ") + error.what());
     }

@@ -85,6 +85,8 @@ ValidationResult Composition::validate() const {
     if (workArea_ && (workArea_->start < core::RationalTime{} ||
                       workArea_->start >= workArea_->end || workArea_->end > duration_))
         result.add(ValidationCode::InvalidValue, "workArea", "Invalid composition work area");
+    if (workingColorSpaceId_.has_value())
+        result.append("workingColorSpaceId", validateWorkingColorSpaceId(*workingColorSpaceId_));
     if (!backgroundColor_.isValid())
         result.add(ValidationCode::InvalidValue, "backgroundColor",
                    "Invalid composition background colour");

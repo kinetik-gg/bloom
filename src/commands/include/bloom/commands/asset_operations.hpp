@@ -185,6 +185,21 @@ class SetCompositionBackgroundColor final : public Operation {
     document::CompositionId composition_;
     core::Color4d color_;
 };
+
+class SetCompositionWorkingColorSpace final : public Operation {
+  public:
+    SetCompositionWorkingColorSpace(document::CompositionId composition,
+                                    std::optional<std::string> colorSpaceId)
+        : composition_(composition), colorSpaceId_(std::move(colorSpaceId)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.composition.set-working-color-space";
+    }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+
+  private:
+    document::CompositionId composition_;
+    std::optional<std::string> colorSpaceId_;
+};
 class AddImageLayer final : public Operation {
   public:
     AddImageLayer(document::CompositionId composition, document::AssetId asset)

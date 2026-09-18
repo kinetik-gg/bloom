@@ -213,6 +213,22 @@ std::optional<std::filesystem::path> ProjectHost::displayPath() const {
     return snapshot.displayPath->value();
 }
 
+const document::ColorSettings* ProjectHost::colorSettings() const noexcept {
+    return session_.has_value() ? session_->colorSettings() : nullptr;
+}
+
+host::ProjectSessionColorSettingsStatus
+ProjectHost::setColorSettings(document::ColorSettings settings) {
+    if (!session_.has_value())
+        return host::ProjectSessionColorSettingsStatus::InvalidSession;
+    const auto status = session_->setColorSettings(std::move(settings));
+    if (status == host::ProjectSessionColorSettingsStatus::Updated) {
+        emit dirtyStateChanged();
+        emit colorSettingsChanged();
+    }
+    return status;
+}
+
 host::PublicationCoordinator& ProjectHost::publicationCoordinator() noexcept {
     return *publicationCoordinator_; // NOLINT(bugprone-unchecked-optional-access) -- guaranteed
                                      // populated by the constructor (which throws otherwise).

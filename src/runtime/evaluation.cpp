@@ -4,6 +4,8 @@
 
 namespace bloom::runtime {
 
+const EvaluationColorIntent EvaluationColorIntent::LinearRec709Scene{};
+
 bool operator==(const ProcessFrameIdentity& lhs, const ProcessFrameIdentity& rhs) {
     const bool plansEqual = lhs.plan == rhs.plan ||
                             (lhs.plan != nullptr && rhs.plan != nullptr && *lhs.plan == *rhs.plan);

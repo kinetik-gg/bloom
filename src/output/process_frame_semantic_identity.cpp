@@ -42,6 +42,7 @@ constexpr std::size_t kPixelStreamFixedBytes =
 constexpr std::size_t kBytesPerPixel = 4 * sizeof(std::uint32_t);
 constexpr std::size_t kPixelHashChunkPixels = 256;
 constexpr std::size_t kPixelHashChunkBytes = kPixelHashChunkPixels * kBytesPerPixel;
+constexpr std::size_t kColorIntentRevisionBytes = bloom::core::kSha256DigestBytes;
 constexpr std::size_t kCompositionIdentityBytes =
     sizeof(kSemanticIdentityDomain) + sizeof(std::uint16_t) + 3 * sizeof(std::uint64_t) +
     2 * sizeof(std::int64_t) + sizeof(std::uint64_t) + sizeof(std::uint8_t) +
@@ -243,6 +244,25 @@ preflightFailure(const ProcessFrameSemanticIdentityErrorCode error) noexcept {
                bloom::output::kOutputAnalysisMaximumProcessPixelBytesV1;
 }
 
+[[nodiscard]] bool
+isSupportedColorIntent(const bloom::runtime::EvaluationColorIntent& intent) noexcept {
+    if (intent.workingColorSpaceId.empty() || intent.workingColorSpaceId.size() > 256) {
+        return false;
+    }
+    return std::ranges::all_of(intent.workingColorSpaceId, [](const char value) {
+        const auto byte = static_cast<unsigned char>(value);
+        return byte >= 0x20U && byte <= 0x7EU;
+    });
+}
+
+[[nodiscard]] constexpr std::size_t
+colorIntentIdentityBytes(const std::string_view colorSpaceId) noexcept {
+    if (colorSpaceId == kProcessColorId) {
+        return 0;
+    }
+    return colorSpaceId.size() - kProcessColorId.size() + kColorIntentRevisionBytes;
+}
+
 [[nodiscard]] PreflightOutcome preflightIdentity(const ProcessFrame& frame) noexcept {
     const auto& identity = frame.identity();
     const auto& image = frame.processImage();
@@ -260,7 +280,7 @@ preflightFailure(const ProcessFrameSemanticIdentityErrorCode error) noexcept {
         return preflightFailure(
             ProcessFrameSemanticIdentityErrorCode::UnsupportedEvaluationQuality);
     }
-    if (identity.colorIntent != bloom::runtime::EvaluationColorIntent::LinearRec709Scene) {
+    if (!isSupportedColorIntent(identity.colorIntent)) {
         return preflightFailure(ProcessFrameSemanticIdentityErrorCode::UnsupportedColorIntent);
     }
     if (plan.planSemanticsVersion() == 0 || plan.animationSamplingSemanticsVersion() == 0 ||
@@ -306,7 +326,8 @@ preflightFailure(const ProcessFrameSemanticIdentityErrorCode error) noexcept {
             return preflightFailure(ProcessFrameSemanticIdentityErrorCode::InconsistentImage);
         }
         resolutionKind = 1;
-        requiredBytes = bloom::output::kCompositionProcessFrameSemanticIdentityV1Bytes;
+        requiredBytes = bloom::output::kCompositionProcessFrameSemanticIdentityV1Bytes +
+                        colorIntentIdentityBytes(identity.colorIntent.workingColorSpaceId);
     } else if (const auto* proxy = std::get_if<ProxyResolution>(&identity.resolution)) {
         if (displayExtent != proxy->extent) {
             return preflightFailure(ProcessFrameSemanticIdentityErrorCode::InconsistentImage);
@@ -318,7 +339,8 @@ preflightFailure(const ProcessFrameSemanticIdentityErrorCode error) noexcept {
         expectedPixelAspect = *proxyAspect;
         proxyExtent = proxy->extent;
         resolutionKind = 2;
-        requiredBytes = bloom::output::kProxyProcessFrameSemanticIdentityV1Bytes;
+        requiredBytes = bloom::output::kProxyProcessFrameSemanticIdentityV1Bytes +
+                        colorIntentIdentityBytes(identity.colorIntent.workingColorSpaceId);
     } else {
         return preflightFailure(ProcessFrameSemanticIdentityErrorCode::InvalidResolution);
     }
@@ -478,9 +500,11 @@ hashFailure(const ProcessFrameSemanticIdentityErrorCode error) noexcept {
            writer.integer(displayWindow.extent().width()) &&
            writer.integer(displayWindow.extent().height()) &&
            writer.integer(pixelAspect.numerator()) && writer.integer(pixelAspect.denominator()) &&
-           writer.text(kProcessColorId) && writer.integer(std::uint8_t{1}) &&
+           writer.text(identity.colorIntent.workingColorSpaceId) &&
+           (identity.colorIntent.workingColorSpaceId == kProcessColorId ||
+            writer.exact(std::as_bytes(identity.colorIntent.ocioConfigRevision.bytes()))) &&
            writer.integer(std::uint8_t{1}) && writer.integer(std::uint8_t{1}) &&
-           writer.text(kProcessPixelSemanticsProfileId) &&
+           writer.integer(std::uint8_t{1}) && writer.text(kProcessPixelSemanticsProfileId) &&
            writer.integer(plan.planSemanticsVersion()) &&
            writer.integer(identity.animationSamplingSemanticsVersion) &&
            writer.integer(identity.evaluatorSemanticsVersion) &&
@@ -495,7 +519,7 @@ namespace bloom::output {
 
 ProcessFrameSemanticIdentityV1::ProcessFrameSemanticIdentityV1(
     std::shared_ptr<const runtime::ProcessFrame> processFrame,
-    std::array<std::byte, kProxyProcessFrameSemanticIdentityV1Bytes> canonicalBytes,
+    std::array<std::byte, kMaximumProcessFrameSemanticIdentityV1Bytes> canonicalBytes,
     const std::size_t canonicalByteCount, const core::Sha256Digest processPixelDigest) noexcept
     : processFrame_(std::move(processFrame)), canonicalBytes_(canonicalBytes),
       canonicalByteCount_(canonicalByteCount), processPixelDigest_(processPixelDigest) {}
@@ -574,7 +598,7 @@ ProcessFrameSemanticIdentityV1PreparationResult ProcessFrameSemanticIdentityV1Pr
         if (cancellation.isCancellationRequested()) {
             return ProcessFrameSemanticIdentityV1PreparationResult::cancelled();
         }
-        std::array<std::byte, kProxyProcessFrameSemanticIdentityV1Bytes> canonicalBytes{};
+        std::array<std::byte, kMaximumProcessFrameSemanticIdentityV1Bytes> canonicalBytes{};
         if (!emitIdentity(processFrame->identity(), processFrame->processImage(), *preflight.value,
                           *hashed.digest,
                           std::span(canonicalBytes).first(preflight.value->requiredBytes))) {

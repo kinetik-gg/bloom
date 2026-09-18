@@ -475,11 +475,11 @@ void testDescriptorValidationAndBounds(Expectations& expectations) {
 
 void testPresetVocabularyAndRelationships(Expectations& expectations) {
     auto exr = makeExrReport();
-    exr[2].sourceDescriptor = "color-id=id:invented";
-    exr[2].targetDescriptor = "color-id=id:invented";
-    expectations.expect(validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr).issue().code ==
-                            Error::DescriptorVocabularyMismatch,
-                        "canonical grammar alone cannot replace the preset's fixed color ID");
+    exr[2].sourceDescriptor = "color-id=id:ACEScg";
+    exr[2].targetDescriptor = "color-id=id:ACEScg";
+    const auto acesValidation = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
+    expectations.expect(acesValidation.approvable(),
+                        "a flat EXR analysis record carries the selected working color space");
 
     exr = makeExrReport();
     exr[0].targetDescriptor = "height=u:1;packing=id:rgba;sample-type=id:binary32;width=u:2";

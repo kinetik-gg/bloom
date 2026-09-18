@@ -1593,6 +1593,12 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
     }
     if (!state.ok(writer.endArray()))
         return false;
+    if (const auto& workingColorSpaceId = composition.workingColorSpaceId();
+        workingColorSpaceId.has_value()) {
+        if (!state.ok(writer.memberName("workingColorSpaceId")) ||
+            !state.ok(writer.stringValue(*workingColorSpaceId)))
+            return false;
+    }
     if (!emitRetainedTrailing(state)) {
         return false;
     }
@@ -2370,7 +2376,7 @@ locatorPortability(const bloom::document::OcioConfigLocator& locator) noexcept {
 
     // Color settings are durable project truth that Project does not own, so this writer performs
     // their complete admission here, delegating lexical rules to the document-owned validator.
-    if (settings.processColorSpaceId != kProcessColorSpaceIdV1) {
+    if (!bloom::document::validateWorkingColorSpaceId(settings.processColorSpaceId).ok()) {
         walk.fail(CanonicalDocumentError::InvalidProcessColorSpaceId);
         return walk;
     }
@@ -2419,6 +2425,12 @@ locatorPortability(const bloom::document::OcioConfigLocator& locator) noexcept {
             format.pixelAspect().numerator() == 0 || format.pixelAspect().denominator() == 0 ||
             format.frameRate().numerator() == 0 || format.frameRate().denominator() == 0) {
             walk.fail(CanonicalDocumentError::InvalidCompositionFormat, compositionIndex);
+            return walk;
+        }
+        if (composition.workingColorSpaceId().has_value() &&
+            !bloom::document::validateWorkingColorSpaceId(*composition.workingColorSpaceId())
+                 .ok()) {
+            walk.fail(CanonicalDocumentError::InvalidWorkingColorSpaceId, compositionIndex);
             return walk;
         }
     }

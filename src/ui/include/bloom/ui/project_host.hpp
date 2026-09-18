@@ -122,6 +122,9 @@ class ProjectHost final : public QObject {
     [[nodiscard]] bool isBusy() const noexcept;
     [[nodiscard]] ProjectHostActivity activity() const noexcept;
     [[nodiscard]] std::optional<std::filesystem::path> displayPath() const;
+    [[nodiscard]] const document::ColorSettings* colorSettings() const noexcept;
+    [[nodiscard]] host::ProjectSessionColorSettingsStatus
+    setColorSettings(document::ColorSettings settings);
 
     // Application-wide sharing seam (task F3, issue #103): docs/architecture/frame-output.md,
     // "Capability Boundary" / "Atomic Publication" -- "Project saves and frame exports reuse one
@@ -214,6 +217,7 @@ class ProjectHost final : public QObject {
   signals:
     // Fires exactly once per successful New replace or successful Open install.
     void sessionReplaced();
+    void colorSettingsChanged();
     void dirtyStateChanged();
     void activityChanged();
     // Typed outcome + a display-ready message (never collapses Superseded/failed into success).

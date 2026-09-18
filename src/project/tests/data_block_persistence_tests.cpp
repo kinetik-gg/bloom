@@ -122,7 +122,7 @@ int run() {
     }
     auto openedArchive = std::move(opened).takeOpened();
     const auto restored = openedArchive.document->snapshot();
-    if (openedArchive.schemaMinor != 18 ||
+    if (openedArchive.schemaMinor != 19 ||
         restored.project().typedDataBlocks().size() != expected.size())
         return 1;
     for (std::size_t index = 0; index < expected.size(); ++index)

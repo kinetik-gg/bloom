@@ -117,7 +117,9 @@ ProjectSession::ProjectSession(ProjectSession&& other) noexcept
           std::exchange(other.newestAcceptedPublicationIntent_, PublicationIntentId{})),
       contentKind_(other.contentKind_), editability_(other.editability_),
       displayPath_(std::move(other.displayPath_)), cleanRevision_(other.cleanRevision_),
-      colorSettings_(std::move(other.colorSettings_)), roundTrip_(std::move(other.roundTrip_)),
+      colorSettings_(std::move(other.colorSettings_)),
+      colorSettingsDirty_(std::exchange(other.colorSettingsDirty_, false)),
+      roundTrip_(std::move(other.roundTrip_)),
       schemaMinor_(std::exchange(other.schemaMinor_, std::uint32_t{0})),
       retainedRequirements_(std::move(other.retainedRequirements_)),
       decodedContentReservations_(std::move(other.decodedContentReservations_)),
@@ -250,7 +252,7 @@ ProjectSessionStateSnapshot ProjectSession::stateSnapshot() const {
 
     const auto current = document_->snapshot().revision();
     result.currentRevision = current;
-    result.dirty = current != cleanRevision_.value_or(document::Revision{});
+    result.dirty = current != cleanRevision_.value_or(document::Revision{}) || colorSettingsDirty_;
     result.canUndo = commandStack_->canUndo();
     result.canRedo = commandStack_->canRedo();
     result.historySize = commandStack_->size();
@@ -461,6 +463,7 @@ SessionInstallStatus ProjectSession::installDecodedReplacement(const OpenIntentC
     document_ = std::move(content.document_);
     commandStack_ = std::move(freshStack);
     colorSettings_ = std::move(content.colorSettings_);
+    colorSettingsDirty_ = false;
     roundTrip_ = std::move(sharedRoundTrip);
     schemaMinor_ = content.schemaMinor_;
     retainedRequirements_ = std::move(content.requirements_);
@@ -498,6 +501,7 @@ ProjectSession::installPreservedReadOnlyReplacement(const OpenIntentCapture inte
     document_.reset();
     commandStack_.reset();
     colorSettings_.reset();
+    colorSettingsDirty_ = false;
     roundTrip_.reset();
     schemaMinor_ = 0;
     retainedRequirements_.clear();
@@ -564,6 +568,21 @@ ProjectSessionCommandResult ProjectSession::redo() {
     return {.status = ProjectSessionCommandStatus::Completed, .command = commandStack_->redo()};
 }
 
+ProjectSessionColorSettingsStatus
+ProjectSession::setColorSettings(document::ColorSettings settings) {
+    if (!isValid())
+        return ProjectSessionColorSettingsStatus::InvalidSession;
+    if (contentKind_ != ProjectSessionContentKind::DecodedDocument)
+        return ProjectSessionColorSettingsStatus::ReadOnly;
+    if (!settings.validate().ok())
+        return ProjectSessionColorSettingsStatus::InvalidSettings;
+    if (colorSettings_.has_value() && *colorSettings_ == settings)
+        return ProjectSessionColorSettingsStatus::NoChange;
+    colorSettings_ = std::move(settings);
+    colorSettingsDirty_ = true;
+    return ProjectSessionColorSettingsStatus::Updated;
+}
+
 ProjectSessionSavepointStatus ProjectSession::acceptSavepoint(
     const SessionPathIntentCapture intent, const PublicationIntentId publicationIntent,
     const document::Revision publishedRevision, std::optional<ProjectDisplayPath> publishedPath) {
@@ -602,6 +621,7 @@ ProjectSessionSavepointStatus ProjectSession::acceptSavepoint(
         pathIntentKind_ = SessionPathIntentKind::ExistingPath;
     }
     cleanRevision_ = publishedRevision;
+    colorSettingsDirty_ = false;
     newestAcceptedPublicationIntent_ = publicationIntent;
     return ProjectSessionSavepointStatus::Accepted;
 }
