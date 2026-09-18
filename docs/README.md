@@ -46,6 +46,8 @@ provide research or rationale, but they are not binding until adopted here.
 - [Organizing Assets](user-guide/assets.md) — folders, display names, tags, search and drag order.
 - [Import from network shares](user-guide/network-shares.md) — mounting an SMB share and
   importing from it on Linux, macOS and Windows.
+- [Memory](user-guide/memory.md) — the cache budgets Bloom chooses, the two override keys, and what
+  "Memory pressure: caches trimmed" means.
 
 ## Current Checkpoint
 

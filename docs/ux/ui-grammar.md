@@ -94,7 +94,10 @@ workspace tabs or custom title bar are part of this grammar revision.
 `WindowStatusBar` composes a single `Control`-height `UiSmall` row: version, colour state,
 readiness, dropped frames when measured, cache when populated, and transient/persistent messages.
 The cache cell combines RAM-preview frames with operation-cache hits, misses, retained bytes and
-effective budgets; its tooltip names those two cache accounts when the compact cell is dense.
+effective budgets; its tooltip names those two cache accounts when the compact cell is dense, and
+states the rule the budgets came from: Bloom reserves `max(8 GiB, 40%)` of memory for the rest of
+the machine and its default caches never exceed half of physical memory. The tooltip explains where
+a number came from; it never becomes a second place to read the numbers themselves.
 Colour state is tinted text with no filled badge. It remains visible on every central page,
 and reports unavailable colour state when no preview controller exists. Readiness and cache
 use muted ink; a colour-state failure remains explicit. `UiSmall` preserves mixed case with
@@ -598,3 +601,16 @@ hold is offered once, before the artist starts editing: "Bloom closed unexpected
 changes. Recover the unsaved changes from `<file>`?" with Yes/No. Yes opens that file through the
 ordinary Open flow, unsaved-change prompt included; No leaves it alone. Nothing is offered when the
 last shutdown was clean, and a recovery file older than its saved project is never offered.
+
+## Memory Pressure Message
+
+When the operating system reports less memory available than Bloom reserved for it, the caches are
+trimmed to half their budgets and the status bar shows one transient notice:
+
+> Memory pressure: caches trimmed
+
+It is a status report in the same row as every other notice, not a dialog and not a warning colour:
+nothing failed, no work was lost, and the artist has nothing to decide. It says what Bloom did, in
+the past tense, because by the time it appears the trim has already happened. It appears once per
+episode of pressure rather than on every poll, so a machine that stays busy does not repeat it, and
+it never names a byte count -- the cache cell beside it already reports what the caches hold.

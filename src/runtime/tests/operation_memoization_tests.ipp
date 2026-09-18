@@ -216,33 +216,140 @@ void testOperationDirtyPropagation(Expectations& expectations) {
 
 void testMemoryBudgetLedger(Expectations& expectations) {
     constexpr auto gibibyte = std::size_t{1024} * 1024U * 1024U;
-    const runtime::MemoryBudgetLedger ledger(std::size_t{16} * gibibyte);
-    const auto defaults = ledger.allocate();
-    const auto expectedOperation = std::size_t{12} * gibibyte * 3 / 5;
-    expectations.expect(defaults.usableByteBudget == std::size_t{12} * gibibyte &&
-                            defaults.operationCacheByteBudget == expectedOperation &&
+    // CACHEFIX-1. Every case below passes availableMemory explicitly: the default argument latches
+    // the host's own reading, which would make these expectations depend on the build machine.
+    constexpr std::size_t plentiful = std::size_t{1024} * gibibyte;
+
+    const runtime::MemoryBudgetLedger sixteen(std::size_t{16} * gibibyte, plentiful);
+    const auto defaults = sixteen.allocate();
+    const auto expectedOperation = std::size_t{8} * gibibyte * 3 / 5;
+    expectations.expect(sixteen.reserveByteBudget() == std::size_t{8} * gibibyte,
+                        "a 16 GiB machine reserves the 8 GiB minimum, not 40% of 16");
+    expectations.expect(defaults.usableByteBudget == std::size_t{8} * gibibyte &&
+                            sixteen.defaultTotalByteBudget() == std::size_t{8} * gibibyte,
+                        "a 16 GiB machine leaves 8 GiB usable and defaults to all of it");
+    expectations.expect(defaults.operationCacheByteBudget == expectedOperation &&
                             defaults.previewFrameCacheByteBudget ==
-                                defaults.usableByteBudget - expectedOperation,
-                        "the machine budget reserves four GiB and splits the usable budget 60/40");
+                                sixteen.defaultTotalByteBudget() - expectedOperation,
+                        "the default total splits 60/40 operation/preview");
     expectations.expect(defaults.operationCacheByteBudget +
                                 defaults.previewFrameCacheByteBudget ==
-                            defaults.usableByteBudget,
-                        "the default cache allocations consume exactly the usable budget");
+                            sixteen.defaultTotalByteBudget(),
+                        "the default cache allocations consume exactly the default total");
 
-    const auto operationOverride = ledger.allocate(std::size_t{10} * gibibyte);
-    expectations.expect(operationOverride.operationCacheByteBudget == std::size_t{10} * gibibyte &&
-                            operationOverride.previewFrameCacheByteBudget == std::size_t{2} * gibibyte,
+    // The machine the 38 GiB incident happened on. The old rule reserved max(4 GiB, 25%) = 15 GiB
+    // and split all 45 GiB that were left, 27 operation + 18 preview.
+    const runtime::MemoryBudgetLedger sixty(std::size_t{60} * gibibyte, plentiful);
+    const auto sixtyDefaults = sixty.allocate();
+    expectations.expect(sixty.reserveByteBudget() == std::size_t{24} * gibibyte &&
+                            sixty.usableByteBudget() == std::size_t{36} * gibibyte,
+                        "a 60 GiB machine reserves 40% and leaves 36 GiB usable");
+    expectations.expect(sixty.defaultTotalByteBudget() == std::size_t{30} * gibibyte,
+                        "the default total is capped at half of physical memory, not the usable "
+                        "budget");
+    expectations.expect(sixtyDefaults.operationCacheByteBudget == std::size_t{18} * gibibyte &&
+                            sixtyDefaults.previewFrameCacheByteBudget == std::size_t{12} * gibibyte,
+                        "a 60 GiB machine defaults to 18 GiB operation and 12 GiB preview");
+
+    // The availability cap: the same machine, launched while 12 GiB is actually free.
+    const runtime::MemoryBudgetLedger busy(std::size_t{60} * gibibyte, std::size_t{12} * gibibyte);
+    const auto busyDefaults = busy.allocate();
+    expectations.expect(busy.usableByteBudget() == std::size_t{36} * gibibyte,
+                        "availability does not move the override ceiling");
+    expectations.expect(busy.defaultTotalByteBudget() ==
+                            std::size_t{12} * gibibyte * 4 / 5,
+                        "the default total is capped at 80% of available memory at startup");
+    expectations.expect(busyDefaults.operationCacheByteBudget +
+                                busyDefaults.previewFrameCacheByteBudget ==
+                            busy.defaultTotalByteBudget(),
+                        "the availability-capped default total is split, not exceeded");
+
+    // The low-memory floor. An 8 GiB machine owes the whole 8 GiB minimum reserve to the host, so
+    // the reserve arithmetic leaves nothing and the 3 GiB floor is what keeps Bloom usable.
+    const runtime::MemoryBudgetLedger small(std::size_t{8} * gibibyte, plentiful);
+    const auto smallDefaults = small.allocate();
+    expectations.expect(small.usableByteBudget() == runtime::kFallbackUsableMemoryBudget &&
+                            small.defaultTotalByteBudget() == runtime::kFallbackUsableMemoryBudget,
+                        "an 8 GiB machine falls back to the 3 GiB low-memory floor");
+    expectations.expect(smallDefaults.operationCacheByteBudget == gibibyte &&
+                            smallDefaults.previewFrameCacheByteBudget ==
+                                runtime::kMinimumPreviewFrameCacheByteBudget,
+                        "the floor keeps the 2 GiB preview minimum and gives operations the rest");
+    const runtime::MemoryBudgetLedger starved(std::size_t{8} * gibibyte, gibibyte);
+    expectations.expect(starved.defaultTotalByteBudget() == runtime::kFallbackUsableMemoryBudget,
+                        "the availability cap never pushes a budget below the low-memory floor");
+
+    const runtime::MemoryBudgetLedger unknown(0, 0);
+    expectations.expect(unknown.usableByteBudget() == runtime::kFallbackUsableMemoryBudget &&
+                            unknown.reserveByteBudget() == runtime::kMinimumHostMemoryReserve,
+                        "an unreported machine uses the floor and the minimum reserve");
+
+    // Overrides clamp to the USABLE budget, not the default total: an artist may deliberately ask
+    // for more than Bloom would choose, up to the point where the machine itself would starve.
+    const auto operationOverride = sixty.allocate(std::size_t{34} * gibibyte);
+    expectations.expect(operationOverride.operationCacheByteBudget == std::size_t{34} * gibibyte &&
+                            operationOverride.previewFrameCacheByteBudget ==
+                                std::size_t{2} * gibibyte,
                         "a single operation override is honored and reduces preview space");
-    const auto previewOverride = ledger.allocate({}, std::size_t{10} * gibibyte);
-    expectations.expect(previewOverride.operationCacheByteBudget == std::size_t{2} * gibibyte &&
-                            previewOverride.previewFrameCacheByteBudget == std::size_t{10} * gibibyte,
+    const auto clamped = sixty.allocate(std::size_t{80} * gibibyte);
+    expectations.expect(clamped.operationCacheByteBudget == sixty.usableByteBudget(),
+                        "an override beyond the machine is clamped to the usable budget");
+    const auto previewOverride = sixty.allocate({}, std::size_t{30} * gibibyte);
+    expectations.expect(previewOverride.previewFrameCacheByteBudget == std::size_t{30} * gibibyte &&
+                            previewOverride.operationCacheByteBudget == std::size_t{6} * gibibyte,
                         "a single preview override is honored and reduces operation space");
-    const auto overcommitted = ledger.allocate(std::size_t{10} * gibibyte,
-                                               std::size_t{10} * gibibyte);
+    const auto overcommitted =
+        sixty.allocate(std::size_t{30} * gibibyte, std::size_t{30} * gibibyte);
     expectations.expect(overcommitted.operationCacheByteBudget +
                                 overcommitted.previewFrameCacheByteBudget ==
                             overcommitted.usableByteBudget,
                         "two overcommitted overrides are proportionally clamped to the ledger");
+    // The mitigation the supervisor applied by hand on the incident machine now sits comfortably
+    // inside the ledger rather than fighting it.
+    const auto mitigation = sixty.allocate(std::size_t{8} * gibibyte, std::size_t{6} * gibibyte);
+    expectations.expect(mitigation.operationCacheByteBudget == std::size_t{8} * gibibyte &&
+                            mitigation.previewFrameCacheByteBudget == std::size_t{6} * gibibyte,
+                        "two overrides inside the usable budget are both honored exactly");
+}
+
+void testOperationCacheByteAccounting(Expectations& expectations) {
+    // CACHEFIX-1 accounting: the audit has to be able to say WHICH half of the operation cache is
+    // holding the bytes, because decoded media is the expensive half and the protected one.
+    runtime::OperationCache cache;
+    const auto revision = document::Revision::fromRaw(1);
+    const runtime::OperationCacheValue value{.image = {}, .values = {runtime::CompiledValue{0.5}}};
+    cache.store("operation-a", revision, value);
+    const auto operationBytes = cache.retainedBytes();
+    cache.store("decoded-a", document::Revision{}, value,
+                runtime::OperationCacheEntryKind::DecodedMedia);
+    expectations.expect(
+        cache.retainedBytes(runtime::OperationCacheEntryKind::Operation) == operationBytes &&
+            cache.retainedBytes(runtime::OperationCacheEntryKind::DecodedMedia) ==
+                cache.retainedBytes() - operationBytes,
+        "the operation cache separates operation bytes from decoded-media bytes");
+    expectations.expect(cache.retainedBytes(runtime::OperationCacheEntryKind::Operation) +
+                                cache.retainedBytes(
+                                    runtime::OperationCacheEntryKind::DecodedMedia) ==
+                            cache.retainedBytes(),
+                        "the two kind accounts add up to the total");
+
+    // A pressure trim evicts down to a limit WITHOUT surrendering the budget, so the cache can
+    // fill back up once the machine recovers.
+    const auto budget = cache.byteBudget();
+    const auto before = cache.retainedBytes();
+    cache.trimToBytes(0);
+    expectations.expect(cache.retainedBytes() == 0 && cache.byteBudget() == budget,
+                        "a trim to zero empties the cache and leaves the budget alone");
+    expectations.expect(cache.statistics().pressureDrops == 2,
+                        "a trim counts its drops apart from ordinary budget eviction");
+    expectations.expect(cache.retainedBytes(runtime::OperationCacheEntryKind::DecodedMedia) == 0,
+                        "the decoded-media account falls with the entries it was counting");
+    expectations.expect(before > 0, "the cache held something before the trim");
+    cache.store("operation-b", revision, value);
+    expectations.expect(cache.retainedBytes() > 0,
+                        "the cache accepts entries again after a trim, because the budget survived");
+    cache.trimToBytes(std::numeric_limits<std::size_t>::max());
+    expectations.expect(cache.retainedBytes() > 0, "a trim above the budget evicts nothing");
 }
 
 void testOperationCacheLifecycle(Expectations& expectations) {

@@ -92,6 +92,11 @@ class PreviewFrameCache final : public QObject {
         std::uint64_t staleDrops = 0;
         // Frames refused because one frame alone does not fit the budget.
         std::uint64_t rejections = 0;
+        // CACHEFIX-1. Frames dropped because retaining them threw std::bad_alloc: the insert is
+        // abandoned, the published frame is untouched, and the viewer still shows it.
+        std::uint64_t allocationFailures = 0;
+        // Frames dropped by a memory-pressure trim, as opposed to ordinary budget eviction.
+        std::uint64_t pressureDrops = 0;
 
         friend bool operator==(const Statistics&, const Statistics&) = default;
     };
@@ -119,6 +124,9 @@ class PreviewFrameCache final : public QObject {
 
     // Changing the budget evicts immediately if the new one is smaller.
     void setByteBudget(std::size_t bytes);
+    // Evicts down to `bytes` WITHOUT changing the budget -- the runtime memory-pressure response
+    // (see WindowStatusBar), which must be able to hand the allowance back. Never grows the cache.
+    void trimToBytes(std::size_t bytes);
     [[nodiscard]] std::size_t byteBudget() const noexcept { return byteBudget_; }
     [[nodiscard]] std::size_t residentBytes() const noexcept { return residentBytes_; }
     [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }

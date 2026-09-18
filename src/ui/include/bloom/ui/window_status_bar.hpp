@@ -5,7 +5,9 @@
 #include <bloom/ui/viewer_editor_probe.hpp>
 
 #include <QString>
+
 #include <bloom/ui/kit/surfaces.hpp>
+#include <cstddef>
 
 class QLabel;
 class QTimer;
@@ -93,6 +95,14 @@ class WindowStatusBar final : public kit::KSurface {
     // progress. Passing an empty string clears it.
     void setPersistentMessage(const QString& message);
 
+    // CACHEFIX-1 pressure response. Drives one poll with a given MemAvailable reading instead of
+    // the host's, so a test can exercise the trim and the notice on any machine. Mirrors the
+    // *ForTest precedent used elsewhere in this class.
+    void pollMemoryPressureForTest(std::size_t availableBytes);
+    [[nodiscard]] std::size_t memoryReserveBytesForTest() const noexcept {
+        return memoryReserveBytes_;
+    }
+
     // Test/diagnostic surface only, mirroring ViewerEditor's own *ForTest precedent.
     [[nodiscard]] QString colorChipTextForTest() const;
     [[nodiscard]] QString previewStateTextForTest() const;
@@ -108,6 +118,11 @@ class WindowStatusBar final : public kit::KSurface {
     void refreshProbeCell(const ProbeReadout& readout);
     void refreshMediaDiskCacheCell();
     void refreshMessage();
+    // Reads the host's MemAvailable and hands it to applyMemoryPressure(). Driven by the same
+    // five-second timer as the disk-cache cell -- a memory reading does not need sub-second
+    // freshness either, and adding a second timer for it would only add a second cadence.
+    void pollMemoryPressure();
+    void applyMemoryPressure(std::size_t availableBytes);
 
     CompositionSession& session_;
     CompositionPreviewController* previewController_ = nullptr;
@@ -126,6 +141,12 @@ class WindowStatusBar final : public kit::KSurface {
     QTimer* mediaDiskCacheTimer_ = nullptr;
     QString transientMessage_;
     QString persistentMessage_;
+    // max(8 GiB, 40% of physical) -- what the memory ledger left to the rest of the machine, and
+    // therefore the line below which the machine is short of memory rather than merely busy.
+    std::size_t memoryReserveBytes_ = 0;
+    // One notice per episode of pressure: set when the trim runs, cleared only when availability
+    // recovers above the reserve. A machine that stays busy is told once, not every five seconds.
+    bool memoryPressureActive_ = false;
 };
 
 } // namespace bloom::ui

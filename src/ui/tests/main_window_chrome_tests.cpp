@@ -4,6 +4,7 @@
 #include "window_fixture.hpp"
 #undef BLOOM_GRAMMAR_ARTIFACT_DIR
 
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -537,6 +538,68 @@ void testWindowStatusBarIsAKitStripWithEveryCell(Expectations& expectations) {
                         "status bar: a window built without a media disk cache reports it as off");
 }
 
+// CACHEFIX-1. Budgets are a plan, not a promise the machine will keep. When the operating system
+// reports less memory available than the ledger reserved for it, both in-memory caches are trimmed
+// to half their budgets and the bar says so -- once per episode, and without surrendering the
+// budgets, so the caches refill when the machine recovers. Driven through the *ForTest seam rather
+// than by waiting for the five-second timer or for the build machine to run out of memory.
+void testWindowStatusBarTrimsCachesUnderMemoryPressure(Expectations& expectations) {
+    bool ok = false;
+    Fixture fixture(&ok);
+    expectations.expect(ok, "memory pressure: stand-in editors register");
+    constexpr std::size_t kBudget = std::size_t{1} << 20U;
+    bloom::runtime::OperationCache operationCache(kBudget);
+    const auto fill = [&operationCache](const char* prefix) {
+        for (int index = 0; index < 16; ++index)
+            operationCache.store(
+                prefix + std::to_string(index) + std::string(std::size_t{64} * 1024U, 'x'),
+                bloom::document::Revision::fromRaw(1), {.image = {}, .values = {}, .bounds = {}});
+    };
+    fill("pressure-");
+    WindowStatusBar strip(fixture.compositionSession, nullptr, nullptr, &operationCache);
+
+    const auto reserve = strip.memoryReserveBytesForTest();
+    expectations.expect(reserve >= bloom::runtime::kMinimumHostMemoryReserve,
+                        "memory pressure: the reserve is never below the 8 GiB minimum");
+    const auto filled = operationCache.retainedBytes();
+    expectations.expect(filled > kBudget / 2,
+                        "memory pressure: the fixture cache holds more than half its budget");
+
+    strip.pollMemoryPressureForTest(reserve * 2);
+    expectations.expect(strip.messageTextForTest().isEmpty() &&
+                            operationCache.retainedBytes() == filled,
+                        "memory pressure: a machine with memory to spare is left alone");
+    strip.pollMemoryPressureForTest(0);
+    expectations.expect(strip.messageTextForTest().isEmpty() &&
+                            operationCache.retainedBytes() == filled,
+                        "memory pressure: a platform that reports nothing is not read as empty");
+
+    strip.pollMemoryPressureForTest(reserve / 2);
+    expectations.expect(strip.messageTextForTest() ==
+                            QStringLiteral("Memory pressure: caches trimmed"),
+                        "memory pressure: the bar reports the trim in the artist's terms");
+    expectations.expect(operationCache.retainedBytes() <= kBudget / 2,
+                        "memory pressure: the operation cache is trimmed to half its budget");
+    expectations.expect(operationCache.byteBudget() == kBudget,
+                        "memory pressure: the trim does not surrender the configured budget");
+    expectations.expect(operationCache.statistics().pressureDrops > 0,
+                        "memory pressure: trimmed entries are counted apart from budget eviction");
+
+    strip.clearTransientMessage();
+    strip.pollMemoryPressureForTest(reserve / 2);
+    expectations.expect(strip.messageTextForTest().isEmpty(),
+                        "memory pressure: a machine that stays busy is told once, not every poll");
+
+    strip.pollMemoryPressureForTest(reserve * 2);
+    fill("recovered-");
+    expectations.expect(operationCache.retainedBytes() > kBudget / 2,
+                        "memory pressure: the cache fills back up once the machine recovers");
+    strip.pollMemoryPressureForTest(reserve / 2);
+    expectations.expect(strip.messageTextForTest() ==
+                            QStringLiteral("Memory pressure: caches trimmed"),
+                        "memory pressure: a second episode is reported again");
+}
+
 // CACHE-2: "Clear Media Cache…" lives in the Composition menu beside RAM Preview, present (though
 // reporting "not enabled" if triggered) even for a window built without a disk cache -- see
 // confirmAndClearMediaDiskCache()'s own null handling. Not triggered here: it opens a modal
@@ -624,6 +687,7 @@ int main(int argc, char** argv) {
     testViewMenuItemsExistAndFire(expectations);
     testHelpMenuItemsExistAndFire(expectations);
     testWindowStatusBarIsAKitStripWithEveryCell(expectations);
+    testWindowStatusBarTrimsCachesUnderMemoryPressure(expectations);
     testWindowStatusBarMessagesClearThemselves(expectations);
     testRejectedCommandsBecomeStatusBarNotices(expectations);
     testClearMediaCacheActionExists(expectations);

@@ -492,6 +492,32 @@ void testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(Expectations& expecta
     cache.insert(frames[2]);
     expectations.expect(cache.size() == 0 && cache.statistics().rejections == 1,
                         "a frame that cannot fit the budget is refused, not forced in");
+    // CACHEFIX-1: the refused frame is still a frame. Retaining it was an optimization; the handle
+    // the controller published is untouched and the viewer can still paint from it.
+    expectations.expect(frames[2] != nullptr && frames[2]->displayBufferView().has_value(),
+                        "a frame the cache refused is still renderable by its owner");
+
+    // CACHEFIX-1 memory pressure: trimToBytes() evicts without surrendering the budget, so the
+    // cache refills once the machine recovers instead of staying permanently halved.
+    cache.setByteBudget(frameBytes * 4);
+    for (const auto& frame : frames) {
+        cache.insert(frame);
+    }
+    const auto beforeTrim = cache.residentBytes();
+    const auto trimBudget = cache.byteBudget();
+    const auto beforeDrops = cache.statistics().pressureDrops;
+    cache.trimToBytes(frameBytes);
+    expectations.expect(cache.residentBytes() <= frameBytes && beforeTrim > frameBytes,
+                        "a pressure trim evicts down to the limit it was given");
+    expectations.expect(cache.byteBudget() == trimBudget,
+                        "a pressure trim leaves the configured budget alone");
+    expectations.expect(cache.statistics().pressureDrops > beforeDrops,
+                        "trimmed frames are counted apart from ordinary budget eviction");
+    cache.insert(frames[0]);
+    cache.insert(frames[1]);
+    expectations.expect(cache.residentBytes() > frameBytes,
+                        "the cache fills back up after a trim, because the budget survived");
+    cache.clear();
 
     // A newer revision makes every retained entry unreachable, and inserting one drops them.
     cache.setByteBudget(frameBytes * 8);

@@ -4,6 +4,7 @@
 #include <memory>
 
 #include <bloom/media/cache/media_disk_cache.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/painting.hpp>
@@ -233,7 +234,15 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     mediaDiskCacheTimer_->setInterval(5'000);
     connect(mediaDiskCacheTimer_, &QTimer::timeout, this,
             &WindowStatusBar::refreshMediaDiskCacheCell);
+    // CACHEFIX-1: the memory-pressure poll rides the same five-second cadence rather than adding a
+    // timer of its own. Deliberately NOT called here at construction: a window that opens on an
+    // already-busy machine has nothing to report yet -- the caches it would trim are empty -- and a
+    // notice in the first painted frame would be a claim about the artist's machine made before
+    // Bloom had done anything to it.
+    connect(mediaDiskCacheTimer_, &QTimer::timeout, this, &WindowStatusBar::pollMemoryPressure);
     mediaDiskCacheTimer_->start();
+    memoryReserveBytes_ =
+        runtime::MemoryBudgetLedger::reserveForPhysicalMemory(runtime::physicalMemoryBytes());
 
     // A refused command is a notice, not a dialog: the artist asked for something the document
     // could not do, the command did not run, and the reason belongs where every other notice is.
@@ -263,11 +272,46 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     }
     if (operationCache_ != nullptr) {
         cache_->setToolTip(
-            tr("RAM preview frames and operation-cache hits, misses, retained bytes, and budgets"));
+            tr("RAM preview frames and operation-cache hits, misses, retained bytes, and budgets. "
+               "Bloom reserves the larger of 8 GB or 40% of memory for the rest of the machine, "
+               "and its default caches never exceed half of it."));
         cache_->setAccessibleName(tr("Cache statistics"));
     }
     refreshPreviewCells();
     refreshMessage();
+}
+
+void WindowStatusBar::pollMemoryPressure() { applyMemoryPressure(runtime::availableMemoryBytes()); }
+
+void WindowStatusBar::pollMemoryPressureForTest(const std::size_t availableBytes) {
+    applyMemoryPressure(availableBytes);
+}
+
+void WindowStatusBar::applyMemoryPressure(const std::size_t availableBytes) {
+    // A platform that reports nothing (0) reports nothing: never invent pressure from silence.
+    if (availableBytes == 0 || memoryReserveBytes_ == 0) {
+        return;
+    }
+    if (availableBytes >= memoryReserveBytes_) {
+        memoryPressureActive_ = false;
+        return;
+    }
+    if (memoryPressureActive_) {
+        return;
+    }
+    memoryPressureActive_ = true;
+    // Half of each budget, and the BUDGETS ARE NOT CHANGED: the ledger's or the artist's decision
+    // about how much Bloom may hold survives an episode of pressure, so the caches fill back up
+    // once the machine recovers instead of staying permanently halved by one busy moment.
+    if (operationCache_ != nullptr) {
+        operationCache_->trimToBytes(operationCache_->byteBudget() / 2);
+    }
+    if (previewController_ != nullptr) {
+        auto& frameCache = previewController_->frameCache();
+        frameCache.trimToBytes(frameCache.byteBudget() / 2);
+    }
+    showTransientMessage(tr("Memory pressure: caches trimmed"));
+    refreshPreviewCells();
 }
 
 void WindowStatusBar::refreshPreviewCells() {

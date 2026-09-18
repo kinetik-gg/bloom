@@ -514,12 +514,17 @@ ROI or viewer adjustment. The compiled-plan cache is unaffected by either viewer
 **Budget.** `playback/ram-preview-memory-bytes` and
 `playback/operation-cache-bytes` are resolved together by the session's one memory-budget ledger.
 The usable budget is physical memory less a reserve for the operating system, decoders, and other
-applications (a quarter of physical memory, never less than 4 GiB). Missing, unparseable, or zero
-settings use a 60% operation-cache / 40% RAM-preview split; the preview side retains its 2 GiB
-floor when the usable budget allows it. A single override keeps its requested value where possible
-and reduces the other cache; two overrides that overcommit the machine are proportionally clamped.
-When physical memory is unavailable or too small to leave that reserve, the ledger uses a bounded
-fallback so the preview floor remains useful without exceeding reported physical memory.
+applications (40% of physical memory, never less than 8 GiB), and it is the ceiling an explicit
+override may reach. The DEFAULT total is capped more tightly still: never more than half of physical
+memory, and never more than 80% of what the operating system reported as available at startup. See
+docs/architecture/evaluation-primitives.md for the full rule and its per-machine table. Missing,
+unparseable, or zero settings use a 60% operation-cache / 40% RAM-preview split of that default
+total; the preview side retains its 2 GiB floor when the default total allows it. A single override
+keeps its requested value where possible and reduces the other cache; two overrides that overcommit
+the machine are proportionally clamped. When physical memory is unavailable or too small to leave
+that reserve, the ledger uses the 3 GiB low-memory floor so the preview floor remains useful without
+exceeding reported physical memory. When available memory later drops below the reserve, both caches
+are trimmed to half their budgets and the status bar says so; the budgets themselves do not change.
 The effective operation and preview budgets are shown together in the window status-bar cache cell.
 Least-recently-used entries are evicted until each effective budget is satisfied, and a frame larger
 than the whole preview budget is refused rather than allowed to evict everything for itself. At

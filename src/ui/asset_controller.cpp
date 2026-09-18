@@ -23,6 +23,24 @@
 
 namespace bloom::ui {
 namespace {
+// CACHEFIX-1 proxy/audio caps. The proxy cache keeps its historic 512-entry bound and adds the
+// byte bound that bound only ever implied; the audio cache gets the aggregate bound it never had.
+constexpr std::size_t kProxyCacheEntryLimit = 512;
+constexpr std::size_t kProxyCacheByteCapacity = std::size_t{8} * 1024U * 1024U;
+constexpr std::size_t kDecodedAudioByteCapacity = std::size_t{2} * 1024U * 1024U * 1024U;
+
+[[nodiscard]] std::size_t proxyByteCost(const QImage& image) {
+    // sizeInBytes() is the allocation QImage actually holds, stride padding included.
+    return image.isNull() ? 0 : static_cast<std::size_t>(image.sizeInBytes());
+}
+
+[[nodiscard]] std::size_t audioBufferByteCost(const media::audio::AudioBuffer& buffer) {
+    std::size_t bytes = sizeof(media::audio::AudioBuffer);
+    for (const auto& plane : buffer.planes)
+        bytes += plane.capacity() * sizeof(float);
+    return bytes;
+}
+
 std::filesystem::path nativePath(const QString& text) {
 #if defined(_WIN32)
     return std::filesystem::path(text.toStdWString());
@@ -176,6 +194,8 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
         thumbnailCache_.clear();
         waveforms_.clear();
         audioBuffers_.clear();
+        proxyCacheBytes_ = 0;
+        decodedAudioBytes_ = 0;
         refresh();
     });
     connect(this, &AssetController::diagnostic, &session_, &CompositionSession::commandRejected);
@@ -388,6 +408,11 @@ void AssetController::refresh() {
          diskCache = mediaDiskCache_](runtime::TaskContext& context) mutable {
             auto results = std::make_shared<Thumbnails>();
             results->cache = std::move(cached);
+            // The proxy cache carries over from the previous run, so its byte account has to carry
+            // over with it: starting from zero here would let the map grow past the capacity by
+            // whatever the previous run had already put in it.
+            for (const auto& [key, image] : results->cache)
+                results->proxyBytes += proxyByteCost(image);
             const auto decode = [&](const runtime::CompiledImageSource& source) {
                 Preview preview;
                 const auto selected =
@@ -440,10 +465,22 @@ void AssetController::refresh() {
                         }
                 }
                 if (!preview.image.isNull()) {
-                    // 512 proxies of at most 64 × 64 RGBA8: bounded to 8 MiB.
-                    if (results->cache.size() >= 512)
+                    // CACHEFIX-1: the 512-entry bound was only ever a bound on COUNT, and the
+                    // 8 MiB it claimed was an unmeasured inference from "at most 64 x 64 RGBA8".
+                    // Charge the real bytes, keep both bounds, and make the figure readable.
+                    const auto cost = proxyByteCost(preview.image);
+                    while (!results->cache.empty() &&
+                           (results->cache.size() >= kProxyCacheEntryLimit ||
+                            cost > kProxyCacheByteCapacity -
+                                       std::min(results->proxyBytes, kProxyCacheByteCapacity))) {
+                        results->proxyBytes -= std::min(
+                            results->proxyBytes, proxyByteCost(results->cache.begin()->second));
                         results->cache.erase(results->cache.begin());
-                    results->cache.emplace(preview.key, preview.image);
+                    }
+                    if (cost <= kProxyCacheByteCapacity) {
+                        results->cache.emplace(preview.key, preview.image);
+                        results->proxyBytes += cost;
+                    }
                 }
                 return preview;
             };
@@ -472,9 +509,21 @@ void AssetController::refresh() {
                             results->waveforms.emplace(
                                 asset.id, std::make_shared<const media::audio::WaveformSummary>(
                                               *summary.value()));
-                            results->audioBuffers.emplace(
-                                asset.id, std::make_shared<const media::audio::AudioBuffer>(
-                                              std::move(*decoded.value())));
+                            // CACHEFIX-1: a decoded buffer is capped per asset by
+                            // AudioDecodeLimits::kDefaultSampleBudget (48M samples, ~192 MB), but
+                            // the MAP of them had no aggregate bound at all -- a project with
+                            // twenty long audio assets could retain multiple gigabytes the memory
+                            // ledger never saw. The waveform summary is kept either way, so the
+                            // timeline still draws the asset; only the playable buffer is refused.
+                            const auto audioCost = audioBufferByteCost(*decoded.value());
+                            if (audioCost <=
+                                kDecodedAudioByteCapacity -
+                                    std::min(results->audioBytes, kDecodedAudioByteCapacity)) {
+                                results->audioBuffers.emplace(
+                                    asset.id, std::make_shared<const media::audio::AudioBuffer>(
+                                                  std::move(*decoded.value())));
+                                results->audioBytes += audioCost;
+                            }
                         }
                     }
                     results->assets.emplace(asset.id, std::move(preview));
@@ -543,6 +592,8 @@ void AssetController::poll() {
                 thumbnailCache_ = std::move((*result->value())->cache);
                 waveforms_ = std::move((*result->value())->waveforms);
                 audioBuffers_ = std::move((*result->value())->audioBuffers);
+                proxyCacheBytes_ = (*result->value())->proxyBytes;
+                decodedAudioBytes_ = (*result->value())->audioBytes;
                 emit changed();
             }
         }

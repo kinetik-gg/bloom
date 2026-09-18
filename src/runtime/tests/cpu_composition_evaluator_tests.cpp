@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -2204,6 +2205,7 @@ int main(int argc, char* argv[]) {
         testContentBoundsEdgeCases(expectations);
         testLayerBoundsReadout(expectations);
         testMemoryBudgetLedger(expectations);
+        testOperationCacheByteAccounting(expectations);
         testOperationCacheLifecycle(expectations);
         testOperationMemoization(expectations);
         testOperationTimeInvariance(expectations);
