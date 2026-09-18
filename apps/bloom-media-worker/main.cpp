@@ -3,9 +3,12 @@
 #else
 #include "ffmpeg_provider.hpp"
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
+#include <bloom/media/provider/openh264_runtime.hpp>
 #endif
 #include "worker_io.hpp"
 #include <bloom/platform/process_supervisor.hpp>
+#include <cstdlib>
+#include <filesystem>
 #include <string_view>
 
 int main(int argc, char** argv) {
@@ -17,9 +20,37 @@ int main(int argc, char** argv) {
     (void)argv;
     const auto handshake = fake::handshake();
 #else
-    const bool hardware = argc == 2 && std::string_view(argv[1]) == "--vaapi";
-    const auto handshake = provider::ffmpegHandshake(hardware);
-    ffmpeg::Encoder encoder;
+    bool hardware = false;
+    std::string openh264Directory;
+    std::string openh264Digest;
+    for (int i = 1; i < argc; ++i) {
+        const auto argument = std::string_view(argv[i]);
+        if (argument == "--vaapi")
+            hardware = true;
+        else if (argument == "--openh264-dir" && i + 1 < argc)
+            openh264Directory = argv[++i];
+        else if (argument == "--openh264-sha256" && i + 1 < argc)
+            openh264Digest = argv[++i];
+        else
+            return 2;
+    }
+    bool openh264 = false;
+    if (!openh264Directory.empty()) {
+        const auto status = provider::OpenH264Runtime(openh264Directory).verify();
+        openh264 = status.installed && status.digest == openh264Digest;
+        if (!openh264)
+            openh264Directory.clear();
+        else
+            setenv("LD_LIBRARY_PATH",
+                   (openh264Directory + ":" +
+                    (std::filesystem::path(argv[0]).parent_path() / "lib").string())
+                       .c_str(),
+                   1);
+    }
+    hardware = hardware && ffmpeg::hardwareEncodeAvailable();
+    const auto handshake = provider::ffmpegHandshake(
+        hardware, openh264, provider::OpenH264Runtime::version(), openh264Digest);
+    ffmpeg::Encoder encoder(hardware);
 #endif
     try {
         std::uint64_t session = 0, sequence = 0;
@@ -64,10 +95,7 @@ int main(int argc, char** argv) {
             auto payload =
                 message->kind == provider::MessageKind::Call
                     ? ffmpeg::call(std::get<provider::CallRequest>(message->payload), hardware)
-                    : (hardware
-                           ? provider::Payload(provider::Unavailable{
-                                 provider::Error::Unavailable, "Hardware encode is not qualified"})
-                           : encoder.call(message->kind, message->payload));
+                    : encoder.call(message->kind, message->payload);
 #endif
             auto kind = provider::MessageKind::Failure;
             if (std::holds_alternative<provider::ProbeResult>(payload))

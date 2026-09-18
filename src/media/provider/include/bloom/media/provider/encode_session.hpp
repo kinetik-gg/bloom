@@ -6,6 +6,10 @@
 namespace bloom::media::provider {
 struct EncodeSessionOptionsV1 {
     std::string executable;
+    std::string openh264Directory;
+    std::string openh264Version;
+    std::string openh264Digest;
+    bool vaapi = false;
     std::chrono::milliseconds timeout{120000};
     std::function<void(std::int64_t)> launched;
 };

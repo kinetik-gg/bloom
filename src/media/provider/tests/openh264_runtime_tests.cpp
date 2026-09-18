@@ -1,0 +1,105 @@
+#include "support.hpp"
+
+#include <bloom/media/provider/openh264_runtime.hpp>
+
+#include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <vector>
+
+using namespace bloom::media::provider;
+
+namespace {
+std::filesystem::path root() { return std::filesystem::path(BLOOM_OPENH264_RUNTIME_TEST_ROOT); }
+
+void clear(const std::filesystem::path& path) {
+    std::error_code error;
+    std::filesystem::remove_all(path, error);
+    test::check(!error, "clear OpenH264 test root");
+}
+
+void mismatchIsNotInstalled() {
+    const auto directory = root() / "mismatch";
+    clear(directory);
+    std::filesystem::create_directories(directory);
+    std::ofstream file(directory / OpenH264Runtime::libraryName(), std::ios::binary);
+    file << "truncated";
+    file.close();
+    const auto status = OpenH264Runtime(directory).verify();
+    test::check(!status.installed &&
+                    status.failure == OpenH264RuntimeFailure::LibraryDigestMismatch,
+                "digest mismatch is not installed");
+}
+
+void consentIsRequired() {
+    const auto directory = root() / "consent";
+    clear(directory);
+    bool launched = false;
+    OpenH264Runtime runtime(directory, [&](const std::string&, const std::vector<std::string>&,
+                                           std::chrono::milliseconds) {
+        launched = true;
+        return false;
+    });
+    const auto result = runtime.install(false);
+    test::check(!result.installed && result.failure == OpenH264RuntimeFailure::ConsentRequired,
+                "missing consent refuses install");
+    test::check(!launched, "missing consent does not launch a downloader");
+}
+
+void truncatedDownloadIsTyped() {
+    const auto directory = root() / "truncated";
+    clear(directory);
+    auto launcher = [](const std::string& executable, const std::vector<std::string>& arguments,
+                       std::chrono::milliseconds) {
+        if (executable == "/usr/bin/curl") {
+            const auto output = std::ranges::find(arguments, "--output");
+            if (output == arguments.end() || std::next(output) == arguments.end())
+                return false;
+            std::ofstream file(*std::next(output), std::ios::binary);
+            file << "truncated Cisco archive";
+            return static_cast<bool>(file);
+        }
+        return false;
+    };
+    const auto result = OpenH264Runtime(directory, launcher).install(true);
+    test::check(!result.installed &&
+                    result.failure == OpenH264RuntimeFailure::ArchiveDigestMismatch,
+                "truncated download has a typed digest failure");
+}
+
+void emptyDirectoryIsNotInstalled() {
+    const auto directory = root() / "empty";
+    clear(directory);
+    const auto status = OpenH264Runtime(directory).verify();
+    test::check(!status.installed && status.failure == OpenH264RuntimeFailure::NotInstalled,
+                "empty OpenH264 directory is not installed");
+}
+
+void licenseTextMatchesCiscoFixture() {
+    std::ifstream file(BLOOM_OPENH264_LICENSE_FIXTURE, std::ios::binary);
+    if (!file)
+        return;
+    const std::string expected((std::istreambuf_iterator<char>(file)),
+                               std::istreambuf_iterator<char>());
+    test::check(expected == OpenH264Runtime::binaryLicenseText(),
+                "embedded Cisco licence text matches the downloaded terms");
+}
+} // namespace
+
+int main() {
+    try {
+        clear(root());
+        licenseTextMatchesCiscoFixture();
+        emptyDirectoryIsNotInstalled();
+        mismatchIsNotInstalled();
+        consentIsRequired();
+        truncatedDownloadIsTyped();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
+    return 0;
+}

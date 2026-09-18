@@ -3,6 +3,8 @@
 #include <bloom/media/provider/encode_session.hpp>
 #include <bloom/output/output_analysis.hpp>
 #include <bloom/render/image.hpp>
+#include <filesystem>
+#include <functional>
 
 namespace bloom::output {
 struct MediaOutputFacetV1 {
@@ -21,6 +23,16 @@ struct MediaOutputAnalysisV1 {
     std::string implementationNote;
     bool appleAuthorized = false, deliveryQualified = false;
 };
+struct H264RuntimeAvailabilityV1 {
+    bool installed = false;
+    std::string version;
+    std::string digest;
+    std::filesystem::path directory;
+    std::string detail;
+};
+[[nodiscard]] H264RuntimeAvailabilityV1 verifyH264RuntimeV1();
+[[nodiscard]] H264RuntimeAvailabilityV1
+installH264RuntimeV1(bool explicitConsent, const std::function<void(std::uint64_t)>& progress = {});
 [[nodiscard]] media::provider::Result<MediaOutputAnalysisV1>
 analyzeMediaOutputV1(OutputPresetV1 preset, media::provider::EncodeSettingsV1 settings);
 [[nodiscard]] media::provider::Result<media::provider::FrameProduct>

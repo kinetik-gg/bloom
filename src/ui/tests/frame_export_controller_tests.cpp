@@ -1094,11 +1094,11 @@ void testCompositionExportUi(Expectations& expectations) {
         auto* profile = dialog->findChild<bloom::ui::kit::KDropdown*>("compositionExportProfile");
         auto* note = dialog->findChild<bloom::ui::kit::KLabel*>("compositionExportNote");
         expectations.expect(
-            preset && preset->count() == 6 &&
+            preset && preset->count() == 7 &&
                 preset->isItemEnabled(3) ==
                     output::outputPresetAvailabilityV1(output::OutputPresetV1::TiffRgba16SrgbV1)
                         .available,
-            "TIFF enabled alongside six presets");
+            "TIFF enabled alongside seven presets");
         if (output::outputPresetAvailabilityV1(output::OutputPresetV1::ProResMovV1).available) {
             expectations.expect(profile && profile->count() == 6 &&
                                     profile->currentData().toString() == QStringLiteral("hq"),

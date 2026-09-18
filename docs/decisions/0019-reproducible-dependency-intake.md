@@ -101,6 +101,21 @@ and the reviewed schema copy is `dependencies/schemas/dependency-lock-1.1.schema
 The detailed file shape, qualification workflow, and current intake candidates are maintained in
 [`../architecture/dependency-intake.md`](../architecture/dependency-intake.md).
 
+### Runtime-fetched binary note (2026-09-18)
+
+Reviewed lock schema 1.2 permits a `runtimeFetch` record for a binary that cannot be bundled under
+the upstream vendor's redistribution terms. The record binds the HTTPS vendor URL pattern, archive
+and decompressed-library digests per platform, installed name, and licence artifact. Bloom's
+OpenH264 intake builds a private source stub for FFmpeg linkage only; the Cisco binary is fetched by
+the end user's machine after explicit consent, verified on every launch, and never fetched at
+startup or shipped in the application.
+
+The worker's runtime-fetched-library pattern includes a Bloom-owned `libopenh264.so.8` API shim in
+the private worker `lib/` directory. It has no codec implementation and exports only the six
+OpenH264 wrapper entry points, so all FFmpeg worker processes can load without the Cisco binary.
+The host prepends a verified Cisco directory for worker encode, decode, and fixture-generation
+launches; only software H.264 encode requires that real binary.
+
 ## Consequences
 
 - Normal Bloom builds become smaller and easier to reason about because they consume declared

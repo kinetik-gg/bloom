@@ -510,6 +510,17 @@ provider::Payload call(const provider::CallRequest& request, bool hardware) {
         return provider::Unavailable{provider::Error::Io, "Media file unavailable"};
     }
 }
+
+bool hardwareEncodeAvailable() {
+    const auto* codec = avcodec_find_encoder_by_name("h264_vaapi");
+    if (codec == nullptr)
+        return false;
+    AVBufferRef* device = nullptr;
+    const auto status =
+        av_hwdevice_ctx_create(&device, AV_HWDEVICE_TYPE_VAAPI, "/dev/dri/renderD128", nullptr, 0);
+    av_buffer_unref(&device);
+    return status >= 0;
+}
 } // namespace bloom::media::ffmpeg
 #include "ffmpeg_provider_encode.ipp"
 #ifdef BLOOM_MEDIA_FIXTURE_GENERATOR

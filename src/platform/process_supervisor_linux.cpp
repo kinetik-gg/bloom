@@ -215,11 +215,26 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
     argv.push_back(nullptr);
     auto state = std::make_unique<State>();
     state->options = options;
-    char locale[] = "LC_ALL=C";
-    char zone[] = "TZ=UTC";
-    std::array<char*, 3> environment{locale, zone, nullptr};
+    std::vector<std::string> environment{"LC_ALL=C", "TZ=UTC"};
+    for (const auto& entry : options.environment) {
+        if (entry.find('\0') != std::string::npos || entry.find('=') == std::string::npos)
+            return ProcessFailure{ProcessError::Spawn, EINVAL};
+        const auto separator = entry.find('=');
+        const auto name = entry.substr(0, separator);
+        auto found = std::find_if(environment.begin(), environment.end(),
+                                  [&](const auto& value) { return value.starts_with(name + '='); });
+        if (found == environment.end())
+            environment.push_back(entry);
+        else
+            *found = entry;
+    }
+    std::vector<char*> environmentPointers;
+    environmentPointers.reserve(environment.size() + 1);
+    for (auto& entry : environment)
+        environmentPointers.push_back(entry.data());
+    environmentPointers.push_back(nullptr);
     code = ::posix_spawn(&state->pid, options.executable.c_str(), &actions.value, &attributes.value,
-                         argv.data(), environment.data());
+                         argv.data(), environmentPointers.data());
     if (code != 0)
         return ProcessFailure{ProcessError::Spawn, code};
     state->input = std::move(input[1]);

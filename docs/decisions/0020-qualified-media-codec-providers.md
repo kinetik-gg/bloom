@@ -66,6 +66,23 @@ for its broader acceptance conditions.
 The implemented export ladder, canonical records and immutable tolerance profiles are owned by
 [media-io.md](../architecture/media-io.md#time-based-export-media-4).
 
+## H.264 review encode intake (2026-09-18)
+
+The review deliverable admits H.264 MOV at approximately 30 Mbps using Cisco OpenH264 2.6.0 for
+software encoding and VA-API hardware encoding when an encode context is available. Software
+capability is declared only after the host verifies Cisco's runtime binary digest; the worker gets
+the verified directory and digest and refuses a mismatch. The software tuple is High profile,
+8-bit 4:2:0, one-second GOP, CBR/VBR target, and Rec.709 primaries/transfer/matrix with limited
+range. H.264 review output is `DecodedSemanticTolerance` with its tolerance-profile digest and is
+explicitly not archival or delivery-qualified.
+
+OpenH264's source is built only as a private FFmpeg link-time stub. Cisco's redistributed binary is
+not bundled, and installation requires an explicit licence-consent record, a supervised bounded
+download, decompression, digest verification, and atomic publication. VA-API is a separate
+hardware execution key with no determinism claim; its tuple is advertised only when the worker
+initialises the hardware path. The export dialog exposes a typed “H.264 encoder not installed”
+reason, one-click install/locate controls, and a VA-API alternative.
+
 ## Accepted v0 amendment: WAV and MP3 preview audio (2026-09-15)
 
 Building on the narrow v0 in-process image exception introduced by MEDIA-1, AUDIO-1 admits a
@@ -282,6 +299,11 @@ verified the shared-library SONAME set with VA-API enabled. The review explicitl
 software H.264/HEVC encoding and treats FFmpeg ProRes as non-authorized preview output. Full
 patent/counsel disposition, shipped-file SPDX SBOM, and final distribution-package review remain
 gates for this ADR and are not implied by this intake evidence.
+
+The amendment also proves the runtime-fetched-library boundary: a Bloom-owned six-symbol
+`libopenh264.so.8` shim is installed beside every worker, including tests-disabled builds, and has
+no codec implementation. Decode and fixture generation run with the shim and therefore do not
+require Cisco's binary; only H.264 software encode gets the verified Cisco directory prepended.
 
 ## Acceptance Requirements
 

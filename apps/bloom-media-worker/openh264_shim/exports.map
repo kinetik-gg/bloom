@@ -1,0 +1,10 @@
+OPENH264_SHIM_8 {
+    global:
+        WelsCreateSVCEncoder;
+        WelsDestroySVCEncoder;
+        WelsCreateDecoder;
+        WelsDestroyDecoder;
+        WelsGetCodecVersion;
+        WelsGetCodecVersionEx;
+    local: *;
+};

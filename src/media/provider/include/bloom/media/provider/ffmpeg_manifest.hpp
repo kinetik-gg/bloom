@@ -2,7 +2,9 @@
 #include <bloom/media/provider/protocol.hpp>
 namespace bloom::media::provider {
 // Codec-free declaration shared by the host and the isolated executable.
-[[nodiscard]] Handshake ffmpegHandshake(bool hardware = false);
+[[nodiscard]] Handshake ffmpegHandshake(bool hardware = false, bool openh264 = false,
+                                        std::string_view openh264Version = {},
+                                        std::string_view openh264Digest = {});
 [[nodiscard]] PipelineQualificationV1 ffmpegPipeline(const ProviderDeclaration& declaration);
 inline constexpr const char* kProResPreviewNote =
     "Decoded by FFmpeg; not an Apple-authorized ProRes implementation";

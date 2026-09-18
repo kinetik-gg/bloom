@@ -24,6 +24,7 @@
 --enable-muxer=mxf
 --enable-muxer=wav
 --enable-decoder=h264
+--disable-decoder=libopenh264
 --enable-decoder=hevc
 --enable-decoder=prores
 --enable-decoder=dnxhd
@@ -68,6 +69,9 @@
 --enable-decoder=pcm_vidc
 --enable-encoder=prores_ks
 --enable-encoder=dnxhd
+--enable-encoder=libopenh264
+--enable-encoder=h264_vaapi
+--enable-encoder=hevc_vaapi
 --enable-encoder=aac
 --enable-encoder=tiff
 --enable-encoder=pcm_alaw
@@ -120,6 +124,7 @@
 --enable-bsf=remove_extradata
 --enable-bsf=vp9_superframe
 --enable-protocol=file
+--enable-libopenh264
 --enable-vaapi
 --enable-hwaccel=h264_vaapi
 --enable-hwaccel=hevc_vaapi

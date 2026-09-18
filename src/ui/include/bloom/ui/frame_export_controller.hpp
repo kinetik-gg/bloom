@@ -83,6 +83,8 @@ struct CompositionExportRequest final {
     output::OutputPresetV1 preset = output::OutputPresetV1::ProResMovV1;
     std::string profile = "hq";
     bool audio = true;
+    bool hardware = false;
+    bool openh264Consent = false;
     std::uint32_t sampleRate = 48000;
 };
 

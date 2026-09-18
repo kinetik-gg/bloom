@@ -3,13 +3,16 @@
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QMessageBox>
 #include <QSpinBox>
 #include <algorithm>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
+#include <bloom/media/provider/openh264_runtime.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
+#include <filesystem>
 #include <limits>
 
 namespace bloom::ui {
@@ -21,13 +24,14 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
     auto* layout = new QFormLayout(&dialog);
     auto* preset = new kit::KDropdown(&dialog);
     preset->setObjectName("compositionExportPreset");
-    const std::array<std::pair<const char*, output::OutputPresetV1>, 6> presets{
+    const std::array<std::pair<const char*, output::OutputPresetV1>, 7> presets{
         {{"ProRes MOV (preview)", output::OutputPresetV1::ProResMovV1},
          {"DNxHR MXF", output::OutputPresetV1::DnxhrMxfV1},
          {"PCM WAV / BWF", output::OutputPresetV1::PcmWavV1},
          {"TIFF sequence", output::OutputPresetV1::TiffRgba16SrgbV1},
          {"PNG sequence", output::OutputPresetV1::PngRgba8SrgbV1},
-         {"OpenEXR sequence", output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1}}};
+         {"OpenEXR sequence", output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1},
+         {"H.264 MOV (review)", output::OutputPresetV1::H264MovV1}}};
     for (const auto& [name, id] : presets) {
         preset->addItem(QString::fromUtf8(name), static_cast<int>(id));
         const auto capability = output::outputPresetAvailabilityV1(id);
@@ -66,6 +70,23 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
     auto* note = new kit::KLabel(&dialog);
     note->setWordWrap(true);
     note->setObjectName("compositionExportNote");
+    auto* install = new kit::KButton(QObject::tr("Install OpenH264…"), &dialog);
+    install->setObjectName("installOpenH264");
+    auto* locate = new kit::KButton(QObject::tr("Locate downloaded file…"), &dialog);
+    locate->setObjectName("locateOpenH264");
+    auto* hardware = new kit::KCheckBox(&dialog);
+    hardware->setObjectName("useVaapi");
+    hardware->setText(QObject::tr("Use hardware (VA-API)"));
+    const auto hasVaapiDevice = [] {
+        std::error_code error;
+        for (const auto& entry : std::filesystem::directory_iterator("/dev/dri", error))
+            if (entry.path().filename().string().starts_with("renderD"))
+                return true;
+        return false;
+    }();
+    hardware->setVisible(hasVaapiDevice);
+    bool openh264Consent = false;
+    bool openh264Installed = media::provider::OpenH264Runtime().verify().installed;
     auto* proceed = new kit::KButton(QObject::tr("Continue"), &dialog);
     proceed->setVariant(kit::KButton::Variant::Primary);
     auto* cancel = new kit::KButton(QObject::tr("Cancel"), &dialog);
@@ -80,6 +101,9 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
     layout->addRow(QObject::tr("Destination"), destinationRow);
     layout->addRow(audioRow);
     layout->addRow(note);
+    layout->addRow(install);
+    layout->addRow(locate);
+    layout->addRow(hardware);
     layout->addRow(buttons);
     const auto update = [&] {
         const auto id = static_cast<output::OutputPresetV1>(preset->currentData().toInt());
@@ -106,10 +130,13 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
         } else if (id == output::OutputPresetV1::PcmWavV1) {
             profile->addItem("16-bit PCM", "pcm_s16le");
             profile->addItem("24-bit PCM", "pcm_s24le");
+        } else if (id == output::OutputPresetV1::H264MovV1) {
+            profile->addItem("H.264 High", "high");
         } else
             profile->addItem(QObject::tr("Preset default"), "");
-        const bool video =
-            id == output::OutputPresetV1::ProResMovV1 || id == output::OutputPresetV1::DnxhrMxfV1;
+        const bool h264 = id == output::OutputPresetV1::H264MovV1;
+        const bool video = h264 || id == output::OutputPresetV1::ProResMovV1 ||
+                           id == output::OutputPresetV1::DnxhrMxfV1;
         audio->setEnabled(video);
         audio->setVisible(video || id == output::OutputPresetV1::PcmWavV1);
         audioLabel->setVisible(video || id == output::OutputPresetV1::PcmWavV1);
@@ -117,24 +144,74 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
             audio->setChecked(true);
         note->setText(id == output::OutputPresetV1::ProResMovV1
                           ? QString::fromUtf8(media::provider::kProResExportNote)
-                          : QString{});
+                      : h264 && !openh264Installed && !hardware->isChecked()
+                          ? QObject::tr("H.264 encoder not installed. Cisco's binary is fetched "
+                                        "only after consent. Hardware VA-API is an alternative.")
+                      : h264 ? QObject::tr("Review deliverable — not for archival")
+                             : QString{});
         note->setVisible(!note->text().isEmpty());
+        install->setVisible(h264 && !openh264Installed && !hardware->isChecked());
+        locate->setVisible(h264 && !openh264Installed && !hardware->isChecked());
+        hardware->setEnabled(h264 && hasVaapiDevice);
     };
     QObject::connect(preset, &kit::KDropdown::currentIndexChanged, &dialog, update);
     update();
+    const auto validate = [&] {
+        const auto id = static_cast<output::OutputPresetV1>(preset->currentData().toInt());
+        const bool h264 = id == output::OutputPresetV1::H264MovV1;
+        proceed->setEnabled(
+            !destination->text().trimmed().isEmpty() && first->value() <= last->value() &&
+            output::outputPresetAvailabilityV1(id).available &&
+            (!h264 || hardware->isChecked() || openh264Installed || openh264Consent));
+    };
+    QObject::connect(install, &kit::KButton::clicked, &dialog, [&] {
+        QMessageBox licenseDialog(&dialog);
+        licenseDialog.setWindowTitle(QObject::tr("Install OpenH264"));
+        licenseDialog.setText(QObject::tr("Cisco OpenH264 2.6.0 is a review encoder."));
+        licenseDialog.setInformativeText(
+            QObject::tr("Bloom downloads the binary from:\n%1\n\nThe binary is fetched to "
+                        "your user data directory, verified by SHA-256, and is not bundled "
+                        "with Bloom. The Cisco terms are shown below.")
+                .arg(QString::fromStdString(media::provider::OpenH264Runtime::downloadUrl())));
+        licenseDialog.setDetailedText(
+            QString::fromStdString(media::provider::OpenH264Runtime::binaryLicenseText()) +
+            QObject::tr("\nLicense URL: %1")
+                .arg(QString::fromStdString(media::provider::OpenH264Runtime::binaryLicenseUrl())));
+        licenseDialog.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+        licenseDialog.setDefaultButton(QMessageBox::No);
+        const auto consent = licenseDialog.exec();
+        if (consent == QMessageBox::Yes) {
+            openh264Consent = true;
+            note->setText(QObject::tr("OpenH264 will be installed after you continue."));
+            note->setVisible(true);
+        }
+        validate();
+    });
+    QObject::connect(locate, &kit::KButton::clicked, &dialog, [&] {
+        const auto path = QFileDialog::getOpenFileName(&dialog, QObject::tr("Locate OpenH264"));
+        if (path.isEmpty())
+            return;
+        const auto result = media::provider::OpenH264Runtime().locate(path.toStdString());
+        if (result.installed) {
+            openh264Installed = true;
+            note->setText(QObject::tr("OpenH264 2.6.0 verified."));
+            update();
+        } else {
+            QMessageBox::warning(&dialog, QObject::tr("OpenH264 not accepted"),
+                                 QString::fromStdString(result.detail));
+        }
+        validate();
+    });
+    QObject::connect(hardware, &kit::KCheckBox::toggled, &dialog, [&] {
+        update();
+        validate();
+    });
     QObject::connect(browse, &kit::KButton::clicked, &dialog, [&] {
         const auto name = QFileDialog::getSaveFileName(&dialog, QObject::tr("Export Composition"),
                                                        destination->text());
         if (!name.isEmpty())
             destination->setText(name);
     });
-    const auto validate = [&] {
-        proceed->setEnabled(!destination->text().trimmed().isEmpty() &&
-                            first->value() <= last->value() &&
-                            output::outputPresetAvailabilityV1(
-                                static_cast<output::OutputPresetV1>(preset->currentData().toInt()))
-                                .available);
-    };
     QObject::connect(destination, &kit::KLineEdit::textChanged, &dialog, validate);
     QObject::connect(first, &QSpinBox::valueChanged, &dialog, validate);
     QObject::connect(last, &QSpinBox::valueChanged, &dialog, validate);
@@ -151,8 +228,11 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
     request.preset = static_cast<output::OutputPresetV1>(preset->currentData().toInt());
     request.profile = profile->currentData().toString().toStdString();
     request.audio = audio->isChecked();
+    request.hardware = hardware->isChecked();
+    request.openh264Consent = openh264Consent;
     request.sampleRate = sampleRate;
     const char* extension = request.preset == output::OutputPresetV1::ProResMovV1        ? ".mov"
+                            : request.preset == output::OutputPresetV1::H264MovV1        ? ".mov"
                             : request.preset == output::OutputPresetV1::DnxhrMxfV1       ? ".mxf"
                             : request.preset == output::OutputPresetV1::PcmWavV1         ? ".wav"
                             : request.preset == output::OutputPresetV1::TiffRgba16SrgbV1 ? ".tiff"

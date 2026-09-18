@@ -2,7 +2,9 @@
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 
 namespace bloom::media::provider {
-Handshake ffmpegHandshake(bool hardware) {
+Handshake ffmpegHandshake(const bool hardware, const bool openh264,
+                          const std::string_view openh264Version,
+                          const std::string_view openh264Digest) {
     Handshake h;
     auto& e = h.execution;
     e.provider = "bloom.ffmpeg";
@@ -18,6 +20,9 @@ Handshake ffmpegHandshake(bool hardware) {
     e.synchronization = "pipe-order";
     e.resourceProfile = "media-v1";
     e.entitlement = "apple_authorized=false;delivery_qualified=false";
+    if (openh264)
+        e.entitlement +=
+            ";openh264=" + std::string(openh264Version) + ";sha256=" + std::string(openh264Digest);
     e.trustDomain = "ffmpeg-lgpl";
     QualificationEvidenceV1 q;
     if (const auto fixtures = Digest::fromLowercaseHex(BLOOM_FFMPEG_FIXTURE_ID))
@@ -89,6 +94,46 @@ Handshake ffmpegHandshake(bool hardware) {
             encode(Role::Mux, "intake-encoders-v1", container, "closed-stream-layout-v1");
             encode(Role::ReopenDecode, "intake-encoders-v1", container, "first-last-pcm-v1");
         }
+        if (openh264) {
+            encode(Role::VideoEncode, "h264", "mov", "high");
+            auto& d = h.declarations.back();
+            d.capability.bitDepth = 8;
+            d.capability.chroma = "yuv420p";
+            d.capability.range = "limited";
+            d.capability.colorFeatures = "rec709-display-referred";
+        }
+    } else {
+        auto hardwareEncode = [&](const char* codec) {
+            add(Role::VideoEncode, codec);
+            auto& d = h.declarations.back();
+            d.capability.purpose = Purpose::Export;
+            d.capability.container = "mov";
+            d.capability.profile = "high";
+            d.capability.mapping = "bounded-encode-v1";
+            d.capability.bitDepth = 8;
+            d.capability.chroma = "yuv420p";
+            d.capability.range = "limited";
+            d.capability.colorFeatures = "rec709-display-referred";
+        };
+        hardwareEncode("h264");
+        hardwareEncode("hevc");
+        for (const auto* codec : {"pcm_s16le", "pcm_s24le", "aac"}) {
+            add(Role::AudioEncode, codec);
+            auto& d = h.declarations.back();
+            d.capability.purpose = Purpose::Export;
+            d.capability.container = "intake-muxers-v1";
+            d.capability.profile = "source-rate";
+            d.capability.mapping = "bounded-encode-v1";
+        }
+        for (const auto role : {Role::Mux, Role::ReopenDecode}) {
+            add(role, "intake-encoders-v1");
+            auto& d = h.declarations.back();
+            d.capability.purpose = Purpose::Export;
+            d.capability.container = "mov";
+            d.capability.profile =
+                role == Role::Mux ? "closed-stream-layout-v1" : "first-last-pcm-v1";
+            d.capability.mapping = "bounded-encode-v1";
+        }
     }
     h.transports = {Transport::PipeCopiesV0};
     return h;
@@ -113,7 +158,9 @@ PipelineQualificationV1 ffmpegPipeline(const ProviderDeclaration& d) {
         EncodeSettingsV1 settings;
         settings.videoCodec = d.capability.role == Role::AudioEncode ? "" : d.capability.codec;
         settings.audioCodec = d.capability.role == Role::AudioEncode ? d.capability.codec : "";
-        p.determinism = encodeDeterminism(settings);
+        p.determinism = d.execution.implementation == Implementation::Hardware
+                            ? MediaDeterminismV1::NoDeterminismClaim
+                            : encodeDeterminism(settings);
         p.toleranceProfile = encodeTolerance(settings);
         p.reopenPolicy = "same-provider-not-independent";
         p.qcProfile = "first-last-layout-time-pcm-v1";

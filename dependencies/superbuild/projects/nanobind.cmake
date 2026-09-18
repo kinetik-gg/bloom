@@ -15,6 +15,8 @@ ExternalProject_Add(bloom_dependency_nanobind
         -G "${CMAKE_GENERATOR}"
         ${BLOOM_DEPENDENCY_COMMON_CMAKE_ARGS}
         -DCMAKE_CXX_COMPILER:FILEPATH=${CMAKE_CXX_COMPILER}
+        -DPython_EXECUTABLE:FILEPATH=/usr/bin/python3
+        -DPython3_EXECUTABLE:FILEPATH=/usr/bin/python3
         -DBLOOM_NANOBIND_SOURCE:PATH=<SOURCE_DIR>
     BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target bloom-nanobind-static --parallel 3
     INSTALL_COMMAND ${CMAKE_COMMAND} --install <BINARY_DIR>)

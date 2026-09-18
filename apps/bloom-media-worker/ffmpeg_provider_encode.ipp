@@ -83,13 +83,17 @@ struct EncodeTrack {
     AVCodecContext* codec = nullptr;
     AVStream* stream = nullptr;
     AVFrame* frame = av_frame_alloc();
+    AVFrame* hardwareFrame = av_frame_alloc();
     AVPacket* packet = av_packet_alloc();
+    AVBufferRef* hardwareFrames = nullptr;
     SwsContext* scale = nullptr;
     SwrContext* resample = nullptr;
     ~EncodeTrack() {
         sws_freeContext(scale);
         swr_free(&resample);
         av_frame_free(&frame);
+        av_frame_free(&hardwareFrame);
+        av_buffer_unref(&hardwareFrames);
         av_packet_free(&packet);
         avcodec_free_context(&codec);
     }
@@ -109,6 +113,10 @@ int videoProfile(const EncodeSettingsV1& s) {
         require(found != names.end(), "DNx profile unavailable", Error::Unavailable);
         return static_cast<int>(found - names.begin());
     }
+    if (s.videoCodec == "h264") {
+        require(s.profile == "high", "H.264 profile unavailable", Error::Unavailable);
+        return AV_PROFILE_H264_HIGH;
+    }
     require(s.videoCodec == "tiff" && s.profile == "rgba16", "Video encoder unavailable",
             Error::Unavailable);
     return 0;
@@ -127,11 +135,20 @@ struct Encoder::State {
     std::unique_ptr<PrivateMediaFile> aacReference;
     std::vector<std::vector<float>> pendingAudio;
     std::uint64_t audioSubmitted = 0;
-    explicit State(EncodeSettingsV1 s)
-        : settings(std::move(s)), file(settings.byteLimit), io(file, true) {}
+    bool hardware = false;
+    State(EncodeSettingsV1 s, const bool useHardware)
+        : settings(std::move(s)), file(settings.byteLimit), io(file, true), hardware(useHardware) {}
     ~State() { avformat_free_context(format); }
     void packets(EncodeTrack& track, AVFrame* frame) {
-        require(avcodec_send_frame(track.codec, frame) >= 0, "Encoder rejected input");
+        AVFrame* submitted = frame;
+        if (frame != nullptr && track.hardwareFrames != nullptr) {
+            require(av_hwframe_get_buffer(track.hardwareFrames, track.hardwareFrame, 0) >= 0 &&
+                        av_hwframe_transfer_data(track.hardwareFrame, frame, 0) >= 0,
+                    "VA-API frame upload failed", Error::Unavailable);
+            track.hardwareFrame->pts = frame->pts;
+            submitted = track.hardwareFrame;
+        }
+        require(avcodec_send_frame(track.codec, submitted) >= 0, "Encoder rejected input");
         int status = 0;
         while ((status = avcodec_receive_packet(track.codec, track.packet)) >= 0) {
             if (settings.videoCodec == "tiff") {
@@ -165,8 +182,11 @@ struct Encoder::State {
                            static_cast<int>(settings.rate.numerator)};
             c.framerate = av_inv_q(c.time_base);
             c.profile = videoProfile(settings);
-            c.pix_fmt =
-                settings.videoCodec == "tiff" ? AV_PIX_FMT_RGBA64LE : AV_PIX_FMT_YUV422P10LE;
+            c.pix_fmt = settings.videoCodec == "tiff"
+                            ? AV_PIX_FMT_RGBA64LE
+                            : settings.videoCodec == "h264" && hardware ? AV_PIX_FMT_VAAPI
+                            : settings.videoCodec == "h264" ? AV_PIX_FMT_YUV420P
+                                                             : AV_PIX_FMT_YUV422P10LE;
             if (settings.videoCodec == "prores_ks" && c.profile >= 4)
                 c.pix_fmt = AV_PIX_FMT_YUVA444P10LE;
             if (settings.videoCodec == "dnxhd") {
@@ -176,8 +196,33 @@ struct Encoder::State {
                 if (c.profile == 0)
                     c.bit_rate = 120000000;
             }
+            if (settings.videoCodec == "h264") {
+                c.bit_rate = 30000000;
+                c.rc_min_rate = c.bit_rate;
+                c.rc_max_rate = c.bit_rate;
+                c.gop_size = static_cast<int>(std::max<std::int64_t>(
+                    1, settings.rate.numerator / settings.rate.denominator));
+                c.max_b_frames = 0;
+                if (hardware) {
+                    require(av_hwdevice_ctx_create(&c.hw_device_ctx, AV_HWDEVICE_TYPE_VAAPI,
+                                                   "/dev/dri/renderD128", nullptr, 0) >= 0,
+                            "VA-API device unavailable", Error::Unavailable);
+                    track.hardwareFrames = av_hwframe_ctx_alloc(c.hw_device_ctx);
+                    require(track.hardwareFrames, "VA-API frame context unavailable",
+                            Error::Unavailable);
+                    auto* frames = reinterpret_cast<AVHWFramesContext*>(track.hardwareFrames->data);
+                    frames->format = AV_PIX_FMT_VAAPI;
+                    frames->sw_format = AV_PIX_FMT_NV12;
+                    frames->width = c.width;
+                    frames->height = c.height;
+                    frames->initial_pool_size = 4;
+                    require(av_hwframe_ctx_init(track.hardwareFrames) >= 0,
+                            "VA-API frame context failed", Error::Unavailable);
+                    c.hw_frames_ctx = av_buffer_ref(track.hardwareFrames);
+                }
+            }
             c.color_primaries = AVCOL_PRI_BT709;
-            c.color_trc = AVCOL_TRC_IEC61966_2_1;
+            c.color_trc = AVCOL_TRC_BT709;
             c.colorspace = AVCOL_SPC_BT709;
             c.color_range = AVCOL_RANGE_MPEG;
             c.sample_aspect_ratio = {1, 1};
@@ -210,13 +255,14 @@ struct Encoder::State {
                     "Encoder metadata failure");
         }
         if (video) {
-            track.frame->format = c.pix_fmt;
+            track.frame->format = track.hardwareFrames ? AV_PIX_FMT_NV12 : c.pix_fmt;
             track.frame->width = c.width;
             track.frame->height = c.height;
             require(av_frame_get_buffer(track.frame, 32) >= 0, "Encode frame allocation",
                     Error::Oversized);
             track.scale =
-                sws_getContext(c.width, c.height, AV_PIX_FMT_RGBA64LE, c.width, c.height, c.pix_fmt,
+                sws_getContext(c.width, c.height, AV_PIX_FMT_RGBA64LE, c.width, c.height,
+                               static_cast<AVPixelFormat>(track.frame->format),
                                SWS_BICUBIC | SWS_BITEXACT, nullptr, nullptr, nullptr);
             require(track.scale, "Output pixel conversion unavailable", Error::Unavailable);
             if (settings.videoCodec != "tiff") {
@@ -235,9 +281,8 @@ struct Encoder::State {
     }
     void open() {
         require(valid(settings), "Invalid encode settings", Error::InvalidValue);
-        if (settings.videoCodec == "h264" || settings.videoCodec == "hevc" ||
-            settings.videoCodec == "h265")
-            throw Unavailable{Error::Unavailable, "codec.h264.software-encoder-not-intaken"};
+        if (settings.videoCodec == "hevc" || settings.videoCodec == "h265")
+            throw Unavailable{Error::Unavailable, "codec.hevc.software-encoder-not-intaken"};
         if (settings.videoCodec == "tiff") {
             require(settings.container == "tiff" && settings.frames == 1 &&
                         settings.audioCodec.empty(),
@@ -264,7 +309,10 @@ struct Encoder::State {
                 av_dict_set(&format->metadata, "description", settings.bwfDescription.c_str(), 0);
         }
         if (!settings.videoCodec.empty())
-            openTrack(videoTrack, settings.videoCodec, true);
+            openTrack(videoTrack, settings.videoCodec == "h264"
+                                       ? (hardware ? "h264_vaapi" : "libopenh264")
+                                                                  : settings.videoCodec,
+                      true);
         if (!settings.audioCodec.empty())
             openTrack(audioTrack, settings.audioCodec, false);
         if (settings.audioCodec == "aac") {
@@ -614,14 +662,14 @@ struct Encoder::State {
             require(qc.audio == expectedPcm.finalize(), "Reopened PCM samples differ");
     }
 };
-Encoder::Encoder() = default;
+Encoder::Encoder(const bool hardware) : hardware_(hardware) {}
 Encoder::~Encoder() = default;
 provider::Payload Encoder::call(provider::MessageKind kind, const provider::Payload& payload) {
     try {
         av_log_set_level(AV_LOG_ERROR);
         if (kind == MessageKind::EncodeBegin) {
             require(!state_, "Encoder already initialized", Error::UnexpectedMessage);
-            state_ = std::make_unique<State>(std::get<EncodeSettingsV1>(payload));
+            state_ = std::make_unique<State>(std::get<EncodeSettingsV1>(payload), hardware_);
             state_->open();
         } else {
             require(state_ != nullptr, "Encoder is not initialized", Error::UnexpectedMessage);

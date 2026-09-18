@@ -2,6 +2,7 @@
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/image.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
+#include <bloom/media/provider/openh264_runtime.hpp>
 #include <bloom/media/video/audio.hpp>
 #include <bloom/output/composition_output_stream.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -204,7 +205,13 @@ Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& ana
         evidence.snapshot = approval;
         evidence.approval = evidence.snapshot;
         evidence.preset = analysis.digest;
-        evidence.execution = checked(digest(ffmpegHandshake().execution));
+        const bool hardware =
+            analysis.settings.videoCodec == "h264" &&
+            analysis.implementationNote.find("encoder=vaapi") != std::string::npos;
+        const bool openh264 = analysis.settings.videoCodec == "h264" && !hardware;
+        const auto hello = ffmpegHandshake(hardware, openh264, OpenH264Runtime::version(),
+                                           OpenH264Runtime::libraryDigest());
+        evidence.execution = checked(digest(hello.execution));
         // Bind all declared ordered export components; no delivery or independent-reader claim.
         PipelineQualificationV1 pipeline;
         pipeline.purpose = Purpose::Export;
@@ -220,7 +227,6 @@ Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& ana
             if ((role == Role::VideoEncode && analysis.settings.videoCodec.empty()) ||
                 (role == Role::AudioEncode && analysis.settings.audioCodec.empty()))
                 continue;
-            const auto hello = ffmpegHandshake();
             const auto found = std::ranges::find_if(hello.declarations, [&](const auto& d) {
                 return d.capability.role == role &&
                        (role == Role::VideoEncode

@@ -266,12 +266,36 @@ void validateProductionPatches(const Value& component, const std::string& compon
     }
 }
 
+void validateProductionRuntimeFetch(const Value& runtime, const std::string& location,
+                                    const Path& root) {
+    object(runtime, {"urlPattern", "platforms", "license"}, location);
+    stringValue(runtime.at("urlPattern"), location + ".urlPattern");
+    const auto& platforms = array(runtime.at("platforms"), location + ".platforms", 64, 1);
+    for (std::size_t index = 0; index < platforms.size(); ++index) {
+        const auto itemLocation = location + ".platforms[" + std::to_string(index) + ']';
+        object(platforms[index], {"platform", "archiveSha256", "librarySha256", "libraryName"},
+               itemLocation);
+        identifier(platforms[index].at("platform"), itemLocation + ".platform");
+        digestValue(platforms[index].at("archiveSha256"), itemLocation + ".archiveSha256");
+        digestValue(platforms[index].at("librarySha256"), itemLocation + ".librarySha256");
+        stringValue(platforms[index].at("libraryName"), itemLocation + ".libraryName");
+    }
+    requireOrdered(
+        platforms, [](const Value& child) { return child.at("platform").asString(); },
+        location + ".platforms");
+    const auto& license = runtime.at("license");
+    object(license, {"spdxExpression", "text"}, location + ".license");
+    stringValue(license.at("spdxExpression"), location + ".license.spdxExpression");
+    verifyProductionArtifactReference(license.at("text"), location + ".license.text", root);
+}
+
 void validateComponentProduction(const Value& value, const std::string& location,
                                  const Path& root) {
     objectWithOptionalMembers(value,
                               {{"name", false},
                                {"version", false},
                                {"configureArguments", true},
+                               {"runtimeFetch", true},
                                {"source", false},
                                {"license", false},
                                {"patches", false},
@@ -281,6 +305,8 @@ void validateComponentProduction(const Value& value, const std::string& location
                               location);
     const auto& componentName = identifier(value.at("name"), location + ".name");
     stringValue(value.at("version"), location + ".version");
+    if (const auto* runtime = value.find("runtimeFetch"); runtime != nullptr)
+        validateProductionRuntimeFetch(*runtime, location + ".runtimeFetch", root);
 
     const auto* configureArguments = value.find("configureArguments");
     if (configureArguments != nullptr) {
@@ -548,8 +574,8 @@ void validateProductionLockDocument(const Value& value, const Path& root) {
     const auto& version = value.at("schemaVersion");
     object(version, {"major", "minor"}, "$.schemaVersion");
     if (!version.at("major").isNumber() || version.at("major").asNumber().spelling != "1" ||
-        !version.at("minor").isNumber() || version.at("minor").asNumber().spelling != "1") {
-        fail("version", "$.schemaVersion", "expected exact version 1.1");
+        !version.at("minor").isNumber() || version.at("minor").asNumber().spelling != "2") {
+        fail("version", "$.schemaVersion", "expected exact version 1.2");
     }
 
     validateProductionUnicodeProfile(value.at("unicodeProfile"));

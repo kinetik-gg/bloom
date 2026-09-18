@@ -1,0 +1,91 @@
+{
+  "name": "openh264",
+  "version": "2.6.0",
+  "runtimeFetch": {
+    "urlPattern": "https://ciscobinary.openh264.org/libopenh264-{version}-linux64.8.so.bz2",
+    "platforms": [
+      {
+        "platform": "linux-x86_64",
+        "archiveSha256": "sha256:27ab53323c110b76214c1c72222f459d17febbcd1e252136cadc292b0308d75b",
+        "librarySha256": "sha256:2f0cde7c6a6abcf5cae76942894ea42897fa677bce4ed6c91a24dd1b041d5f04",
+        "libraryName": "libopenh264.so.8"
+      }
+    ],
+    "license": {
+      "spdxExpression": "BSD-2-Clause",
+      "text": {
+        "path": "dependencies/licenses/openh264/BINARY_LICENSE.txt",
+        "sha256": "sha256:bd9f363c5ea11ef723d0304cddacb5273c43c0e1194097c7a045d05273635418"
+      }
+    }
+  },
+  "source": {
+    "url": "https://github.com/cisco/openh264/archive/refs/tags/v2.6.0.tar.gz",
+    "archiveSha256": "sha256:558544ad358283a7ab2930d69a9ceddf913f4a51ee9bf1bfb9e377322af81a69",
+    "archiveSizeBytes": 60302243,
+    "retrievedAt": "2026-09-18",
+    "commit": "cf3b514b",
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/openh264/provenance.md",
+        "sha256": "sha256:d7b15143c8d2e5af050a78cd7aa6736c9d197b0b0441d2eb8e4fb038712bb16d"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "BSD-2-Clause",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/openh264/BINARY_LICENSE.txt",
+        "sha256": "sha256:bd9f363c5ea11ef723d0304cddacb5273c43c0e1194097c7a045d05273635418"
+      },
+      {
+        "path": "dependencies/licenses/openh264/LICENSE",
+        "sha256": "sha256:dd5c1c9668512530fa5a96e4c29ac4033d70a7eeb0eed7a42fddb6dd794ebdbb"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "corresponding-source",
+    "correspondingSourceArchiveSha256": "sha256:558544ad358283a7ab2930d69a9ceddf913f4a51ee9bf1bfb9e377322af81a69",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/openh264/review.md",
+        "sha256": "sha256:7883830ec68a310ae0a2636f2d834fe6d365b54cde963217dc63f13ee9c3d1da"
+    },
+    "reviewedAt": "2026-09-18"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [
+    {
+      "profileId": "bloom.linux-x86-64-clang-release",
+      "linkage": "shared",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.openh264.runtime-fetch",
+          "state": "enabled",
+          "reason": "Cisco's binary is fetched only after explicit consent and verified on every worker launch"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.openh264.link-time-stub",
+        "bloom.capability.openh264.runtime-fetch"
+      ],
+      "shippingRoles": [
+        "license",
+        "source"
+      ],
+      "conformanceFixtureSets": []
+    }
+  ],
+  "securityReview": {
+    "reviewedAt": "2026-09-18",
+    "record": {
+      "path": "dependencies/licenses/openh264/security.md",
+      "sha256": "sha256:676f133e1cb5dc2b742ad69684968bc4ec951f49d7b0d93d0d7936fec6ad5daf"
+    },
+    "vulnerabilities": []
+  }
+}

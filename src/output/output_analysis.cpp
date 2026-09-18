@@ -89,6 +89,7 @@ using bloom::output::OutputPresetV1;
     case OutputPresetV1::ProResMovV1:
     case OutputPresetV1::DnxhrMxfV1:
     case OutputPresetV1::PcmWavV1:
+    case OutputPresetV1::H264MovV1:
         return false;
     case OutputPresetV1::PngRgba8SrgbV1:
         return rule.validForPng;
