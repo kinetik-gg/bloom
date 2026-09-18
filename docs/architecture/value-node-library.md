@@ -379,4 +379,20 @@ to String), or can fail (anything from String). A refusal the artist can see, fo
 they placed deliberately, is better than a silent coercion whose rule they have to remember.
 
 The current UI category order and normalized family mapping are owned by [UI grammar](../ux/ui-grammar.md).
-This presentation projection leaves the non-persisted document category enum unchanged.
+Value-family normalization is a presentation projection. COLOR-3 adds the non-persisted
+`NodeCategory::Color` for image effects.
+
+## Colour Image Effects
+
+These definitions operate on images and use `NodeLoweringKind::ImageEffect`, independently of the
+Color value nodes. They appear under Add → Colour after Compositing.
+
+| Node | Image ports | Constant parameters | Behavior |
+| --- | --- | --- | --- |
+| OCIO Colour Space Transform (`bloom.ocio-colour-space-transform`) | `input` → `image` | `from`, `to` (String, empty working space); `bypass` (false) | Exact-config non-data source/destination conversion |
+| OCIO File Transform (`bloom.ocio-file-transform`) | `input` → `image` | `lut` (Integer asset id, 0 unset); `interpolation` (Linear/Tetrahedral/Best, Linear default); `direction` (Forward/Inverse, Forward default); `processSpace` (String, empty working space); `bypass`, `look` (false) | Working → process space → LUT → working; digest-verified external LUT |
+
+Missing or refused processing yields a typed warning and the unchanged input image. The look flag
+marks a File Transform for request-level bypass; it does not alter its saved wiring. See
+[colour management](color-management.md#show-look-nodes-and-lut-assets) for limits and platform
+fallbacks, and [image effects](layer-graph-model.md#image-effects) for alpha handling.

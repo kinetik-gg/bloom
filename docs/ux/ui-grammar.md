@@ -397,9 +397,10 @@ the current selection is disabled, and a persisted group that disappears after s
 falls back to All. Tooltips state the complete section set so the icon-only controls remain
 discoverable.
 
-Node Add menu and search order is Sources, Layers, Compositing, Values, Math, Convert, String,
+Node Add menu and search order is Sources, Layers, Compositing, Colour, Values, Math, Convert, String,
 Logic, Time, Color, Vector, Utilities, Output. The UI category projection owns normalization;
-the document enum is unchanged and no migration is needed. Utilities contains only reroute and
+the Colour image-effect section projects `NodeCategory::Color`, while Color holds value nodes.
+Categories are not persisted, so no migration is needed. Utilities contains only reroute and
 Separate/Combine plumbing (reroutes remain link gestures). Time includes Time, frame readouts and
 time conversions; composition readouts and literals remain Values. HSV operations belong to Color.
 Kit menus with `columnFlow` use real action-backed controls in additional columns, capped at

@@ -14,7 +14,7 @@ processor cache, and cross-platform qualification remain pending.
 
 Updated: 2026-09-18
 
-## Current Version 1.20 Decisions — Asset Input Transforms
+## Version 1.20 Decisions — Asset Input Transforms
 
 Document schema 1.20 gives every image and video asset a durable `inputColorSpaceId` beside the
 legacy integer interpretation. An empty id is Auto. A non-empty id is resolved only in the exact
@@ -721,3 +721,50 @@ It transforms straight RGB and preserves alpha under the image-effect alpha cont
 data spaces, or unavailable processors pass the image through with a node-addressed typed warning,
 including on warm cache hits. The existing preview diagnostic path exposes that reason in the Viewer
 and status line. Bypass and true identity share the input pixels exactly.
+
+
+## Show Look Nodes And LUT Assets
+
+The Colour menu contains `bloom.ocio-colour-space-transform` and `bloom.ocio-file-transform`.
+Both lower to the reusable image-effect operation. CST resolves `from` and `to` in the exact
+selected config, with an empty id meaning the effective working space. File Transform resolves
+`processSpace` the same way and executes working → process space → LUT → process space → working.
+For the ACES show workflow this is ACEScg → ACEScct → show LUT → ACEScct → ACEScg. Colour kernels
+un-premultiply RGB, preserve alpha, and re-premultiply after processing; zero alpha remains zero.
+
+LUT assets accept `.cube`, `.clf`, `.spi1d` and `.spi3d`. Import captures the existing locator and
+SHA-256 digest off the UI thread. The file is reopened without following the final symlink,
+checked as a regular file, bounded, hashed and structurally preflighted before preparation.
+The observed digest must match the imported asset. A changed digest changes the effect memo key
+and reports `ChangedFile`; relinking adopts new bytes through an undoable command. Missing ids,
+missing files and every refusal pass through with a typed evaluation warning, including on cache
+hits. A canonical `.cube` whose table is the exact identity grid with the default unit domain is an
+exact identity, including HDR values outside that domain; no clamp or process-space round trip is
+introduced. OCIO-proven identity processors use the same path. No imported image or LUT is rewritten.
+
+External LUT parsing, processor construction and application use the supervised colour helper.
+The Linux implementation sends anonymous sealed resources and distinct pixel slabs over a private
+socket with descriptor, inode, length and nonce checks. The helper verifies structural limits again
+before OCIO. Landlock denies filesystem access; seccomp denies network creation, child creation,
+execution and cross-process memory/signal access. No output path enters the protocol. CLF external
+references and XML entities are refused. The file cap is 64 MiB and a 3D LUT edge is at most 129.
+The existing 5/30/10-second deadlines, 512 MiB helper ceiling and typed supervisor failures apply.
+Host reservations conservatively account for input bytes, sealed copies, scratch, slabs and opaque
+handles under the 768 MiB service ceiling; a request stays below 384 MiB and allocations below
+64 MiB. The runtime cache retains at most four file processors, accounting one MiB per opaque
+handle. Cancellation kills and reaps an active helper, invalidates its token and publishes no
+partial image. A later evaluation prepares a fresh token.
+
+Linux requires the confinement primitives as well as the existing process supervisor. macOS,
+Windows and Linux hosts without those capabilities report `HelperUnavailable` for external LUTs.
+They preserve the editable graph and pass through with diagnostics. There is no in-process external
+LUT fallback. The sealed-file intake also returns `HelperUnavailable` on macOS and Windows, so new
+LUT import is refused there while saved LUT records remain editable. Built-in CST processing
+remains available on all three desktop targets.
+
+File Transform's `look` marker opts it into request-level `bypassLookNodes`. The default is false;
+true skips only marked effects and has a separate frame/memo identity. COLOR-4 owns the Viewer
+footer switch. Export creates requests with false: the COLOR-5 review preset includes the look.
+A handoff EXR workflow explicitly sets the relevant nodes' durable `bypass` parameters before
+export; a Viewer-only look setting never changes export. Output preset implementation belongs to
+COLOR-5.

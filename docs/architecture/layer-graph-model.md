@@ -67,6 +67,24 @@ that same alpha before publishing RGBA32F. Alpha is unchanged; zero-alpha pixels
 transparent black. Identity and bypass share the original image without a divide/multiply round
 trip. Negative and HDR RGB are retained if finite.
 
+The first image-effect definitions are OCIO Colour Space Transform and OCIO File Transform.
+Their registry category is Colour, ordered after Compositing and not persisted. Each owns one
+`input` Image socket and one `image` Image output. Any image producer may feed an effect, and its
+output may feed another effect or any image consumer; ordinary graph validation still rejects
+cycles. For example: Solid → CST → File Transform → CST → Layer Output. Parameters remain command-
+owned project truth; Properties uses the exact-config picker and a LUT-kind-filtered asset picker.
+
+### Show Look Bypass
+
+An effect's `look` marker identifies it as part of the show look. The ephemeral evaluation request
+`bypassLookNodes` defaults to false. When true, marked effects execute as identities without changing
+the graph or saved node parameters. Their memo addresses and process-frame request identities remain
+distinct from the look-on request. Per-node `bypass` is a separate, saved authoring choice.
+
+Export constructs fresh requests with `bypassLookNodes = false`; a Viewer look preview never changes
+export intent. The COLOR-5 review preset includes the show look. An unlooked VFX handoff EXR uses
+explicit per-node bypass in its authored graph; it does not inherit the Viewer's preview switch.
+
 ### Layer Output
 
 A `Layer Output` is an explicit graph node or equivalent first-class boundary that owns a stable
@@ -88,8 +106,8 @@ copy or translate it.
 
 Merge (`bloom.layer-stack`, the preserved durable type ID) has `Many` cardinality. Each Merge
 owns an ordered collection of stable slots addressed by `(merge node ID, slot ID, content)`.
-Every slot has one image edge and may have one audio edge. Layer Output, Solid, Text, another Merge,
-image reroutes, and Audio source boundaries are valid sources for their respective typed ports. A
+Every slot has one image edge and may have one audio edge. Any image producer, including an image
+effect, can feed its image port; audio sources feed the separate audio port. A
 slot records its direct Layer identity when its source is a Layer Output;
 plain image slots have no Layer identity. A Layer may participate once in each Merge, and membership
 is optional. An unconnected Layer contributes no pixels to Output.
@@ -125,7 +143,7 @@ list or generated Merge chain to synchronize. Composition sources provide nestin
 The Merge and parenting changes introduced plan semantics 4: `CompiledMergeInput` admits an absent Layer identity and a plain image
 operation, changing the previous Layer-only operand grammar. Layer Output also carries an optional
 parent operation index. Evaluator semantics remains 6 and
-primitive semantics remains 5; existing unparented pixel behavior is unchanged. Current output identities use plan 6, animation 2, evaluator 8 and primitives 7.
+primitive semantics remains 5; existing unparented pixel behavior is unchanged. Current output identities use plan 8, animation 2, evaluator 9 and primitives 7.
 
 ### Composition Sources
 
@@ -703,10 +721,11 @@ and preserves the slot and edge IDs; a body drop appends. A press where there is
 ### Node Categories
 
 `NodeDefinition::category` declares which Add-surface section a node type is listed under:
-`Sources`, `Layers`, `Compositing`, `Values`, `Math`, `Utilities`, `Output`. The vocabulary is the
+`Sources`, `Layers`, `Compositing`, `Color`, `Values`, `Math`, `Utilities`, `Output`. The vocabulary is the
 artist's -- what a node is for -- so it is declared beside the type rather than derived from
 `NodeLoweringKind`, which spans several sections at once. The built-ins are Solid and Text under
-`Sources`, the layer boundary under `Layers`, Merge under `Compositing`, Output under `Output`, the
+`Sources`, the layer boundary under `Layers`, Merge under `Compositing`, image effects under
+`Color` (shown as **Colour**), Output under `Output`, the
 literal value sources and `Time` under `Values`, the arithmetic under `Math`, and the plumbing,
 logic and conversions under `Utilities` (see **Value Graph And Drivers** and
 [value-node-library.md](value-node-library.md)).
@@ -1241,14 +1260,3 @@ It previews source and compensating Position overrides together, then commits th
 transaction. The opposite handle stays fixed, or Alt holds the anchor. Rotation and anchor gestures
 remain transforms. Selecting a path exposes its anchors and tangent handles immediately; no
 separate edit mode or double-click is required.
-
-### Show Look Bypass
-
-An effect's `look` marker identifies it as part of the show look. The ephemeral evaluation request
-`bypassLookNodes` defaults to false. When true, marked effects execute as identities without changing
-the graph or saved node parameters. Their memo addresses and process-frame request identities remain
-distinct from the look-on request. Per-node `bypass` is a separate, saved authoring choice.
-
-Export constructs fresh requests with `bypassLookNodes = false`; a Viewer look preview never changes
-export intent. The COLOR-5 review preset includes the show look. An unlooked VFX handoff EXR uses
-explicit per-node bypass in its authored graph; it does not inherit the Viewer's preview switch.
