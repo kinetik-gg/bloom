@@ -166,6 +166,10 @@ void testGoldenMatchesC2DirectOutput(Expectations& expectations) {
     const bloom::runtime::CpuQualifiedDisplayPreparer preparer(*handle);
     const bloom::runtime::QualifiedDisplayPreparationRequest request{
         .aggregatePixelStorageByteLimit = 1U << 20U,
+        .viewAdjust = {},
+        .displayName = {},
+        .viewName = {},
+        .showLook = true,
     };
     const auto result = preparer.prepare(evaluated.frame(), request, {});
     expectations.expect(result.status() ==
@@ -268,6 +272,10 @@ void testCancellationAtChunkBoundaryPublishesNothing(Expectations& expectations)
     const bloom::runtime::CpuQualifiedDisplayPreparer preparer(*handle);
     const bloom::runtime::QualifiedDisplayPreparationRequest request{
         .aggregatePixelStorageByteLimit = 1U << 20U,
+        .viewAdjust = {},
+        .displayName = {},
+        .viewName = {},
+        .showLook = true,
     };
 
     auto submission = scheduler.submit<void>(
@@ -328,6 +336,10 @@ void testFailurePropagationTyped(Expectations& expectations) {
     const bloom::runtime::CpuQualifiedDisplayPreparer preparer(*handle);
     const bloom::runtime::QualifiedDisplayPreparationRequest starvedRequest{
         .aggregatePixelStorageByteLimit = 1,
+        .viewAdjust = {},
+        .displayName = {},
+        .viewName = {},
+        .showLook = true,
     };
     const auto result = preparer.prepare(evaluated.frame(), starvedRequest, {});
     expectations.expect(
@@ -339,6 +351,10 @@ void testFailurePropagationTyped(Expectations& expectations) {
 
     const bloom::runtime::QualifiedDisplayPreparationRequest invalidRequest{
         .aggregatePixelStorageByteLimit = 0,
+        .viewAdjust = {},
+        .displayName = {},
+        .viewName = {},
+        .showLook = true,
     };
     const auto invalidResult = preparer.prepare(evaluated.frame(), invalidRequest, {});
     expectations.expect(
@@ -361,22 +377,40 @@ void testViewAdjust(Expectations& expectations) {
     const runtime::CpuQualifiedDisplayPreparer qualified(*handle);
     const runtime::CpuReferenceDisplayPreparer reference;
     constexpr std::size_t budget = 1U << 20U;
-    const auto original =
-        reference.prepare(evaluated.frame(), {.aggregatePixelStorageByteLimit = budget}, {});
-    const auto qualifiedOriginal =
-        qualified.prepare(evaluated.frame(), {.aggregatePixelStorageByteLimit = budget}, {});
+    const auto original = reference.prepare(evaluated.frame(),
+                                            {.aggregatePixelStorageByteLimit = budget,
+                                             .viewAdjust = {},
+                                             .displayName = {},
+                                             .viewName = {},
+                                             .showLook = true},
+                                            {});
+    const auto qualifiedOriginal = qualified.prepare(evaluated.frame(),
+                                                     {.aggregatePixelStorageByteLimit = budget,
+                                                      .viewAdjust = {},
+                                                      .displayName = {},
+                                                      .viewName = {},
+                                                      .showLook = true},
+                                                     {});
     const auto encode = [](double value) {
         return value <= 0.0031308 ? value * 12.92 : 1.055 * std::pow(value, 1.0 / 2.4) - 0.055;
     };
     expectations.expect(runtime::ViewAdjust{1, 1}.linearExposure(0.125) == 0.25,
                         "one EV doubles linear display light before encoding");
     for (const runtime::ViewAdjust adjust : {runtime::ViewAdjust{}, {1, 1}, {0, 2}, {-1, 0.5}}) {
-        const auto a =
-            reference.prepare(evaluated.frame(),
-                              {.aggregatePixelStorageByteLimit = budget, .viewAdjust = adjust}, {});
-        const auto b =
-            qualified.prepare(evaluated.frame(),
-                              {.aggregatePixelStorageByteLimit = budget, .viewAdjust = adjust}, {});
+        const auto a = reference.prepare(evaluated.frame(),
+                                         {.aggregatePixelStorageByteLimit = budget,
+                                          .viewAdjust = adjust,
+                                          .displayName = {},
+                                          .viewName = {},
+                                          .showLook = true},
+                                         {});
+        const auto b = qualified.prepare(evaluated.frame(),
+                                         {.aggregatePixelStorageByteLimit = budget,
+                                          .viewAdjust = adjust,
+                                          .displayName = {},
+                                          .viewName = {},
+                                          .showLook = true},
+                                         {});
         expectations.expect(a.frame() && b.frame(), "both adjusted display paths prepare");
         if (!a.frame() || !b.frame())
             continue;
@@ -413,10 +447,20 @@ void testViewAdjust(Expectations& expectations) {
     expectations.expect(sampled.frame() && sampled.frame()->processImage().pixels().size() == 1,
                         "1x1 ROI retains one reference process pixel");
     if (sampled.frame()) {
-        const auto a =
-            reference.prepare(sampled.frame(), {.aggregatePixelStorageByteLimit = budget}, {});
-        const auto b =
-            qualified.prepare(sampled.frame(), {.aggregatePixelStorageByteLimit = budget}, {});
+        const auto a = reference.prepare(sampled.frame(),
+                                         {.aggregatePixelStorageByteLimit = budget,
+                                          .viewAdjust = {},
+                                          .displayName = {},
+                                          .viewName = {},
+                                          .showLook = true},
+                                         {});
+        const auto b = qualified.prepare(sampled.frame(),
+                                         {.aggregatePixelStorageByteLimit = budget,
+                                          .viewAdjust = {},
+                                          .displayName = {},
+                                          .viewName = {},
+                                          .showLook = true},
+                                         {});
         expectations.expect(a.frame() && b.frame(),
                             "ROI display preparation succeeds in both paths");
         if (a.frame() && b.frame()) {
@@ -437,11 +481,21 @@ void testViewAdjust(Expectations& expectations) {
                 "ROI preserves the full viewport and pads uncomputed pixels in both display paths");
         }
     }
-    const auto invalid = reference.prepare(
-        evaluated.frame(), {.aggregatePixelStorageByteLimit = budget, .viewAdjust = {0, 0}}, {});
+    const auto invalid = reference.prepare(evaluated.frame(),
+                                           {.aggregatePixelStorageByteLimit = budget,
+                                            .viewAdjust = {0, 0},
+                                            .displayName = {},
+                                            .viewName = {},
+                                            .showLook = true},
+                                           {});
     expectations.expect(!invalid.frame(), "invalid gamma is rejected before display work");
-    const auto starved = qualified.prepare(
-        evaluated.frame(), {.aggregatePixelStorageByteLimit = 200, .viewAdjust = {1, 1}}, {});
+    const auto starved = qualified.prepare(evaluated.frame(),
+                                           {.aggregatePixelStorageByteLimit = 200,
+                                            .viewAdjust = {1, 1},
+                                            .displayName = {},
+                                            .viewName = {},
+                                            .showLook = true},
+                                           {});
     expectations.expect(!starved.frame(),
                         "adjusted qualified storage obeys the aggregate byte budget");
 }

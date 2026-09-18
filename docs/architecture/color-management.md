@@ -9,8 +9,8 @@ composition working-space selection, config-managed asset input transforms, and 
 alpha/pixel flow are implemented and qualified on Linux. The separable
 blend modes under "Blend modes" below are implemented in the CPU reference compositing kernel and
 qualified by per-mode goldens. The
-supervised helper, the archive and loose locator kinds, viewer/staged-graph integration, the
-processor cache, and cross-platform qualification remain pending.
+supervised helper, the archive and loose locator kinds, staged-graph integration, and the
+processor cache remain pending.
 
 Updated: 2026-09-18
 
@@ -162,6 +162,32 @@ Changing only a display, view, look, monitor, or display packing invalidates onl
 Changing a config revision also invalidates process results when an import or explicit process
 color operation used that config; the fixed v1 Solid-to-process path does not. A
 `PreparedPreviewFrame` is a publication envelope over those two products, not a third pixel cache.
+
+### Viewer display/view and look selection
+
+At config resolution Bloom enumerates the active `(display, view, colourSpaceId)` pairs once. The
+public list is bounded to 64 displays and 32 views per display; a larger config is refused with a
+typed diagnostic rather than being partially exposed to the UI. Each entry marks the config's
+default pair. Bloom Neutral's `srgb_rec709_display / srgb_rec709_display` pair remains the default,
+so its existing display-processor identity and packed goldens are unchanged. The ACES CG list
+includes the `Rec.1886 Rec.709 - Display / ACES 1.0 - SDR Video` review pair and its sRGB display
+counterpart.
+
+The Viewer footer stores the selected pair under a revision-scoped, per-viewer QSettings key and
+includes it in `PreviewRequestIdentity`, the RAM-preview key, and display-preparation identities.
+Changing it therefore re-prepares display pixels without invalidating the working-space process
+cache. The colour picker's inverse remains pinned to the config's sRGB authoring pair; it is not
+changed by the review display selection.
+
+The footer's Look toggle is a viewer-only request setting. When off, viewer evaluation sets
+`EvaluationRequest::bypassLookNodes`; RAM preview and the one-pixel probe inherit that setting.
+Export requests retain the normal `false` value and always include active look-tagged effects.
+The toggle is unavailable when the composition snapshot has no look-tagged OCIO effect.
+
+Probe values expose un-premultiplied working-space RGBA from the process frame, the encoded RGBA8
+actually painted, and the float display-stage value before packing. The status-bar cell identifies
+the working-space id and selected display in its tooltip; Ctrl-click cycles the display value
+between 8-bit and float forms.
 
 ## Durable OCIO Configuration Identity
 

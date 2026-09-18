@@ -39,6 +39,9 @@ struct ReferenceDisplayPreparationRequest final {
     ReferenceDisplayIntent intent = ReferenceDisplayIntent::LinearRec709SceneToSrgb;
     std::size_t aggregatePixelStorageByteLimit = 0;
     ViewAdjust viewAdjust{};
+    std::string displayName;
+    std::string viewName;
+    bool showLook = true;
 };
 
 struct ReferenceDisplayFrameIdentity final {
@@ -50,6 +53,9 @@ struct ReferenceDisplayFrameIdentity final {
     ReferenceDisplayPacking packing = ReferenceDisplayPacking::StraightRgba8;
     std::uint32_t mapperSemanticsVersion = kReferenceDisplayMapperSemanticsVersion;
     ViewAdjust viewAdjust{};
+    std::string displayName;
+    std::string viewName;
+    bool showLook = true;
 
     friend bool operator==(const ReferenceDisplayFrameIdentity&,
                            const ReferenceDisplayFrameIdentity&) = default;

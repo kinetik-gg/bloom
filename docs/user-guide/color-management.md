@@ -38,6 +38,24 @@ Flat EXR keeps scene-linear pixels and writes the working-space id plus its prim
 header. Projects that stay on `lin_rec709_scene` retain Bloom's earlier reference-display and output
 goldens.
 
+## Review the show through the intended display
+
+For an ACES CG review, open the Viewer footer's **Display / View** menu and choose **Rec.1886
+Rec.709 - Display / ACES 1.0 - SDR Video**. The choice is remembered per Viewer and per config
+revision; changing the project colour configuration returns the menu to that config's default.
+This is a review transform only: it changes Viewer and RAM Preview pixels, never the working-space
+process image or export output.
+
+If the composition contains a look-tagged OCIO File Transform, switch on the footer's **Look**
+toggle to include it while reviewing, or switch it off to inspect the underlying grade. The toggle
+is disabled when the composition has no look-tagged effect. Export always includes active look
+effects; use an authored Bypass value when the exported handoff itself must omit one.
+
+Move the pointer over the Viewer to read the probe in the window status bar. **W** reports the
+un-premultiplied working-space RGBA authored by the process frame; **D** reports the display value
+the Viewer paints. Ctrl-click the probe cell to switch D between 8-bit encoded values and float
+values before display encoding. The tooltip names both the working-space id and selected display.
+
 ## Importing plates and camera footage
 
 Assets use **Input colour space: Auto** by default. Bloom resolves that choice from the selected

@@ -432,7 +432,11 @@ twoSolidBlendPlan(const core::BlendMode topMode, const core::BlendMode bottomMod
 [[nodiscard]] runtime::ReferenceDisplayPreparationRequest
 displayRequest(const std::size_t aggregateBudget = 1U << 20U) {
     return {.intent = runtime::ReferenceDisplayIntent::LinearRec709SceneToSrgb,
-            .aggregatePixelStorageByteLimit = aggregateBudget};
+            .aggregatePixelStorageByteLimit = aggregateBudget,
+            .viewAdjust = {},
+            .displayName = {},
+            .viewName = {},
+            .showLook = true};
 }
 
 [[nodiscard]] bool near(const float value, const float expected, const float tolerance = 1.0e-6F) {

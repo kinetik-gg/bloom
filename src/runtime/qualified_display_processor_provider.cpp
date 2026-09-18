@@ -64,6 +64,10 @@ registryDiagnostic(const bloom::color::OcioBuiltInResolutionResult& result) {
                 "bloom.runtime.qualified-display-processor.registry-display-view-ambiguous",
                 "The embedded Bloom Neutral display configuration has no unambiguous display/"
                 "view mapping");
+        case OcioBuiltInInvalidReason::DisplayViewEnumerationLimitExceeded:
+            return diagnostic(
+                "bloom.runtime.qualified-display-processor.registry-display-view-limit",
+                "The OCIO configuration exceeds Bloom's bounded display/view list limits");
         case OcioBuiltInInvalidReason::WorkingColorSpaceMissing:
             return diagnostic(
                 "bloom.runtime.qualified-display-processor.working-space-missing",
@@ -96,6 +100,9 @@ registryDiagnostic(const bloom::color::OcioBuiltInResolutionResult& result) {
         return diagnostic(
             "bloom.runtime.qualified-display-processor.build-identity-construction-failed",
             "The Bloom Neutral display processor identity could not be constructed");
+    case OcioBuildProcessorError::DisplayViewNotFound:
+        return diagnostic("bloom.runtime.qualified-display-processor.display-view-not-found",
+                          "The requested display/view pair is not in the resolved OCIO config");
     case OcioBuildProcessorError::None:
         break;
     }

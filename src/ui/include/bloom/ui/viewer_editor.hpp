@@ -32,6 +32,7 @@ class ImageExtent;
 
 namespace bloom::ui::kit {
 class KDropdown;
+class KIconToggle;
 class KValueField;
 } // namespace bloom::ui::kit
 
@@ -361,6 +362,10 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     void paintRoi(QPainter& painter) const;
     void publishRoi();
     [[nodiscard]] QString analysisSettingsPrefix() const;
+    [[nodiscard]] QString displayViewSettingsKey() const;
+    [[nodiscard]] QString lookSettingsKey() const;
+    void rebuildDisplayViewControl();
+    void updateLookControl();
     void loadViewAdjust();
     void refreshViewAdjustment();
     void consumeViewAdjustment();
@@ -377,6 +382,7 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     PreparedPreviewFrameHandle probeCacheFrame_;
     QPoint probeCachePixel_;
     std::optional<core::Color4d> probeCacheReference_;
+    std::optional<core::Color4d> probeCacheDisplayLinear_;
     QString probeFailure_;
     [[nodiscard]] PreparedPreviewFrameHandle displayedFrame() const;
     runtime::ViewAdjust viewAdjust_{};
@@ -433,6 +439,8 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
 
     // hands the whole row over by reparenting exactly one widget.
     kit::KDropdown* channelDropdown_ = nullptr;
+    kit::KDropdown* viewerDisplayView_ = nullptr;
+    kit::KIconToggle* viewerLookToggle_ = nullptr;
     kit::KDropdown* backgroundDropdown_ = nullptr;
     // Part of the Resolution control rather than a footer item of its own: what the chosen
     // policy actually resolved to ("Auto · ¼"), which for Auto is visible nowhere else.

@@ -126,3 +126,10 @@ Before approval, the mean channel errors against the prior references were 0.340
 0.336177 (DPR 1.5), with changed fractions 0.00219792 and 0.00193171; both were within the
 existing tolerance. The fixture contains no data blocks, so the approved change is limited to the
 Inspector filter chrome. Rendering identity goldens are unchanged.
+
+COLOR-4 approval (2026-09-18, Qt 6.8.3): the Viewer footer adds the Display / View picker and
+Look toggle. Both references were regenerated with `--update-goldens` at DPR 1 and 1.5 and
+visually inspected. Before approval, the mean channel errors against the prior references were
+0.112840 (DPR 1) and 0.110435 (DPR 1.5), with changed fractions 0.000763889 and 0.000756173;
+both were within the existing tolerance. After approval both means were 0. The change is
+viewer-only chrome; composition and rendering identity goldens are unchanged.

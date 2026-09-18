@@ -171,7 +171,11 @@ int main(int argc, char* argv[]) {
         compiledPlanCache);
     bloom::ui::CompositionPreviewController previewController(
         compositionSession, taskScheduler, taskUiBridge, previewPipeline,
-        {.colorIntent = compositionSession.colorIntent()}, previewFrameCache);
+        {.colorIntent = compositionSession.colorIntent(),
+         .displayName = {},
+         .viewName = {},
+         .showLook = true},
+        previewFrameCache);
     bloom::ui::BackgroundPreviewController backgroundPreviewController(
         compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline);
     bloom::ui::RamPreviewController ramPreviewController(

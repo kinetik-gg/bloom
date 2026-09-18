@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 class QSettings;
@@ -51,6 +52,9 @@ struct PreviewFrameCacheKey final {
 
     std::optional<render::ImageWindow> roi = std::nullopt;
     runtime::ViewAdjust viewAdjust{};
+    std::string displayName;
+    std::string viewName;
+    bool showLook = true;
 
     friend bool operator==(const PreviewFrameCacheKey&, const PreviewFrameCacheKey&) = default;
 };

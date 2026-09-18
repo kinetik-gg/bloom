@@ -178,6 +178,9 @@ void BackgroundPreviewController::fillNextFrame() {
             .quality = key->quality,
             .colorIntent = key->colorIntent,
             .resolutionPolicy = key->resolutionPolicy,
+            .displayName = key->displayName,
+            .viewName = key->viewName,
+            .showLook = key->showLook,
         };
         if (cache.contains(*key)) {
             // Protect nearer existing entries from eviction by this pass's farther entries.

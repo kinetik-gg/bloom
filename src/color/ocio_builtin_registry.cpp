@@ -4,6 +4,7 @@
 #include <bloom/color/display_processor_identity.hpp>
 #include <bloom/color/ocio_content_revision.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <memory>
@@ -18,6 +19,9 @@
                                     // opens/closes namespace bloom::color::detail itself
 
 namespace {
+
+constexpr std::size_t kMaximumDisplays = 64;
+constexpr std::size_t kMaximumViewsPerDisplay = 32;
 
 [[nodiscard]] std::span<const std::byte> embeddedPayloadBytes() noexcept {
     return std::as_bytes(
@@ -173,6 +177,52 @@ findUniqueDisplayViewForColorSpace(const OCIO::ConstConfigRcPtr& config,
     return found;
 }
 
+[[nodiscard]] std::optional<std::vector<bloom::color::DisplayViewEntry>>
+enumerateDisplayViews(const OCIO::ConstConfigRcPtr& config, const DisplayViewPair& defaultPair,
+                      bloom::color::OcioBuiltInInvalidReason& invalidReason) {
+    const int displayCount = config->getNumDisplays();
+    if (displayCount < 0 || static_cast<std::size_t>(displayCount) > kMaximumDisplays) {
+        invalidReason = bloom::color::OcioBuiltInInvalidReason::DisplayViewEnumerationLimitExceeded;
+        return std::nullopt;
+    }
+
+    std::vector<bloom::color::DisplayViewEntry> result;
+    for (int displayIndex = 0; displayIndex < displayCount; ++displayIndex) {
+        const char* const display = config->getDisplay(displayIndex);
+        if (display == nullptr || *display == '\0') {
+            invalidReason = bloom::color::OcioBuiltInInvalidReason::DisplayViewNotUniquelyMapped;
+            return std::nullopt;
+        }
+        const int viewCount = config->getNumViews(display);
+        if (viewCount < 0 || static_cast<std::size_t>(viewCount) > kMaximumViewsPerDisplay) {
+            invalidReason =
+                bloom::color::OcioBuiltInInvalidReason::DisplayViewEnumerationLimitExceeded;
+            return std::nullopt;
+        }
+        for (int viewIndex = 0; viewIndex < viewCount; ++viewIndex) {
+            const char* const view = config->getView(display, viewIndex);
+            const char* const colourSpace =
+                view == nullptr ? nullptr : config->getDisplayViewColorSpaceName(display, view);
+            if (view == nullptr || *view == '\0' || colourSpace == nullptr ||
+                *colourSpace == '\0') {
+                invalidReason =
+                    bloom::color::OcioBuiltInInvalidReason::DisplayViewNotUniquelyMapped;
+                return std::nullopt;
+            }
+            result.push_back({std::string(display), std::string(view), std::string(colourSpace),
+                              std::string_view(display) == defaultPair.display &&
+                                  std::string_view(view) == defaultPair.view});
+        }
+    }
+    const auto defaultFound = std::find_if(result.begin(), result.end(),
+                                           [](const auto& entry) { return entry.isDefault; });
+    if (defaultFound == result.end()) {
+        invalidReason = bloom::color::OcioBuiltInInvalidReason::DisplayViewNotUniquelyMapped;
+        return std::nullopt;
+    }
+    return result;
+}
+
 } // namespace
 
 namespace bloom::color {
@@ -181,12 +231,13 @@ ResolvedBloomNeutralConfig::ResolvedBloomNeutralConfig(
     std::unique_ptr<Impl> impl, core::Sha256Digest expectedRevision,
     std::string processColorSpaceId, std::string outputColorSpaceId, std::string displayName,
     std::string viewName, std::string configName, std::vector<OcioColorSpaceInfo> colorSpaces,
-    std::string sRgbTextureColorSpaceId, std::string rec709VideoColorSpaceId) noexcept
+    std::vector<DisplayViewEntry> displays, std::string sRgbTextureColorSpaceId,
+    std::string rec709VideoColorSpaceId) noexcept
     : impl_(std::move(impl)), expectedRevision_(expectedRevision),
       processColorSpaceId_(std::move(processColorSpaceId)),
       outputColorSpaceId_(std::move(outputColorSpaceId)), displayName_(std::move(displayName)),
       viewName_(std::move(viewName)), configName_(std::move(configName)),
-      colorSpaces_(std::move(colorSpaces)),
+      colorSpaces_(std::move(colorSpaces)), displays_(std::move(displays)),
       sRgbTextureColorSpaceId_(std::move(sRgbTextureColorSpaceId)),
       rec709VideoColorSpaceId_(std::move(rec709VideoColorSpaceId)) {}
 
@@ -210,6 +261,9 @@ std::string_view ResolvedBloomNeutralConfig::viewName() const& noexcept { return
 std::string_view ResolvedBloomNeutralConfig::configName() const& noexcept { return configName_; }
 const std::vector<OcioColorSpaceInfo>& ResolvedBloomNeutralConfig::colorSpaces() const& noexcept {
     return colorSpaces_;
+}
+std::span<const DisplayViewEntry> ResolvedBloomNeutralConfig::displays() const& noexcept {
+    return displays_;
 }
 std::string_view ResolvedBloomNeutralConfig::sRgbTextureColorSpaceId() const& noexcept {
     return sRgbTextureColorSpaceId_;
@@ -404,6 +458,15 @@ resolveOcioBuiltIn(const OcioConfigLocatorKind locatorKind, const std::string_vi
         return result;
     }
 
+    OcioBuiltInInvalidReason displayEnumerationReason = OcioBuiltInInvalidReason::None;
+    const auto displays = enumerateDisplayViews(config, *displayView, displayEnumerationReason);
+    if (!displays.has_value()) {
+        auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
+        result.recomputedRevision_ = recomputed;
+        result.invalidReason_ = displayEnumerationReason;
+        return result;
+    }
+
     const auto inputMappings = inputColorSpaceMappings(config, isNeutral);
     auto impl = std::make_unique<ResolvedBloomNeutralConfig::Impl>(config);
     ResolvedBloomNeutralConfig resolved(
@@ -417,7 +480,7 @@ resolveOcioBuiltIn(const OcioConfigLocatorKind locatorKind, const std::string_vi
                               : displayView->display),
         displayView->display, displayView->view,
         config->getName() == nullptr ? std::string(locatorValue) : std::string(config->getName()),
-        inputMappings.spaces, inputMappings.sRgbTexture, inputMappings.rec709Video);
+        inputMappings.spaces, *displays, inputMappings.sRgbTexture, inputMappings.rec709Video);
 
     auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Ready);
     result.recomputedRevision_ = recomputed;

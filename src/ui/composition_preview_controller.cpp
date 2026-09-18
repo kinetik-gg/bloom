@@ -56,7 +56,7 @@ FrameFreshness CompositionPreviewController::freshnessFor(
 
 CompositionPreviewController::CompositionPreviewController(
     CompositionSession& session, runtime::TaskScheduler& scheduler, TaskUiBridge& taskUiBridge,
-    PreviewPreparationFunction preparation, CompositionPreviewSettings settings,
+    PreviewPreparationFunction preparation, const CompositionPreviewSettings& settings,
     PreviewFrameCacheHandle frameCache, QObject* parent)
     : QObject(parent), session_(session), scheduler_(scheduler), taskUiBridge_(taskUiBridge),
       preparation_(std::move(preparation)), settings_(settings),
@@ -167,6 +167,9 @@ CompositionPreviewController::cacheKeyForTime(const core::RationalTime time) con
         .colorIntent = settings_.colorIntent,
         .resolutionPolicy = settings_.resolutionPolicy,
         .roi = regionOfInterest(),
+        .displayName = settings_.displayName,
+        .viewName = settings_.viewName,
+        .showLook = settings_.showLook,
     };
 }
 
@@ -260,6 +263,26 @@ void CompositionPreviewController::setResolutionPolicy(
     settings_.resolutionPolicy = policy;
     preparationEstimate_.reset();
     emit resolutionChanged();
+    requestPreview(false, PreviewRequestKind::Visible);
+}
+
+void CompositionPreviewController::setViewerDisplayView(std::string displayName,
+                                                        std::string viewName) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (shuttingDown_ || (settings_.displayName == displayName && settings_.viewName == viewName)) {
+        return;
+    }
+    settings_.displayName = std::move(displayName);
+    settings_.viewName = std::move(viewName);
+    requestPreview(false, PreviewRequestKind::Visible);
+}
+
+void CompositionPreviewController::setViewerLookEnabled(const bool enabled) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (shuttingDown_ || settings_.showLook == enabled) {
+        return;
+    }
+    settings_.showLook = enabled;
     requestPreview(false, PreviewRequestKind::Visible);
 }
 
@@ -528,6 +551,9 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         .colorIntent = settings_.colorIntent,
         .resolutionPolicy = settings_.resolutionPolicy,
         .roi = regionOfInterest(),
+        .displayName = settings_.displayName,
+        .viewName = settings_.viewName,
+        .showLook = settings_.showLook,
     };
 
     const auto publishTerminal = [this, &desiredIdentity,

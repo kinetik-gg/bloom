@@ -3,6 +3,7 @@
 #include <bloom/color/display_processor_identity.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -149,6 +150,20 @@ void testNeutralIdentityGolden(Expectations& expectations) {
                         "the built processor's canonical DisplayProcessorIdentity bytes equal the "
                         "independently derived golden");
 
+    auto explicitDefault = bloom::color::buildBloomNeutralCpuDisplayProcessor(
+        *resolved, resolved->displayName(), resolved->viewName());
+    expectations.expect(explicitDefault.succeeded(),
+                        "selecting the resolved sRGB pair explicitly still builds");
+    if (explicitDefault.succeeded()) {
+        expectations.expect(
+            std::ranges::equal(explicitDefault.handle()->identity().canonicalBytes(), actual),
+            "the explicit default sRGB pair preserves the identity golden");
+        const auto authored = bloom::core::Color4d{0.18, 0.5, 0.8, 1.0};
+        expectations.expect(explicitDefault.handle()->referenceToDisplay(authored) ==
+                                handle->referenceToDisplay(authored),
+                            "the explicit default sRGB pair preserves display values");
+    }
+
     expectations.expect(handle->lease().kind() ==
                             bloom::color::DisplayProcessorLeaseKind::InProcess,
                         "the Bloom Neutral built-in lease is InProcess");
@@ -184,6 +199,44 @@ void testAcesCgWhiteDisplay(Expectations& expectations) {
                                 std::abs(displayed->blue - kAcesSdrWhite) < 1e-5,
                             "ACEScg/AP1 white follows the ACES SDR display transform");
     }
+
+    const auto rec709 = std::ranges::find_if(resolved->displays(), [](const auto& entry) {
+        return entry.display == "Rec.1886 Rec.709 - Display" &&
+               entry.view == "ACES 1.0 - SDR Video";
+    });
+    expectations.expect(rec709 != resolved->displays().end(),
+                        "the ACES config exposes the Rec.709 SDR display/view pair");
+    if (rec709 == resolved->displays().end()) {
+        return;
+    }
+    auto selected = bloom::color::buildBloomNeutralCpuDisplayProcessor(*resolved, rec709->display,
+                                                                       rec709->view);
+    expectations.expect(selected.succeeded(), "an explicit non-default ACES display/view builds");
+    if (!selected.succeeded()) {
+        return;
+    }
+    const auto selectedValue = selected.handle()->referenceToDisplay({0.18, 0.18, 0.18, 1.0});
+    const auto defaultValue = built.handle()->referenceToDisplay({0.18, 0.18, 0.18, 1.0});
+    expectations.expect(selectedValue.has_value() && defaultValue.has_value(),
+                        "both ACES display/view transforms evaluate the known solid");
+    if (selectedValue.has_value() && defaultValue.has_value()) {
+        const auto pack = [](const double value) {
+            return static_cast<std::uint8_t>(std::floor(std::clamp(value, 0.0, 1.0) * 255.0 + 0.5));
+        };
+        expectations.expect(pack(selectedValue->red) != pack(defaultValue->red) ||
+                                pack(selectedValue->green) != pack(defaultValue->green) ||
+                                pack(selectedValue->blue) != pack(defaultValue->blue),
+                            "a non-default ACES display/view changes the packed solid bytes");
+        constexpr bloom::core::Color4d kRec709Oracle{0.389528, 0.389529, 0.389528, 1.0};
+        expectations.expect(
+            std::abs(selectedValue->red - kRec709Oracle.red) < 1.0 / 255.0 &&
+                std::abs(selectedValue->green - kRec709Oracle.green) < 1.0 / 255.0 &&
+                std::abs(selectedValue->blue - kRec709Oracle.blue) < 1.0 / 255.0,
+            "the selected packed solid agrees with the OCIO oracle before encoding");
+    }
+    expectations.expect(selected.handle()->provenance().displayName == rec709->display &&
+                            selected.handle()->provenance().viewName == rec709->view,
+                        "processor provenance retains the explicit display/view pair");
 }
 
 } // namespace

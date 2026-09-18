@@ -36,6 +36,9 @@ PreparedPreviewFrame::create(const std::uint64_t requestGeneration,
         .resolutionPolicy = resolutionPolicy,
         .roi = processIdentity.roi,
         .viewAdjust = displayFrame->identity().viewAdjust,
+        .displayName = displayFrame->identity().displayName,
+        .viewName = displayFrame->identity().viewName,
+        .showLook = displayFrame->identity().showLook,
     };
     return PreparedPreviewFrame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
 }
@@ -70,6 +73,9 @@ PreparedPreviewFrame::createQualified(const std::uint64_t requestGeneration,
         .resolutionPolicy = resolutionPolicy,
         .roi = processIdentity.roi,
         .viewAdjust = displayFrame->identity().viewAdjust,
+        .displayName = displayFrame->identity().displayName,
+        .viewName = displayFrame->identity().viewName,
+        .showLook = displayFrame->identity().showLook,
     };
     return PreparedPreviewFrame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
 }
@@ -78,7 +84,7 @@ PreviewDisplayOnlyFrame::PreviewDisplayOnlyFrame(
     PreviewRequestIdentity desiredIdentity, ProcessFrameIdentity processIdentity,
     render::PreparedReferenceDisplayBuffer buffer, const bool isOcioQualified,
     std::vector<EvaluatedOperationBounds> bounds) noexcept
-    : desiredIdentity_(desiredIdentity), processIdentity_(std::move(processIdentity)),
+    : desiredIdentity_(std::move(desiredIdentity)), processIdentity_(std::move(processIdentity)),
       buffer_(std::move(buffer)), isOcioQualified_(isOcioQualified), bounds_(std::move(bounds)) {}
 
 std::optional<PreviewDisplayOnlyFrame>
@@ -150,7 +156,7 @@ std::optional<PreparedPreviewFrame> PreparedPreviewFrame::createDisplayOnly(
 
 PreparedPreviewFrame::PreparedPreviewFrame(PreviewRequestIdentity desiredIdentity,
                                            DisplayFrameVariant displayFrame) noexcept
-    : desiredIdentity_(desiredIdentity), displayFrame_(std::move(displayFrame)) {}
+    : desiredIdentity_(std::move(desiredIdentity)), displayFrame_(std::move(displayFrame)) {}
 
 // std::visit/std::get both have a (never-actually-reachable-here, since displayFrame_ is only ever
 // constructed by create()/createQualified() and never reassigned) valueless_by_exception exception
@@ -262,6 +268,13 @@ const ReferenceDisplayFrameIdentity& PreparedPreviewFrame::displayIdentity() con
 const render::PreparedReferenceDisplayBuffer&
 PreparedPreviewFrame::displayBuffer() const& noexcept {
     return std::get_if<ReferencePtr>(&displayFrame_)->get()->buffer();
+}
+
+std::optional<core::Color4d> PreparedPreviewFrame::displayLinearProbe() const noexcept {
+    if (const auto* qualified = std::get_if<QualifiedPtr>(&displayFrame_)) {
+        return (*qualified)->displayLinearProbe();
+    }
+    return std::nullopt;
 }
 
 const std::shared_ptr<const QualifiedDisplayFrame>&

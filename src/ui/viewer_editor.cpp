@@ -1,3 +1,4 @@
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/viewer_editor.hpp>
@@ -168,6 +169,50 @@ constexpr auto kCentreCrossSetting = "viewer/overlay/centre-cross";
 constexpr auto kThirdsSetting = "viewer/overlay/thirds";
 constexpr auto kRulersSetting = "viewer/overlay/rulers";
 constexpr auto kPixelGridSetting = "viewer/overlay/pixel-grid";
+
+[[nodiscard]] std::optional<color::ResolvedBloomNeutralConfig>
+resolveViewerColorConfig(const CompositionSession& session) {
+    const auto* builtIn = std::get_if<document::BuiltInOcioConfigLocator>(
+        &session.colorSettings().ocioConfig.locator);
+    if (builtIn == nullptr) {
+        return std::nullopt;
+    }
+    auto result =
+        color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri,
+                                  session.colorSettings().ocioConfig.expectedRevision.digest,
+                                  session.colorIntent().workingColorSpaceId);
+    return std::move(result).takeResolved();
+}
+
+[[nodiscard]] bool hasLookTaggedEffect(const CompositionSession& session) {
+    const auto* composition = session.composition();
+    if (composition == nullptr) {
+        return false;
+    }
+    for (const auto& node : composition->graph().nodes()) {
+        if (node.typeId != "bloom.ocio-file-transform") {
+            continue;
+        }
+        const auto look =
+            std::ranges::find(node.parameters, "look", &document::ParameterBinding::role);
+        if (look == node.parameters.end()) {
+            continue;
+        }
+        const auto* record = composition->parameters().find(look->parameterId);
+        if (record == nullptr) {
+            continue;
+        }
+        const auto* constant = std::get_if<document::ConstantValueSource>(&record->source);
+        if (constant == nullptr) {
+            return true;
+        }
+        const auto* enabled = std::get_if<bool>(&constant->value);
+        if (enabled == nullptr || *enabled) {
+            return true;
+        }
+    }
+    return false;
+}
 
 QString safeAreaPresetName(const ViewerSafeAreaPreset preset) {
     switch (preset) {
@@ -1184,6 +1229,67 @@ void ViewerEditor::zoomOutAtCenter() {
 }
 
 // Builds the footer row and everything in it (task VIEW-1). Called once, from the constructor.
+void ViewerEditor::rebuildDisplayViewControl() {
+    if (viewerDisplayView_ == nullptr) {
+        return;
+    }
+    const QSignalBlocker blocker(viewerDisplayView_);
+    viewerDisplayView_->clearItems();
+    const auto resolved = resolveViewerColorConfig(session_);
+    if (!resolved.has_value() || resolved->displays().empty()) {
+        viewerDisplayView_->addItem(tr("Unavailable"));
+        viewerDisplayView_->setCurrentIndex(0);
+        viewerDisplayView_->setEnabled(false);
+        viewerDisplayView_->setMutedValue(true);
+        return;
+    }
+
+    int defaultIndex = 0;
+    for (std::size_t index = 0; index < resolved->displays().size(); ++index) {
+        const auto& entry = resolved->displays()[index];
+        const auto label = QStringLiteral("%1 / %2").arg(QString::fromStdString(entry.display),
+                                                         QString::fromStdString(entry.view));
+        const auto data =
+            QStringList{QString::fromStdString(entry.display), QString::fromStdString(entry.view)};
+        const int itemIndex = viewerDisplayView_->addItem(label, data);
+        viewerDisplayView_->setItemToolTip(
+            itemIndex,
+            QStringLiteral("%1 · %2").arg(label, QString::fromStdString(entry.colourSpaceId)));
+        if (entry.isDefault) {
+            defaultIndex = itemIndex;
+        }
+    }
+    const auto saved = QSettings().value(displayViewSettingsKey()).toStringList();
+    int selectedIndex = defaultIndex;
+    if (saved.size() == 2) {
+        for (int index = 0; index < viewerDisplayView_->count(); ++index) {
+            if (viewerDisplayView_->itemData(index).toStringList() == saved) {
+                selectedIndex = index;
+                break;
+            }
+        }
+    }
+    viewerDisplayView_->setEnabled(true);
+    viewerDisplayView_->setMutedValue(false);
+    viewerDisplayView_->setCurrentIndex(selectedIndex);
+    const auto selected = viewerDisplayView_->itemData(selectedIndex).toStringList();
+    if (selected.size() == 2) {
+        previewController_.setViewerDisplayView(selected[0].toStdString(),
+                                                selected[1].toStdString());
+    }
+}
+
+void ViewerEditor::updateLookControl() {
+    if (viewerLookToggle_ == nullptr) {
+        return;
+    }
+    const bool available = hasLookTaggedEffect(session_);
+    viewerLookToggle_->setEnabled(available);
+    viewerLookToggle_->setToolTip(
+        available ? tr("Look: include look-tagged effects in the viewer")
+                  : tr("Look unavailable: this composition has no look-tagged effect"));
+}
+
 void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     auto* footer = this;
     chrome_.footer.objectName = "viewerFooter";
@@ -1259,6 +1365,39 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     analysisTimer_->setInterval(16);
     connect(analysisTimer_, &QTimer::timeout, this, &ViewerEditor::consumeViewAdjustment);
     loadViewAdjust();
+
+    viewerDisplayView_ = new kit::KDropdown(footer);
+    viewerDisplayView_->setObjectName("viewerDisplayView");
+    viewerDisplayView_->setAccessibleName(tr("Display and view"));
+    viewerDisplayView_->setToolTip(tr("Display / View; viewer display only, never export"));
+    viewerDisplayView_->setControlSize(kit::KDropdown::ControlSize::Compact);
+    connect(viewerDisplayView_, &kit::KDropdown::currentIndexChanged, this,
+            [this](const int index) {
+                if (index < 0) {
+                    return;
+                }
+                const auto selected = viewerDisplayView_->itemData(index).toStringList();
+                if (selected.size() != 2) {
+                    return;
+                }
+                QSettings().setValue(displayViewSettingsKey(), selected);
+                previewController_.setViewerDisplayView(selected[0].toStdString(),
+                                                        selected[1].toStdString());
+            });
+
+    viewerLookToggle_ = new kit::KIconToggle(kit::IconId::Visible, footer);
+    viewerLookToggle_->setObjectName("viewerLookToggle");
+    viewerLookToggle_->setAccessibleName(tr("Look"));
+    viewerLookToggle_->setToolTip(tr("Look: include look-tagged effects in the viewer"));
+    const bool showLook = QSettings().value(lookSettingsKey(), true).toBool();
+    viewerLookToggle_->setChecked(showLook);
+    previewController_.setViewerLookEnabled(showLook);
+    connect(viewerLookToggle_, &kit::KIconToggle::toggled, this, [this](const bool enabled) {
+        QSettings().setValue(lookSettingsKey(), enabled);
+        previewController_.setViewerLookEnabled(enabled);
+    });
+    rebuildDisplayViewControl();
+    updateLookControl();
 
     // ---- Zoom ----------------------------------------------------------------------------------
     zoomDropdown_ = new kit::KDropdown(footer);
@@ -1409,14 +1548,15 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     resolutionDropdown_->setToolTip(viewerResolutionText(previewController_));
     for (auto* control : std::initializer_list<QWidget*>{
              channelDropdown_, roiButton_, roiClearButton_, exposureField_, gammaField_,
-             ramPreviewButton_, stepToStartButton_, stepBackButton_, playPauseButton_,
-             stepForwardButton_, stepToEndButton_, loopButton_})
+             viewerDisplayView_, viewerLookToggle_, ramPreviewButton_, stepToStartButton_,
+             stepBackButton_, playPauseButton_, stepForwardButton_, stepToEndButton_, loopButton_})
         chrome_.footer.addWidget(control);
     chrome_.footer.addStretch();
     for (auto* control :
          std::initializer_list<QWidget*>{timeReadout_, zoomDropdown_, resolutionDropdown_})
         chrome_.footer.addWidget(control);
     statusBarFooter_ = EditorArea::buildChromeRow(chrome_.footer, this, true);
+    viewerDisplayView_->setFixedWidth(kit::px(kit::Size::ViewerZoomWidth));
     chrome_.hosted = [this] {
         statusBarFooterTaken_ = true;
         loadViewAdjust();
@@ -1523,6 +1663,11 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     buildHeader();
     buildFooter(ramPreview);
     wireTransport();
+    connect(&session_, &CompositionSession::colorSettingsChanged, this,
+            [this] { rebuildDisplayViewControl(); });
+    connect(&session_, &CompositionSession::snapshotChanged, this, [this] { updateLookControl(); });
+    connect(&session_, &CompositionSession::compositionChanged, this,
+            [this] { updateLookControl(); });
 
     // Every one of these already repainted the status bar for free when it was part of this
 

@@ -1097,6 +1097,26 @@ void testResolutionPolicyAndRequestThresholds(Expectations& expectations) {
                             controller.state().desiredIdentity.has_value() &&
                             key->resolution == controller.state().desiredIdentity->resolution,
                         "cache and request share policy and resolved factor");
+    const auto displayGeneration = generation(controller.state());
+    controller.setViewerDisplayView("Review Display", "Review View");
+    expectations.expect(controller.settings().displayName == "Review Display" &&
+                            controller.settings().viewName == "Review View" &&
+                            controller.state().desiredIdentity.has_value() &&
+                            controller.state().desiredIdentity->displayName == "Review Display" &&
+                            controller.state().desiredIdentity->viewName == "Review View" &&
+                            generation(controller.state()) > displayGeneration,
+                        "viewer display/view selection is part of the preview request identity");
+    const auto selectedKey = controller.cacheKeyForTime(core::RationalTime::fromInteger(0));
+    expectations.expect(selectedKey.has_value() && selectedKey->displayName == "Review Display" &&
+                            selectedKey->viewName == "Review View",
+                        "viewer display/view selection is part of the frame-cache key");
+    const auto lookGeneration = generation(controller.state());
+    controller.setViewerLookEnabled(false);
+    expectations.expect(!controller.settings().showLook &&
+                            controller.state().desiredIdentity.has_value() &&
+                            !controller.state().desiredIdentity->showLook &&
+                            generation(controller.state()) > lookGeneration,
+                        "viewer Look selection re-prepares the request with look bypass enabled");
     controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Half);
     expectations.expect(controller.resolutionDivisor() == 2, "fixed Half uses its own factor");
     controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Full);
