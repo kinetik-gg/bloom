@@ -104,6 +104,13 @@ void testFormatsAndRefusals(const std::filesystem::path& root) {
         CpuFileTransformProcessor::prepare(forged, LutInterpolation::Linear, LutDirection::Forward);
     expect(refused.error == LutError::EdgeTooLarge && !refused.processor,
            "helper independently refuses hostile bytes that bypassed host preflight");
+    for (const auto format : {2U, 3U, 4U}) {
+        forged.format = format;
+        const auto disguised = CpuFileTransformProcessor::prepare(forged, LutInterpolation::Linear,
+                                                                  LutDirection::Forward);
+        expect(disguised.error == LutError::MalformedFile && !disguised.processor,
+               "declaring another format cannot bypass the helper's cube edge refusal");
+    }
     forged.digest = resource.digest;
     expect(
         CpuFileTransformProcessor::prepare(forged, LutInterpolation::Linear, LutDirection::Forward)
@@ -121,6 +128,25 @@ void testFormatsAndRefusals(const std::filesystem::path& root) {
     }
     expect(readLutFile(clf).error == LutError::UnsupportedFormat,
            "CLF external resource access is refused");
+    {
+        // The declared CLF signature appears only in a cube title. OCIO auto-detects the cube
+        // from the descriptor, so the parsed-operation check must enforce the edge limit too.
+        std::ofstream file(clf);
+        file << "TITLE \"<ProcessList>\"\nLUT_3D_SIZE 130\n";
+        for (std::size_t row = 0; row < std::size_t{130} * 130U * 130U; ++row)
+            file << "0 0 0\n";
+    }
+    const auto disguisedCube = readLutFile(clf);
+    expect(disguisedCube.error == LutError::None,
+           "disguised cube fixture reaches the supervised parser");
+    const auto parsedRefusal = CpuFileTransformProcessor::prepare(
+        disguisedCube, LutInterpolation::Linear, LutDirection::Forward);
+    const bool gridRefused = parsedRefusal.error == LutError::EdgeTooLarge ||
+                             parsedRefusal.error == LutError::MalformedFile;
+    if (!gridRefused)
+        std::cerr << "disguised cube refusal: " << lutErrorName(parsedRefusal.error) << '\n';
+    expect(gridRefused && !parsedRefusal.processor,
+           "OCIO auto-detection cannot admit a parsed 3D grid above the edge limit");
     std::error_code error;
     const auto link = root / "symlink.cube";
     std::filesystem::create_symlink(path, link, error);

@@ -223,6 +223,23 @@ void testFileTransform() {
     const auto reused = context.prepare(effect, requestFor(*source).colorIntent);
     expect(first.fileProcessor && first.fileProcessor == reused.fileProcessor,
            "file processor is reused by config, digest, process space and options");
+    {
+        const auto renamed = directory / "same-bytes.spi1d";
+        std::filesystem::copy_file(path, renamed);
+        auto differentFormat = effect;
+        auto& capturedAsset = std::get<runtime::FileTransformKernel>(differentFormat.kernel).asset;
+        if (!capturedAsset)
+            throw std::logic_error("Missing LUT fixture asset");
+        auto& captured = *capturedAsset;
+        captured.locator.path = renamed.string();
+        captured.locator.relinkHint = "file://" + renamed.string();
+        const auto separatelyPrepared =
+            context.prepare(differentFormat, requestFor(*source).colorIntent);
+        expect(separatelyPrepared.cacheIdentity != first.cacheIdentity &&
+                   !separatelyPrepared.fileProcessor && separatelyPrepared.diagnostic &&
+                   separatelyPrepared.diagnostic->detail == "MalformedFile",
+               "relabelled cube bytes are refused without reusing the prepared processor");
+    }
     if (first.fileProcessor) {
         std::array<std::array<float, 4>, 1> pixels{{{0.25F, 0.5F, 0.75F, 1}}};
         unsigned polls = 0;

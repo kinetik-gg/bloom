@@ -95,6 +95,7 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
                                cancelled);
         const auto digest = resource.digest.toLowercaseHex();
         key.add(std::string(digest.data(), digest.size()));
+        key.add(resource.format);
         key.add(file->interpolation);
         key.add(file->direction);
         if (resource.error == color::LutError::None &&

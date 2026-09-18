@@ -604,7 +604,7 @@ The kernel variant contains `IdentityImageKernel`, `CstKernel{fromId, toId}` and
 `FileTransformKernel{lutAssetId, interpolation, direction, processSpaceId}` with an immutable
 captured asset record. File identity includes its exact content digest. A bounded evaluator-owned
 cache shares prepared CST processors by config revision/from/to and file processors by those
-values plus file digest, interpolation and direction. Preparation is task work. File execution
+values plus file digest, format, interpolation and direction. Preparation is task work. File execution
 uses cancellable chunks, and diagnostics survive warm frame memo hits. The process-space wrapper
 is skipped for a proven identity LUT to retain bit identity. Canonical identity `.cube` tables
 with the default unit domain are exact no-ops, including negative and HDR input.

@@ -745,7 +745,9 @@ introduced. OCIO-proven identity processors use the same path. No imported image
 External LUT parsing, processor construction and application use the supervised colour helper.
 The Linux implementation sends anonymous sealed resources and distinct pixel slabs over a private
 socket with descriptor, inode, length and nonce checks. The helper verifies structural limits again
-before OCIO. Landlock denies filesystem access; seccomp denies network creation, child creation,
+before OCIO and checks OCIO's parsed 3D grid sizes before preparing a CPU processor, including
+when its detected format differs from the file extension. Landlock denies filesystem access;
+seccomp denies network creation, child creation,
 execution and cross-process memory/signal access. No output path enters the protocol. CLF external
 references and XML entities are refused. The file cap is 64 MiB and a 3D LUT edge is at most 129.
 The existing 5/30/10-second deadlines, 512 MiB helper ceiling and typed supervisor failures apply.

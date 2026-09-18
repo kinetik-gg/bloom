@@ -121,6 +121,12 @@ LutError detail::preflightLut(const std::string_view text, const std::uint32_t f
             *identity = canonicalIdentity;
         return LutError::None;
     }
+    if (format == 3) {
+        std::string signature;
+        unsigned version = 0;
+        if (!(stream >> signature >> version) || signature != "Version" || version != 1)
+            return LutError::MalformedFile;
+    }
     if (format == 4) {
         std::string signature;
         double version = 0;
@@ -132,6 +138,8 @@ LutError detail::preflightLut(const std::string_view text, const std::uint32_t f
             return LutError::EdgeTooLarge;
     }
     if (format == 2) {
+        if (text.find("<ProcessList") == std::string_view::npos)
+            return LutError::MalformedFile;
         // External references and XML entities are outside the sealed single-resource contract.
         if (text.find("Reference") != std::string::npos ||
             (text.find("<!DOCTYPE") != std::string::npos ||

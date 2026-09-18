@@ -99,7 +99,17 @@ LutError build(const detail::LutPacket& message, OCIO::ConstCPUProcessorRcPtr& c
         transform->setInterpolation(interpolation[message[9]]);
         transform->setDirection(message[10] == 0 ? OCIO::TRANSFORM_DIR_FORWARD
                                                  : OCIO::TRANSFORM_DIR_INVERSE);
-        cpu = OCIO::Config::CreateRaw()->getProcessor(transform)->getDefaultCPUProcessor();
+        const auto processor = OCIO::Config::CreateRaw()->getProcessor(transform);
+        // OCIO auto-detects the sealed descriptor's format. Check its unoptimized operations
+        // as well as the declared-format preflight before admitting a CPU processor.
+        const auto group = processor->createGroupTransform();
+        for (int index = 0; index < group->getNumTransforms(); ++index) {
+            const auto& operation = group->getTransform(index);
+            const auto* lut = dynamic_cast<const OCIO::Lut3DTransform*>(operation.get());
+            if (lut && lut->getGridSize() > kMaximumLut3dEdge)
+                return LutError::EdgeTooLarge;
+        }
+        cpu = processor->getDefaultCPUProcessor();
         return cpu ? LutError::None : LutError::TransformBuildFailed;
     } catch (const std::bad_alloc&) {
         return LutError::HelperMemoryLimit;
