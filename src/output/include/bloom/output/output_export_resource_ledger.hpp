@@ -3,6 +3,10 @@
 #include <cstdint>
 #include <memory>
 
+namespace bloom::runtime {
+class MemoryBudgetLedger;
+}
+
 // docs/architecture/frame-output.md "Non-Blocking Execution": "Attempt resource admission computes
 // and reserves the checked retained bytes needed through the approval decision ... Approved-job
 // admission transactionally expands that reservation to the checked peak across retained attempt
@@ -41,12 +45,24 @@ struct ExportResourceLedgerState;
 
 class ExportResourceReservationV1;
 
-// The shared service-wide allowance. Move-only (holds the shared counter state); a caller keeps
+// The shared service-wide allowance (holds the shared counter state); a caller keeps
 // one instance alive for the lifetime of the application/test and passes it by reference to every
 // attempt/job admission call.
+//
+// Participates in the process memory budget by default. A trim lowers the concurrent allowance;
+// it never frees a live product or reduces an active reservation's charge. Further reserve() and
+// growing expand() calls that exceed the lowered allowance return ServiceAllowanceExceeded until
+// releases catch up or the memory ledger's gradual recovery restores admission. The configured
+// concurrent allowance remains the ceiling throughout recovery. Participation ends only after
+// both this facade and its last reservation are destroyed.
 class ExportResourceLedgerV1 final {
   public:
     explicit ExportResourceLedgerV1(
+        std::uint64_t concurrentAllowance = kOutputExportConcurrentResidentAllowanceV1) noexcept;
+    // An isolated ledger supports deterministic polling in tests. It must outlive this facade
+    // and every reservation created through it.
+    explicit ExportResourceLedgerV1(
+        runtime::MemoryBudgetLedger& memoryBudget,
         std::uint64_t concurrentAllowance = kOutputExportConcurrentResidentAllowanceV1) noexcept;
     ExportResourceLedgerV1(const ExportResourceLedgerV1&) = delete;
     ExportResourceLedgerV1& operator=(const ExportResourceLedgerV1&) = delete;
