@@ -38,13 +38,13 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.16`.
+The container version remains `1.0`; the current document schema is `1.17`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. Versioned artifacts through `1.11` remain checked as
-historical fixtures, with the current `1.16` contract also enforced by the canonical writer,
+historical fixtures, with the current `1.17` contract also enforced by the canonical writer and
 decoder tests. The manifest artifact still requires container `1.0`; its document
 declaration follows the current document minor. Every historical artifact from `1.0` through `1.11`,
 manifest and document, remains checked, and each version's checker validates what its own minor adds
@@ -97,7 +97,7 @@ document state.
 
 Document 1.14 adds a constant `path` value. The version-only 1.13 → 1.14 migration changes no
 existing value or pixel. Container version remains 1.0; the manifest declares whatever the current
-document minor is, which is 1.16 since asset organization landed on top.
+document minor is, which is 1.17 since video assets landed on top.
 
 ```json
 {"kind":"path","anchors":[{"point":{"x":0,"y":0},"outHandle":{"x":20,"y":0}},{"point":{"x":40,"y":40},"inHandle":{"x":40,"y":20}}],"closed":false}
@@ -848,9 +848,10 @@ schema-version path. Reconstruction applies the same registry validation to deco
 names the node ID. Old or future versions of a known kind are never silently upgraded, downgraded,
 or interpreted through another definition. No parameters or IDs are injected and no edges are dropped.
 
-The canonical writer is **1.16** and the load floor is **1.15**. Opening 1.15 applies the additive
-asset metadata defaults during typed decoding and reports the resulting document as 1.16. The
-registered 1.15 → 1.16 DOM transform is tested against the same decoded result. No node version,
+The canonical writer is **1.17** and the load floor is **1.15**. Opening 1.15 applies the additive
+asset metadata defaults during typed decoding and reports the resulting document as 1.17. The
+registered 1.15 → 1.16 and 1.16 → 1.17 DOM transforms are tested against the same decoded result.
+No node version,
 parameter source or rendering meaning changes. The earlier numbered ladder remains independently
 tested bookkeeping and does not admit files below the load floor. Historical schema
 artifacts describe their own versions and do not imply that those documents can be loaded.
@@ -1164,7 +1165,7 @@ the new artifacts to 1.5 and run the complete historical ladder.
 ## Content Bounds Introduced In Document 1.7
 
 Solid v2 introduced explicit Scalar width and height. Text v2, Layer v4, and Merge v2 use local
-content bounds. These are now the only supported definitions; the current 1.16 schema includes
+content bounds. These are now the only supported definitions; the current 1.17 schema includes
 those contracts together with per-component animation, image assets, and audio. Documents carrying
 older node versions fail validation. There is no coordinate conversion or compatibility evaluator.
 
@@ -1204,8 +1205,8 @@ historical `1.8` artifacts remain unchanged.
 
 ## Images And Backgrounds In Document 1.10
 
-`document-1.10.schema.json` and `manifest-1.10.schema.json` are current. The manifest reserves
-`bloom.image-source` as a built-in type. Container and node schema versions remain independent.
+The introduction artifacts are `document-1.10.schema.json` and `manifest-1.10.schema.json`.
+The manifest reserves `bloom.image-source` as a built-in type. Container and node schema versions remain independent.
 Migration 1.9 → 1.10 appends empty project `assets`, opaque black composition `backgroundColor`,
 and `idAllocation.highestIssued.asset: "0"`; all existing IDs and authored values are retained.
 
@@ -1280,9 +1281,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.16`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.17`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-Current artifacts are `document-1.16.schema.json` and `manifest-1.16.schema.json`.
+Current artifacts are `document-1.17.schema.json` and `manifest-1.17.schema.json`.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
 Its value is the canonical decimal-string LayerId of another boundary in the same composition.
@@ -1314,10 +1315,10 @@ and unknown additive members.
 ## Asset Organization In Document 1.16
 
 Document `1.16` adds organization metadata without changing media identity or evaluation. The
-canonical document and manifest artifacts are `document-1.16.schema.json` and
-`manifest-1.16.schema.json`. Container version remains `1.0`; the load floor remains `1.15` so
-existing projects can acquire these additive defaults when opened. Saving writes 1.16, while
-opening alone leaves the original file untouched.
+introduction artifacts are `document-1.16.schema.json` and `manifest-1.16.schema.json`. Container
+version remains `1.0`; the load floor remains `1.15` so existing projects can acquire these
+additive defaults when opened. The current writer saves 1.17; opening alone leaves the
+original file untouched.
 
 Each asset appends `name`, optional `folder`, `tags`, then `order` after its existing media
 payload (`manifest`, and optional `font` or `audio`). `name` is a non-empty display name of at
@@ -1355,3 +1356,26 @@ captured face rather than a file, so those use the captured family and style. Mi
 empty tags, and positions matching their former ID-ordered listing. The migration preserves every
 asset ID, locator, digest, media descriptor, graph node and parameter source. Relink likewise keeps
 name, folder, tags and order. No organization command changes render pixels.
+
+## Video Assets In Document 1.17
+
+The current document and manifest schema artifacts are `document-1.17.schema.json` and
+`manifest-1.17.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
+The 1.16 → 1.17 migration only advances the version; existing assets and pixels are unchanged.
+Opening 1.15 first applies asset-organization defaults and then the video version step.
+
+`AssetKind::Video` serializes as `"video"`. It retains the shared asset identity, locator,
+interpretation, dimensions and organization envelope, with a closed `video` member before
+organization fields. `video` contains `frames` (canonical unsigned decimal string), exact rational
+`duration`, and a nonempty `streams` array (at most 256). A stream contains, in order: `id`, `kind`
+(1 video, 2 audio, 3 data), `codec`, `profile`, `pixelFormat`, `timecode`, `timebase`, `framePeriod`,
+`duration`, `width`, `height`, `sampleRate`, `primaries`, `transfer`, `matrix`, `range`, and
+`channelLayout`. Rates are stored as exact positive reciprocal frame periods. Colour code points
+use canonical signed decimal strings; absent tags remain explicit. Stream IDs follow container
+order. Dimensions, strings, timing, audio layout and frame counts are bounded during decoding and
+domain validation. Only video assets may carry this member.
+
+The first video stream defines the asset's duration, frame count and dimensions. The first audio
+stream supplies its preview sample rate and channel count. Content digest binds every decode and
+cache lookup. ProRes authorization is not project truth: the current provider's explicit
+non-authorized status is execution evidence and appears in the asset tooltip.

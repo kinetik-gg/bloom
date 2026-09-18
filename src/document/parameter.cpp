@@ -239,6 +239,16 @@ constantMatchesSchema(const std::string_view schemaKey,
                     ? (*value >= -1000000000 && *value <= 1000000000)
                     : (*value >= 0 && *value <= (schemaKey == "bloom.image.loop-mode" ? 2 : 3)));
     }
+    if (schemaKey == "bloom.video.asset")
+        return std::holds_alternative<std::string>(constant.value);
+    if (schemaKey == "bloom.video.start-frame" || schemaKey == "bloom.video.loop-mode" ||
+        schemaKey == "bloom.video.color-space") {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value &&
+               (schemaKey == "bloom.video.start-frame"
+                    ? (*value >= -1000000000 && *value <= 1000000000)
+                    : (*value >= 0 && *value <= (schemaKey == "bloom.video.loop-mode" ? 2 : 3)));
+    }
     if (schemaKey == kTextAlignmentParameterSchemaKey) {
         const auto* value = std::get_if<std::int64_t>(&constant.value);
         return value && *value >= 0 && *value <= 2;

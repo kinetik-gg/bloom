@@ -194,6 +194,7 @@ enum class NodeLoweringKind {
     Shape,
     Text,
     ImageSource,
+    VideoSource,
     AudioSource,
     CompositionSource,
     LayerOutput,
@@ -262,6 +263,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::Shape:
     case NodeLoweringKind::Solid:
     case NodeLoweringKind::Text:
+    case NodeLoweringKind::VideoSource:
     case NodeLoweringKind::ImageSource:
     case NodeLoweringKind::AudioSource:
     case NodeLoweringKind::CompositionSource:

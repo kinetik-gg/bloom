@@ -472,6 +472,29 @@ void testAssetOrganizationSchema(const std::filesystem::path& root, int& failure
                                          "manifest minor stays 1.16", failures);
 }
 
+void testVideoSchema(const std::filesystem::path& root, int& failures) {
+    using namespace bloom::quality;
+    const auto document = json::parseFile(root / "schemas/project/document-1.17.schema.json");
+    validateDocumentSchemaV1_17(document);
+    for (const auto* field : {"codec", "timebase", "framePeriod", "duration", "timecode",
+                              "primaries", "channelLayout"}) {
+        auto missing = document;
+        eraseMember(path(missing, {"$defs", "videoStream-1.17", "properties"}), field);
+        expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_17(missing); },
+                                             "video stream fields stay pinned", failures);
+    }
+    auto open = document;
+    path(open, {"$defs", "video-1.17", "unevaluatedProperties"}) = Value(true);
+    expectTypedFailure<SchemaCheckError>([&] { validateDocumentSchemaV1_17(open); },
+                                         "video records remain closed", failures);
+    auto manifest = json::parseFile(root / "schemas/project/manifest-1.17.schema.json");
+    validateManifestSchemaV1_17(manifest);
+    path(manifest, {"$defs", "fixedVersion-1.17", "properties", "minor", "const"}) =
+        json::parse("16");
+    expectTypedFailure<SchemaCheckError>([&] { validateManifestSchemaV1_17(manifest); },
+                                         "manifest minor stays 1.17", failures);
+}
+
 [[nodiscard]] auto parseRoot(const std::span<const char* const> arguments)
     -> std::filesystem::path {
     if (arguments.size() != 3U || std::string_view{arguments[1]} != "--root") {
@@ -497,6 +520,7 @@ auto main(const int count, const char* const* values) -> int {
         testNodeLayoutSchema(root, failures);
         testNodeGroupSchema(root, failures);
         testAssetOrganizationSchema(root, failures);
+        testVideoSchema(root, failures);
         if (failures == 0) {
             std::cout << "Project schema checker self-tests passed\n";
         }

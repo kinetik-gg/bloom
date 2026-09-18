@@ -2,6 +2,8 @@
 #include "image_source.hpp"
 #include "layer_parent_transform.hpp"
 #include "operation_key.hpp"
+#include "video_source.hpp"
+#include <bloom/media/video/colour.hpp>
 #include <bloom/render/path_raster.hpp>
 #include <bloom/runtime/composition_time.hpp>
 
@@ -60,6 +62,7 @@ static_assert(document::kMaximumTextSizePixels == render::kMaximumTextPixelSize,
                 subject.nodeId = source.sourceNodeId;
             },
             [&subject](const CompiledImageSource& image) { subject.nodeId = image.sourceNodeId; },
+            [&subject](const CompiledVideoSource& video) { subject.nodeId = video.sourceNodeId; },
             [&subject](const CompiledText& text) { subject.nodeId = text.sourceNodeId; },
             [&subject](const CompiledLayerOutput& layer) {
                 subject.nodeId = layer.sourceNodeId;
@@ -345,6 +348,10 @@ enum class ScalarDomain : std::uint8_t {
                 return image.loopMode >= 0 && image.loopMode <= 2 && image.colorSpace >= 0 &&
                        image.colorSpace <= 3 && (!image.asset || image.asset->validate().ok());
             },
+            [](const CompiledVideoSource& image) {
+                return image.loopMode >= 0 && image.loopMode <= 2 && image.colorSpace >= 0 &&
+                       image.colorSpace <= 3 && (!image.asset || image.asset->validate().ok());
+            },
             [&plan, index, &failure](const CompiledShape& shape) {
                 const auto* curve = std::get_if<Vec2CurveIndex>(&shape.size.source);
                 const auto valid = [&](std::string_view key,
@@ -395,6 +402,7 @@ enum class ScalarDomain : std::uint8_t {
                            std::holds_alternative<CompiledShape>(input) ||
                            std::holds_alternative<CompiledText>(input) ||
                            std::holds_alternative<CompiledImageSource>(input) ||
+                           std::holds_alternative<CompiledVideoSource>(input) ||
                            std::holds_alternative<CompiledCompositionSource>(input) ||
                            std::holds_alternative<CompiledLayerOutput>(input) ||
                            std::holds_alternative<CompiledMerge>(input);
@@ -1081,6 +1089,7 @@ template <typename Value>
                                                      ScalarDomain::Unbounded, operationSubject));
                 },
                 [](const CompiledImageSource&) {},
+                [](const CompiledVideoSource&) {},
                 [](const CompiledMerge&) {},
                 [](const CompiledCompositionOutput&) {},
             },
@@ -1741,6 +1750,20 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                              selectedImage->warning,
                                              {}});
             }
+            std::optional<detail::VideoSourceSelection> selectedVideo;
+            if (const auto* source = std::get_if<CompiledVideoSource>(&plan->operations()[index])) {
+                selectedVideo =
+                    detail::selectVideoSource(*source, request.time, plan->format().frameRate(),
+                                              mediaBase, *videoContext(), true, cancellation);
+                if (selectedVideo->cancelled)
+                    return EvaluationResult::cancelled();
+                if (!selectedVideo->warning.empty())
+                    imageWarnings.push_back({EvaluationDiagnosticCode::InvalidParameter,
+                                             DiagnosticSeverity::Warning,
+                                             operationSubject,
+                                             selectedVideo->warning,
+                                             {}});
+            }
             // Resolve authored transforms even when a parent's pixels are cached, empty, or
             // outside its range. Parenting inherits neither visibility nor opacity.
             if (const auto* layer = std::get_if<CompiledLayerOutput>(&plan->operations()[index])) {
@@ -1858,6 +1881,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             key.add(*nestedTime);
                             key.add(nested->planSemanticsVersion());
                             key.add(nestedFrame->contentHash_);
+                        } else if constexpr (std::is_same_v<Step, CompiledVideoSource>) {
+                            key.add(selectedVideo->cacheKey);
                         } else if constexpr (std::is_same_v<Step, CompiledImageSource>) {
                             key.add(selectedImage->cacheKey);
                         } else if constexpr (std::is_same_v<Step, CompiledText>) {
@@ -2103,6 +2128,34 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             bounds[index].local =
                                 nestedFrame->evaluatedBounds()[nested->output().value()].output;
                             bounds[index].output = bounds[index].local;
+                        },
+                        [&](const CompiledVideoSource&) {
+                            if (!selectedVideo || !selectedVideo->frame)
+                                return;
+                            auto image = media::video::videoToSceneLinear(
+                                *selectedVideo->frame, selectedVideo->interpretation,
+                                resolved.imageDescriptor, resolved.horizontalScale,
+                                resolved.verticalScale, remainingPixelBudget(),
+                                [&] { return cancellation.isCancellationRequested(); });
+                            if (const auto* error =
+                                    std::get_if<media::provider::Unavailable>(&image)) {
+                                operationCancelled =
+                                    error->reason == media::provider::Error::Cancelled;
+                                if (!operationCancelled)
+                                    imageWarnings.push_back(
+                                        {EvaluationDiagnosticCode::InvalidParameter,
+                                         DiagnosticSeverity::Warning,
+                                         operationSubject,
+                                         error->detail,
+                                         {}});
+                                return;
+                            }
+                            auto& pixels = std::get<render::Rgba32fImage>(image);
+                            bounds[index].local = detail::boundsForWindow(
+                                pixels.descriptor()->dataWindow(), resolved.horizontalScale,
+                                resolved.verticalScale);
+                            bounds[index].output = bounds[index].local;
+                            produced.emplace(std::move(pixels));
                         },
                         [&](const CompiledImageSource&) {
                             if (!selectedImage || !selectedImage->available)
@@ -2982,7 +3035,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     slots[index] =
                         std::make_shared<const render::Rgba32fImage>(std::move(*produced));
                 }
-                if (cache)
+                if (cache && (!selectedVideo || slots[index]))
                     cache->store(
                         key.bytes(), plan->sourceRevision(),
                         {.image = index == request.output.value() ? processImage : slots[index],

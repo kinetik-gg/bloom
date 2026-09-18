@@ -1,5 +1,6 @@
 #include "wire.hpp"
 #include <algorithm>
+#include <bit>
 #include <bloom/media/provider/protocol.hpp>
 #include <new>
 #include <set>
@@ -76,6 +77,10 @@ void call(Writer& w, const CallRequest& c) {
     w.number(c.width);
     w.number(c.height);
     w.number(c.frame);
+    w.number(c.stream);
+    require(c.samples > 0 && c.samples <= Limits::audioSamples);
+    w.number(c.samples);
+    w.hash(c.sourceDigest);
 }
 CallRequest call(Reader& r) {
     CallRequest c;
@@ -84,6 +89,9 @@ CallRequest call(Reader& r) {
     c.width = r.number<std::uint32_t>();
     c.height = r.number<std::uint32_t>();
     c.frame = r.number<std::uint64_t>();
+    c.stream = r.number<std::uint32_t>();
+    c.samples = r.number<std::uint32_t>();
+    c.sourceDigest = r.hash();
     Writer validation;
     call(validation, c);
     return c;
@@ -104,8 +112,13 @@ void probe(Writer& w, const ProbeResult& p) {
         w.rational(s.rate);
         w.number(s.width);
         w.number(s.height);
-        w.enumeration(s.format, 1, 3);
+        w.enumeration(s.format, 1, 4);
         colour(w, s.colour);
+        w.rational(s.duration);
+        w.number(s.frameCount);
+        w.text(s.pixelFormat);
+        w.text(s.timecode);
+        w.number<std::uint8_t>(s.appleAuthorized ? 1 : 0);
         w.number(s.sampleRate);
         w.count(s.channelLayout.size(), Limits::channels);
         for (const auto& c : s.channelLayout)
@@ -129,8 +142,15 @@ ProbeResult probe(Reader& r) {
         s.rate = r.rational();
         s.width = r.number<std::uint32_t>();
         s.height = r.number<std::uint32_t>();
-        s.format = r.enumeration<PixelFormat>(1, 3);
+        s.format = r.enumeration<PixelFormat>(1, 4);
         s.colour = colour(r);
+        s.duration = r.rational();
+        s.frameCount = r.number<std::uint64_t>();
+        s.pixelFormat = r.text();
+        s.timecode = r.text();
+        const auto authorized = r.number<std::uint8_t>();
+        require(authorized <= 1);
+        s.appleAuthorized = authorized != 0;
         s.sampleRate = r.number<std::uint32_t>();
         auto channels = r.count(Limits::channels);
         for (std::uint32_t j = 0; j < channels; ++j)
@@ -142,7 +162,7 @@ ProbeResult probe(Reader& r) {
 }
 void frame(Writer& w, const FrameProduct& f) {
     require(valid(f));
-    w.enumeration(f.format, 1, 3);
+    w.enumeration(f.format, 1, 4);
     w.rational(f.pts);
     colour(w, f.colour);
     w.count(f.planes.size(), Limits::planes);
@@ -157,7 +177,7 @@ void frame(Writer& w, const FrameProduct& f) {
 }
 FrameProduct frame(Reader& r) {
     FrameProduct f;
-    f.format = r.enumeration<PixelFormat>(1, 3);
+    f.format = r.enumeration<PixelFormat>(1, 4);
     f.pts = r.rational();
     f.colour = colour(r);
     const auto n = r.count(Limits::planes);
@@ -184,6 +204,53 @@ FrameProduct frame(Reader& r) {
     require(valid(f));
     return f;
 }
+void index(Writer& w, const DemuxIndex& value) {
+    require(valid(value));
+    w.count(value.keyframes.size(), Limits::indexEntries);
+    for (const auto& entry : value.keyframes) {
+        w.number(entry.stream);
+        w.rational(entry.pts);
+        w.rational(entry.dts);
+    }
+}
+DemuxIndex index(Reader& r) {
+    DemuxIndex value;
+    const auto count = r.count(Limits::indexEntries);
+    require(count <= r.bytes.size() / 36U, Error::BadLength);
+    for (std::uint32_t i = 0; i < count; ++i)
+        value.keyframes.push_back({r.number<std::uint32_t>(), r.rational(), r.rational()});
+    require(valid(value));
+    return value;
+}
+void audio(Writer& w, const AudioBlock& value) {
+    require(valid(value));
+    w.rational(value.pts);
+    w.number(value.sampleRate);
+    w.count(value.channels.size(), Limits::channels);
+    w.count(value.channels.front().size(), Limits::audioSamples);
+    for (std::size_t i = 0; i < value.channels.size(); ++i) {
+        w.text(value.channelLayout[i]);
+        for (const auto sample : value.channels[i])
+            w.number(std::bit_cast<std::uint32_t>(sample));
+    }
+}
+AudioBlock audio(Reader& r) {
+    AudioBlock value;
+    value.pts = r.rational();
+    value.sampleRate = r.number<std::uint32_t>();
+    const auto channels = r.count(Limits::channels), samples = r.count(Limits::audioSamples);
+    require(channels > 0 && samples > 0);
+    require(static_cast<std::uint64_t>(channels) * samples * 4U <= r.bytes.size(),
+            Error::BadLength);
+    for (std::uint32_t i = 0; i < channels; ++i) {
+        value.channelLayout.push_back(r.text());
+        auto& plane = value.channels.emplace_back();
+        for (std::uint32_t j = 0; j < samples; ++j)
+            plane.push_back(std::bit_cast<float>(r.number<std::uint32_t>()));
+    }
+    require(valid(value));
+    return value;
+}
 } // namespace
 Result<Bytes> encodeMessage(const Message& m) {
     try {
@@ -193,7 +260,7 @@ Result<Bytes> encodeMessage(const Message& m) {
         w.number(magic);
         w.number(kProtocolVersion);
         w.number(kSchemaVersion);
-        w.enumeration(m.kind, 1, 8);
+        w.enumeration(m.kind, 1, 10);
         w.number(m.session);
         w.number(m.sequence);
         switch (m.kind) {
@@ -209,9 +276,15 @@ Result<Bytes> encodeMessage(const Message& m) {
         case MessageKind::Frame:
             frame(w, std::get<FrameProduct>(m.payload));
             break;
+        case MessageKind::Index:
+            index(w, std::get<DemuxIndex>(m.payload));
+            break;
+        case MessageKind::Audio:
+            audio(w, std::get<AudioBlock>(m.payload));
+            break;
         case MessageKind::Failure: {
             const auto& e = std::get<Unavailable>(m.payload);
-            w.enumeration(e.reason, 1, static_cast<std::uint8_t>(Error::Shutdown));
+            w.enumeration(e.reason, 1, static_cast<std::uint8_t>(Error::SourceChanged));
             w.text(e.detail);
             break;
         }
@@ -261,7 +334,7 @@ Result<Message> decodeMessage(std::span<const std::byte> bytes) {
         const auto schema = r.number<std::uint16_t>();
         require(protocol == kProtocolVersion && schema == kSchemaVersion, Error::VersionMismatch);
         Message m;
-        m.kind = r.enumeration<MessageKind>(1, 8);
+        m.kind = r.enumeration<MessageKind>(1, 10);
         m.session = r.number<std::uint64_t>();
         m.sequence = r.number<std::uint64_t>();
         require(m.session != 0 && m.sequence != 0);
@@ -278,9 +351,15 @@ Result<Message> decodeMessage(std::span<const std::byte> bytes) {
         case MessageKind::Frame:
             m.payload = frame(r);
             break;
+        case MessageKind::Index:
+            m.payload = index(r);
+            break;
+        case MessageKind::Audio:
+            m.payload = audio(r);
+            break;
         case MessageKind::Failure: {
             Unavailable e;
-            e.reason = r.enumeration<Error>(1, static_cast<std::uint8_t>(Error::Shutdown));
+            e.reason = r.enumeration<Error>(1, static_cast<std::uint8_t>(Error::SourceChanged));
             e.detail = r.text();
             m.payload = std::move(e);
             break;

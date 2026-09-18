@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-08-25
+Updated: 2026-09-17
 
 ## Purpose
 
@@ -52,7 +52,7 @@ level's dependencies.
 | --- | --- | --- |
 | `F1` | Composition Source | Built: nested image, offset/scale, Hold/Loop/PingPong, cycle validation, shared evaluation and caches. Nested audio playback uses the same time mappings and sums participating layers. |
 | `F1` | Image, Image Sequence | Stable asset identity, source interpretation, windows, channels, and missing-frame policy |
-| `C1` | Video Clip | Explicit stream, time base, orientation, color, alpha, and decode policy |
+| `C1` | Video Source | Built on Linux: worker-only FFmpeg decode, asset/start frame/loop/colour controls, image and audio outputs, exact CFR timing and preserved alpha; native macOS/Windows providers remain unavailable |
 | `C1` | Shape | Built: one parametric/path source with shared fill and stroke; viewer drawing tools follow |
 | `C1` | Linear Gradient, Radial Gradient, Four-Point Gradient | Explicit interpolation space, repeat mode, and alpha behavior |
 | `C1` | Checker, Grid, Color Bars | Deterministic diagnostic and design generators |

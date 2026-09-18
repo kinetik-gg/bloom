@@ -81,9 +81,11 @@ bool valid(const ProbeResult& v) {
     for (const auto& s : v.streams) {
         if (!ids.insert(s.id).second || !text(s.codec) || !text(s.profile) || !valid(s.timebase) ||
             s.timebase.numerator <= 0 || !valid(s.rate) || s.rate.numerator <= 0 ||
-            !colour(s.colour))
+            !colour(s.colour) || !valid(s.duration) || s.duration.numerator < 0 ||
+            !text(s.pixelFormat) || s.timecode.size() > Limits::stringBytes ||
+            !wire::validText(s.timecode))
             return false;
-        if (s.format < PixelFormat::Rgba8 || s.format > PixelFormat::Yuv420p8 ||
+        if (s.format < PixelFormat::Rgba8 || s.format > PixelFormat::Yuva444p16 ||
             s.kind < MediaKind::Video || s.kind > MediaKind::Data)
             return false;
         if (s.kind == MediaKind::Video && !extent(s.width, s.height))
@@ -98,20 +100,22 @@ bool valid(const ProbeResult& v) {
 }
 bool valid(const FrameProduct& v) {
     if (!valid(v.pts) || !colour(v.colour) || v.format < PixelFormat::Rgba8 ||
-        v.format > PixelFormat::Yuv420p8 || v.planes.empty() || v.planes.size() > Limits::planes)
+        v.format > PixelFormat::Yuva444p16 || v.planes.empty() || v.planes.size() > Limits::planes)
         return false;
     const bool yuv = v.format == PixelFormat::Yuv420p8;
-    if (v.planes.size() != (yuv ? 3U : 1U))
+    const bool yuva = v.format == PixelFormat::Yuva444p16;
+    if (v.planes.size() != (yuva ? 4U : (yuv ? 3U : 1U)))
         return false;
     std::uint64_t total = 0;
     for (std::size_t i = 0; i < v.planes.size(); ++i) {
         const auto& p = v.planes[i];
-        const auto bytesPerPixel = yuv ? 1U : (v.format == PixelFormat::Rgba8 ? 4U : 16U);
+        const auto bytesPerPixel =
+            yuva ? 2U : (yuv ? 1U : (v.format == PixelFormat::Rgba8 ? 4U : 16U));
         if (!extent(p.width, p.height) || p.stride < p.width * bytesPerPixel ||
             p.bytes.size() != static_cast<std::uint64_t>(p.stride) * p.height)
             return false;
-        if (i != 0 &&
-            (p.width != (v.planes[0].width + 1) / 2 || p.height != (v.planes[0].height + 1) / 2))
+        if (i != 0 && (p.width != (yuva ? v.planes[0].width : (v.planes[0].width + 1) / 2) ||
+                       p.height != (yuva ? v.planes[0].height : (v.planes[0].height + 1) / 2)))
             return false;
         total += p.bytes.size();
         if (total > Limits::productBytes || digestBytes(p.bytes) != p.digest)
@@ -130,6 +134,12 @@ bool valid(const AudioBlock& v) {
         if (c.size() != n || !std::ranges::all_of(c, [](float f) { return std::isfinite(f); }))
             return false;
     return true;
+}
+bool valid(const DemuxIndex& value) {
+    return value.keyframes.size() <= Limits::indexEntries &&
+           std::ranges::all_of(value.keyframes, [](const auto& entry) {
+               return entry.stream < Limits::entries && valid(entry.pts) && valid(entry.dts);
+           });
 }
 #define BLOOM_MEDIA_RECORD(Type)                                                                   \
     Result<Bytes> canonicalBytes(const Type& v) {                                                  \

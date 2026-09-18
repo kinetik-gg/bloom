@@ -213,7 +213,8 @@ bool PropertiesEditor::filterGroupAvailable(const QString& group) const {
         (node->typeId == document::kSolidSourceNodeType ||
          node->typeId == document::kTextSourceNodeType ||
          node->typeId == document::kShapeSourceNodeType ||
-         node->typeId == document::kAudioSourceNodeType || node->typeId == "bloom.image-source"))
+         node->typeId == document::kAudioSourceNodeType ||
+         (node->typeId == "bloom.image-source" || node->typeId == "bloom.video-source")))
         return true;
     return !registryRows_.empty();
 }

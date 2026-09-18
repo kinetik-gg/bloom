@@ -55,7 +55,8 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                 else if constexpr (std::is_same_v<Step, CompiledShape>)
                     return parameter(step.size) || parameter(step.fillColor) ||
                            parameter(step.strokeColor) || parameter(step.strokeWidth);
-                else if constexpr (std::is_same_v<Step, CompiledCompositionSource>)
+                else if constexpr (std::is_same_v<Step, CompiledCompositionSource> ||
+                                   std::is_same_v<Step, CompiledVideoSource>)
                     return true;
                 else if constexpr (std::is_same_v<Step, CompiledImageSource>)
                     return step.asset && step.asset->kind == document::AssetKind::Sequence;

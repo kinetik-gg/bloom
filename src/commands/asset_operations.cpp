@@ -1,8 +1,11 @@
 #include <algorithm>
 #include <array>
 #include <bloom/commands/asset_operations.hpp>
+#include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/media/image.hpp>
+
+#include <bloom/media/video/session.hpp>
 #include <cctype>
 #include <fstream>
 #include <limits>
@@ -13,6 +16,55 @@
 
 namespace bloom::commands {
 namespace {
+media::provider::Result<document::AssetRecord>
+assetMetadata(const media::provider::ProbeResult& probe) {
+    using namespace media::provider;
+    if (!valid(probe))
+        return Unavailable{Error::InvalidValue, "Invalid video metadata"};
+    document::AssetRecord asset;
+    asset.kind = document::AssetKind::Video;
+    asset.contentDigest = probe.sourceDigest;
+    for (const auto& stream : probe.streams) {
+        const auto timebase =
+            core::RationalTime::create(stream.timebase.numerator, stream.timebase.denominator);
+        const auto period =
+            core::RationalTime::create(stream.rate.denominator, stream.rate.numerator);
+        const auto duration =
+            core::RationalTime::create(stream.duration.numerator, stream.duration.denominator);
+        if (!timebase || !period || !duration)
+            return Unavailable{Error::InvalidValue, "Invalid video timing"};
+        if (stream.kind == MediaKind::Video && asset.width == 0) {
+            asset.width = stream.width;
+            asset.height = stream.height;
+            asset.duration = *duration;
+            if (stream.rate.numerator > std::numeric_limits<std::uint32_t>::max() ||
+                stream.rate.denominator > std::numeric_limits<std::uint32_t>::max())
+                return Unavailable{Error::Unavailable, "Video rate exceeds the supported range"};
+            const auto mapping = core::FrameTimeMapping::create(
+                *duration, static_cast<std::uint32_t>(stream.rate.numerator),
+                static_cast<std::uint32_t>(stream.rate.denominator));
+            if (!mapping || mapping.value()->maximumFrameIndex() >= Limits::indexEntries ||
+                stream.frameCount > Limits::indexEntries)
+                return Unavailable{Error::Unavailable,
+                                   "Video duration is unavailable or exceeds the frame limit"};
+            asset.frames =
+                stream.frameCount ? stream.frameCount : mapping.value()->maximumFrameIndex() + 1;
+        }
+        if (stream.kind == MediaKind::Audio && asset.channels == 0) {
+            asset.rate = stream.sampleRate;
+            asset.channels = static_cast<std::uint32_t>(stream.channelLayout.size());
+        }
+        asset.videoStreams.push_back(
+            {stream.id, static_cast<std::uint32_t>(stream.kind), stream.codec, stream.profile,
+             stream.pixelFormat, stream.timecode, *timebase, *period, *duration, stream.width,
+             stream.height, stream.sampleRate, stream.colour.primaries, stream.colour.transfer,
+             stream.colour.matrix, stream.colour.range, stream.channelLayout});
+    }
+    if (asset.width == 0)
+        return Unavailable{Error::Unavailable, "The file has no video stream"};
+    return asset;
+}
+
 std::string utf8(const std::filesystem::path& path) {
     const auto bytes = path.generic_u8string();
     return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
@@ -160,6 +212,31 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
             std::ranges::transform(extension, extension.begin(), [](const unsigned char value) {
                 return static_cast<char>(std::tolower(value));
             });
+            if (media::video::isVideoExtension(path)) {
+                media::video::VideoDecodeSession session(path);
+                const auto probed = session.probe(cancel);
+                const auto* probe = std::get_if<media::provider::ProbeResult>(&probed);
+                if (!probe) {
+                    mediaDiagnostic_ = std::get<media::provider::Unavailable>(probed);
+                    diagnostic_ = mediaDiagnostic_->detail;
+                    assets_.clear();
+                    return;
+                }
+                auto metadata = assetMetadata(*probe);
+                auto* asset = std::get_if<document::AssetRecord>(&metadata);
+                if (!asset) {
+                    mediaDiagnostic_ = std::get<media::provider::Unavailable>(metadata);
+                    diagnostic_ = mediaDiagnostic_->detail;
+                    assets_.clear();
+                    return;
+                }
+                asset->locator = locator(path, projectDirectory);
+                assets_.push_back(std::move(*asset));
+                admitted.insert(std::filesystem::absolute(path).lexically_normal());
+                if (progress)
+                    progress(assets_.size(), paths.size());
+                continue;
+            }
             if (extension == ".wav" || extension == ".mp3") {
                 const auto probe = media::audio::probeAudio(path);
                 if (!probe.value()) {

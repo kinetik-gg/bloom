@@ -142,7 +142,8 @@ enum class Step {
     LayerParenting,
     Paths,
     TextCapability,
-    AssetOrganization
+    AssetOrganization,
+    Video
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -159,7 +160,7 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     if (step == Step::AnimationBreadth || step == Step::ValueGraph || step == Step::LayerTimeline ||
         step == Step::Merges || step == Step::ContentBounds || step == Step::Audio ||
         step == Step::KeyframeHandles || step == Step::LayerParenting || step == Step::Paths ||
-        step == Step::TextCapability)
+        step == Step::TextCapability || step == Step::Video)
         return false;
     if (scope == Scope::Composition) {
         return value.findMember(step == Step::NodeLayout   ? "nodeLayout"
@@ -191,21 +192,22 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
             return transform(member.value(), child, step, output);
         };
         if (scope == Scope::Root && member.key() == "schemaVersion") {
-            append(output, step == Step::NodeLayout         ? "{\"major\":1,\"minor\":1}"
-                           : step == Step::NodeGroups       ? "{\"major\":1,\"minor\":2}"
-                           : step == Step::AnimationBreadth ? "{\"major\":1,\"minor\":3}"
-                           : step == Step::ValueGraph       ? "{\"major\":1,\"minor\":4}"
-                           : step == Step::LayerTimeline    ? "{\"major\":1,\"minor\":5}"
-                           : step == Step::Merges           ? "{\"major\":1,\"minor\":6}"
-                           : step == Step::ContentBounds    ? "{\"major\":1,\"minor\":7}"
-                           : step == Step::SafeAreas        ? "{\"major\":1,\"minor\":8}"
-                           : step == Step::Images           ? "{\"major\":1,\"minor\":10}"
-                           : step == Step::Audio            ? "{\"major\":1,\"minor\":11}"
-                           : step == Step::KeyframeHandles  ? "{\"major\":1,\"minor\":12}"
-                           : step == Step::LayerParenting   ? "{\"major\":1,\"minor\":13}"
-                           : step == Step::Paths            ? "{\"major\":1,\"minor\":14}"
-                           : step == Step::TextCapability   ? "{\"major\":1,\"minor\":15}"
-                                                            : "{\"major\":1,\"minor\":16}");
+            append(output, step == Step::NodeLayout          ? "{\"major\":1,\"minor\":1}"
+                           : step == Step::NodeGroups        ? "{\"major\":1,\"minor\":2}"
+                           : step == Step::AnimationBreadth  ? "{\"major\":1,\"minor\":3}"
+                           : step == Step::ValueGraph        ? "{\"major\":1,\"minor\":4}"
+                           : step == Step::LayerTimeline     ? "{\"major\":1,\"minor\":5}"
+                           : step == Step::Merges            ? "{\"major\":1,\"minor\":6}"
+                           : step == Step::ContentBounds     ? "{\"major\":1,\"minor\":7}"
+                           : step == Step::SafeAreas         ? "{\"major\":1,\"minor\":8}"
+                           : step == Step::Images            ? "{\"major\":1,\"minor\":10}"
+                           : step == Step::Audio             ? "{\"major\":1,\"minor\":11}"
+                           : step == Step::KeyframeHandles   ? "{\"major\":1,\"minor\":12}"
+                           : step == Step::LayerParenting    ? "{\"major\":1,\"minor\":13}"
+                           : step == Step::Paths             ? "{\"major\":1,\"minor\":14}"
+                           : step == Step::TextCapability    ? "{\"major\":1,\"minor\":15}"
+                           : step == Step::AssetOrganization ? "{\"major\":1,\"minor\":16}"
+                                                             : "{\"major\":1,\"minor\":17}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
                 return false;
@@ -418,6 +420,12 @@ MigrationStepOutcome migrateAssetOrganizationV1_15(const JsonValue& root,
     if (!sourceVersionIs(root, "15") ||
         !transform(root, Scope::Root, Step::AssetOrganization, output))
         return MigrationStepOutcome::failure("/project/assets");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateVideoV1_16(const JsonValue& root, std::pmr::memory_resource*,
+                                       Buffer& output) {
+    if (!sourceVersionIs(root, "16") || !transform(root, Scope::Root, Step::Video, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }
 } // namespace bloom::project

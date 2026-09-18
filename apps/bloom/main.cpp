@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -106,7 +107,11 @@ int main(int argc, char* argv[]) {
     const QSettings playbackSettings;
     const auto cacheBudgets = bloom::ui::cacheMemoryBudgetsFromSettings(playbackSettings);
     {
-        cpuEvaluator.operationCache()->setByteBudget(cacheBudgets.operationCacheByteBudget);
+        const auto videoBytes =
+            std::min(std::size_t{256} * 1024U * 1024U, cacheBudgets.operationCacheByteBudget / 4U);
+        cpuEvaluator.setVideoCacheByteBudget(videoBytes);
+        cpuEvaluator.operationCache()->setByteBudget(cacheBudgets.operationCacheByteBudget -
+                                                     videoBytes);
     }
     // CACHE-2 (docs/architecture/media-io.md "Disk cache"): one instance shared by the evaluator
     // and the Asset Controller's proxy/thumbnail decodes below -- "the same store". Built from

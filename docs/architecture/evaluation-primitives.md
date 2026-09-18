@@ -371,7 +371,7 @@ operation and scanline boundaries, and cancelled/failed evaluation publishes no 
 Operation memoization includes dimension, typography, and dependency values and retains matching
 evaluated geometry. Display preparation remains a separate typed stage.
 
-Evaluator semantics 8, primitive semantics 7, plan semantics 5, and animation semantics 2 are the
+Evaluator semantics 8, primitive semantics 7, plan semantics 7, and animation semantics 2 are the
 current identities. TEXT-2 moved the plan version for the text reference/layout grammar and SHAPE-1
 moved the evaluator and primitive versions for path rasterization; the two lanes landed together, so
 all three steps are reflected in one set of re-derived identity goldens. Existing point-text pixels
@@ -726,7 +726,7 @@ Compiled Solid dimensions, Text layout operands and Shape geometry operands are 
 bounds include the enabled fill and stroke. Layer transforms always place the
 local-bounds anchor at the authored position, and Merge always unions its inputs' bounds. Plans
 carry no historical evaluation selector. Unsupported document node versions are rejected before
-compilation. Current identity uses plan semantics 5, animation sampling 2, evaluator 8, and render
+compilation. Current identity uses plan semantics 7, animation sampling 2, evaluator 8, and render
 primitives 7. SHAPE-1 adds shape pixels and TEXT-2 adds box-text pixels, both while preserving all
 existing source pixel goldens.
 
@@ -754,3 +754,23 @@ source whitespace or inserts a soft break. Consumers convert source bytes to the
 cursor units; Qt UTF-16 positions never enter the render API. The query returns logical advance
 geometry without allocating a coverage bitmap, and shares validation and cancellation with the
 placement path. It changes no rendering semantics, schema versions or existing pixel goldens.
+
+### Video Source (MEDIA-3)
+
+`bloom.video-source` version 1 lowers to `CompiledVideoSource`: source node, captured video asset,
+start frame, loop mode and colour-space override. It emits image and audio ports. Exact composition
+time minus `startFrame / compositionRate` maps to the captured video rate. Negative time holds
+frame zero; Hold clamps to the final frame, Loop wraps, and Ping Pong reverses at the endpoints.
+The first video stream supplies pixels. The first audio stream supplies the existing clip model,
+using the same start offset and Layer/Merge participation rules; audio beyond its buffer is silent.
+Loop and Ping Pong currently apply to image sampling, while audio retains ordinary clip timing.
+
+Evaluation runs the bounded worker session/cache path off the UI thread, then converts supported
+Rec.709 or sRGB-tagged YUV to scene-linear premultiplied pixels. Unsupported colour and changed
+content produce diagnostics instead of cached stale pixels. Video source selection participates
+in operation identity, including content digest, stream, frame and interpretation.
+
+Compiled-plan semantics is **7**. Animation remains **2**, evaluator **8**, primitives **7**;
+existing arms' pixel semantics are unchanged. The independent `s5-identity-oracle.py` audit
+reproduced all plan-6 analysis/output pins before deriving plan-7 pins, preserving the four
+preimage lengths (PNG analysis 1922, EXR analysis 1485, PNG output 669, EXR output 567 bytes).

@@ -1,6 +1,7 @@
 #pragma once
 #include <bloom/commands/operation.hpp>
 #include <bloom/core/color.hpp>
+#include <bloom/media/provider/contract.hpp>
 #include <filesystem>
 #include <functional>
 #include <vector>
@@ -140,10 +141,15 @@ class ImportAssets final : public Operation {
         return assets_;
     }
     [[nodiscard]] const std::string& diagnostic() const noexcept { return diagnostic_; }
+    [[nodiscard]] const std::optional<media::provider::Unavailable>&
+    mediaDiagnostic() const noexcept {
+        return mediaDiagnostic_;
+    }
 
   private:
     std::vector<document::AssetRecord> assets_;
     std::string diagnostic_;
+    std::optional<media::provider::Unavailable> mediaDiagnostic_;
 };
 class RelinkAsset final : public Operation {
   public:

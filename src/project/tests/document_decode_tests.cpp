@@ -93,7 +93,7 @@ constexpr std::uint64_t kGenerousOperationBudget = 8ULL << 20U; // 8 MiB: ample 
 // carry the current required composition members; rejection fixtures alter only their target.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":16})";
+constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":17})";
 constexpr std::string_view kValidDigest =
     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 
@@ -227,7 +227,7 @@ constexpr std::string_view kMinimalGraphJson =
 // skeleton builder rather than complicating every existing R2/R3 call site above.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":17})";
+constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":18})";
 
 [[nodiscard]] std::string
 documentWithCompositionFutureMinor(const std::string_view compositionJsonText) {

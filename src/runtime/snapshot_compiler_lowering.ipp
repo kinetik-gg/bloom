@@ -396,7 +396,9 @@ lower(const std::vector<document::NodeId>& order) {
         const auto* startBinding = findParameterBinding(audioSource, "startFrame");
         const auto* assetText = parameterConstant<std::string>(assetBinding);
         const auto* startFrame = parameterConstant<std::int64_t>(startBinding);
-        const auto level = compiledScalarParameter(findParameterBinding(audioSource, "level"));
+        const auto level = audioSource.typeId == "bloom.video-source" && assetBinding
+            ? std::optional(runtime::CompiledScalarParameter{assetBinding->parameterId,1.0})
+            : compiledScalarParameter(findParameterBinding(audioSource, "level"));
         std::uint64_t assetRaw = 0;
         if (assetText == nullptr || startFrame == nullptr || !level || assetText->empty() ||
             std::from_chars(assetText->data(), assetText->data() + assetText->size(), assetRaw)
@@ -446,7 +448,7 @@ lower(const std::vector<document::NodeId>& order) {
                  boundary->solo, boundary->inPoint, boundary->endPoint(composition_->duration())});
             return true;
         }
-        if (audioSource == nullptr || audioSource->typeId != document::kAudioSourceNodeType) {
+        if (audioSource == nullptr || (audioSource->typeId != document::kAudioSourceNodeType && audioSource->typeId != "bloom.video-source")) {
             addTopologyFailure(layerAudioEdgeIterator->source.nodeId,
                                "Audio layer does not have an audio source.");
             return false;
@@ -496,7 +498,7 @@ lower(const std::vector<document::NodeId>& order) {
             {*source, !isMuted(feedNodeId), false, {}, composition_->duration()});
         return mix;
     }
-    if (feed != nullptr && feed->typeId == document::kAudioSourceNodeType) {
+    if (feed != nullptr && (feed->typeId == document::kAudioSourceNodeType || feed->typeId == "bloom.video-source")) {
         // An audio source wired straight into the output plays whole, from the composition start.
         const auto sourceIndex = appendSource(*feed);
         if (!sourceIndex)
@@ -519,6 +521,8 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
         return lowerSolid(node);
     case NodeLoweringKind::CompositionSource:
         return lowerCompositionSource(node);
+    case NodeLoweringKind::VideoSource:
+        return lowerVideoSource(node);
     case NodeLoweringKind::ImageSource:
         return lowerImageSource(node);
     case NodeLoweringKind::AudioSource:
@@ -642,6 +646,27 @@ lowerImageSource(const document::NodeRecord& node) {
     return runtime::CompiledImageSource{node.id, record ? std::optional{*record} : std::nullopt,
                                         *start,  *loop,
                                         *space,  *premultiply};
+}
+
+[[nodiscard]] std::optional<runtime::CompiledOperation>
+lowerVideoSource(const document::NodeRecord& node) {
+    const auto* asset = parameterConstant<std::string>(findParameterBinding(node, "asset"));
+    const auto* start = parameterConstant<std::int64_t>(findParameterBinding(node, "startFrame"));
+    const auto* loop = parameterConstant<std::int64_t>(findParameterBinding(node, "loopMode"));
+    const auto* space = parameterConstant<std::int64_t>(findParameterBinding(node, "colorSpace"));
+    if (!asset || !start || !loop || !space) {
+        addTopologyFailure(node.id, "Video source parameters could not be lowered.");
+        return std::nullopt;
+    }
+    std::uint64_t raw = 0;
+    const auto parsed = std::from_chars(asset->data(), asset->data() + asset->size(), raw);
+    const auto* record =
+        parsed.ec == std::errc{} && parsed.ptr == asset->data() + asset->size()
+            ? request_.snapshot.project().findAsset(document::AssetId::fromRaw(raw))
+            : nullptr;
+    return runtime::CompiledVideoSource{node.id, record ? std::optional{*record} : std::nullopt,
+                                        *start,  *loop,
+                                        *space};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

@@ -23,7 +23,7 @@
                                                    ? "sequence"
                                                    : asset.kind == bloom::document::AssetKind::Audio
                                                          ? "audio"
-                                                         : "font")) ||
+                                                         : asset.kind == bloom::document::AssetKind::Video ? "video" : "font")) ||
             !state.ok(writer.memberName("locator")) || !emitAssetLocator(state, asset.locator) ||
             !state.ok(writer.memberName("contentDigest")) || !emitAssetDigest(state, asset.contentDigest) ||
             !state.ok(writer.memberName("interpretation")) || !state.ok(writer.beginObject()) ||
@@ -66,6 +66,36 @@
                 !state.ok(writer.memberName("duration")) ||
                 !emitRational(state, asset.duration.numerator(), asset.duration.denominator()) ||
                 !state.ok(writer.endObject())) return false;
+        }
+        if (asset.kind == bloom::document::AssetKind::Video) {
+            if (!state.ok(writer.memberName("video")) || !state.ok(writer.beginObject()) ||
+                !emitNamedId(state,"frames",asset.frames) || !state.ok(writer.memberName("duration")) ||
+                !emitRational(state,asset.duration.numerator(),asset.duration.denominator()) ||
+                !state.ok(writer.memberName("streams")) || !state.ok(writer.beginArray())) return false;
+            for (const auto& stream : asset.videoStreams) {
+                if (!state.ok(writer.beginObject())) return false;
+                if (!state.ok(writer.memberName("id")) || !state.ok(writer.integerValue(stream.id))) return false;
+                if (!state.ok(writer.memberName("kind")) || !state.ok(writer.integerValue(stream.kind))) return false;
+                if (!state.ok(writer.memberName("codec")) || !state.ok(writer.stringValue(stream.codec))) return false;
+                if (!state.ok(writer.memberName("profile")) || !state.ok(writer.stringValue(stream.profile))) return false;
+                if (!state.ok(writer.memberName("pixelFormat")) || !state.ok(writer.stringValue(stream.pixelFormat))) return false;
+                if (!state.ok(writer.memberName("timecode")) || !state.ok(writer.stringValue(stream.timecode))) return false;
+                if (!state.ok(writer.memberName("timebase")) || !emitRational(state,stream.timebase.numerator(),stream.timebase.denominator())) return false;
+                if (!state.ok(writer.memberName("framePeriod")) || !emitRational(state,stream.framePeriod.numerator(),stream.framePeriod.denominator())) return false;
+                if (!state.ok(writer.memberName("duration")) || !emitRational(state,stream.duration.numerator(),stream.duration.denominator())) return false;
+                if (!state.ok(writer.memberName("width")) || !state.ok(writer.integerValue(stream.width))) return false;
+                if (!state.ok(writer.memberName("height")) || !state.ok(writer.integerValue(stream.height))) return false;
+                if (!state.ok(writer.memberName("sampleRate")) || !state.ok(writer.integerValue(stream.sampleRate))) return false;
+                if (!emitNamedSigned(state,"primaries",stream.primaries)) return false;
+                if (!emitNamedSigned(state,"transfer",stream.transfer)) return false;
+                if (!emitNamedSigned(state,"matrix",stream.matrix)) return false;
+                if (!emitNamedSigned(state,"range",stream.range)) return false;
+                if (!state.ok(writer.memberName("channelLayout")) || !state.ok(writer.beginArray())) return false;
+                for (const auto& channel : stream.channelLayout)
+                    if (!state.ok(writer.stringValue(channel))) return false;
+                if (!state.ok(writer.endArray()) || !state.ok(writer.endObject())) return false;
+            }
+            if (!state.ok(writer.endArray()) || !state.ok(writer.endObject())) return false;
         }
         if (!state.ok(writer.memberName("name")) || !state.ok(writer.stringValue(asset.name))) return false;
         const auto assetFolder = asset.folder;

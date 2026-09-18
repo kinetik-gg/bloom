@@ -1,6 +1,5 @@
-// COMP-SRC: identity pins independently re-derived with s5-identity-oracle.py
-// at plan 6, animation 2, evaluator 8, primitives 7. Plan 5 reproduced the base
-// pins first; preimage lengths and pixels are unchanged.
+// MEDIA-3: s5-identity-oracle.py reproduced plan-6 pins before deriving plan 7.
+// Animation 2, evaluator 8, primitives 7, pixel bits and preimage lengths are unchanged.
 #include "output_analysis_analyzer_test_support.hpp"
 
 #include <bloom/output/output_analysis_digest.hpp>
@@ -116,7 +115,7 @@ void testNominalPresetsAndDigestGoldens(Expectations& expectations) {
     expectations.expect(
         pngDigest && pngDigest.preimageByteCount() == 1922 &&
             hasDigest(pngDigest.digest(),
-                      "9748dab2456e2f86f41bf027fdae388ac2fd081121b4e9f8ca7c1b624b7b4f88"),
+                      "e0c850d4953b7fcc5568d0c920c5373991ed9ebdea2e8415225e049b27a486d4"),
         "the analyzer-produced PNG report preserves the independent digest golden");
 
     auto exrInputValue = exrInput(descriptor());
@@ -144,7 +143,7 @@ void testNominalPresetsAndDigestGoldens(Expectations& expectations) {
     expectations.expect(
         exrDigest && exrDigest.preimageByteCount() == 1485 &&
             hasDigest(exrDigest.digest(),
-                      "653dc4f7e71c1be340ffd382f7dd51292c0ae91e5a1950afe16091f964630082"),
+                      "d07988b616ef530dbaa5b43695311b551f5b9b5b8696fa4381a394915c086b87"),
         "the analyzer-produced EXR report preserves the independent digest golden");
 
     const auto tiff = analyzeTiffRgba16SrgbV1(

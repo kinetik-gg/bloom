@@ -31,6 +31,52 @@ struct TestContext {
     }
 };
 
+void videoAssetRows(TestContext& context) {
+    using namespace bloom;
+    auto seed = document::makeNewProject("Video", "Main", core::RationalTime::fromInteger(2));
+    document::AssetRecord asset;
+    asset.id = document::AssetId::fromRaw(1);
+    asset.name = "Video fixture";
+    asset.kind = document::AssetKind::Video;
+    asset.locator = {"file", "project-relative", "clip.mov", "file:///media/clip.mov"};
+    asset.width = 64;
+    asset.height = 48;
+    asset.frames = 48;
+    asset.duration = core::RationalTime::fromInteger(2);
+    document::AssetVideoStream stream;
+    stream.codec = "prores";
+    stream.timebase = core::RationalTime::fromInteger(1);
+    stream.framePeriod = core::RationalTime::fromInteger(1);
+    stream.width = 64;
+    stream.height = 48;
+    stream.duration = asset.duration;
+    asset.videoStreams.push_back(stream);
+    context.expect(seed.project.addAsset(asset), "valid video asset fixture");
+    document::Document document(std::move(seed.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, seed.initialCompositionId);
+    ui::AssetsEditor editor(session);
+    auto* tree = editor.findChild<QTreeWidget*>("assetsTree");
+    context.expect(tree != nullptr, "video assets tree");
+    if (!tree)
+        return;
+    bool found = false;
+    for (QTreeWidgetItemIterator it(tree); *it; ++it)
+        if ((*it)->text(0) == "Video fixture") {
+            found = true;
+            context.expect((*it)->text(1) == QStringLiteral("Video · 00:00:02"),
+                           "video kind includes HH:MM:SS");
+            context.expect((*it)->toolTip(0).contains(QStringLiteral(
+                               "Decoded by FFmpeg; not an Apple-authorized ProRes implementation")),
+                           "ProRes tooltip carries exact non-authorization note");
+        }
+    context.expect(found, "video asset appears in Assets");
+    commands::Transaction transaction("Add Video Layer", session.snapshot().revision());
+    transaction.emplace<commands::AddImageLayer>(seed.initialCompositionId, asset.id);
+    context.expect(session.executeTransaction(std::move(transaction)).succeeded(),
+                   "video drop command participates in UI session history");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -122,5 +168,6 @@ int main(int argc, char** argv) {
                        "double-click opens the selected composition");
     }
 
+    videoAssetRows(context);
     return context.ok ? 0 : 1;
 }

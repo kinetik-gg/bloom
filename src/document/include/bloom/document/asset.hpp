@@ -10,7 +10,7 @@
 #include <vector>
 
 namespace bloom::document {
-enum class AssetKind : std::uint8_t { Image, Sequence, Audio, Font };
+enum class AssetKind : std::uint8_t { Image, Sequence, Audio, Font, Video };
 enum class AssetColorSpace : std::uint8_t { Auto, Srgb, Linear, Raw };
 enum class AssetAlphaAssociation : std::uint8_t { Straight, Premultiplied };
 struct AssetInterpretation {
@@ -46,6 +46,15 @@ struct AssetFolder {
     std::optional<AssetFolderId> parent;
     friend bool operator==(const AssetFolder&, const AssetFolder&) = default;
 };
+struct AssetVideoStream {
+    std::uint32_t id = 0, kind = 1;
+    std::string codec, profile, pixelFormat, timecode;
+    core::RationalTime timebase{}, framePeriod{}, duration{};
+    std::uint32_t width = 1, height = 1, sampleRate = 0;
+    std::int64_t primaries = -1, transfer = -1, matrix = -1, range = -1;
+    std::vector<std::string> channelLayout;
+    friend bool operator==(const AssetVideoStream&, const AssetVideoStream&) = default;
+};
 struct AssetRecord {
     AssetId id;
     AssetKind kind = AssetKind::Image;
@@ -63,6 +72,7 @@ struct AssetRecord {
     // Font metadata is captured when the artist picks a face. It keeps the Properties and Assets
     // surfaces useful even when the system font later disappears; the renderer still verifies the
     // locator bytes against contentDigest at compile time.
+    std::vector<AssetVideoStream> videoStreams;
     std::string fontFamily;
     std::string fontStyle;
     std::uint32_t fontIndex = 0;

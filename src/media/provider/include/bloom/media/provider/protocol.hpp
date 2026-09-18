@@ -2,7 +2,7 @@
 #include <bloom/media/provider/registry.hpp>
 
 namespace bloom::media::provider {
-inline constexpr std::uint16_t kProtocolVersion = 1, kSchemaVersion = 1;
+inline constexpr std::uint16_t kProtocolVersion = 1, kSchemaVersion = 2;
 inline constexpr std::uint32_t kEnvelopeBytes = 25;
 enum class MessageKind : std::uint8_t {
     Handshake = 1,
@@ -12,7 +12,9 @@ enum class MessageKind : std::uint8_t {
     Cancel = 5,
     Shutdown = 6,
     Ack = 7,
-    Failure = 8
+    Failure = 8,
+    Index = 9,
+    Audio = 10
 };
 struct Handshake {
     ProviderExecutionKeyV1 execution;
@@ -26,9 +28,11 @@ struct CallRequest {
     std::string source;
     std::uint32_t width = 1, height = 1;
     std::uint64_t frame = 0;
+    std::uint32_t stream = 0, samples = 1024;
+    Digest sourceDigest{};
 };
-using Payload =
-    std::variant<Handshake, CallRequest, ProbeResult, FrameProduct, std::monostate, Unavailable>;
+using Payload = std::variant<Handshake, CallRequest, ProbeResult, FrameProduct, DemuxIndex,
+                             AudioBlock, std::monostate, Unavailable>;
 struct Message {
     MessageKind kind = MessageKind::Ack;
     std::uint64_t session = 0, sequence = 0;

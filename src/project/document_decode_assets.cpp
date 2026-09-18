@@ -132,6 +132,82 @@ bool font(const JsonValue& node, DecodeState& state, const std::string& path,
         return false;
     return true;
 }
+bool video(const JsonValue& node, DecodeState& state, const std::string& path,
+           document::AssetRecord& out) {
+    constexpr std::array<std::string_view, 3> keys{"frames", "duration", "streams"};
+    std::vector<const JsonValue*> fields;
+    if (!matchOrderedMembers(node, keys, false, state, path, fields) ||
+        node.objectMembers().size() != keys.size())
+        return false;
+    const auto frameText = fields[0]->asString();
+    if (!frameText)
+        return false;
+    const auto frameCount = parseCanonicalObjectId(*frameText);
+    if (!frameCount)
+        return false;
+    out.frames = *frameCount.value();
+    if (!decodeRationalTimeValue(*fields[1], state, path, out.duration) ||
+        fields[2]->kind() != JsonValueKind::Array || fields[2]->arrayElements().empty() ||
+        fields[2]->arrayElements().size() > 256)
+        return false;
+    constexpr std::array<std::string_view, 17> streamKeys{
+        "id",        "kind",        "codec",    "profile", "pixelFormat",  "timecode",
+        "timebase",  "framePeriod", "duration", "width",   "height",       "sampleRate",
+        "primaries", "transfer",    "matrix",   "range",   "channelLayout"};
+    for (const auto& value : fields[2]->arrayElements()) {
+        document::AssetVideoStream stream;
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(value, streamKeys, false, state, path, members) ||
+            value.objectMembers().size() != streamKeys.size())
+            return false;
+        if (!number(*members[0], state, path, stream.id))
+            return false;
+        if (!number(*members[1], state, path, stream.kind))
+            return false;
+        if (!text(*members[2], state, path, stream.codec))
+            return false;
+        if (!text(*members[3], state, path, stream.profile))
+            return false;
+        if (!text(*members[4], state, path, stream.pixelFormat))
+            return false;
+        if (!text(*members[5], state, path, stream.timecode))
+            return false;
+        if (!decodeRationalTimeValue(*members[6], state, path, stream.timebase))
+            return false;
+        if (!decodeRationalTimeValue(*members[7], state, path, stream.framePeriod))
+            return false;
+        if (!decodeRationalTimeValue(*members[8], state, path, stream.duration))
+            return false;
+        if (!number(*members[9], state, path, stream.width))
+            return false;
+        if (!number(*members[10], state, path, stream.height))
+            return false;
+        if (!number(*members[11], state, path, stream.sampleRate))
+            return false;
+        if (!integer(*members[12], state, path, stream.primaries))
+            return false;
+        if (!integer(*members[13], state, path, stream.transfer))
+            return false;
+        if (!integer(*members[14], state, path, stream.matrix))
+            return false;
+        if (!integer(*members[15], state, path, stream.range))
+            return false;
+        if (members[16]->kind() != JsonValueKind::Array || members[16]->arrayElements().size() > 64)
+            return false;
+        for (const auto& channel : members[16]->arrayElements()) {
+            std::string name;
+            if (!text(channel, state, path, name))
+                return false;
+            stream.channelLayout.push_back(std::move(name));
+        }
+        if (stream.kind == 2 && out.channels == 0) {
+            out.rate = stream.sampleRate;
+            out.channels = static_cast<std::uint32_t>(stream.channelLayout.size());
+        }
+        out.videoStreams.push_back(std::move(stream));
+    }
+    return true;
+}
 } // namespace
 bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& path,
                   std::vector<document::AssetRecord>& out) {
@@ -153,14 +229,16 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
             !digest(*fields[3], state, path, asset.contentDigest))
             return false;
         if (asset.id.value() <= previous ||
-            (kind != "image" && kind != "sequence" && kind != "audio" && kind != "font")) {
+            (kind != "image" && kind != "sequence" && kind != "audio" && kind != "font" &&
+             kind != "video")) {
             state.fail(DocumentDecodeError::DomainViolation, path);
             return false;
         }
         // Font assets arrive with document 1.15; 1.14 carries path values but no font kind, so an
         // earlier minor naming one is a domain violation rather than a tolerated unknown. Mirrors
         // the `path` constant's own minor gate in document_decode_composition.cpp.
-        if (kind == "font" && state.documentMinor < 15) {
+        if ((kind == "font" && state.documentMinor < 15) ||
+            (kind == "video" && state.documentMinor < 17)) {
             state.fail(DocumentDecodeError::DomainViolation, path);
             return false;
         }
@@ -168,6 +246,7 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
         asset.kind = kind == "image"      ? document::AssetKind::Image
                      : kind == "sequence" ? document::AssetKind::Sequence
                      : kind == "audio"    ? document::AssetKind::Audio
+                     : kind == "video"    ? document::AssetKind::Video
                                           : document::AssetKind::Font;
         constexpr std::array<std::string_view, 2> interpretationKeys{"colorSpace",
                                                                      "alphaAssociation"};
@@ -198,12 +277,21 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
                 return false;
             }
         }
+        if (asset.kind == document::AssetKind::Video) {
+            const auto* descriptor = value.findMember("video");
+            if (!descriptor || !video(*descriptor, state, path, asset)) {
+                state.fail(DocumentDecodeError::DomainViolation, path);
+                return false;
+            }
+        }
         if (state.documentMinor >= 16) {
             auto allKeys = std::vector<std::string_view>(keys.begin(), keys.end());
             if (asset.kind == document::AssetKind::Font)
                 allKeys.push_back("font");
             if (asset.kind == document::AssetKind::Audio)
                 allKeys.push_back("audio");
+            if (asset.kind == document::AssetKind::Video)
+                allKeys.push_back("video");
             allKeys.push_back("name");
             if (value.findMember("folder"))
                 allKeys.push_back("folder");
