@@ -11,6 +11,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(BLOOM_BUILD_DESKTOP "Build the Qt desktop application and UI tests" ON)
+# Throwaway measurement programs under tools/spikes. OFF by default: a spike is evidence for a
+# design decision, never a shipped target, so the product build must not compile or link one.
+option(BLOOM_BUILD_SPIKES "Build the throwaway design spikes under tools/spikes" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -50,6 +53,10 @@ add_subdirectory(src/host)
 add_subdirectory(src/scripting)
 add_subdirectory(apps/bloom-media-worker)
 add_subdirectory(apps/bloom-cli)
+
+if(BLOOM_BUILD_SPIKES)
+    add_subdirectory(tools/spikes/instance0)
+endif()
 
 add_custom_target(
     bloom-quality-check

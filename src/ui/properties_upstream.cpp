@@ -60,11 +60,6 @@ void PropertiesEditor::configureUpstream() {
         if (upstreamPanel_) {
             for (auto* section : upstreamPanel_->findChildren<kit::KSection*>())
                 std::erase(sections_, section);
-            // CRASH-2: cancel any in-flight font-catalogue poll on the rows going down with this
-            // panel before it is orphaned for deferred deletion -- see
-            // PropertiesRegistryRow::detachFromSession().
-            for (auto* row : upstreamRows_)
-                row->detachFromSession();
             upstreamPanel_->hide();
             upstreamPanel_->setParent(nullptr);
             upstreamPanel_->deleteLater();

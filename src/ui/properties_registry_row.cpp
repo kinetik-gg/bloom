@@ -340,7 +340,7 @@ bool PropertiesRegistryRow::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void PropertiesRegistryRow::populateFontSelector() {
-    if (detached_ || selector_ == nullptr || !isFontSchema(definition_.schemaKey))
+    if (selector_ == nullptr || !isFontSchema(definition_.schemaKey))
         return;
     auto& cache = fontCatalogueCache();
     (void)cache.poll();
@@ -380,11 +380,7 @@ void PropertiesRegistryRow::populateFontSelector() {
 }
 
 void PropertiesRegistryRow::pollFontCatalogue() {
-    // detached_ is set by detachFromSession() before this row is orphaned for deferred deletion.
-    // A poll that was already armed can still fire in the window between that orphaning and the
-    // row's actual destruction (deleteLater() is not synchronous), so this check has to be the
-    // very first thing here -- nothing below it may touch session_ (CRASH-2).
-    if (detached_ || selector_ == nullptr || !isFontSchema(definition_.schemaKey))
+    if (selector_ == nullptr || !isFontSchema(definition_.schemaKey))
         return;
     auto& cache = fontCatalogueCache();
     if (cache.poll()) {
@@ -394,8 +390,6 @@ void PropertiesRegistryRow::pollFontCatalogue() {
     if (cache.pending())
         QTimer::singleShot(50, this, &PropertiesRegistryRow::pollFontCatalogue);
 }
-
-void PropertiesRegistryRow::detachFromSession() { detached_ = true; }
 
 void PropertiesRegistryRow::refresh() {
     refreshing_ = true;
