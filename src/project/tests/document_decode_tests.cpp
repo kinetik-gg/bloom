@@ -93,7 +93,7 @@ constexpr std::uint64_t kGenerousOperationBudget = 8ULL << 20U; // 8 MiB: ample 
 // carry the current required composition members; rejection fixtures alter only their target.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":17})";
+constexpr std::string_view kCurrentSchemaVersion = R"({"major":1,"minor":18})";
 constexpr std::string_view kValidDigest =
     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 
@@ -198,9 +198,9 @@ constexpr std::string_view kMinimalGraphJson =
     result += ",\"compositions\":[";
     result += compositionsArrayBody;
     result +=
-        R"(],"assets":[]},"idAllocation":{"highestIssued":{"composition":"0","node":"0","edge":"0",)"
+        R"(],"assets":[],"dataBlocks":[]},"idAllocation":{"highestIssued":{"composition":"0","node":"0","edge":"0",)"
         R"("layer":"0","layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
-        R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0","asset":"0"}},"extensions":[]})";
+        R"("driverBinding":"0","extensionRecord":"0","nodeGroup":"0","asset":"0","dataBlock":"0"}},"extensions":[]})";
     return result;
 }
 
@@ -227,7 +227,7 @@ constexpr std::string_view kMinimalGraphJson =
 // skeleton builder rather than complicating every existing R2/R3 call site above.
 // ---------------------------------------------------------------------------------------------
 
-constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":18})";
+constexpr std::string_view kFutureSchemaVersion = R"({"major":1,"minor":19})";
 
 [[nodiscard]] std::string
 documentWithCompositionFutureMinor(const std::string_view compositionJsonText) {
@@ -254,11 +254,11 @@ documentWithColorSettingsFutureMinor(const std::string_view colorSettingsJsonTex
     result += R"(,"compositions":[)";
     result += defaultCompositionJson();
     result +=
-        R"(],"assets":[]},"idAllocation":{"highestIssued":{"composition":"0","node":"0","edge":"0",)"
+        R"(],"assets":[],"dataBlocks":[]},"idAllocation":{"highestIssued":{"composition":"0","node":"0","edge":"0",)"
         R"("layer":"0","layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
         R"("driverBinding":"0","extensionRecord":")";
     result += extensionRecordHighWater;
-    result += R"(","nodeGroup":"0","asset":"0"}},"extensions":[)";
+    result += R"(","nodeGroup":"0","asset":"0","dataBlock":"0"}},"extensions":[)";
     result += extensionsArrayBody;
     result += "]}";
     return result;
@@ -1819,10 +1819,10 @@ void testRejectsDanglingCompositionOutputNode(Expectations& expectations) {
     document += R"(,"compositions":[)";
     document += compositionJsonText;
     document +=
-        R"(],"assets":[],"zzzProjectExtra":"hello world"},)"
+        R"(],"assets":[],"dataBlocks":[],"zzzProjectExtra":"hello world"},)"
         R"("idAllocation":{"highestIssued":{"composition":"0","node":"0","edge":"0",)"
         R"("layer":"0","layerSlot":"0","parameter":"0","animationCurve":"0","keyframe":"0",)"
-        R"("driverBinding":"0","extensionRecord":"1","nodeGroup":"0","asset":"0"}},)"
+        R"("driverBinding":"0","extensionRecord":"1","nodeGroup":"0","asset":"0","dataBlock":"0"}},)"
         R"("extensions":[)";
     document += extensionRecordJson;
     document += R"(],"zzzFutureField":42})";

@@ -216,5 +216,6 @@ evaluateScalarPrimitive(const core::primitives::ScalarPrimitive operation,
 [[nodiscard]] ValueUtilityOutcome evaluateValueTime(const ValueUtilityInvocation& invocation);
 [[nodiscard]] ValueUtilityOutcome evaluateValueString(const ValueUtilityInvocation& invocation);
 [[nodiscard]] ValueUtilityOutcome evaluateValueNumeric(const ValueUtilityInvocation& invocation);
+[[nodiscard]] ValueUtilityOutcome evaluateValueDataBlock(const ValueUtilityInvocation& invocation);
 
 } // namespace bloom::runtime::detail

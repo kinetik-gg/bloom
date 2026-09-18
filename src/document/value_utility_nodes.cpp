@@ -50,6 +50,18 @@ constexpr std::array<ValueUtilityOutput, 2> kParsedColor{
     ValueUtilityOutput{bloom::document::kValidPortName, SocketValueKind::Boolean}};
 
 constexpr std::array<ValueUtilitySelector, 0> kNoSelectors{};
+constexpr std::array<ValueUtilitySelector, 1> kDataBlockSelector{ValueUtilitySelector{
+    bloom::document::kDataBlockParameterRole, bloom::document::kDataBlockParameterSchemaKey, 0}};
+constexpr std::array<ValueUtilityOperand, 1> kTimeSampleOperand{
+    ValueUtilityOperand{.role = "time", .kind = SocketValueKind::Scalar}};
+constexpr std::array<ValueUtilityOperand, 2> kTableLookupOperands{
+    ValueUtilityOperand{.role = "row", .kind = SocketValueKind::Integer},
+    ValueUtilityOperand{.role = "column", .kind = SocketValueKind::Integer}};
+constexpr std::array<ValueUtilityOperand, 1> kPointSetIndexOperand{
+    ValueUtilityOperand{.role = "index", .kind = SocketValueKind::Integer}};
+constexpr std::array<ValueUtilityOutput, 2> kPointSetOutputs{
+    ValueUtilityOutput{"count", SocketValueKind::Integer},
+    ValueUtilityOutput{"point", SocketValueKind::Vector3}};
 
 // The radix selector, shared by both Integer conversions so the two cannot offer different bases.
 constexpr std::array<ValueUtilitySelector, 1> kRadixSelector{ValueUtilitySelector{
@@ -349,7 +361,7 @@ constexpr std::array<ValueUtilityOperand, 1> kBooleanValueOperand{
 // composition or to the evaluation request, not to the document's own authored values.
 constexpr std::array<ValueUtilityOperand, 0> kNoOperands{};
 
-constexpr std::array<ValueUtilityDescriptor, 62> kDescriptors{
+constexpr std::array<ValueUtilityDescriptor, 66> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kScalarToStringNodeType, "Scalar To String",
                            ValueUtilityKernel::ScalarToString, NodeCategory::Utilities,
                            kScalarToStringOperands, kNoSelectors, kStringResult},
@@ -541,6 +553,18 @@ constexpr std::array<ValueUtilityDescriptor, 62> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kCompositionSizeNodeType, "Composition Size",
                            ValueUtilityKernel::CompositionSize, NodeCategory::Values, kNoOperands,
                            kNoSelectors, kVector2Result},
+    ValueUtilityDescriptor{bloom::document::kDataSampleNodeType, "Data Sample",
+                           ValueUtilityKernel::DataSample, NodeCategory::Values, kTimeSampleOperand,
+                           kDataBlockSelector, kScalarResult},
+    ValueUtilityDescriptor{bloom::document::kRampSampleNodeType, "Ramp Sample",
+                           ValueUtilityKernel::RampSample, NodeCategory::Values, kTimeSampleOperand,
+                           kDataBlockSelector, kColorResult},
+    ValueUtilityDescriptor{bloom::document::kTableLookupNodeType, "Table Lookup",
+                           ValueUtilityKernel::TableLookup, NodeCategory::Values,
+                           kTableLookupOperands, kDataBlockSelector, kScalarResult},
+    ValueUtilityDescriptor{bloom::document::kPointSetReadNodeType, "Point Set",
+                           ValueUtilityKernel::PointSetRead, NodeCategory::Values,
+                           kPointSetIndexOperand, kDataBlockSelector, kPointSetOutputs},
 };
 
 } // namespace

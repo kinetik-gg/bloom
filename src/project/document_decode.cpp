@@ -990,6 +990,10 @@ using document::SchemaVersion;
     return true;
 }
 
+[[nodiscard]] bool decodeDataBlocks(const JsonValue& node, DecodeState& state,
+                                    const std::string& path,
+                                    std::vector<document::DataBlockRecord>& out);
+
 [[nodiscard]] bool decodeProject(const JsonValue& node, DecodeState& state, const std::string& path,
                                  DecodedDocumentEnvelope& out) {
     static constexpr std::array<std::string_view, 4> kKeys{"id", "name", "colorSettings",
@@ -998,8 +1002,12 @@ using document::SchemaVersion;
         state.documentMinor >= 10
             ? std::vector<std::string_view>{"id", "name", "colorSettings", "compositions", "assets"}
             : std::vector<std::string_view>(kKeys.begin(), kKeys.end());
-    if (state.documentMinor >= 16 && node.findMember("assetFolders"))
+    const bool hasAssetFolders =
+        state.documentMinor >= 16 && node.findMember("assetFolders") != nullptr;
+    if (hasAssetFolders)
         keys.push_back("assetFolders");
+    if (state.documentMinor >= 18)
+        keys.push_back("dataBlocks");
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, true, state, path, members)) {
         return false;
@@ -1059,9 +1067,16 @@ using document::SchemaVersion;
     if (state.documentMinor >= 10 &&
         !detail::decodeAssets(*members[4], state, joinPath(path, "assets"), out.assets))
         return false;
-    if (members.size() > 5 &&
-        !detail::decodeAssetFolders(*members[5], state, joinPath(path, "assetFolders"),
-                                    out.assetFolders))
+    std::size_t nextProjectMember = 5;
+    if (hasAssetFolders) {
+        if (!detail::decodeAssetFolders(*members[nextProjectMember], state,
+                                        joinPath(path, "assetFolders"), out.assetFolders))
+            return false;
+        ++nextProjectMember;
+    }
+    if (state.documentMinor >= 18 && members.size() > nextProjectMember &&
+        !decodeDataBlocks(*members[nextProjectMember], state, joinPath(path, "dataBlocks"),
+                          out.dataBlocks))
         return false;
     return true;
 }
@@ -1095,15 +1110,19 @@ using document::SchemaVersion;
 // not exist has never issued a group id.
 [[nodiscard]] bool decodeHighestIssued(const JsonValue& node, DecodeState& state,
                                        const std::string& path, IdAllocatorHighWater& out) {
-    static constexpr std::array<std::string_view, 13> kKeys{
-        "composition", "node",           "edge",       "layer",         "layerSlot",
-        "parameter",   "animationCurve", "keyframe",   "driverBinding", "extensionRecord",
-        "nodeGroup",   "asset",          "assetFolder"};
-    const auto keys = std::span(kKeys).first(
-        state.documentMinor <= 1 ? 10U
-        : state.documentMinor < 10
-            ? 11U
-            : (state.documentMinor >= 16 && node.findMember("assetFolder") ? 13U : 12U));
+    static constexpr std::array<std::string_view, 14> kKeys{
+        "composition", "node",           "edge",        "layer",         "layerSlot",
+        "parameter",   "animationCurve", "keyframe",    "driverBinding", "extensionRecord",
+        "nodeGroup",   "asset",          "assetFolder", "dataBlock"};
+    std::vector<std::string_view> keys;
+    const auto baseCount = state.documentMinor <= 1 ? 10U : state.documentMinor < 10 ? 11U : 12U;
+    keys.assign(kKeys.begin(), kKeys.begin() + static_cast<std::ptrdiff_t>(baseCount));
+    const bool hasAssetFolder =
+        state.documentMinor >= 16 && node.findMember("assetFolder") != nullptr;
+    if (hasAssetFolder)
+        keys.push_back("assetFolder");
+    if (state.documentMinor >= 18)
+        keys.push_back("dataBlock");
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, true, state, path, members)) {
         return false;
@@ -1135,9 +1154,15 @@ using document::SchemaVersion;
     if (state.documentMinor >= 10 &&
         !decodeAllocatorHighWaterMember(*members[11], state, joinPath(path, "asset"), out.asset))
         return false;
-    if (members.size() > 12 &&
-        !decodeAllocatorHighWaterMember(*members[12], state, joinPath(path, "assetFolder"),
-                                        out.assetFolder))
+    std::size_t nextMember = 12;
+    if (hasAssetFolder && !decodeAllocatorHighWaterMember(
+                              *members[12], state, joinPath(path, "assetFolder"), out.assetFolder))
+        return false;
+    if (hasAssetFolder)
+        ++nextMember;
+    if (state.documentMinor >= 18 &&
+        !decodeAllocatorHighWaterMember(*members[nextMember], state, joinPath(path, "dataBlock"),
+                                        out.dataBlock))
         return false;
     return decodeAllocatorHighWaterMember(*members[10], state, joinPath(path, "nodeGroup"),
                                           out.nodeGroup);
@@ -1159,9 +1184,9 @@ using document::SchemaVersion;
 // ------------------------------------------------------------------------------------------
 
 // A typed target {"kind": ..., "id": ...} used both by a record's `subject` (once null is ruled
-// out by the caller) and by a host-table reference `target`. Inverts extensionTargetKind's nine
+// out by the caller) and by a host-table reference `target`. Inverts extensionTargetKind's eleven
 // wire strings from canonical_document.cpp exactly: project, composition, node, edge, layer,
-// layer-slot, parameter, animation-curve, keyframe.
+// node-group, layer, layer-slot, parameter, animation-curve, keyframe, asset.
 [[nodiscard]] bool decodeExtensionTarget(const JsonValue& node, DecodeState& state,
                                          const std::string& path, ExtensionTarget& out) {
     std::string_view kindText;
@@ -1192,6 +1217,14 @@ using document::SchemaVersion;
     }
     if (kindText == "node") {
         document::NodeId id;
+        if (!decodeObjectId(*members[1], state, idPath, id)) {
+            return false;
+        }
+        out = id;
+        return true;
+    }
+    if (kindText == "node-group") {
+        document::NodeGroupId id;
         if (!decodeObjectId(*members[1], state, idPath, id)) {
             return false;
         }
@@ -1240,6 +1273,14 @@ using document::SchemaVersion;
     }
     if (kindText == "keyframe") {
         document::KeyframeId id;
+        if (!decodeObjectId(*members[1], state, idPath, id)) {
+            return false;
+        }
+        out = id;
+        return true;
+    }
+    if (kindText == "asset") {
+        document::AssetId id;
         if (!decodeObjectId(*members[1], state, idPath, id)) {
             return false;
         }
@@ -1514,6 +1555,511 @@ using document::SchemaVersion;
         previousId = currentId;
         hasPrevious = true;
         out.push_back(std::move(record));
+    }
+    return true;
+}
+
+[[nodiscard]] bool decodeBlockDouble(const JsonValue& node, DecodeState& state,
+                                     const std::string& path, double& out) {
+    if (node.kind() != JsonValueKind::Number || !node.asNumberToken()) {
+        state.fail(DocumentDecodeError::WrongValueKind, path);
+        return false;
+    }
+    const auto token = node.asNumberToken();
+    if (!token) {
+        state.fail(DocumentDecodeError::WrongValueKind, path);
+        return false;
+    }
+    const auto parsed = parseKnownFloat64(*token);
+    if (!parsed) {
+        state.fail(DocumentDecodeError::InvalidFloat64, path);
+        return false;
+    }
+    out = *parsed.value();
+    return true;
+}
+
+[[nodiscard]] bool decodeBlockDigest(const JsonValue& node, DecodeState& state,
+                                     const std::string& path, core::Sha256Digest& out) {
+    std::string_view text;
+    if (!decodeStringMember(node, state, path, text))
+        return false;
+    const auto parsed = core::Sha256Digest::fromLowercaseHex(text);
+    if (!parsed) {
+        state.fail(DocumentDecodeError::DomainViolation, path);
+        return false;
+    }
+    out = *parsed;
+    return true;
+}
+
+[[nodiscard]] bool decodeBlockValue(const JsonValue& node, DecodeState& state,
+                                    const std::string& path, document::ParameterValue& out) {
+    std::string_view kind;
+    if (!decodeKindDiscriminator(node, state, path, kind))
+        return false;
+    if (kind == "bool") {
+        static constexpr std::array<std::string_view, 2> keys{"kind", "value"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        if (members[1]->kind() != JsonValueKind::Boolean) {
+            state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, "value"));
+            return false;
+        }
+        out = members[1]->asBoolean().value_or(false);
+        return true;
+    }
+    if (kind == "int64") {
+        static constexpr std::array<std::string_view, 2> keys{"kind", "value"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        std::string_view text;
+        if (!decodeStringMember(*members[1], state, joinPath(path, "value"), text))
+            return false;
+        const auto parsed = parseCanonicalInt64(text);
+        if (!parsed) {
+            state.fail(DocumentDecodeError::InvalidInt64Value, joinPath(path, "value"));
+            return false;
+        }
+        out = *parsed.value();
+        return true;
+    }
+    if (kind == "float64") {
+        static constexpr std::array<std::string_view, 2> keys{"kind", "value"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        double value = 0.0;
+        if (!decodeBlockDouble(*members[1], state, joinPath(path, "value"), value))
+            return false;
+        out = value;
+        return true;
+    }
+    if (kind == "vec2" || kind == "vec3" || kind == "color4") {
+        const std::size_t count = kind == "vec2" ? 2U : (kind == "vec3" ? 3U : 4U);
+        std::vector<std::string_view> keys{"kind", "x", "y"};
+        if (kind == "vec3")
+            keys.push_back("z");
+        if (kind == "color4")
+            keys = {"kind", "red", "green", "blue", "alpha"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        std::array<double, 4> values{};
+        for (std::size_t i = 0; i < count; ++i)
+            if (!decodeBlockDouble(*members[i + 1], state, joinPath(path, keys[i + 1]), values[i]))
+                return false;
+        if (kind == "vec2")
+            out = document::Vec2d{values[0], values[1]};
+        else if (kind == "vec3")
+            out = document::Vec3d{values[0], values[1], values[2]};
+        else
+            out = core::Color4d{values[0], values[1], values[2], values[3]};
+        return true;
+    }
+    if (kind == "string") {
+        static constexpr std::array<std::string_view, 2> keys{"kind", "value"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        std::string_view text;
+        if (!decodeStringMember(*members[1], state, joinPath(path, "value"), text))
+            return false;
+        out = std::string(text);
+        return true;
+    }
+    if (kind == "rational") {
+        static constexpr std::array<std::string_view, 2> keys{"kind", "value"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        core::RationalTime value;
+        if (!decodeRationalTimeValue(*members[1], state, joinPath(path, "value"), value))
+            return false;
+        out = value;
+        return true;
+    }
+    state.fail(DocumentDecodeError::DomainViolation, joinPath(path, "kind"));
+    return false;
+}
+
+[[nodiscard]] bool decodeBlockLocator(const JsonValue& node, DecodeState& state,
+                                      const std::string& path, document::AssetLocator& out) {
+    static constexpr std::array<std::string_view, 4> keys{"kind", "portability", "path",
+                                                          "relinkHint"};
+    std::vector<const JsonValue*> members;
+    if (!matchOrderedMembers(node, keys, true, state, path, members))
+        return false;
+    std::string_view kind, portability, locatorPath, relinkHint;
+    if (!decodeStringMember(*members[0], state, joinPath(path, "kind"), kind) ||
+        !decodeStringMember(*members[1], state, joinPath(path, "portability"), portability) ||
+        !decodeStringMember(*members[2], state, joinPath(path, "path"), locatorPath) ||
+        !decodeStringMember(*members[3], state, joinPath(path, "relinkHint"), relinkHint))
+        return false;
+    out = {std::string(kind), std::string(portability), std::string(locatorPath),
+           std::string(relinkHint)};
+    return true;
+}
+
+[[nodiscard]] bool decodeBlockPayload(const JsonValue& node, DecodeState& state,
+                                      const std::string& path, document::DataBlockKind kind,
+                                      document::DataBlockPayload& out) {
+    std::string_view payloadKind;
+    if (!decodeKindDiscriminator(node, state, path, payloadKind))
+        return false;
+    if (kind == document::DataBlockKind::Curve) {
+        static constexpr std::array<std::string_view, 4> keys{"kind", "domainStart", "domainEnd",
+                                                              "samples"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        document::DataBlockCurve curve;
+        if (!decodeBlockDouble(*members[1], state, joinPath(path, "domainStart"),
+                               curve.domainStart) ||
+            !decodeBlockDouble(*members[2], state, joinPath(path, "domainEnd"), curve.domainEnd))
+            return false;
+        if (members[3]->kind() != JsonValueKind::Array) {
+            state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, "samples"));
+            return false;
+        }
+        for (std::size_t i = 0; i < members[3]->arrayElements().size(); ++i) {
+            double value = 0;
+            if (!decodeBlockDouble(members[3]->arrayElements()[i], state,
+                                   joinPathIndex(joinPath(path, "samples"), i), value))
+                return false;
+            curve.samples.push_back(value);
+        }
+        out = std::move(curve);
+        return true;
+    }
+    if (kind == document::DataBlockKind::Ramp) {
+        static constexpr std::array<std::string_view, 2> keys{"kind", "stops"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        if (members[1]->kind() != JsonValueKind::Array) {
+            state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, "stops"));
+            return false;
+        }
+        document::DataBlockRamp ramp;
+        for (std::size_t i = 0; i < members[1]->arrayElements().size(); ++i) {
+            const auto& item = members[1]->arrayElements()[i];
+            static constexpr std::array<std::string_view, 2> stopKeys{"position", "color"};
+            std::vector<const JsonValue*> stop;
+            if (!matchOrderedMembers(item, stopKeys, true, state,
+                                     joinPathIndex(joinPath(path, "stops"), i), stop))
+                return false;
+            document::DataBlockRampStop s;
+            if (!decodeBlockDouble(*stop[0], state, joinPath(path, "position"), s.position))
+                return false;
+            static constexpr std::array<std::string_view, 4> colorKeys{"red", "green", "blue",
+                                                                       "alpha"};
+            std::vector<const JsonValue*> color;
+            if (!matchOrderedMembers(*stop[1], colorKeys, true, state, joinPath(path, "color"),
+                                     color))
+                return false;
+            if (!decodeBlockDouble(*color[0], state, "", s.color.red) ||
+                !decodeBlockDouble(*color[1], state, "", s.color.green) ||
+                !decodeBlockDouble(*color[2], state, "", s.color.blue) ||
+                !decodeBlockDouble(*color[3], state, "", s.color.alpha))
+                return false;
+            ramp.stops.push_back(s);
+        }
+        out = std::move(ramp);
+        return true;
+    }
+    if (kind == document::DataBlockKind::Mask) {
+        static constexpr std::array<std::string_view, 2> keys{"kind", "coverageAsset"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        document::DataBlockMask mask;
+        if (!decodeObjectId(*members[1], state, joinPath(path, "coverageAsset"),
+                            mask.coverageAsset))
+            return false;
+        out = mask;
+        return true;
+    }
+    if (kind == document::DataBlockKind::Table || kind == document::DataBlockKind::PointSet) {
+        const bool pointSet = kind == document::DataBlockKind::PointSet;
+        std::vector<std::string_view> keys =
+            pointSet ? std::vector<std::string_view>{"kind", "dimensions", "points", "attributes"}
+                     : std::vector<std::string_view>{"kind", "columns"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        auto decodeColumns = [&](const JsonValue& value, const std::string& where,
+                                 std::vector<document::DataBlockTableColumn>& columns) {
+            if (value.kind() != JsonValueKind::Array) {
+                state.fail(DocumentDecodeError::WrongValueKind, where);
+                return false;
+            }
+            for (std::size_t i = 0; i < value.arrayElements().size(); ++i) {
+                static constexpr std::array<std::string_view, 3> columnKeys{"name", "valueKind",
+                                                                            "values"};
+                std::vector<const JsonValue*> column;
+                if (!matchOrderedMembers(value.arrayElements()[i], columnKeys, true, state,
+                                         joinPathIndex(where, i), column))
+                    return false;
+                std::string_view name, valueKind;
+                if (!decodeStringMember(*column[0], state,
+                                        joinPath(joinPathIndex(where, i), "name"), name) ||
+                    !decodeStringMember(*column[1], state,
+                                        joinPath(joinPathIndex(where, i), "valueKind"), valueKind))
+                    return false;
+                const auto parsed = parseCanonicalJsonUInt32(valueKind, 255);
+                if (!parsed) {
+                    state.fail(DocumentDecodeError::DomainViolation,
+                               joinPath(joinPathIndex(where, i), "valueKind"));
+                    return false;
+                }
+                document::DataBlockTableColumn result;
+                result.name = std::string(name);
+                result.valueKind = static_cast<document::DataBlockValueKind>(*parsed.value());
+                if (column[2]->kind() != JsonValueKind::Array) {
+                    state.fail(DocumentDecodeError::WrongValueKind,
+                               joinPath(joinPathIndex(where, i), "values"));
+                    return false;
+                }
+                for (std::size_t j = 0; j < column[2]->arrayElements().size(); ++j) {
+                    document::ParameterValue v;
+                    if (!decodeBlockValue(
+                            column[2]->arrayElements()[j], state,
+                            joinPathIndex(joinPath(joinPathIndex(where, i), "values"), j), v))
+                        return false;
+                    result.values.push_back(std::move(v));
+                }
+                columns.push_back(std::move(result));
+            }
+            return true;
+        };
+        if (pointSet) {
+            document::DataBlockPointSet points;
+            std::uint32_t dimensions = 0;
+            if (!decodeUInt32Member(*members[1], state, joinPath(path, "dimensions"), 3,
+                                    dimensions) ||
+                dimensions < 2)
+                return false;
+            points.dimensions = static_cast<std::uint8_t>(dimensions);
+            if (members[2]->kind() != JsonValueKind::Array) {
+                state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, "points"));
+                return false;
+            }
+            for (std::size_t i = 0; i < members[2]->arrayElements().size(); ++i) {
+                static constexpr std::array<std::string_view, 3> pointKeys{"x", "y", "z"};
+                std::vector<const JsonValue*> point;
+                if (!matchOrderedMembers(members[2]->arrayElements()[i], pointKeys, true, state,
+                                         joinPathIndex(joinPath(path, "points"), i), point))
+                    return false;
+                document::Vec3d value;
+                if (!decodeBlockDouble(*point[0], state, "", value.x) ||
+                    !decodeBlockDouble(*point[1], state, "", value.y) ||
+                    !decodeBlockDouble(*point[2], state, "", value.z))
+                    return false;
+                points.points.push_back(value);
+            }
+            if (!decodeColumns(*members[3], joinPath(path, "attributes"), points.attributes))
+                return false;
+            out = std::move(points);
+            return true;
+        }
+        document::DataBlockTable table;
+        if (!decodeColumns(*members[1], joinPath(path, "columns"), table.columns))
+            return false;
+        out = std::move(table);
+        return true;
+    }
+    if (kind == document::DataBlockKind::Path) {
+        static constexpr std::array<std::string_view, 3> keys{"kind", "closed", "anchors"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        if (members[0]->kind() != JsonValueKind::String ||
+            members[1]->kind() != JsonValueKind::Boolean ||
+            members[2]->kind() != JsonValueKind::Array)
+            return false;
+        document::PathValue value;
+        value.closed = members[1]->asBoolean().value_or(false);
+        for (std::size_t i = 0; i < members[2]->arrayElements().size(); ++i) {
+            static constexpr std::array<std::string_view, 3> anchorKeys{"point", "inHandle",
+                                                                        "outHandle"};
+            std::vector<const JsonValue*> anchor;
+            if (!matchOrderedMembers(members[2]->arrayElements()[i], anchorKeys, true, state,
+                                     joinPathIndex(joinPath(path, "anchors"), i), anchor))
+                return false;
+            auto decodePoint = [&](const JsonValue& point, document::Vec2d& result) {
+                static constexpr std::array<std::string_view, 2> xy{"x", "y"};
+                std::vector<const JsonValue*> coords;
+                if (!matchOrderedMembers(point, xy, true, state, "", coords))
+                    return false;
+                return decodeBlockDouble(*coords[0], state, "", result.x) &&
+                       decodeBlockDouble(*coords[1], state, "", result.y);
+            };
+            document::PathAnchor a;
+            if (!decodePoint(*anchor[0], a.point))
+                return false;
+            for (std::size_t h = 0; h < 2; ++h)
+                if (!anchor[h + 1]->isNull()) {
+                    document::Vec2d handle;
+                    if (!decodePoint(*anchor[h + 1], handle))
+                        return false;
+                    if (h == 0)
+                        a.inHandle = handle;
+                    else
+                        a.outHandle = handle;
+                }
+            value.anchors.push_back(a);
+        }
+        out = value;
+        return true;
+    }
+    if (kind == document::DataBlockKind::Analysis || kind == document::DataBlockKind::Opaque ||
+        document::isMediaDataBlockKind(kind)) {
+        static constexpr std::array<std::string_view, 2> keys{"kind", "bytes"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        document::OpaqueExtensionPayload bytes;
+        if (!decodePayload(*members[1], state, joinPath(path, "bytes"), bytes))
+            return false;
+        out = std::move(bytes);
+        return true;
+    }
+    state.fail(DocumentDecodeError::DomainViolation, joinPath(path, "kind"));
+    return false;
+}
+
+[[nodiscard]] bool decodeDataBlock(const JsonValue& node, DecodeState& state,
+                                   const std::string& path, document::DataBlockRecord& out) {
+    static constexpr std::array<std::string_view, 10> keys{
+        "id",        "kind",       "owner",   "typeId",  "schemaVersion",
+        "mediaType", "provenance", "subject", "payload", "tags"};
+    std::vector<const JsonValue*> members;
+    if (!matchOrderedMembers(node, keys, true, state, path, members))
+        return false;
+    document::DataBlockRecord block;
+    document::DataBlockRecordId id;
+    if (!decodeObjectId(*members[0], state, joinPath(path, "id"), id))
+        return false;
+    block.id = id;
+    std::string_view kindText;
+    if (!decodeStringMember(*members[1], state, joinPath(path, "kind"), kindText))
+        return false;
+    static constexpr std::array<std::string_view, 13> kindNames{
+        "image", "sequence",  "video", "audio", "font",     "curve", "ramp",
+        "table", "point-set", "path",  "mask",  "analysis", "opaque"};
+    const auto* kindIt = std::find(kindNames.begin(), kindNames.end(), kindText);
+    if (kindIt == kindNames.end()) {
+        state.fail(DocumentDecodeError::DomainViolation, joinPath(path, "kind"));
+        return false;
+    }
+    block.kind = static_cast<document::DataBlockKind>(kindIt - kindNames.begin());
+    if (!members[2]->isNull()) {
+        document::ExtensionTarget target;
+        if (!decodeExtensionTarget(*members[2], state, joinPath(path, "owner"), target))
+            return false;
+        block.owner = target;
+    }
+    std::string_view text;
+    if (!decodeStringMember(*members[3], state, joinPath(path, "typeId"), text))
+        return false;
+    block.typeId = std::string(text);
+    if (!decodeSchemaVersionField(*members[4], state, joinPath(path, "schemaVersion"),
+                                  block.schemaVersion))
+        return false;
+    if (!decodeStringMember(*members[5], state, joinPath(path, "mediaType"), text))
+        return false;
+    block.mediaType = std::string(text);
+    {
+        static constexpr std::array<std::string_view, 4> provenanceKeys{
+            "kind", "locator", "createdAt", "contentDigest"};
+        static constexpr std::array<std::string_view, 4> producerKeys{"kind", "producer",
+                                                                      "createdAt", "contentDigest"};
+        std::vector<const JsonValue*> p;
+        const auto producer = members[6]->findMember("kind") &&
+                              members[6]->findMember("kind")->asString() == "producer";
+        if (!matchOrderedMembers(*members[6], producer ? producerKeys : provenanceKeys, true, state,
+                                 joinPath(path, "provenance"), p))
+            return false;
+        std::string_view sourceKind;
+        if (!decodeStringMember(*p[0], state, "", sourceKind))
+            return false;
+        if (sourceKind == "source") {
+            document::AssetLocator locator;
+            if (!decodeBlockLocator(*p[1], state, joinPath(path, "provenance/locator"), locator))
+                return false;
+            block.provenance.source = locator;
+        } else {
+            static constexpr std::array<std::string_view, 3> producerFields{"name", "version",
+                                                                            "parametersDigest"};
+            std::vector<const JsonValue*> q;
+            if (!matchOrderedMembers(*p[1], producerFields, true, state,
+                                     joinPath(path, "provenance/producer"), q))
+                return false;
+            document::DataBlockProducer producerValue;
+            if (!decodeStringMember(*q[0], state, "", text))
+                return false;
+            producerValue.name = std::string(text);
+            if (!decodeStringMember(*q[1], state, "", text))
+                return false;
+            producerValue.version = std::string(text);
+            if (!decodeBlockDigest(*q[2], state, "", producerValue.parametersDigest))
+                return false;
+            block.provenance.source = std::move(producerValue);
+        }
+        if (!decodeStringMember(*p[2], state, "", text))
+            return false;
+        block.provenance.createdAt = std::string(text);
+        if (!decodeBlockDigest(*p[3], state, "", block.provenance.contentDigest))
+            return false;
+    }
+    if (!members[7]->isNull()) {
+        document::ExtensionTarget target;
+        if (!decodeExtensionTarget(*members[7], state, joinPath(path, "subject"), target))
+            return false;
+        block.subject = target;
+    }
+    if (!decodeBlockPayload(*members[8], state, joinPath(path, "payload"), block.kind,
+                            block.payload))
+        return false;
+    if (members[9]->kind() != JsonValueKind::Array) {
+        state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, "tags"));
+        return false;
+    }
+    for (std::size_t i = 0; i < members[9]->arrayElements().size(); ++i) {
+        if (!decodeStringMember(members[9]->arrayElements()[i], state,
+                                joinPathIndex(joinPath(path, "tags"), i), text))
+            return false;
+        block.tags.emplace_back(text);
+    }
+    out = std::move(block);
+    return true;
+}
+
+[[nodiscard]] bool decodeDataBlocks(const JsonValue& node, DecodeState& state,
+                                    const std::string& path,
+                                    std::vector<document::DataBlockRecord>& out) {
+    if (node.kind() != JsonValueKind::Array) {
+        state.fail(DocumentDecodeError::WrongValueKind, path);
+        return false;
+    }
+    out.clear();
+    std::uint64_t previous = 0;
+    bool has = false;
+    for (std::size_t i = 0; i < node.arrayElements().size(); ++i) {
+        document::DataBlockRecord block;
+        if (!decodeDataBlock(node.arrayElements()[i], state, joinPathIndex(path, i), block))
+            return false;
+        const auto id = std::get<document::DataBlockRecordId>(block.id).value();
+        if (has && id <= previous) {
+            state.fail(DocumentDecodeError::DomainViolation, joinPathIndex(path, i) + "/id");
+            return false;
+        }
+        previous = id;
+        has = true;
+        out.push_back(std::move(block));
     }
     return true;
 }

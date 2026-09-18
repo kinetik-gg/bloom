@@ -119,3 +119,10 @@ DPR 1.5; after approval both were 0 with changed fraction 0. Comparison toleranc
 coverage are unchanged.
 
 Merged-tree approval (2026-09-17, Qt 6.8.3): ASSETS-2 and TABS-1 each re-approved the references on their own base; the integration merge regenerated both captures once more so the references carry both the Assets tree changes and the Properties filter strip. Tolerances unchanged.
+
+DATA-1 approval (2026-09-17, Qt 6.8.3): the Assets panel adds the Media/Data/Compositions filter row.
+Both references were regenerated with `--update-goldens` at DPR 1 and 1.5 and visually inspected.
+Before approval, the mean channel errors against the prior references were 0.340005 (DPR 1) and
+0.336177 (DPR 1.5), with changed fractions 0.00219792 and 0.00193171; both were within the
+existing tolerance. The fixture contains no data blocks, so the approved change is limited to the
+Inspector filter chrome. Rendering identity goldens are unchanged.

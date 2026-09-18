@@ -15,6 +15,7 @@ enum class Family : std::uint8_t {
     Time,
     String,
     Numeric,
+    DataBlocks,
 };
 
 [[nodiscard]] Family familyOf(const Kernel kernel) noexcept {
@@ -87,6 +88,11 @@ enum class Family : std::uint8_t {
     case Kernel::BooleanNot:
     case Kernel::InRange:
         return Family::Numeric;
+    case Kernel::DataSample:
+    case Kernel::RampSample:
+    case Kernel::TableLookup:
+    case Kernel::PointSetRead:
+        return Family::DataBlocks;
     }
     return Family::Conversion;
 }
@@ -105,6 +111,8 @@ ValueUtilityOutcome evaluateValueUtility(const ValueUtilityInvocation& invocatio
         return detail::evaluateValueNumeric(invocation);
     case Family::Conversion:
         break;
+    case Family::DataBlocks:
+        return detail::evaluateValueDataBlock(invocation);
     }
     return detail::evaluateValueConversion(invocation);
 }

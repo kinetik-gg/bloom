@@ -1,5 +1,6 @@
 #pragma once
 #include <bloom/commands/asset_operations.hpp>
+#include <bloom/commands/data_block_operations.hpp>
 #include <bloom/document/shape.hpp>
 
 #include <bloom/commands/animation_operations.hpp>

@@ -86,6 +86,7 @@ target_sources(
         value_graph_evaluation.cpp
         value_utility_support.hpp
         value_utility_kernels.cpp
+        value_utility_data_blocks.cpp
         value_utility_conversions.cpp
         value_utility_time.cpp
         value_utility_strings.cpp

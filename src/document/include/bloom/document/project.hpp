@@ -4,6 +4,7 @@
 #include <bloom/document/animation.hpp>
 #include <bloom/document/asset.hpp>
 #include <bloom/document/composition_settings.hpp>
+#include <bloom/document/data_block.hpp>
 #include <bloom/document/extension_records.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/ids.hpp>
@@ -113,6 +114,16 @@ class Project final {
     [[nodiscard]] bool removeComposition(CompositionId id);
     [[nodiscard]] bool addExtensionRecord(ExtensionRecord record);
     [[nodiscard]] bool removeExtensionRecord(ExtensionRecordId id);
+    [[nodiscard]] std::span<const DataBlockRecord> typedDataBlocks() const noexcept {
+        return dataBlocks_;
+    }
+    [[nodiscard]] const DataBlockRecord* findDataBlock(DataBlockRecordId id) const noexcept;
+    [[nodiscard]] DataBlockRecord* findDataBlock(DataBlockRecordId id) noexcept;
+    [[nodiscard]] bool addDataBlock(DataBlockRecord block);
+    [[nodiscard]] bool removeDataBlock(DataBlockRecordId id);
+    // Normalized views used by the Inspector. Media assets and extension records remain in their
+    // owning collections; only authored non-media blocks are stored in typedDataBlocks().
+    [[nodiscard]] std::vector<DataBlockRecord> dataBlocks() const;
 
     [[nodiscard]] ValidationResult validate() const;
     [[nodiscard]] ValidationResult validateCompositionNesting() const;
@@ -124,6 +135,7 @@ class Project final {
     std::vector<AssetRecord> assets_;
     std::vector<AssetFolder> assetFolders_;
     std::vector<ExtensionRecord> extensionRecords_;
+    std::vector<DataBlockRecord> dataBlocks_;
 };
 
 } // namespace bloom::document

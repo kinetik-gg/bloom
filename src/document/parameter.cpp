@@ -83,6 +83,9 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
         schemaKey == kIntegerOperandParameterSchemaKey) {
         return integer();
     }
+    if (schemaKey == kDataBlockParameterSchemaKey) {
+        return integer();
+    }
     if (schemaKey == kBooleanValueParameterSchemaKey ||
         schemaKey == kBooleanOperandParameterSchemaKey ||
         schemaKey == kClampResultParameterSchemaKey) {

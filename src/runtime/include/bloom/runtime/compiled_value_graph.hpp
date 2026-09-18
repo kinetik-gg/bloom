@@ -2,6 +2,7 @@
 
 #include <bloom/core/color.hpp>
 #include <bloom/core/scalar_primitives.hpp>
+#include <bloom/document/data_block.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/value_operations.hpp>
@@ -12,6 +13,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <variant>
@@ -255,6 +257,7 @@ struct CompiledValueUtility final {
     document::ValueUtilityKernel operation = document::ValueUtilityKernel::ScalarToString;
     std::vector<CompiledValueOperand> operands;
     std::vector<std::int64_t> selectors;
+    std::optional<document::DataBlockRecord> dataBlock;
 
     friend bool operator==(const CompiledValueUtility&, const CompiledValueUtility&) = default;
 };

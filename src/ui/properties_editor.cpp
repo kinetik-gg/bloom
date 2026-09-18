@@ -28,6 +28,7 @@
 #include <bloom/core/color.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/document/composition_settings.hpp>
+#include <bloom/document/data_block.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/parameter.hpp>
@@ -44,6 +45,7 @@
 #include <QScrollArea>
 #include <QSettings>
 #include <QSignalBlocker>
+#include <QStringList>
 #include <QVBoxLayout>
 #include <QVariant>
 
@@ -242,6 +244,9 @@ void PropertiesEditor::updateFilterAvailability() {
 }
 
 bool PropertiesEditor::sectionMatchesFilter(const kit::KSection* section) const {
+    if (std::holds_alternative<document::DataBlockRecordId>(session_.selection().primary))
+        return filterGroup_ == QStringLiteral("all") ||
+               section->property("propertiesSectionGroup").toString() == QStringLiteral("data");
     return filterGroup_ == QStringLiteral("all") ||
            section->property("propertiesSectionGroup").toString() == filterGroup_;
 }
@@ -339,6 +344,7 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     bodyLayout->addWidget(selectionSection_);
 
     buildDocumentSection(bodyLayout);
+    buildDataBlockSection(bodyLayout);
     bindCommits();
 
     connect(&session_, &CompositionSession::snapshotChanged, this, &PropertiesEditor::rebuild);
@@ -509,6 +515,7 @@ void PropertiesEditor::rebuild() {
     configureSolidColor();
     configureTextSource();
     configureDocumentProperties();
+    configureDataBlockProperties();
     configureMergeInputs();
     configureRegistryRows();
     configureUpstream();
@@ -757,9 +764,11 @@ void PropertiesEditor::configureBlendMode() {
 void PropertiesEditor::configureDocumentProperties() {
     const auto* composition = session_.composition();
     const bool hasSelection = !std::holds_alternative<std::monostate>(session_.selection().primary);
-    const bool showDocument = composition != nullptr && !hasSelection;
+    const bool hasDataBlock =
+        std::holds_alternative<document::DataBlockRecordId>(session_.selection().primary);
+    const bool showDocument = composition != nullptr && !hasSelection && !hasDataBlock;
     documentSection_->setVisible(showDocument);
-    selectionSection_->setVisible(!showDocument);
+    selectionSection_->setVisible(!showDocument && !hasDataBlock);
     if (!showDocument) {
         return;
     }
@@ -777,6 +786,41 @@ void PropertiesEditor::configureDocumentProperties() {
     const auto context = frameContextFor(session_);
     documentDuration_->setText(context.has_value() ? formatDuration(*context)
                                                    : QStringLiteral("—"));
+}
+
+void PropertiesEditor::configureDataBlockProperties() {
+    const auto* id = std::get_if<document::DataBlockRecordId>(&session_.selection().primary);
+    const auto* block = id ? session_.snapshot().project().findDataBlock(*id) : nullptr;
+    dataBlockSection_->setVisible(block != nullptr);
+    if (block == nullptr)
+        return;
+
+    const auto source = std::visit(
+        [](const auto& value) -> QString {
+            using Source = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<Source, document::AssetLocator>) {
+                return QStringLiteral("Source · %1").arg(QString::fromStdString(value.path));
+            } else {
+                return QStringLiteral("Producer · %1 %2")
+                    .arg(QString::fromStdString(value.name), QString::fromStdString(value.version));
+            }
+        },
+        block->provenance.source);
+    const auto digest = block->provenance.contentDigest.toLowercaseHex();
+    QStringList tags;
+    for (const auto& tag : block->tags)
+        tags.push_back(QString::fromStdString(tag));
+    const auto payload =
+        tr("%1 bytes · %2")
+            .arg(static_cast<qulonglong>(block->payloadBytes()))
+            .arg(QString::fromStdString(std::string(document::dataBlockKindName(block->kind))));
+    dataBlockKind_->setText(
+        QString::fromStdString(std::string(document::dataBlockKindName(block->kind))));
+    dataBlockProvenance_->setText(source);
+    dataBlockDigest_->setText(QString::fromStdString(std::string(digest.data(), digest.size())));
+    dataBlockPayload_->setText(payload);
+    dataBlockTags_->setText(tags.isEmpty() ? tr("None") : tags.join(QStringLiteral(", ")));
+    dataBlockReaders_->setText(tr("%1 nodes").arg(session_.dataBlockReaders(*id).size()));
 }
 
 void PropertiesEditor::filterRows() {

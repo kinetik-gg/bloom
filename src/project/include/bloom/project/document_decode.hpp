@@ -6,6 +6,7 @@
 #include <bloom/document/animation.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/composition_settings.hpp>
+#include <bloom/document/data_block.hpp>
 #include <bloom/document/extension_records.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/ids.hpp>
@@ -165,6 +166,7 @@ struct DecodedDocumentEnvelope final {
     std::vector<DecodedComposition> compositions;
     std::vector<document::AssetRecord> assets;
     std::vector<document::AssetFolder> assetFolders;
+    std::vector<document::DataBlockRecord> dataBlocks;
     document::IdAllocatorHighWater highWater;
     std::vector<document::ExtensionRecord> extensionRecords;
 

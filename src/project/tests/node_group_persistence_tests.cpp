@@ -30,7 +30,9 @@ namespace {
 void removeImageFields(std::string& text) {
     text = std::regex_replace(text, std::regex(R"(,\s*"backgroundColor"\s*:\s*\[[^\]]*\])"), "");
     text = std::regex_replace(text, std::regex(R"(,\s*"assets"\s*:\s*\[\])"), "");
+    text = std::regex_replace(text, std::regex(R"(,\s*"dataBlocks"\s*:\s*\[\])"), "");
     text = std::regex_replace(text, std::regex(R"(,\s*"asset"\s*:\s*"0")"), "");
+    text = std::regex_replace(text, std::regex(R"(,\s*"dataBlock"\s*:\s*"0")"), "");
 }
 
 using namespace bloom;
@@ -173,10 +175,10 @@ std::vector<std::byte> legacyArchive(std::string& documentText) {
         throw std::logic_error("legacy entries");
     const auto bytes = entries.document()->documentBytes();
     documentText.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    const auto minor = documentText.find("\"minor\": 17");
+    const auto minor = documentText.find("\"minor\": 18");
     if (minor == std::string::npos)
         throw std::logic_error("legacy minor anchor");
-    documentText.replace(minor, std::string_view("\"minor\": 17").size(), "\"minor\": 1");
+    documentText.replace(minor, std::string_view("\"minor\": 18").size(), "\"minor\": 1");
     removeImageFields(documentText);
     eraseMemberLine(documentText, "nodeGroups");
     eraseMemberLine(documentText, "nodeGroup");

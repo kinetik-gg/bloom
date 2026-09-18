@@ -329,8 +329,10 @@ void migrationPin() {
     json = std::regex_replace(json, std::regex(R"("minor"\s*:\s*\d+)"), "\"minor\": 9",
                               std::regex_constants::format_first_only);
     replace(R"(,\s*"assets"\s*:\s*\[\s*\])", "");
+    replace(R"(,\s*"dataBlocks"\s*:\s*\[\s*\])", "");
     replace(R"(,\s*"backgroundColor"\s*:\s*\[[^\]]*\])", "");
     replace(R"(,\s*"asset"\s*:\s*"0")", "");
+    replace(R"(,\s*"dataBlock"\s*:\s*"0")", "");
     auto coordinator = project::ProjectIoMemoryCoordinator::create(64ULL << 20U);
     if (!coordinator)
         std::abort();

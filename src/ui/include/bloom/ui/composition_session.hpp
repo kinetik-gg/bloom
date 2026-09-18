@@ -68,8 +68,9 @@ struct KeyframeSelection final {
     friend bool operator==(const KeyframeSelection&, const KeyframeSelection&) = default;
 };
 
-using SelectionTarget = std::variant<std::monostate, document::LayerId, document::NodeId,
-                                     document::ParameterId, KeyframeSelection>;
+using SelectionTarget =
+    std::variant<std::monostate, document::LayerId, document::NodeId, document::ParameterId,
+                 document::DataBlockRecordId, KeyframeSelection>;
 
 struct CompositionSelection {
     SelectionTarget primary;
@@ -198,6 +199,9 @@ class CompositionSession final : public QObject {
     }
     void selectNodes(std::set<document::NodeId> nodes, document::NodeId primary);
     void toggleNodeSelection(document::NodeId nodeId);
+    void selectDataBlock(document::DataBlockRecordId blockId);
+    [[nodiscard]] std::set<document::NodeId>
+    dataBlockReaders(document::DataBlockRecordId blockId) const;
     void selectParameter(document::ParameterId parameterId);
     // Selecting a keyframe REPLACES the primary selection like every other select* method (one
     // primary/contextual selection truth -- docs/roadmap.md's Batch-4 gate). A missing curve/key

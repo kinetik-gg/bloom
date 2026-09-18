@@ -975,8 +975,9 @@ void Evaluator::evaluateUtility(const runtime::CompiledValueOperation& operation
     for (const auto& operand : kernel.operands) {
         operands.push_back(operandOf(operand));
     }
-    const auto outcome =
-        runtime::evaluateValueUtility({kernel.operation, operands, kernel.selectors, time_, rate_});
+    const auto outcome = runtime::evaluateValueUtility(
+        {kernel.operation, operands, kernel.selectors, time_, rate_,
+         kernel.dataBlock.has_value() ? &*kernel.dataBlock : nullptr});
     if (outcome.failed) {
         const auto& blamed = outcome.failedOperand < kernel.operands.size()
                                  ? kernel.operands[outcome.failedOperand]

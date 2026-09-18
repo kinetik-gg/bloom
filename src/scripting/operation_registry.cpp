@@ -19,7 +19,7 @@ namespace {
                                                      .message = std::move(message)});
 }
 
-[[nodiscard]] const Value* find(const Arguments& arguments, const std::string& name) {
+[[nodiscard]] const Value* findArgument(const Arguments& arguments, const std::string& name) {
     const auto iterator = arguments.find(name);
     return iterator == arguments.end() ? nullptr : &iterator->second;
 }
@@ -38,7 +38,7 @@ namespace {
                                                   const std::string& operationId,
                                                   const std::string& name,
                                                   OperationCreateResult& error) {
-    const auto* value = find(arguments, name);
+    const auto* value = findArgument(arguments, name);
     if (value == nullptr) {
         error = failure(operationId, name, "Missing integer argument");
         return std::nullopt;
@@ -54,7 +54,7 @@ namespace {
                                            const std::string& operationId, const std::string& name,
                                            OperationCreateResult& error,
                                            const bool required = true) {
-    const auto* value = find(arguments, name);
+    const auto* value = findArgument(arguments, name);
     if (value == nullptr) {
         if (!required) {
             return std::nullopt;
@@ -76,7 +76,7 @@ namespace {
                                               const std::string& operationId,
                                               const std::string& name,
                                               OperationCreateResult& error) {
-    const auto* value = find(arguments, name);
+    const auto* value = findArgument(arguments, name);
     if (value == nullptr) {
         error = failure(operationId, name, "Missing string argument");
         return std::nullopt;
@@ -92,7 +92,7 @@ namespace {
                                               const std::string& operationId,
                                               const std::string& name,
                                               OperationCreateResult& error) {
-    const auto* value = find(arguments, name);
+    const auto* value = findArgument(arguments, name);
     if (value == nullptr) {
         error = failure(operationId, name, "Missing stable id argument");
         return std::nullopt;
@@ -111,7 +111,7 @@ namespace {
 [[nodiscard]] std::optional<document::Vec2d>
 vec2(const Arguments& arguments, const std::string& operationId, const std::string& name,
      OperationCreateResult& error, const bool required = true) {
-    const auto* value = find(arguments, name);
+    const auto* value = findArgument(arguments, name);
     if (value == nullptr) {
         if (!required) {
             return std::nullopt;
@@ -139,7 +139,7 @@ vec2(const Arguments& arguments, const std::string& operationId, const std::stri
 [[nodiscard]] std::optional<core::Color4d>
 color4(const Arguments& arguments, const std::string& operationId, const std::string& name,
        OperationCreateResult& error, const bool required = true) {
-    const auto* value = find(arguments, name);
+    const auto* value = findArgument(arguments, name);
     if (value == nullptr) {
         if (!required) {
             return std::nullopt;
@@ -176,7 +176,7 @@ color4(const Arguments& arguments, const std::string& operationId, const std::st
                                                          const std::string& operationId,
                                                          const std::string& name,
                                                          OperationCreateResult& error) {
-    const auto* value = find(arguments, name);
+    const auto* value = findArgument(arguments, name);
     if (value == nullptr) {
         error = failure(operationId, name, "Missing rational time argument");
         return std::nullopt;
@@ -277,6 +277,11 @@ OperationRegistry OperationRegistry::builtIn() {
          "bloom.asset.rename-folder",
          "bloom.asset.reorder",
          "bloom.asset.set-tags",
+         "bloom.data-block.create",
+         "bloom.data-block.replace-payload",
+         "bloom.data-block.remove",
+         "bloom.data-block.relink",
+         "bloom.data-block.set-tags",
          "bloom.composition.add",
          "bloom.composition.clear-work-area",
          "bloom.composition.delete",
@@ -490,6 +495,43 @@ OperationRegistry OperationRegistry::builtIn() {
         {{"composition", ValueKind::Id, true},
          {"nodeType", ValueKind::String, true},
          {"position", ValueKind::Vec2, true}});
+
+    replaceFactory("bloom.data-block.remove",
+                   [](const std::string& operationId, const Arguments& arguments) {
+                       OperationCreateResult error(nullptr, std::nullopt);
+                       const auto block = id(arguments, operationId, "dataBlock", error);
+                       if (!block.has_value())
+                           return error;
+                       return OperationCreateResult(
+                           std::make_unique<commands::RemoveDataBlock>(
+                               document::DataBlockRecordId::fromRaw(*block)),
+                           std::nullopt);
+                   },
+                   {{"dataBlock", ValueKind::Id, true}});
+
+    replaceFactory("bloom.data-block.set-tags",
+                   [](const std::string& operationId, const Arguments& arguments) {
+                       OperationCreateResult error(nullptr, std::nullopt);
+                       const auto block = id(arguments, operationId, "dataBlock", error);
+                       const auto* value = findArgument(arguments, "tags");
+                       if (!block.has_value() || value == nullptr)
+                           return error;
+                       const auto* array = std::get_if<ValueArray>(&value->storage);
+                       if (array == nullptr)
+                           return failure(operationId, "tags", "Expected an array of strings");
+                       std::vector<std::string> tags;
+                       for (const auto& entry : *array) {
+                           const auto* tag = std::get_if<std::string>(&entry.storage);
+                           if (tag == nullptr)
+                               return failure(operationId, "tags", "Expected an array of strings");
+                           tags.push_back(*tag);
+                       }
+                       return OperationCreateResult(
+                           std::make_unique<commands::SetDataBlockTags>(
+                               document::DataBlockRecordId::fromRaw(*block), std::move(tags)),
+                           std::nullopt);
+                   },
+                   {{"dataBlock", ValueKind::Id, true}, {"tags", ValueKind::Array, true}});
 
     return registry;
 }

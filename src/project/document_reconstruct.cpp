@@ -201,6 +201,14 @@ ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope) 
         }
     }
 
+    for (auto& block : envelope.dataBlocks) {
+        if (std::get_if<document::DataBlockRecordId>(&block.id) == nullptr ||
+            !project.addDataBlock(std::move(block))) {
+            return ReconstructDocumentResult::failure(
+                projectRejection(ReconstructionStage::DataBlockAdd));
+        }
+    }
+
     const auto validation = project.validate();
     if (!validation.ok()) {
         return ReconstructDocumentResult::failure(

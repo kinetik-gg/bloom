@@ -47,6 +47,7 @@ struct ValueUtilityInvocation final {
     // disagree about which frame "now" is.
     core::RationalTime time;
     document::FrameRate rate = document::FrameRate::framesPerSecond24();
+    const document::DataBlockRecord* dataBlock = nullptr;
 };
 
 struct ValueUtilityOutcome final {

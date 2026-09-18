@@ -131,6 +131,19 @@ if(BUILD_TESTING)
         LABELS unit project persistence document
     )
 
+    add_executable(bloom_project_data_block_persistence_test tests/data_block_persistence_tests.cpp)
+    target_include_directories(
+        bloom_project_data_block_persistence_test
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(bloom_project_data_block_persistence_test PRIVATE bloom_project)
+    bloom_enable_warnings(bloom_project_data_block_persistence_test)
+    bloom_add_test(
+        NAME bloom.project.data_block_persistence
+        COMMAND bloom_project_data_block_persistence_test
+        LABELS unit project persistence data
+    )
+
     add_executable(bloom_project_document_migration_test tests/document_migration_tests.cpp)
     target_link_libraries(bloom_project_document_migration_test PRIVATE bloom_project)
     bloom_enable_warnings(bloom_project_document_migration_test)

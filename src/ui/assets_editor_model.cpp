@@ -1,8 +1,10 @@
 #include "assets_editor_internal.hpp"
 #include <QHBoxLayout>
+#include <QMetaType>
 #include <QSignalBlocker>
 #include <QTreeWidgetItemIterator>
 #include <algorithm>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/assets_editor.hpp>
@@ -10,6 +12,7 @@
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/row.hpp>
 #include <map>
+#include <set>
 #include <tuple>
 
 namespace bloom::ui {
@@ -51,8 +54,15 @@ class AssetRow final : public kit::KRow {
 QString itemKey(const QTreeWidgetItem* item) {
     if (!item)
         return {};
-    for (const auto role : {assets::kCompositionRole, assets::kAssetRole, assets::kFolderRole}) {
-        const auto id = item->data(0, role).toULongLong();
+    for (const auto role : {assets::kCompositionRole, assets::kAssetRole, assets::kFolderRole,
+                            assets::kDataBlockRole}) {
+        const auto value = item->data(0, role);
+        if (role == assets::kDataBlockRole && value.metaType().id() != QMetaType::ULongLong) {
+            if (value.toBool())
+                return QStringLiteral("data-root");
+            continue;
+        }
+        const auto id = value.toULongLong();
         if (id)
             return QString::number(role) + ':' + QString::number(id);
     }
@@ -262,6 +272,41 @@ void AssetsEditor::rebuild() {
                           : kit::IconId::Image,
                false, tags, missing);
     }
+    const bool hasDataBlocks =
+        std::ranges::any_of(project.typedDataBlocks(), [](const auto& block) {
+            return !document::isMediaDataBlockKind(block.kind);
+        });
+    if (hasDataBlocks) {
+        auto* dataRoot = new QTreeWidgetItem(tree_);
+        dataRoot->setText(0, tr("Data"));
+        dataRoot->setText(1, tr("Inspector"));
+        dataRoot->setData(0, assets::kDataBlockRole, true);
+        dataRoot->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        dataRoot->setExpanded(true);
+        addRow(dataRoot, kit::IconId::Stack, true);
+        for (const auto& block : project.typedDataBlocks()) {
+            if (document::isMediaDataBlockKind(block.kind))
+                continue;
+            const auto* id = std::get_if<document::DataBlockRecordId>(&block.id);
+            if (id == nullptr)
+                continue;
+            auto* item = new QTreeWidgetItem(dataRoot);
+            const auto kindName = document::dataBlockKindName(block.kind);
+            item->setText(0, QStringLiteral("%1 · %2").arg(
+                                 QString::fromStdString(block.typeId),
+                                 QString::fromUtf8(kindName.data(),
+                                                   static_cast<qsizetype>(kindName.size()))));
+            item->setText(1, QString::fromStdString(block.provenance.createdAt));
+            item->setData(0, assets::kDataBlockRole, QVariant::fromValue<qulonglong>(id->value()));
+            const auto digest = block.provenance.contentDigest.toLowercaseHex();
+            item->setToolTip(
+                0, tr("%1 · digest %2")
+                       .arg(QString::fromStdString(block.typeId),
+                            QString::fromStdString(std::string(digest.data(), digest.size()))));
+            item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+            addRow(item, kit::IconId::Info, false);
+        }
+    }
     applyFilter(search_->text());
     if (selected.empty())
         updateSelection();
@@ -280,12 +325,36 @@ void AssetsEditor::updateSelection() {
     const QSignalBlocker blocker(tree_);
     tree_->clearSelection();
     tree_->setCurrentItem(nullptr);
+    const auto* selectedBlock =
+        std::get_if<document::DataBlockRecordId>(&session_.selection().primary);
+    std::set<document::DataBlockRecordId> readBlocks;
+    if (selectedBlock == nullptr) {
+        for (const auto& block : session_.snapshot().project().typedDataBlocks()) {
+            const auto* id = std::get_if<document::DataBlockRecordId>(&block.id);
+            if (id == nullptr)
+                continue;
+            const auto readers = session_.dataBlockReaders(*id);
+            if (std::ranges::any_of(session_.selectedNodes(),
+                                    [&](const auto node) { return readers.contains(node); }))
+                readBlocks.insert(*id);
+        }
+    }
     for (QTreeWidgetItemIterator it(tree_); *it; ++it)
-        if (!(*it)->isHidden() && assets::compositionId(*it) == session_.compositionId() &&
-            session_.compositionId().isValid()) {
+        if (!(*it)->isHidden() &&
+            ((selectedBlock != nullptr &&
+              (*it)->data(0, assets::kDataBlockRole).metaType().id() == QMetaType::ULongLong &&
+              (*it)->data(0, assets::kDataBlockRole).toULongLong() == selectedBlock->value()) ||
+             (selectedBlock == nullptr &&
+              (*it)->data(0, assets::kDataBlockRole).metaType().id() == QMetaType::ULongLong &&
+              readBlocks.contains(document::DataBlockRecordId::fromRaw(
+                  (*it)->data(0, assets::kDataBlockRole).toULongLong()))) ||
+             (selectedBlock == nullptr && readBlocks.empty() &&
+              assets::compositionId(*it) == session_.compositionId() &&
+              session_.compositionId().isValid()))) {
             tree_->setCurrentItem(*it);
             (*it)->setSelected(true);
-            break;
+            if (selectedBlock != nullptr)
+                break;
         }
     refreshRowSelection();
 }
@@ -294,6 +363,14 @@ void AssetsEditor::refreshRowSelection() {
     for (QTreeWidgetItemIterator it(tree_); *it; ++it)
         if (auto* row = qobject_cast<kit::KRow*>(tree_->itemWidget(*it, 0)))
             row->setRowState(index++, (*it)->isSelected());
+    if (!rebuilding_) {
+        const auto* current = tree_->currentItem();
+        if (current != nullptr) {
+            const auto value = current->data(0, assets::kDataBlockRole);
+            if (value.metaType().id() == QMetaType::ULongLong)
+                session_.selectDataBlock(document::DataBlockRecordId::fromRaw(value.toULongLong()));
+        }
+    }
 }
 void AssetsEditor::applyFilter(const QString& text) {
     const auto query = text.trimmed();
@@ -303,21 +380,35 @@ void AssetsEditor::applyFilter(const QString& text) {
     for (QTreeWidgetItemIterator it(tree_); *it; ++it)
         items.push_back(*it);
     const QSignalBlocker blocker(tree_);
+    const bool hasDataBlocks =
+        std::ranges::any_of(session_.snapshot().project().typedDataBlocks(), [](const auto& block) {
+            return !document::isMediaDataBlockKind(block.kind);
+        });
     for (auto it = items.rbegin(); it != items.rend(); ++it) {
         auto* item = *it;
         const auto tags = item->data(0, assets::kTagsRole).toStringList();
-        bool matches =
+        const bool isData = item->data(0, assets::kDataBlockRole).isValid();
+        const bool isComposition = assets::compositionId(item).isValid() ||
+                                   item->data(0, assets::kCompositionRootRole).toBool();
+        const bool isMedia = assets::assetId(item).isValid() || assets::folderId(item).has_value();
+        const bool categoryMatches = filterMode_ == -1
+                                         ? isMedia || isComposition || (isData && hasDataBlocks)
+                                     : filterMode_ == 0 ? isMedia
+                                     : filterMode_ == 1 ? isData
+                                                        : isComposition;
+        const bool textMatches =
             query.isEmpty() || (!tagsOnly && item->text(0).contains(term, Qt::CaseInsensitive));
-        matches = matches || std::ranges::any_of(tags, [&](const auto& tag) {
-                      return tag.contains(term, Qt::CaseInsensitive);
-                  });
+        const bool tagMatches = std::ranges::any_of(
+            tags, [&](const auto& tag) { return tag.contains(term, Qt::CaseInsensitive); });
+        const bool matches = categoryMatches && (textMatches || tagMatches);
         bool childMatches = false;
         for (int index = 0; index < item->childCount(); ++index)
             childMatches = childMatches || !item->child(index)->isHidden();
         item->setHidden(!matches && !childMatches);
         if (item->isHidden())
             item->setSelected(false);
-        if (assets::folderId(item) || item->data(0, assets::kCompositionRootRole).toBool()) {
+        if (assets::folderId(item) || item->data(0, assets::kCompositionRootRole).toBool() ||
+            item->data(0, assets::kDataBlockRole).toBool()) {
             const auto folder = assets::folderId(item);
             const bool collapsed =
                 folder ? collapsedFolders_.contains(folder->value()) : compositionsCollapsed_;

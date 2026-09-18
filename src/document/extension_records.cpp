@@ -25,9 +25,11 @@ struct TargetDeclarations final {
     std::unordered_set<EdgeId> edges;
     std::unordered_set<LayerId> layers;
     std::unordered_set<LayerSlotId> layerSlots;
+    std::unordered_set<NodeGroupId> nodeGroups;
     std::unordered_set<ParameterId> parameters;
     std::unordered_set<AnimationCurveId> animationCurves;
     std::unordered_set<KeyframeId> keyframes;
+    std::unordered_set<AssetId> assets;
 
     [[nodiscard]] bool contains(const ExtensionTarget& target) const {
         return std::visit(
@@ -39,6 +41,8 @@ struct TargetDeclarations final {
                     return compositions.contains(id);
                 } else if constexpr (std::same_as<Id, NodeId>) {
                     return nodes.contains(id);
+                } else if constexpr (std::same_as<Id, NodeGroupId>) {
+                    return nodeGroups.contains(id);
                 } else if constexpr (std::same_as<Id, EdgeId>) {
                     return edges.contains(id);
                 } else if constexpr (std::same_as<Id, LayerId>) {
@@ -49,6 +53,8 @@ struct TargetDeclarations final {
                     return parameters.contains(id);
                 } else if constexpr (std::same_as<Id, AnimationCurveId>) {
                     return animationCurves.contains(id);
+                } else if constexpr (std::same_as<Id, AssetId>) {
+                    return assets.contains(id);
                 } else {
                     return keyframes.contains(id);
                 }
@@ -60,6 +66,8 @@ struct TargetDeclarations final {
 [[nodiscard]] TargetDeclarations collectTargetDeclarations(const Project& project) {
     TargetDeclarations declarations;
     declarations.project = project.id();
+    for (const auto& asset : project.assets())
+        declarations.assets.insert(asset.id);
     for (const auto& composition : project.compositions()) {
         declarations.compositions.insert(composition.id());
         for (const auto& node : composition.graph().nodes()) {
@@ -93,6 +101,10 @@ struct TargetDeclarations final {
                     }
                 },
                 record);
+        }
+        for (const auto& [groupId, group] : composition.nodeGroups()) {
+            static_cast<void>(group);
+            declarations.nodeGroups.insert(groupId);
         }
     }
     return declarations;

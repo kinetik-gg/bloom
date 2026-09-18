@@ -562,6 +562,39 @@ void PropertiesEditor::buildDocumentSection(QVBoxLayout* layout) {
     layout->addWidget(documentSection_);
 }
 
+void PropertiesEditor::buildDataBlockSection(QVBoxLayout* layout) {
+    dataBlockSection_ = new QWidget(this);
+    dataBlockSection_->setObjectName(QStringLiteral("propertiesDataBlockSection"));
+    auto* panelLayout = new QVBoxLayout(dataBlockSection_);
+    panelLayout->setContentsMargins(0, 0, 0, 0);
+    panelLayout->setSpacing(kit::px(kit::Spacing::XS));
+    auto* section = properties::addSection(panelLayout, dataBlockSection_, QStringLiteral("data"),
+                                           tr("Data Block"));
+    section->setResetEnabled(false);
+    adoptSection(section, {});
+    auto* body = section->body();
+    auto* rows = section->bodyLayout();
+    const auto addReadOnly = [&](QLabel*& target, const QString& objectName,
+                                 const QString& accessible, const QString& label) {
+        target = makeReadOnlyValueLabel(kit::TypeRole::Value, body);
+        target->setObjectName(objectName);
+        target->setAccessibleName(accessible);
+        addRow(rows, body, makeRowLabel(label, body), nullptr, target);
+    };
+    addReadOnly(dataBlockKind_, QStringLiteral("dataBlockKind"), tr("Data block kind"), tr("Kind"));
+    addReadOnly(dataBlockProvenance_, QStringLiteral("dataBlockProvenance"),
+                tr("Data block provenance"), tr("Provenance"));
+    addReadOnly(dataBlockDigest_, QStringLiteral("dataBlockDigest"), tr("Data block digest"),
+                tr("Digest"));
+    addReadOnly(dataBlockPayload_, QStringLiteral("dataBlockPayload"),
+                tr("Data block payload summary"), tr("Payload"));
+    addReadOnly(dataBlockTags_, QStringLiteral("dataBlockTags"), tr("Data block tags"), tr("Tags"));
+    addReadOnly(dataBlockReaders_, QStringLiteral("dataBlockReaders"), tr("Data block readers"),
+                tr("References"));
+    panelLayout->addStretch(1);
+    layout->addWidget(dataBlockSection_);
+}
+
 void PropertiesEditor::bindCell(kit::KValueField* field, const std::string_view role,
                                 const std::optional<document::AnimationComponent> component,
                                 const std::function<void()>& change) {

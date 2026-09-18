@@ -24,6 +24,7 @@
 #include <bloom/ui/composition_session.hpp>
 
 #include <QAction>
+#include <QButtonGroup>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -41,6 +42,7 @@
 #include <QVBoxLayout>
 #include <QVariant>
 
+#include <array>
 #include <cstdint>
 #include <optional>
 
@@ -54,6 +56,28 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     const int gutter = kit::px(kit::Spacing::S);
     layout->setContentsMargins(gutter, gutter, gutter, gutter);
     layout->setSpacing(kit::px(kit::Spacing::Gutter));
+
+    auto* filters = new QWidget(this);
+    filters->setObjectName(QStringLiteral("assetsKindFilterRow"));
+    auto* filterLayout = new QHBoxLayout(filters);
+    filterLayout->setContentsMargins(0, 0, 0, 0);
+    filterLayout->setSpacing(kit::px(kit::Spacing::XS));
+    filterButtons_ = new QButtonGroup(this);
+    filterButtons_->setExclusive(true);
+    const std::array labels{tr("Media"), tr("Data"), tr("Compositions")};
+    for (int index = 0; index < static_cast<int>(labels.size()); ++index) {
+        auto* button = new kit::KButton(labels[static_cast<std::size_t>(index)], filters);
+        button->setObjectName(QStringLiteral("assetsKindFilter%1").arg(index));
+        button->setVariant(kit::KButton::Variant::Ghost);
+        button->setControlSize(kit::KButton::ControlSize::Compact);
+        button->setCheckable(true);
+        button->setChecked(index == filterMode_);
+        filterButtons_->addButton(button, index);
+        filterLayout->addWidget(button);
+    }
+    filterLayout->addStretch(1);
+    connect(filterButtons_, &QButtonGroup::idClicked, this, &AssetsEditor::setFilter);
+    layout->addWidget(filters);
 
     search_ = new kit::KSearchField(this);
     search_->setObjectName(QStringLiteral("assetsSearchField"));
@@ -117,6 +141,11 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     buildHeaderMenus();
     buildFooter();
     rebuild();
+}
+
+void AssetsEditor::setFilter(const int filter) {
+    filterMode_ = filter;
+    applyFilter(search_->text());
 }
 
 void AssetsEditor::openComposition(const document::CompositionId id) {

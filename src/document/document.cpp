@@ -24,6 +24,11 @@ template <typename Visitor>
             return false;
         }
     }
+    for (const auto& block : project.typedDataBlocks()) {
+        const auto* id = std::get_if<DataBlockRecordId>(&block.id);
+        if (id != nullptr && !visitor(*id))
+            return false;
+    }
     for (const auto& composition : project.compositions()) {
         if (!visitor(composition.id())) {
             return false;

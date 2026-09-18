@@ -87,6 +87,7 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     void buildSolidSection(QVBoxLayout* layout);
     void buildTextSection(QVBoxLayout* layout);
     void buildDocumentSection(QVBoxLayout* layout);
+    void buildDataBlockSection(QVBoxLayout* layout);
     void bindCommits();
 
     // Task PROPS-1, deliverable 1: a slider shares its row's commit with the paired value cell.
@@ -122,6 +123,7 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     // documentSection_'s rows from composition()'s own read-only format/duration -- never a new
     // CompositionSession API.
     void configureDocumentProperties();
+    void configureDataBlockProperties();
 
     CompositionSession& session_;
 
@@ -197,6 +199,14 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     QLabel* documentFrameRate_ = nullptr;
     QLabel* documentDuration_ = nullptr;
     QLabel* documentPixelAspect_ = nullptr;
+
+    QWidget* dataBlockSection_ = nullptr;
+    QLabel* dataBlockKind_ = nullptr;
+    QLabel* dataBlockProvenance_ = nullptr;
+    QLabel* dataBlockDigest_ = nullptr;
+    QLabel* dataBlockPayload_ = nullptr;
+    QLabel* dataBlockTags_ = nullptr;
+    QLabel* dataBlockReaders_ = nullptr;
 
     bool rebuilding_ = false;
     // True between a cell's scrubStarted() and its scrubFinished()/scrubCancelled(). One flag for
