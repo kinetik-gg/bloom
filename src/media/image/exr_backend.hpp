@@ -9,9 +9,9 @@ namespace bloom::media::detail {
                                                const CancelImageWork& cancel);
 
 [[nodiscard]] ImageResult<std::shared_ptr<const render::Rgba32fImage>>
-decodeExr(const std::filesystem::path& path, ImageInterpretation interpretation,
-          std::shared_ptr<const color::CpuInputProcessor> processor, const CancelImageWork& cancel,
-          const ImageProgress& progress, std::size_t pixelBudget,
+decodeExr(const std::filesystem::path& path, const ImageInterpretation& interpretation,
+          std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
+          const CancelImageWork& cancel, const ImageProgress& progress, std::size_t pixelBudget,
           std::optional<core::Sha256Digest> expectedDigest);
 
 } // namespace bloom::media::detail

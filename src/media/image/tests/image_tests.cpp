@@ -9,15 +9,23 @@
 #include <ImfStringAttribute.h>
 #include <ImfTileDescription.h>
 #include <ImfTiledOutputFile.h>
+#include <OpenColorIO/OpenColorIO.h>
 #include <algorithm>
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/media/image.hpp>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
 #include <vector>
+
+namespace OCIOAlias = OCIO_NAMESPACE;
 
 namespace {
 using namespace bloom_output_png_test_support;
@@ -47,7 +55,8 @@ void png(const std::filesystem::path& path, const bool sixteen = false) {
 }
 
 void exr(const std::filesystem::path& path, const bool tiled, const Imf::PixelType type,
-         const bool luminance = false) {
+         const bool luminance = false,
+         const std::optional<Imf::Chromaticities>& chromaticities = std::nullopt) {
     constexpr int width = 3;
     constexpr int height = 2;
     const Imath::Box2i display(Imath::V2i(-2, 1), Imath::V2i(2, 4));
@@ -55,7 +64,8 @@ void exr(const std::filesystem::path& path, const bool tiled, const Imf::PixelTy
     Imf::Header header(display, data);
     if (tiled)
         header.setTileDescription(Imf::TileDescription(2, 2, Imf::ONE_LEVEL));
-    header.insert("chromaticities", Imf::ChromaticitiesAttribute(Imf::Chromaticities()));
+    header.insert("chromaticities",
+                  Imf::ChromaticitiesAttribute(chromaticities.value_or(Imf::Chromaticities())));
     header.insert("alphaAssociation", Imf::StringAttribute("premultiplied"));
     if (luminance) {
         header.channels().insert("Y", Imf::Channel(type));
@@ -137,6 +147,59 @@ void patchExrVersionFlag(const std::filesystem::path& path, const std::uint32_t 
     file.write(reinterpret_cast<const char*>(bytes.data()),
                static_cast<std::streamsize>(bytes.size()));
 }
+
+void acesAp0Read(const std::filesystem::path& path, Expectations& check) {
+    Imf::Chromaticities ap0;
+    ap0.red = {0.7347F, 0.2653F};
+    ap0.green = {0.0F, 1.0F};
+    ap0.blue = {0.0001F, -0.0770F};
+    ap0.white = {0.32168F, 0.33767F};
+    exr(path, false, Imf::FLOAT, false, ap0);
+
+    const auto revision = bloom::color::ocioBuiltInContentRevision(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
+    check.expect(revision.has_value(), "ACES config revision is available for the AP0 fixture");
+    if (!revision)
+        return;
+    auto resolved = bloom::color::resolveOcioBuiltIn(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri,
+        *revision, bloom::color::kAcesCgV1SceneLinearColorSpaceId);
+    check.expect(resolved.ready(), "ACES config resolves for the AP0 fixture");
+    if (!resolved)
+        return;
+    auto processor = bloom::color::CpuColorSpaceProcessor::prepare(
+        *resolved.resolved(), "ACES2065-1", bloom::color::kAcesCgV1SceneLinearColorSpaceId);
+    check.expect(processor.succeeded(), "the AP0-to-ACEScg input processor prepares");
+    if (!processor)
+        return;
+
+    const auto decoded = bloom::media::decodeImage(
+        path,
+        bloom::media::ImageInterpretation{.colorSpace = bloom::media::ImageColorSpace::Auto,
+                                          .inputColorSpaceId = "ACES2065-1",
+                                          .alphaAssociation =
+                                              bloom::media::ImageAlphaAssociation::Auto},
+        std::move(processor).takeProcessor());
+    check.expect(decoded.value.has_value(), "an AP0 EXR reads through the ACEScg processor");
+    if (!decoded.value.has_value())
+        return;
+
+    auto oracleConfig = OCIOAlias::Config::CreateFromBuiltinConfig(
+        std::string(bloom::color::kAcesCgV1BuiltinConfigName).c_str());
+    const auto oracleProcessor =
+        oracleConfig
+            ->getProcessor(OCIOAlias::Context::Create(), "ACES2065-1",
+                           std::string(bloom::color::kAcesCgV1SceneLinearColorSpaceId).c_str())
+            ->getDefaultCPUProcessor();
+    std::array<float, 3> oraclePixel{0.5F, 0.25F, 0.125F};
+    oracleProcessor->applyRGB(oraclePixel.data());
+    const auto pixel = (*decoded.value)->read(-1, 2);
+    check.expect(pixel && std::abs(pixel.value()->red() - oraclePixel[0] * 0.5F) < 0.00001F &&
+                     std::abs(pixel.value()->green() - oraclePixel[1] * 0.5F) < 0.00001F &&
+                     std::abs(pixel.value()->blue() - oraclePixel[2] * 0.5F) < 0.00001F &&
+                     pixel.value()->alpha() == 0.5F,
+                 "AP0 EXR reads to ACEScg within the OCIO oracle tolerance");
+}
 } // namespace
 int main() {
     using namespace bloom_output_png_test_support;
@@ -157,7 +220,40 @@ int main() {
             check.expect(pixel && std::abs(pixel.value()->red() - 0.108F) < 0.002F,
                          "inverse sRGB then premultiply");
         }
-        const auto raw = media::decodeImage(path, {media::ImageColorSpace::Raw});
+        const auto neutral = bloom::color::resolveBloomNeutralV1BuiltIn(
+            bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
+            bloom::color::kBloomNeutralV1ConfigUri, bloom::color::kBloomNeutralV1ConfigDigest);
+        check.expect(neutral.ready(), "Bloom Neutral resolves for byte-identity coverage");
+        if (neutral) {
+            auto managedProcessor = bloom::color::CpuColorSpaceProcessor::prepare(
+                *neutral.resolved(), neutral.resolved()->sRgbTextureColorSpaceId(),
+                neutral.resolved()->processColorSpaceId());
+            check.expect(managedProcessor.succeeded(),
+                         "Bloom Neutral config processor prepares for byte-identity coverage");
+            if (managedProcessor) {
+                const auto managed =
+                    media::decodeImage(path,
+                                       media::ImageInterpretation{
+                                           .colorSpace = media::ImageColorSpace::Auto,
+                                           .inputColorSpaceId = std::string(
+                                               neutral.resolved()->sRgbTextureColorSpaceId()),
+                                           .alphaAssociation = media::ImageAlphaAssociation::Auto},
+                                       std::move(managedProcessor).takeProcessor());
+                const auto oldPixels = result.value ? (*result.value)->pixels()
+                                                    : std::span<const bloom::render::Rgba32f>{};
+                const auto newPixels = managed.value ? (*managed.value)->pixels()
+                                                     : std::span<const bloom::render::Rgba32f>{};
+                check.expect(managed.value.has_value() && oldPixels.size() == newPixels.size() &&
+                                 std::memcmp(oldPixels.data(), newPixels.data(),
+                                             oldPixels.size_bytes()) == 0,
+                             "Neutral-project sRGB PNG decode remains byte-identical");
+            }
+        }
+        const auto raw = media::decodeImage(
+            path,
+            media::ImageInterpretation{.colorSpace = media::ImageColorSpace::Raw,
+                                       .inputColorSpaceId = {},
+                                       .alphaAssociation = media::ImageAlphaAssociation::Auto});
         check.expect(raw.value.has_value() &&
                          std::abs((*raw.value)->pixels()[0].red() - 0.252F) < 0.002F,
                      "Raw preserves encoded RGB then premultiplies");
@@ -232,6 +328,9 @@ int main() {
             check.expect(!rejected && rejected.code == media::ImageDiagnosticCode::DigestMismatch,
                          "EXR digest mismatch is typed and clean");
         }
+    }
+    {
+        acesAp0Read(scratch.file("aces-ap0.exr"), check);
     }
     {
         const auto path = scratch.file("luminance.exr");

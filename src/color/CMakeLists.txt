@@ -70,6 +70,7 @@ target_sources(
     bloom_color_ocio
     PRIVATE
         ocio_builtin_registry.cpp
+        ocio_cpu_color_space_processor.cpp
         ocio_cpu_display_processor.cpp
         ocio_cpu_input_processor.cpp
         ocio_cpu_display_frame.cpp
@@ -79,6 +80,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/color/ocio_builtin_registry.hpp
+            include/bloom/color/ocio_cpu_color_space_processor.hpp
             include/bloom/color/ocio_cpu_display_processor.hpp
             include/bloom/color/ocio_cpu_input_processor.hpp
             include/bloom/color/ocio_cpu_display_frame.hpp
@@ -160,6 +162,18 @@ if(BUILD_TESTING)
         NAME bloom.color.ocio-cpu-display-processor
         COMMAND bloom_color_ocio_cpu_display_processor_test
         LABELS unit color ocio identity
+    )
+
+    add_executable(
+        bloom_color_ocio_cpu_color_space_processor_test
+        tests/ocio_cpu_color_space_processor_tests.cpp
+    )
+    target_link_libraries(bloom_color_ocio_cpu_color_space_processor_test PRIVATE bloom_color_ocio)
+    bloom_enable_warnings(bloom_color_ocio_cpu_color_space_processor_test)
+    bloom_add_test(
+        NAME bloom.color.ocio-cpu-color-space-processor
+        COMMAND bloom_color_ocio_cpu_color_space_processor_test
+        LABELS unit color ocio
     )
 
     add_executable(

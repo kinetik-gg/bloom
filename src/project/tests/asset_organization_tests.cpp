@@ -1,4 +1,5 @@
 #include "zip_container_test_support.hpp"
+#include <array>
 #include <bloom/document/new_project.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/document_decode.hpp>
@@ -58,7 +59,7 @@ void roundTripAndValidation() {
     const auto settings = document::makeBloomNeutralColorSettingsV1({});
     auto archive = buildVerifiedSaveArchive({}, {.snapshot = &snapshot, .colorSettings = &settings},
                                             {}, memory());
-    expect(static_cast<bool>(archive), "organized project saves at 1.19");
+    expect(static_cast<bool>(archive), "organized project saves at 1.20");
     if (!archive)
         return;
     auto result = openProjectArchive(archive.archive()->bytes(), {}, memory());
@@ -67,8 +68,8 @@ void roundTripAndValidation() {
         return;
     auto opened = std::move(result).takeOpened();
     auto restored = opened.document->snapshot();
-    expect(opened.schemaMinor == 19 && *restored.project().findAsset(asset.id) == asset,
-           "name, tags, folder, order and media identity round-trip at 1.19");
+    expect(opened.schemaMinor == 20 && *restored.project().findAsset(asset.id) == asset,
+           "name, tags, folder, order and media identity round-trip at 1.20");
     expect(restored.project().assetFolders().size() == 2 &&
                *restored.project().findAssetFolder(child) ==
                    *snapshot.project().findAssetFolder(child),
@@ -141,10 +142,11 @@ void migration() {
         std::regex(
             R"regex(,\s*"name": "(?:Plate|Captured face Book)",\s*"tags": \[\],\s*"order": "0")regex"),
         "");
+    legacy = std::regex_replace(legacy, std::regex(R"(,\s*"inputColorSpaceId": "")"), "");
     legacy = std::regex_replace(legacy, std::regex(R"(,\s*"dataBlocks"\s*:\s*\[\])"), "");
     legacy = std::regex_replace(legacy, std::regex(R"(,\s*"dataBlock"\s*:\s*"0")"), "");
-    const auto version = legacy.find("\"minor\": 19");
-    legacy.replace(version, std::string_view("\"minor\": 19").size(), "\"minor\": 15");
+    const auto version = legacy.find("\"minor\": 20");
+    legacy.replace(version, std::string_view("\"minor\": 20").size(), "\"minor\": 15");
     auto operation = memory();
     auto parsed = parseStrictJsonDom(std::as_bytes(std::span(legacy)), {}, operation);
     if (!parsed)
@@ -179,15 +181,73 @@ void migration() {
     if (opened.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto result = std::move(opened).takeOpened();
-    expect(result.schemaMinor == 19 &&
+    expect(result.schemaMinor == 20 &&
                result.document->snapshot().project().assets().front().name == "shot.v02",
            "opened archive reports current schema and migrated display name");
+}
+
+void inputInterpretationMigration() {
+    const std::array expectedIds{"", "srgb_rec709_display", "lin_rec709_scene", ""};
+    for (std::uint32_t value = 0; value <= 3; ++value) {
+        auto initial =
+            document::makeNewProject("Assets", "Main", core::RationalTime::fromInteger(24));
+        expect(initial.project.addAsset(plate()), "input migration fixture asset added");
+        document::Document document{std::move(initial.project)};
+        const auto snapshot = document.snapshot();
+        const auto settings = document::makeBloomNeutralColorSettingsV1({});
+        std::array<char, 64> payloadScratch{};
+        std::array<std::size_t, 64> sortScratch{};
+        const CanonicalDocumentV1 input{&snapshot, &settings, payloadScratch, sortScratch};
+        const auto size = canonicalDocumentSize(input);
+        if (!size)
+            throw std::runtime_error("input migration canonical size");
+        std::string text(*size.value(), '\0');
+        if (!encodeCanonicalDocument(input, text))
+            throw std::runtime_error("input migration canonical encode");
+        const auto rootVersion = text.find("\"minor\": 20\n  },\n  \"project\"");
+        if (rootVersion == std::string::npos)
+            throw std::runtime_error("input migration root version anchor");
+        text.replace(rootVersion, std::string_view("\"minor\": 20").size(), "\"minor\": 19");
+        const auto interpretation = text.find("\"interpretation\": {");
+        if (interpretation == std::string::npos)
+            throw std::runtime_error("input migration interpretation anchor");
+        const auto interpretationEnd = text.find("\n        }", interpretation);
+        if (interpretationEnd == std::string::npos)
+            throw std::runtime_error("input migration interpretation end");
+        const auto replacement = std::string("\"interpretation\": {\n") +
+                                 "          \"colorSpace\": " + std::to_string(value) + ",\n" +
+                                 "          \"alphaAssociation\": 0\n        }";
+        text.replace(interpretation,
+                     interpretationEnd + std::string_view("\n        }").size() - interpretation,
+                     replacement);
+        auto operation = memory();
+        auto parsed = parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
+        expect(static_cast<bool>(parsed), "1.19 input interpretation fixture parses");
+        if (!parsed)
+            continue;
+        auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 19}, {1, 20},
+                                           kProductionDocumentMigrationSteps, {}, operation);
+        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 1,
+               "1.19 input interpretation migrates in one deterministic step");
+        if (migrated.outcome() != MigrationOutcome::Migrated)
+            continue;
+        const auto decoded = decodeDocumentEnvelope(*migrated.migratedRoot());
+        expect(decoded && decoded.value()->assets.size() == 1,
+               "migrated input interpretation decodes one asset");
+        if (!decoded || decoded.value()->assets.empty())
+            continue;
+        const auto& interpretationValue = decoded.value()->assets.front().interpretation;
+        expect(interpretationValue.colorSpace == static_cast<document::AssetColorSpace>(value) &&
+                   interpretationValue.inputColorSpaceId == expectedIds[value],
+               "1.19 enum migration pins the exact config input id for every enum value");
+    }
 }
 } // namespace
 int main() {
     try {
         roundTripAndValidation();
         migration();
+        inputInterpretationMigration();
         lexicalNames();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

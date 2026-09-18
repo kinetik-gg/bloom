@@ -169,9 +169,23 @@ Result<std::shared_ptr<const FrameProduct>>
 VideoDecodeSession::frame(const ProbeResult& source, std::uint32_t stream, std::uint64_t index,
                           std::uint32_t interpretation, DecodedVideoCache* cache,
                           const Cancel& cancel) {
+    return frame(source, stream, index, interpretation, cache, {}, {}, {}, cancel);
+}
+Result<std::shared_ptr<const FrameProduct>>
+VideoDecodeSession::frame(const ProbeResult& source, std::uint32_t stream, std::uint64_t index,
+                          std::uint32_t interpretation, DecodedVideoCache* cache,
+                          const std::string_view inputColorSpaceId,
+                          const std::string_view workingColorSpaceId,
+                          const provider::Digest& configRevision, const Cancel& cancel) {
     if (const auto error = verifySource(source.sourceDigest, cancel))
         return *error;
-    const FrameKey key{source.sourceDigest, stream, index, interpretation};
+    const FrameKey key{source.sourceDigest,
+                       stream,
+                       index,
+                       interpretation,
+                       std::string(inputColorSpaceId),
+                       std::string(workingColorSpaceId),
+                       configRevision};
     if (cache)
         if (auto cached = cache->find(key))
             return cached;

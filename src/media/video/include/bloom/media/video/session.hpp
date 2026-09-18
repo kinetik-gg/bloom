@@ -13,6 +13,9 @@ struct FrameKey {
     std::uint32_t stream = 0;
     std::uint64_t frame = 0;
     std::uint32_t interpretation = 0;
+    std::string inputColorSpaceId;
+    std::string workingColorSpaceId;
+    provider::Digest configRevision;
     friend bool operator==(const FrameKey&, const FrameKey&) = default;
 };
 // Independent resident byte budget. Callers reserve this budget through their memory ledger.
@@ -22,7 +25,7 @@ class DecodedVideoCache final {
                                                        runtime::processMemoryBudgetLedger());
     ~DecodedVideoCache();
     [[nodiscard]] std::shared_ptr<const provider::FrameProduct> find(const FrameKey& key);
-    void store(FrameKey key, std::shared_ptr<const provider::FrameProduct> frame);
+    void store(const FrameKey& key, std::shared_ptr<const provider::FrameProduct> frame);
     void setByteBudget(std::size_t budget);
     [[nodiscard]] std::size_t residentBytes() const;
     [[nodiscard]] std::size_t byteBudget() const;
@@ -52,6 +55,11 @@ class VideoDecodeSession final {
     [[nodiscard]] provider::Result<std::shared_ptr<const provider::FrameProduct>>
     frame(const provider::ProbeResult& source, std::uint32_t stream, std::uint64_t index,
           std::uint32_t interpretation, DecodedVideoCache* cache, const Cancel& cancel = {});
+    [[nodiscard]] provider::Result<std::shared_ptr<const provider::FrameProduct>>
+    frame(const provider::ProbeResult& source, std::uint32_t stream, std::uint64_t index,
+          std::uint32_t interpretation, DecodedVideoCache* cache,
+          std::string_view inputColorSpaceId, std::string_view workingColorSpaceId,
+          const provider::Digest& configRevision, const Cancel& cancel = {});
     [[nodiscard]] provider::Result<provider::AudioBlock>
     audio(const provider::ProbeResult& source, std::uint32_t stream, std::uint64_t sample,
           std::uint32_t count, const Cancel& cancel = {});

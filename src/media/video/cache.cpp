@@ -24,7 +24,8 @@ std::shared_ptr<const provider::FrameProduct> DecodedVideoCache::find(const Fram
     entries_.splice(entries_.begin(), entries_, found);
     return entries_.front().frame;
 }
-void DecodedVideoCache::store(FrameKey key, std::shared_ptr<const provider::FrameProduct> frame) {
+void DecodedVideoCache::store(const FrameKey& key,
+                              std::shared_ptr<const provider::FrameProduct> frame) {
     if (!frame || !provider::valid(*frame))
         return;
     std::size_t bytes = 0;

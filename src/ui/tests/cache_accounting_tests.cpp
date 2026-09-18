@@ -290,7 +290,7 @@ void testContentionDuringTwoHundredImports(Expectations& check) {
         plane.bytes.resize(static_cast<std::size_t>(plane.stride) * plane.height);
         plane.digest = bloom::media::provider::digestBytes(plane.bytes);
         frame->planes.push_back(std::move(plane));
-        video.store({{}, 0, static_cast<std::uint64_t>(index), 0}, std::move(frame));
+        video.store({{}, 0, static_cast<std::uint64_t>(index), 0, {}, {}, {}}, std::move(frame));
         image.reset();
         peak = std::max(peak, residentBytes());
         if (index == 99) {

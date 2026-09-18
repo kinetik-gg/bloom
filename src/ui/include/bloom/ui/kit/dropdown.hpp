@@ -39,6 +39,7 @@ class KDropdown final : public QWidget {
 
     int addItem(const QString& text, const QVariant& data = {});
     int addItem(const QIcon& icon, const QString& text, const QVariant& data = {});
+    void setItemText(int index, const QString& text);
     [[nodiscard]] QIcon itemIcon(int index) const;
     void setItemToolTip(int index, const QString& toolTip);
     [[nodiscard]] int findData(const QVariant& data) const;

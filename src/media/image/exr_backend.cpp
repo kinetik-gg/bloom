@@ -1,5 +1,8 @@
 #include "exr_backend.hpp"
 
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_cpu_input_processor.hpp>
+
 #include <ImathBox.h>
 #include <ImfChannelList.h>
 #include <ImfChromaticities.h>
@@ -35,6 +38,8 @@ namespace {
 constexpr std::array<std::uint32_t, 8> kRec709D65ChromaticityBits{
     0x3f23d70aU, 0x3ea8f5c3U, 0x3e99999aU, 0x3f19999aU,
     0x3e19999aU, 0x3d75c28fU, 0x3ea01a37U, 0x3ea872b0U};
+constexpr std::array<float, 8> kAcesAp0Chromaticities{0.7347F, 0.2653F,  0.0F,     1.0F,
+                                                      0.0001F, -0.0770F, 0.32168F, 0.33767F};
 constexpr std::size_t kMaximumChannels = 4;
 
 template <typename T>
@@ -114,6 +119,31 @@ struct ExrLayout final {
     for (std::size_t index = 0; index < values.size(); ++index)
         if (!std::isfinite(values[index]) ||
             !sameBits(values[index], kRec709D65ChromaticityBits[index]))
+            return false;
+    return true;
+}
+
+[[nodiscard]] bool isAcesAp1(const Imf::Chromaticities& chromaticities) {
+    const std::array<std::uint32_t, 8> expected = bloom::color::kAcesCgV1ChromaticityBits;
+    const std::array<float, 8> values{chromaticities.red.x,   chromaticities.red.y,
+                                      chromaticities.green.x, chromaticities.green.y,
+                                      chromaticities.blue.x,  chromaticities.blue.y,
+                                      chromaticities.white.x, chromaticities.white.y};
+    for (std::size_t index = 0; index < values.size(); ++index)
+        if (!std::isfinite(values[index]) ||
+            std::bit_cast<std::uint32_t>(values[index]) != expected[index])
+            return false;
+    return true;
+}
+
+[[nodiscard]] bool isAcesAp0(const Imf::Chromaticities& chromaticities) {
+    const std::array<float, 8> values{chromaticities.red.x,   chromaticities.red.y,
+                                      chromaticities.green.x, chromaticities.green.y,
+                                      chromaticities.blue.x,  chromaticities.blue.y,
+                                      chromaticities.white.x, chromaticities.white.y};
+    for (std::size_t index = 0; index < values.size(); ++index)
+        if (!std::isfinite(values[index]) ||
+            std::abs(values[index] - kAcesAp0Chromaticities[index]) > 1.0e-6F)
             return false;
     return true;
 }
@@ -238,12 +268,17 @@ struct ExrLayout final {
                      {}};
     if (const auto* chromaticities =
             header.findTypedAttribute<Imf::ChromaticitiesAttribute>("chromaticities")) {
-        result.colorSpaceTag =
-            isRec709D65(chromaticities->value()) ? "lin_rec709_scene" : "exr.chromaticities";
+        result.colorSpaceTag = isAcesAp0(chromaticities->value())     ? "ACES2065-1"
+                               : isAcesAp1(chromaticities->value())   ? "ACEScg"
+                               : isRec709D65(chromaticities->value()) ? "lin_rec709_scene"
+                                                                      : "exr.chromaticities";
         result.interpretationAssumption =
-            result.colorSpaceTag == "lin_rec709_scene"
+            result.colorSpaceTag == "ACES2065-1" ? "EXR chromaticities identify ACES AP0"
+            : result.colorSpaceTag == "ACEScg"   ? "EXR chromaticities identify ACES AP1"
+            : result.colorSpaceTag == "lin_rec709_scene"
                 ? "EXR chromaticities identify Rec.709/D65 scene-linear RGB"
-                : "EXR chromaticities identify scene-linear RGB outside the built-in Rec.709 tag";
+                : "EXR chromaticities identify scene-linear RGB outside the supported "
+                  "automatic tags";
     } else {
         result.colorSpaceTag = "lin_rec709_scene";
         result.interpretationAssumption =
@@ -295,10 +330,10 @@ ImageResult<ImageProbe> probeExr(const std::filesystem::path& path,
 }
 
 ImageResult<std::shared_ptr<const render::Rgba32fImage>>
-decodeExr(const std::filesystem::path& path, const ImageInterpretation interpretation,
-          std::shared_ptr<const color::CpuInputProcessor> processor, const CancelImageWork& cancel,
-          const ImageProgress& progress, const std::size_t pixelBudget,
-          const std::optional<core::Sha256Digest> expectedDigest) {
+decodeExr(const std::filesystem::path& path, const ImageInterpretation& interpretation,
+          std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
+          const CancelImageWork& cancel, const ImageProgress& progress,
+          const std::size_t pixelBudget, const std::optional<core::Sha256Digest> expectedDigest) {
     if (cancelled(cancel))
         return failure<std::shared_ptr<const render::Rgba32fImage>>(ImageDiagnosticCode::Cancelled,
                                                                     "Image decode cancelled");
@@ -410,7 +445,10 @@ decodeExr(const std::filesystem::path& path, const ImageInterpretation interpret
             (interpretation.alphaAssociation == ImageAlphaAssociation::Auto
                  ? layout->alphaAssociation
                  : interpretation.alphaAssociation) == ImageAlphaAssociation::Premultiplied;
-        const bool convert = interpretation.colorSpace == ImageColorSpace::Srgb;
+        const bool convert = !interpretation.inputColorSpaceId.empty() ||
+                             interpretation.colorSpace == ImageColorSpace::Srgb ||
+                             processor != nullptr;
+        std::shared_ptr<const color::CpuInputProcessor> compatibilityProcessor;
         if (convert && !processor) {
             const auto resolved = color::resolveBloomNeutralV1BuiltIn(
                 color::OcioConfigLocatorKind::BloomBuiltIn, color::kBloomNeutralV1ConfigUri,
@@ -419,11 +457,23 @@ decodeExr(const std::filesystem::path& path, const ImageInterpretation interpret
                 return failure<std::shared_ptr<const render::Rgba32fImage>>(
                     ImageDiagnosticCode::DecodeFailed,
                     "Bloom Neutral input config could not be resolved");
-            processor = color::CpuInputProcessor::prepare(*resolved.resolved());
+            if (interpretation.inputColorSpaceId.empty()) {
+                compatibilityProcessor = color::CpuInputProcessor::prepare(*resolved.resolved());
+            } else {
+                auto prepared = color::CpuColorSpaceProcessor::prepare(
+                    *resolved.resolved(), interpretation.inputColorSpaceId,
+                    resolved.resolved()->processColorSpaceId());
+                if (!prepared)
+                    return failure<std::shared_ptr<const render::Rgba32fImage>>(
+                        ImageDiagnosticCode::ColorSpaceUnavailable,
+                        "Input colour space is unavailable in the selected config");
+                processor = std::move(prepared).takeProcessor();
+            }
         }
-        if (convert && !processor)
+        if (convert && !processor && !compatibilityProcessor)
             return failure<std::shared_ptr<const render::Rgba32fImage>>(
-                ImageDiagnosticCode::DecodeFailed, "Input colour processor could not be prepared");
+                ImageDiagnosticCode::ColorSpaceUnavailable,
+                "Input colour processor could not be prepared");
 
         std::vector<std::array<float, 4>> row(layout->width);
         for (std::uint64_t y = 0; y < layout->height; ++y) {
@@ -444,9 +494,10 @@ decodeExr(const std::filesystem::path& path, const ImageInterpretation interpret
                         row[x][channel] = row[x][3] > 0.0F ? row[x][channel] / row[x][3] : 0.0F;
                 }
             }
-            if (convert && !processor->apply(row))
+            if (convert && ((processor && !processor->apply(row)) ||
+                            (compatibilityProcessor && !compatibilityProcessor->apply(row))))
                 return failure<std::shared_ptr<const render::Rgba32fImage>>(
-                    ImageDiagnosticCode::DecodeFailed, "Input colour conversion failed");
+                    ImageDiagnosticCode::ColorSpaceUnavailable, "Input colour conversion failed");
             auto outputRow = builder.value()->row(
                 static_cast<std::int64_t>(layout->dataWindow.min.y) + static_cast<std::int64_t>(y));
             if (!outputRow)

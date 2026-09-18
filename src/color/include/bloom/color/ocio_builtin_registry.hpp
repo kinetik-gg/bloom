@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // The in-process built-in OCIO registry (issue #95, design decision 2 of the task package):
 // resolves the immutable Bloom Neutral v1 payload and OCIO 2.5's pinned ACES 1.3 CG built-in,
@@ -70,6 +71,14 @@ enum class OcioBuiltInInvalidReason : std::uint8_t {
 
 class ResolvedBloomNeutralConfig;
 class OcioBuiltInResolutionResult;
+
+struct OcioColorSpaceInfo final {
+    std::string id;
+    std::string family;
+    bool sceneLinear = false;
+
+    friend bool operator==(const OcioColorSpaceInfo&, const OcioColorSpaceInfo&) = default;
+};
 
 // Attempts to resolve one OcioConfigReference-shaped request against the in-process Bloom
 // Neutral v1 built-in registry. `locatorValue` is the caller's exact locator text; it is compared
@@ -132,6 +141,15 @@ class ResolvedBloomNeutralConfig final {
     [[nodiscard]] std::string_view viewName() const&& = delete;
     [[nodiscard]] std::string_view configName() const& noexcept;
     [[nodiscard]] std::string_view configName() const&& = delete;
+    // The exact non-data colour spaces exposed by the resolved config, in OCIO config order. The
+    // family is display metadata for grouped pickers; sceneLinear is the validation result used
+    // when a project or an asset chooses a working space.
+    [[nodiscard]] const std::vector<OcioColorSpaceInfo>& colorSpaces() const& noexcept;
+    [[nodiscard]] const std::vector<OcioColorSpaceInfo>& colorSpaces() const&& = delete;
+    [[nodiscard]] std::string_view sRgbTextureColorSpaceId() const& noexcept;
+    [[nodiscard]] std::string_view sRgbTextureColorSpaceId() const&& = delete;
+    [[nodiscard]] std::string_view rec709VideoColorSpaceId() const& noexcept;
+    [[nodiscard]] std::string_view rec709VideoColorSpaceId() const&& = delete;
 
     // Opaque handle consumed only by ocio_cpu_display_processor.hpp's processor builder within
     // this same library; not part of the public color-value surface.
@@ -150,7 +168,9 @@ class ResolvedBloomNeutralConfig final {
     ResolvedBloomNeutralConfig(std::unique_ptr<Impl> impl, core::Sha256Digest expectedRevision,
                                std::string processColorSpaceId, std::string outputColorSpaceId,
                                std::string displayName, std::string viewName,
-                               std::string configName) noexcept;
+                               std::string configName, std::vector<OcioColorSpaceInfo> colorSpaces,
+                               std::string sRgbTextureColorSpaceId,
+                               std::string rec709VideoColorSpaceId) noexcept;
 
     std::unique_ptr<Impl> impl_;
     core::Sha256Digest expectedRevision_;
@@ -159,6 +179,9 @@ class ResolvedBloomNeutralConfig final {
     std::string displayName_;
     std::string viewName_;
     std::string configName_;
+    std::vector<OcioColorSpaceInfo> colorSpaces_;
+    std::string sRgbTextureColorSpaceId_;
+    std::string rec709VideoColorSpaceId_;
 };
 
 class [[nodiscard]] OcioBuiltInResolutionResult final {

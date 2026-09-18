@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_cpu_color_space_processor.hpp>
+#include <bloom/color/ocio_cpu_input_processor.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/media/image.hpp>
 #include <charconv>
@@ -70,6 +72,68 @@ template <typename T> [[nodiscard]] ImageResult<T> providerMissing() {
             "TIFF provider is missing; MEDIA-3 must provide the worker adapter",
             false,
             ImageDiagnosticCode::ProviderMissing};
+}
+
+ImageResult<std::shared_ptr<const render::Rgba32fImage>>
+applyInputProcessor(const std::shared_ptr<const render::Rgba32fImage>& image,
+                    const std::shared_ptr<const color::CpuColorSpaceProcessor>& processor,
+                    const CancelImageWork& cancel, const std::size_t pixelBudget) {
+    if (!processor)
+        return {image, {}};
+    if (!image || image->descriptor() == nullptr)
+        return {{},
+                "Image provider returned an invalid RGBA32F image",
+                false,
+                ImageDiagnosticCode::ProviderFailed};
+    const auto descriptor = *image->descriptor();
+    auto builder = render::Rgba32fImageBuilder::create(descriptor, pixelBudget);
+    if (!builder)
+        return {{},
+                "Decoded image exceeds the pixel storage budget",
+                false,
+                ImageDiagnosticCode::PixelBudgetExceeded};
+    const auto extent = descriptor.dataWindow().extent();
+    const auto source = image->pixels();
+    std::vector<std::array<float, 4>> row(extent.width());
+    for (std::uint32_t y = 0; y < extent.height(); ++y) {
+        if (cancelled(cancel))
+            return {{}, {}, true, ImageDiagnosticCode::Cancelled};
+        for (std::uint32_t x = 0; x < extent.width(); ++x) {
+            const auto& pixel = source[static_cast<std::size_t>(y) * extent.width() + x];
+            const auto alpha = pixel.alpha();
+            row[x] = {alpha > 0.0F ? pixel.red() / alpha : 0.0F,
+                      alpha > 0.0F ? pixel.green() / alpha : 0.0F,
+                      alpha > 0.0F ? pixel.blue() / alpha : 0.0F, alpha};
+        }
+        if (!processor->apply(row))
+            return {{},
+                    "Input colour conversion failed",
+                    false,
+                    ImageDiagnosticCode::ColorSpaceUnavailable};
+        auto outputRow =
+            builder.value()->row(descriptor.dataWindow().originY() + static_cast<std::int64_t>(y));
+        if (!outputRow)
+            return {
+                {}, "Image output row is unavailable", false, ImageDiagnosticCode::DecodeFailed};
+        for (std::uint32_t x = 0; x < extent.width(); ++x) {
+            const auto& sample = row[x];
+            const auto output = render::Rgba32f::fromPremultiplied(
+                sample[0] * sample[3], sample[1] * sample[3], sample[2] * sample[3], sample[3]);
+            if (!output)
+                return {{},
+                        "Input colour conversion produced an invalid pixel",
+                        false,
+                        ImageDiagnosticCode::ColorSpaceUnavailable};
+            (*outputRow.value())[x] = *output.value();
+        }
+    }
+    auto output = std::move(*builder.value()).freeze();
+    if (!output)
+        return {{},
+                "Input colour conversion produced an invalid image",
+                false,
+                ImageDiagnosticCode::ColorSpaceUnavailable};
+    return {std::make_shared<const render::Rgba32fImage>(std::move(*output.value())), {}};
 }
 } // namespace
 std::filesystem::path resolveImagePath(std::string_view relativePath, std::string_view relinkHint,
@@ -156,8 +220,8 @@ ImageResult<ImageProbe> probeImage(const std::filesystem::path& path, const Canc
     }
 }
 ImageResult<std::shared_ptr<const render::Rgba32fImage>>
-decodeImage(const std::filesystem::path& path, ImageInterpretation interpretation,
-            std::shared_ptr<const color::CpuInputProcessor> processor,
+decodeImage(const std::filesystem::path& path, const ImageInterpretation& interpretation,
+            std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
             const CancelImageWork& cancel, const ImageProgress& progress, std::size_t pixelBudget,
             std::optional<core::Sha256Digest> expectedDigest, const ImageProvider* provider) {
     try {
@@ -180,6 +244,25 @@ decodeImage(const std::filesystem::path& path, ImageInterpretation interpretatio
         if (isTiffMagic(*bytes.value)) {
             if (provider == nullptr || !provider->decode)
                 return providerMissing<std::shared_ptr<const render::Rgba32fImage>>();
+            if (!processor && !interpretation.inputColorSpaceId.empty()) {
+                const auto resolved = color::resolveBloomNeutralV1BuiltIn(
+                    color::OcioConfigLocatorKind::BloomBuiltIn, color::kBloomNeutralV1ConfigUri,
+                    color::kBloomNeutralV1ConfigDigest);
+                if (!resolved)
+                    return {{},
+                            "Bloom Neutral input config could not be resolved",
+                            false,
+                            ImageDiagnosticCode::ColorSpaceUnavailable};
+                auto prepared = color::CpuColorSpaceProcessor::prepare(
+                    *resolved.resolved(), interpretation.inputColorSpaceId,
+                    resolved.resolved()->processColorSpaceId());
+                if (!prepared)
+                    return {{},
+                            "Input colour space is unavailable in the selected config",
+                            false,
+                            ImageDiagnosticCode::ColorSpaceUnavailable};
+                processor = std::move(prepared).takeProcessor();
+            }
             const auto response = provider->decode({.path = path,
                                                     .interpretation = interpretation,
                                                     .pixelBudget = pixelBudget,
@@ -191,12 +274,7 @@ decodeImage(const std::filesystem::path& path, ImageInterpretation interpretatio
                         response.code == ImageDiagnosticCode::None
                             ? ImageDiagnosticCode::ProviderFailed
                             : response.code};
-            if (!response.value->image)
-                return {{},
-                        "TIFF provider returned no image",
-                        false,
-                        ImageDiagnosticCode::ProviderFailed};
-            return {response.value->image, {}};
+            return applyInputProcessor(response.value->image, processor, cancel, pixelBudget);
         }
         detail::ImageInfo info;
         if (!detail::imageInfo(*bytes.value, info) || !validInfo(info))
@@ -213,18 +291,39 @@ decodeImage(const std::filesystem::path& path, ImageInterpretation interpretatio
         bytes.value.reset();
         if (cancelled(cancel))
             return {{}, {}, true};
-        const bool convert = interpretation.colorSpace == ImageColorSpace::Auto ||
-                             interpretation.colorSpace == ImageColorSpace::Srgb;
+        const bool convert = !interpretation.inputColorSpaceId.empty() ||
+                             interpretation.colorSpace == ImageColorSpace::Auto ||
+                             interpretation.colorSpace == ImageColorSpace::Srgb ||
+                             processor != nullptr;
+        std::shared_ptr<const color::CpuInputProcessor> compatibilityProcessor;
         if (convert && !processor) {
             const auto resolved = color::resolveBloomNeutralV1BuiltIn(
                 color::OcioConfigLocatorKind::BloomBuiltIn, color::kBloomNeutralV1ConfigUri,
                 color::kBloomNeutralV1ConfigDigest);
             if (!resolved)
                 return {{}, "Bloom Neutral input config could not be resolved"};
-            processor = color::CpuInputProcessor::prepare(*resolved.resolved());
+            if (interpretation.inputColorSpaceId.empty()) {
+                // Direct media callers from the 1.19 API do not carry a project config. Preserve
+                // their exact Bloom Neutral default while all project-managed paths supply the
+                // general config processor explicitly.
+                compatibilityProcessor = color::CpuInputProcessor::prepare(*resolved.resolved());
+            } else {
+                auto prepared = color::CpuColorSpaceProcessor::prepare(
+                    *resolved.resolved(), interpretation.inputColorSpaceId,
+                    resolved.resolved()->processColorSpaceId());
+                if (!prepared)
+                    return {{},
+                            "Input colour space is unavailable in the selected config",
+                            false,
+                            ImageDiagnosticCode::ColorSpaceUnavailable};
+                processor = std::move(prepared).takeProcessor();
+            }
         }
-        if (convert && !processor)
-            return {{}, "Input colour processor could not be prepared"};
+        if (convert && !processor && !compatibilityProcessor)
+            return {{},
+                    "Input colour processor could not be prepared",
+                    false,
+                    ImageDiagnosticCode::ColorSpaceUnavailable};
         const auto window = render::ImageWindow::create(0, 0, width, height);
         const auto descriptor = render::Rgba32fImageDescriptor::create(
             *window.value(), *window.value(), core::PixelAspectRatio::square());
@@ -244,8 +343,12 @@ decodeImage(const std::filesystem::path& path, ImageInterpretation interpretatio
                         row[x][c] = row[x][3] > 0.0F ? row[x][c] / row[x][3] : 0.0F;
                 }
             }
-            if (convert && !processor->apply(row))
-                return {{}, "Input colour conversion failed"};
+            if (convert && ((processor && !processor->apply(row)) ||
+                            (compatibilityProcessor && !compatibilityProcessor->apply(row))))
+                return {{},
+                        "Input colour conversion failed",
+                        false,
+                        ImageDiagnosticCode::ColorSpaceUnavailable};
             auto outputRow = builder.value()->row(y);
             for (std::uint32_t x = 0; x < width; ++x) {
                 const auto& sample = row[x];

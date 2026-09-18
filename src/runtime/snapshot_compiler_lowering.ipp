@@ -632,6 +632,8 @@ lowerImageSource(const document::NodeRecord& node) {
     const auto* start = parameterConstant<std::int64_t>(findParameterBinding(node, "startFrame"));
     const auto* loop = parameterConstant<std::int64_t>(findParameterBinding(node, "loopMode"));
     const auto* space = parameterConstant<std::int64_t>(findParameterBinding(node, "colorSpace"));
+    const auto* inputSpace =
+        parameterConstant<std::string>(findParameterBinding(node, "inputColorSpaceId"));
     const auto* premultiply = parameterConstant<bool>(findParameterBinding(node, "premultiply"));
     if (!asset || !start || !loop || !space || !premultiply) {
         addTopologyFailure(node.id, "Image source parameters could not be lowered.");
@@ -644,8 +646,9 @@ lowerImageSource(const document::NodeRecord& node) {
             ? request_.snapshot.project().findAsset(document::AssetId::fromRaw(raw))
             : nullptr;
     return runtime::CompiledImageSource{node.id, record ? std::optional{*record} : std::nullopt,
-                                        *start,  *loop,
-                                        *space,  *premultiply};
+                                        *start, *loop, *space,
+                                        inputSpace == nullptr ? std::string{} : *inputSpace,
+                                        *premultiply};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -654,6 +657,8 @@ lowerVideoSource(const document::NodeRecord& node) {
     const auto* start = parameterConstant<std::int64_t>(findParameterBinding(node, "startFrame"));
     const auto* loop = parameterConstant<std::int64_t>(findParameterBinding(node, "loopMode"));
     const auto* space = parameterConstant<std::int64_t>(findParameterBinding(node, "colorSpace"));
+    const auto* inputSpace =
+        parameterConstant<std::string>(findParameterBinding(node, "inputColorSpaceId"));
     if (!asset || !start || !loop || !space) {
         addTopologyFailure(node.id, "Video source parameters could not be lowered.");
         return std::nullopt;
@@ -665,8 +670,8 @@ lowerVideoSource(const document::NodeRecord& node) {
             ? request_.snapshot.project().findAsset(document::AssetId::fromRaw(raw))
             : nullptr;
     return runtime::CompiledVideoSource{node.id, record ? std::optional{*record} : std::nullopt,
-                                        *start,  *loop,
-                                        *space};
+                                        *start, *loop, *space,
+                                        inputSpace == nullptr ? std::string{} : *inputSpace};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

@@ -20,7 +20,7 @@ namespace bloom::media::cache {
 // source bytes and interpretation -- an entry keyed on the old identity is never read back
 // (docs/architecture/media-io.md "Disk cache": "cache key includes the decoder's identity so a
 // decoder upgrade invalidates entries").
-inline constexpr std::string_view kImageDecoderIdentity = "bloom-image-decode-2";
+inline constexpr std::string_view kImageDecoderIdentity = "bloom-image-decode-3";
 
 // The inputs that make a decoded image's on-disk identity: everything selectImageSource() /
 // selectThumbnail() already resolve per docs/architecture/media-io.md's cache-key contract (asset
@@ -31,6 +31,8 @@ struct ImageCacheKeyInputs final {
     core::Sha256Digest contentDigest;
     std::int64_t memberFrame = 0;
     ImageColorSpace colorSpace = ImageColorSpace::Auto;
+    std::string inputColorSpaceId;
+    std::string workingColorSpaceId;
     ImageAlphaAssociation alphaAssociation = ImageAlphaAssociation::Straight;
     core::Sha256Digest configDigest;
 
@@ -49,10 +51,11 @@ struct ImageCacheKeyInputs final {
 //
 // `diskCache` may be null or disabled: behaves exactly like calling media::decodeImage() directly.
 [[nodiscard]] ImageResult<std::shared_ptr<const render::Rgba32fImage>>
-decodeThroughDiskCache(const std::filesystem::path& path, ImageInterpretation interpretation,
+decodeThroughDiskCache(const std::filesystem::path& path, const ImageInterpretation& interpretation,
                        std::optional<core::Sha256Digest> expectedDigest,
                        const std::string& cacheKey, MediaDiskCache* diskCache, bool writeAsync,
                        const CancelImageWork& cancel = {}, const ImageProgress& progress = {},
-                       std::size_t pixelBudget = kMaxImageStorageBytes);
+                       std::size_t pixelBudget = kMaxImageStorageBytes,
+                       std::shared_ptr<const color::CpuColorSpaceProcessor> processor = {});
 
 } // namespace bloom::media::cache

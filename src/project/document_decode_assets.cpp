@@ -248,21 +248,30 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
                      : kind == "audio"    ? document::AssetKind::Audio
                      : kind == "video"    ? document::AssetKind::Video
                                           : document::AssetKind::Font;
-        constexpr std::array<std::string_view, 2> interpretationKeys{"colorSpace",
-                                                                     "alphaAssociation"};
+        constexpr std::array<std::string_view, 3> interpretationKeys{
+            "colorSpace", "inputColorSpaceId", "alphaAssociation"};
+        constexpr std::array<std::string_view, 2> legacyInterpretationKeys{"colorSpace",
+                                                                           "alphaAssociation"};
         std::vector<const JsonValue*> interpretation;
         std::uint32_t space = 0, alpha = 0;
-        if (!matchOrderedMembers(*fields[4], interpretationKeys, false, state, path,
-                                 interpretation) ||
+        std::string inputColorSpaceId;
+        const bool currentInterpretation = state.documentMinor >= 20;
+        if ((currentInterpretation ? !matchOrderedMembers(*fields[4], interpretationKeys, false,
+                                                          state, path, interpretation)
+                                   : !matchOrderedMembers(*fields[4], legacyInterpretationKeys,
+                                                          false, state, path, interpretation)) ||
             !number(*interpretation[0], state, path, space) ||
-            !number(*interpretation[1], state, path, alpha) || space > 3 || alpha > 1 ||
-            !number(*fields[5], state, path, asset.width) ||
+            (currentInterpretation && !text(*interpretation[1], state, path, inputColorSpaceId)) ||
+            !number(*(currentInterpretation ? interpretation[2] : interpretation[1]), state, path,
+                    alpha) ||
+            space > 3 || alpha > 1 || !number(*fields[5], state, path, asset.width) ||
             !number(*fields[6], state, path, asset.height) ||
             !manifest(*fields[7], state, path, asset.manifest)) {
             state.fail(DocumentDecodeError::DomainViolation, path);
             return false;
         }
         asset.interpretation = {static_cast<document::AssetColorSpace>(space),
+                                std::move(inputColorSpaceId),
                                 static_cast<document::AssetAlphaAssociation>(alpha)};
         if (asset.kind == document::AssetKind::Font) {
             const auto* fontNode = value.findMember("font");

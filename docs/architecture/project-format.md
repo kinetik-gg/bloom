@@ -1,7 +1,8 @@
 # Bloom Project Format
 
-The current document schema is 1.19. It adds an optional per-composition working colour-space
-override on top of the 1.18 `project.dataBlocks` collection and `dataBlock` allocator namespace.
+The current document schema is 1.20. It adds config-managed asset input colour-space ids on top of
+the 1.19 optional per-composition working colour-space override, the 1.18 `project.dataBlocks`
+collection, and the `dataBlock` allocator namespace.
 See [data blocks](data-blocks.md) for the model and provenance contract.
 
 Status: accepted
@@ -20,7 +21,7 @@ migrations are implemented.
 Format-specific semantic verification of
 the complete save/reopen pipeline, and cross-platform publication parity remain pending.
 
-Updated: 2026-09-17
+Updated: 2026-09-18
 
 ## Purpose And Ownership
 
@@ -42,19 +43,24 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.19`.
+The container version remains `1.0`; the current document schema is `1.20`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. Versioned artifacts through `1.11` remain checked as
-historical fixtures, with the current `1.19` contract also enforced by the canonical writer and
+historical fixtures, with the current `1.20` contract also enforced by the canonical writer and
 decoder tests. The manifest artifact still requires container `1.0`; its document
 declaration follows the current document minor. Every historical artifact from `1.0` through `1.11`,
 manifest and document, remains checked, and each version's checker validates what its own minor adds
 and then reduces the artifact to its predecessor so the older checks run unchanged.
 
 Document `1.16` adds asset folders, display names, tags and ordering (see "Asset Organization" below).
+
+Document `1.20` adds `inputColorSpaceId` to every asset interpretation and adds the matching
+non-animatable String parameter to image and video source nodes. The empty id is Auto/inherit; a
+non-empty id is an exact non-data colour-space id in the project's OCIO configuration. The legacy
+integer interpretation and image/video `colorSpace` parameter remain for compatibility.
 
 Document `1.14` adds the bounded `path` constant value (see "Path values" below).
 
@@ -860,11 +866,11 @@ schema-version path. Reconstruction applies the same registry validation to deco
 names the node ID. Old or future versions of a known kind are never silently upgraded, downgraded,
 or interpreted through another definition. No parameters or IDs are injected and no edges are dropped.
 
-The canonical writer is **1.19** and the load floor is **1.15**. Opening 1.15 applies the additive
-asset metadata defaults during typed decoding and reports the resulting document as 1.19. The
-registered 1.15 → 1.16, 1.16 → 1.17, 1.17 → 1.18, and 1.18 → 1.19 DOM transforms are tested
-against the same decoded result; the last step adds no override, preserving inheritance and
-`lin_rec709_scene`.
+The canonical writer is **1.20** and the load floor is **1.15**. Opening 1.15 applies the additive
+asset metadata defaults during typed decoding and reports the resulting document as 1.20. The
+registered 1.15 → 1.16, 1.16 → 1.17, 1.17 → 1.18, 1.18 → 1.19, and 1.19 → 1.20 DOM transforms are
+tested against the same decoded result; the last step adds only the deterministic input-id
+mapping, preserving inheritance and `lin_rec709_scene`.
 No node version,
 parameter source or rendering meaning changes. The earlier numbered ladder remains independently
 tested bookkeeping and does not admit files below the load floor. Historical schema
@@ -1179,7 +1185,7 @@ the new artifacts to 1.5 and run the complete historical ladder.
 ## Content Bounds Introduced In Document 1.7
 
 Solid v2 introduced explicit Scalar width and height. Text v2, Layer v4, and Merge v2 use local
-content bounds. These are now the only supported definitions; the current 1.17 schema includes
+content bounds. These are now the only supported definitions; the current 1.20 schema includes
 those contracts together with per-component animation, image assets, and audio. Documents carrying
 older node versions fail validation. There is no coordinate conversion or compatibility evaluator.
 
@@ -1235,7 +1241,12 @@ Assets are sorted by ID. Their closed member order is `id`, `kind`, `locator`, `
 order is `kind: "file"`, `portability: "project-relative"`, UTF-8 `path`, absolute `relinkHint`.
 The digest is lowercase SHA-256 of image bytes; a sequence digest hashes ordered decimal frame
 numbers plus `:` and each member's lowercase digest. Interpretation holds integer `colorSpace`
-(0 Auto, 1 sRGB, 2 Linear, 3 Raw) and `alphaAssociation` (0 Straight, 1 Premultiplied).
+(0 Auto, 1 sRGB, 2 Linear, 3 Raw), string `inputColorSpaceId`, and `alphaAssociation` (0 Straight,
+1 Premultiplied). The string is written after the legacy integer and before `alphaAssociation`; an
+empty string means Auto. A non-empty value is an exact non-data colour-space id in the project's
+selected OCIO configuration. New imports leave the legacy enum at Auto so format metadata and EXR
+chromaticities remain automatic; the enum is retained for compatibility and deterministic migration
+of older documents.
 
 The manifest contains `pattern`, `padding`, decimal-string `first` and `last`, sorted `members`
 (frame, locator, digest), and explicit decimal-string `gaps`. A still carries an empty manifest.
@@ -1295,9 +1306,10 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.17`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.20`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-Current artifacts are `document-1.18.schema.json` and `manifest-1.18.schema.json`.
+The current artifacts are `document-1.20.schema.json` and `manifest-1.20.schema.json`; the
+historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
 Its value is the canonical decimal-string LayerId of another boundary in the same composition.
@@ -1331,7 +1343,7 @@ and unknown additive members.
 Document `1.16` adds organization metadata without changing media identity or evaluation. The
 introduction artifacts are `document-1.16.schema.json` and `manifest-1.16.schema.json`. Container
 version remains `1.0`; the load floor remains `1.15` so existing projects can acquire these
-additive defaults when opened. The current writer saves 1.17; opening alone leaves the
+additive defaults when opened. The current writer saves 1.20; opening alone leaves the
 original file untouched.
 
 Each asset appends `name`, optional `folder`, `tags`, then `order` after its existing media
@@ -1373,10 +1385,11 @@ name, folder, tags and order. No organization command changes render pixels.
 
 ## Video Assets In Document 1.17
 
-The current document and manifest schema artifacts are `document-1.18.schema.json` and
-`manifest-1.18.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
-The 1.16 → 1.17 migration only advances the version; existing assets and pixels are unchanged.
-Opening 1.15 first applies asset-organization defaults and then the video version step.
+The current document and manifest schema artifacts are `document-1.20.schema.json` and
+`manifest-1.20.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
+The 1.16 → 1.17 migration only advances the version; the 1.17 → 1.18 and 1.18 → 1.19 steps
+likewise preserve existing assets and pixels. Opening 1.15 first applies asset-organization
+defaults and the historical video and working-space steps, then the 1.19 → 1.20 input-id step.
 
 `AssetKind::Video` serializes as `"video"`. It retains the shared asset identity, locator,
 interpretation, dimensions and organization envelope, with a closed `video` member before
@@ -1393,3 +1406,26 @@ The first video stream defines the asset's duration, frame count and dimensions.
 stream supplies its preview sample rate and channel count. Content digest binds every decode and
 cache lookup. ProRes authorization is not project truth: the current provider's explicit
 non-authorized status is execution evidence and appears in the asset tooltip.
+
+## Asset Input Colour Spaces In Document 1.20
+
+The `1.19` → `1.20` migration appends `inputColorSpaceId` to each existing asset interpretation
+and adds the `inputColorSpaceId` String parameter to `bloom.image-source` and `bloom.video-source`.
+Both source rows are non-animatable. The source value is empty to inherit the asset; otherwise it is
+the exact config id selected by the artist. The integer `colorSpace` rows remain unchanged: `0`
+inherits the asset's legacy interpretation, while values `1` through `3` retain their historical
+sRGB, Linear, and Raw compatibility behavior.
+
+Migration is deterministic under the selected project's OCIO configuration:
+
+| 1.19 `colorSpace` | 1.20 `inputColorSpaceId` |
+| --- | --- |
+| Auto | empty |
+| Srgb | config sRGB-texture id (`srgb_rec709_display` in Bloom Neutral) |
+| Linear | effective working-space id |
+| Raw | empty; data/no-conversion |
+
+The canonical writer emits `colorSpace`, `inputColorSpaceId`, then `alphaAssociation` in that
+order. The field is bounded and validated as strict UTF-8. Missing, data, or unavailable ids do
+not fall back to a similarly named space or to an ambient config; the asset remains diagnostically
+unavailable until the user chooses a valid id.

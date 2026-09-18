@@ -300,6 +300,18 @@ void testBuildImageCacheKey(Expectations& check) {
     changedFrame.memberFrame = 4;
     check.expect(cache::buildImageCacheKey(changedFrame, "decoder-v1") != keyA,
                  "a different member frame changes the key");
+    auto changedInput = inputs;
+    changedInput.inputColorSpaceId = "ACEScg";
+    check.expect(cache::buildImageCacheKey(changedInput, "decoder-v1") != keyA,
+                 "a different input colour-space id changes the key");
+    auto changedWorking = inputs;
+    changedWorking.workingColorSpaceId = "ACEScg";
+    check.expect(cache::buildImageCacheKey(changedWorking, "decoder-v1") != keyA,
+                 "a different working colour-space id changes the key");
+    auto changedRevision = inputs;
+    changedRevision.configDigest = digestOf("config-revision-2");
+    check.expect(cache::buildImageCacheKey(changedRevision, "decoder-v1") != keyA,
+                 "a different OCIO config revision changes the key");
     check.expect(cache::buildImageCacheKey(inputs, "decoder-v2") != keyA,
                  "a decoder identity/version change invalidates the key, exactly as a decoder "
                  "upgrade must invalidate old disk entries");

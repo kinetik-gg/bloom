@@ -1,4 +1,4 @@
 add_library(bloom_media_video STATIC session.cpp cache.cpp audio.cpp colour.cpp)
 target_include_directories(bloom_media_video PUBLIC include)
-target_link_libraries(bloom_media_video PUBLIC bloom_media_worker_host bloom_media_audio bloom_color_video bloom_render bloom_runtime)
+target_link_libraries(bloom_media_video PUBLIC bloom_media_worker_host bloom_media_audio bloom_color_video bloom_render bloom_runtime bloom_color_ocio)
 bloom_enable_warnings(bloom_media_video)

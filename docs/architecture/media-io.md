@@ -278,6 +278,27 @@ and explicitly resolve color, alpha, field, rate, timecode, and audio-layout amb
 interpretation receives its own canonical identity and participates in decode, proxy, render, and
 cache keys.
 
+#### Colour tags and config-managed input spaces (COLOR-2)
+
+Video H.273 tags remain evidence from the container; they are not themselves OCIO colour-space
+ids. With an asset in Auto mode, Bloom maps a video stream with Rec.709 primaries and matrix plus
+BT.709 transfer to the selected config's Rec.709 camera/video space, sRGB transfer to the config's
+sRGB-texture space, and linear transfer to the effective working space. Missing, contradictory, or
+unsupported tags refuse with a typed diagnostic. Rec.2020, HLG, and PQ remain the MEDIA-3 typed
+refusal unless the selected config and an explicit artist id provide a separately qualified path.
+
+ARRI LogC3 and RED Log3G10 do not have a container Auto mapping in this contract. Their config
+colour spaces are explicit artist choices. The Assets and Properties pickers enumerate every
+non-data colour space in the exact selected config, grouped by its OCIO family, and preserve the
+chosen id on the asset or source node. A source-node id overrides the asset; an empty source id
+inherits the asset's automatic or explicit interpretation.
+
+Image Auto rules are equally explicit: 8/16-bit PNG, JPEG, and TIFF use the config's sRGB-texture
+space; EXR AP0, AP1, and Rec.709/D65 chromaticities map to `ACES2065-1`, `ACEScg`, and
+`lin_rec709_scene` respectively; other EXR chromaticities refuse; and an EXR without
+chromaticities assumes the working space with a warning. The exact config revision is part of every
+resolved input identity.
+
 ### 3. Packet And Frame Index
 
 An index is keyed by source identity, provider/version, selected stream, and interpretation. It
@@ -426,13 +447,13 @@ QSettings-only precedent (`bloom::ui::media_disk_cache_settings`) rather than ad
 Preferences surface for one feature.
 
 **Cache key.** Content-addressed and restart-stable, deliberately narrower than the evaluator's
-in-process operation-cache key: asset content digest, member/frame, interpretation (color space
-and alpha association), the Bloom Neutral config digest, and a decoder identity/version string
-(`bloom::media::cache::kImageDecoderIdentity`) bumped whenever the decode or Bloom-Neutral-
-conversion pipeline could change decoded pixels for the same source bytes -- a decoder upgrade
-therefore invalidates old entries by construction. The key omits the resolved path/relink hint and
-availability that the memory-cache key includes, so a relink of identical content still hits the
-disk entry.
+in-process operation-cache key: asset content digest, member/frame, legacy interpretation, resolved
+input colour-space id, effective working-space id, exact OCIO config revision, alpha association,
+and a decoder identity/version string (`bloom::media::cache::kImageDecoderIdentity`) bumped
+whenever the decode or config-managed conversion pipeline could change decoded pixels for the same
+source bytes. The key omits the resolved path/relink hint and availability that the memory-cache key
+includes, so a relink of identical content still hits the disk entry. Changing the input id,
+working id, or config revision necessarily misses both decoded image and video-frame caches.
 
 **Format (v0).** Uncompressed Float32 RGBA, matching the process image exactly: a small fixed
 header (data/display window, pixel aspect, payload byte count) plus the raw pixel payload, and a
@@ -1216,11 +1237,12 @@ content check; scrubbing does not decode the complete audio clip again.
 No operation-cache or memory-ledger implementation changes are required.
 
 Colour conversion preserves stream tags when a decoder omits them from its frame. The provider
-copies YUV420P8 directly or expands YUV/alpha to bounded YUVA444P16 planes. `src/color` owns the
-Rec.709 matrix/range arithmetic and inverse Rec.709 or sRGB transfer to scene-linear Rec.709;
-`src/media/video` adapts the checked planes and premultiplies retained alpha. No missing primaries,
-matrix or range is inferred. Rec.2020, HLG and PQ return typed `Unavailable`, including when a
-transfer override is supplied. Raw and linear overrides change transfer interpretation only.
+copies YUV420P8 directly or expands YUV/alpha to bounded YUVA444P16 planes. `src/media/video`
+performs the qualified Rec.709 matrix/range step, while `src/color` applies the resolved OCIO
+input-id-to-working-space transform on straight RGB before alpha is restored. No missing primaries,
+matrix or range is inferred. Rec.2020, HLG and PQ return typed `Unavailable` on the unqualified
+path, including when a legacy transfer override is supplied. Raw and linear compatibility overrides
+retain their historical transfer-only behavior; an explicit config id is recorded separately.
 
 Tests generate 48-frame H.264 MP4 and ProRes 422 MOV fixtures with burned-in frame numbers and
 48 kHz PCM, using the intake libraries in a worker-only fixture generator. An additional ProRes 4444

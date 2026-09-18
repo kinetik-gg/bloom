@@ -145,7 +145,7 @@ template <typename Definition>
         return hasCanonicalKey(definition, "bloom.video-source", 1) &&
                hasOutput(definition, "image", SocketValueKind::Image) &&
                hasOutput(definition, "audio", SocketValueKind::Audio) &&
-               definition.outputs.size() == 2 && definition.parameters.size() == 4 &&
+               definition.outputs.size() == 2 && definition.parameters.size() == 5 &&
                definition.inputs.empty() &&
                hasParameter(definition, 0, "asset", "bloom.video.asset",
                             ParameterValueKind::String) &&
@@ -154,10 +154,13 @@ template <typename Definition>
                hasParameter(definition, 2, "loopMode", "bloom.video.loop-mode",
                             ParameterValueKind::Integer) &&
                hasParameter(definition, 3, "colorSpace", "bloom.video.color-space",
-                            ParameterValueKind::Integer);
+                            ParameterValueKind::Integer) &&
+               hasParameter(definition, 4, kVideoInputColorSpaceIdParameterRole,
+                            kVideoInputColorSpaceIdParameterSchemaKey, ParameterValueKind::String,
+                            false, false);
     case NodeLoweringKind::ImageSource:
         return hasCanonicalKey(definition, "bloom.image-source", 1) &&
-               hasImageOutput(definition, "image") && definition.parameters.size() == 5 &&
+               hasImageOutput(definition, "image") && definition.parameters.size() == 6 &&
                definition.inputs.empty() &&
                hasParameter(definition, 0, "asset", "bloom.image.asset",
                             ParameterValueKind::String) &&
@@ -168,7 +171,10 @@ template <typename Definition>
                hasParameter(definition, 3, "colorSpace", "bloom.image.color-space",
                             ParameterValueKind::Integer) &&
                hasParameter(definition, 4, "premultiply", "bloom.image.premultiply",
-                            ParameterValueKind::Boolean);
+                            ParameterValueKind::Boolean) &&
+               hasParameter(definition, 5, kImageInputColorSpaceIdParameterRole,
+                            kImageInputColorSpaceIdParameterSchemaKey, ParameterValueKind::String,
+                            false, false);
     case NodeLoweringKind::CompositionSource:
         return hasCanonicalKey(definition, kCompositionSourceNodeType, 1) &&
                definition.inputs.empty() && definition.outputs.size() == 2 &&
@@ -453,7 +459,10 @@ template <typename Definition>
              {"loopMode", "bloom.video.loop-mode", ParameterValueKind::Integer, true, false,
               std::int64_t{0}},
              {"colorSpace", "bloom.video.color-space", ParameterValueKind::Integer, true, false,
-              std::int64_t{0}}},
+              std::int64_t{0}},
+             {std::string(kVideoInputColorSpaceIdParameterRole),
+              std::string(kVideoInputColorSpaceIdParameterSchemaKey), ParameterValueKind::String,
+              false, false, std::string{}}},
             std::nullopt,
             NodeCardinality::Many,
             NodeCategory::Sources};
@@ -461,22 +470,25 @@ template <typename Definition>
 
 [[nodiscard]] NodeDefinition imageDefinition() {
     using namespace bloom::document;
-    return {{"bloom.image-source", 1},
-            NodeLoweringKind::ImageSource,
-            {},
-            {{"image", SocketValueKind::Image}},
-            {{"asset", "bloom.image.asset", ParameterValueKind::String, true, false, std::string{}},
-             {"startFrame", "bloom.image.start-frame", ParameterValueKind::Integer, true, false,
-              std::int64_t{0}},
-             {"loopMode", "bloom.image.loop-mode", ParameterValueKind::Integer, true, false,
-              std::int64_t{0}},
-             {"colorSpace", "bloom.image.color-space", ParameterValueKind::Integer, true, false,
-              std::int64_t{0}},
-             {"premultiply", "bloom.image.premultiply", ParameterValueKind::Boolean, true, false,
-              true}},
-            std::nullopt,
-            NodeCardinality::Many,
-            NodeCategory::Sources};
+    return {
+        {"bloom.image-source", 1},
+        NodeLoweringKind::ImageSource,
+        {},
+        {{"image", SocketValueKind::Image}},
+        {{"asset", "bloom.image.asset", ParameterValueKind::String, true, false, std::string{}},
+         {"startFrame", "bloom.image.start-frame", ParameterValueKind::Integer, true, false,
+          std::int64_t{0}},
+         {"loopMode", "bloom.image.loop-mode", ParameterValueKind::Integer, true, false,
+          std::int64_t{0}},
+         {"colorSpace", "bloom.image.color-space", ParameterValueKind::Integer, true, false,
+          std::int64_t{0}},
+         {"premultiply", "bloom.image.premultiply", ParameterValueKind::Boolean, true, false, true},
+         {std::string(kImageInputColorSpaceIdParameterRole),
+          std::string(kImageInputColorSpaceIdParameterSchemaKey), ParameterValueKind::String, false,
+          false, std::string{}}},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Sources};
 }
 
 [[nodiscard]] NodeDefinition compositionSourceDefinition() {

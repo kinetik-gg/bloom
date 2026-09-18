@@ -61,6 +61,7 @@ class PropertiesRegistryRow final : public QWidget {
   private:
     void commit();
     void populateFontSelector();
+    void populateInputColorSpaceSelector();
     void pollFontCatalogue();
     [[nodiscard]] double displayScale() const;
     bool eventFilter(QObject* watched, QEvent* event) override;
