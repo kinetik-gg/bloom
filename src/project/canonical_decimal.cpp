@@ -519,24 +519,36 @@ CanonicalFloat64TextResult formatCanonicalFloat64(const double value) noexcept {
 
     std::array<char, 17> digits{};
     std::size_t digitCount = 0;
+    std::size_t rawDigitCount = 0;
+    std::size_t leadingZeroCount = 0;
     std::size_t digitsBeforePoint = 0;
     std::size_t cursor = 0;
     bool sawPoint = false;
+    bool sawNonZero = false;
     while (cursor < shortestView.size() && shortestView[cursor] != 'e' &&
            shortestView[cursor] != 'E') {
         if (shortestView[cursor] == '.') {
             sawPoint = true;
-            digitsBeforePoint = digitCount;
+            digitsBeforePoint = rawDigitCount;
         } else {
-            if (digitCount >= digits.size()) {
-                std::terminate();
+            ++rawDigitCount;
+            if (!sawNonZero && shortestView[cursor] == '0') {
+                ++leadingZeroCount;
+            } else {
+                sawNonZero = true;
+                if (digitCount >= digits.size()) {
+                    std::terminate();
+                }
+                digits[digitCount++] = shortestView[cursor];
             }
-            digits[digitCount++] = shortestView[cursor];
         }
         ++cursor;
     }
     if (!sawPoint) {
-        digitsBeforePoint = digitCount;
+        digitsBeforePoint = rawDigitCount;
+    }
+    if (digitCount == 0) {
+        std::terminate();
     }
 
     int explicitExponent = 0;
@@ -557,7 +569,8 @@ CanonicalFloat64TextResult formatCanonicalFloat64(const double value) noexcept {
         }
     }
 
-    const int scientificExponent = explicitExponent + static_cast<int>(digitsBeforePoint) - 1;
+    const int scientificExponent = explicitExponent + static_cast<int>(digitsBeforePoint) -
+                                   static_cast<int>(leadingZeroCount) - 1;
     if (scientificExponent >= -6 && scientificExponent < 21) {
         const int decimalPoint = scientificExponent + 1;
         if (decimalPoint <= 0) {
