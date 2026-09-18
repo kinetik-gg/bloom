@@ -25,10 +25,12 @@ active composition's optional override. It is carried with the OCIO config revis
 intent and is part of the process/output semantic identity for generalized projects. The legacy
 `lin_rec709_scene` intent keeps the previous identity bytes and goldens.
 
-PNG uses the qualified transform from the effective working space to the selected display/view. EXR
-does not transform pixels: it writes the working-space id as `colorInteropID` and writes the exact
-working-space primaries/white point into `chromaticities` (ACEScg uses AP1; `lin_rec709_scene` uses
-the existing Rec.709/D65 bits). An unsupported mapping fails before staging.
+PNG and TIFF use the qualified OCIO transform from the effective working space to the config's
+default display/view. Their analysis binds that processor and config revision. EXR defaults to
+unchanged working-space pixels, but `FlatExrRgba32fOptionsV1::outputColorSpaceId` can name an output
+space in the exact config. `CpuColorSpaceProcessor` converts working → output before encoding;
+`colorInteropID` and `chromaticities` describe the output space. An unavailable transform or
+unsupported chromaticity mapping fails before staging.
 
 ## Purpose
 
@@ -611,13 +613,13 @@ are not expected to round-trip as file metadata; their semantic effect is what v
 
 - one flat, single-part, scanline image;
 - channels named exactly `R`, `G`, `B`, `A`, each Float32 with sampling `1 x 1`;
-- canonical premultiplied process samples without a display transform, clamp, quantization, or
-  straight-alpha conversion;
+- premultiplied Float32 samples, without a display transform, clamp or quantization; an optional
+  output colour transform operates on straight RGB and restores the original alpha;
 - exact signed data and display windows after checked conversion to the OpenEXR coordinate domain;
-- increasing-Y scanline order and lossless ZIP compression;
+- increasing-Y scanline order and the declared lossless compression: ZIP (default), PIZ, ZIPS or none;
 - the pixel-aspect rational rounded once to the OpenEXR Float32 attribute; and
-- `colorInteropID` equal to the effective working-space id plus the exact chromaticity bits for that
-  space (the legacy Rec.709/D65 values remain byte-identical for `lin_rec709_scene`).
+- `colorInteropID` equal to the output colour-space id plus the exact chromaticity bits for that
+  space; an empty output id resolves to the working space and preserves the existing bytes.
 
 The version-field value is OpenEXR version `2` with every feature flag clear: regular single-part
 scanline storage, short names, non-deep, non-tiled, non-multipart. The header contains exactly these
@@ -627,7 +629,7 @@ time code, owner, comments, software, capture date, or host data, fails preset v
 | Attribute | OpenEXR type | Required version 1 value |
 | --- | --- | --- |
 | `channels` | `chlist` | entries in lexical order `A`, `B`, `G`, `R`; each `FLOAT`, `pLinear=0`, x/y sampling `1/1` |
-| `compression` | `compression` | `ZIP_COMPRESSION` |
+| `compression` | `compression` | declared `ZIP_COMPRESSION`, `PIZ_COMPRESSION`, `ZIPS_COMPRESSION` or `NO_COMPRESSION` |
 | `dataWindow` | `box2i` | checked inclusive signed-32 bounds corresponding exactly to the process data window |
 | `displayWindow` | `box2i` | checked inclusive signed-32 bounds corresponding exactly to the process display window |
 | `lineOrder` | `lineOrder` | `INCREASING_Y` |
@@ -635,7 +637,7 @@ time code, owner, comments, software, capture date, or host data, fails preset v
 | `screenWindowCenter` | `v2f` | `(0, 0)`, bits `00000000 00000000` |
 | `screenWindowWidth` | `float` | `1`, bits `3f800000` |
 | `chromaticities` | `chromaticities` | values below, in OpenEXR red/green/blue/white order |
-| `colorInteropID` | `string` | exact UTF-8 bytes `lin_rec709_scene` |
+| `colorInteropID` | `string` | exact output colour-space id; legacy default `lin_rec709_scene` |
 
 The legacy `lin_rec709_scene` `chromaticities` binary32 bit patterns are exact: red `(3f23d70a, 3ea8f5c3)`, green
 `(3e99999a, 3f19999a)`, blue `(3e19999a, 3d75c28f)`, and D65 white
@@ -647,12 +649,18 @@ The pixel-aspect rational is converted once to binary32 using IEEE-754 round-to-
 ties-to-even, with gradual underflow and preserved signed zero. NaN, infinity, a non-positive
 result, or finite overflow fails before staging. The same conversion rule governs any declared
 binary64-to-binary32 output boundary; it must not inherit ambient rounding or flush subnormals.
-Process samples are already binary32 and are copied bit-for-bit rather than numerically converted.
+Without an output transform, process samples are copied bit-for-bit. With a transform, RGB is
+unpremultiplied in binary32, converted through the exact config, then premultiplied again. Zero
+alpha produces zero RGB; alpha itself is retained. Non-finite results fail the export.
 
 For the ACES 1.3 CG built-in, the `ACEScg` working-space header uses AP1 red/green/blue
 chromaticity bits `(3f36872b, 3e960419)`, `(3e28f5c3, 3f547ae1)`, `(3e03126f, 3d343958)` and
 D60 white `(3ea4b33e, 3eace315)`. These values are pinned from the qualified OCIO config and are
-verified by the ACEScg export golden.
+verified by the ACEScg export golden. Output `ACES2065-1` uses AP0 bits
+`(3f3c154d, 3e87d567)`, `(00000000, 3f800000)`, `(38d1b717, bd9db22d)` and the same D60 white.
+The handoff preset selects AP0 and PIZ. An independent OCIO/OpenEXR test bounds its RGB error to
+less than `1e-5`. The default working-space/ZIP path retains its original artifact and identity
+bytes.
 
 Version 1 additionally bounds every data- and display-window coordinate to a magnitude strictly
 below `1073741823` (`INT32_MAX/2`) — the validated coordinate ceiling the qualified OpenEXR
@@ -660,7 +668,10 @@ encoder itself enforces. A window outside that checked ceiling fails typed befor
 than surfacing a library error; the full signed-32 wording above is therefore bounded by this
 explicit version 1 ceiling.
 
-The report marks process pixels, alpha, channels, and windows `Exact`. The pixel-aspect facet is
+Without a colour transform, the report marks process pixels, alpha, channels and windows `Exact`.
+A working-to-output transform marks Pixels and Color `Approximated` with
+`exr.output-color-transform`; External Dependencies binds the exact OCIO config revision with
+`exr.ocio-external-reference`. Compression records the selected method. The pixel-aspect facet is
 `Exact` only when the stored Float32 round-trips to the source rational; otherwise it is
 `Approximated` and records both values. Float32 samples are compared bit-for-bit after reopen,
 including signed zero and finite negative/HDR values where the process contract preserves them.
@@ -723,9 +734,9 @@ EXR kind `2` appends:
 i32(data xMin) || i32(data yMin) || i32(data xMax) || i32(data yMax)
 i32(display xMin) || i32(display yMin) || i32(display xMax) || i32(display yMax)
 u32(pixelAspectRatio binary32 bits)
-u8(1)                                # ZIP_COMPRESSION
+u8(compression)                      # ZIP=1, PIZ=2, ZIPS=3, none=4
 u8(1)                                # INCREASING_Y
-text("lin_rec709_scene")
+text(outputColorSpaceId)              # legacy default "lin_rec709_scene"
 8 * u32(chromaticities bits in red/green/blue/white x/y order)
 text("exr.singlepart-scanline-rgba32f.v1")
 u64(pixelCount)
@@ -959,8 +970,36 @@ settings in `MediaOutputAnalysisV1`. The eleven ordered facets state the lossy d
 codec precision, omitted or retained alpha, exact cadence, stream layout and external provider.
 Each evaluated frame still receives a separate immutable attempt and authoring-thread digest
 approval. The composition driver uses SCRIPT-0's host frame-time mapping and publishes one staged,
-closed, reopened and verified movie or WAV. The original PNG/EXR sequence loop and frame record
-encodings remain intact; TIFF joins the same sequence publication path.
+closed, reopened and verified movie or WAV. PNG/EXR/TIFF share per-frame atomic publication.
+Default EXR records remain unchanged;
+explicit output transforms and look policies bind the additional evidence described below.
 
 See [media I/O](media-io.md#time-based-export-media-4) for the resource, tolerance and QC records,
-and [Exporting video](../user-guide/exporting-video.md) for artist-facing controls.
+and [Export](../user-guide/exporting-video.md) for artist-facing controls.
+
+## Deliverable presets and sequence names (COLOR-5)
+
+The dialog places two deliverables above the raw presets. **VFX handoff EXR (ACES2065-1, PIZ,
+1001, ####)** fills output space `ACES2065-1`, PIZ, Start frame 1001, Padding 4 and Pattern
+`<base>.####.<ext>`. It captures `bypassLookNodes=true` for this export only. **Review H.264
+(Rec.709, look on)** captures `bypassLookNodes=false` and the ACES config's
+`Rec.1886 Rec.709 - Display` / `ACES 1.0 - SDR Video` processor. Fields remain editable after a
+preset is selected. No display/view picker is introduced.
+
+Sequence requests expose `startFrame` (absent means the range's first frame), `framePadding`
+(default 4) and `namePattern` (default `<base>.####.<ext>`). Composition frame indices still
+select evaluation times; Start frame changes filenames only. `<base>` and `<ext>` come from the
+destination; `{name}` is the composition name. Exactly one `####` or `{frame}` supplies the frame
+number. Both use the selected padding, expanded to the last label's digit count when necessary.
+This keeps the entire sequence lexically ascending and collision-free, including digit boundaries.
+Unknown tokens, repeated/missing frame tokens, overflow, invalid path components or changed file
+extensions are refused before publication. A 48-frame handoff to `shot.exr` yields
+`shot.1001.exr` through `shot.1048.exr`.
+
+EXR colour preparation runs as cancellable scheduler work before approval. The approval dialog
+shows the captured output space and compression and **Look: OFF (handoff)**, or
+`look: baked (N look-tagged effects)`. A Viewer setting cannot change this policy. When a frame
+contains look-tagged effects or explicitly bypasses them, its analysis record appends the domain
+`BloomOutputLookV1\0`, a one-byte bypass flag and an unsigned big-endian 64-bit effect count
+(27 bytes total). The legacy no-look/default-policy record has no suffix. The 64×64 ACES handoff
+fixture pins the process record at 271 bytes and the analysis record at 1669 bytes.

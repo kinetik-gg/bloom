@@ -79,7 +79,7 @@ provide research or rationale, but they are not binding until adopted here.
 
 The detailed implementation status and next merge gates live in [`roadmap.md`](roadmap.md).
 
-See [Exporting video](user-guide/exporting-video.md) for composition export presets, audio,
+See [Export](user-guide/exporting-video.md) for composition export presets, audio,
 verification and cancellation.
 
 ## Status Vocabulary

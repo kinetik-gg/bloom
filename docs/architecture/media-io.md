@@ -39,7 +39,7 @@ PNG/JPEG.
 TIFF is content-probed by classic and BigTIFF magic, but its read and write operations are provider
 operations. `ImageProvider` carries explicit Decode and Encode callbacks matching the worker image
 product; no global registry is consulted. MEDIA-4 enables `TiffRgba16SrgbV1` export through the isolated FFmpeg worker on Linux.
-It writes RGBA16 little-endian, sRGB, straight alpha and verifies every decoded sample before
+It writes RGBA16 little-endian, with the config display/view baked into straight RGB, and verifies every decoded sample before
 publication. The general `ImageProvider` read callback remains a separate intake seam.
 Platforms without the process backend expose an unavailable preset with its reason.
 
@@ -1265,7 +1265,7 @@ host. Strict delivery and Apple authorization remain gated by ADR 0020.
 | `ProResMovV1` | ProRes KS Proxy, LT, 422, HQ, 4444, 4444 XQ; optional PCM | Preview workflow; straight alpha for 4444 variants only; no Apple authorization or delivery claim |
 | `DnxhrMxfV1` | DNxHR LB, SQ, HQ, HQX, 444; optional PCM | Intra-frame lossy video; dimensions, rate and audio layout must satisfy the muxer |
 | `PcmWavV1` | Signed little-endian PCM 16/24; BWF description when supplied | Byte-exact pinned worker; RF64 auto promotion; BW64 remains pending |
-| `TiffRgba16SrgbV1` | Single frames and numbered sequences | Exact decoded RGBA16 after the declared lossy scene-linear-to-sRGB conversion |
+| `TiffRgba16SrgbV1` | Single frames and numbered sequences | Exact decoded RGBA16 after the declared OCIO display/view conversion and quantization |
 | Worker-only capabilities | DNxHD; AAC; MOV, MXF, Matroska, WAV mux | Closed stream layouts; unsupported profiles or timing return typed failures |
 | `H264MovV1` | H.264 High MOV review encode via Cisco OpenH264 2.6.0 when verified; optional AAC or PCM; 30 Mbps default | 8-bit 4:2:0, one-second GOP, Rec.709 limited range; lossy `DecodedSemanticTolerance`; Review deliverable — not for archival |
 | H.264 hardware encode | H.264 High MOV via VA-API when the worker creates an encode context | Hardware execution key; no determinism claim; skipped with a typed reason when no `/dev/dri/renderD*` exists |
@@ -1341,12 +1341,17 @@ identity. The 256×128, 48-frame HQ/PCM fixture record is 146 bytes and independ
 `3eb779c366d82c3f12d9fabeb1dce7deff69e740e7db866fe619db7a4d804da2`.
 
 Media analysis binds the frozen preset byte (4 = ProRes, 5 = DNxHR, 6 = PCM, 7 = H.264 review), settings digest and
-all eleven ordered preservation facets. Its HQ/PCM fixture is 579 bytes and independently derives
-`9a5f56e4290356b06d838af31b272da8d83339b2bd9bd8fd8eb4ed6bf9771350`.
+all eleven ordered preservation facets. COLOR-5 binds the chosen display/view identity and look
+effect count. Its HQ/PCM fixture advances from 579 to 759 bytes and independently derives
+`881bec4a9feff91651f94191980833942eb3e0708fa814dcc2af9e20a36599d9`.
+The neutral display record remains 224 bytes, SHA-256
+`b473d0289aa343bc89b1465c4779c557c687e3ee724d5aae337d9829f8e949b1`.
+The [COLOR-5 identity oracle](color5-identity-oracle.md) constructs these records independently.
 The expanded QC oracle fixture is 527 bytes. The QC record appends artifact size, frame/sample counts, rational duration, first/last/audio and
 approval digests, tolerance, determinism, authority booleans, implementation note and measured
 errors. Independent oracles pin field order. The runner returns this immutable evidence with the
-publication outcome. The existing PNG/EXR frame identities and writer paths are unchanged.
+publication outcome. Default no-look EXR identities remain unchanged; explicit output transforms and look policies
+are specified in [Frame Output](frame-output.md).
 
 The pinned 48-frame, 24 fps motion fixture reopens both ProRes HQ MOV and DNxHR HQ MXF with
 2/1 duration and 96,000 stereo PCM samples. Every decoded sample equals the independently
@@ -1356,3 +1361,23 @@ DNxHR HQ. TIFF decodes exactly; WAV matches an independent RIFF/PCM byte oracle.
 cover all admitted profiles, AAC acceptance and out-of-tolerance rejection, BWF metadata,
 H.264/HEVC refusal, cancellation, worker crash/retry, abandoned-client cleanup and sequence
 byte parity for PNG, EXR and TIFF.
+
+
+### Review colour and look evidence (COLOR-5)
+
+The named **Review H.264 (Rec.709, look on)** deliverable evaluates the captured composition with
+`bypassLookNodes=false`. It unpremultiplies RGB, applies the exact config's
+`Rec.1886 Rec.709 - Display` / `ACES 1.0 - SDR Video` OCIO `DisplayViewTransform`, clamps and
+quantizes the display values to RGBA16, then sends the existing worker settings. The 30 Mbps
+default, H.264 High profile and Rec.709 tags remain unchanged. PNG/TIFF and raw movie presets use
+the config's default display/view instead of a fixed sRGB transfer function. No Viewer state is
+consulted. Unsupported config/display/view combinations fail before encoding.
+
+Analysis binds the processor identity, actual display/view pair, config revision and
+`look: baked (N look-tagged effects)`; approval and QC retain that description. The existing
+versioned worker tolerance-profile name retains `srgb` for compatibility: its numerical limits
+compare the supplied display-referred samples and do not select the colour transform. The COLOR-5
+2× gain LUT fixture decodes the first review frame through the worker and independently converts
+its tagged Rec.709 YUV to display RGB. Maximum/mean errors are 252/133 in 16-bit units, within
+22938/1967. The same fixture's look-bypassed AP0 handoff has zero error against direct OCIO output.
+Worker and external-LUT unavailability on macOS/Windows remain explicit supported fallbacks.
