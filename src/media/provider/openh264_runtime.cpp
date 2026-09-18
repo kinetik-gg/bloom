@@ -17,7 +17,7 @@ constexpr std::string_view kArchiveDigest =
     "27ab53323c110b76214c1c72222f459d17febbcd1e252136cadc292b0308d75b";
 constexpr std::string_view kLibraryDigest =
     "2f0cde7c6a6abcf5cae76942894ea42897fa677bce4ed6c91a24dd1b041d5f04";
-constexpr std::string_view kLicenseDigest =
+[[maybe_unused]] constexpr std::string_view kLicenseDigest =
     "bd9f363c5ea11ef723d0304cddacb5273c43c0e1194097c7a045d05273635418";
 constexpr std::string_view kUrl =
     "https://ciscobinary.openh264.org/libopenh264-2.6.0-linux64.8.so.bz2";
@@ -190,9 +190,9 @@ OpenH264RuntimeStatus OpenH264Runtime::verify() const {
 #endif
 }
 
-OpenH264InstallResult
-OpenH264Runtime::install(const bool explicitConsent,
-                         const std::function<void(std::uint64_t)>& progress) const {
+OpenH264InstallResult OpenH264Runtime::install(
+    [[maybe_unused]] const bool explicitConsent,
+    [[maybe_unused]] const std::function<void(std::uint64_t)>& progress) const {
 #if !defined(__linux__) || !defined(__x86_64__)
     return failure(OpenH264RuntimeFailure::UnsupportedPlatform,
                    "Cisco OpenH264 2.6.0 linux64.8 is not available for this platform", root_);

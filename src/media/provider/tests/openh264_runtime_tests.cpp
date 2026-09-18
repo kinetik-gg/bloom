@@ -87,16 +87,41 @@ void licenseTextMatchesCiscoFixture() {
     test::check(expected == OpenH264Runtime::binaryLicenseText(),
                 "embedded Cisco licence text matches the downloaded terms");
 }
+
+// Every other behaviour in this file is only reachable where the Cisco OpenH264 runtime is
+// supported (Linux x86_64). Elsewhere the declared contract is a typed UnsupportedPlatform result
+// that never launches a downloader -- asserted here instead of skipped, so the fallback is tested.
+void unsupportedPlatformIsTyped() {
+    const auto directory = root() / "unsupported";
+    clear(directory);
+    const auto status = OpenH264Runtime(directory).verify();
+    test::check(!status.installed && status.failure == OpenH264RuntimeFailure::UnsupportedPlatform,
+                "verify reports the unsupported platform");
+    bool launched = false;
+    OpenH264Runtime runtime(directory, [&](const std::string&, const std::vector<std::string>&,
+                                           std::chrono::milliseconds) {
+        launched = true;
+        return false;
+    });
+    const auto result = runtime.install(true);
+    test::check(!result.installed && result.failure == OpenH264RuntimeFailure::UnsupportedPlatform,
+                "install reports the unsupported platform");
+    test::check(!launched, "the unsupported platform never launches a downloader");
+}
 } // namespace
 
 int main() {
     try {
         clear(root());
         licenseTextMatchesCiscoFixture();
+#if defined(__linux__) && defined(__x86_64__)
         emptyDirectoryIsNotInstalled();
         mismatchIsNotInstalled();
         consentIsRequired();
         truncatedDownloadIsTyped();
+#else
+        unsupportedPlatformIsTyped();
+#endif
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

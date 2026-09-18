@@ -29,6 +29,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unistd.h>
 #include <utility>
 #include <vector>
 
