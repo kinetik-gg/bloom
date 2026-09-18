@@ -63,6 +63,9 @@ inline std::uint64_t inode(const int fd) {
     return ::fstat(fd, &value) == 0 ? static_cast<std::uint64_t>(value.st_ino) : 0;
 }
 inline int sharedFile() { return ::memfd_create("bloom-lut", MFD_CLOEXEC | MFD_ALLOW_SEALING); }
+inline bool sealExtent(const int fd) {
+    return ::fcntl(fd, F_ADD_SEALS, F_SEAL_GROW | F_SEAL_SHRINK) == 0;
+}
 inline bool sealInput(const int fd) {
     return ::fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL) == 0;
 }
@@ -73,6 +76,7 @@ inline bool validSharedFile(const int fd, const std::uint64_t expectedInode,
     return ::fstat(fd, &info) == 0 && S_ISREG(info.st_mode) && info.st_size >= 0 &&
            static_cast<std::uint64_t>(info.st_size) == bytes &&
            static_cast<std::uint64_t>(info.st_ino) == expectedInode && seals >= 0 &&
+           (seals & (F_SEAL_GROW | F_SEAL_SHRINK)) == (F_SEAL_GROW | F_SEAL_SHRINK) &&
            (!sealed || (seals & (F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK)) ==
                            (F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK));
 }

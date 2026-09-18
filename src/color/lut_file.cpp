@@ -41,8 +41,8 @@ LutError detail::preflightLut(const std::string_view text, const std::uint32_t f
     std::istringstream stream(std::string(text.substr(0, 4096)));
     stream.imbue(std::locale::classic());
     if (format == 1) {
-        std::uint64_t expected = 0, samples = 0, edge = 0;
-        bool canonicalIdentity = true, threeDimensional = false;
+        std::uint64_t expected = 0, samples = 0, oneDimensionalEdge = 0, threeDimensionalEdge = 0;
+        bool canonicalIdentity = true;
         std::size_t offset = 0;
         while (offset < text.size()) {
             if (cancellation && cancellation())
@@ -61,20 +61,32 @@ LutError detail::preflightLut(const std::string_view text, const std::uint32_t f
                 continue;
             if (token == "TITLE")
                 continue;
-            if (token == "DOMAIN_MIN" || token == "DOMAIN_MAX" || token == "LUT_1D_INPUT_RANGE" ||
-                token == "LUT_3D_INPUT_RANGE") {
-                canonicalIdentity = false;
+            if (token == "DOMAIN_MIN" || token == "DOMAIN_MAX") {
+                float r = 0, g = 0, b = 0;
+                if (!(row >> r >> g >> b))
+                    return LutError::MalformedFile;
+                const float expectedDomain = token == "DOMAIN_MIN" ? 0.0F : 1.0F;
+                canonicalIdentity = canonicalIdentity && r == expectedDomain &&
+                                    g == expectedDomain && b == expectedDomain;
+                continue;
+            }
+            if (token == "LUT_1D_INPUT_RANGE" || token == "LUT_3D_INPUT_RANGE") {
+                float low = 0, high = 0;
+                if (!(row >> low >> high))
+                    return LutError::MalformedFile;
+                canonicalIdentity = canonicalIdentity && low == 0.0F && high == 1.0F;
                 continue;
             }
             if (token == "LUT_3D_SIZE" || token == "LUT_1D_SIZE") {
-                if (!(row >> edge) || edge < 2 || expected != 0)
+                auto& edge = token == "LUT_3D_SIZE" ? threeDimensionalEdge : oneDimensionalEdge;
+                if (edge != 0 || samples != 0 || !(row >> edge) || edge < 2)
                     return LutError::MalformedFile;
                 if (token == "LUT_3D_SIZE" && edge > kMaximumLut3dEdge)
                     return LutError::EdgeTooLarge;
                 if (edge > kMaximumLutBytes / 12)
                     return LutError::FileTooLarge;
-                threeDimensional = token == "LUT_3D_SIZE";
-                expected = threeDimensional ? edge * edge * edge : edge;
+                expected = oneDimensionalEdge +
+                           threeDimensionalEdge * threeDimensionalEdge * threeDimensionalEdge;
                 continue;
             }
             float r = 0, g = 0, b = 0;
@@ -86,13 +98,19 @@ LutError detail::preflightLut(const std::string_view text, const std::uint32_t f
             std::string extra;
             if (row >> extra)
                 return LutError::MalformedFile;
+            const bool threeDimensional = samples >= oneDimensionalEdge;
+            const auto edge = threeDimensional ? threeDimensionalEdge : oneDimensionalEdge;
+            if (edge < 2)
+                return LutError::MalformedFile;
+            const auto gridIndex = threeDimensional ? samples - oneDimensionalEdge : samples;
             const auto coordinate = [edge](const std::uint64_t index) {
                 return static_cast<float>(index) / static_cast<float>(edge - 1);
             };
             canonicalIdentity =
-                canonicalIdentity && r == coordinate(threeDimensional ? samples % edge : samples) &&
-                g == coordinate(threeDimensional ? (samples / edge) % edge : samples) &&
-                b == coordinate(threeDimensional ? samples / (edge * edge) : samples);
+                canonicalIdentity &&
+                r == coordinate(threeDimensional ? gridIndex % edge : gridIndex) &&
+                g == coordinate(threeDimensional ? (gridIndex / edge) % edge : gridIndex) &&
+                b == coordinate(threeDimensional ? gridIndex / (edge * edge) : gridIndex);
             ++samples;
             if (samples > expected)
                 return LutError::MalformedFile;

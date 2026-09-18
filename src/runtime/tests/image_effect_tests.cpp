@@ -216,6 +216,28 @@ void testFileTransform() {
                changed.diagnostics()[0].summary.find("ChangedFile") != std::string::npos,
            "changed LUT invalidates a memoized frame and refuses the stale asset digest");
     const auto kernel = kernelFor();
+    runtime::detail::ImageEffectContext context;
+    const runtime::CompiledImageEffect effect{document::NodeId::fromRaw(20),
+                                              runtime::OperationIndex::fromRaw(0), kernel};
+    const auto first = context.prepare(effect, requestFor(*source).colorIntent);
+    const auto reused = context.prepare(effect, requestFor(*source).colorIntent);
+    expect(first.fileProcessor && first.fileProcessor == reused.fileProcessor,
+           "file processor is reused by config, digest, process space and options");
+    if (first.fileProcessor) {
+        std::array<std::array<float, 4>, 1> pixels{{{0.25F, 0.5F, 0.75F, 1}}};
+        unsigned polls = 0;
+        const auto cancelDuringExchange = [&polls] {
+            ++polls;
+            return polls >= 2;
+        };
+        expect(first.fileProcessor->apply(pixels, cancelDuringExchange) ==
+                   color::LutError::HelperCancelled,
+               "active file processor can be cancelled");
+        const auto recovered = context.prepare(effect, requestFor(*source).colorIntent);
+        expect(recovered.fileProcessor && recovered.fileProcessor != first.fileProcessor &&
+                   recovered.fileProcessor->isAvailable(),
+               "cancelled prepared tokens are replaced on the next frame");
+    }
     const auto gain = planWith({kernel}, sample);
     const auto transformed = evaluator.evaluate(gain, requestFor(*gain), {});
     expect(transformed.frame() && transformed.diagnostics().empty(), "gain LUT evaluates");
@@ -236,6 +258,19 @@ void testFileTransform() {
                               std::abs(pixel.blue() - rgb[2] * 0.5F)});
     expect(delta < 1e-5F, "ACEScct gain LUT matches an independent OCIO pipeline");
     std::cout << "File Transform ACEScct oracle maximum delta: " << delta << '\n';
+    runtime::CpuCompositionEvaluator recoveringEvaluator;
+    std::vector<color::LutFile> pressure;
+    pressure.reserve(10);
+    for (int i = 0; i < 10; ++i)
+        pressure.push_back(color::readLutFile(path));
+    const auto limited = recoveringEvaluator.evaluate(gain, requestFor(*gain), {});
+    expect(samePixels(limited, baseline) && !limited.diagnostics().empty() &&
+               limited.diagnostics().front().detail == "HelperMemoryLimit",
+           "helper preparation is refused under the aggregate host resource limit");
+    pressure.clear();
+    const auto recoveredFrame = recoveringEvaluator.evaluate(gain, requestFor(*gain), {});
+    expect(recoveredFrame.diagnostics().empty() && samePixels(recoveredFrame, transformed),
+           "resource recovery cannot reuse the cached preparation-refusal image");
     const auto chain = planWith({kernel, kernel, kernel}, sample);
     const auto cold = evaluator.evaluate(chain, requestFor(*chain), {});
     const auto warm = evaluator.evaluate(chain, requestFor(*chain), {});

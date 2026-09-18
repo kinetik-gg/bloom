@@ -150,6 +150,8 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
             }
         }
     }
+    if (prepared.diagnostic)
+        prepared.cacheIdentity += ":prepare-refused:" + prepared.diagnostic->detail;
     if (!prepared.cancelled && !prepared.diagnostic) {
         std::lock_guard lock(mutex_);
         if (processors_.size() >= (file ? 4U : 256U))

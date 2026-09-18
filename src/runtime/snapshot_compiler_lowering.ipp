@@ -656,7 +656,7 @@ lowerImageEffect(const document::NodeRecord& node,
             const auto* asset = request_.snapshot.project().findAsset(id);
             return runtime::CompiledImageEffect{node.id, *input,
                 runtime::FileTransformKernel{id, *interpolation, *direction, *space,
-                    asset ? std::optional{*asset} : std::nullopt}, *bypass, *look};
+                    asset && asset->kind == document::AssetKind::Lut ? std::optional{*asset} : std::nullopt}, *bypass, *look};
         }
     }
     addTopologyFailure(node.id, "Image effect kernel or parameters are unsupported.");

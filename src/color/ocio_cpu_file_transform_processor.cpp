@@ -70,6 +70,7 @@ class CpuFileTransformProcessor::Impl final {
             return failure;
         const auto expiry = Clock::now() + deadline;
         const auto command = message[2], expectedNonce = message[3], bytes = message[4];
+        const auto sentPacket = message;
         const auto sent = worker->write(std::as_bytes(std::span(message)), expiry, cancellation);
         if (const auto* error = std::get_if<platform::ProcessFailure>(&sent))
             failure = processError(*error);
@@ -79,7 +80,9 @@ class CpuFileTransformProcessor::Impl final {
             if (const auto* readError = std::get_if<platform::ProcessFailure>(&read))
                 failure = processError(*readError);
             else if (!detail::validPacket(message, command, expectedNonce) || message[4] != bytes ||
-                     message[5] > static_cast<std::uint64_t>(LutError::InvalidPixel))
+                     message[5] > static_cast<std::uint64_t>(LutError::InvalidPixel) ||
+                     message[6] > 1 ||
+                     !std::equal(message.begin() + 7, message.end(), sentPacket.begin() + 7))
                 failure = LutError::HelperProtocolViolation;
             else
                 failure = static_cast<LutError>(message[5]);
@@ -197,7 +200,8 @@ LutError CpuFileTransformProcessor::apply(std::span<std::array<float, 4>> pixels
         detail::LutFd input(detail::sharedFile()), output(detail::sharedFile());
         if (input.get() < 0 || output.get() < 0 ||
             !detail::writeFd(input.get(), std::as_bytes(slab)) || !detail::sealInput(input.get()) ||
-            ::ftruncate(output.get(), static_cast<off_t>(slab.size_bytes())) != 0)
+            ::ftruncate(output.get(), static_cast<off_t>(slab.size_bytes())) != 0 ||
+            !detail::sealExtent(output.get()))
             return LutError::HelperMemoryLimit;
         while (impl_->busy.test_and_set(std::memory_order_acquire)) {
             if (cancellation && cancellation())
