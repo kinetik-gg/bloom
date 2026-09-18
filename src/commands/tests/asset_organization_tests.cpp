@@ -16,7 +16,7 @@ CommandResult execute(Document& document, CommandStack& stack, Args&&... args) {
     transaction.emplace<Operation>(std::forward<Args>(args)...);
     return stack.execute(std::move(transaction));
 }
-void testLutImport(TestContext& test) {
+void testLutImport([[maybe_unused]] TestContext& test) {
 #ifdef __linux__
     const auto directory = std::filesystem::current_path() / "color3-import-fixtures";
     std::filesystem::create_directories(directory);
