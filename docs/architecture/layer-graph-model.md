@@ -1241,3 +1241,14 @@ It previews source and compensating Position overrides together, then commits th
 transaction. The opposite handle stays fixed, or Alt holds the anchor. Rotation and anchor gestures
 remain transforms. Selecting a path exposes its anchors and tangent handles immediately; no
 separate edit mode or double-click is required.
+
+### Show Look Bypass
+
+An effect's `look` marker identifies it as part of the show look. The ephemeral evaluation request
+`bypassLookNodes` defaults to false. When true, marked effects execute as identities without changing
+the graph or saved node parameters. Their memo addresses and process-frame request identities remain
+distinct from the look-on request. Per-node `bypass` is a separate, saved authoring choice.
+
+Export constructs fresh requests with `bypassLookNodes = false`; a Viewer look preview never changes
+export intent. The COLOR-5 review preset includes the show look. An unlooked VFX handoff EXR uses
+explicit per-node bypass in its authored graph; it does not inherit the Viewer's preview switch.

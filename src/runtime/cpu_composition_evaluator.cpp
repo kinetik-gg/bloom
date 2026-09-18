@@ -1754,7 +1754,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             }
             std::optional<detail::PreparedImageEffect> preparedEffect;
             if (const auto* effect = std::get_if<CompiledImageEffect>(&plan->operations()[index])) {
-                preparedEffect = imageEffectContext()->prepare(*effect, request.colorIntent);
+                preparedEffect = request.bypassLookNodes && effect->look
+                                     ? detail::PreparedImageEffect{}
+                                     : imageEffectContext()->prepare(*effect, request.colorIntent);
                 if (preparedEffect->diagnostic) {
                     auto warning = *preparedEffect->diagnostic;
                     warning.subject = operationSubject;
@@ -1917,6 +1919,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 key.add(cst->toId);
                             }
                             key.add(step.bypass);
+                            key.add(step.look);
+                            key.add(request.bypassLookNodes);
                             key.add(std::string(request.colorIntent.workingColorSpaceId));
                             const auto revision =
                                 request.colorIntent.ocioConfigRevision.toLowercaseHex();
@@ -3178,6 +3182,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             .animationSamplingSemanticsVersion = animationSamplingSemanticsVersion,
             .imagePrimitiveSemanticsVersion = render::kCpuImagePrimitiveSemanticsVersion,
             .roi = request.roi,
+            .bypassLookNodes = request.bypassLookNodes,
         };
         auto frame = std::shared_ptr<const ProcessFrame>(new ProcessFrame(
             std::move(identity), std::move(processImage), frameStatistics, std::move(bounds),

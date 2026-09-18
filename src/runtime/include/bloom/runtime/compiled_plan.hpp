@@ -192,6 +192,7 @@ struct CompiledImageEffect final {
     OperationIndex input;
     ImageEffectKernel kernel;
     bool bypass = false;
+    bool look = false;
     friend bool operator==(const CompiledImageEffect&, const CompiledImageEffect&) = default;
 };
 

@@ -87,6 +87,7 @@ struct EvaluationRequest final {
     std::size_t pixelStorageByteLimit = 0;
     bool bypassOperationCache = false;
     std::optional<render::ImageWindow> roi = std::nullopt;
+    bool bypassLookNodes = false;
 };
 
 // This deliberately retains the complete immutable plan. Exact deep equality is the conservative
@@ -104,6 +105,7 @@ struct ProcessFrameIdentity final {
     std::uint32_t animationSamplingSemanticsVersion = kAnimationSamplingSemanticsVersion;
     std::uint32_t imagePrimitiveSemanticsVersion = 0;
     std::optional<render::ImageWindow> roi = std::nullopt;
+    bool bypassLookNodes = false;
 
     friend bool operator==(const ProcessFrameIdentity& lhs, const ProcessFrameIdentity& rhs);
 };

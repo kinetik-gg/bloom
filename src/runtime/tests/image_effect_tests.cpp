@@ -140,11 +140,42 @@ void testCst() {
     expect(prepared.processor && prepared.processor == reused.processor,
            "config/from/to processor prepares once and is shared");
 }
+void testLookBypass() {
+    runtime::CpuCompositionEvaluator evaluator;
+    const runtime::CstKernel transform{"ACEScg", "ACEScct"};
+    auto definition = planWith({transform, transform, transform})->copyDefinition();
+    std::get<runtime::CompiledImageEffect>(definition.operations[1]).look = true;
+    std::get<runtime::CompiledImageEffect>(definition.operations[3]).look = true;
+    const auto plan =
+        std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
+    auto request = requestFor(*plan);
+    expect(!request.bypassLookNodes, "new evaluation/export requests include the look by default");
+    const auto withLook = evaluator.evaluate(plan, request, {});
+    request.bypassLookNodes = true;
+    const auto withoutLook = evaluator.evaluate(plan, request, {});
+    const auto retained = planWith({transform});
+    const auto expected = evaluator.evaluate(retained, requestFor(*retained), {});
+    expect(samePixels(withoutLook, expected),
+           "look bypass skips tagged effects and retains untagged colour processing");
+    expect(!samePixels(withLook, withoutLook), "look flag changes evaluated pixels");
+    expect(withLook.frame() && withoutLook.frame() &&
+               withLook.frame()->identity() != withoutLook.frame()->identity(),
+           "look flag participates in process frame identity");
+    const auto warm = evaluator.evaluate(plan, request, {});
+    expect(samePixels(warm, withoutLook) && warm.frame()->operationCacheStatistics().misses == 0,
+           "look-bypassed chain memoizes each node");
+    request.bypassLookNodes = false;
+    const auto restored = evaluator.evaluate(plan, request, {});
+    expect(samePixels(restored, withLook),
+           "turning the look on restores the original cached graph result");
+}
+
 } // namespace
 
 int main() {
     try {
         testCst();
+        testLookBypass();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
