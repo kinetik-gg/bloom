@@ -11,6 +11,7 @@
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QPoint>
+#include <QPointer>
 #include <QRect>
 #include <QString>
 #include <QWidget>
@@ -22,6 +23,7 @@
 
 class QAction;
 class QLabel;
+class QLineEdit;
 class QScrollBar;
 class QMenu;
 class QContextMenuEvent;
@@ -233,10 +235,14 @@ class TimelineLayerStack final : public kit::KListSurface {
     void contextMenuEvent(QContextMenuEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     bool event(QEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
     void relayoutRows();
     void renameLayer(document::LayerId layer);
+    void updateRenameGeometry();
+    QPointer<QLineEdit> renameEditor_;
+    document::LayerId renamingLayer_{};
     int anchorRow_ = -1;
     int dragRow_ = -1;
     int insertionRow_ = -1;

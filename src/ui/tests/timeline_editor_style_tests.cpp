@@ -1510,6 +1510,113 @@ void testBlankLayerContextMenu(Expectations& expectations) {
     finishFixture(fixture);
 }
 
+void testInlineRenameGeometryAndCommit(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Inline rename"));
+    (void)fixture.session.addSolidLayer("Original", core::Color4d{1, 0, 0, 1});
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    auto* editor = new ui::TimelineEditor(fixture.session, fixture.controller);
+    layout->addWidget(editor);
+    layoutEditor(host);
+    auto* stack = editor->layerStackForTest();
+    auto* row = stack->findChild<ui::kit::KRow*>("timelineLayerRow");
+    const auto id = stack->entries().front().layerId;
+    auto* label = row->nameLabel();
+    const auto labelBounds = [&] { return QRect(label->mapTo(stack, QPoint{}), label->size()); };
+    const auto start = [&]() -> QLineEdit* {
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QTest::mouseDClick(stack, Qt::LeftButton, Qt::NoModifier, labelBounds().center());
+        auto* field = stack->findChild<QLineEdit*>("timelineLayerRenameEditor");
+        expectations.expect(field && field->hasFocus(), "rename field opens with focus");
+        return field;
+    };
+    auto* field = start();
+    if (!field) {
+        finishFixture(fixture);
+        return;
+    }
+    const auto initial = labelBounds();
+    const auto aligned = [&] {
+        const auto bounds = labelBounds();
+        return field->x() == bounds.x() && field->width() == bounds.width() &&
+               std::abs(field->geometry().center().y() - bounds.center().y()) <= 1;
+    };
+    expectations.expect(aligned() && labelBounds() == initial,
+                        "rename overlays the label without shifting it or covering the chevron");
+    const auto screenshot = qEnvironmentVariable("BLOOM_TIMELINE_RENAME_SCREENSHOT");
+    if (!screenshot.isEmpty())
+        expectations.expect(host.grab().save(screenshot), "inline rename screenshot saves");
+    const auto commands = fixture.commands.size();
+    const auto revision = fixture.session.snapshot().revision();
+    field->setText("A much longer layer name that stays inside the original name column");
+    expectations.expect(aligned() && labelBounds() == initial,
+                        "typing does not grow the rename field or change the row layout");
+    stack->resize(stack->width() + 70, stack->height());
+    expectations.expect(aligned(), "rename field follows the name label when the column resizes");
+    field->setText("Original");
+    QTest::keyClick(field, Qt::Key_Return);
+    expectations.expect(fixture.commands.size() == commands &&
+                            fixture.session.snapshot().revision() == revision,
+                        "editing back to the original name then Return creates no transaction");
+
+    field = start();
+    if (field) {
+        QTest::mouseClick(stack, Qt::LeftButton, Qt::NoModifier,
+                          QPoint(stack->width() / 2, stack->height() - 10));
+        expectations.expect(!field->isVisible() && fixture.commands.size() == commands &&
+                                fixture.session.snapshot().revision() == revision,
+                            "unchanged blur closes the editor without a transaction");
+    }
+    field = start();
+    if (field) {
+        field->setText("Blur committed");
+        QTest::mouseClick(stack, Qt::LeftButton, Qt::NoModifier,
+                          QPoint(stack->width() / 2, stack->height() - 10));
+        expectations.expect(!field->isVisible() && fixture.commands.size() == commands + 1 &&
+                                fixture.session.composition()->graph().findLayer(id)->name ==
+                                    "Blur committed",
+                            "clicking outside commits the changed name exactly once");
+        (void)fixture.session.undo();
+        expectations.expect(fixture.session.composition()->graph().findLayer(id)->name ==
+                                "Original",
+                            "one undo restores the name committed on blur");
+    }
+    const auto afterUndo = fixture.session.snapshot().revision();
+    const auto afterUndoCommands = fixture.commands.size();
+    field = start();
+    if (field) {
+        field->setText("Cancelled");
+        QTest::keyClick(field, Qt::Key_Escape);
+        expectations.expect(!field->isVisible() && fixture.commands.size() == afterUndoCommands &&
+                                fixture.session.snapshot().revision() == afterUndo,
+                            "Escape cancels despite the resulting focus loss");
+    }
+    field = start();
+    if (field) {
+        field->setText("Return committed");
+        QTest::keyClick(field, Qt::Key_Return);
+        // The new edit replaces the undone rename at the redo tail.
+        expectations.expect(
+            fixture.commands.size() == commands + 1 && !fixture.commands.canRedo() &&
+                fixture.session.composition()->graph().findLayer(id)->name == "Return committed",
+            "Return and the resulting blur commit exactly once");
+    }
+    field = start();
+    if (field) {
+        QWidget nonFocusable(&host);
+        nonFocusable.setFocusPolicy(Qt::NoFocus);
+        nonFocusable.show();
+        field->setText("Outside committed");
+        QTest::mouseClick(&nonFocusable, Qt::LeftButton);
+        expectations.expect(!field->isVisible() &&
+                                fixture.session.composition()->graph().findLayer(id)->name ==
+                                    "Outside committed",
+                            "clicking a non-focusable surface still commits the rename");
+    }
+    finishFixture(fixture);
+}
+
 // Decision 5: the play/pause button's ICON swaps alongside its already-pinned text()/isChecked()
 // contract (playback_controller_tests.cpp owns that contract byte-for-byte).
 void testRangeRowsAndWorkAreaCommands(Expectations& expectations) {
@@ -2753,6 +2860,7 @@ int main(int argc, char** argv) {
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     Expectations expectations;
     try {
+        testInlineRenameGeometryAndCommit(expectations);
         testBlankLayerContextMenu(expectations);
         testTimelinePolishInteractions(expectations);
         testOutputMergeRows(expectations);

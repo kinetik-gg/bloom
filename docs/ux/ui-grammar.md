@@ -344,6 +344,10 @@ column geometry, and Ui text role. Layer and nested-property disclosures are unb
 targets with their existing 16px chevrons and an XS gap before the text. KDiamond uses the Bold
 outline at every DPR. Colour parameter rows show only the swatch; expanding the parameter exposes
 the individual R/G/B/A numeric rows, so narrowing the table never crushes four inline fields.
+Layer rename uses the shared KLineEdit at the name label's horizontal bounds, vertically centered
+in the row; it never covers the chevron or expands as text is typed. It follows column resizing.
+Return or focus loss commits a changed name once; unchanged text creates no transaction and Escape
+cancels without committing on the subsequent focus loss.
 
 The timeline's graph editor REPLACES the key lanes rather than sitting beside them: in graph mode
 the lane region paints only its Surface backdrop and the curve view covers it, because two views of

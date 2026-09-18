@@ -686,6 +686,7 @@ void TimelineLayerStack::relayoutRows() {
             property->show();
         }
     }
+    updateRenameGeometry();
 }
 
 void TimelineLayerStack::resizeEvent(QResizeEvent* event) {
@@ -846,7 +847,39 @@ void TimelineLayerStack::mouseReleaseEvent(QMouseEvent* event) {
                          : std::optional(entries_[static_cast<std::size_t>(to)].slotId));
     (void)session_.executeTransaction(std::move(transaction));
 }
+bool TimelineLayerStack::eventFilter(QObject* watched, QEvent* event) {
+    if (renameEditor_ && event->type() == QEvent::MouseButtonPress) {
+        const auto* target = qobject_cast<QWidget*>(watched);
+        if (target && target != renameEditor_ && !renameEditor_->isAncestorOf(target))
+            renameEditor_->clearFocus();
+    }
+    return kit::KListSurface::eventFilter(watched, event);
+}
+
+void TimelineLayerStack::updateRenameGeometry() {
+    if (!renameEditor_)
+        return;
+    const auto found = std::ranges::find(entries_, renamingLayer_, &TimelineLayerEntry::layerId);
+    const int first = scrollOffset_ / kTimelineRowHeight;
+    const int slot = static_cast<int>(found - entries_.begin()) - first;
+    if (found == entries_.end() || slot < 0 || slot >= static_cast<int>(rowPool_.size()) ||
+        !rowPool_[static_cast<std::size_t>(slot)]->isVisible()) {
+        renameEditor_->clearFocus();
+        return;
+    }
+    auto* row = rowPool_[static_cast<std::size_t>(slot)];
+    auto* label = row->nameLabel();
+    row->layout()->activate();
+    label->parentWidget()->layout()->activate();
+    const auto origin = label->mapTo(this, QPoint{});
+    renameEditor_->setGeometry(origin.x(), row->y() + (row->height() - renameEditor_->height()) / 2,
+                               label->width(), renameEditor_->height());
+    renameEditor_->raise();
+}
+
 void TimelineLayerStack::renameLayer(const document::LayerId layerId) {
+    if (renameEditor_)
+        renameEditor_->clearFocus();
     const auto* composition = session_.composition();
     const auto* layer = composition ? composition->graph().findLayer(layerId) : nullptr;
     if (!layer)
@@ -854,32 +887,53 @@ void TimelineLayerStack::renameLayer(const document::LayerId layerId) {
     const auto found = std::ranges::find(entries_, layerId, &TimelineLayerEntry::layerId);
     if (found == entries_.end())
         return;
-    auto* field = new kit::KLineEdit(mediaLayerDisplayName(session_, layerId), this);
+    const auto originalName = mediaLayerDisplayName(session_, layerId);
+    auto* field = new kit::KLineEdit(originalName, this);
+    renameEditor_ = field;
+    renamingLayer_ = layerId;
     field->setObjectName("timelineLayerRenameEditor");
-    field->setGeometry(kNameCellX, rowTop(static_cast<int>(found - entries_.begin())),
-                       nameCellWidth(width()), kTimelineRowHeight);
+    field->setMinimumWidth(0);
+    updateRenameGeometry();
     const auto revision = session_.snapshot().revision();
     const auto compositionId = session_.compositionId();
-    connect(field, &QLineEdit::returnPressed, this,
-            [this, field, layerId, revision, compositionId] {
-                commands::Transaction transaction("Rename Layer", revision);
-                transaction.emplace<commands::RenameLayer>(compositionId, layerId,
-                                                           field->text().toStdString());
-                field->hide();
-                field->deleteLater();
-                (void)session_.executeTransaction(std::move(transaction));
-                setFocus();
-            });
-    connect(field, &QLineEdit::editingFinished, field, &QObject::deleteLater);
+    const auto finish = [this, field, layerId, revision, compositionId, originalName](bool cancel) {
+        // Return, focus loss and hiding the field may all finish the same edit. Retire it first
+        // so a focus signal or synchronous session refresh cannot submit a second transaction.
+        if (renameEditor_ != field)
+            return;
+        renameEditor_.clear();
+        qApp->removeEventFilter(this);
+        const auto name = field->text();
+        field->hide();
+        field->deleteLater();
+        if (!cancel && name != originalName) {
+            commands::Transaction transaction("Rename Layer", revision);
+            transaction.emplace<commands::RenameLayer>(compositionId, layerId, name.toStdString());
+            (void)session_.executeTransaction(std::move(transaction));
+        }
+    };
+    connect(field, &QLineEdit::returnPressed, this, [this, finish] {
+        finish(false);
+        setFocus();
+    });
+    connect(qApp, &QApplication::focusChanged, field, [field, finish](QWidget* old, QWidget*) {
+        if (old == field)
+            finish(false);
+    });
     auto* cancel = new QAction(field);
     cancel->setShortcut(QKeySequence(Qt::Key_Escape));
     cancel->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     field->addAction(cancel);
-    connect(cancel, &QAction::triggered, field, &QObject::deleteLater);
+    connect(cancel, &QAction::triggered, field, [this, finish] {
+        finish(true);
+        setFocus();
+    });
     field->show();
     field->raise();
     field->setFocus();
     field->selectAll();
+    // A click on a NoFocus surface must finish the edit too, not just clicks that transfer focus.
+    qApp->installEventFilter(this);
 }
 void TimelineLayerStack::mouseDoubleClickEvent(QMouseEvent* event) {
     const int row = (static_cast<int>(event->position().y()) + scrollOffset_) / kTimelineRowHeight;

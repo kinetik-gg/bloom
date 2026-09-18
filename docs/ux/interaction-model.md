@@ -265,7 +265,7 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | `Ctrl+K` | Split selected layers at the playhead (also Timeline Edit) |
 | Click / Ctrl-click / Shift-click row | Select one / toggle membership / extend contiguous selection |
 | Drag row | Reorder stable slots at the insertion indicator |
-| Double-click name | Inline rename; Return commits, Escape cancels |
+| Double-click name | Inline rename in the name label's bounds; Return or focus loss commits changed text once, unchanged text creates no transaction, Escape cancels |
 | Right-click row | Duplicate, Delete, Rename, Blending, Label Color, Split at Playhead |
 | Right-click empty layer-table space | Add submenu (existing Solid, Text and shape actions); direct Keyframes, Graph Editor, Snap to Frames, Zoom to Fit, Select All and Deselect All actions. Opening or dismissing the menu preserves selection |
 | `Ctrl+wheel` over ruler or lanes | Zoom time about the pointer; the pointer's time stays fixed until a composition boundary clamps the range |

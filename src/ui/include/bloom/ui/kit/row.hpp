@@ -31,6 +31,7 @@ class KRow : public QWidget {
     void setLeadingInset(int inset);
     void setName(const QString& text, std::optional<IconId> disclosure = std::nullopt);
     KIconButton* disclosureButton() const { return disclosure_; }
+    KLabel* nameLabel() const { return name_; }
 
   protected:
     void paintEvent(QPaintEvent* event) override;
