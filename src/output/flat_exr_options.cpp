@@ -24,7 +24,7 @@ PreparedFlatExrOutputV1::prepare(const runtime::EvaluationColorIntent& source,
     if (flatExrCompressionNameV1(options.compression).empty() ||
         !detail::flatExrChromaticityBitsForWorkingColorSpaceV1(options.outputColorSpaceId))
         return {};
-    auto result = std::make_shared<PreparedFlatExrOutputV1>();
+    auto result = std::shared_ptr<PreparedFlatExrOutputV1>(new PreparedFlatExrOutputV1());
     result->options_ = std::move(options);
     result->sourceColorSpaceId_ = source.workingColorSpaceId;
     result->sourceRevision_ = source.ocioConfigRevision;
@@ -34,7 +34,9 @@ PreparedFlatExrOutputV1::prepare(const runtime::EvaluationColorIntent& source,
                                   : source.ocioConfigRevision;
         const auto uri = revision == color::kBloomNeutralV1ConfigDigest
                              ? color::kBloomNeutralV1ConfigUri
-                             : color::kAcesCgV1ConfigUri;
+                         : source.ocioConfigUri == runtime::kBloomNeutralOcioConfigUri
+                             ? color::kAcesCgV1ConfigUri
+                             : source.ocioConfigUri;
         auto resolved = color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn, uri,
                                                   revision, source.workingColorSpaceId);
         auto config = std::move(resolved).takeResolved();

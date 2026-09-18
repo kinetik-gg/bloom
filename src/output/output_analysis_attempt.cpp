@@ -118,9 +118,30 @@ buildOutputAnalysisAttemptV1(OutputAnalysisAttemptBuildInputsV1 inputs,
         return OutputAnalysisAttemptBuildResultV1::failure(
             OutputAnalysisAttemptErrorCodeV1::InvalidIdentity);
     }
+    if (inputs.processIdentity->processFrame() != inputs.frame) {
+        return OutputAnalysisAttemptBuildResultV1::failure(
+            OutputAnalysisAttemptErrorCodeV1::InvalidIdentity);
+    }
     if (inputs.report == nullptr) {
         return OutputAnalysisAttemptBuildResultV1::failure(
             OutputAnalysisAttemptErrorCodeV1::InvalidReport);
+    }
+    if (inputs.report->exr() &&
+        !inputs.report->exr()->matches(inputs.frame->identity().colorIntent)) {
+        return OutputAnalysisAttemptBuildResultV1::failure(
+            OutputAnalysisAttemptErrorCodeV1::InvalidReport);
+    }
+    if (inputs.report->display()) {
+        const auto displayIdentity =
+            inputs.report->display()->processor().identity().borrowedView();
+        const auto revision = inputs.frame->identity().colorIntent.ocioConfigRevision;
+        if (!displayIdentity ||
+            displayIdentity->expectedOcioRevision() != (revision == core::Sha256Digest{}
+                                                            ? color::kBloomNeutralV1ConfigDigest
+                                                            : revision)) {
+            return OutputAnalysisAttemptBuildResultV1::failure(
+                OutputAnalysisAttemptErrorCodeV1::InvalidReport);
+        }
     }
 
     const auto preset = inputs.report->view().preset;

@@ -25,6 +25,7 @@ class PreparedFlatExrOutputV1 final {
                              std::span<std::array<float, 4>>) const noexcept;
 
   private:
+    PreparedFlatExrOutputV1() = default;
     FlatExrRgba32fOptionsV1 options_;
     std::string sourceColorSpaceId_;
     core::Sha256Digest sourceRevision_;

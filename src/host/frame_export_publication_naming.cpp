@@ -5,6 +5,17 @@
 namespace bloom::host {
 namespace {
 bool safeName(std::string_view text) {
+    auto device = std::string(text.substr(0, text.find('.')));
+    while (!device.empty() && device.back() == ' ')
+        device.pop_back();
+    for (auto& c : device)
+        if (c >= 'a' && c <= 'z')
+            c = static_cast<char>(c - 'a' + 'A');
+    if (device == "CON" || device == "PRN" || device == "AUX" || device == "NUL" ||
+        device == "CONIN$" || device == "CONOUT$" ||
+        (device.size() == 4 && (device.starts_with("COM") || device.starts_with("LPT")) &&
+         device[3] >= '1' && device[3] <= '9'))
+        return false;
     return !text.empty() && text != "." && text != ".." && text.size() <= 240 &&
            std::ranges::none_of(text,
                                 [](unsigned char c) {

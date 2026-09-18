@@ -80,6 +80,21 @@ int main() {
             return 1;
     }
     auto overflow = naming;
+    for (const auto* reserved : {"CON", "aux", "COM1", "lpt9", "CON "}) {
+        if (expect(!bloom::host::sequencePublicationPathV1("shot.exr", reserved, 0, 0, 47, naming),
+                   "Windows device basenames are refused on every platform"))
+            return 1;
+    }
+    const bloom::host::SequenceNamingV1 boundary{
+        .startFrame = 9999, .framePadding = 4, .namePattern = "<base>.{frame}.<ext>"};
+    const auto before =
+        bloom::host::sequencePublicationPathV1("shot.exr", "ignored", 0, 0, 1, boundary);
+    const auto after =
+        bloom::host::sequencePublicationPathV1("shot.exr", "ignored", 1, 0, 1, boundary);
+    if (expect(before && after && before->filename() == "shot.09999.exr" &&
+                   after->filename() == "shot.10000.exr" && *before < *after,
+               "frame token uses consistent padding across a digit boundary"))
+        return 1;
     overflow.startFrame = std::numeric_limits<std::uint64_t>::max();
     if (expect(!bloom::host::sequencePublicationPathV1("shot.exr", "shot", 0, 0, 47, overflow),
                "frame label overflow is refused"))

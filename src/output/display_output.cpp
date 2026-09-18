@@ -24,7 +24,7 @@ PreparedOutputDisplayV1::prepare(const runtime::EvaluationColorIntent& intent,
     auto handle = std::move(built).takeHandle();
     if (!handle)
         return {};
-    auto result = std::make_shared<PreparedOutputDisplayV1>();
+    auto result = std::shared_ptr<PreparedOutputDisplayV1>(new PreparedOutputDisplayV1());
     result->processor_ =
         std::make_shared<const color::PreparedCpuDisplayProcessorHandle>(std::move(*handle));
     result->description_ = "display: " + std::string(display) + "; view: " + std::string(view);

@@ -15,6 +15,7 @@ class PreparedOutputDisplayV1 final {
     [[nodiscard]] const core::Sha256Digest& digest() const noexcept { return digest_; }
 
   private:
+    PreparedOutputDisplayV1() = default;
     std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> processor_;
     std::string description_;
     core::Sha256Digest digest_;
