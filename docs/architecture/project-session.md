@@ -372,6 +372,12 @@ Application close has two stages:
 
 Panels never own or drain the scheduler. Final runtime shutdown cannot begin merely because a
 window emitted `closeEvent`; the project-session continuation is authoritative.
+After the coordinator publishes runtime quiescence, the composition root explicitly completes
+the main window's close before requesting Qt application quit. Until that point repeated close
+requests remain idempotent and keep the window alive. The final close must be accepted: Qt's
+application quit can otherwise be vetoed by the same asynchronous-close guard that initiated it.
+Regression coverage runs the real application event loop through both clean Quit and dirty
+Cancel-then-Discard, rather than treating the quiescence signal alone as proof of process exit.
 
 ## Recent Paths And Presentation State
 

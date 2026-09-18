@@ -780,12 +780,84 @@ void testStuckShutdownDiagnosticLogsAfterFiveSeconds(Expectations& expectations)
         "releasing the gated worker still lets shutdown reach quiescence normally afterward");
 }
 
+// Exercise QApplication::exec()/quit(), not only the coordinator's quiescent signal: Qt sends
+// another close event to visible windows before it permits the application event loop to exit.
+void testRealApplicationQuit(Expectations& expectations, const bool dirty) {
+    using namespace bloom;
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::ProjectHost projectHost(scheduler);
+    const auto [document, commands] = projectHost.liveDocumentAndStack();
+    ui::CompositionSession session(*document, *commands, projectHost.lowestCompositionId());
+    if (dirty)
+        (void)session.addSolidLayer("Unsaved", core::Color4d{1, 0, 0, 1});
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    ui::CompositionPreviewController controller(
+        session, scheduler, bridge,
+        [](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
+           const std::vector<runtime::SnapshotParameterOverride>&, runtime::TaskContext&) {
+            return runtime::TaskResult<ui::PreviewPreparationResultHandle>::cancelled();
+        });
+    ui::ApplicationShutdownCoordinator shutdown(controller, bridge);
+    auto* application = qApp;
+    const bool oldQuitOnClose = application->quitOnLastWindowClosed();
+    application->setQuitOnLastWindowClosed(false);
+    application->installEventFilter(&shutdown);
+    ui::EditorRegistry registry;
+    runtime::NodeDefinitionRegistry definitions;
+    definitions.freeze();
+    runtime::SnapshotCompiler compiler(definitions);
+    ui::FrameExportController exporter(session, scheduler, bridge, compiler,
+                                       projectHost.publicationCoordinator(),
+                                       projectHost.artifactCoordinator());
+    ui::MainWindow window(registry, session, projectHost, exporter);
+    QObject::connect(&window, &ui::MainWindow::shutdownRequested, &shutdown,
+                     &ui::ApplicationShutdownCoordinator::beginShutdown);
+    QObject::connect(&shutdown, &ui::ApplicationShutdownCoordinator::shutdownQuiescent, &window,
+                     &ui::MainWindow::completeShutdown);
+    QObject::connect(&shutdown, &ui::ApplicationShutdownCoordinator::shutdownQuiescent, application,
+                     &QApplication::quit);
+    int decisions = 0;
+    projectHost.setUnsavedChangeDecisionProvider([&] {
+        return ++decisions == 1 ? ui::UnsavedChangeDecision::Cancel
+                                : ui::UnsavedChangeDecision::Discard;
+    });
+    bool timedOut = false;
+    QTimer watchdog;
+    watchdog.setSingleShot(true);
+    QObject::connect(&watchdog, &QTimer::timeout, application, [&] {
+        timedOut = true;
+        QCoreApplication::exit(1);
+    });
+    window.show();
+    QTimer::singleShot(0, &window, [&] {
+        window.findChild<QAction*>("quitAction")->trigger();
+        if (dirty) {
+            expectations.expect(decisions == 1 && !shutdown.isShuttingDown() && window.isVisible(),
+                                "Cancel leaves the dirty application active");
+            window.close();
+        }
+    });
+    watchdog.start(2000);
+    const int result = application->exec();
+    watchdog.stop();
+    expectations.expect(!timedOut && result == 0,
+                        "clean Quit or Discard must exit the real QApplication loop");
+    expectations.expect(decisions == (dirty ? 2 : 0) && scheduler.isQuiescent() &&
+                            !window.isVisible(),
+                        "final Qt close neither prompts again nor exits before workers finish");
+    application->removeEventFilter(&shutdown);
+    application->setQuitOnLastWindowClosed(oldQuitOnClose);
+    window.hide();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     Expectations expectations;
+    testRealApplicationQuit(expectations, true);
+    testRealApplicationQuit(expectations, false);
     testShutdownAndCloseRouting(expectations);
     testFileMenuQuitRoutesThroughShutdown(expectations);
     testIdleApplicationQuitsOnClose(expectations);

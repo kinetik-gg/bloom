@@ -80,6 +80,9 @@ class MainWindow final : public QMainWindow {
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);
     void saveApplicationState(QSettings& settings) const;
+    // Called only after the shutdown coordinator has observed runtime quiescence. Earlier close
+    // requests must leave the window alive while unsaved decisions and worker draining finish.
+    void completeShutdown();
     // Presentation-level read-only surface (task R1, issue #74): true exactly when the central
     // QStackedWidget's current page is the read-only placeholder instead of the editor workspace
     // -- i.e. the live ProjectHost content kind is PreservedReadOnly. Exposed so an offscreen test
@@ -176,6 +179,7 @@ class MainWindow final : public QMainWindow {
     QAction* clearMediaDiskCacheAction_ = nullptr;
     bool workspaceLayoutWritable_ = true;
     bool shutdownRequested_ = false;
+    bool shutdownComplete_ = false;
 };
 
 } // namespace bloom::ui

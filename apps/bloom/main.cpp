@@ -286,6 +286,11 @@ int main(int argc, char* argv[]) {
                      [&window, &settings] { window.saveApplicationState(settings); });
     QObject::connect(&window, &bloom::ui::MainWindow::shutdownRequested, &shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::beginShutdown);
+    // QApplication::quit() asks visible top-level windows to close. Release MainWindow's
+    // asynchronous-close guard only now, or that final request is vetoed forever after Discard.
+    QObject::connect(&shutdownCoordinator,
+                     &bloom::ui::ApplicationShutdownCoordinator::shutdownQuiescent, &window,
+                     &bloom::ui::MainWindow::completeShutdown);
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownQuiescent, &application,
                      &QApplication::quit);

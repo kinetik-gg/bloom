@@ -234,7 +234,16 @@ void MainWindow::saveApplicationState(QSettings& settings) const {
     }
 }
 
+void MainWindow::completeShutdown() {
+    shutdownComplete_ = true;
+    close();
+}
+
 void MainWindow::closeEvent(QCloseEvent* event) {
+    if (shutdownComplete_) {
+        event->accept();
+        return;
+    }
     event->ignore();
     if (shutdownRequested_) {
         return;
