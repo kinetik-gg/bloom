@@ -197,12 +197,20 @@ jobs:
   # Non-required: Linux remains the automated merge gate.
   macos-native:
     name: macOS Clang quality
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 60
 
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      # `src/core` uses floating-point std::from_chars/std::to_chars, which Apple's libc++ only
+      # ships from a recent Xcode; select the newest installed toolchain.
+      - name: Select newest Xcode
+        run: |
+          newest=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
+          xcodebuild -version || clang++ --version | head -1
 
       - name: Install dependencies
         run: brew install opencolorio openexr libzip yyjson zlib ninja
@@ -227,20 +235,27 @@ jobs:
   # Non-required for the same reason as macos-native.
   macos-desktop:
     name: macOS Qt desktop
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 90
 
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
+      - name: Select newest Xcode
+        run: |
+          newest=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
+          xcodebuild -version || clang++ --version | head -1
+
       - name: Install dependencies
         run: brew install opencolorio openexr libzip yyjson zlib ninja
 
       - name: Install Qt
         run: |
-          python3 -m pip install --user aqtinstall==3.2.1
-          python3 -m aqt install-qt mac desktop 6.8.3 clang_64 \
+          python3 -m venv "$RUNNER_TEMP/aqt-venv"
+          "$RUNNER_TEMP/aqt-venv/bin/pip" install --quiet aqtinstall==3.2.1
+          "$RUNNER_TEMP/aqt-venv/bin/aqt" install-qt mac desktop 6.8.3 clang_64 \
             --outputdir "$RUNNER_TEMP/qt"
 
       # Some macOS SDKs removed the deprecated AGL framework that Qt's link line still names. Provide
