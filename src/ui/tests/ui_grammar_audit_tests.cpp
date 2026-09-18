@@ -57,8 +57,10 @@ int run(int argc, char** argv) {
             if (widget->property("chromeControl").toBool() ||
                 widget->objectName() == "editorTypePicker" ||
                 widget->objectName() == "maximizeAreaButton") {
-                expect(widget->height() == kit::px(kit::Size::Control), widget,
-                       "chrome child must use Control");
+                expect(widget->height() == kit::px(qobject_cast<kit::KIconToggle*>(widget)
+                                                       ? kit::Size::ToggleCell
+                                                       : kit::Size::Control),
+                       widget, "chrome child must use Control");
                 ++controls;
             }
             if (qobject_cast<kit::KDropdown*>(widget) || qobject_cast<kit::KIconButton*>(widget) ||
