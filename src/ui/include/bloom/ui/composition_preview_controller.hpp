@@ -104,7 +104,7 @@ class CompositionPreviewController final : public QObject {
   public:
     // `frameCache` is the RAM preview cache (task PERF1): a request whose key is already cached is
     // answered from it immediately, with no evaluation and without entering the coalescing path,
-    // and every frame this controller publishes is put into it -- so playing a range once makes the
+    // and frames without diagnostics enter it -- so playing a warning-free range once makes the
     // second pass a sequence of lookups. Pass one to share it with the RAM preview controller; omit
     // it and this controller owns a cache of its own.
     CompositionPreviewController(CompositionSession& session, runtime::TaskScheduler& scheduler,

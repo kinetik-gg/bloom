@@ -238,6 +238,7 @@ void AssetsEditor::rebuild() {
         const auto& asset = *record;
         auto* item = asset.folder ? new QTreeWidgetItem(folders.at(*asset.folder))
                                   : new QTreeWidgetItem(tree_);
+        const bool lut = asset.kind == document::AssetKind::Lut;
         const bool font = asset.kind == document::AssetKind::Font;
         const bool video = asset.kind == document::AssetKind::Video;
         const auto seconds = static_cast<qulonglong>(std::max(0.0, asset.duration.toSeconds()));
@@ -250,7 +251,8 @@ void AssetsEditor::rebuild() {
         const auto extension = asset.locator.path.substr(asset.locator.path.find_last_of('.') + 1);
         const bool exr = extension == "exr" || extension == "EXR";
         item->setText(0, QString::fromStdString(asset.name));
-        item->setText(1, font    ? tr("Font · %1").arg(QString::fromStdString(asset.fontStyle))
+        item->setText(1, lut     ? tr("LUT")
+                         : font  ? tr("Font · %1").arg(QString::fromStdString(asset.fontStyle))
                          : video ? tr("Video · %1").arg(duration)
                          : sequence
                              ? (exr ? tr("EXR · %1 frames").arg(asset.manifest.members.size())
@@ -267,7 +269,8 @@ void AssetsEditor::rebuild() {
         item->setData(0, assets::kTagsRole, tags);
         const auto* controller = session_.assetController();
         const bool missing = controller && controller->missing(asset.id);
-        auto tooltip = missing ? (font    ? tr("Missing font — Relink in Assets")
+        auto tooltip = missing ? (lut     ? tr("Missing LUT — Relink in Assets")
+                                  : font  ? tr("Missing font — Relink in Assets")
                                   : audio ? tr("Missing audio — Relink in Assets")
                                   : video ? tr("Missing video — Relink in Assets")
                                           : tr("Missing image — Relink in Assets"))
@@ -296,7 +299,8 @@ void AssetsEditor::rebuild() {
             item->setToolTip(0, item->toolTip(0) + QStringLiteral("\n") +
                                     QString::fromUtf8(media::provider::kProResPreviewNote));
         addRow(item,
-               font       ? kit::IconId::Text
+               lut        ? kit::IconId::SlidersHorizontal
+               : font     ? kit::IconId::Text
                : sequence ? kit::IconId::Images
                : audio    ? kit::IconId::Audio
                           : kit::IconId::Image,

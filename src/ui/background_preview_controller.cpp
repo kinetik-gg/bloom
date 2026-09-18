@@ -235,7 +235,8 @@ void BackgroundPreviewController::consumeReadyResult() {
     const auto& value = result->value();
     if (result->state() != runtime::TaskState::Succeeded || !value.has_value() ||
         *value == nullptr || (*value)->frame() == nullptr ||
-        (*value)->frame()->desiredIdentity() != *activeIdentity_) {
+        (*value)->frame()->desiredIdentity() != *activeIdentity_ ||
+        !result->diagnostics().empty()) {
         // Unsupported/failed work is not retried indefinitely while the app is idle. Its task
         // retains the pipeline's diagnostics; the next revision/resolution/playhead restarts.
         exhausted_ = true;

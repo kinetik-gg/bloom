@@ -100,6 +100,14 @@ std::span<const QString> nodeCategoryOrder() {
 }
 
 QString displayTypeName(const std::string_view typeId) {
+    if (typeId == "bloom.ocio-colour-space-transform")
+        return QCoreApplication::translate("node_editor", "OCIO Colour Space Transform");
+    if (typeId == "bloom.ocio-file-transform")
+        return QCoreApplication::translate("node_editor", "OCIO File Transform");
+    if (typeId == "processSpace")
+        return QCoreApplication::translate("node_editor", "Process Space");
+    if (typeId == "lut")
+        return QCoreApplication::translate("node_editor", "LUT");
     if (typeId == "timeOffset")
         return QCoreApplication::translate("node_editor", "Time Offset");
     if (typeId == "timeScale")

@@ -6,6 +6,7 @@
 #include <QUuid>
 #include <algorithm>
 #include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/media/cache/media_disk_cache_decode.hpp>
@@ -374,7 +375,8 @@ void AssetController::requestImport(QWidget* parent) {
     // the static function gives no opportunity to do.
     QFileDialog dialog(
         parent, tr("Import Media"), {},
-        tr("Media (*.png *.jpg *.jpeg *.exr *.tif *.tiff *.wav *.mp3 *.mp4 *.mov *.mkv *.mxf "
+        tr("Media (*.cube *.clf *.spi1d *.spi3d *.png *.jpg *.jpeg *.exr *.tif *.tiff *.wav *.mp3 "
+           "*.mp4 *.mov *.mkv *.mxf "
            "*.m4v *.mts *.m2ts *.ts *.PNG *.JPG *.JPEG *.EXR *.TIF *.TIFF *.WAV *.MP3 "
            "*.MP4 *.MOV *.MKV *.MXF)"));
     dialog.setAcceptMode(QFileDialog::AcceptOpen);
@@ -394,11 +396,11 @@ void AssetController::relink(document::AssetId id, QWidget* parent) {
     const bool font = asset != nullptr && asset->kind == document::AssetKind::Font;
     QFileDialog dialog(
         parent, font ? tr("Relink Font") : tr("Relink Media"), {},
-        font
-            ? tr("Fonts (*.ttf *.otf *.ttc *.TTF *.OTF *.TTC)")
-            : tr("Media (*.png *.jpg *.jpeg *.exr *.tif *.tiff *.wav *.mp3 *.mp4 *.mov *.mkv *.mxf "
-                 "*.m4v *.mts *.m2ts *.ts *.PNG *.JPG *.JPEG *.EXR *.TIF *.TIFF *.WAV *.MP3 "
-                 "*.MP4 *.MOV *.MKV *.MXF)"));
+        font ? tr("Fonts (*.ttf *.otf *.ttc *.TTF *.OTF *.TTC)")
+             : tr("Media (*.cube *.clf *.spi1d *.spi3d *.png *.jpg *.jpeg *.exr *.tif *.tiff *.wav "
+                  "*.mp3 *.mp4 *.mov *.mkv *.mxf "
+                  "*.m4v *.mts *.m2ts *.ts *.PNG *.JPG *.JPEG *.EXR *.TIF *.TIFF *.WAV *.MP3 "
+                  "*.MP4 *.MOV *.MKV *.MXF)"));
     dialog.setAcceptMode(QFileDialog::AcceptOpen);
     dialog.setFileMode(QFileDialog::ExistingFile);
     configureFileDialogSidebar(dialog);
@@ -818,6 +820,15 @@ void AssetController::refresh() {
                                                     std::move(*decoded.value())));
                         }
                     }
+                    results->assets.emplace(asset.id, std::move(preview));
+                } else if (asset.kind == document::AssetKind::Lut) {
+                    Preview preview;
+                    const auto path = media::resolveImagePath(asset.locator.path,
+                                                              asset.locator.relinkHint, directory);
+                    const auto lut = color::readLutFile(
+                        path, [&context] { return context.isCancellationRequested(); });
+                    preview.missing =
+                        lut.error != color::LutError::None || lut.digest != asset.contentDigest;
                     results->assets.emplace(asset.id, std::move(preview));
                 } else if (asset.kind == document::AssetKind::Font) {
                     Preview preview;

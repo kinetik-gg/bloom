@@ -683,6 +683,17 @@ void testWindowStatusBarMessagesClearThemselves(Expectations& expectations) {
                         "status bar messages: when the notice expires the persistent message is "
                         "what is left, not an empty strip");
 
+    CompositionPreviewState warning;
+    warning.activity = PreviewActivity::Ready;
+    warning.diagnostics.push_back({"bloom.runtime.evaluation.color-space-missing",
+                                   bloom::runtime::DiagnosticSeverity::Warning,
+                                   "Colour transform bypassed: MissingInputColorSpace",
+                                   {},
+                                   {}});
+    expectations.expect(
+        previewActivityText(warning) ==
+            QStringLiteral("Colour transform bypassed: MissingInputColorSpace"),
+        "a ready pass-through frame displays its typed colour refusal in the status bar");
     strip->setPersistentMessage(QString{});
     expectations.expect(strip->messageTextForTest().isEmpty(),
                         "status bar messages: clearing the persistent message empties the cell");

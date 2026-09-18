@@ -184,7 +184,8 @@ class AssetDropTarget final : public QObject {
             return true;
         }
         const auto id = assetFromMime(*drop->mimeData(), session_);
-        if (!id.isValid()) {
+        const auto* droppedAsset = session_.snapshot().project().findAsset(id);
+        if (!id.isValid() || (droppedAsset && droppedAsset->kind == document::AssetKind::Lut)) {
             drop->ignore();
             return true;
         }
