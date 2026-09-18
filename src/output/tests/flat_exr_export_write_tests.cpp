@@ -58,6 +58,38 @@ buildAttempt(output::ExportResourceLedgerV1& ledger, support::Fixture fixture) {
     return result.attempt();
 }
 
+void testOutputOptions(Expectations& expectations) {
+    const auto revision = bloom::color::ocioBuiltInContentRevision(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
+    expectations.expect(revision.has_value(), "ACES config is available");
+    if (!revision)
+        return;
+    auto fixture = support::roundTripFixture();
+    fixture.identity.colorIntent = {.workingColorSpaceId = "ACEScg",
+                                    .ocioConfigRevision = *revision};
+    output::ExportResourceLedgerV1 ledger;
+    auto attempt = buildAttempt(ledger, std::move(fixture));
+    support::ScratchDirectory scratch("output-options");
+    for (const auto compression :
+         {output::FlatExrCompressionV1::Zip, output::FlatExrCompressionV1::Piz,
+          output::FlatExrCompressionV1::Zips, output::FlatExrCompressionV1::None}) {
+        auto prepared = output::prepareFlatExrAttemptV1(
+            *attempt, {.outputColorSpaceId = "ACES2065-1", .compression = compression}, ledger);
+        expectations.expect(prepared.hasAttempt(),
+                            "output colour options produce an approvable report");
+        if (!prepared)
+            continue;
+        const output::FlatExrExportWriterV1 writer;
+        const auto result = writer.run(
+            *prepared.attempt(),
+            scratch.file(std::string(output::flatExrCompressionNameV1(compression)) + ".exr"), {});
+        expectations.expect(result.status() == output::FlatExrExportWriteStatusV1::Written,
+                            "output AP0 pixels and declared compression pass reopen verification");
+        expectations.expect(prepared.attempt()->digest() != attempt->digest(),
+                            "output transform changes approval identity");
+    }
+}
+
 void testWrittenAndIndependentlyVerifiable(Expectations& expectations) {
     output::ExportResourceLedgerV1 ledger;
     auto attempt = buildAttempt(ledger, support::roundTripFixture());
@@ -136,6 +168,7 @@ void testCancellationBeforeWritingProducesNoArtifact(Expectations& expectations)
 
 int main() {
     Expectations expectations;
+    testOutputOptions(expectations);
     testWrittenAndIndependentlyVerifiable(expectations);
     testCancellationBeforeWritingProducesNoArtifact(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

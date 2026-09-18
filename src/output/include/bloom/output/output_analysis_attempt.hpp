@@ -198,4 +198,9 @@ class OutputAnalysisAttemptV1 final {
 buildOutputAnalysisAttemptV1(OutputAnalysisAttemptBuildInputsV1 inputs,
                              ExportResourceLedgerV1& ledger) noexcept;
 
+// Runs on an export task before approval; retains the original evaluated frame and target.
+[[nodiscard]] OutputAnalysisAttemptBuildResultV1
+prepareFlatExrAttemptV1(const OutputAnalysisAttemptV1&, FlatExrRgba32fOptionsV1,
+                        ExportResourceLedgerV1&) noexcept;
+
 } // namespace bloom::output

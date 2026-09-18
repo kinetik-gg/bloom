@@ -49,6 +49,7 @@ struct FlatExrInclusiveWindowV1 final {
 struct FlatExrRgba32fSemanticMetadataV1 final {
     FlatExrInclusiveWindowV1 dataWindow;
     FlatExrInclusiveWindowV1 displayWindow;
+    FlatExrCompressionV1 compression = FlatExrCompressionV1::Zip;
     std::uint32_t pixelAspectRatioBits;
     std::array<std::uint32_t, 8> chromaticityBits = kFlatExrRec709D65ChromaticitiesBitsV1;
 };

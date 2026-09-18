@@ -8,6 +8,7 @@
 
 #include <array>
 #include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/output/flat_exr_options.hpp>
 #include <cstdint>
 #include <optional>
 #include <string_view>
@@ -37,6 +38,21 @@ flatExrWindowWithinLibraryCeilingV1(const std::int64_t origin,
     const auto maxCoordinate = origin + static_cast<std::int64_t>(extent) - 1;
     return origin > -kFlatExrLibraryCoordinateCeilingV1 &&
            maxCoordinate < kFlatExrLibraryCoordinateCeilingV1;
+}
+
+// Explicit mapping; OpenEXR enum values are not serialized.
+[[nodiscard]] constexpr int flatExrLibraryCompressionV1(FlatExrCompressionV1 value) noexcept {
+    switch (value) {
+    case FlatExrCompressionV1::Zip:
+        return 3;
+    case FlatExrCompressionV1::Piz:
+        return 4;
+    case FlatExrCompressionV1::Zips:
+        return 2;
+    case FlatExrCompressionV1::None:
+        return 0;
+    }
+    return -1;
 }
 
 struct FlatExrHeaderAttributeContractV1 final {

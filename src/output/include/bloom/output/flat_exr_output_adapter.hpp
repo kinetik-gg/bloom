@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/output/flat_exr_options.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/evaluation.hpp>
 
@@ -93,7 +94,8 @@ class FlatExrRgba32fLinRec709SceneWriterV1 final {
     [[nodiscard]] FlatExrWriteResultV1
     write(const runtime::ProcessFrame& frame, const std::filesystem::path& destination,
           const runtime::CancellationToken& cancellation,
-          const FlatExrWriteProgressCallbackV1& progress = {}) const noexcept;
+          const FlatExrWriteProgressCallbackV1& progress = {},
+          const PreparedFlatExrOutputV1* output = nullptr) const noexcept;
 };
 
 } // namespace bloom::output

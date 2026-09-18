@@ -10,6 +10,7 @@ struct CompositionOutputSourceV1 {
     std::shared_ptr<const runtime::CompiledCompositionPlan> plan;
     core::RationalTime origin;
     std::filesystem::path assetBaseDirectory;
+    std::shared_ptr<const PreparedOutputDisplayV1> display = {};
 };
 // Blocking output adapter. Owns the isolated encoder and offline mix clients. The caller
 // serializes calls on an I/O executor and retains the admission reservation through close.

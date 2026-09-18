@@ -91,6 +91,8 @@ enum class OutputFacetStableCodeV1 : std::uint8_t {
     AdapterUnavailable,
     ResourceLimitExceeded,
     TiffWorkerExternalReference,
+    ExrOutputColorTransform,
+    ExrOcioExternalReference,
 };
 
 struct OutputPresetIdentityV1 final {

@@ -154,6 +154,13 @@ OcioBuildProcessorResult
 buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig& resolved,
                                      const std::string_view displayName,
                                      const std::string_view viewName) noexcept {
+    return buildCpuDisplayProcessorForView(resolved, displayName, viewName);
+}
+
+OcioBuildProcessorResult
+buildCpuDisplayProcessorForView(const ResolvedBloomNeutralConfig& resolved,
+                                const std::string_view displayName,
+                                const std::string_view viewName) noexcept {
     const auto entry = std::find_if(
         resolved.displays().begin(), resolved.displays().end(), [&](const auto& candidate) {
             return candidate.display == displayName && candidate.view == viewName;
@@ -177,19 +184,18 @@ buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig& resolved,
         // ocio_builtin_registry.cpp's resolution-time comment for the companion assertion that
         // the config declares no "environment:" section of its own.
         const OCIO::ConstContextRcPtr emptyContext = OCIO::Context::Create();
-        processor =
-            config->getProcessor(emptyContext, std::string(resolved.processColorSpaceId()).c_str(),
-                                 std::string(displayName).c_str(), std::string(viewName).c_str(),
-                                 OCIO::TRANSFORM_DIR_FORWARD);
+        auto transform = OCIO::DisplayViewTransform::Create();
+        transform->setSrc(std::string(resolved.processColorSpaceId()).c_str());
+        transform->setDisplay(std::string(displayName).c_str());
+        transform->setView(std::string(viewName).c_str());
+        processor = config->getProcessor(emptyContext, transform, OCIO::TRANSFORM_DIR_FORWARD);
         if (!processor) {
             return OcioBuildProcessorResult(OcioBuildProcessorError::GetProcessorFailed);
         }
         cacheId = processor->getCacheID();
         cpuProcessor = processor->getDefaultCPUProcessor();
         const auto inverse =
-            config->getProcessor(emptyContext, std::string(resolved.processColorSpaceId()).c_str(),
-                                 std::string(displayName).c_str(), std::string(viewName).c_str(),
-                                 OCIO::TRANSFORM_DIR_INVERSE);
+            config->getProcessor(emptyContext, transform, OCIO::TRANSFORM_DIR_INVERSE);
         // Authoring must not turn display white into an artificial HDR value through fast pow.
         inverseProcessor = inverse->getOptimizedCPUProcessor(OCIO::OPTIMIZATION_LOSSLESS);
         if (!cpuProcessor || !inverseProcessor) {

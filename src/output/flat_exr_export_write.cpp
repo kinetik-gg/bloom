@@ -57,7 +57,8 @@ FlatExrExportWriterV1::run(const OutputAnalysisAttemptV1& attempt,
             detail::reportExportProgress(progress, {.stage = OutputExportStageV1::Writing,
                                                     .completed = writeProgress.completedScanlines,
                                                     .total = writeProgress.totalScanlines});
-        });
+        },
+        attempt.report()->exr().get());
     if (writeResult.status() == FlatExrWriteStatusV1::Cancelled) {
         return FlatExrExportWriteResultV1::cancelled();
     }

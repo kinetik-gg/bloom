@@ -3,7 +3,9 @@ add_library(bloom_output STATIC)
 target_sources(
     bloom_output
     PRIVATE
+        display_output.cpp
         bound_output_analysis.cpp
+        flat_exr_options.cpp
         flat_exr_export_write.cpp
         flat_exr_output_adapter.cpp
         flat_exr_preset_contract.hpp
@@ -32,6 +34,8 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/output/display_output.hpp
+            include/bloom/output/flat_exr_options.hpp
             include/bloom/output/flat_exr_export_write.hpp
             include/bloom/output/flat_exr_output_adapter.hpp
             include/bloom/output/flat_exr_reopen_verifier.hpp
@@ -104,6 +108,15 @@ bloom_find_dependency(ZLIB)
 target_link_libraries(bloom_output PRIVATE ZLIB::ZLIBSTATIC)
 
 if(BUILD_TESTING)
+    bloom_find_dependency(OpenColorIO)
+    add_executable(bloom_output_deliverable_test tests/deliverable_export_tests.cpp)
+    target_link_libraries(bloom_output_deliverable_test PRIVATE bloom_output bloom_media_video OpenEXR::OpenEXR OpenColorIO::OpenColorIO)
+    bloom_enable_warnings(bloom_output_deliverable_test)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_dependencies(bloom_output_deliverable_test bloom-media-worker)
+        target_compile_definitions(bloom_output_deliverable_test PRIVATE BLOOM_COLOR5_OPENH264_RUNTIME="${CMAKE_BINARY_DIR}/apps/bloom-media-worker/openh264-test")
+    endif()
+    bloom_add_test(NAME bloom.output.deliverables COMMAND bloom_output_deliverable_test LABELS unit output color media TIMEOUT 120)
     add_executable(bloom_output_media_output_test tests/media_output_tests.cpp)
     target_link_libraries(bloom_output_media_output_test PRIVATE bloom_output)
     bloom_enable_warnings(bloom_output_media_output_test)

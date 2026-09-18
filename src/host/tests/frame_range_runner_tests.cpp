@@ -1,4 +1,6 @@
+#include <bloom/host/frame_export_publication.hpp>
 #include <bloom/host/frame_range_runner.hpp>
+#include <limits>
 
 #include <iostream>
 #include <vector>
@@ -54,6 +56,49 @@ int main() {
         return 1;
     }
 
+    const bloom::host::SequenceNamingV1 naming{
+        .startFrame = 1001, .framePadding = 4, .namePattern = "{name}.####.<ext>"};
+    std::filesystem::path previous;
+    for (std::uint64_t index = 0; index < 48; ++index) {
+        const auto path =
+            bloom::host::sequencePublicationPathV1("render/base.exr", "shot", index, 0, 47, naming);
+        if (expect(
+                path && path->filename() == "shot." + std::to_string(1001 + index) + ".exr" &&
+                    (index == 0 || *path > previous),
+                "handoff naming is unique and monotonic from shot.1001.exr through shot.1048.exr"))
+            return 1;
+        if (!path)
+            return 1;
+        previous = *path;
+    }
+    for (const auto* pattern : {"shot.exr", "../####.exr", "{name}.###.exr", "####.{frame}.exr",
+                                "{frame}.png", "{unknown}.####.exr"}) {
+        auto invalid = naming;
+        invalid.namePattern = pattern;
+        if (expect(!bloom::host::sequencePublicationPathV1("shot.exr", "shot", 0, 0, 47, invalid),
+                   "invalid or colliding names are refused"))
+            return 1;
+    }
+    auto overflow = naming;
+    for (const auto* reserved : {"CON", "aux", "COM1", "lpt9", "CON "}) {
+        if (expect(!bloom::host::sequencePublicationPathV1("shot.exr", reserved, 0, 0, 47, naming),
+                   "Windows device basenames are refused on every platform"))
+            return 1;
+    }
+    const bloom::host::SequenceNamingV1 boundary{
+        .startFrame = 9999, .framePadding = 4, .namePattern = "<base>.{frame}.<ext>"};
+    const auto before =
+        bloom::host::sequencePublicationPathV1("shot.exr", "ignored", 0, 0, 1, boundary);
+    const auto after =
+        bloom::host::sequencePublicationPathV1("shot.exr", "ignored", 1, 0, 1, boundary);
+    if (expect(before && after && before->filename() == "shot.09999.exr" &&
+                   after->filename() == "shot.10000.exr" && *before < *after,
+               "frame token uses consistent padding across a digit boundary"))
+        return 1;
+    overflow.startFrame = std::numeric_limits<std::uint64_t>::max();
+    if (expect(!bloom::host::sequencePublicationPathV1("shot.exr", "shot", 0, 0, 47, overflow),
+               "frame label overflow is refused"))
+        return 1;
     std::size_t callbacks = 0;
     const auto cancelled = FrameRangeRunnerV1::run(
         request,

@@ -45,6 +45,15 @@ struct Work {
     std::unique_ptr<output::OutputAnalysisAttemptTargetV1> target;
     std::optional<SequenceExportResultV1> result;
     explicit Work(SequenceExportRequestV1 r) : request(std::move(r)) {}
+    runtime::EvaluationColorIntent colorIntent() const {
+        const auto* composition = request.composition.snapshot.project().findComposition(
+            request.composition.compositionId);
+        return {.workingColorSpaceId = composition && composition->workingColorSpaceId()
+                                           ? std::string_view(*composition->workingColorSpaceId())
+                                           : std::string_view(request.workingColorSpaceId),
+                .ocioConfigRevision = request.ocioConfigRevision,
+                .ocioConfigUri = request.ocioConfigUri};
+    }
     bool isCancelled() const { return cancelled.load(); }
     void checkpoint() const {
         require(!isCancelled() && !taskCancellation.isCancellationRequested(),
@@ -133,8 +142,13 @@ struct Work {
                              static_cast<std::uint64_t>(s.rate.denominator) /
                              static_cast<std::uint64_t>(s.rate.numerator);
         }
-        analysis = std::make_unique<output::MediaOutputAnalysisV1>(
-            checked(output::analyzeMediaOutputV1(request.preset, std::move(s))));
+        const auto display = output::PreparedOutputDisplayV1::prepare(
+            colorIntent(), request.displayName, request.viewName);
+        require(request.preset == output::OutputPresetV1::PcmWavV1 || display != nullptr,
+                "Output display processor unavailable", Error::Unavailable);
+        analysis =
+            std::make_unique<output::MediaOutputAnalysisV1>(checked(output::analyzeMediaOutputV1(
+                request.preset, std::move(s), display, output::outputLookEffectCountV1(*plan))));
         if (request.preset == output::OutputPresetV1::H264MovV1) {
             analysis->implementationNote +=
                 request.hardware ? "; encoder=vaapi vaapi-runtime-unqualified"
@@ -163,7 +177,7 @@ struct Work {
                          "Missing exact audio origin");
             encoder = std::make_unique<output::CompositionOutputStreamV1>(
                 output::CompositionOutputSourceV1{request.composition.snapshot, plan, origin,
-                                                  request.assetBaseDirectory},
+                                                  request.assetBaseDirectory, analysis->display},
                 settings(), request.worker, queueReservation,
                 [this] { return isCancelled() || taskCancellation.isCancellationRequested(); });
         }
@@ -332,8 +346,9 @@ struct SequenceExportRunnerV1::State {
                            .output = work->plan->output(),
                            .resolution = runtime::CompositionFormatResolution{},
                            .quality = runtime::EvaluationQuality::Reference,
-                           .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
-                           .pixelStorageByteLimit = 1024ULL * 1024U * 1024U},
+                           .colorIntent = work->colorIntent(),
+                           .pixelStorageByteLimit = 1024ULL * 1024U * 1024U,
+                           .bypassLookNodes = false},
             .targetPath = work->request.range.destination,
             .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
             .owner = owner,

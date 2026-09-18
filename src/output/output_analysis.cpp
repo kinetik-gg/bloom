@@ -399,6 +399,12 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
         if (!isColorDescriptor(facet.sourceDescriptor)) {
             return VocabularyValidation::VocabularyMismatch;
         }
+        if (report.preset == OutputPresetV1::FlatExrRgba32fLinRec709SceneV1 &&
+            facet.stableCode == OutputFacetStableCodeV1::ExrOutputColorTransform)
+            return isColorDescriptor(facet.targetDescriptor) &&
+                           facet.targetDescriptor != facet.sourceDescriptor
+                       ? VocabularyValidation::Valid
+                       : VocabularyValidation::RelationshipMismatch;
         return facet.targetDescriptor == (report.preset == OutputPresetV1::PngRgba8SrgbV1 ||
                                                   report.preset == OutputPresetV1::TiffRgba16SrgbV1
                                               ? "color-id=id:srgb_rec709_display"
@@ -508,6 +514,13 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
         if (!facet.sourceDescriptor.empty()) {
             return VocabularyValidation::VocabularyMismatch;
         }
+        if (report.preset == OutputPresetV1::FlatExrRgba32fLinRec709SceneV1)
+            return facet.targetDescriptor == "method=id:zip" ||
+                           facet.targetDescriptor == "method=id:piz" ||
+                           facet.targetDescriptor == "method=id:zips" ||
+                           facet.targetDescriptor == "method=id:none"
+                       ? VocabularyValidation::Valid
+                       : VocabularyValidation::VocabularyMismatch;
         return facet.targetDescriptor == (report.preset == OutputPresetV1::PngRgba8SrgbV1
                                               ? "method=id:deflate-level-6-filter-none"
                                           : report.preset == OutputPresetV1::TiffRgba16SrgbV1
@@ -525,12 +538,24 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
             return VocabularyValidation::VocabularyMismatch;
         }
         if (report.preset == OutputPresetV1::FlatExrRgba32fLinRec709SceneV1) {
-            return facet.targetDescriptor == noDependencies
+            return (facet.stableCode == OutputFacetStableCodeV1::ExrOcioExternalReference
+                        ? isLowerHexRevision(facet.targetDescriptor)
+                        : facet.targetDescriptor == noDependencies)
                        ? VocabularyValidation::Valid
                        : VocabularyValidation::VocabularyMismatch;
         }
         if (report.preset == OutputPresetV1::TiffRgba16SrgbV1) {
-            return facet.targetDescriptor == "kind=id:tiff-provider;revision=id:none"
+            constexpr std::string_view prefix = "kind=id:tiff-provider;revision=id:";
+            const auto suffix = facet.targetDescriptor.substr(
+                std::min(prefix.size(), facet.targetDescriptor.size()));
+            return facet.targetDescriptor.starts_with(prefix) &&
+                           (suffix == "none" ||
+                            (suffix.size() == 64 &&
+                             std::ranges::all_of(suffix,
+                                                 [](char c) {
+                                                     return (c >= '0' && c <= '9') ||
+                                                            (c >= 'a' && c <= 'f');
+                                                 })))
                        ? VocabularyValidation::Valid
                        : VocabularyValidation::VocabularyMismatch;
         }

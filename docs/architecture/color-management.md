@@ -792,7 +792,16 @@ remains available on all three desktop targets.
 
 File Transform's `look` marker opts it into request-level `bypassLookNodes`. The default is false;
 true skips only marked effects and has a separate frame/memo identity. COLOR-4 owns the Viewer
-footer switch. Export creates requests with false: the COLOR-5 review preset includes the look.
-A handoff EXR workflow explicitly sets the relevant nodes' durable `bypass` parameters before
-export; a Viewer-only look setting never changes export. Output preset implementation belongs to
-COLOR-5.
+footer switch. Export captures its own policy: the COLOR-5 handoff preset sets
+`bypassLookNodes=true`, while review sets false. Neither changes durable node parameters or the
+Viewer setting. Handoff approval states **Look: OFF (handoff)**; review evidence states
+`look: baked (N look-tagged effects)`.
+
+The VFX deliverable converts the effective working space to `ACES2065-1` (AP0) through the exact
+config, writes premultiplied 32-bit float EXR with PIZ, and labels its sequence from 1001. The
+review deliverable applies look-tagged effects, then the config's `Rec.1886 Rec.709 - Display` /
+`ACES 1.0 - SDR Video` display transform before H.264 quantization. Its default target is 30 Mbps.
+The ACES 1.3 CG built-in's default display is sRGB; the named review deliberately selects the
+Rec.709 pair. Raw display-referred presets use the config's default display/view. Missing pairs
+fail explicitly. The processor pair and config revision are recorded in analysis and evidence;
+there is no export display/view picker.

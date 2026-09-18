@@ -76,6 +76,13 @@ checkedAttemptRetainedBytes(const render::Rgba32fImageDescriptor& descriptor,
         }
         total += identityBytes;
     }
+    if (report.display()) {
+        const auto bytes = report.display()->processor().identity().canonicalBytes().size() +
+                           report.display()->description().size();
+        if (bytes > maximum - total)
+            return std::nullopt;
+        total += bytes;
+    }
     return total;
 }
 
@@ -111,9 +118,30 @@ buildOutputAnalysisAttemptV1(OutputAnalysisAttemptBuildInputsV1 inputs,
         return OutputAnalysisAttemptBuildResultV1::failure(
             OutputAnalysisAttemptErrorCodeV1::InvalidIdentity);
     }
+    if (inputs.processIdentity->processFrame() != inputs.frame) {
+        return OutputAnalysisAttemptBuildResultV1::failure(
+            OutputAnalysisAttemptErrorCodeV1::InvalidIdentity);
+    }
     if (inputs.report == nullptr) {
         return OutputAnalysisAttemptBuildResultV1::failure(
             OutputAnalysisAttemptErrorCodeV1::InvalidReport);
+    }
+    if (inputs.report->exr() &&
+        !inputs.report->exr()->matches(inputs.frame->identity().colorIntent)) {
+        return OutputAnalysisAttemptBuildResultV1::failure(
+            OutputAnalysisAttemptErrorCodeV1::InvalidReport);
+    }
+    if (inputs.report->display()) {
+        const auto displayIdentity =
+            inputs.report->display()->processor().identity().borrowedView();
+        const auto revision = inputs.frame->identity().colorIntent.ocioConfigRevision;
+        if (!displayIdentity ||
+            displayIdentity->expectedOcioRevision() != (revision == core::Sha256Digest{}
+                                                            ? color::kBloomNeutralV1ConfigDigest
+                                                            : revision)) {
+            return OutputAnalysisAttemptBuildResultV1::failure(
+                OutputAnalysisAttemptErrorCodeV1::InvalidReport);
+        }
     }
 
     const auto preset = inputs.report->view().preset;
@@ -167,6 +195,36 @@ buildOutputAnalysisAttemptV1(OutputAnalysisAttemptBuildInputsV1 inputs,
     } catch (const std::bad_alloc&) {
         return OutputAnalysisAttemptBuildResultV1::failure(
             OutputAnalysisAttemptErrorCodeV1::ResourceReservationFailed);
+    }
+}
+
+OutputAnalysisAttemptBuildResultV1
+prepareFlatExrAttemptV1(const OutputAnalysisAttemptV1& source, FlatExrRgba32fOptionsV1 options,
+                        ExportResourceLedgerV1& ledger) noexcept {
+    try {
+        if (source.preset() != OutputPresetV1::FlatExrRgba32fLinRec709SceneV1 || !source.frame())
+            return OutputAnalysisAttemptBuildResultV1::failure(
+                OutputAnalysisAttemptErrorCodeV1::InvalidReport);
+        const auto prepared = PreparedFlatExrOutputV1::prepare(
+            source.frame()->identity().colorIntent, std::move(options));
+        if (!prepared)
+            return OutputAnalysisAttemptBuildResultV1::failure(
+                OutputAnalysisAttemptErrorCodeV1::InvalidReport);
+        const auto report = analyzeFlatExrRgba32fLinRec709SceneV1(
+            {.process = {.readyIdentity = source.processIdentity(), .missingDescriptor = {}},
+             .exr = prepared});
+        if (!report)
+            return OutputAnalysisAttemptBuildResultV1::failure(
+                OutputAnalysisAttemptErrorCodeV1::InvalidReport);
+        return buildOutputAnalysisAttemptV1({.frame = source.frame(),
+                                             .processIdentity = source.processIdentity(),
+                                             .report = report.report(),
+                                             .target = source.target(),
+                                             .display = {}},
+                                            ledger);
+    } catch (...) {
+        return OutputAnalysisAttemptBuildResultV1::failure(
+            OutputAnalysisAttemptErrorCodeV1::InternalInvariant);
     }
 }
 

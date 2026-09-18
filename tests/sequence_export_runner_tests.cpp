@@ -202,7 +202,8 @@ void tests(const std::filesystem::path& directory) {
         const auto result = f.run(f.request(path, preset));
         verify(result, path, preset != output::OutputPresetV1::PcmWavV1);
         if (preset == output::OutputPresetV1::ProResMovV1)
-            check(need(result.evidence).implementationNote == media::provider::kProResExportNote,
+            check(need(result.evidence)
+                      .implementationNote.starts_with(media::provider::kProResExportNote),
                   "required ProRes evidence wording");
     }
     const auto path = directory / "cancel.mov";

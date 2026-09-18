@@ -1,5 +1,6 @@
 #include <bloom/output/output_analysis_digest.hpp>
 
+#include <bloom/output/display_output.hpp>
 #include <bloom/output/output_limits.hpp>
 
 #include <array>
@@ -286,6 +287,12 @@ computeOutputAnalysisDigestV1(const ProcessFrameSemanticIdentityV1& processIdent
             OutputAnalysisDigestErrorCodeV1::ResourceLimitExceeded);
     }
 
+    if (report.preset == OutputPresetV1::FlatExrRgba32fLinRec709SceneV1 &&
+        report.facets[2].stableCode == OutputFacetStableCodeV1::ExrOutputColorTransform &&
+        !targetDependencyMatches(report.facets[10].targetDescriptor,
+                                 processFrame.identity().colorIntent.ocioConfigRevision))
+        return OutputAnalysisDigestV1Result::failure(
+            OutputAnalysisDigestErrorCodeV1::TargetDependencyRevisionMismatch);
     const auto presetIdentity = outputPresetIdentityV1(report.preset);
     if (!presetIdentity) {
         return OutputAnalysisDigestV1Result::failure(
@@ -345,13 +352,19 @@ computeOutputAnalysisDigestV1(const ProcessFrameSemanticIdentityV1& processIdent
     }
 
     const auto processIdentityBytes = processIdentity.canonicalBytes();
-    const auto calculatedPreimageSize =
+    auto calculatedPreimageSize =
         preimageSize(report, *presetIdentity, stableCodes, processIdentityBytes.size(),
                      revisionBytes.size(), displayIdentityBytes.size());
     if (!calculatedPreimageSize) {
         return OutputAnalysisDigestV1Result::failure(
             OutputAnalysisDigestErrorCodeV1::PreimageSizeOverflow);
     }
+    constexpr char lookDomain[] = "BloomOutputLookV1";
+    const auto lookCount = outputLookEffectCountV1(*processFrame.identity().plan);
+    const bool hasLookPolicy = processFrame.identity().bypassLookNodes || lookCount != 0;
+    if (hasLookPolicy && !checkedAdd(*calculatedPreimageSize, sizeof(lookDomain) + 9U))
+        return OutputAnalysisDigestV1Result::failure(
+            OutputAnalysisDigestErrorCodeV1::PreimageSizeOverflow);
     if (*calculatedPreimageSize > kOutputAnalysisDigestMaximumPreimageBytesV1) {
         return OutputAnalysisDigestV1Result::failure(
             OutputAnalysisDigestErrorCodeV1::PreimageTooLarge, *calculatedPreimageSize);
@@ -377,6 +390,12 @@ computeOutputAnalysisDigestV1(const ProcessFrameSemanticIdentityV1& processIdent
                    stream.appendText(facet.sourceDescriptor) &&
                    stream.appendText(facet.targetDescriptor);
     }
+    if (hasLookPolicy)
+        streamed = streamed &&
+                   stream.append(std::as_bytes(std::span(lookDomain, sizeof(lookDomain)))) &&
+                   stream.appendU8(processFrame.identity().bypassLookNodes ? 1U : 0U) &&
+                   stream.appendU32(static_cast<std::uint32_t>(lookCount >> 32U)) &&
+                   stream.appendU32(static_cast<std::uint32_t>(lookCount));
     if (!streamed) {
         return OutputAnalysisDigestV1Result::failure(
             OutputAnalysisDigestErrorCodeV1::InternalInvariant, stream.byteCount());

@@ -26,14 +26,39 @@ int main() {
         s.audioCodec = "pcm_s16le";
         s.audioSamples = 96000;
         const auto report = analyze(o::OutputPresetV1::ProResMovV1, s);
+        const auto revision = bloom::color::ocioBuiltInContentRevision(
+            bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
+        if (revision) {
+            const auto display = o::PreparedOutputDisplayV1::prepare(
+                {.workingColorSpaceId = "ACEScg",
+                 .ocioConfigRevision = *revision,
+                 .ocioConfigUri = bloom::color::kAcesCgV1ConfigUri});
+            check(display != nullptr, "ACES display processor available");
+            check(display->description().find("view: ACES 1.0 - SDR Video") != std::string::npos,
+                  "config default view recorded");
+            const auto rec709 = o::PreparedOutputDisplayV1::prepare(
+                {.workingColorSpaceId = "ACEScg",
+                 .ocioConfigRevision = *revision,
+                 .ocioConfigUri = bloom::color::kAcesCgV1ConfigUri},
+                "Rec.1886 Rec.709 - Display", "ACES 1.0 - SDR Video");
+            check(rec709 && rec709->digest() != display->digest(),
+                  "Rec.709 review pair has its own identity");
+        }
         const auto hex = report.digest.toLowercaseHex();
+        std::size_t recordBytes = std::string_view("BloomMediaOutputAnalysisV1").size() + 1 + 32;
+        for (const auto& facet : report.facets)
+            recordBytes += 3 + facet.description.size();
+        check(recordBytes == 759 &&
+                  report.display->processor().identity().canonicalBytes().size() == 224,
+              "identity record sizes pinned");
         // Independent Python byte oracle: domain + 04 + frozen 146-byte settings hash + eleven
-        // explicit (facet byte,state byte,NUL-terminated UTF-8 description) tuples: 579 bytes.
+        // explicit (facet byte,state byte,NUL-terminated UTF-8 description) tuples: 759 bytes. See
+        // tests/color5_identity_oracle.py.
         check(std::string(hex.data(), hex.size()) ==
-                  "9a5f56e4290356b06d838af31b272da8d83339b2bd9bd8fd8eb4ed6bf9771350",
+                  "881bec4a9feff91651f94191980833942eb3e0708fa814dcc2af9e20a36599d9",
               "media analysis frozen oracle");
-        check(report.implementationNote == p::kProResExportNote && !report.appleAuthorized &&
-                  !report.deliveryQualified,
+        check(report.implementationNote.starts_with(p::kProResExportNote) &&
+                  !report.appleAuthorized && !report.deliveryQualified,
               "ProRes wording and authority");
         check(report.facets[3].preservation == o::OutputPreservationStateV1::Omitted,
               "422 alpha omitted");
@@ -70,7 +95,7 @@ int main() {
         const auto review = analyze(o::OutputPresetV1::H264MovV1, h264);
         check(review.determinism == p::MediaDeterminismV1::DecodedSemanticTolerance &&
                   review.toleranceProfile != p::Digest{} &&
-                  review.implementationNote == "Review deliverable — not for archival",
+                  review.implementationNote.starts_with("Review deliverable — not for archival"),
               "H.264 review analysis records lossy tolerance and archival warning");
         check(std::holds_alternative<p::Unavailable>(
                   o::analyzeMediaOutputV1(o::OutputPresetV1::ProResMovV1, s)),

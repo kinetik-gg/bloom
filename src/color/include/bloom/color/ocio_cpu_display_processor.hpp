@@ -80,6 +80,9 @@ class OcioBuildProcessorResult;
 
 [[nodiscard]] OcioBuildProcessorResult
 buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig& resolved) noexcept;
+[[nodiscard]] OcioBuildProcessorResult
+buildCpuDisplayProcessorForView(const ResolvedBloomNeutralConfig&, std::string_view display,
+                                std::string_view view) noexcept;
 
 [[nodiscard]] OcioBuildProcessorResult
 buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig& resolved,
@@ -131,6 +134,9 @@ class PreparedCpuDisplayProcessorHandle final {
     friend OcioBuildProcessorResult
     buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig&, std::string_view,
                                          std::string_view) noexcept;
+    friend OcioBuildProcessorResult
+    buildCpuDisplayProcessorForView(const ResolvedBloomNeutralConfig&, std::string_view,
+                                    std::string_view) noexcept;
 
     PreparedCpuDisplayProcessorHandle(std::unique_ptr<Impl> impl,
                                       DisplayProcessorIdentityV1 identity,
@@ -170,6 +176,9 @@ class [[nodiscard]] OcioBuildProcessorResult final {
     friend OcioBuildProcessorResult
     buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig&, std::string_view,
                                          std::string_view) noexcept;
+    friend OcioBuildProcessorResult
+    buildCpuDisplayProcessorForView(const ResolvedBloomNeutralConfig&, std::string_view,
+                                    std::string_view) noexcept;
 
     explicit OcioBuildProcessorResult(PreparedCpuDisplayProcessorHandle handle) noexcept
         : handle_(std::move(handle)) {}

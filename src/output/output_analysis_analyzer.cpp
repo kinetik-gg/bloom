@@ -282,6 +282,7 @@ template <typename Assessments>
 }
 
 struct CommonInput final {
+    std::shared_ptr<const output::PreparedFlatExrOutputV1> exr = {};
     output::OutputAnalysisProcessSourceV1 process;
     output::OutputAnalysisAdapterStateV1 adapter;
     output::OutputAnalysisCompressionStateV1 compression;
@@ -305,8 +306,9 @@ OutputAnalysisReportV1::OutputAnalysisReportV1(
 }
 
 OutputAnalysisReportV1::OutputAnalysisReportV1(OutputAnalysisReportV1&& other) noexcept
-    : preset_(other.preset_), assessments_(std::move(other.assessments_)),
-      permissionMask_(other.permissionMask_), descriptorByteCount_(other.descriptorByteCount_) {
+    : exr_(std::move(other.exr_)), display_(std::move(other.display_)), preset_(other.preset_),
+      assessments_(std::move(other.assessments_)), permissionMask_(other.permissionMask_),
+      descriptorByteCount_(other.descriptorByteCount_) {
     bindAssessmentViews();
     other.bindAssessmentViews();
 }
@@ -384,6 +386,19 @@ class OutputAnalysisAnalyzerV1 final {
         }
 
         try {
+            if (input.exr &&
+                (!input.process.readyIdentity ||
+                 !input.exr->matches(
+                     input.process.readyIdentity->processFrame()->identity().colorIntent)))
+                return OutputAnalysisAnalyzerResultV1::failure(AnalyzerError::InvalidProcessSource);
+            std::shared_ptr<const PreparedOutputDisplayV1> display;
+            if (tiff && input.process.readyIdentity) {
+                display = PreparedOutputDisplayV1::prepare(
+                    input.process.readyIdentity->processFrame()->identity().colorIntent);
+                if (!display)
+                    input.adapter = OutputAnalysisAdapterStateV1::Unavailable;
+            }
+            const bool transform = input.exr && input.exr->processor();
             const auto& descriptor = *source.descriptor;
             const auto dataWindow = descriptor.dataWindow();
             const auto displayWindow = descriptor.displayWindow();
@@ -400,12 +415,14 @@ class OutputAnalysisAnalyzerV1 final {
                 assessments;
             const auto pixelCode = !source.processReady
                                        ? Code::ProcessFrameMissing
-                                       : (png    ? Code::PngDisplayTransformClampQuantize
-                                          : tiff ? Code::TiffDisplayTransformClampQuantize
-                                                 : Code::None);
-            const auto colorCode = png    ? pngColorCode(*input.colorResolution)
-                                   : tiff ? Code::TiffLinRec709SceneToSrgb
-                                          : Code::None;
+                                       : (png         ? Code::PngDisplayTransformClampQuantize
+                                          : tiff      ? Code::TiffDisplayTransformClampQuantize
+                                          : transform ? Code::ExrOutputColorTransform
+                                                      : Code::None);
+            const auto colorCode = png         ? pngColorCode(*input.colorResolution)
+                                   : tiff      ? Code::TiffLinRec709SceneToSrgb
+                                   : transform ? Code::ExrOutputColorTransform
+                                               : Code::None;
             const auto compressionCode =
                 input.compression == OutputAnalysisCompressionStateV1::Available
                     ? Code::None
@@ -459,9 +476,10 @@ class OutputAnalysisAnalyzerV1 final {
                               : Code::TiffSquarePixelRequired)
                        : (roundedAspect->exact ? Code::None : Code::ExrParRoundedBinary32);
 
-            Code dependencyCode = png    ? Code::PngOcioExternalReference
-                                  : tiff ? Code::TiffWorkerExternalReference
-                                         : Code::None;
+            Code dependencyCode = png         ? Code::PngOcioExternalReference
+                                  : tiff      ? Code::TiffWorkerExternalReference
+                                  : transform ? Code::ExrOcioExternalReference
+                                              : Code::None;
             if (exceedsResourceLimits(descriptor)) {
                 dependencyCode = Code::ResourceLimitExceeded;
             } else if (input.adapter == OutputAnalysisAdapterStateV1::Unavailable) {
@@ -486,10 +504,12 @@ class OutputAnalysisAnalyzerV1 final {
                                            png    ? std::string("component-type=id:uint8")
                                            : tiff ? std::string("component-type=id:uint16")
                                                   : std::string(kSourcePrecision));
-            valid = valid &&
-                    setAssessment(assessments[2], preset, Facet::Color, colorCode, sourceColor,
-                                  (png || tiff) ? std::string("color-id=id:srgb_rec709_display")
-                                                : sourceColor);
+            valid =
+                valid &&
+                setAssessment(assessments[2], preset, Facet::Color, colorCode, sourceColor,
+                              (png || tiff) ? std::string("color-id=id:srgb_rec709_display")
+                              : input.exr ? "color-id=id:" + input.exr->options().outputColorSpaceId
+                                          : sourceColor);
             valid = valid &&
                     setAssessment(
                         assessments[3], preset, Facet::AlphaAssociation,
@@ -513,18 +533,24 @@ class OutputAnalysisAnalyzerV1 final {
                                        (png || tiff) ? std::string("denominator=u:1;numerator=u:1")
                                                      : binary32Descriptor(roundedAspect->bits));
             valid = valid &&
-                    setAssessment(assessments[8], preset, Facet::Compression, compressionCode, "",
-                                  png    ? std::string("method=id:deflate-level-6-filter-none")
-                                  : tiff ? std::string("method=id:tiff-provider")
-                                         : std::string("method=id:zip"));
+                    setAssessment(
+                        assessments[8], preset, Facet::Compression, compressionCode, "",
+                        png    ? std::string("method=id:deflate-level-6-filter-none")
+                        : tiff ? std::string("method=id:tiff-provider")
+                               : "method=id:" +
+                                     std::string(input.exr ? flatExrCompressionNameV1(
+                                                                 input.exr->options().compression)
+                                                           : "zip"));
             valid = valid && setAssessment(assessments[9], preset, Facet::Metadata, Code::None,
                                            std::string(kMetadata), std::string(kMetadata));
             valid = valid &&
                     setAssessment(assessments[10], preset, Facet::ExternalDependencies,
                                   dependencyCode, std::string(kNoDependencies),
                                   png    ? ocioDependencyDescriptor(*input.expectedOcioRevision)
-                                  : tiff ? std::string("kind=id:tiff-provider;revision=id:none")
-                                         : std::string(kNoDependencies));
+                                  : tiff ? (display ? [&] { const auto hex = display->digest().toLowercaseHex(); return "kind=id:tiff-provider;revision=id:" + std::string(hex.data(), hex.size()); }() : std::string("kind=id:tiff-provider;revision=id:none"))
+                                  : transform ? ocioDependencyDescriptor(
+                                                    input.exr->processor()->configRevision())
+                                              : std::string(kNoDependencies));
             if (!valid) {
                 return OutputAnalysisAnalyzerResultV1::failure(AnalyzerError::InternalInvariant);
             }
@@ -563,8 +589,10 @@ class OutputAnalysisAnalyzerV1 final {
                     AnalyzerError::GeneratedReportInvariantViolation, generatedValidation.issue());
             }
 
-            auto report = std::shared_ptr<const OutputAnalysisReportV1>(new OutputAnalysisReportV1(
+            auto report = std::shared_ptr<OutputAnalysisReportV1>(new OutputAnalysisReportV1(
                 preset, std::move(assessments), *permissionMask, descriptorByteCount));
+            report->exr_ = std::move(input.exr);
+            report->display_ = std::move(display);
             const auto retainedValidation = validateOutputAnalysisReportV1(report->view());
             const auto retainedMask = retainedValidation.permissionMask();
             if (!retainedValidation || !retainedMask.has_value() ||
@@ -598,7 +626,8 @@ OutputAnalysisAnalyzerResultV1 analyzeFlatExrRgba32fLinRec709SceneV1WithFaultFor
     FlatExrRgba32fLinRec709SceneAnalysisInputV1 input,
     const OutputAnalysisAnalyzerFaultV1 fault) noexcept {
     return OutputAnalysisAnalyzerV1::analyze(OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
-                                             {.process = std::move(input.process),
+                                             {.exr = std::move(input.exr),
+                                              .process = std::move(input.process),
                                               .adapter = input.adapter,
                                               .compression = input.compression,
                                               .otherDependency = input.otherDependency,

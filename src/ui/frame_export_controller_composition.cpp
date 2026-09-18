@@ -1,5 +1,6 @@
 #include "composition_editor_support.hpp"
 #include "composition_export_dialog.hpp"
+#include <QCryptographicHash>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -22,7 +23,17 @@ void FrameExportController::requestCompositionExport() {
             rate = asset.rate;
             break;
         }
-    const auto request = compositionExportDialog(mapping.value()->maximumFrameIndex(), rate);
+    QString projectKey;
+    if (projectPathProvider_) {
+        if (const auto path = projectPathProvider_(); path)
+            projectKey = QString::fromLatin1(
+                QCryptographicHash::hash(
+                    QByteArray::fromStdString(path->lexically_normal().generic_string()),
+                    QCryptographicHash::Sha256)
+                    .toHex());
+    }
+    const auto request =
+        compositionExportDialog(mapping.value()->maximumFrameIndex(), rate, projectKey);
     if (request)
         beginCompositionExport(*request);
 }
@@ -57,9 +68,19 @@ void FrameExportController::beginCompositionExport(CompositionExportRequest requ
             request.preset == output::OutputPresetV1::PcmWavV1 ? request.profile : "pcm_s16le",
         .bwfDescription = {},
         .assetBaseDirectory = {},
-        .worker = {}};
+        .worker = {},
+        .startFrame = request.range.naming.startFrame,
+        .framePadding = request.range.naming.framePadding,
+        .namePattern = request.range.naming.namePattern,
+        .workingColorSpaceId = std::string(session_.colorIntent().workingColorSpaceId),
+        .ocioConfigRevision = session_.colorIntent().ocioConfigRevision,
+        .ocioConfigUri = std::string(session_.colorIntent().ocioConfigUri)};
+    if (request.deliverable == DeliverablePreset::Review) {
+        captured.displayName = "Rec.1886 Rec.709 - Display";
+        captured.viewName = "ACES 1.0 - SDR Video";
+    }
     mediaExport_ = std::make_unique<host::SequenceExportRunnerV1>(
-        scheduler_, compiler_, publicationCoordinator_, artifactCoordinator_, ledger_,
+        scheduler_, compiler_, publicationCoordinator_, artifactCoordinator_, *ledger_,
         std::move(captured));
     pendingDestination_ = std::move(request.range.destination);
     pendingPreset_ = request.preset;

@@ -350,6 +350,7 @@ target_sources(
         script_panel.hpp
         frame_export_controller.cpp
         frame_export_controller_composition.cpp
+        frame_export_controller_deliverables.cpp
         composition_export_dialog.cpp
         composition_export_dialog.hpp
         frameless_window_support.cpp
