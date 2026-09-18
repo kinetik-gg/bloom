@@ -19,6 +19,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace bloom::ui {
@@ -41,6 +42,9 @@ struct CompositionPreviewSettings final {
     runtime::PreviewResolutionPolicy resolutionPolicy = runtime::PreviewResolutionPolicy::Auto;
     runtime::EvaluationQuality quality = runtime::EvaluationQuality::Reference;
     runtime::EvaluationColorIntent colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene;
+    std::string displayName;
+    std::string viewName;
+    bool showLook = true;
     std::size_t pixelStorageByteLimit = kDefaultPreviewPixelStorageByteLimit;
     // The first Interactive request is immediate. Subsequent requests inside this 16 ms window
     // coalesce to the newest value; an active worker remains the admission gate.
@@ -109,7 +113,7 @@ class CompositionPreviewController final : public QObject {
     // it and this controller owns a cache of its own.
     CompositionPreviewController(CompositionSession& session, runtime::TaskScheduler& scheduler,
                                  TaskUiBridge& taskUiBridge, PreviewPreparationFunction preparation,
-                                 CompositionPreviewSettings settings = {},
+                                 const CompositionPreviewSettings& settings = {},
                                  PreviewFrameCacheHandle frameCache = nullptr,
                                  QObject* parent = nullptr);
     ~CompositionPreviewController() override;
@@ -159,6 +163,8 @@ class CompositionPreviewController final : public QObject {
     [[nodiscard]] runtime::EvaluationResolution resolution() const;
     [[nodiscard]] std::uint32_t resolutionDivisor() const noexcept;
     void setResolutionPolicy(runtime::PreviewResolutionPolicy policy);
+    void setViewerDisplayView(std::string displayName, std::string viewName);
+    void setViewerLookEnabled(bool enabled);
     void setRegionOfInterest(std::optional<QRectF> region);
     [[nodiscard]] runtime::TaskSubmission<PreviewPreparationResultHandle>
     submitViewerAnalysis(const runtime::PreviewRequestIdentity& identity);

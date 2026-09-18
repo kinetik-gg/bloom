@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -33,6 +34,9 @@ struct PreviewRequestIdentity final {
 
     std::optional<render::ImageWindow> roi = std::nullopt;
     ViewAdjust viewAdjust{};
+    std::string displayName;
+    std::string viewName;
+    bool showLook = true;
 
     friend bool operator==(const PreviewRequestIdentity&, const PreviewRequestIdentity&) = default;
 };
@@ -175,6 +179,7 @@ class PreparedPreviewFrame final {
     // active alternative's own buffer is unexpectedly invalid (never observed for a successfully
     // published frame -- both preparers reject publishing an invalid buffer).
     [[nodiscard]] std::optional<PreviewDisplayBufferView> displayBufferView() const noexcept;
+    [[nodiscard]] std::optional<core::Color4d> displayLinearProbe() const noexcept;
 
     // Reference-only accessors; see the class-level precondition documentation above.
     [[nodiscard]] const std::shared_ptr<const ReferenceDisplayFrame>&

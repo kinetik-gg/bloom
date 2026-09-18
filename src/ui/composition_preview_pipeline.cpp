@@ -210,6 +210,42 @@ buildSelectedDisplayProcessor(const bloom::runtime::EvaluationColorIntent& inten
     }
 }
 
+[[nodiscard]] std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle>
+buildSelectedDisplayProcessor(const bloom::runtime::EvaluationColorIntent& intent,
+                              const std::string_view displayName,
+                              const std::string_view viewName) noexcept {
+    if (displayName.empty() || viewName.empty()) {
+        return buildSelectedDisplayProcessor(intent);
+    }
+    try {
+        const auto expectedRevision = intent.ocioConfigRevision == bloom::core::Sha256Digest{}
+                                          ? bloom::color::kBloomNeutralV1ConfigDigest
+                                          : intent.ocioConfigRevision;
+        const auto locator = isNeutralIntent(intent) ? bloom::color::kBloomNeutralV1ConfigUri
+                                                     : bloom::color::kAcesCgV1ConfigUri;
+        auto resolution =
+            bloom::color::resolveOcioBuiltIn(bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
+                                             locator, expectedRevision, intent.workingColorSpaceId);
+        if (!resolution.ready()) {
+            return {};
+        }
+        auto resolved = std::move(resolution).takeResolved();
+        if (!resolved.has_value()) {
+            return {};
+        }
+        auto built =
+            bloom::color::buildBloomNeutralCpuDisplayProcessor(*resolved, displayName, viewName);
+        auto handle = std::move(built).takeHandle();
+        if (!handle.has_value()) {
+            return {};
+        }
+        return std::make_shared<const bloom::color::PreparedCpuDisplayProcessorHandle>(
+            std::move(*handle));
+    } catch (...) {
+        return {};
+    }
+}
+
 } // namespace
 
 namespace bloom::ui {
@@ -307,6 +343,7 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
             .pixelStorageByteLimit = pixelStorageByteLimit,
             .bypassOperationCache = !interactionOverride.empty(),
             .roi = desiredIdentity.roi,
+            .bypassLookNodes = !desiredIdentity.showLook,
         };
         auto evaluationResult = evaluator.evaluate(
             compileResult.plan, evaluationRequest, context.cancellation(),
@@ -342,10 +379,20 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
         // window (design decision 3) routes through the unchanged reference path otherwise -- the
         // permanently-Failed case already returned above, before evaluation even ran.
         std::optional<runtime::PreparedPreviewFrame> prepared;
-        std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> selectedHandle =
-            isNeutralIntent(desiredIdentity.colorIntent)
-                ? qualifiedSnapshot.handle
-                : buildSelectedDisplayProcessor(desiredIdentity.colorIntent);
+        std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> selectedHandle;
+        if (isNeutralIntent(desiredIdentity.colorIntent) && desiredIdentity.displayName.empty()) {
+            selectedHandle = qualifiedSnapshot.handle;
+        } else if (isNeutralIntent(desiredIdentity.colorIntent) &&
+                   qualifiedSnapshot.readiness ==
+                       runtime::QualifiedDisplayProcessorReadiness::Pending) {
+            // Preserve the documented startup reference window even when the Viewer has already
+            // chosen the config's default display/view. A non-default choice is built once the
+            // qualified provider is ready; it never changes export evaluation.
+            selectedHandle = nullptr;
+        } else {
+            selectedHandle = buildSelectedDisplayProcessor(
+                desiredIdentity.colorIntent, desiredIdentity.displayName, desiredIdentity.viewName);
+        }
         if (!isNeutralIntent(desiredIdentity.colorIntent) && selectedHandle == nullptr) {
             return TaskResult::failed(missingResultDiagnostic(
                 "The selected OCIO working space could not prepare a qualified display transform"));
@@ -355,6 +402,9 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
             const runtime::QualifiedDisplayPreparationRequest qualifiedRequest{
                 .aggregatePixelStorageByteLimit = pixelStorageByteLimit,
                 .viewAdjust = desiredIdentity.viewAdjust,
+                .displayName = desiredIdentity.displayName,
+                .viewName = desiredIdentity.viewName,
+                .showLook = desiredIdentity.showLook,
             };
             auto qualifiedResult = qualifiedPreparer.prepare(
                 evaluationResult.frame(), qualifiedRequest, context.cancellation(),
@@ -391,6 +441,9 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
                 .intent = runtime::ReferenceDisplayIntent::LinearRec709SceneToSrgb,
                 .aggregatePixelStorageByteLimit = pixelStorageByteLimit,
                 .viewAdjust = desiredIdentity.viewAdjust,
+                .displayName = desiredIdentity.displayName,
+                .viewName = desiredIdentity.viewName,
+                .showLook = desiredIdentity.showLook,
             };
             auto displayResult = displayPreparer.prepare(
                 evaluationResult.frame(), displayRequest, context.cancellation(),

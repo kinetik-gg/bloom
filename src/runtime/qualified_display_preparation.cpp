@@ -11,6 +11,17 @@ using bloom::runtime::DiagnosticSeverity;
 using bloom::runtime::QualifiedDisplayDiagnostic;
 using bloom::runtime::QualifiedDisplayDiagnosticCode;
 
+[[nodiscard]] std::optional<bloom::core::Color4d>
+unpremultiplied(const bloom::render::Rgba32f& pixel) noexcept {
+    const double alpha = static_cast<double>(pixel.alpha());
+    if (alpha == 0.0) {
+        return bloom::core::Color4d{0.0, 0.0, 0.0, 0.0};
+    }
+    return bloom::core::Color4d{static_cast<double>(pixel.red()) / alpha,
+                                static_cast<double>(pixel.green()) / alpha,
+                                static_cast<double>(pixel.blue()) / alpha, alpha};
+}
+
 [[nodiscard]] QualifiedDisplayDiagnostic diagnostic(const QualifiedDisplayDiagnosticCode code,
                                                     std::string summary, std::string detail = {}) {
     return {.code = code,
@@ -103,9 +114,11 @@ qualifiedDisplayDiagnosticCodeId(const QualifiedDisplayDiagnosticCode code) noex
 QualifiedDisplayFrame::QualifiedDisplayFrame(
     QualifiedDisplayFrameIdentity identity, std::shared_ptr<const ProcessFrame> processFrame,
     color::PreparedDisplayFrame buffer,
-    std::optional<render::PreparedReferenceDisplayBuffer> adjustedBuffer) noexcept
+    std::optional<render::PreparedReferenceDisplayBuffer> adjustedBuffer,
+    std::optional<core::Color4d> displayLinearProbe) noexcept
     : identity_(std::move(identity)), processFrame_(std::move(processFrame)),
-      buffer_(std::move(buffer)), adjustedBuffer_(std::move(adjustedBuffer)) {}
+      buffer_(std::move(buffer)), adjustedBuffer_(std::move(adjustedBuffer)),
+      displayLinearProbe_(displayLinearProbe) {}
 
 QualifiedDisplayPreparationResult
 QualifiedDisplayPreparationResult::prepared(std::shared_ptr<const QualifiedDisplayFrame> frame,
@@ -205,6 +218,14 @@ CpuQualifiedDisplayPreparer::prepare(std::shared_ptr<const ProcessFrame> process
     reportProgress(progress,
                    {.stage = QualifiedDisplayProgressStage::Applying, .completed = 1, .total = 1});
 
+    std::optional<core::Color4d> displayLinearProbe;
+    if (processView.value()->pixels().size() == 1U) {
+        const auto straight = unpremultiplied(processView.value()->pixels().front());
+        if (straight.has_value()) {
+            displayLinearProbe = handle_->referenceToDisplayLinear(*straight);
+        }
+    }
+
     std::optional<render::PreparedReferenceDisplayBuffer> adjusted;
     if (!request.viewAdjust.neutral() ||
         processDescriptor->dataWindow() != processDescriptor->displayWindow()) {
@@ -231,10 +252,13 @@ CpuQualifiedDisplayPreparer::prepare(std::shared_ptr<const ProcessFrame> process
         .packing = QualifiedDisplayPacking::StraightRgba8,
         .preparerSemanticsVersion = kQualifiedDisplayPreparerSemanticsVersion,
         .viewAdjust = request.viewAdjust,
+        .displayName = request.displayName,
+        .viewName = request.viewName,
+        .showLook = request.showLook,
     };
-    auto frame = std::shared_ptr<const QualifiedDisplayFrame>(
-        new QualifiedDisplayFrame(std::move(identity), std::move(processFrame),
-                                  std::move(*produced.value()), std::move(adjusted)));
+    auto frame = std::shared_ptr<const QualifiedDisplayFrame>(new QualifiedDisplayFrame(
+        std::move(identity), std::move(processFrame), std::move(*produced.value()),
+        std::move(adjusted), displayLinearProbe));
     return QualifiedDisplayPreparationResult::prepared(std::move(frame));
 }
 

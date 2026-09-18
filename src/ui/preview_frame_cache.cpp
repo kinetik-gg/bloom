@@ -63,7 +63,10 @@ PreviewFrameCacheKey::forIdentity(const runtime::PreviewRequestIdentity& identit
             .colorIntent = identity.colorIntent,
             .resolutionPolicy = identity.resolutionPolicy,
             .roi = identity.roi,
-            .viewAdjust = identity.viewAdjust};
+            .viewAdjust = identity.viewAdjust,
+            .displayName = identity.displayName,
+            .viewName = identity.viewName,
+            .showLook = identity.showLook};
 }
 
 PreviewFrameCache::PreviewFrameCache(const std::size_t byteBudget,

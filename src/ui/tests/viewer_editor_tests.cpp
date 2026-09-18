@@ -993,17 +993,45 @@ void testResolutionDropdownPersistsAndMovesWithFooter(Expectations& expectations
 
 // --- Task VIEW-1: the viewer footer ------------------------------------------------------------
 
-// The footer's controls, in the order the task fixes them: Channel, Zoom, Resolution, Background,
-// the transport, and the frame/time readout. Order is asserted through laid-out geometry rather
-// than child order, because the artist reads positions, not construction sequence.
+// The footer's controls, in the order the task fixes them: Channel, ROI, exposure, gamma,
+// display/view, Look, transport, and the frame/time readout. Order is asserted through laid-out
+// geometry rather than child order, because the artist reads positions, not construction sequence.
 void testFooterControlsAreOrderedLeftToRight(Expectations& expectations) {
     using namespace bloom;
+    QSettings().remove("viewer/display-view");
     ViewerFixture fixture(makeTestProject("Footer Order Test"));
     auto* footer = bloom::ui::test::footer(fixture.viewer);
     expectations.expect(footer != nullptr, "the viewer offers a footer widget");
     if (footer == nullptr) {
         reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
         return;
+    }
+    auto* displayView = footer->findChild<ui::kit::KDropdown*>("viewerDisplayView");
+    auto* lookToggle = footer->findChild<QToolButton*>("viewerLookToggle");
+    expectations.expect(displayView != nullptr && displayView->count() > 0,
+                        "Display / View lists the resolved config pairs");
+    expectations.expect(lookToggle != nullptr && !lookToggle->isEnabled(),
+                        "Look is disabled when the composition has no look-tagged effect");
+    if (displayView != nullptr && displayView->count() > 0) {
+        auto resolution = color::resolveBloomNeutralV1BuiltIn(
+            color::OcioConfigLocatorKind::BloomBuiltIn, color::kBloomNeutralV1ConfigUri,
+            color::kBloomNeutralV1ConfigDigest);
+        auto resolved = std::move(resolution).takeResolved();
+        const auto defaultPair = displayView->itemData(displayView->currentIndex()).toStringList();
+        expectations.expect(resolved.has_value() && !defaultPair.isEmpty() &&
+                                defaultPair[0].toStdString() == resolved->displayName() &&
+                                defaultPair[1].toStdString() == resolved->viewName(),
+                            "Display / View defaults to the config's default pair");
+        if (displayView->count() > 1) {
+            const int alternateIndex = displayView->currentIndex() == 0 ? 1 : 0;
+            displayView->setCurrentIndex(alternateIndex);
+            const auto selected = displayView->itemData(alternateIndex).toStringList();
+            expectations.expect(
+                selected.size() == 2 &&
+                    fixture.controller.settings().displayName == selected[0].toStdString() &&
+                    fixture.controller.settings().viewName == selected[1].toStdString(),
+                "choosing a Display / View reaches the viewer controller");
+        }
     }
     footer->resize(1400, ui::kit::px(ui::kit::Size::Control));
     // grab() forces the pending resize (and so the footer's own layout pass) to run now, the same
@@ -1016,6 +1044,8 @@ void testFooterControlsAreOrderedLeftToRight(Expectations& expectations) {
                                    "viewerRoiClear",
                                    "viewerExposure",
                                    "viewerGamma",
+                                   "viewerDisplayView",
+                                   "viewerLookToggle",
                                    "timelineRamPreviewButton",
                                    "viewerStepToStartButton",
                                    "timelineStepBackButton",
@@ -1037,6 +1067,7 @@ void testFooterControlsAreOrderedLeftToRight(Expectations& expectations) {
                             std::string{name} + " sits to the right of the control before it");
         previousRight = control->geometry().right();
     }
+    QSettings().remove("viewer/display-view");
     reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
 }
 

@@ -1018,7 +1018,11 @@ independentlyVerifyPng(Expectations& expectations,
     const auto prepared = preparer.prepare(
         attempt->frame(),
         {.aggregatePixelStorageByteLimit = output::kOutputExportPreparedPngBytesMaximumV1,
-         .chunkPixelCount = runtime::kDefaultQualifiedDisplayChunkPixelCount},
+         .chunkPixelCount = runtime::kDefaultQualifiedDisplayChunkPixelCount,
+         .viewAdjust = {},
+         .displayName = {},
+         .viewName = {},
+         .showLook = true},
         {});
     expectations.expect(prepared.status() == runtime::QualifiedDisplayPreparationStatus::Prepared &&
                             prepared.frame() != nullptr,

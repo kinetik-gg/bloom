@@ -287,6 +287,9 @@ ReferenceDisplayPreparationResult CpuReferenceDisplayPreparer::prepare(
             .packing = ReferenceDisplayPacking::StraightRgba8,
             .mapperSemanticsVersion = kReferenceDisplayMapperSemanticsVersion,
             .viewAdjust = request.viewAdjust,
+            .displayName = request.displayName,
+            .viewName = request.viewName,
+            .showLook = request.showLook,
         };
         auto frame = std::shared_ptr<const ReferenceDisplayFrame>(new ReferenceDisplayFrame(
             std::move(identity), std::move(processFrame), std::move(*displayBuffer.value())));

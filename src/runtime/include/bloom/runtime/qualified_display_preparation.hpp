@@ -39,6 +39,9 @@ struct QualifiedDisplayPreparationRequest final {
     std::size_t aggregatePixelStorageByteLimit = 0;
     std::size_t chunkPixelCount = kDefaultQualifiedDisplayChunkPixelCount;
     ViewAdjust viewAdjust{};
+    std::string displayName;
+    std::string viewName;
+    bool showLook = true;
 };
 
 enum class QualifiedDisplayProvider : std::uint8_t {
@@ -62,6 +65,9 @@ struct QualifiedDisplayFrameIdentity final {
     QualifiedDisplayPacking packing = QualifiedDisplayPacking::StraightRgba8;
     std::uint32_t preparerSemanticsVersion = kQualifiedDisplayPreparerSemanticsVersion;
     ViewAdjust viewAdjust{};
+    std::string displayName;
+    std::string viewName;
+    bool showLook = true;
 
     friend bool operator==(const QualifiedDisplayFrameIdentity&,
                            const QualifiedDisplayFrameIdentity&) = default;
@@ -141,19 +147,25 @@ class QualifiedDisplayFrame final {
     }
     [[nodiscard]] const std::optional<render::PreparedReferenceDisplayBuffer>&
     adjustedBuffer() const&& = delete;
+    [[nodiscard]] const std::optional<core::Color4d>& displayLinearProbe() const& noexcept {
+        return displayLinearProbe_;
+    }
+    [[nodiscard]] const std::optional<core::Color4d>& displayLinearProbe() const&& = delete;
 
   private:
     friend class CpuQualifiedDisplayPreparer;
 
-    QualifiedDisplayFrame(
-        QualifiedDisplayFrameIdentity identity, std::shared_ptr<const ProcessFrame> processFrame,
-        color::PreparedDisplayFrame buffer,
-        std::optional<render::PreparedReferenceDisplayBuffer> adjustedBuffer) noexcept;
+    QualifiedDisplayFrame(QualifiedDisplayFrameIdentity identity,
+                          std::shared_ptr<const ProcessFrame> processFrame,
+                          color::PreparedDisplayFrame buffer,
+                          std::optional<render::PreparedReferenceDisplayBuffer> adjustedBuffer,
+                          std::optional<core::Color4d> displayLinearProbe) noexcept;
 
     QualifiedDisplayFrameIdentity identity_;
     std::shared_ptr<const ProcessFrame> processFrame_;
     color::PreparedDisplayFrame buffer_;
     std::optional<render::PreparedReferenceDisplayBuffer> adjustedBuffer_;
+    std::optional<core::Color4d> displayLinearProbe_;
 };
 
 class QualifiedDisplayPreparationResult final {

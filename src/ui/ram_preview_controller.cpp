@@ -155,6 +155,9 @@ void RamPreviewController::submitNextFrame() {
             .quality = previewController_.settings().quality,
             .colorIntent = previewController_.settings().colorIntent,
             .resolutionPolicy = previewController_.settings().resolutionPolicy,
+            .displayName = previewController_.settings().displayName,
+            .viewName = previewController_.settings().viewName,
+            .showLook = previewController_.settings().showLook,
         };
         if (!previewController_.frameCache().contains(key)) {
             break;
@@ -184,6 +187,9 @@ void RamPreviewController::submitNextFrame() {
         .quality = previewController_.settings().quality,
         .colorIntent = previewController_.settings().colorIntent,
         .resolutionPolicy = previewController_.settings().resolutionPolicy,
+        .displayName = previewController_.settings().displayName,
+        .viewName = previewController_.settings().viewName,
+        .showLook = previewController_.settings().showLook,
     };
 
     // Foreground, not Interactive: a RAM preview is a background fill the artist asked for, and it

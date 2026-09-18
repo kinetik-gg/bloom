@@ -362,7 +362,10 @@ void testFullDriveApprovedAndPublished(Expectations& expectations) {
         fixture.session, fixture.scheduler, fixture.bridge,
         bloom::ui::makeCompositionPreviewPipeline(fixture.compiler, previewEvaluator,
                                                   previewPreparer, previewProvider),
-        {.resolutionPolicy = runtime::PreviewResolutionPolicy::Quarter});
+        {.resolutionPolicy = runtime::PreviewResolutionPolicy::Quarter,
+         .displayName = {},
+         .viewName = {},
+         .showLook = true});
     expectations.expect(
         waitUntil([&] { return preview.state().activity == bloom::ui::PreviewActivity::Ready; }),
         "Quarter preview is ready before exporting at Full");
@@ -863,7 +866,10 @@ void testFrameRangeExportsEveryFrameAtItsOwnTime(Expectations& expectations) {
         fixture.session, fixture.scheduler, fixture.bridge,
         bloom::ui::makeCompositionPreviewPipeline(fixture.compiler, previewEvaluator,
                                                   previewPreparer, previewProvider),
-        {.resolutionPolicy = runtime::PreviewResolutionPolicy::Quarter});
+        {.resolutionPolicy = runtime::PreviewResolutionPolicy::Quarter,
+         .displayName = {},
+         .viewName = {},
+         .showLook = true});
     expectations.expect(
         waitUntil([&] { return preview.state().activity == bloom::ui::PreviewActivity::Ready; }),
         "Quarter preview is ready before exporting at Full");

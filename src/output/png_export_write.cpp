@@ -123,7 +123,11 @@ PngExportWriteResultV1 PngExportWriterV1::run(
     const auto colorResult = preparer.prepare(
         attempt.frame(),
         {.aggregatePixelStorageByteLimit = static_cast<std::size_t>(effectiveLimit),
-         .chunkPixelCount = runtime::kDefaultQualifiedDisplayChunkPixelCount},
+         .chunkPixelCount = runtime::kDefaultQualifiedDisplayChunkPixelCount,
+         .viewAdjust = {},
+         .displayName = {},
+         .viewName = {},
+         .showLook = true},
         cancellation, [&progress](const runtime::QualifiedDisplayProgress& stageProgress) {
             detail::reportExportProgress(progress, {.stage = OutputExportStageV1::ColorPreparing,
                                                     .completed = stageProgress.completed,
