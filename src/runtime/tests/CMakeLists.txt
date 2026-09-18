@@ -192,3 +192,11 @@ bloom_add_test(
     COMMAND bloom_runtime_input_color_context_test
     LABELS unit runtime media color
 )
+
+bloom_find_dependency(OpenColorIO)
+add_executable(bloom_runtime_image_effect_test image_effect_tests.cpp)
+target_include_directories(bloom_runtime_image_effect_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_image_effect_test PRIVATE bloom_runtime_evaluator OpenColorIO::OpenColorIO)
+bloom_enable_warnings(bloom_runtime_image_effect_test)
+bloom_enable_strict_floating_point(bloom_runtime_image_effect_test)
+bloom_add_test(NAME bloom.runtime.image-effects COMMAND bloom_runtime_image_effect_test LABELS unit runtime color)

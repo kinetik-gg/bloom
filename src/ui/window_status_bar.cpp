@@ -87,6 +87,8 @@ QString previewActivityText(const CompositionPreviewState& preview) {
         return stale ? WindowStatusBar::tr("Rendering current frame · Previous frame shown")
                      : WindowStatusBar::tr("Rendering current frame");
     case PreviewActivity::Ready:
+        if (!preview.diagnostics.empty() && !preview.diagnostics.front().summary.empty())
+            return QString::fromStdString(preview.diagnostics.front().summary);
         return WindowStatusBar::tr("Current frame ready");
     case PreviewActivity::Unsupported:
         return stale ? WindowStatusBar::tr("Preview unsupported · Previous frame shown")

@@ -13,6 +13,7 @@
 #include <QSettings>
 #include <QStringList>
 #include <QThread>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -22,6 +23,7 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
@@ -67,6 +69,62 @@ void connectNodes(ui::CompositionSession& session, document::NodeId source, docu
     expect(session.executeNodeTransaction(std::move(transaction)).changed(),
            "connect upstream fixture");
 }
+void colourEffectRows() {
+    auto project = document::makeNewProject("Colour", "Main", core::RationalTime::fromInteger(10));
+    const auto composition = project.initialCompositionId;
+    for (const auto kind : {document::AssetKind::Lut, document::AssetKind::Image}) {
+        document::AssetRecord asset;
+        asset.id = document::AssetId::fromRaw(kind == document::AssetKind::Lut ? 70 : 71);
+        asset.kind = kind;
+        asset.name = kind == document::AssetKind::Lut ? "Show LUT" : "Plate";
+        asset.locator = {"file", "project-relative", "show.cube", "file:///show.cube"};
+        if (kind == document::AssetKind::Image)
+            asset.width = asset.height = 1;
+        expect(project.project.addAsset(asset), "colour picker asset fixture");
+    }
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, composition);
+    ui::AssetsEditor assets(session);
+    const auto* tree = assets.findChild<QTreeWidget*>();
+    const auto lutRows = tree->findItems("Show LUT", Qt::MatchExactly | Qt::MatchRecursive);
+    expect(lutRows.size() == 1 && lutRows.front()->text(1) == "LUT",
+           "Assets shows the LUT kind label");
+    const auto cst = addNode(session, "bloom.ocio-colour-space-transform");
+    expect(cst.isValid(), "Add supports CST");
+    session.selectNode(cst);
+    ui::PropertiesEditor properties(session);
+    properties.show();
+    QCoreApplication::processEvents();
+    const auto spaces = properties.findChildren<ui::kit::KDropdown*>("propertiesEffectColorSpace");
+    expect(spaces.size() == 2 && spaces.front()->currentText() == "Working space" &&
+               spaces.front()->count() > 1,
+           "CST reuses searchable config pickers with working default");
+    const auto file = addNode(session, "bloom.ocio-file-transform");
+    session.selectNode(file);
+    QCoreApplication::processEvents();
+    auto* picker = properties.findChild<ui::kit::KDropdown*>("propertiesLutAsset");
+    expect(picker && picker->count() == 2 && picker->itemData(1).value<std::int64_t>() == 70,
+           "LUT picker contains only LUT assets");
+    if (picker)
+        picker->setCurrentIndex(1);
+    const auto* node = session.composition()->graph().findNode(file);
+    for (const auto& binding : node->parameters)
+        if (binding.role == "lut") {
+            const auto* parameter = session.composition()->parameters().find(binding.parameterId);
+            const auto* value = std::get_if<document::ConstantValueSource>(&parameter->source);
+            expect(value && std::get<std::int64_t>(value->value) == 70,
+                   "LUT selection publishes an integer asset reference through a command");
+        }
+    expect(session.undo(), "LUT choice is undoable");
+    const auto* definition =
+        document::builtInNodeDefinitions().find("bloom.ocio-file-transform", 1);
+    expect(definition && definition->category == document::NodeCategory::Color &&
+               definition->inputs.front().name == "input" &&
+               definition->outputs.front().name == "image",
+           "Colour effect card definition has the image socket pair");
+}
+
 void upstreamRows() {
     auto project =
         document::makeNewProject("Upstream", "Main", core::RationalTime::fromInteger(10));
@@ -491,6 +549,7 @@ int main(int argc, char** argv) try {
     registryRows();
     upstreamRows();
     drivenTextContent();
+    colourEffectRows();
     widthRule();
     videoRows();
     QSettings().clear();

@@ -59,3 +59,32 @@ overrides the asset; **Auto** inherits the asset interpretation. Rec.2020, HLG, 
 unavailable on the unqualified preview path and report a typed diagnostic until a qualified config
 mapping is explicitly selected. Changing the input choice or project working space re-decodes the
 thumbnail, proxy, and rendered frame; no stale colour conversion is reused.
+
+## Set up a show LUT
+
+1. Select the ACES 1.3 CG configuration and **ACEScg** working space.
+2. Import the show's `.cube` file through the Assets panel. It appears with kind **LUT**.
+3. In Nodes, choose **Add → Colour → OCIO File Transform**. Connect the image producer to its
+   **Input**, then connect **Image** to the next image node or Layer Output.
+4. In Properties, select the LUT asset, set **Process Space** to **ACEScct**, and use the LUT
+   author's interpolation and direction. The defaults are Linear and Forward.
+5. Enable **Look** to mark this node as part of the show look. **Bypass** disables the node without
+   changing its connections.
+
+The File Transform performs ACEScg → ACEScct → LUT → ACEScct → ACEScg. It preserves alpha and keeps
+imported media unchanged. An identity LUT is exactly equivalent to bypass. A missing, changed or
+refused LUT leaves the image unchanged and reports why; use Assets → Relink to adopt an updated
+file. LUT files are capped at 64 MiB with 3D edges no larger than 129. LUT import currently requires
+Linux, and execution needs its qualified helper. Other targets preserve saved nodes and assets and
+show an unavailable diagnostic.
+
+**OCIO Colour Space Transform** offers explicit **From** and **To** selectors from the project
+config. Empty selectors mean the composition working space. For an explicit graph with CSTs on
+either side of a LUT, set the LUT's Process Space to the working space so it processes the values
+arriving at that point without adding another conversion. The surrounding CSTs then own the
+ACEScg → ACEScct and ACEScct → ACEScg conversions.
+
+The Look marker identifies the nodes that a look preview can skip. Use each node's **Bypass**
+parameter to disable it. Exports include active effects; a preview-only bypass does not change
+export. For a VFX handoff without the look, set the relevant nodes' **Bypass** parameters explicitly
+before exporting, then restore them afterward.

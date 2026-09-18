@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/media/audio/audio.hpp>
@@ -212,6 +213,24 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
             std::ranges::transform(extension, extension.begin(), [](const unsigned char value) {
                 return static_cast<char>(std::tolower(value));
             });
+            if (color::isLutExtension(path)) {
+                const auto lut = color::readLutFile(path, cancel);
+                if (lut.error != color::LutError::None) {
+                    diagnostic_ =
+                        "LUT import refused: " + std::string(color::lutErrorName(lut.error));
+                    assets_.clear();
+                    return;
+                }
+                document::AssetRecord asset;
+                asset.kind = document::AssetKind::Lut;
+                asset.locator = locator(path, projectDirectory);
+                asset.contentDigest = lut.digest;
+                assets_.push_back(std::move(asset));
+                admitted.insert(std::filesystem::absolute(path).lexically_normal());
+                if (progress)
+                    progress(assets_.size(), paths.size());
+                continue;
+            }
             if (media::video::isVideoExtension(path)) {
                 media::video::VideoDecodeSession session(path);
                 const auto probed = session.probe(cancel);

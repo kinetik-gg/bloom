@@ -242,3 +242,8 @@ binary loading strategy remain deferred until an external extension workflow ent
 See the focused [`task-system.md`](task-system.md), [`project-session.md`](project-session.md),
 [`gpu-backend.md`](gpu-backend.md), and [`platform-support.md`](platform-support.md) contracts for
 decisions that should not be duplicated here.
+
+The commands module depends directly on `bloom_color_ocio` for bounded LUT asset intake during
+`ImportAssets` preparation. That preparation runs on the import task; command publication only
+copies the prepared locator/digest record. The color module owns validation and supervised OCIO
+execution, and never depends on commands, document, or UI.

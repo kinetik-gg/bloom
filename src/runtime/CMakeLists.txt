@@ -77,6 +77,8 @@ target_sources(
         operation_key.hpp
         animation_sampling.cpp
         cpu_composition_evaluator.cpp
+        image_effect.cpp
+        image_effect.hpp
         cpu_composition_evaluator_support.hpp
         evaluation.cpp
         prepared_preview_frame.cpp

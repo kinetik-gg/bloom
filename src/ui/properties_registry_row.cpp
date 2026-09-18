@@ -39,8 +39,14 @@ namespace {
     return schema == document::kTextFontParameterSchemaKey;
 }
 
+[[nodiscard]] bool isEffectColorSpaceSchema(const std::string_view schema) {
+    return schema == "bloom.ocio-cst.from" || schema == "bloom.ocio-cst.to" ||
+           schema == "bloom.ocio-file.process-space";
+}
+
 [[nodiscard]] bool isInputColorSpaceSchema(const std::string_view schema) {
-    return schema == document::kImageInputColorSpaceIdParameterSchemaKey ||
+    return isEffectColorSpaceSchema(schema) ||
+           schema == document::kImageInputColorSpaceIdParameterSchemaKey ||
            schema == document::kVideoInputColorSpaceIdParameterSchemaKey;
 }
 
@@ -164,7 +170,9 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
     setProperty("parameterId", QVariant::fromValue(static_cast<qulonglong>(parameter.value())));
     setProperty("role", QString::fromStdString(definition_.role));
     const auto label =
-        isInputColorSpaceSchema(definition_.schemaKey)               ? tr("Input colour space")
+        isEffectColorSpaceSchema(definition_.schemaKey)
+            ? node_editor::displayTypeName(definition_.role)
+        : isInputColorSpaceSchema(definition_.schemaKey)             ? tr("Input colour space")
         : definition_.schemaKey == document::kTextParameterSchemaKey ? tr("Text")
         : definition_.schemaKey == document::kTextAlignmentParameterSchemaKey ? tr("Text Alignment")
         : definition_.schemaKey == document::kTextLineHeightParameterSchemaKey ? tr("Line Height")
@@ -211,13 +219,16 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         layout->addWidget(segments_);
         connect(segments_, &kit::KRadioGroup::currentIndexChanged, this, [this] { commit(); });
     } else if (isInputColorSpaceSchema(definition_.schemaKey) || !items.empty() ||
+               definition_.schemaKey == "bloom.ocio-file.lut" ||
                definition_.schemaKey == "bloom.image.asset" ||
                definition_.schemaKey == "bloom.video.asset" ||
                definition_.schemaKey == "bloom.audio.asset" ||
                isFontSchema(definition_.schemaKey)) {
         selector_ = new kit::KDropdown(controls);
         selector_->setObjectName(
-            definition_.schemaKey == "bloom.image.asset"         ? "propertiesImageAsset"
+            definition_.schemaKey == "bloom.ocio-file.lut"       ? "propertiesLutAsset"
+            : isEffectColorSpaceSchema(definition_.schemaKey)    ? "propertiesEffectColorSpace"
+            : definition_.schemaKey == "bloom.image.asset"       ? "propertiesImageAsset"
             : definition_.schemaKey == "bloom.audio.asset"       ? "propertiesAudioAsset"
             : isFontSchema(definition_.schemaKey)                ? "propertiesTextFont"
             : definition_.schemaKey == "bloom.image.loop-mode"   ? "propertiesImageLoopMode"
@@ -449,8 +460,11 @@ void PropertiesRegistryRow::populateInputColorSpaceSelector() {
     const QSignalBlocker blocker(selector_);
     const auto current = session_.constantStringValue(parameter_).value_or(QString{});
     selector_->clearItems();
-    const auto automatic = selector_->addItem(tr("Auto"), QString{});
-    selector_->setItemToolTip(automatic, tr("Inherit the asset's automatic interpretation"));
+    const bool effect = isEffectColorSpaceSchema(definition_.schemaKey);
+    const auto automatic = selector_->addItem(effect ? tr("Working space") : tr("Auto"), QString{});
+    selector_->setItemToolTip(automatic, effect
+                                             ? tr("Use the composition working colour space")
+                                             : tr("Inherit the asset's automatic interpretation"));
     const auto config = inputColorConfig(session_);
     if (!config) {
         const auto unavailable = selector_->addItem(tr("OCIO config unavailable"), QString{});
@@ -546,6 +560,20 @@ void PropertiesRegistryRow::refresh() {
         if (auto* scalar = std::get_if<double>(&value); scalar && slider_)
             slider_->setValue(*scalar);
         if (auto* integer = std::get_if<std::int64_t>(&value)) {
+            if (selector_ && definition_.schemaKey == "bloom.ocio-file.lut") {
+                const QSignalBlocker blocker(selector_);
+                selector_->clearItems();
+                selector_->addItem(tr("Choose LUT"), QVariant::fromValue(std::int64_t{0}));
+                for (const auto& asset : session_.snapshot().project().assets())
+                    if (asset.kind == document::AssetKind::Lut &&
+                        asset.id.value() <=
+                            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+                        selector_->addItem(
+                            QString::fromStdString(asset.name),
+                            QVariant::fromValue(static_cast<std::int64_t>(asset.id.value())));
+                if (*integer != 0 && selector_->findData(QVariant::fromValue(*integer)) < 0)
+                    selector_->addItem(tr("Missing LUT"), QVariant::fromValue(*integer));
+            }
             if (integer_)
                 integer_->setText(QString::number(static_cast<qlonglong>(*integer)));
             if (fields_[0])
@@ -607,17 +635,19 @@ void PropertiesRegistryRow::refresh() {
                     }
             }
             if (selector_ && isInputColorSpaceSchema(definition_.schemaKey)) {
-                auto automatic = tr("Auto");
-                if (text->empty()) {
+                const bool effect = isEffectColorSpaceSchema(definition_.schemaKey);
+                auto automatic = effect ? tr("Working space") : tr("Auto");
+                if (!effect && text->empty()) {
                     const auto resolved = sourceAssetInputColorSpace(session_, node);
                     if (!resolved.isEmpty())
                         automatic = resolved;
                 }
                 selector_->setItemText(0, automatic);
-                selector_->setItemToolTip(0,
-                                          text->empty() && automatic != tr("Auto")
-                                              ? tr("Resolved by the asset: %1").arg(automatic)
-                                              : tr("Inherit the asset's automatic interpretation"));
+                selector_->setItemToolTip(
+                    0, effect ? tr("Composition working colour space: %1")
+                                    .arg(QString::fromStdString(
+                                        std::string(session_.colorIntent().workingColorSpaceId)))
+                              : tr("Inherit the asset's automatic interpretation"));
                 for (int index = 0; index < selector_->count(); ++index)
                     if (selector_->itemData(index).toString() == QString::fromStdString(*text)) {
                         selector_->setCurrentIndex(index);

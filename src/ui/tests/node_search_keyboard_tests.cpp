@@ -197,12 +197,13 @@ void testSearchKeyboardAndMenus() {
     // arithmetic over those numbers, the plumbing that carries them, and finally where the picture
     // goes.
     expect(sectionHeadings(list->model()) ==
-               QStringList{
-                   QStringLiteral("Sources"), QStringLiteral("Layers"),
-                   QStringLiteral("Compositing"), QStringLiteral("Values"), QStringLiteral("Math"),
-                   QStringLiteral("Convert"), QStringLiteral("String"), QStringLiteral("Logic"),
-                   QStringLiteral("Time"), QStringLiteral("Color"), QStringLiteral("Vector"),
-                   QStringLiteral("Utilities"), QStringLiteral("Output")},
+               QStringList{QStringLiteral("Sources"), QStringLiteral("Layers"),
+                           QStringLiteral("Compositing"), QStringLiteral("Colour"),
+                           QStringLiteral("Values"), QStringLiteral("Math"),
+                           QStringLiteral("Convert"), QStringLiteral("String"),
+                           QStringLiteral("Logic"), QStringLiteral("Time"), QStringLiteral("Color"),
+                           QStringLiteral("Vector"), QStringLiteral("Utilities"),
+                           QStringLiteral("Output")},
            "every populated section is headed, in category order, and the empty ones are absent");
     expect(list->model()->index(0, 0).data(kit::kSearchSectionRole).toBool() &&
                list->model()->index(0, 0).flags() == Qt::NoItemFlags,
@@ -416,6 +417,14 @@ void testSearchKeyboardAndMenus() {
         for (const auto& category : node_editor::nodeCategoryOrder())
             expected.append(node_editor::nodeCategoryName(category));
         expect(sections == expected, "whose sections are the registry's categories, in order");
+        auto* colour = addMenu->findChild<QMenu*>("nodeAddCategoryMenu.Colour");
+        QStringList colourNodes;
+        if (colour)
+            for (auto* entry : colour->actions())
+                colourNodes.append(entry->text());
+        expect(colourNodes.contains("OCIO Colour Space Transform") &&
+                   colourNodes.contains("OCIO File Transform") && colourNodes.size() == 2,
+               "Colour offers both image-effect nodes");
         auto* output = named(menu, "nodeAddCompositionOutputAction");
         expect(output != nullptr && !output->isEnabled() && !output->toolTip().isEmpty(),
                "a singleton already present is listed disabled with its refusal");

@@ -373,8 +373,8 @@ operation and scanline boundaries, and cancelled/failed evaluation publishes no 
 Operation memoization includes dimension, typography, and dependency values and retains matching
 evaluated geometry. Display preparation remains a separate typed stage.
 
-Evaluator semantics 8, primitive semantics 7, plan semantics 7, and animation semantics 2 are the
-current identities. TEXT-2 moved the plan version for the text reference/layout grammar and SHAPE-1
+Evaluator semantics 9, primitive semantics 7, plan semantics 8, and animation semantics 2 are the
+current identities; COLOR-3 moved the plan/evaluator pair to 8/9 for image-effect lowering. TEXT-2 moved the plan version for the text reference/layout grammar and SHAPE-1
 moved the evaluator and primitive versions for path rasterization; the two lanes landed together, so
 all three steps are reflected in one set of re-derived identity goldens. Existing point-text pixels
 remain pinned because the zero-box defaults take the old path; only new box-layout pins were added.
@@ -465,7 +465,7 @@ needs an OCIO transform; a matching alias, role, or display name is insufficient
 The compatibility spelling `EvaluationColorIntent::LinearRec709Scene` still denotes the zero-revision
 `lin_rec709_scene` intent, preserving existing process-frame and reference-display bytes. Generalized
 intents add their working-space id and config revision to cache/output identity. CPU image primitive
-semantics version `7`, CPU evaluator semantics version `8`, and reference display-mapper semantics
+semantics version `7`, CPU evaluator semantics version `9`, and reference display-mapper semantics
 version `2` remain the relevant primitive contracts.
 
 Binding rules:
@@ -587,10 +587,41 @@ identity, device capability, and fallback are semantic contracts rather than bac
 The planned artist-facing vocabulary is maintained in
 [`../product/node-catalogue.md`](../product/node-catalogue.md).
 
+## Image Effect Lowering
+
+COLOR-3 advances compiled-plan semantics to **8** and CPU evaluator semantics to **9**.
+Animation semantics remains **2** and image primitive semantics remains **7**. Existing pixel
+fixtures are unchanged; version-bearing identity digests are independently re-derived.
+
+`CompiledImageEffect` contains its source node identity, an earlier input `OperationIndex`, a
+closed kernel variant, and bypass state. Its bounds and time dependence follow its input. The
+initial identity kernel shares immutable input storage, including vector coverage when bypassed.
+Colour kernels use the straight-RGB alpha rule in
+[`layer-graph-model.md`](layer-graph-model.md#image-effects). Future effects add kernels to this
+common operation rather than introducing another source kind.
+
+The kernel variant contains `IdentityImageKernel`, `CstKernel{fromId, toId}` and
+`FileTransformKernel{lutAssetId, interpolation, direction, processSpaceId}` with an immutable
+captured asset record. File identity includes its exact content digest. A bounded evaluator-owned
+cache shares prepared CST processors by config revision/from/to and file processors by those
+values plus file digest, format, interpolation and direction. Preparation is task work. File execution
+uses cancellable chunks, and diagnostics survive warm frame memo hits. The process-space wrapper
+is skipped for a proven identity LUT to retain bit identity. Canonical identity `.cube` tables
+with the default unit domain are exact no-ops, including negative and HDR input.
+
+The plan also carries `bypass` and `look`; `EvaluationRequest::bypassLookNodes` skips only marked
+nodes. Bypass shares upstream image storage and bounds. Active colour transforms materialize the
+RGBA32F image, transform straight RGB, then restore the original alpha association. Alpha zero
+stays transparent black; failures never publish partially transformed rows.
+
+Each effect has its own memo entry. Its key includes input content digest, kernel identity,
+bypass, working-space id, and exact OCIO config revision. Ordinary input lifetime accounting,
+cancellation, progress, and memory admission apply to the effect as to every image operation.
+
 ## Operation memoization
 
 The session's `CpuCompositionEvaluator` owns a synchronized, byte-bounded LRU shared by its
-foreground, RAM-preview and background requests. Solid, Text, post-transform Layer Output, Merge,
+foreground, RAM-preview and background requests. Solid, Text, image effects, post-transform Layer Output, Merge,
 Composition Output and individual value-graph operations retain successful results. Image hits
 share immutable pixel storage; they do not copy or rerender it. Absent trimmed-layer images can
 also be retained. Failed value operations rerun so their diagnostics are reproduced. Cancelled or
@@ -780,7 +811,7 @@ Compiled Solid dimensions, Text layout operands and Shape geometry operands are 
 bounds include the enabled fill and stroke. Layer transforms always place the
 local-bounds anchor at the authored position, and Merge always unions its inputs' bounds. Plans
 carry no historical evaluation selector. Unsupported document node versions are rejected before
-compilation. Current identity uses plan semantics 7, animation sampling 2, evaluator 8, and render
+compilation. Current identity uses plan semantics 8, animation sampling 2, evaluator 9, and render
 primitives 7. SHAPE-1 adds shape pixels and TEXT-2 adds box-text pixels, both while preserving all
 existing source pixel goldens.
 
@@ -824,7 +855,7 @@ Rec.709 or sRGB-tagged YUV to scene-linear premultiplied pixels. Unsupported col
 content produce diagnostics instead of cached stale pixels. Video source selection participates
 in operation identity, including content digest, stream, frame and interpretation.
 
-Compiled-plan semantics is **7**. Animation remains **2**, evaluator **8**, primitives **7**;
+At the composition-source landing, compiled-plan semantics was **7**, animation **2**, evaluator **8**, primitives **7**;
 existing arms' pixel semantics are unchanged. The independent `s5-identity-oracle.py` audit
 reproduced all plan-6 analysis/output pins before deriving plan-7 pins, preserving the four
 preimage lengths (PNG analysis 1922, EXR analysis 1485, PNG output 669, EXR output 567 bytes).

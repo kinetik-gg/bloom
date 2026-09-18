@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-09-17
+Updated: 2026-09-18
 
 ## Purpose
 
@@ -99,7 +99,8 @@ keeps display transforms out of scene/process pixels.
 
 | Level | Planned nodes | Processing contract |
 | --- | --- | --- |
-| `C1` | Color Space Transform | Explicit source and destination spaces resolved through project color management |
+| `C1` | OCIO Colour Space Transform | Built: reusable image-effect lowering, exact-config source/destination spaces, working-space defaults, alpha-preserving conversion and typed pass-through diagnostics |
+| `C1` | OCIO File Transform | Built: LUT assets, working/process-space conversion, interpolation, direction and look bypass; supervised Linux execution, typed unavailable fallback on macOS/Windows |
 | `C1` | Exposure | Scene-linear light scaling |
 | `C1` | Offset, Multiply | Declared scene/process space; no implicit clamp |
 | `C1` | Lift/Gamma/Gain | Explicit grading model and working space |

@@ -42,6 +42,8 @@ QString nodeCategoryName(const document::NodeCategory category) {
         return QCoreApplication::translate("node_editor", "Sources");
     case document::NodeCategory::Layers:
         return QCoreApplication::translate("node_editor", "Layers");
+    case document::NodeCategory::Color:
+        return QCoreApplication::translate("node_editor", "Colour");
     case document::NodeCategory::Compositing:
         return QCoreApplication::translate("node_editor", "Compositing");
     case document::NodeCategory::Values:
@@ -89,15 +91,23 @@ QString nodeCategoryName(const document::NodeDefinition& definition) {
 }
 std::span<const QString> nodeCategoryOrder() {
     static const std::array order{
-        QStringLiteral("Sources"), QStringLiteral("Layers"), QStringLiteral("Compositing"),
-        QStringLiteral("Values"),  QStringLiteral("Math"),   QStringLiteral("Convert"),
-        QStringLiteral("String"),  QStringLiteral("Logic"),  QStringLiteral("Time"),
-        QStringLiteral("Color"),   QStringLiteral("Vector"), QStringLiteral("Utilities"),
-        QStringLiteral("Output")};
+        QStringLiteral("Sources"),   QStringLiteral("Layers"), QStringLiteral("Compositing"),
+        QStringLiteral("Colour"),    QStringLiteral("Values"), QStringLiteral("Math"),
+        QStringLiteral("Convert"),   QStringLiteral("String"), QStringLiteral("Logic"),
+        QStringLiteral("Time"),      QStringLiteral("Color"),  QStringLiteral("Vector"),
+        QStringLiteral("Utilities"), QStringLiteral("Output")};
     return order;
 }
 
 QString displayTypeName(const std::string_view typeId) {
+    if (typeId == "bloom.ocio-colour-space-transform")
+        return QCoreApplication::translate("node_editor", "OCIO Colour Space Transform");
+    if (typeId == "bloom.ocio-file-transform")
+        return QCoreApplication::translate("node_editor", "OCIO File Transform");
+    if (typeId == "processSpace")
+        return QCoreApplication::translate("node_editor", "Process Space");
+    if (typeId == "lut")
+        return QCoreApplication::translate("node_editor", "LUT");
     if (typeId == "timeOffset")
         return QCoreApplication::translate("node_editor", "Time Offset");
     if (typeId == "timeScale")

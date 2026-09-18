@@ -60,7 +60,14 @@ ValidationResult AssetRecord::validate() const {
         result.add(ValidationCode::InvalidId, "id", "Asset ID must not be zero");
     if (!validLocator(locator))
         result.add(ValidationCode::InvalidValue, "locator", "Invalid asset locator");
-    if (kind == AssetKind::Font) {
+    if (kind > AssetKind::Lut)
+        result.add(ValidationCode::InvalidValue, "kind", "Invalid asset kind");
+    if (kind == AssetKind::Lut) {
+        if (locator.kind != "file" || width != 0 || height != 0 || !manifest.members.empty() ||
+            !manifest.gaps.empty() || !manifest.pattern.empty() || !videoStreams.empty())
+            result.add(ValidationCode::InvalidValue, "lut",
+                       "A LUT asset is a file without image dimensions or a sequence manifest");
+    } else if (kind == AssetKind::Font) {
         if (fontFamily.empty() || fontStyle.empty() || fontFamily.size() > 1024 ||
             fontStyle.size() > 1024 || !core::isValidUtf8(fontFamily) ||
             !core::isValidUtf8(fontStyle))
@@ -121,7 +128,15 @@ ValidationResult AssetRecord::validate() const {
     } else if (!videoStreams.empty())
         result.add(ValidationCode::InvalidValue, "video",
                    "Only video assets carry stream metadata");
-    if (kind == AssetKind::Font) {
+    if (kind == AssetKind::Lut) {
+        if (interpretation.colorSpace != AssetColorSpace::Auto ||
+            !interpretation.inputColorSpaceId.empty() ||
+            interpretation.alphaAssociation != AssetAlphaAssociation::Straight || rate != 0 ||
+            channels != 0 || frames != 0 || duration != core::RationalTime{} ||
+            !fontFamily.empty() || !fontStyle.empty() || fontIndex != 0)
+            result.add(ValidationCode::InvalidValue, "lut",
+                       "A LUT asset has no media interpretation or descriptor");
+    } else if (kind == AssetKind::Font) {
         if (interpretation.colorSpace != AssetColorSpace::Auto ||
             interpretation.alphaAssociation != AssetAlphaAssociation::Straight)
             result.add(ValidationCode::InvalidValue, "interpretation",

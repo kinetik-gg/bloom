@@ -128,6 +128,12 @@ template <typename Definition>
 [[nodiscard]] bool hasValidLoweringShape(const NodeDefinition& definition) {
     using namespace bloom::document;
     switch (definition.lowering) {
+    case NodeLoweringKind::ImageEffect:
+        return definition.inputs ==
+                   std::vector<InputPortDefinition>{{"input", SocketValueKind::Image}} &&
+               definition.outputs ==
+                   std::vector<OutputPortDefinition>{{"image", SocketValueKind::Image}} &&
+               !definition.layerSlotInput && !definition.audioLayerSlotInput;
     case NodeLoweringKind::Shape:
         return definition == shapeDefinition();
     case NodeLoweringKind::Solid:
@@ -468,6 +474,40 @@ template <typename Definition>
             NodeCategory::Sources};
 }
 
+[[nodiscard]] NodeDefinition fileTransformDefinition() {
+    return {
+        {"bloom.ocio-file-transform", 1},
+        NodeLoweringKind::ImageEffect,
+        {{"input", SocketValueKind::Image}},
+        {{"image", SocketValueKind::Image}},
+        {{"lut", "bloom.ocio-file.lut", ParameterValueKind::Integer, true, false, std::int64_t{0}},
+         {"interpolation", "bloom.ocio-file.interpolation", ParameterValueKind::Integer, true,
+          false, std::int64_t{0}},
+         {"direction", "bloom.ocio-file.direction", ParameterValueKind::Integer, true, false,
+          std::int64_t{0}},
+         {"processSpace", "bloom.ocio-file.process-space", ParameterValueKind::String, true, false,
+          std::string{}},
+         {"bypass", "bloom.ocio-effect.bypass", ParameterValueKind::Boolean, true, false, false},
+         {"look", "bloom.ocio-effect.look", ParameterValueKind::Boolean, true, false, false}},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Color};
+}
+
+[[nodiscard]] NodeDefinition cstDefinition() {
+    return {
+        {"bloom.ocio-colour-space-transform", 1},
+        NodeLoweringKind::ImageEffect,
+        {{"input", SocketValueKind::Image}},
+        {{"image", SocketValueKind::Image}},
+        {{"from", "bloom.ocio-cst.from", ParameterValueKind::String, true, false, std::string{}},
+         {"to", "bloom.ocio-cst.to", ParameterValueKind::String, true, false, std::string{}},
+         {"bypass", "bloom.ocio-effect.bypass", ParameterValueKind::Boolean, true, false, false}},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Color};
+}
+
 [[nodiscard]] NodeDefinition imageDefinition() {
     using namespace bloom::document;
     return {
@@ -670,6 +710,8 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
                                             compositionOutputDefinition(),
                                             textDefinition(),
                                             imageDefinition(),
+                                            cstDefinition(),
+                                            fileTransformDefinition(),
                                             videoDefinition(),
                                             audioDefinition(),
                                             compositionSourceDefinition()};

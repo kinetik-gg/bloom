@@ -238,4 +238,50 @@ void validateManifestSchemaV1_20(const json::Value& schema) {
         json::parse(R"({"$ref":"#/$defs/fixedVersion-1.19"})");
     validateManifestSchemaV1_19(previous);
 }
+void validateDocumentSchemaV1_21(const json::Value& schema) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-document:1.21",
+                       "LUT document id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.21").at("properties").at("minor"),
+                 R"({"const":21})", "LUT document minor");
+    requireExact(schema.at("$defs").at("asset-1.11").at("properties").at("kind").at("enum"),
+                 R"(["image","sequence","audio","font","video","lut"])", "LUT asset kinds");
+    auto previous = schema;
+    auto& defs = previous.at("$defs");
+    auto fixed =
+        std::find_if(defs.asObject().begin(), defs.asObject().end(),
+                     [](const auto& member) { return member.first == "fixedVersion-1.21"; });
+    if (fixed == defs.asObject().end())
+        throw std::runtime_error("document 1.21 version is missing");
+    fixed->first = "fixedVersion-1.20";
+    fixed->second.at("properties").at("minor") = json::parse(R"({"const":20})");
+    defs.at("asset-1.11").at("properties").at("kind").at("enum") =
+        json::parse(R"(["image","sequence","audio","font","video"])");
+    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-document:1.20"));
+    previous.at("properties").at("schemaVersion") =
+        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.20"})");
+    validateDocumentSchemaV1_20(previous);
+}
+void validateManifestSchemaV1_21(const json::Value& schema) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-manifest:1.21",
+                       "LUT manifest id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.21").at("properties").at("minor"),
+                 R"({"const":21})", "LUT manifest minor");
+    auto previous = schema;
+    auto& defs = previous.at("$defs");
+    auto fixed =
+        std::find_if(defs.asObject().begin(), defs.asObject().end(),
+                     [](const auto& member) { return member.first == "fixedVersion-1.21"; });
+    if (fixed == defs.asObject().end())
+        throw std::runtime_error("manifest 1.21 version is missing");
+    fixed->first = "fixedVersion-1.20";
+    fixed->second.at("properties").at("minor") = json::parse(R"({"const":20})");
+    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-manifest:1.20"));
+    defs.at("document-1.0").at("properties").at("schemaVersion") =
+        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.20"})");
+    validateManifestSchemaV1_20(previous);
+}
 } // namespace bloom::quality

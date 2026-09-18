@@ -62,8 +62,7 @@ CpuColorSpaceProcessor::prepare(const ResolvedBloomNeutralConfig& config,
         if (!target)
             return OcioColorSpaceProcessorResult(
                 {}, OcioColorSpaceProcessorError::MissingWorkingColorSpace);
-        if (target->isData() || target->getReferenceSpaceType() != OCIO::REFERENCE_SPACE_SCENE ||
-            !ocioConfig->isColorSpaceLinear(working.c_str(), OCIO::REFERENCE_SPACE_SCENE)) {
+        if (target->isData()) {
             return OcioColorSpaceProcessorResult(
                 {}, OcioColorSpaceProcessorError::WorkingColorSpaceInvalid);
         }

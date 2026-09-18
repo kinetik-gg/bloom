@@ -525,14 +525,14 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
         return;
     }
 
-    const std::string anchor = "\"minor\": 20\n  },\n  \"project\"";
+    const std::string anchor = "\"minor\": 21\n  },\n  \"project\"";
     const auto anchorPos = text.find(anchor);
     expectations.expect(anchorPos != std::string::npos,
                         "round-tripped newer minor: root schemaVersion anchor is located");
     if (anchorPos == std::string::npos) {
         return;
     }
-    text.replace(anchorPos, std::string_view("\"minor\": 20").size(), "\"minor\": 21");
+    text.replace(anchorPos, std::string_view("\"minor\": 21").size(), "\"minor\": 22");
     expectations.expect(text.size() >= 2 && text.back() == '\n' && text[text.size() - 2] == '}',
                         "round-tripped newer minor: baseline ends with the root's closing brace");
     if (text.size() < 2 || text.back() != '\n' || text[text.size() - 2] != '}') {
@@ -576,7 +576,7 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
                          .displayPath = std::nullopt,
                          .persistedAllocatorHighWater = persistedHighWater,
                          .roundTrip = std::move(roundTrip),
-                         .schemaMinor = 21,
+                         .schemaMinor = 22,
                          .retainedRequirements = {}});
     expectations.expect(static_cast<bool>(sessionResult),
                         "round-tripped newer minor: the session installs the round-tripped "
@@ -624,7 +624,7 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
         expectations.expect(
             static_cast<bool>(decodedManifest) && decodedManifest.value() != nullptr &&
                 decodedManifest.value()->documentSchemaVersion ==
-                    bloom::document::SchemaVersion{1, 21},
+                    bloom::document::SchemaVersion{1, 22},
             "round-tripped newer minor: the published manifest declares document schema {1,21}");
     }
 

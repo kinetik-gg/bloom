@@ -79,6 +79,7 @@ void forEachInput(const CompiledOperation& operation, Function&& function) {
                    [](const CompiledShape&) {},
                    [](const CompiledSolid&) {},
                    [](const CompiledText&) {},
+                   [&function](const CompiledImageEffect& effect) { function(effect.input); },
                    [](const CompiledImageSource&) {},
                    [](const CompiledVideoSource&) {},
                    [](const CompiledCompositionSource&) {},

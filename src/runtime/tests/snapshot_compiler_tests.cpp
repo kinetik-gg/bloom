@@ -1840,6 +1840,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
                         "large-registry cancellation stops before further definition resolution");
 }
 
+#include "snapshot_compiler_effect_tests.ipp"
 #include "snapshot_compiler_mute_tests.ipp"
 
 } // namespace
@@ -1847,6 +1848,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 int main() {
     Expectations expectations;
     try {
+        testImageEffectLowering(expectations);
         testLiveValueOverrideOwners(expectations);
         testOverrideVectorKindsAndLimits(expectations);
         testLayerFlagsAndRangeLowering(expectations);

@@ -372,13 +372,17 @@ ValidationResult DataBlockRecord::validate(const Project* project) const {
 DataBlockRecord DataBlockRecord::fromAsset(const AssetRecord& asset) {
     DataBlockRecord block;
     block.id = asset.id;
-    block.kind = asset.kind == AssetKind::Image      ? DataBlockKind::Image
+    block.kind = asset.kind == AssetKind::Lut        ? DataBlockKind::Opaque
+                 : asset.kind == AssetKind::Image    ? DataBlockKind::Image
                  : asset.kind == AssetKind::Sequence ? DataBlockKind::Sequence
                  : asset.kind == AssetKind::Video    ? DataBlockKind::Video
                  : asset.kind == AssetKind::Audio    ? DataBlockKind::Audio
                                                      : DataBlockKind::Font;
-    block.typeId = "bloom.media.asset";
-    block.schemaVersion = {1, 18};
+    if (asset.kind == AssetKind::Lut)
+        block.payload = OpaqueExtensionPayload{};
+    block.typeId = asset.kind == AssetKind::Lut ? "bloom.color.lut-asset" : "bloom.media.asset";
+    block.schemaVersion =
+        asset.kind == AssetKind::Lut ? SchemaVersion{1, 21} : SchemaVersion{1, 18};
     block.mediaType = "application/vnd.bloom.asset";
     block.provenance.source = asset.locator;
     block.provenance.contentDigest = asset.contentDigest;

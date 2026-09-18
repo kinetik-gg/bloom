@@ -59,6 +59,8 @@ void refreshAssetSelector(kit::KDropdown& selector, const CompositionSession& se
     selector.clearItems();
     selector.addItem(QObject::tr("Choose Asset"), QString{});
     for (const auto& asset : session.snapshot().project().assets()) {
+        if (asset.kind == document::AssetKind::Lut)
+            continue;
         if (videoOnly != (asset.kind == document::AssetKind::Video) ||
             audioOnly != (asset.kind == document::AssetKind::Audio))
             continue;
@@ -115,6 +117,17 @@ QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view
     const auto add = [&items](const QString& text, const std::int64_t stored) {
         items.append({text, stored});
     };
+    if (schemaKey == "bloom.ocio-file.interpolation") {
+        add(QObject::tr("Linear"), 0);
+        add(QObject::tr("Tetrahedral"), 1);
+        add(QObject::tr("Best"), 2);
+        return items;
+    }
+    if (schemaKey == "bloom.ocio-file.direction") {
+        add(QObject::tr("Forward"), 0);
+        add(QObject::tr("Inverse"), 1);
+        return items;
+    }
     if (schemaKey == "bloom.shape.kind") {
         for (std::int64_t i = 0; i <= 6; ++i)
             add(QString::fromUtf8(

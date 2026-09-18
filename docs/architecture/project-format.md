@@ -1,6 +1,6 @@
 # Bloom Project Format
 
-The current document schema is 1.20. It adds config-managed asset input colour-space ids on top of
+The current document schema is 1.21. It adds LUT assets on top of 1.20 config-managed asset input colour-space ids,
 the 1.19 optional per-composition working colour-space override, the 1.18 `project.dataBlocks`
 collection, and the `dataBlock` allocator namespace.
 See [data blocks](data-blocks.md) for the model and provenance contract.
@@ -43,19 +43,32 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.20`.
+The container version remains `1.0`; the current document schema is `1.21`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. Versioned artifacts through `1.11` remain checked as
-historical fixtures, with the current `1.20` contract also enforced by the canonical writer and
+historical fixtures, with the current `1.21` contract also enforced by the canonical writer and
 decoder tests. The manifest artifact still requires container `1.0`; its document
 declaration follows the current document minor. Every historical artifact from `1.0` through `1.11`,
 manifest and document, remains checked, and each version's checker validates what its own minor adds
 and then reduces the artifact to its predecessor so the older checks run unchanged.
 
 Document `1.16` adds asset folders, display names, tags and ordering (see "Asset Organization" below).
+
+Document `1.21` adds the `lut` asset-kind token. LUT records use the existing file locator,
+content digest, name, folder, tags and order; dimensions are zero and there is no sequence or
+video-stream descriptor. The `1.20` → `1.21` migration changes only the document version.
+Earlier schema minors reject `lut`. The container remains `1.0`; LUT bytes stay external assets.
+The existing opaque data-block projection identifies them as `bloom.color.lut-asset` without
+introducing another data-block kind or duplicating the durable asset record.
+
+Both OCIO nodes use registry schema version 1 and ordinary node/parameter persistence. Their
+constant parameters are `from`, `to`, `bypass` for CST, and `lut` (integer asset id),
+`interpolation` (0 Linear, 1 Tetrahedral, 2 Best), `direction` (0 Forward, 1 Inverse),
+`processSpace`, `bypass`, `look` for File Transform. Empty space ids mean the composition working
+space. `bypassLookNodes` is a request option and is never stored in the project.
 
 Document `1.20` adds `inputColorSpaceId` to every asset interpretation and adds the matching
 non-animatable String parameter to image and video source nodes. The empty id is Auto/inherit; a
@@ -866,11 +879,11 @@ schema-version path. Reconstruction applies the same registry validation to deco
 names the node ID. Old or future versions of a known kind are never silently upgraded, downgraded,
 or interpreted through another definition. No parameters or IDs are injected and no edges are dropped.
 
-The canonical writer is **1.20** and the load floor is **1.15**. Opening 1.15 applies the additive
-asset metadata defaults during typed decoding and reports the resulting document as 1.20. The
-registered 1.15 → 1.16, 1.16 → 1.17, 1.17 → 1.18, 1.18 → 1.19, and 1.19 → 1.20 DOM transforms are
-tested against the same decoded result; the last step adds only the deterministic input-id
-mapping, preserving inheritance and `lin_rec709_scene`.
+The canonical writer is **1.21** and the load floor is **1.15**. Opening 1.15 applies the additive
+asset metadata defaults during typed decoding and reports the resulting document as 1.21. The
+registered 1.15 → 1.16, 1.16 → 1.17, 1.17 → 1.18, 1.18 → 1.19, 1.19 → 1.20 and 1.20 → 1.21 DOM
+transforms are tested against the same decoded result. The input-id step adds only the deterministic
+mapping, preserving inheritance and `lin_rec709_scene`; the LUT step advances only the version.
 No node version,
 parameter source or rendering meaning changes. The earlier numbered ladder remains independently
 tested bookkeeping and does not admit files below the load floor. Historical schema
@@ -1185,7 +1198,7 @@ the new artifacts to 1.5 and run the complete historical ladder.
 ## Content Bounds Introduced In Document 1.7
 
 Solid v2 introduced explicit Scalar width and height. Text v2, Layer v4, and Merge v2 use local
-content bounds. These are now the only supported definitions; the current 1.20 schema includes
+content bounds. These are now the only supported definitions; the current 1.21 schema includes
 those contracts together with per-component animation, image assets, and audio. Documents carrying
 older node versions fail validation. There is no coordinate conversion or compatibility evaluator.
 
@@ -1306,9 +1319,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.20`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.21`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.20.schema.json` and `manifest-1.20.schema.json`; the
+The current artifacts are `document-1.21.schema.json` and `manifest-1.21.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1343,7 +1356,7 @@ and unknown additive members.
 Document `1.16` adds organization metadata without changing media identity or evaluation. The
 introduction artifacts are `document-1.16.schema.json` and `manifest-1.16.schema.json`. Container
 version remains `1.0`; the load floor remains `1.15` so existing projects can acquire these
-additive defaults when opened. The current writer saves 1.20; opening alone leaves the
+additive defaults when opened. The current writer saves 1.21; opening alone leaves the
 original file untouched.
 
 Each asset appends `name`, optional `folder`, `tags`, then `order` after its existing media
@@ -1385,11 +1398,11 @@ name, folder, tags and order. No organization command changes render pixels.
 
 ## Video Assets In Document 1.17
 
-The current document and manifest schema artifacts are `document-1.20.schema.json` and
-`manifest-1.20.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
+The current document and manifest schema artifacts are `document-1.21.schema.json` and
+`manifest-1.21.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
 The 1.16 → 1.17 migration only advances the version; the 1.17 → 1.18 and 1.18 → 1.19 steps
 likewise preserve existing assets and pixels. Opening 1.15 first applies asset-organization
-defaults and the historical video and working-space steps, then the 1.19 → 1.20 input-id step.
+defaults and the historical video and working-space steps, then the 1.19 → 1.20 input-id step and 1.20 → 1.21 version step.
 
 `AssetKind::Video` serializes as `"video"`. It retains the shared asset identity, locator,
 interpretation, dimensions and organization envelope, with a closed `video` member before

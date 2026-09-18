@@ -9,8 +9,9 @@
 
 namespace bloom::color {
 
-// A general, CPU-only input transform. The processor accepts only colour spaces declared by the
-// exact resolved OCIO config and always targets a validated scene-linear working space. Data
+// A general CPU colour-space transform between non-data spaces in the exact resolved config.
+// The config resolver validates the project working space; explicit graph transforms may target
+// nonlinear spaces such as ACEScct. Data
 // spaces, missing IDs, unsupported floating-point environments, and OCIO failures are explicit
 // typed failures; callers must not silently fall back to a transfer-function guess.
 enum class OcioColorSpaceProcessorError : std::uint8_t {
@@ -65,6 +66,7 @@ class CpuColorSpaceProcessor final {
     [[nodiscard]] static OcioColorSpaceProcessorResult
     prepare(const ResolvedBloomNeutralConfig& config, std::string_view fromId,
             std::string_view toWorkingSpaceId) noexcept;
+    [[nodiscard]] bool isIdentity() const noexcept { return identity_; }
     [[nodiscard]] bool apply(std::span<std::array<float, 4>> pixels) const noexcept;
     [[nodiscard]] const core::Sha256Digest& configRevision() const& noexcept { return revision_; }
     [[nodiscard]] const core::Sha256Digest& configRevision() const&& = delete;

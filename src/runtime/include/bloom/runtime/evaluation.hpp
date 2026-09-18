@@ -36,7 +36,8 @@ namespace bloom::runtime {
 // from before this change must not compare equal to one from after it, even where the pixels
 // coincide.
 // VECTOR-1: semantics 8 covers transformed vector geometry at output resolution.
-inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 8;
+// COLOR-3: semantics 9 adds image-effect kernels; existing primitive pixels are unchanged.
+inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 9;
 
 enum class EvaluationQuality : std::uint8_t {
     Reference,
@@ -86,6 +87,7 @@ struct EvaluationRequest final {
     std::size_t pixelStorageByteLimit = 0;
     bool bypassOperationCache = false;
     std::optional<render::ImageWindow> roi = std::nullopt;
+    bool bypassLookNodes = false;
 };
 
 // This deliberately retains the complete immutable plan. Exact deep equality is the conservative
@@ -103,6 +105,7 @@ struct ProcessFrameIdentity final {
     std::uint32_t animationSamplingSemanticsVersion = kAnimationSamplingSemanticsVersion;
     std::uint32_t imagePrimitiveSemanticsVersion = 0;
     std::optional<render::ImageWindow> roi = std::nullopt;
+    bool bypassLookNodes = false;
 
     friend bool operator==(const ProcessFrameIdentity& lhs, const ProcessFrameIdentity& rhs);
 };
@@ -125,6 +128,11 @@ enum class EvaluationDiagnosticCode : std::uint8_t {
     UnsupportedFloatingPointEnvironment,
     IncompatibleImageDescriptor,
     InternalInvariant,
+    ColorSpaceMissing,
+    ColorSpaceIsData,
+    ColorTransformFailed,
+    OcioConfigUnavailable,
+    LutTransformFailed,
 };
 
 [[nodiscard]] std::string_view evaluationDiagnosticCodeId(EvaluationDiagnosticCode code) noexcept;

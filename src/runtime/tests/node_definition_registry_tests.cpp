@@ -69,6 +69,26 @@ void testValidationAndDuplicates(Expectations& expectations) {
     using namespace bloom::runtime;
     NodeDefinitionRegistry registry;
 
+    NodeDefinition effect{{"example.effect", 1},
+                          NodeLoweringKind::ImageEffect,
+                          {{"input", SocketValueKind::Image}},
+                          {{"image", SocketValueKind::Image}},
+                          {},
+                          std::nullopt};
+    NodeDefinitionRegistry effects;
+    expectations.expect(effects.registerDefinition(effect) == NodeRegistrationStatus::Registered,
+                        "one image input and output form an effect");
+    NodeDefinitionRegistry rejectedEffects;
+    effect.inputs.push_back({"extra", SocketValueKind::Image});
+    expectations.expect(rejectedEffects.registerDefinition(effect) ==
+                            NodeRegistrationStatus::InvalidDefinition,
+                        "effect shape rejects a second image input");
+    effect.inputs.pop_back();
+    effect.inputs.front().name = "wrong";
+    expectations.expect(rejectedEffects.registerDefinition(effect) ==
+                            NodeRegistrationStatus::InvalidDefinition,
+                        "effect input name is canonical");
+
     auto invalid = customSolid();
     invalid.key.typeId.clear();
     expectations.expect(registry.registerDefinition(std::move(invalid)) ==
@@ -108,8 +128,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // readouts, and DATA-1's four data-block readers. The number is pinned rather than computed so
     // that adding a node type is a deliberate edit here. MEDIA-1 adds one Image source definition,
     // AUDIO-2 adds one Audio source definition, COMP-SRC adds Composition source, and LB-1 adds the
-    // Layer Bounds value readout. MEDIA-3 adds the Video source.
-    expectations.expect(registry.definitions().size() == 110,
+    // Layer Bounds value readout. MEDIA-3 adds Video; COLOR-3 adds CST and File Transform.
+    expectations.expect(registry.definitions().size() == 112,
                         "startup contribution includes every built-in definition");
 
     for (const auto& [kind, version] : std::array<std::pair<std::string_view, std::uint32_t>, 4>{

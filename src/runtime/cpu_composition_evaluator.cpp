@@ -1,4 +1,5 @@
 #include "cpu_composition_evaluator_support.hpp"
+#include "image_effect.hpp"
 #include "image_source.hpp"
 #include "layer_parent_transform.hpp"
 #include "operation_key.hpp"
@@ -61,6 +62,7 @@ static_assert(document::kMaximumTextSizePixels == render::kMaximumTextPixelSize,
             [&subject](const CompiledCompositionSource& source) {
                 subject.nodeId = source.sourceNodeId;
             },
+            [&subject](const CompiledImageEffect& effect) { subject.nodeId = effect.sourceNodeId; },
             [&subject](const CompiledImageSource& image) { subject.nodeId = image.sourceNodeId; },
             [&subject](const CompiledVideoSource& video) { subject.nodeId = video.sourceNodeId; },
             [&subject](const CompiledText& text) { subject.nodeId = text.sourceNodeId; },
@@ -344,6 +346,22 @@ enum class ScalarDomain : std::uint8_t {
                        hasValidScalarCurveReference(mapping.offset, plan, index, failure) &&
                        hasValidScalarCurveReference(mapping.scale, plan, index, failure);
             },
+            [index, &plan, &failure](const CompiledImageEffect& effect) {
+                bool validKernel = true;
+                if (const auto* file = std::get_if<FileTransformKernel>(&effect.kernel))
+                    validKernel = file->interpolation >= 0 && file->interpolation <= 2 &&
+                                  file->direction >= 0 && file->direction <= 1 &&
+                                  file->processSpaceId.size() <= 256 &&
+                                  (!file->asset || (file->asset->kind == document::AssetKind::Lut &&
+                                                    file->asset->validate().ok()));
+                if (effect.input.value() < index && validKernel)
+                    return true;
+                failure = diagnostic(
+                    EvaluationDiagnosticCode::InvalidPlan,
+                    "Image effect has an invalid kernel or non-topological input", {},
+                    subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
+                return false;
+            },
             [](const CompiledImageSource& image) {
                 return image.loopMode >= 0 && image.loopMode <= 2 && image.colorSpace >= 0 &&
                        image.colorSpace <= 3 && (!image.asset || image.asset->validate().ok());
@@ -401,6 +419,7 @@ enum class ScalarDomain : std::uint8_t {
                     return std::holds_alternative<CompiledSolid>(input) ||
                            std::holds_alternative<CompiledShape>(input) ||
                            std::holds_alternative<CompiledText>(input) ||
+                           std::holds_alternative<CompiledImageEffect>(input) ||
                            std::holds_alternative<CompiledImageSource>(input) ||
                            std::holds_alternative<CompiledVideoSource>(input) ||
                            std::holds_alternative<CompiledCompositionSource>(input) ||
@@ -1089,6 +1108,7 @@ template <typename Value>
                                       registerScalar(source.timeMapping.scale, "timeScale",
                                                      ScalarDomain::Unbounded, operationSubject));
                 },
+                [](const CompiledImageEffect&) {},
                 [](const CompiledImageSource&) {},
                 [](const CompiledVideoSource&) {},
                 [](const CompiledMerge&) {},
@@ -1687,6 +1707,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             std::optional<render::Rgba32fImage> produced;
             std::optional<EvaluationDiagnostic> operationFailure;
             bool operationCancelled = false;
+            bool effectApplicationFailed = false;
 
             std::shared_ptr<const ProcessFrame> nestedFrame;
             std::optional<core::RationalTime> nestedTime;
@@ -1737,6 +1758,20 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 frameStatistics.evaluatedNodes.insert(frameStatistics.evaluatedNodes.end(),
                                                       nestedStatistics.evaluatedNodes.begin(),
                                                       nestedStatistics.evaluatedNodes.end());
+            }
+            std::optional<detail::PreparedImageEffect> preparedEffect;
+            if (const auto* effect = std::get_if<CompiledImageEffect>(&plan->operations()[index])) {
+                preparedEffect = request.bypassLookNodes && effect->look
+                                     ? detail::PreparedImageEffect{}
+                                     : imageEffectContext()->prepare(*effect, request.colorIntent,
+                                                                     mediaBase, cancellation);
+                if (preparedEffect->cancelled)
+                    return EvaluationResult::cancelled();
+                if (preparedEffect->diagnostic) {
+                    auto warning = *preparedEffect->diagnostic;
+                    warning.subject = operationSubject;
+                    imageWarnings.push_back(std::move(warning));
+                }
             }
             std::optional<detail::ImageSourceSelection> selectedImage;
             if (const auto* source = std::get_if<CompiledImageSource>(&plan->operations()[index])) {
@@ -1790,6 +1825,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 std::holds_alternative<CompiledShape>(operation) ||
                 std::holds_alternative<CompiledText>(operation))
                 vectors[index] = VectorChain{index, {}, 1};
+            if (const auto* effect = std::get_if<CompiledImageEffect>(&operation);
+                effect && preparedEffect->identity())
+                vectors[index] = vectors[effect->input.value()];
             if (const auto* layer = std::get_if<CompiledLayerOutput>(&operation)) {
                 const auto& inputVector = vectors[layer->input.value()];
                 if (inputVector) {
@@ -1883,6 +1921,31 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             key.add(*nestedTime);
                             key.add(nested->planSemanticsVersion());
                             key.add(nestedFrame->contentHash_);
+                        } else if constexpr (std::is_same_v<Step, CompiledImageEffect>) {
+                            key.add(std::string(request.colorIntent.ocioConfigUri));
+                            key.add(preparedEffect->cacheIdentity);
+                            key.add(step.kernel.index());
+                            if (const auto* cst = std::get_if<CstKernel>(&step.kernel)) {
+                                key.add(cst->fromId);
+                                key.add(cst->toId);
+                            }
+                            if (const auto* file = std::get_if<FileTransformKernel>(&step.kernel)) {
+                                key.add(file->lutAssetId);
+                                key.add(file->interpolation);
+                                key.add(file->direction);
+                                key.add(file->processSpaceId);
+                                if (file->asset) {
+                                    const auto digest = file->asset->contentDigest.toLowercaseHex();
+                                    key.add(std::string(digest.data(), digest.size()));
+                                }
+                            }
+                            key.add(step.bypass);
+                            key.add(step.look);
+                            key.add(request.bypassLookNodes);
+                            key.add(std::string(request.colorIntent.workingColorSpaceId));
+                            const auto revision =
+                                request.colorIntent.ocioConfigRevision.toLowercaseHex();
+                            key.add(std::string(revision.data(), revision.size()));
                         } else if constexpr (std::is_same_v<Step, CompiledVideoSource>) {
                             key.add(selectedVideo->cacheKey);
                         } else if constexpr (std::is_same_v<Step, CompiledImageSource>) {
@@ -2159,6 +2222,32 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 resolved.verticalScale);
                             bounds[index].output = bounds[index].local;
                             produced.emplace(std::move(pixels));
+                        },
+                        [&](const CompiledImageEffect& effect) {
+                            slots[index] = slots[effect.input.value()];
+                            bounds[index].local = bounds[effect.input.value()].output;
+                            bounds[index].output = bounds[index].local;
+                            if (slots[index] && !preparedEffect->identity()) {
+                                auto result = detail::applyImageEffect(
+                                    *preparedEffect, *slots[index], remainingPixelBudget(),
+                                    cancellation, operationIndex, progress);
+                                if (result.cancelled) {
+                                    operationCancelled = true;
+                                    return;
+                                }
+                                if (result.diagnostic) {
+                                    result.diagnostic->subject = operationSubject;
+                                    imageWarnings.push_back(std::move(*result.diagnostic));
+                                    effectApplicationFailed = true;
+                                    contentHashes[index] += ":effect-failed";
+                                } else if (result.image) {
+                                    slots[index] = std::move(result.image);
+                                }
+                            }
+                            reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
+                                                      .operation = operationIndex,
+                                                      .completed = 1,
+                                                      .total = 1});
                         },
                         [&](const CompiledImageSource&) {
                             if (!selectedImage || !selectedImage->available)
@@ -3038,7 +3127,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     slots[index] =
                         std::make_shared<const render::Rgba32fImage>(std::move(*produced));
                 }
-                if (cache && (!selectedVideo || slots[index]))
+                if (cache && !effectApplicationFailed && (!selectedVideo || slots[index]))
                     cache->store(
                         key.bytes(), plan->sourceRevision(),
                         {.image = index == request.output.value() ? processImage : slots[index],
@@ -3114,6 +3203,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             .animationSamplingSemanticsVersion = animationSamplingSemanticsVersion,
             .imagePrimitiveSemanticsVersion = render::kCpuImagePrimitiveSemanticsVersion,
             .roi = request.roi,
+            .bypassLookNodes = request.bypassLookNodes,
         };
         auto frame = std::shared_ptr<const ProcessFrame>(new ProcessFrame(
             std::move(identity), std::move(processImage), frameStatistics, std::move(bounds),

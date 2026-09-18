@@ -51,7 +51,8 @@ void CompositionPreviewController::consumeReadyResult() {
         if (key.has_value() &&
             *key == PreviewFrameCacheKey::forIdentity(completed.desiredIdentity) &&
             prepared.has_value() && *prepared != nullptr && (*prepared)->frame() != nullptr &&
-            (*prepared)->frame()->desiredIdentity() == completed.desiredIdentity) {
+            (*prepared)->frame()->desiredIdentity() == completed.desiredIdentity &&
+            result->diagnostics().empty()) {
             frameCache_->insert((*prepared)->frame());
         }
         if (isCurrent(completed)) {
@@ -133,12 +134,13 @@ void CompositionPreviewController::consumeReadyResult() {
             next.activity = PreviewActivity::Ready;
             next.freshness = FrameFreshness::Current;
             next.frame = frame;
-            next.message = tr("The current composition frame is ready");
+            next.message = firstDiagnosticSummary(next.diagnostics,
+                                                  tr("The current composition frame is ready"));
             // Playing without a cache keeps today's behavior but fills the cache as it goes, so the
             // second pass over the same range is a sequence of lookups (task PERF1, item 3). A
             // frame rendered under an interactive override is the exception: its pixels belong to a
             // gesture, and its identity cannot say so.
-            if (!completed.carriedInteractionOverride) {
+            if (!completed.carriedInteractionOverride && next.diagnostics.empty()) {
                 frameCache_->insert(frame);
             }
             break;
