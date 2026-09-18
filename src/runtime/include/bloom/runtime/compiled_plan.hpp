@@ -46,7 +46,8 @@ namespace bloom::runtime {
 // which is why the identity goldens were re-derived in the same change.
 // COMP-SRC advances 5 -> 6: plans now own a table of nested composition plans,
 // indexed by source operations with composition-time mapping operands.
-inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 7;
+// COLOR-3 freezes the reusable image-effect input/kernel grammar as plan semantics 8.
+inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 8;
 // Task S5 bumped this 1 -> 2: KeyframeInterpolation gained EaseInOut, so sampling can now produce a
 // value no version-1 sampler could, and the Color4 curve table added a third sampled value kind.
 inline constexpr std::uint32_t kAnimationSamplingSemanticsVersion = 2;
@@ -172,6 +173,21 @@ struct CompiledCompositionSource final {
     CompiledCompositionTimeMapping timeMapping;
     friend bool operator==(const CompiledCompositionSource&,
                            const CompiledCompositionSource&) = default;
+};
+
+// Image effects preserve the input's data/display windows and content bounds. Kernels operate
+// on straight RGB, preserve alpha, and publish finite premultiplied RGBA32F. Identity and bypass
+// share the input storage exactly. This is the common lowering for subsequent image effects.
+struct IdentityImageKernel final {
+    friend bool operator==(const IdentityImageKernel&, const IdentityImageKernel&) = default;
+};
+using ImageEffectKernel = std::variant<IdentityImageKernel>;
+struct CompiledImageEffect final {
+    document::NodeId sourceNodeId;
+    OperationIndex input;
+    ImageEffectKernel kernel;
+    bool bypass = false;
+    friend bool operator==(const CompiledImageEffect&, const CompiledImageEffect&) = default;
 };
 
 struct CompiledImageSource {
@@ -366,7 +382,7 @@ struct CompiledCompositionOutput {
 using CompiledOperation =
     std::variant<CompiledSolid, CompiledText, CompiledImageSource, CompiledVideoSource,
                  CompiledLayerOutput, CompiledMerge, CompiledCompositionOutput, CompiledShape,
-                 CompiledCompositionSource>;
+                 CompiledCompositionSource, CompiledImageEffect>;
 
 // Mutable construction storage is deliberately a distinct type. Publishing a plan copies or moves
 // this complete definition into private storage, so retaining or changing the definition cannot

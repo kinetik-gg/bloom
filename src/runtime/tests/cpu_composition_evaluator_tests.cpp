@@ -2171,7 +2171,7 @@ void testRegionOfInterest(Expectations& expectations) {
                                 "ROI pixels are byte-identical to full evaluation");
         }
         expectations.expect(full.frame()->identity() != cropped.frame()->identity() &&
-                                cropped.frame()->identity().evaluatorSemanticsVersion == 8,
+                                cropped.frame()->identity().evaluatorSemanticsVersion == 9,
                             "ROI changes request identity without changing semantics versions");
         const auto again = evaluator.evaluate(plan, request, {});
         expectations.expect(again.frame() && again.frame()->operationCacheStatistics().misses == 0,
@@ -2190,6 +2190,48 @@ void testRegionOfInterest(Expectations& expectations) {
     }
 }
 
+void testImageEffectGroundwork(Expectations& expectations) {
+    const runtime::CpuCompositionEvaluator evaluator;
+    const auto baselinePlan = oneSolidPlan({-0.25, 2.0, 0.5, 0.5});
+    const auto baseline = evaluator.evaluate(baselinePlan, requestFor(*baselinePlan), {});
+    auto definition = baselinePlan->copyDefinition();
+    for (std::size_t i = 0; i < 3; ++i)
+        definition.operations.insert(
+            definition.operations.begin() + static_cast<std::ptrdiff_t>(1 + i),
+            runtime::CompiledImageEffect{document::NodeId::fromRaw(100 + i),
+                                         runtime::OperationIndex::fromRaw(i),
+                                         runtime::IdentityImageKernel{}, false});
+    std::get<runtime::CompiledLayerOutput>(definition.operations[4]).input =
+        runtime::OperationIndex::fromRaw(3);
+    std::get<runtime::CompiledMerge>(definition.operations[5]).entries[0].input =
+        runtime::OperationIndex::fromRaw(4);
+    std::get<runtime::CompiledCompositionOutput>(definition.operations[6]).input =
+        runtime::OperationIndex::fromRaw(5);
+    definition.output = runtime::OperationIndex::fromRaw(6);
+    const auto plan = publishPlan(std::move(definition));
+    const auto first = evaluator.evaluate(plan, requestFor(*plan), {});
+    const auto second = evaluator.evaluate(plan, requestFor(*plan), {});
+    expectations.expect(baseline.frame() && first.frame() && second.frame(),
+                        "three identity effects evaluate");
+    if (baseline.frame() && first.frame() && second.frame()) {
+        expectations.expect(std::ranges::equal(baseline.frame()->processImage().pixels(),
+                                               first.frame()->processImage().pixels()),
+                            "identity chain preserves premultiplied negative/HDR pixels exactly");
+        const auto& statistics = second.frame()->operationCacheStatistics();
+        expectations.expect(statistics.hits == 7 && statistics.misses == 0,
+                            "three effects each memoize independently");
+        expectations.expect(!plan->operationTimeDependent(runtime::OperationIndex::fromRaw(3)),
+                            "effects inherit static input time dependence");
+    }
+    auto invalid = plan->copyDefinition();
+    std::get<runtime::CompiledImageEffect>(invalid.operations[1]).input =
+        runtime::OperationIndex::fromRaw(2);
+    const auto invalidPlan = publishPlan(std::move(invalid));
+    expectations.expect(evaluator.evaluate(invalidPlan, requestFor(*invalidPlan), {}).status() ==
+                            runtime::EvaluationStatus::Failed,
+                        "effect forward references fail preflight");
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -2199,6 +2241,7 @@ int main(int argc, char* argv[]) {
             benchmarkOperationMemoization(expectations);
             return expectations.failures() == 0 ? 0 : 1;
         }
+        testImageEffectGroundwork(expectations);
         testRegionOfInterest(expectations);
         testContinuousTextRasterisation(expectations);
         testParentedBounds(expectations);

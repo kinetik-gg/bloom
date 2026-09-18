@@ -168,6 +168,7 @@ enum class NodeCategory : std::uint8_t {
     Sources,
     Layers,
     Compositing,
+    Color,
     Values,
     // Task UTIL-1. Arithmetic and shaping got their own section because Utilities had become the
     // place everything that is not a source, a layer or an output ends up: a Math node, a Switch, a
@@ -194,6 +195,7 @@ enum class NodeLoweringKind {
     Shape,
     Text,
     ImageSource,
+    ImageEffect,
     VideoSource,
     AudioSource,
     CompositionSource,
@@ -265,6 +267,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::Text:
     case NodeLoweringKind::VideoSource:
     case NodeLoweringKind::ImageSource:
+    case NodeLoweringKind::ImageEffect:
     case NodeLoweringKind::AudioSource:
     case NodeLoweringKind::CompositionSource:
     case NodeLoweringKind::LayerOutput:

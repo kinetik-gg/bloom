@@ -212,7 +212,8 @@ lower(const std::vector<document::NodeId>& order) {
         // source.
         if (isValueNode(id))
             continue;
-        if (!isMuted(id) && definition->lowering != runtime::NodeLoweringKind::LayerOutput)
+        if (!isMuted(id) && definition->lowering != runtime::NodeLoweringKind::LayerOutput &&
+            definition->lowering != runtime::NodeLoweringKind::ImageEffect)
             continue;
         const auto input = firstImageInput(*node);
         const auto edge = input ? std::ranges::find_if(reachableEdges_,
@@ -523,6 +524,8 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
         return lowerCompositionSource(node);
     case NodeLoweringKind::VideoSource:
         return lowerVideoSource(node);
+    case NodeLoweringKind::ImageEffect:
+        return lowerImageEffect(node, indices);
     case NodeLoweringKind::ImageSource:
         return lowerImageSource(node);
     case NodeLoweringKind::AudioSource:
@@ -624,6 +627,17 @@ lowerCompositionSource(const document::NodeRecord& node) {
     runtime::CompiledCompositionSource source{node.id, index, {*offset, *scale, *loop}};
     compositionSources_.emplace(node.id, source);
     return source;
+}
+
+[[nodiscard]] std::optional<runtime::CompiledOperation>
+lowerImageEffect(const document::NodeRecord& node,
+                 const std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    const auto input = findInputOperation(node.id, "input", indices);
+    if (!input) {
+        addTopologyFailure(node.id, "Image effect input could not be lowered.");
+        return std::nullopt;
+    }
+    return runtime::CompiledImageEffect{node.id, *input, runtime::IdentityImageKernel{}, false};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

@@ -587,6 +587,23 @@ identity, device capability, and fallback are semantic contracts rather than bac
 The planned artist-facing vocabulary is maintained in
 [`../product/node-catalogue.md`](../product/node-catalogue.md).
 
+## Image Effect Lowering
+
+COLOR-3 advances compiled-plan semantics to **8** and CPU evaluator semantics to **9**.
+Animation semantics remains **2** and image primitive semantics remains **7**. Existing pixel
+fixtures are unchanged; version-bearing identity digests are independently re-derived.
+
+`CompiledImageEffect` contains its source node identity, an earlier input `OperationIndex`, a
+closed kernel variant, and bypass state. Its bounds and time dependence follow its input. The
+initial identity kernel shares immutable input storage, including vector coverage when bypassed.
+Colour kernels use the straight-RGB alpha rule in
+[`layer-graph-model.md`](layer-graph-model.md#image-effects). Future effects add kernels to this
+common operation rather than introducing another source kind.
+
+Each effect has its own memo entry. Its key includes input content digest, kernel identity,
+bypass, working-space id, and exact OCIO config revision. Ordinary input lifetime accounting,
+cancellation, progress, and memory admission apply to the effect as to every image operation.
+
 ## Operation memoization
 
 The session's `CpuCompositionEvaluator` owns a synchronized, byte-bounded LRU shared by its

@@ -128,6 +128,12 @@ template <typename Definition>
 [[nodiscard]] bool hasValidLoweringShape(const NodeDefinition& definition) {
     using namespace bloom::document;
     switch (definition.lowering) {
+    case NodeLoweringKind::ImageEffect:
+        return definition.inputs ==
+                   std::vector<InputPortDefinition>{{"input", SocketValueKind::Image}} &&
+               definition.outputs ==
+                   std::vector<OutputPortDefinition>{{"image", SocketValueKind::Image}} &&
+               !definition.layerSlotInput && !definition.audioLayerSlotInput;
     case NodeLoweringKind::Shape:
         return definition == shapeDefinition();
     case NodeLoweringKind::Solid:

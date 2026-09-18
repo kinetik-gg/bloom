@@ -799,6 +799,7 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     case NodeLoweringKind::Shape:
     case NodeLoweringKind::Solid:
     case NodeLoweringKind::VideoSource:
+    case NodeLoweringKind::ImageEffect:
     case NodeLoweringKind::ImageSource:
     case NodeLoweringKind::CompositionSource:
     case NodeLoweringKind::AudioSource:

@@ -69,6 +69,26 @@ void testValidationAndDuplicates(Expectations& expectations) {
     using namespace bloom::runtime;
     NodeDefinitionRegistry registry;
 
+    NodeDefinition effect{{"example.effect", 1},
+                          NodeLoweringKind::ImageEffect,
+                          {{"input", SocketValueKind::Image}},
+                          {{"image", SocketValueKind::Image}},
+                          {},
+                          std::nullopt};
+    NodeDefinitionRegistry effects;
+    expectations.expect(effects.registerDefinition(effect) == NodeRegistrationStatus::Registered,
+                        "one image input and output form an effect");
+    NodeDefinitionRegistry rejectedEffects;
+    effect.inputs.push_back({"extra", SocketValueKind::Image});
+    expectations.expect(rejectedEffects.registerDefinition(effect) ==
+                            NodeRegistrationStatus::InvalidDefinition,
+                        "effect shape rejects a second image input");
+    effect.inputs.pop_back();
+    effect.inputs.front().name = "wrong";
+    expectations.expect(rejectedEffects.registerDefinition(effect) ==
+                            NodeRegistrationStatus::InvalidDefinition,
+                        "effect input name is canonical");
+
     auto invalid = customSolid();
     invalid.key.typeId.clear();
     expectations.expect(registry.registerDefinition(std::move(invalid)) ==

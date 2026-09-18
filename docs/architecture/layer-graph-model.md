@@ -53,6 +53,20 @@ Source -> Layer --------------+
 Audio Source -> Layer --audio-+
 ```
 
+### Image Effects
+
+An image effect has exactly one Image transport input named `input` and one Image output named
+`image`. `NodeLoweringKind::ImageEffect` is the shared lowering for image-to-image kernels;
+`NodeCategory::Color` follows Compositing in the Add menu and is not persisted. Effects may connect
+any image producer to any image consumer, including chains before a Layer Output, Merge, or Output.
+The ordinary graph dependency validation continues to reject cycles.
+
+Effects preserve their input's content bounds, data window, display window, and pixel aspect.
+Colour kernels unpremultiply RGB when alpha is positive, transform straight RGB, and multiply by
+that same alpha before publishing RGBA32F. Alpha is unchanged; zero-alpha pixels remain exact
+transparent black. Identity and bypass share the original image without a divide/multiply round
+trip. Negative and HDR RGB are retained if finite.
+
 ### Layer Output
 
 A `Layer Output` is an explicit graph node or equivalent first-class boundary that owns a stable
