@@ -301,14 +301,16 @@ licensing, substitution, and missing-dependency workflow.
 ### Timeline layer row controls
 
 `kit::KRow` owns the layer table: four `ToggleCell` controls, a flexible Name, and two
-`DropdownWidth` columns. `KIconToggle` rasterizes SVG at the current DPR, with Regular off and
-Fill on. The audio cell is disabled with an explanatory tooltip. A kit disclosure button expands
-properties; Parent is a disabled `KDropdown` showing `None`. The grammar owns all dimensions.
+`DropdownWidth` columns. Timeline switches rasterize 16px Regular SVG glyphs at the current DPR
+only when checked; unchecked switches are blank bordered boxes. Audio appears for audio-bearing
+sources and retains its column space when hidden. Unboxed kit chevrons expand layer and nested
+properties, with a gap before their labels. Parent offers None and eligible layers through the
+shared parent command. The grammar owns all dimensions.
 
 | Row control | Object name | State |
 | --- | --- | --- |
 | Blending | `layerBlendingDropdown` | Enabled. Offers every implemented blend mode, in the one shared order, starting at the layer's own authored mode. Authors the layer the row DRAWS, never the selection |
-| Parent | `layerParentDropdown` | Visible, disabled `None` placeholder; tooltip explains that parenting does not exist yet |
+| Parent | `layerParentDropdown` | Offers None and eligible layer names; disabled while the layer is locked |
 
 A disabled placeholder always states its reason in its tooltip rather than merely looking
 unresponsive. The Properties panel's own Blending row (`blendModeEditor`) offers the same vocabulary in

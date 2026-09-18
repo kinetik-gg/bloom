@@ -87,8 +87,8 @@ constexpr int kToggleColumnWidth = kit::px(kit::Size::TimelineToggleColumn);
 constexpr int kNameCellMinWidth = kit::px(kit::Size::TimelineNameMin);
 constexpr int kColumnWidth = kit::px(kit::Size::TimelineColumn);
 
-constexpr int kToggleStripX = 0;
-constexpr int kNameCellX = kToggleColumnWidth;
+constexpr int kToggleStripX = kit::px(kit::Spacing::ChromePadding);
+constexpr int kNameCellX = kToggleStripX + kToggleColumnWidth;
 constexpr int kLayerColumnWidthPx = kit::px(kit::Size::TimelineLeftColumn);
 // First-run / Reset Workspace divider: the layer table occupies 37% of the timeline's usable
 // width. This is a ratio, not a pixel default; a persisted pixel width still wins on later opens.
@@ -114,7 +114,7 @@ kit::IconId toggleIcon(const int index) {
     case ToggleCell::Visibility:
         return kit::IconId::Visible;
     case ToggleCell::Audio:
-        return kit::IconId::AudioOff;
+        return kit::IconId::AudioOn;
     case ToggleCell::Solo:
         return kit::IconId::Solo;
     case ToggleCell::Lock:
@@ -282,7 +282,7 @@ kit::KDropdown* makeBlendingDropdown(QWidget* parent) {
 // -- task T1 replaces task U7's surface ladder), so the separator is the only thing giving the grid
 // its rhythm.
 void paintRowSeparator(QPainter& painter, const int top, const int widthPixels) {
-    kit::applyHairlinePen(painter, kit::color(kit::Color::Background));
+    kit::applyHairlinePen(painter, kit::color(kit::Color::Border));
     const auto y = static_cast<qreal>(top + kTimelineRowHeight) - 0.5;
     painter.drawLine(QPointF(0.0, y), QPointF(static_cast<qreal>(widthPixels), y));
 }
@@ -310,6 +310,7 @@ class TimelineLayerRow final : public kit::KRow {
     TimelineLayerRow(CompositionSession& session, QWidget* parent)
         : kit::KRow(parent), session_(&session) {
         setObjectName(QStringLiteral("timelineLayerRow"));
+        setLeadingInset(kit::px(kit::Spacing::ChromePadding));
         setAttribute(Qt::WA_TransparentForMouseEvents, false);
         setFixedHeight(kTimelineRowHeight);
         blending_ = makeBlendingDropdown(this);
@@ -334,6 +335,10 @@ class TimelineLayerRow final : public kit::KRow {
         QList<QWidget*> cells;
         for (int index = 0; index < kToggleCellCount; ++index) {
             auto* toggle = new kit::KIconToggle(toggleIcon(index), this);
+            toggle->setProperty("layerSwitch", true);
+            auto policy = toggle->sizePolicy();
+            policy.setRetainSizeWhenHidden(true);
+            toggle->setSizePolicy(policy);
             toggles_[static_cast<std::size_t>(index)] = toggle;
             toggle->setObjectName(QStringLiteral("timelineLayerToggle%1").arg(index));
             toggle->setToolTip(toggleToolTip(index));
@@ -371,7 +376,7 @@ class TimelineLayerRow final : public kit::KRow {
         setRowState(rowIndex, selected);
         layerId_ = entry.layerId;
         collapsedImage_ = entry.imageNodeId.isValid();
-        audioLayer_ = entry.audioNodeId.isValid() && !entry.imageNodeId.isValid();
+        audioLayer_ = entry.kind == TimelineEditor::tr("Audio");
         // `binding_` (not just a QSignalBlocker) because setCurrentIndex() is a projection of
         // document truth, never an edit: a blocked signal would still leave the lambda armed for a
         // nested change, and a row re-pointed during a scroll must author nothing at all.
@@ -392,6 +397,14 @@ class TimelineLayerRow final : public kit::KRow {
         }
         solo_ = layer && layer->solo;
         locked_ = layer && layer->locked;
+        const bool hasAudio = entry.audioNodeId.isValid();
+        const bool audioConnected =
+            layer && composition &&
+            std::ranges::any_of(composition->graph().edges(), [&](const auto& edge) {
+                const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
+                return input && input->nodeId == layer->nodeId &&
+                       input->port == document::kLayerOutputAudioInputPort;
+            });
         blending_->setEnabled(mode.has_value() && !locked_);
         parentDropdown_->clearItems();
         parentDropdown_->addItem(TimelineEditor::tr("None"), QVariant::fromValue(qulonglong{0}));
@@ -418,19 +431,15 @@ class TimelineLayerRow final : public kit::KRow {
         for (int index = 0; index < kToggleCellCount; ++index) {
             auto* toggle = toggles_[static_cast<std::size_t>(index)];
             const QSignalBlocker blocker(toggle);
-            toggle->setVisible(index != 1 || audioLayer_);
+            toggle->setVisible(index != 1 || hasAudio);
             toggle->setChecked(index == 0   ? (enabled_ && !audioLayer_)
-                               : index == 1 ? (enabled_ && audioLayer_)
+                               : index == 1 ? (enabled_ && audioConnected)
                                : index == 2 ? solo_
                                             : index == 3 && locked_);
-            toggle->setEnabled(index == 1   ? audioLayer_ && !locked_
+            toggle->setEnabled(index == 1   ? hasAudio && !locked_
                                : index == 0 ? !audioLayer_ && (!collapsedImage_ || index == 0)
                                             : index != 1 && !collapsedImage_);
-            toggle->setGlyph(index == 0 ? (enabled_ ? kit::IconId::Visible : kit::IconId::Hidden)
-                             : index == 1
-                                 ? (enabled_ ? kit::IconId::AudioOn : kit::IconId::AudioOff)
-                             : index == 3 ? (locked_ ? kit::IconId::Locked : kit::IconId::Unlocked)
-                                          : toggleIcon(index));
+            toggle->setGlyph(toggleIcon(index));
         }
         binding_ = false;
         update();
@@ -485,20 +494,31 @@ TimelineColumnHeaders::TimelineColumnHeaders(QWidget* parent) : QWidget(parent) 
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     setFixedHeight(kit::px(kit::Size::Control));
     auto* row = new kit::KRow(this);
+    row->setLeadingInset(kit::px(kit::Spacing::ChromePadding));
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     QList<QWidget*> glyphs;
     for (int index = 0; index < kToggleCellCount; ++index) {
         auto* glyph = new kit::KIconButton(row);
-        glyph->setIcon(kit::icon(toggleIcon(index), kit::Size::IconControl, kit::Color::Muted,
+        glyph->setIcon(kit::icon(toggleIcon(index), kit::Size::IconChrome, kit::Color::Muted,
                                  kit::IconWeight::Regular));
-        glyph->setIconSize(QSize(kit::px(kit::Size::IconControl), kit::px(kit::Size::IconControl)));
+        glyph->setIconSize(QSize(kit::px(kit::Size::IconChrome), kit::px(kit::Size::IconChrome)));
         glyph->setAttribute(Qt::WA_TransparentForMouseEvents);
         glyphs.append(glyph);
     }
-    row->setCells(glyphs, new kit::KLabel(tr("Name"), row, kit::TypeRole::UiSmall),
-                  {new kit::KLabel(tr("Blending"), row, kit::TypeRole::UiSmall),
-                   new kit::KLabel(tr("Parent"), row, kit::TypeRole::UiSmall)});
+    auto* name = new QWidget(row);
+    auto* nameLayout = new QHBoxLayout(name);
+    nameLayout->setContentsMargins(kit::px(kit::Spacing::XS), 0, kit::px(kit::Spacing::XS), 0);
+    nameLayout->setSpacing(0);
+    nameLayout->addSpacing(kit::px(kit::Size::ToggleCell) + kit::px(kit::Spacing::XS));
+    nameLayout->addWidget(new kit::KLabel(tr("Name"), name));
+    auto* blending = makeBlendingDropdown(row);
+    auto* blendingLabel = new kit::KLabel(tr("Blending"), row);
+    auto* parentLabel = new kit::KLabel(tr("Parent"), row);
+    row->setCells(glyphs, name, {blendingLabel, parentLabel});
+    blendingLabel->setFixedWidth(
+        std::max(kit::px(kit::Size::DropdownWidth), blending->minimumSizeHint().width()));
+    delete blending;
     row->setFixedHeight(kit::px(kit::Size::Control));
     row->setProperty("headerRow", true);
     layout->addWidget(row);
@@ -607,7 +627,7 @@ void TimelineLayerStack::setCurrentRow(const int row) {
     // Navigation IS selection here (single-selection, exactly like the QTreeWidget before it): the
     // session owns selection truth, and every other editor follows it from selectionChanged.
     const auto& entry = entries_[static_cast<std::size_t>(row)];
-    if (entry.imageNodeId.isValid() || entry.audioNodeId.isValid())
+    if (!entry.layerId.isValid() && (entry.imageNodeId.isValid() || entry.audioNodeId.isValid()))
         session_.selectNode(entry.imageNodeId.isValid() ? entry.imageNodeId : entry.audioNodeId);
     else
         session_.selectLayer(entry.layerId);
@@ -713,11 +733,26 @@ void TimelineLayerStack::mousePressEvent(QMouseEvent* event) {
     if (event->position().x() >= kToggleStripX &&
         event->position().x() < kToggleStripX + kToggleCellCount * kToggleCellWidth) {
         if (toggle == static_cast<int>(ToggleCell::Audio)) {
-            if (!entry.audioNodeId.isValid())
+            if (!entry.audioNodeId.isValid() || layer->locked)
                 return;
             commands::Transaction transaction("Toggle Audio", session_.snapshot().revision());
-            transaction.emplace<commands::SetLayerEnabled>(session_.compositionId(), id,
-                                                           !layer->enabled);
+            if (entry.kind == tr("Audio")) {
+                transaction.emplace<commands::SetLayerEnabled>(session_.compositionId(), id,
+                                                               !layer->enabled);
+            } else {
+                const document::NodeInputRef input{
+                    layer->nodeId, std::string(document::kLayerOutputAudioInputPort)};
+                const bool connected =
+                    std::ranges::any_of(composition->graph().edges(), [&](const auto& edge) {
+                        return edge.destination == document::InputPortRef{input};
+                    });
+                if (connected)
+                    transaction.emplace<commands::DisconnectInput>(session_.compositionId(), input);
+                else
+                    transaction.emplace<commands::ConnectPorts>(
+                        session_.compositionId(),
+                        document::OutputPortRef{entry.audioNodeId, "audio"}, input);
+            }
             (void)session_.executeTransaction(std::move(transaction));
             return;
         }
@@ -1033,6 +1068,7 @@ TimelineLaneRegion::TimelineLaneRegion(CompositionSession& session, TimelineRule
     setObjectName(QStringLiteral("timelineLaneRegion"));
     setFocusPolicy(Qt::StrongFocus);
     setAccessibleName(tr("Layer lanes"));
+    setMouseTracking(true);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setAttribute(Qt::WA_OpaquePaintEvent, true);
     connect(&ruler_, &TimelineRuler::axisChanged, this, qOverload<>(&TimelineLaneRegion::update));
@@ -1121,50 +1157,30 @@ void TimelineLaneRegion::setScrollOffset(const int offset) {
     update();
 }
 
-// The checked LOOK is the kit's own accent fill (ui-grammar.md, "Colour Surfaces": kit button
-// painters ink transport, loop, snap and keyframe toggles on that fill). All this re-derives is
-// the enabled/disabled ink, so a toggle that becomes unavailable says so in the same muted tone
-// every other chrome glyph uses.
-void TimelineEditor::applyHeaderToggleGlyph(QToolButton* button, const bool checked) {
-    Q_UNUSED(checked)
-    if (button == nullptr)
-        return;
-    const auto iconId = button == snappingButton_      ? kit::IconId::Snap
-                        : button == graphEditorButton_ ? kit::IconId::Graph
-                                                       : kit::IconId::Keyframe;
-    button->setIcon(kit::icon(iconId, kit::IconRole::Chrome,
-                              button->isEnabled() ? kit::Color::Foreground : kit::Color::Faint));
-}
-
 void TimelineEditor::setKeyframesVisible(const bool visible) {
+    if (visible && graphEditor_)
+        setGraphEditorEnabled(false);
     keyframesVisible_ = visible;
+    keyframesAction_->setChecked(visible);
     QSettings().setValue(QStringLiteral("timeline/keyframes-visible"), visible);
-    applyHeaderToggleGlyph(keyframesVisibleButton_, visible);
     if (lanes_ != nullptr)
         lanes_->setKeyframesVisible(visible);
 }
 
 void TimelineEditor::setGraphEditorEnabled(const bool enabled) {
+    if (enabled && keyframesVisible_)
+        setKeyframesVisible(false);
     graphEditor_ = enabled;
+    graphAction_->setChecked(enabled);
     QSettings().setValue(QStringLiteral("timeline/graph-editor"), enabled);
-    applyHeaderToggleGlyph(graphEditorButton_, enabled);
-    if (keyframesVisibleButton_ != nullptr) {
-        // The graph editor always shows its keys -- a curve with the keys hidden is a picture of
-        // something nobody can edit -- so the keys toggle is disabled there, and says why.
-        keyframesVisibleButton_->setEnabled(!enabled);
-        keyframesVisibleButton_->setToolTip(
-            enabled ? tr("Keys are always shown in the graph editor") : tr("Show keyframes"));
-        keyframesVisibleButton_->setAccessibleName(keyframesVisibleButton_->toolTip());
-        applyHeaderToggleGlyph(keyframesVisibleButton_, keyframesVisible_);
-    }
     if (lanes_ != nullptr)
         lanes_->setGraphEditorEnabled(enabled);
 }
 
 void TimelineEditor::setSnappingEnabled(const bool enabled) {
     snapping_ = enabled;
+    snapAction_->setChecked(enabled);
     QSettings().setValue(QStringLiteral("timeline/snapping"), enabled);
-    applyHeaderToggleGlyph(snappingButton_, enabled);
     if (lanes_ != nullptr)
         lanes_->setSnappingEnabled(enabled);
 }
@@ -1301,9 +1317,9 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
                          kit::color(kit::Color::Surface));
         const auto sourceNodeId =
             entry.imageNodeId.isValid() ? entry.imageNodeId : entry.audioNodeId;
-        const bool selected = sourceNodeId.isValid()
-                                  ? session_.selectedNodes().contains(sourceNodeId)
-                                  : isLayerSelected(session_, entry.layerId);
+        const bool selected = entry.layerId.isValid()
+                                  ? isLayerSelected(session_, entry.layerId)
+                                  : session_.selectedNodes().contains(sourceNodeId);
         if (selected && entry.rowKind == TimelineLayerEntry::Kind::Layer) {
             paintSelectedRowFill(painter, top, width());
         }
@@ -1438,6 +1454,19 @@ void TimelineLaneRegion::mousePressEvent(QMouseEvent* event) {
 }
 void TimelineLaneRegion::mouseMoveEvent(QMouseEvent* event) {
     if (!drag_) {
+        const int row =
+            (static_cast<int>(event->position().y()) + scrollOffset_) / kTimelineRowHeight;
+        const auto bar = clipBarRect(row);
+        const auto* composition = session_.composition();
+        const auto* layer =
+            composition && row >= 0 && row < static_cast<int>(entries_.size())
+                ? composition->graph().findLayer(entries_[static_cast<std::size_t>(row)].layerId)
+                : nullptr;
+        const bool edge =
+            bar && layer && !layer->locked && bar->contains(event->position().toPoint()) &&
+            (std::abs(event->position().x() - bar->left()) <= kit::px(kit::Spacing::S) ||
+             std::abs(event->position().x() - bar->right()) <= kit::px(kit::Spacing::S));
+        setCursor(edge ? Qt::SizeHorCursor : Qt::ArrowCursor);
         ruler_.updateScrub(static_cast<int>(event->position().x()));
         event->accept();
         return;
@@ -1466,7 +1495,7 @@ void TimelineLaneRegion::mouseMoveEvent(QMouseEvent* event) {
         end += shift;
     }
     guide_.reset();
-    if (!event->modifiers().testFlag(Qt::ShiftModifier)) {
+    if (snapping_ && !event->modifiers().testFlag(Qt::ShiftModifier)) {
         std::vector<core::RationalTime> targets{session_.currentTime(), session_.workArea().start,
                                                 session_.workArea().end};
         for (const auto& layer : composition->graph().layerOutputs())
@@ -1570,11 +1599,11 @@ void TimelineLaneRegion::wheelEvent(QWheelEvent* event) {
 // so the full depth series (layer, group, parameter, component) indents by one consistent step
 // throughout, not just from group onward.
 int TimelineEditor::propertyNameIndent() {
-    constexpr int kLayerNameX = kit::px(kit::Spacing::RowPadding) + kNameCellX +
-                                kit::px(kit::Spacing::XS) + kit::px(kit::Size::ToggleCell);
-    constexpr int kPropertyRowIndicatorPrefix = kit::px(kit::Spacing::RowPadding) +
-                                                kit::px(kit::Size::ToggleCell) +
-                                                kit::px(kit::Spacing::XXS);
+    constexpr int kLayerNameX = kNameCellX + kit::px(kit::Spacing::XS) + kit::px(kit::Spacing::XS) +
+                                kit::px(kit::Size::ToggleCell);
+    constexpr int kPropertyRowIndicatorPrefix =
+        kit::px(kit::Spacing::RowPadding) + kit::px(kit::Size::ToggleCell) +
+        kit::px(kit::Spacing::XXS) + kit::px(kit::Spacing::XXS) + kit::px(kit::Spacing::XS);
     return kLayerNameX + kit::px(kit::Spacing::M) - kPropertyRowIndicatorPrefix;
 }
 
@@ -1625,28 +1654,6 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
         });
     }
     workArea_ = new TimelineWorkAreaRow(session_, this);
-    workArea_->setFixedHeight(kit::px(kit::Size::TimelineWorkArea));
-    EditorChromeRowSpec tools;
-    tools.objectName = "timelineHeaderToolCluster";
-    const auto addTool = [&tools](QWidget* control) { tools.addWidget(control); };
-    const auto addHeaderToggle = [this, &addTool](const QString& name, const QString& tip,
-                                                  const kit::IconId iconId, const bool checked,
-                                                  const bool enabled) {
-        auto* button = new kit::KIconButton(this);
-        button->setObjectName(name);
-        button->setAccessibleName(tip);
-        button->setToolTip(tip);
-        button->setCheckable(true);
-        button->setChecked(checked);
-        button->setEnabled(enabled);
-        button->setAutoRaise(true);
-        button->setIcon(kit::icon(iconId, kit::IconRole::Chrome,
-                                  enabled ? kit::Color::Foreground : kit::Color::Faint));
-        button->setIconSize(QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium)));
-        button->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
-        addTool(button);
-        return button;
-    };
     // The persisted state is read ONCE, here, and then applied through the same setters the click
     // handlers use, so a restored session and a clicked toggle cannot take different paths.
     const QSettings settings;
@@ -1658,33 +1665,22 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     layerColumnWidth_ = std::max(
         minLayerColumnWidth(),
         settings.value(QLatin1StringView(kLayerColumnWidthSetting), layerColumnWidth()).toInt());
-    keyframesVisibleButton_ =
-        addHeaderToggle(QStringLiteral("timelineKeyframesVisibleButton"), tr("Show keyframes"),
-                        kit::IconId::Keyframe, keyframesVisible_, true);
     graphEditor_ = settings.value(QStringLiteral("timeline/graph-editor"), false).toBool();
-    graphEditorButton_ =
-        addHeaderToggle(QStringLiteral("timelineGraphEditorButton"), tr("Show the graph editor"),
-                        kit::IconId::Graph, graphEditor_, true);
-    snappingButton_ =
-        addHeaderToggle(QStringLiteral("timelineSnappingButton"), tr("Snap edits to frames"),
-                        kit::IconId::Snap, snapping_, true);
-    connect(keyframesVisibleButton_, &QToolButton::toggled, this,
-            [this](const bool checked) { setKeyframesVisible(checked); });
-    connect(snappingButton_, &QToolButton::toggled, this,
-            [this](const bool checked) { setSnappingEnabled(checked); });
-    connect(graphEditorButton_, &QToolButton::toggled, this,
-            [this](const bool checked) { setGraphEditorEnabled(checked); });
+    if (graphEditor_)
+        keyframesVisible_ = false;
+    keyframesAction_->setChecked(keyframesVisible_);
+    graphAction_->setChecked(graphEditor_);
+    snapAction_->setChecked(snapping_);
     ruler_ = new TimelineRuler(session_, previewController, this);
-    ruler_->setFixedHeight(kit::px(kit::Size::HeaderRow) - workArea_->height());
+    ruler_->setFixedHeight(kit::px(kit::Size::HeaderRow));
     ruler_->setTimecodeLabels(timecodeFormat_);
     workArea_->setRuler(*ruler_);
-    chrome_.header.addWidget(EditorArea::buildChromeRow(tools, this));
     headerMenus_ = EditorArea::buildChromeRow(chrome_.header, this);
     for (auto* action : actions())
         headerMenus_->addAction(action);
     headerRight_ = EditorArea::buildCanvasChrome({"timelineHeaderRow",
                                                   "timelineHeaderScrollGutter",
-                                                  workArea_,
+                                                  nullptr,
                                                   ruler_,
                                                   kScrollGutterWidth,
                                                   0,
@@ -1693,11 +1689,6 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     chrome_.headerCanvas = headerRight_;
     headerFallback_ =
         EditorArea::buildSplitChrome(headerMenus_, headerRight_, layerColumnWidth_, this);
-    auto* transportRow = EditorArea::buildCanvasChrome(
-        {"timelineNavigatorRow", "timelineNavigatorScrollGutter", nullptr,
-         new TimelineNavigator(*ruler_, this), kScrollGutterWidth, layerColumnWidth_,
-         "timelineNavigatorLeftCell"},
-        this);
 
     // Column headings start the body. Their right cell continues the header playhead into the
     // lanes, using the same viewport mapping and scrollbar gutter.
@@ -1711,8 +1702,6 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     scrollBar_ = new QScrollBar(Qt::Vertical, this);
     scrollBar_->setObjectName("timelineVerticalScrollBar");
     scrollBar_->setAccessibleName(tr("Layer stack scroll"));
-    auto* columnLanes = new TimelineLaneRegion(session_, *ruler_, *scrollBar_, columnHeaderRow);
-    columnLanes->setObjectName("timelineColumnLaneRegion");
     auto* rulerGutter = new QWidget(columnHeaderRow);
     rulerGutter->setObjectName("timelineRulerScrollGutter");
     rulerGutter->setFixedWidth(kScrollGutterWidth);
@@ -1721,7 +1710,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     // divider continues it in one straight line rather than jogging at the body's taller,
     // draggable handle.
     columnHeaderLayout->addSpacing(kit::px(kit::Size::SplitHandle));
-    columnHeaderLayout->addWidget(columnLanes, 1);
+    columnHeaderLayout->addWidget(workArea_, 1);
     columnHeaderLayout->addWidget(rulerGutter);
 
     // ---- Body: the layer column and the lane region, under ONE scrollbar ------------------------
@@ -1802,13 +1791,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     layout->addWidget(headerFallback_);
     layout->addWidget(columnHeaderRow);
     layout->addWidget(body, 1);
-    layout->addWidget(transportRow);
-    const auto syncNavigator = [this, transportRow] {
-        const auto axis = ruler_->axisForWidth(ruler_->width());
-        transportRow->setVisible(axis && (axis->t0 > 0 || axis->t1 < axis->duration.toSeconds()));
-    };
-    connect(ruler_, &TimelineRuler::axisChanged, transportRow, syncNavigator);
-    syncNavigator();
+    createFooter();
+    layout->addWidget(chrome_.footerCanvas);
 
     // ONE scrollbar drives both halves of the grid: left/right scroll sync is structural here, not
     // a pair of handlers keeping two scroll areas in step.
@@ -1857,8 +1841,10 @@ void TimelineEditor::setLayerColumnWidth(const int width, const bool persist) {
                              ? std::max(minWidth, this->width() - kit::px(kit::Size::PanelMinWidth))
                              : std::numeric_limits<int>::max();
     layerColumnWidth_ = std::clamp(width, minWidth, maxWidth);
-    stack_->setMinimumWidth(layerColumnWidth_);
-    columnHeaders_->setMinimumWidth(layerColumnWidth_);
+    stack_->setFixedWidth(layerColumnWidth_);
+    columnHeaders_->setFixedWidth(layerColumnWidth_);
+    if (footerLeft_)
+        footerLeft_->setFixedWidth(layerColumnWidth_);
     if (chrome_.refreshSplit)
         chrome_.refreshSplit();
     if (auto* fallbackSplit = findChild<QWidget*>("timelineHeaderFallbackSplit"))
@@ -1909,9 +1895,25 @@ void TimelineEditor::rebuild() {
             if (const auto* source = directSourceNode(session_, entry.layerId);
                 source != nullptr && (source->typeId == document::kAudioSourceNodeType ||
                                       source->typeId == "bloom.video-source")) {
-                if (source->typeId == "bloom.video-source")
-                    entries.back().imageNodeId = source->id;
-                entries.back().audioNodeId = source->id;
+                const bool audioOnly = source->typeId == document::kAudioSourceNodeType;
+                bool hasAudio = audioOnly;
+                for (const auto& binding : source->parameters) {
+                    if (binding.role != "asset")
+                        continue;
+                    const auto value = session_.constantStringValue(binding.parameterId);
+                    const auto* asset = value
+                                            ? session_.snapshot().project().findAsset(
+                                                  document::AssetId::fromRaw(value->toULongLong()))
+                                            : nullptr;
+                    hasAudio =
+                        hasAudio ||
+                        (asset && (asset->channels > 0 ||
+                                   std::ranges::any_of(asset->videoStreams, [](const auto& stream) {
+                                       return stream.kind == 2;
+                                   })));
+                }
+                if (hasAudio)
+                    entries.back().audioNodeId = source->id;
                 if (auto* controller = session_.assetController()) {
                     for (const auto& binding : source->parameters) {
                         if (binding.role != "asset")
@@ -1944,6 +1946,7 @@ void TimelineEditor::updateScrollRange() {
     const int viewport = stack_->height();
     const int maximum = std::max(0, stack_->contentHeight() - viewport);
     scrollBar_->setRange(0, maximum);
+    scrollBar_->setVisible(maximum > 0);
     scrollBar_->setPageStep(std::max(1, viewport));
     scrollBar_->setSingleStep(kTimelineRowHeight);
 }

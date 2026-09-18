@@ -8,6 +8,7 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
 
 #include <QAction>
@@ -18,51 +19,16 @@
 #include <QResizeEvent>
 #include <QSettings>
 #include <QShowEvent>
+#include <QSignalBlocker>
 #include <QToolButton>
 
 #include <algorithm>
+#include <cmath>
 #include <set>
 #include <vector>
 
 namespace bloom::ui {
 namespace {
-
-class TimelineCompositionName final : public QWidget {
-  public:
-    TimelineCompositionName(CompositionSession& session, QWidget* parent)
-        : QWidget(parent), session_(session), dropdown_(new kit::KDropdown(this)) {
-        setObjectName("timelineCompositionName");
-        setAccessibleName(tr("Composition"));
-        setMinimumWidth(kit::px(kit::Size::TimelineColumn) -
-                        (kit::px(kit::Spacing::M) + kit::px(kit::Spacing::XL)));
-        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-        auto* layout = new QHBoxLayout(this);
-        layout->setContentsMargins(0, 0, 0, 0);
-        layout->setSpacing(0);
-        dropdown_->setObjectName("timelineCompositionSelector");
-        dropdown_->setAccessibleName(tr("Composition"));
-        dropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
-        layout->addWidget(dropdown_);
-        connect(&session, &CompositionSession::snapshotChanged, this, [this] { refresh(); });
-        connect(&session, &CompositionSession::compositionChanged, this, [this] { refresh(); });
-        refresh();
-    }
-
-  private:
-    void refresh() {
-        const auto* composition = session_.composition();
-        name_ = composition != nullptr ? QString::fromStdString(composition->name())
-                                       : tr("No composition");
-        dropdown_->clearItems();
-        dropdown_->addItem(name_);
-        dropdown_->setCurrentIndex(0);
-        setToolTip(name_);
-        setAccessibleName(name_);
-    }
-    CompositionSession& session_;
-    kit::KDropdown* dropdown_ = nullptr;
-    QString name_;
-};
 
 std::set<document::NodeId> selectedLayerNodes(const CompositionSession& session) {
     std::set<document::NodeId> nodes;
@@ -112,6 +78,8 @@ void TimelineEditor::createHeaderMenus() {
 
     auto* add = menu(tr("Add"), QStringLiteral("addLayerMenu"));
     add->setAccessibleName(tr("Add layer menu"));
+    addButton_ = bar->addMenu(add, QStringLiteral("addLayerButton"));
+    addButton_->setToolTip(tr("Add a structured layer"));
     auto* solid = localAction(add, tr("Solid"), QStringLiteral("addSolidLayerAction"), {},
                               [this] { (void)addDefaultSolidLayer(session_); });
     solid->setToolTip(tr("Add a solid using the next built-in reference-linear-sRGB proof color"));
@@ -129,6 +97,19 @@ void TimelineEditor::createHeaderMenus() {
     }
 
     auto* view = menu(tr("View"), QStringLiteral("timelineViewMenu"));
+    const auto toggle = [&](const QString& title, const QString& name, auto callback) {
+        auto* action = localAction(view, title, name, {}, [] {});
+        action->setCheckable(true);
+        connect(action, &QAction::toggled, this, callback);
+        return action;
+    };
+    keyframesAction_ = toggle(tr("Keyframes"), "timelineKeyframesAction",
+                              [this](bool checked) { setKeyframesVisible(checked); });
+    graphAction_ = toggle(tr("Graph Editor"), "timelineGraphEditorAction",
+                          [this](bool checked) { setGraphEditorEnabled(checked); });
+    snapAction_ = toggle(tr("Snap to Frames"), "timelineSnappingAction",
+                         [this](bool checked) { setSnappingEnabled(checked); });
+    view->addSeparator();
     localAction(view, tr("Zoom to Fit"), QStringLiteral("timelineZoomToFitAction"),
                 QKeySequence(Qt::CTRL | Qt::Key_0), [this] { ruler_->zoomToFit(); });
     localAction(
@@ -195,8 +176,6 @@ void TimelineEditor::createHeaderMenus() {
                 QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A),
                 [this] { session_.clearSelection(); });
     bar->addMenu(select, QStringLiteral("timelineSelectButton"));
-    addButton_ = bar->addMenu(add, QStringLiteral("addLayerButton"));
-    addButton_->setToolTip(tr("Add a structured layer"));
     connect(editMenu_, &QMenu::aboutToShow, this, &TimelineEditor::refreshHeaderMenus);
     connect(&session_, &CompositionSession::selectionChanged, this,
             &TimelineEditor::refreshHeaderMenus);
@@ -204,7 +183,85 @@ void TimelineEditor::createHeaderMenus() {
             &TimelineEditor::refreshHeaderMenus);
     connect(&session_, &CompositionSession::snapshotChanged, this,
             &TimelineEditor::refreshHeaderMenus);
-    bar->addWidget(new TimelineCompositionName(session_, this));
+}
+
+void TimelineEditor::createFooter() {
+    EditorChromeRowSpec layerControls;
+    layerControls.objectName = "timelineLayerFooter";
+    const auto actionButton = [&](QAction* action, kit::IconId icon, const QString& name) {
+        auto* button = new kit::KIconButton(this);
+        button->setObjectName(name);
+        button->setDefaultAction(action);
+        button->setIcon(kit::icon(icon, kit::IconRole::Chrome));
+        button->setToolTip(action->text());
+        button->setAccessibleName(action->text());
+        layerControls.addWidget(button);
+    };
+    actionButton(splitLayerAction_, kit::IconId::SplitHorizontal, "timelineFooterSplitLayer");
+    actionButton(deleteLayerAction_, kit::IconId::Delete, "timelineFooterDeleteLayer");
+    auto* left = EditorArea::buildChromeRow(layerControls, this, true);
+    auto* right = new QWidget(this);
+    right->setObjectName("timelineLaneFooter");
+    auto* row = new QHBoxLayout(right);
+    row->setContentsMargins(kit::px(kit::Spacing::ChromePadding), 0,
+                            kit::px(kit::Spacing::ChromePadding), 0);
+    row->setSpacing(kit::px(kit::Spacing::ChromeGap));
+    const auto zoomButton = [&](const QString& label, const QString& name, double factor) {
+        auto* button = new kit::KIconButton(right);
+        button->setText(label);
+        button->setObjectName(name);
+        button->setAccessibleName(factor > 1 ? tr("Zoom in") : tr("Zoom out"));
+        button->setToolTip(button->accessibleName());
+        connect(button, &QToolButton::clicked, this,
+                [this, factor] { ruler_->zoomBy(factor, ruler_->width() / 2.0); });
+        row->addWidget(button);
+    };
+    zoomButton(QStringLiteral("−"), "timelineFooterZoomOut", 0.8);
+    auto* zoom = new kit::KSlider(right);
+    zoom->setObjectName("timelineZoomSlider");
+    zoom->setAccessibleName(tr("Horizontal timeline zoom"));
+    zoom->setToolTip(tr("Horizontal zoom: full composition to individual frames"));
+    zoom->setFixedWidth(kit::px(kit::Size::DropdownWidth));
+    zoom->setRange(0, 1);
+    row->addWidget(zoom);
+    zoomButton(QStringLiteral("+"), "timelineFooterZoomIn", 1.25);
+    connect(zoom, &kit::KSlider::valueChanged, this, [this](double value) {
+        const auto axis = ruler_->axisForWidth(ruler_->width());
+        if (!axis)
+            return;
+        const double total = axis->duration.toSeconds();
+        const double frame =
+            static_cast<double>(axis->frameRate.denominator()) / axis->frameRate.numerator();
+        const double maximum = std::max(1.0, total / frame);
+        const double span = total / std::pow(maximum, value);
+        ruler_->zoomBy((axis->t1 - axis->t0) / span, ruler_->width() / 2.0);
+    });
+    const auto refreshZoom = [this, zoom] {
+        const auto axis = ruler_->axisForWidth(ruler_->width());
+        if (!axis)
+            return;
+        const double total = axis->duration.toSeconds();
+        const double maximum =
+            std::max(1.0, total * axis->frameRate.numerator() / axis->frameRate.denominator());
+        const QSignalBlocker blocker(zoom);
+        zoom->setValue(maximum > 1 ? std::log(total / (axis->t1 - axis->t0)) / std::log(maximum)
+                                   : 0);
+    };
+    connect(ruler_, &TimelineRuler::axisChanged, zoom, refreshZoom);
+    refreshZoom();
+    row->addWidget(new TimelineNavigator(*ruler_, right), 1);
+    auto* fit = new kit::KIconButton(right);
+    fit->setObjectName("timelineFooterFit");
+    fit->setText(tr("Fit"));
+    fit->setAccessibleName(tr("Fit composition"));
+    fit->setToolTip(fit->accessibleName());
+    connect(fit, &QToolButton::clicked, ruler_, &TimelineRuler::zoomToFit);
+    row->addWidget(fit);
+    chrome_.footerCanvas = EditorArea::buildSplitChrome(left, right, layerColumnWidth_, this);
+    chrome_.footerCanvas->setObjectName("timelineFooter");
+    chrome_.footerCanvas->setFixedHeight(kit::px(kit::Size::FooterRow));
+    footerLeft_ = left->parentWidget();
+    footerLeft_->setObjectName("timelineFooterLeftSplit");
 }
 
 void TimelineEditor::refreshHeaderMenus() {

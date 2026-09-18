@@ -28,6 +28,7 @@ class KRow : public QWidget {
     void setCells(const QList<QWidget*>& toggles, QWidget* name, const QList<QWidget*>& columns,
                   QWidget* trailing = nullptr);
     void setRowState(int index, bool selected);
+    void setLeadingInset(int inset);
     void setName(const QString& text, std::optional<IconId> disclosure = std::nullopt);
     KIconButton* disclosureButton() const { return disclosure_; }
 
@@ -41,6 +42,7 @@ class KRow : public QWidget {
     KLabel* name_;
     KIconButton* disclosure_;
     int index_ = 0;
+    int leadingInset_ = px(Spacing::RowPadding);
     bool selected_ = false;
 };
 } // namespace bloom::ui::kit

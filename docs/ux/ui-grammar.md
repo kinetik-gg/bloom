@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-17
+Updated: 2026-09-18
 
 Bloom's mechanical interface contract is owned here and implemented by `src/ui/kit`.
 [ADR 0021](../decisions/0021-ui-grammar.md) records its rationale and extension procedure.
@@ -77,6 +77,11 @@ footer leading controls, transport, readouts and trailing controls. `EditorArea`
 layout and one measure-only overflow algorithm, with hysteresis and a stable minimum.
 Panels do not construct or paint header/footer widgets. The old take-header/footer and split
 provider interfaces are removed. Object names remain stable for interaction and automation.
+Timeline declares a split `footerCanvas`, composed with `EditorArea::buildSplitChrome` and kit
+controls, which EditorArea hosts as the panel footer. Its left cell follows the layer-table
+divider and contains Split at Playhead and Delete Layer actions, enabled for the current selection.
+Its right cell contains horizontal zoom out/slider/in, the draggable range navigator, and Fit.
+The slider maps the full composition through a logarithmic range down to individual frames.
 
 `KRow` owns list layout: fixed-pitch toggle cells, flexible name, fixed-width dropdown columns
 and trailing cell. `KPropertyRow` owns the label, control and reserved diamond columns,
@@ -328,9 +333,13 @@ inside its allocation, including scene proxies. `PropertyGutter` (8) separates l
 controls independently of component gaps. KSection owns `SectionPadding` (8 on every edge).
 Expanded RGBA rows use a blank-label KPropertyRow so controls align beneath the swatch.
 
-Toggle and disclosure cells are ToggleCell squares (24); their glyphs are IconControl (20),
-with Regular off, Fill on, muted disabled and a neutral bordered box. Column headings use
-the same glyph size and pitch. KDiamond uses the Bold outline at every DPR.
+Timeline switches retain ToggleCell squares (24), with IconChrome (16) glyphs: unchecked is an
+empty neutral bordered box, checked uses the same Regular glyph as the column heading. Hidden
+audio controls retain their column width. Headers and rows share the ChromePadding left inset,
+column geometry, and Ui text role. Layer and nested-property disclosures are unboxed 24px hit
+targets with their existing 16px chevrons and an XS gap before the text. KDiamond uses the Bold
+outline at every DPR. Colour parameter rows show only the swatch; expanding the parameter exposes
+the individual R/G/B/A numeric rows, so narrowing the table never crushes four inline fields.
 
 The timeline's graph editor REPLACES the key lanes rather than sitting beside them: in graph mode
 the lane region paints only its Surface backdrop and the curve view covers it, because two views of
@@ -342,11 +351,12 @@ its labels. A scalar curve strokes in `Color::Keyframe`; a component curve takes
 `Color::ComponentX/Y/Z/W`, which R/G/B/A borrow unchanged so one hue always means "the first
 component"; selection is Accent, which none of the five is. Ease handles are drawn only for a
 SELECTED key on an eased segment, as a hairline to a `Size::GraphHandleDot` dot. The graph toggle
-persists under `timeline/graph-editor`, and while it is on the keyframe-visibility toggle is
-disabled with the tooltip "Keys are always shown in the graph editor", because a curve whose keys
-are hidden is a picture of something nobody can edit. `timeline/keyframes-visible` and
-`timeline/snapping` persist the other two header toggles; keys off hides both the key lanes and a
-collapsed layer's summary glyphs, and lane snapping is `snapping && !Shift`.
+persists under `timeline/graph-editor`. View exposes checkable Keyframes and Graph Editor choices;
+enabling either turns the other off, and both may be off to show plain layer lanes.
+`timeline/keyframes-visible` and `timeline/snapping` persist Keyframes and Snap to Frames.
+These controls appear only in View, with no header tool buttons. Header menu order is Add, View,
+Select; the composition dropdown is absent. Keys off hides both key lanes and collapsed summary
+glyphs. Empty key-lane labels paint no chip. Lane snapping is `snapping && !Shift`.
 
 Timeline lanes use `LanePadding` (12) on both sides of their time axis. The layer column/lanes split
 is a draggable `KSplitHandle` (`Size::SplitHandle`, 6, its hit zone; it paints a `TimelineSeparator`
@@ -358,10 +368,14 @@ width; an existing `timeline/layer-column-width` pixel value wins, and a double-
 Workspace returns to the 37% ratio. All timeline rows share TimelineRow pitch and a zero origin;
 the 28px KPropertyRow is centered within that pitch.
 Selected rows use SurfaceRaised with no edge stripe. Every populated and empty row uses a
-Background hairline separator, without alternating fills. The work-area band is BorderHover,
-with 10px-tall accent pills (`TimelineWorkArea`); cached-frame strips are muted.
-The frame readout is centered over the needle and reserves its label rectangle against ruler
-labels. A fitted timeline hides the navigator row; zoomed navigation uses a muted 6px thumb.
+Border hairline separator, without alternating fills. The work-area slider occupies the lane half
+of the layer-column header row, directly below the ruler. Its active range uses SurfaceRaised,
+matching selected layer rows; outside the range stays Surface, with accent endpoint handles.
+Cached-frame strips use green Ok. Ruler tick labels and the current-frame readout are centered on
+their needles; the readout reserves its rectangle against tick labels. The footer navigator stays
+available at fit and uses a muted 6px thumb. Clip trim edges show SizeHorCursor using the same
+hit tolerance as trimming; locked layers do not advertise trimming. The vertical scrollbar appears
+only when the expanded row content exceeds the viewport, retaining its gutter while hidden.
 The shared `TimelineChromeGutter` (32) reserves room for the panel maximize at the right edge.
 Object, Transform, Source groups are collapsible Title Case rows, joined by one group per upstream
 value node driving the layer, titled by that node's display name. KPropertyRow's leading-indicator
@@ -517,8 +531,11 @@ count. The `Audio` socket uses its own `SocketAudio` token, separate from Image 
 
 Audio timeline rows use `DataAudio` for their clip bar and paint the published bucket ranges with
 that token's ink. Their speaker cell is a live mute command backed by the Layer `enabled` flag;
-image, solid and text rows hide that speaker control entirely rather than showing a disabled
-placeholder. Solo and range remain the same Layer semantics as other rows. An unavailable audio
+image, solid and text rows hide that speaker control while reserving its column. Video rows show
+it only when imported stream metadata reports audio. Video audio toggles connect/disconnect the
+source's audio input at the Layer boundary through undoable graph commands, leaving its image
+connection intact. Video rows retain ordinary layer selection, expansion and property controls.
+Solo and range remain the same Layer semantics as other rows. An unavailable audio
 file shows the warning glyph and remains relinkable from Assets.
 
 New Composition and the composition Properties section expose a `KColorChip` Background Colour.

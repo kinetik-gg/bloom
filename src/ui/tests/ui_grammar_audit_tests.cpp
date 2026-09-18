@@ -139,9 +139,13 @@ int run(int argc, char** argv) {
             }
             if (const auto* toggle = qobject_cast<kit::KIconToggle*>(widget)) {
                 const auto pixmap = toggle->glyphPixmap();
-                expect(pixmap.width() ==
-                           qRound(kit::px(kit::Size::IconControl) * widget->devicePixelRatioF()),
-                       widget, "toggle integer physical glyph box");
+                const bool layerSwitch = toggle->property("layerSwitch").toBool();
+                const int extent = layerSwitch && !toggle->isChecked()
+                                       ? 0
+                                       : qRound(kit::px(layerSwitch ? kit::Size::IconChrome
+                                                                    : kit::Size::IconControl) *
+                                                widget->devicePixelRatioF());
+                expect(pixmap.width() == extent, widget, "toggle integer physical glyph box");
                 ++icons;
             }
         }
@@ -191,8 +195,9 @@ int run(int argc, char** argv) {
     for (const auto& label : ruler->majorTickLabelRectsForTest())
         expect(!label.intersects(ruler->playheadLabelRect()), ruler,
                "D12 ruler labels avoid playhead readout");
-    auto* navigatorRow = fixture.window->findChild<QWidget*>("timelineNavigatorRow");
-    expect(!navigatorRow->isVisible(), navigatorRow, "D17 fitted composition hides navigator row");
+    auto* navigatorRow = fixture.window->findChild<QWidget*>("timelineLaneFooter");
+    expect(navigatorRow && navigatorRow->isVisible(), fixture.window.get(),
+           "D17 fitted composition retains its footer zoom and navigator");
     auto* status = fixture.window->statusStrip();
     expect(status && status->isVisible(), fixture.window.get(), "status remains visible");
     for (auto* cell : status->findChildren<kit::KLabel*>()) {

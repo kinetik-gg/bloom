@@ -141,9 +141,10 @@ struct GraphFixture final {
         // The layer and its keys are authored after the editor exists, exactly as an artist would;
         // let the editor rebuild its rows before looking for them.
         QCoreApplication::processEvents();
-        auto* graph = editor.findChild<QToolButton*>("timelineGraphEditorButton");
+        auto* graph = editor.findChild<QAction*>("timelineGraphEditorAction");
         if (graph == nullptr)
             fail("the graph toggle must exist");
+        editor.findChild<QAction*>("timelineKeyframesAction")->setChecked(true);
         const auto axis = editor.rulerForTest()->axisForWidth(editor.laneRegionForTest()->width());
         if (!axis.has_value())
             fail("the lane axis must resolve");
@@ -551,7 +552,7 @@ void testHiddenKeysPaintNoKeyframeInk() {
     GraphFixture fixture(makeProject("Graph hidden keys"));
     const auto curveId = seedOpacity(fixture.session.session);
     static_cast<void>(curveId);
-    auto* keys = fixture.editor.findChild<QToolButton*>("timelineKeyframesVisibleButton");
+    auto* keys = fixture.editor.findChild<QAction*>("timelineKeyframesAction");
     if (keys == nullptr)
         fail("the keys toggle must exist");
     const auto axis =

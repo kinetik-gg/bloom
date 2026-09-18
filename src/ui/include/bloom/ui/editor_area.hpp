@@ -73,6 +73,8 @@ struct EditorChromeSpec {
     int leadingWidth = 0;
     QString leadingName;
     QWidget* headerCanvas = nullptr;
+    // Optional split canvas footer, built through the same chrome helpers as the header.
+    QWidget* footerCanvas = nullptr;
     std::function<int()> splitPosition;
     // task TL-FIX2: EditorArea fixes headerLeft_'s width to splitPosition() once, at rebuild time
     // (see EditorArea::rebuildEditor()). A provider whose split moves later -- the timeline's

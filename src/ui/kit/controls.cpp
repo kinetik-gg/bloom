@@ -129,7 +129,7 @@ KIconButton::KIconButton(QWidget* parent) : QToolButton(parent) {
 void KIconButton::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     const bool heading = parentWidget() && parentWidget()->property("headerRow").toBool();
-    if (!heading)
+    if (!heading && !property("disclosure").toBool())
         fillRoundedSurface(painter, rect(),
                            color(isChecked() ? (isDown() ? Color::AccentPressed : Color::Accent)
                                              : Color::ControlSurface),
@@ -165,6 +165,13 @@ void KIconToggle::setGlyph(IconId id) {
     update();
 }
 QPixmap KIconToggle::glyphPixmap() const {
+    if (property("layerSwitch").toBool()) {
+        if (!isChecked())
+            return {};
+        return iconPixmap(glyph_, Size::IconChrome, Color::Foreground,
+                          isEnabled() ? State::Normal : State::Disabled, IconWeight::Regular,
+                          devicePixelRatioF());
+    }
     if (property("toolChoice").toBool() && isChecked())
         return iconPixmap(glyph_, Size::IconControl, Color::OnAccent, State::Normal,
                           IconWeight::Fill, devicePixelRatioF());

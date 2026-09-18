@@ -254,6 +254,7 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
 
     disclosure_ = new kit::KIconButton(indicator);
     disclosure_->setObjectName("timelinePropertyDisclosure");
+    disclosure_->setProperty("disclosure", true);
     disclosure_->setFixedSize(kit::px(kit::Size::ToggleCell), kit::px(kit::Size::ToggleCell));
     indicators->addWidget(disclosure_);
     connect(disclosure_, &QToolButton::clicked, this, [this] {
@@ -493,7 +494,7 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         const auto scalar = session_.effectiveScalarValue(entry.parameterId);
         const auto color = session_.effectiveColorValue(entry.parameterId);
         const bool components = vector.has_value() || vector3.has_value() || color.has_value();
-        const int count = componentRow ? 1 : color ? 4 : vector3 ? 3 : vector ? 2 : scalar ? 1 : 0;
+        const int count = componentRow ? 1 : color ? 0 : vector3 ? 3 : vector ? 2 : scalar ? 1 : 0;
         disclosure_->setVisible(components && !componentRow);
         for (std::size_t i = 0; i < fields_.size(); ++i) {
             cells_[i]->setVisible(static_cast<int>(i) < count);

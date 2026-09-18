@@ -234,13 +234,7 @@ TimelineNavigator::TimelineNavigator(TimelineRuler& ruler, QWidget* parent)
     updateVisibility();
 }
 
-void TimelineNavigator::updateVisibility() {
-    const auto axis = ruler_.axisForWidth(width());
-    const bool zoomed =
-        axis.has_value() && (axis->t0 > 0.0 || axis->t1 < axis->duration.toSeconds());
-    setVisible(zoomed);
-    update();
-}
+void TimelineNavigator::updateVisibility() { update(); }
 
 bool TimelineNavigator::event(QEvent* event) {
     if (event->type() == QEvent::ShortcutOverride && drag_ != Drag::None &&

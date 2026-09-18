@@ -6,6 +6,7 @@
 // ruler's own tick-density/scrub contract and the keyframe panel's gestures. Offscreen, matching
 // every other widget test in this suite.
 
+#include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/core/blend_mode.hpp>
@@ -31,6 +32,7 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/row.hpp>
+#include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/split_handle.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
@@ -346,8 +348,7 @@ void testHeaderSplitInEditorArea(Expectations& expectations) {
                                 ruler->mapTo(header, QPoint(0, ruler->height())).y() <=
                                     header->height(),
                             "the ruler fits entirely inside the header");
-        expectations.expect(name != nullptr && header->isAncestorOf(name) && name->isVisible(),
-                            "the composition name is visible in the header");
+        expectations.expect(name == nullptr, "the composition dropdown is absent from the header");
         expectations.expect(fullscreen->mapTo(&area, QPoint(fullscreen->width(), 0)).x() >=
                                 area.width() - ui::kit::px(ui::kit::Spacing::ChromePadding) - 1,
                             "fullscreen stays at the panel right edge");
@@ -484,8 +485,8 @@ void testTimeViewportGestures(Expectations& expectations) {
     axis = getAxis();
     expectations.expect(axis.t0 == before.t0 && axis.t1 == before.t1,
                         "Zoom to Fit restores the entire duration");
-    expectations.expect(navigator == nullptr || !navigator->isVisible(),
-                        "the navigator hides when the complete composition is visible");
+    expectations.expect(navigator != nullptr && navigator->isVisible(),
+                        "the footer navigator remains available at full composition zoom");
     expectations.expect(fixture.session.currentTime() == originalTime &&
                             fixture.session.snapshot().revision() == revision,
                         "all navigation is presentation-only");
@@ -543,16 +544,16 @@ void testTimelineHeaderMenus(Expectations& expectations) {
                                 ui::kit::px(ui::kit::Size::TimelineNameDefault) +
                                 2 * ui::kit::px(ui::kit::Size::TimelineColumn),
                         "the default left column is the exact toggle/name/blending/parent sum");
-    expectations.expect(
-        area->findChild<ui::kit::KDropdown*>("timelineCompositionSelector") != nullptr &&
-            area->findChild<QToolButton*>("timelineKeyframesVisibleButton") != nullptr &&
-            area->findChild<QToolButton*>("timelineGraphEditorButton") != nullptr &&
-            area->findChild<QToolButton*>("timelineSnappingButton") != nullptr,
-        "the header exposes the composition selector and timeline tool cluster");
+    expectations.expect(area->findChild<ui::kit::KDropdown*>("timelineCompositionSelector") ==
+                                nullptr &&
+                            area->findChild<QAction*>("timelineKeyframesAction") != nullptr &&
+                            area->findChild<QAction*>("timelineGraphEditorAction") != nullptr &&
+                            area->findChild<QAction*>("timelineSnappingAction") != nullptr,
+                        "View exposes timeline modes and snap without the composition selector");
     // Task VIEW-1: the transport cluster this used to inspect lives in the viewer footer now, so
     // the claim it made ("no Undo/Redo buttons down there") is made about what is actually left in
     // the row -- the navigator, and the empty left cell that keeps its time axis aligned.
-    auto* navigatorCell = editor->findChild<QWidget*>("timelineNavigatorLeftCell");
+    auto* navigatorCell = area->findChild<QWidget*>("timelineFooterLeftSplit");
     expectations.expect(navigatorCell != nullptr &&
                             navigatorCell->width() == editor->layerColumnWidthForTest(),
                         "the navigator row's left cell still reserves exactly the layer column's "
@@ -752,9 +753,9 @@ void testRowsAreFlatThirtyTwoPixelRows(Expectations& expectations) {
                         "unselected lane rows share the flat Surface fill");
 
     // The hairline separator closes each row, in Border.
-    const QColor border = ui::kit::color(ui::kit::Color::Background);
+    const QColor border = ui::kit::color(ui::kit::Color::Border);
     expectations.expect(near(laneImage.pixelColor(sampleX, 31), border, 6),
-                        "a Background hairline closes the row at its last pixel row");
+                        "a Border hairline closes the row at its last pixel row");
 
     delete editor;
     finishFixture(fixture);
@@ -1261,8 +1262,8 @@ void testManyRowsStayBoundedAndThePlayheadNeverRelayoutsThem(Expectations& expec
                                                   std::to_string(kLayerCount) + " layers, bound " +
                                                   std::to_string(bound) + ")");
     expectations.expect(rows.size() >= 2, "the pool is not empty either (test sanity)");
-    expectations.expect(editor->findChildren<ui::kit::KDropdown*>().size() == 2 * rows.size() + 1,
-                        "two KDropdowns per pooled row plus the one composition selector -- not "
+    expectations.expect(editor->findChildren<ui::kit::KDropdown*>().size() == 2 * rows.size(),
+                        "two KDropdowns per pooled row -- not "
                         "two per LAYER, which is the whole reason the pool exists");
 
     // A fixed buffer rather than a growing container: the pool is bounded by the viewport, so the
@@ -1597,10 +1598,40 @@ void testPropertyRows(Expectations& expectations) {
         if (!row->isVisible() || row->property("role").toString() != "color")
             continue;
         auto* chip = row->findChild<ui::kit::KColorChip*>("timelinePropertyColor");
+        const auto fields = row->findChildren<ui::kit::KValueField*>();
+        expectations.expect(
+            chip && chip->isVisible() &&
+                std::ranges::none_of(fields, [](const auto* field) { return field->isVisible(); }),
+            "collapsed colour has a swatch and no cramped inline RGBA fields");
         chip->colorChanged({0.25F, 0.5F, 0.75F, 1.0F});
         expectations.expect(fixture.commands.undoLabel() ==
                                 std::optional<std::string_view>{"Set Text Color"},
                             "text color row uses the same setter and history label as Properties");
+    }
+    document::ParameterId colorParameter;
+    for (const auto& entry : stack->entries())
+        if (entry.role == "color")
+            colorParameter = entry.parameterId;
+    expectations.expect(colorParameter.isValid(), "expanded source contains its colour parameter");
+    stack->parameterExpansionRequested(colorParameter);
+    QCoreApplication::processEvents();
+    expectations.expect(std::ranges::count_if(stack->entries(),
+                                              [&](const auto& entry) {
+                                                  return entry.parameterId == colorParameter &&
+                                                         entry.component.has_value();
+                                              }) == 4,
+                        "expanding colour exposes all four numeric component rows");
+    editor.splitHandleForTest()->dragStarted();
+    editor.splitHandleForTest()->dragged(420 - editor.layerColumnWidthForTest());
+    editor.splitHandleForTest()->dragFinished();
+    QCoreApplication::processEvents();
+    for (auto* row : editor.findChildren<QWidget*>("timelinePropertyRow")) {
+        if (!row->isVisible() || row->property("role").toString() != "color")
+            continue;
+        if (auto* chip = row->findChild<ui::kit::KColorChip*>("timelinePropertyColor");
+            chip && chip->isVisible())
+            expectations.expect(chip->mapTo(stack, chip->rect().bottomRight()).x() < stack->width(),
+                                "colour swatch remains inside a narrowed table");
     }
     if (const auto path = qEnvironmentVariable("BLOOM_TIMELINE_TEST_IMAGE"); !path.isEmpty())
         expectations.expect(editor.grab().save(path), "save requested timeline inspection image");
@@ -2253,8 +2284,8 @@ void testGraphEditorReplacesTheKeyLanes(Expectations& expectations) {
     editor.resize(1600, 700);
     editor.show();
     QCoreApplication::processEvents();
-    auto* graph = editor.findChild<QToolButton*>("timelineGraphEditorButton");
-    auto* keys = editor.findChild<QToolButton*>("timelineKeyframesVisibleButton");
+    auto* graph = editor.findChild<QAction*>("timelineGraphEditorAction");
+    auto* keys = editor.findChild<QAction*>("timelineKeyframesAction");
     auto* view = editor.laneRegionForTest()->graphViewForTest();
     if (graph == nullptr || keys == nullptr || view == nullptr)
         throw std::runtime_error("Missing graph editor widgets");
@@ -2275,19 +2306,17 @@ void testGraphEditorReplacesTheKeyLanes(Expectations& expectations) {
     auto* panel = editor.findChild<ui::TimelineKeyframePanel*>("timelineKeyframePanel");
     expectations.expect(view->isVisible() && panel != nullptr && !panel->isVisible(),
                         "graph mode replaces the key lanes rather than sitting beside them");
-    expectations.expect(!keys->isEnabled() &&
-                            keys->toolTip() ==
-                                QStringLiteral("Keys are always shown in the graph editor"),
-                        "and the keys toggle goes disabled with the reason, not silently inert");
+    expectations.expect(keys->isEnabled() && !keys->isChecked(),
+                        "graph mode unchecks keyframes while leaving the menu choice available");
     expectations.expect(QSettings().value(QStringLiteral("timeline/graph-editor")).toBool(),
                         "the graph choice persists");
     expectations.expect(!view->curves().empty() && view->activeCurve().has_value(),
                         "the opacity curve is on the canvas and one curve is active");
     graph->setChecked(false);
     QCoreApplication::processEvents();
-    expectations.expect(!view->isVisible() && keys->isEnabled() &&
-                            keys->toolTip() == QStringLiteral("Show keyframes"),
-                        "leaving graph mode restores the lanes and the keys toggle");
+    expectations.expect(!view->isVisible() && keys->isEnabled() && !keys->isChecked(),
+                        "turning graph mode off leaves plain layer lanes");
+    keys->setChecked(true);
     settings.remove(QStringLiteral("timeline/graph-editor"));
 }
 
@@ -2308,8 +2337,8 @@ void testHeaderTogglesArePersistedAndLive(Expectations& expectations) {
     editor.show();
     QCoreApplication::processEvents();
 
-    auto* keys = editor.findChild<QToolButton*>("timelineKeyframesVisibleButton");
-    auto* snap = editor.findChild<QToolButton*>("timelineSnappingButton");
+    auto* keys = editor.findChild<QAction*>("timelineKeyframesAction");
+    auto* snap = editor.findChild<QAction*>("timelineSnappingAction");
     if (keys == nullptr || snap == nullptr)
         throw std::runtime_error("Missing timeline header toggles");
     expectations.expect(!keys->isChecked() && !snap->isChecked() && keys->isEnabled() &&
@@ -2406,6 +2435,134 @@ void testOutputMergeRows(Expectations& expectations) {
     finishFixture(fixture);
 }
 
+void testTimelinePolishInteractions(Expectations& expectations) {
+    using namespace bloom;
+    auto project = makeTestProject("Timeline switches");
+    for (std::uint64_t id = 70; id <= 72; ++id) {
+        document::AssetRecord asset;
+        asset.id = document::AssetId::fromRaw(id);
+        asset.kind = id == 72 ? document::AssetKind::Audio : document::AssetKind::Video;
+        asset.name = id == 70 ? "Video with audio" : id == 71 ? "Silent video" : "Audio";
+        asset.locator = {"file", "project-relative", "fixture.mov", "file:///fixture.mov"};
+        asset.duration = time(10);
+        asset.frames = 240;
+        asset.width = asset.height = 16;
+        asset.channels = id == 71 ? 0 : 2;
+        asset.rate = 48000;
+        if (id != 72) {
+            document::AssetVideoStream stream;
+            stream.codec = "raw";
+            stream.timebase = stream.framePeriod = time(1, 24);
+            stream.duration = time(10);
+            asset.videoStreams.push_back(stream);
+            if (id == 70) {
+                stream.id = 1;
+                stream.kind = 2;
+                stream.codec = "pcm";
+                stream.timebase = stream.framePeriod = time(1, 48000);
+                stream.sampleRate = 48000;
+                stream.channelLayout = {"L", "R"};
+                asset.videoStreams.push_back(stream);
+            }
+        }
+        expectations.expect(project.project.addAsset(asset), "fixture media descriptor is valid");
+    }
+    SessionFixture fixture(std::move(project));
+    for (std::uint64_t id = 70; id <= 72; ++id) {
+        commands::Transaction transaction("Add media", fixture.session.snapshot().revision());
+        if (id == 72)
+            transaction.emplace<commands::AddAudioLayer>(fixture.session.compositionId(),
+                                                         document::AssetId::fromRaw(id));
+        else
+            transaction.emplace<commands::AddImageLayer>(fixture.session.compositionId(),
+                                                         document::AssetId::fromRaw(id));
+        expectations.expect(fixture.session.executeTransaction(std::move(transaction)).changed(),
+                            "media layer is added through commands");
+    }
+    ui::TimelineEditor editor(fixture.session, fixture.controller);
+    layoutEditor(editor, 1200, 500);
+    auto* stack = editor.layerStackForTest();
+    int videoRow = -1;
+    expectations.expect(!editor.verticalScrollBarForTest()->isVisible(),
+                        "scrollbar hides when all layers fit");
+    for (int index = 0; index < stack->rowCount(); ++index) {
+        const auto& entry = stack->entries()[static_cast<std::size_t>(index)];
+        auto rows = stack->findChildren<ui::kit::KRow*>("timelineLayerRow");
+        auto found =
+            std::ranges::find_if(rows, [&](auto* row) { return row->y() == stack->rowTop(index); });
+        if (found == rows.end())
+            continue;
+        auto* row = *found;
+        auto* audio = row->findChild<ui::kit::KIconToggle*>("timelineLayerToggle1");
+        auto* solo = row->findChild<ui::kit::KIconToggle*>("timelineLayerToggle2");
+        expectations.expect(audio && solo && solo->glyphPixmap().isNull(),
+                            "inactive solo paints a blank box");
+        if (!audio || !solo)
+            continue;
+        expectations.expect(solo->x() == ui::kit::px(ui::kit::Spacing::ChromePadding) +
+                                             2 * ui::kit::px(ui::kit::Size::ToggleCell),
+                            "hidden audio retains its column so solo stays aligned");
+        expectations.expect(audio->isVisible() == entry.audioNodeId.isValid(),
+                            "only media with an audio stream shows a speaker");
+        if (entry.kind == "Video" && entry.audioNodeId.isValid()) {
+            videoRow = index;
+            expectations.expect(audio->isChecked(), "video audio begins enabled");
+            const auto layer = entry.layerId;
+            QTest::mouseClick(audio, Qt::LeftButton);
+            QCoreApplication::processEvents();
+            expectations.expect(
+                !audio->isChecked() && audio->glyphPixmap().isNull() &&
+                    fixture.session.composition()->graph().findLayer(layer)->enabled,
+                "video mute blanks the speaker without disabling its image");
+            (void)fixture.session.undo();
+            expectations.expect(audio->isChecked(), "undo restores video audio");
+            expectations.expect(audio->glyphPixmap().deviceIndependentSize().width() ==
+                                    ui::kit::px(ui::kit::Size::IconChrome),
+                                "switch ink is 16px in the existing 24px cell");
+            QTest::mouseClick(row->disclosureButton(), Qt::LeftButton);
+            QCoreApplication::processEvents();
+            expectations.expect(stack->rowCount() > 3, "video properties expand like other layers");
+            QTest::mouseClick(row->disclosureButton(), Qt::LeftButton);
+            QCoreApplication::processEvents();
+        }
+    }
+    expectations.expect(videoRow >= 0, "audio-bearing video has a timeline row");
+    if (videoRow >= 0) {
+        auto* lanes = editor.laneRegionForTest();
+        const auto bar = lanes->clipBarRect(videoRow);
+        if (bar) {
+            QTest::mouseMove(lanes, QPoint(bar->left(), bar->center().y()));
+            expectations.expect(lanes->cursor().shape() == Qt::SizeHorCursor,
+                                "left trim edge advertises horizontal resizing");
+            QTest::mouseMove(lanes, QPoint(bar->right(), bar->center().y()));
+            expectations.expect(lanes->cursor().shape() == Qt::SizeHorCursor,
+                                "right trim edge advertises horizontal resizing");
+            QTest::mouseMove(lanes, bar->center());
+            expectations.expect(lanes->cursor().shape() == Qt::ArrowCursor,
+                                "clip body does not advertise trimming");
+        }
+    }
+    auto* zoom = editor.findChild<ui::kit::KSlider*>("timelineZoomSlider");
+    expectations.expect(zoom != nullptr, "split footer provides a zoom slider");
+    if (zoom) {
+        zoom->setValue(0.5);
+        const auto axis = editor.rulerForTest()->axisForWidth(editor.rulerForTest()->width());
+        expectations.expect(axis && axis->t1 - axis->t0 < axis->duration.toSeconds(),
+                            "footer zoom changes the shared timeline axis");
+        editor.rulerForTest()->zoomToFit();
+        expectations.expect(zoom->value() == 0, "Fit synchronizes the footer zoom slider");
+    }
+    editor.resize(1200, 130);
+    QCoreApplication::processEvents();
+    expectations.expect(editor.verticalScrollBarForTest()->isVisible(),
+                        "scrollbar appears when layer rows overflow");
+    editor.resize(1200, 500);
+    QCoreApplication::processEvents();
+    expectations.expect(!editor.verticalScrollBarForTest()->isVisible(),
+                        "scrollbar hides again when the viewport grows");
+    finishFixture(fixture);
+}
+
 void writeTimelineScreenshotIfRequested(Expectations& expectations) {
     const QString destination = qEnvironmentVariable("BLOOM_TIMELINE_SCREENSHOT");
     if (destination.isEmpty())
@@ -2427,6 +2584,13 @@ void writeTimelineScreenshotIfRequested(Expectations& expectations) {
     layout->addWidget(editor);
     layoutEditor(host, 1200, 400);
     expectations.expect(host.grab().save(destination), "the requested timeline screenshot saves");
+    if (auto* timeline = editor->findChild<ui::TimelineEditor*>()) {
+        auto* stack = timeline->layerStackForTest();
+        stack->expansionRequested(stack->entries().front().layerId);
+        QCoreApplication::processEvents();
+        expectations.expect(host.grab().save(destination + ".expanded.png"),
+                            "expanded timeline screenshot saves");
+    }
     delete editor;
     finishFixture(fixture);
 }
@@ -2443,6 +2607,7 @@ int main(int argc, char** argv) {
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     Expectations expectations;
     try {
+        testTimelinePolishInteractions(expectations);
         testOutputMergeRows(expectations);
         testHeaderTogglesArePersistedAndLive(expectations);
         testGraphEditorReplacesTheKeyLanes(expectations);

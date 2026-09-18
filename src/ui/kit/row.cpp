@@ -72,6 +72,7 @@ KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator,
     if (leadingIndicator_ && indicator) {
         indicator->setFixedWidth(px(Size::ToggleCell));
         layout->addWidget(indicator, 0, Qt::AlignVCenter);
+        layout->addSpacing(px(Spacing::XS));
     }
     layout->addWidget(label);
     layout->addSpacing(px(Spacing::PropertyGutter));
@@ -125,8 +126,8 @@ void KPropertyRow::resizeEvent(QResizeEvent* event) {
 }
 KRow::KRow(QWidget* parent) : QWidget(parent), row_(new QHBoxLayout(this)) {
     setFixedHeight(px(Size::ListRow));
-    row_->setContentsMargins(px(Spacing::RowPadding), px(Spacing::RowPadding),
-                             px(Spacing::RowPadding), px(Spacing::RowPadding));
+    row_->setContentsMargins(leadingInset_, px(Spacing::RowPadding), px(Spacing::RowPadding),
+                             px(Spacing::RowPadding));
     row_->setSpacing(0);
     row_->setSizeConstraint(QLayout::SetNoConstraint);
     nameCell_ = new QWidget(this);
@@ -134,8 +135,9 @@ KRow::KRow(QWidget* parent) : QWidget(parent), row_(new QHBoxLayout(this)) {
     nameCell_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto* nameLayout = new QHBoxLayout(nameCell_);
     nameLayout->setContentsMargins(px(Spacing::XS), 0, px(Spacing::XS), 0);
-    nameLayout->setSpacing(0);
+    nameLayout->setSpacing(px(Spacing::XS));
     disclosure_ = new KIconButton(nameCell_);
+    disclosure_->setProperty("disclosure", true);
     disclosure_->setFixedSize(px(Size::ToggleCell), px(Size::ToggleCell));
     disclosure_->hide();
     name_ = new KLabel(nameCell_);
@@ -179,13 +181,19 @@ void KRow::setRowState(int index, bool selected) {
 }
 void KRow::resizeEvent(QResizeEvent* event) {
     const auto vertical = height() == px(Size::Control) ? 0 : px(Spacing::RowPadding);
-    row_->setContentsMargins(px(Spacing::RowPadding), vertical, px(Spacing::RowPadding), vertical);
+    row_->setContentsMargins(leadingInset_, vertical, px(Spacing::RowPadding), vertical);
     QWidget::resizeEvent(event);
+}
+void KRow::setLeadingInset(int inset) {
+    leadingInset_ = inset;
+    auto margins = row_->contentsMargins();
+    margins.setLeft(inset);
+    row_->setContentsMargins(margins);
 }
 void KRow::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     painter.fillRect(rect(), color(selected_ ? Color::SurfaceRaised : Color::Surface));
-    painter.setPen(color(Color::Background));
+    painter.setPen(color(Color::Border));
     painter.drawLine(rect().bottomLeft(), rect().bottomRight());
 }
 } // namespace bloom::ui::kit

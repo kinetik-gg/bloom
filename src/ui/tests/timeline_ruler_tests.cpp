@@ -1169,7 +1169,7 @@ void testWorkAreaStripSpansFullWidthWithDimAccentBand(Expectations& expectations
     expectations.expect(near(image.pixelColor(image.width() - 1, image.height() / 2), accent, 6),
                         "the Accent work-area bar reaches the RIGHT edge (duration)");
     expectations.expect(near(image.pixelColor(image.width() / 2, image.height() / 2),
-                             ui::kit::color(ui::kit::Color::BorderHover), 6),
+                             ui::kit::color(ui::kit::Color::SurfaceRaised), 6),
                         "the default work-area bar spans the full duration");
 }
 
@@ -1228,11 +1228,11 @@ void testCacheBarTracksAxisIdentityEvictionAndBatches(Expectations& expectations
         ruler.render(&image);
         const int greenX = static_cast<int>(rects.front().center().x());
         expectations.expect(image.pixelColor(greenX, ruler.height() - 1) ==
-                                ui::kit::color(ui::kit::Color::Muted),
-                            "cached coverage paints the muted cache band");
+                                ui::kit::color(ui::kit::Color::Ok),
+                            "cached coverage paints the green cache band");
         const int gapX = static_cast<int>(axis->pixelForTime(time(3, 48)));
         expectations.expect(image.pixelColor(gapX, ruler.height() - 1) !=
-                                ui::kit::color(ui::kit::Color::Muted),
+                                ui::kit::color(ui::kit::Color::Ok),
                             "the uncached frame gap remains unpainted");
     }
     ruler.zoomToRange(1.0 / 24.0, 4.0 / 24.0);

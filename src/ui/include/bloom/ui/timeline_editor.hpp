@@ -121,6 +121,7 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
     void updateSelection();
     void updateHistoryActions();
     void createHeaderMenus();
+    void createFooter();
     void refreshHeaderMenus();
     void selectAllLayers();
     void deleteSelectedLayers();
@@ -131,7 +132,6 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
     void setKeyframesVisible(bool visible);
     void setSnappingEnabled(bool enabled);
     void setGraphEditorEnabled(bool enabled);
-    void applyHeaderToggleGlyph(QToolButton* button, bool checked);
     void showEvent(QShowEvent* event) override;
     void updateScrollRange();
 
@@ -149,10 +149,11 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
     QAction* splitLayerAction_ = nullptr;
     QAction* framesAction_ = nullptr;
     QAction* timecodeAction_ = nullptr;
+    QAction* keyframesAction_ = nullptr;
+    QAction* graphAction_ = nullptr;
+    QAction* snapAction_ = nullptr;
+    QWidget* footerLeft_ = nullptr;
     bool timecodeFormat_ = false;
-    QToolButton* keyframesVisibleButton_ = nullptr;
-    QToolButton* graphEditorButton_ = nullptr;
-    QToolButton* snappingButton_ = nullptr;
     bool keyframesVisible_ = true;
     bool snapping_ = true;
     bool graphEditor_ = false;

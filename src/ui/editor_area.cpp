@@ -452,7 +452,8 @@ void EditorArea::rebuildEditor(int editorIndex) {
                 watchForActivation(spec.leading);
             }
         }
-        if (auto* controls = buildChromeRow(spec.footer, this, true)) {
+        if (auto* controls =
+                spec.footerCanvas ? spec.footerCanvas : buildChromeRow(spec.footer, this, true)) {
             footer_ = new QWidget(this);
             footer_->setObjectName("editorFooter");
             footer_->setFixedHeight(kit::px(kit::Size::FooterRow));

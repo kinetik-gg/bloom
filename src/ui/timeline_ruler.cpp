@@ -81,7 +81,6 @@ constexpr qreal kMinimumPixelsPerMajorTick = 40.0;
 // Extra breathing room between two adjacent major labels, beyond their own widest possible text
 // width -- keeps the collision-avoidance math from packing labels edge-to-edge.
 constexpr qreal kMajorLabelGapPixels = kit::px(kit::Size::RulerLabelGap);
-constexpr qreal kTickLabelInsetPixels = kit::px(kit::Size::RulerLabelInset);
 constexpr qreal kMinorTickHeight = kit::px(kit::Size::MinorTick);
 constexpr qreal kMajorTickHeight = kit::px(kit::Size::MajorTick);
 
@@ -183,11 +182,11 @@ computeMajorTickLabels(const TimelineAxis& axis, const qreal labelAreaHeight, co
         }
         const QString text = formatTimelineFrameLabel(index, axis.frameRate, timecode);
         const qreal textWidth = metrics.horizontalAdvance(text);
-        if (x + kTickLabelInsetPixels + textWidth <= axis.widthPixels &&
+        if (x - textWidth / 2 >= 0 && x + textWidth / 2 <= axis.widthPixels &&
             (labels.empty() ||
-             x + kTickLabelInsetPixels > labels.back().rect.right() + kMajorLabelGapPixels)) {
-            labels.push_back(
-                {index, QRectF(x + kTickLabelInsetPixels, 0.0, textWidth, labelAreaHeight)});
+             x - textWidth / 2 > labels.back().rect.right() + kMajorLabelGapPixels)) {
+            labels.push_back({index, QRectF(QPointF(x - textWidth / 2, 0.0),
+                                            QSizeF(textWidth, labelAreaHeight))});
         }
         if (axis.maxIndex - index < majorStep) {
             break;
@@ -312,10 +311,12 @@ class TimelineKeyframeRow final : public QWidget {
         const QRectF chip(kit::px(kit::Spacing::XXS), kit::px(kit::Spacing::XXS),
                           metrics.horizontalAdvance(label_) + kit::px(kit::Spacing::S),
                           height() - kit::px(kit::Spacing::XS));
-        kit::fillRoundedSurface(painter, chip, kit::color(kit::Color::SurfaceRaised), QColor(),
-                                kit::Radius::Small);
-        painter.setPen(kit::color(kit::Color::Muted));
-        painter.drawText(chip, Qt::AlignCenter, label_);
+        if (!label_.isEmpty()) {
+            kit::fillRoundedSurface(painter, chip, kit::color(kit::Color::SurfaceRaised), QColor(),
+                                    kit::Radius::Small);
+            painter.setPen(kit::color(kit::Color::Muted));
+            painter.drawText(chip, Qt::AlignCenter, label_);
+        }
         if (auto* panel = qobject_cast<TimelineKeyframePanel*>(parentWidget());
             panel && panel->gridMode())
             panel->paintGridOverlay(painter, *this);
@@ -763,7 +764,7 @@ void TimelineRuler::paintEvent(QPaintEvent* event) {
     }
 
     for (const auto& segment : cachedFrameRects()) {
-        painter.fillRect(segment, kit::color(kit::Color::Muted));
+        painter.fillRect(segment, kit::color(kit::Color::Ok));
     }
 
     // Playhead: the shared 1px Accent stroke, with its single marker and frame readout in this
@@ -931,6 +932,8 @@ void TimelineRuler::scrubToPixel(const int pixelX) {
 TimelineWorkAreaStrip::TimelineWorkAreaStrip(CompositionSession& session, QWidget* parent)
     : QWidget(parent), session_(session) {
     setObjectName("timelineWorkAreaStrip");
+    connect(&session_, &CompositionSession::currentTimeChanged, this,
+            qOverload<>(&TimelineWorkAreaStrip::update));
     setAccessibleName(tr("Work area"));
     setFixedHeight(kWorkAreaStripHeight);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -952,8 +955,8 @@ TimelineWorkAreaRow::TimelineWorkAreaRow(CompositionSession& session, QWidget* p
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     strip_ = new TimelineWorkAreaStrip(session_, this);
+    strip_->setFixedHeight(kit::px(kit::Size::Control));
     layout->addWidget(strip_);
-    layout->addStretch(1);
 
     connect(&session_, &CompositionSession::currentTimeChanged, this,
             qOverload<>(&TimelineWorkAreaRow::update));

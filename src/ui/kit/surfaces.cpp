@@ -54,7 +54,7 @@ void KListSurface::paintEvent(QPaintEvent*) {
     for (int row = first; row <= (offset_ + height()) / pitch; ++row) {
         const int y = row * pitch - offset_;
         painter.fillRect(QRect(0, y, width(), pitch), color(Color::Surface));
-        painter.setPen(color(Color::Background));
+        painter.setPen(color(Color::Border));
         painter.drawLine(0, y + pitch - 1, width(), y + pitch - 1);
     }
 }
