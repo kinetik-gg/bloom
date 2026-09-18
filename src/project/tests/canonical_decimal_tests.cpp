@@ -259,6 +259,7 @@ void testCanonicalFloat64(Expectations& expectations) {
         {0x444b1ae4d6e2ef50ULL, "1e+21"},
         {0x3eb0c6f7a0b5ed8cULL, "9.999999999999997e-7"},
         {0x3eb0c6f7a0b5ed8dULL, "0.000001"},
+        {0x3f604aaf60000000ULL, "0.0019887376111000776"},
         {0x41b3de4355555553ULL, "333333333.3333332"},
         {0x41b3de4355555554ULL, "333333333.33333325"},
         {0x41b3de4355555555ULL, "333333333.3333333"},
