@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <bloom/media/provider/ffmpeg_launch.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/video/session.hpp>
 #include <cctype>
@@ -77,6 +78,7 @@ struct VideoDecodeSession::State {
     WorkerPoolOptions options(std::string executable) {
         WorkerPoolOptions options;
         options.process.executable = std::move(executable);
+        configureFfmpegWorkerEnvironment(options.process, options.process.executable);
         options.expected = hello;
         options.capacity = 1;
         options.timeout = std::chrono::seconds(30);

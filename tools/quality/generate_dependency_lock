@@ -26,8 +26,6 @@ def upgrade_schema(lock: OrderedDict[str, object]) -> None:
     version = lock.get("schemaVersion")
     if not isinstance(version, dict) or version.get("major") != 1:
         raise ValueError("the input lock must have schema major version 1")
-    version["minor"] = 1
-
     components = lock.get("components")
     if not isinstance(components, list):
         raise ValueError("the input lock must contain a components array")
@@ -42,6 +40,9 @@ def upgrade_schema(lock: OrderedDict[str, object]) -> None:
             "ship-source-offer",
         }:
             raise ValueError("legacy source-obligation values require an explicit reviewed input")
+    version["minor"] = 2 if any(
+        isinstance(component, dict) and "runtimeFetch" in component for component in components
+    ) else 1
 
 
 def add_component(lock: OrderedDict[str, object], component_path: Path) -> None:
@@ -55,6 +56,20 @@ def add_component(lock: OrderedDict[str, object], component_path: Path) -> None:
         raise ValueError(f"component name is missing or already present: {name!r}")
     components.append(component)
     components.sort(key=lambda entry: entry["name"])
+
+
+def replace_component(lock: OrderedDict[str, object], component_path: Path) -> None:
+    component = read_json(component_path)
+    components = lock["components"]
+    if not isinstance(components, list):
+        raise ValueError("the input lock must contain a components array")
+    name = component.get("name")
+    for index, entry in enumerate(components):
+        if isinstance(entry, dict) and entry.get("name") == name:
+            components[index] = component
+            components.sort(key=lambda entry: entry["name"])
+            return
+    raise ValueError(f"component to replace is not present: {name!r}")
 
 
 def add_configure_arguments(component: OrderedDict[str, object], arguments_path: Path) -> None:
@@ -86,17 +101,20 @@ def main() -> int:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--component", type=Path, action="append", default=[])
+    parser.add_argument("--replace-component", type=Path, action="append", default=[])
     parser.add_argument("--configure-arguments", type=Path)
     args = parser.parse_args()
 
     lock = read_json(args.input)
-    upgrade_schema(lock)
     for component_path in args.component:
         add_component(lock, component_path)
+    for component_path in args.replace_component:
+        replace_component(lock, component_path)
     if args.configure_arguments is not None:
         components = lock["components"]
         ffmpeg = next(component for component in components if component.get("name") == "ffmpeg")
         add_configure_arguments(ffmpeg, args.configure_arguments)
+    upgrade_schema(lock)
     write_lock(lock, args.output)
     return 0
 

@@ -647,7 +647,8 @@ cases live under `tests/fixtures/media`; no binary media is checked in.
 Installed worker generations occupy `libexec/bloom/media/<provider-generation>/`, with private
 shared dependencies under their own `lib/`. Linux worker install rpath is exactly `$ORIGIN/lib`;
 CMake does not append link directories. The FFmpeg worker uses this same rpath in build and
-install trees, avoiding empty loader-search entries; its private libraries use `$ORIGIN`.
+install trees, avoiding empty loader-search entries; its private libraries and Bloom OpenH264
+shim use `$ORIGIN`.
 The synthetic test worker needs no codec library and is not installed. MEDIA-3 places the
 reviewed shared FFmpeg closure in its worker generation's private directory. The desktop must
 continue to pass `desktop-no-ffmpeg`; loader paths and codec-bearing worker targets must never
@@ -1266,14 +1267,32 @@ host. Strict delivery and Apple authorization remain gated by ADR 0020.
 | `PcmWavV1` | Signed little-endian PCM 16/24; BWF description when supplied | Byte-exact pinned worker; RF64 auto promotion; BW64 remains pending |
 | `TiffRgba16SrgbV1` | Single frames and numbered sequences | Exact decoded RGBA16 after the declared lossy scene-linear-to-sRGB conversion |
 | Worker-only capabilities | DNxHD; AAC; MOV, MXF, Matroska, WAV mux | Closed stream layouts; unsupported profiles or timing return typed failures |
-| H.264/HEVC software encode | Unavailable | `codec.h264.software-encoder-not-intaken`; openh264/kvazaar intake remains undecided |
+| `H264MovV1` | H.264 High MOV review encode via Cisco OpenH264 2.6.0 when verified; optional AAC or PCM; 30 Mbps default | 8-bit 4:2:0, one-second GOP, Rec.709 limited range; lossy `DecodedSemanticTolerance`; Review deliverable — not for archival |
+| H.264 hardware encode | H.264 High MOV via VA-API when the worker creates an encode context | Hardware execution key; no determinism claim; skipped with a typed reason when no `/dev/dri/renderD*` exists |
+| H.264/HEVC software encode | H.264 software is conditional; HEVC software remains unavailable | `H.264 encoder not installed` until the verified Cisco binary is present; HEVC remains typed unavailable |
 
 The ProRes dialog, approval text, MOV comment and `MediaQcEvidenceV1` carry:
 
 > Decoded/encoded by FFmpeg; not an Apple-authorized ProRes implementation
 
 `apple_authorized=false` and `delivery_qualified=false` accompany that evidence. Preview export
-success does not establish an authorized pipeline. No VA-API export is selected or qualified.
+success does not establish an authorized pipeline. H.264 review evidence names `openh264 2.6.0`
+plus its verified digest, or `vaapi <driver>`. No output is presented as archival or delivery
+qualified.
+
+OpenH264 policy is host-owned and Qt-free. The first install requires explicit consent to Cisco's
+binary licence and stores `media/openh264-consent=2.6.0` in `Bloom.conf`; it never fetches at
+startup. The host supervises system `curl` for at most 60 seconds and 16 MiB, then `bunzip2`,
+verifies both archive and library SHA-256 values from the dependency lock, and atomically publishes
+`libopenh264.so.8` and `BINARY_LICENSE.txt` below the per-user `Kinetik/Bloom/openh264/2.6.0`
+directory. A locate action applies the same verification. The worker receives the directory and
+expected digest, prepends that verified directory to its private loader directory before FFmpeg
+use, and rejects a mismatch. Every worker and fixture-generator build also contains a Bloom-owned
+`libopenh264.so.8` API shim in the private `lib/` directory. The shim contains no codec code and
+keeps FFmpeg loadable when the Cisco binary is absent; it reports the typed `H.264 encoder not
+installed` state for software encode. Decode never needs the Cisco binary, and the shim is used
+for decode and fixture generation until a verified Cisco directory is available. The private
+superbuild stub is not a runtime path and no Cisco binary is bundled.
 
 `host::SequenceExportRunnerV1` compiles one immutable snapshot. `output::CompositionOutputStreamV1`
 owns the codec clients, source-audio decoding and offline mix; host owns approvals and publication.
@@ -1321,7 +1340,7 @@ and tolerance digest after its versioned domain. Execution byte limits are exclu
 identity. The 256×128, 48-frame HQ/PCM fixture record is 146 bytes and independently derives
 `3eb779c366d82c3f12d9fabeb1dce7deff69e740e7db866fe619db7a4d804da2`.
 
-Media analysis binds the frozen preset byte (4 = ProRes, 5 = DNxHR, 6 = PCM), settings digest and
+Media analysis binds the frozen preset byte (4 = ProRes, 5 = DNxHR, 6 = PCM, 7 = H.264 review), settings digest and
 all eleven ordered preservation facets. Its HQ/PCM fixture is 579 bytes and independently derives
 `9a5f56e4290356b06d838af31b272da8d83339b2bd9bd8fd8eb4ed6bf9771350`.
 The expanded QC oracle fixture is 527 bytes. The QC record appends artifact size, frame/sample counts, rational duration, first/last/audio and

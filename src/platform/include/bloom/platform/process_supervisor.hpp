@@ -21,6 +21,9 @@ using ProcessCancellation = std::function<bool()>;
 struct ProcessOptions {
     std::string executable;
     std::vector<std::string> arguments;
+    // Optional child environment entries in KEY=VALUE form. The supervisor still supplies the
+    // deterministic LC_ALL/TZ baseline; entries here override those two keys when requested.
+    std::vector<std::string> environment;
     std::uint64_t addressSpaceBytes = 2ULL * 1024 * 1024 * 1024;
     std::uint32_t openFiles = 64;
     std::chrono::milliseconds messageGrace{50}, termGrace{100};

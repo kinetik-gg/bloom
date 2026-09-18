@@ -1,6 +1,8 @@
 #include <array>
 #include <bloom/media/provider/encode_session.hpp>
+#include <bloom/media/provider/ffmpeg_launch.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
+#include <bloom/media/provider/openh264_runtime.hpp>
 #include <filesystem>
 #include <random>
 
@@ -104,10 +106,37 @@ std::optional<Unavailable> EncodeSessionV1::begin(const EncodeSettingsV1& settin
         return Unavailable{Error::InvalidValue, "Invalid encode session request"};
     if (s.cancel && s.cancel())
         return Unavailable{Error::Cancelled, "Encode cancelled"};
+    const bool h264 = settings.videoCodec == "h264";
+    const bool h264Software = h264 && !s.options.vaapi;
+    OpenH264RuntimeStatus openh264;
+    if (h264Software) {
+        const auto root = s.options.openh264Directory.empty()
+                              ? std::filesystem::path{}
+                              : std::filesystem::path(s.options.openh264Directory);
+        openh264 = OpenH264Runtime(root).verify();
+        if (!openh264.installed)
+            return Unavailable{Error::Unavailable, "H.264 encoder not installed"};
+        s.options.openh264Directory = openh264.directory.string();
+        s.options.openh264Version = openh264.version;
+        s.options.openh264Digest = openh264.digest;
+    }
+    s.hello = ffmpegHandshake(s.options.vaapi, h264Software, s.options.openh264Version,
+                              s.options.openh264Digest);
     if (s.options.executable.empty())
         s.options.executable = defaultWorker();
     platform::ProcessOptions options;
     options.executable = s.options.executable;
+    if (s.options.vaapi)
+        options.arguments.push_back("--vaapi");
+    if (h264Software) {
+        options.arguments.insert(options.arguments.end(),
+                                 {"--openh264-dir", s.options.openh264Directory,
+                                  "--openh264-sha256", s.options.openh264Digest});
+    }
+    configureFfmpegWorkerEnvironment(options, options.executable,
+                                     h264Software
+                                         ? std::filesystem::path(s.options.openh264Directory)
+                                         : std::filesystem::path{});
     auto launched = platform::ProcessSupervisor::launch(options);
     if (const auto* e = std::get_if<platform::ProcessFailure>(&launched))
         return processFailure(*e);

@@ -50,6 +50,8 @@ void FrameExportController::beginCompositionExport(CompositionExportRequest requ
         .preset = request.preset,
         .profile = request.profile,
         .audio = request.audio,
+        .hardware = request.hardware,
+        .openh264Consent = request.openh264Consent,
         .sampleRate = request.sampleRate,
         .pcmCodec =
             request.preset == output::OutputPresetV1::PcmWavV1 ? request.profile : "pcm_s16le",

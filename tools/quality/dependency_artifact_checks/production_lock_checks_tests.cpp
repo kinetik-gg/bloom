@@ -40,7 +40,7 @@ void replace(Value& objectValue, const std::string_view key, Value replacement) 
 constexpr std::string_view kSyntheticEvidenceBytes =
     "synthetic evidence bytes for the production lock validator\n";
 constexpr std::string_view kFrozenLockIdentity =
-    "sha256:222edf4593a35cbf0ec8126e23225effc479f028026a9705e235d747e539c2bf";
+    "sha256:8138ef2df8a0987c3b665bfa2c83d392bf64d21ebdf60d1a3d9e93771b1bc7f4";
 
 [[nodiscard]] auto evidenceDigest() -> std::string {
     return dependency::sha256DigestText(kSyntheticEvidenceBytes);
@@ -71,7 +71,7 @@ constexpr std::string_view kFrozenLockIdentity =
 [[nodiscard]] auto minimalProductionLock() -> Value {
     return object(
         {{"format", text("org.kinetik.bloom.dependencies.lock")},
-         {"schemaVersion", object({{"major", number(1)}, {"minor", number(1)}})},
+         {"schemaVersion", object({{"major", number(1)}, {"minor", number(2)}})},
          {"unicodeProfile", unicodeProfile()},
          {"profiles",
           array({object(

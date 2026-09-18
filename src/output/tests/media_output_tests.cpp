@@ -58,6 +58,20 @@ int main() {
         s.bwfDescription = "BWF metadata";
         check(analyze(o::OutputPresetV1::PcmWavV1, s).digest != pcm.digest,
               "BWF metadata binds approval");
+        p::EncodeSettingsV1 h264;
+        h264.width = 256;
+        h264.height = 128;
+        h264.frames = 48;
+        h264.videoCodec = "h264";
+        h264.profile = "high";
+        h264.container = "mov";
+        h264.audioCodec = "pcm_s16le";
+        h264.audioSamples = 96000;
+        const auto review = analyze(o::OutputPresetV1::H264MovV1, h264);
+        check(review.determinism == p::MediaDeterminismV1::DecodedSemanticTolerance &&
+                  review.toleranceProfile != p::Digest{} &&
+                  review.implementationNote == "Review deliverable — not for archival",
+              "H.264 review analysis records lossy tolerance and archival warning");
         check(std::holds_alternative<p::Unavailable>(
                   o::analyzeMediaOutputV1(o::OutputPresetV1::ProResMovV1, s)),
               "codec/preset mismatch refused");

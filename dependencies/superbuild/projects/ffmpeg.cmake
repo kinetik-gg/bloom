@@ -16,6 +16,8 @@ file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/ffmpeg.configure-arguments"
 if(NOT BLOOM_FFMPEG_ENABLE_VAAPI)
     list(REMOVE_ITEM BLOOM_FFMPEG_CONFIGURE_ARGUMENTS
         --enable-vaapi
+        --enable-encoder=h264_vaapi
+        --enable-encoder=hevc_vaapi
         --enable-hwaccel=h264_vaapi
         --enable-hwaccel=hevc_vaapi)
     list(APPEND BLOOM_FFMPEG_CONFIGURE_ARGUMENTS --disable-vaapi)
@@ -43,10 +45,12 @@ ExternalProject_Add(bloom_dependency_ffmpeg
     DOWNLOAD_NAME ffmpeg-${BLOOM_FFMPEG_VERSION}.tar.xz
     DOWNLOAD_NO_PROGRESS ON
     DOWNLOAD_EXTRACT_TIMESTAMP ON
+    DEPENDS bloom_dependency_openh264
     BUILD_IN_SOURCE ON
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
         CC=${CMAKE_C_COMPILER}
         CXX=${CMAKE_CXX_COMPILER}
+        PKG_CONFIG_PATH=${BLOOM_DEPENDENCY_PREFIX}/lib/pkgconfig
         <SOURCE_DIR>/configure
         --cc=${CMAKE_C_COMPILER}
         --cxx=${CMAKE_CXX_COMPILER}

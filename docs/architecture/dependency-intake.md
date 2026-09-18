@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-09-17
+Updated: 2026-09-18
 
 ## Purpose
 
@@ -19,7 +19,7 @@ identity, resource, and qualification rules below are frozen; production compone
 Unicode digests remain pending verified intake and must not be fabricated to populate the shape.
 
 Implementation status: the two exact Draft 2020-12 lock/prefix schema families, including reviewed
-lock schema 1.1, the offline checker for synthetic contract fixtures, and production lock
+lock schema 1.2, the offline checker for synthetic contract fixtures, and production lock
 validation are implemented — including the reviewed Unicode 15.1 bootstrap tables with two-source
 digest equality, repository-artifact digest binding, and an ASCII-strict v1 string tightening that
 defers NFC machinery. The reviewed production lock contains the static baseline and FFmpeg 8.1.2,
@@ -122,6 +122,32 @@ Lock schema 1.1 retains the v1 canonical ordering rules while permitting the rev
 component fields needed by non-CMake and shared-library dependencies: exact `configureArguments`,
 source archive size/retrieval date, `shared` linkage, and corresponding-source archive digest.
 Components that do not need those fields continue to use the 1.0-compatible static shape.
+
+### Runtime-fetched binary components
+
+Lock schema 1.2 adds the optional `runtimeFetch` record for a component whose distributable binary
+must be obtained by the end user's machine. It binds an HTTPS URL pattern, per-platform archive
+and decompressed-library SHA-256 values, the installed library name, and the vendor licence
+artifact. The generated lock is still the only production lock; records under
+`dependencies/lock-components/` remain the generator inputs.
+
+OpenH264 2.6.0 illustrates the boundary. The superbuild builds headers and a private source
+library only to link FFmpeg, then installs headers and an import stub into the qualified prefix.
+The stub is never a runtime library and the worker has no rpath to its private tree. On first use,
+the host requires explicit Cisco-licence consent, supervises `curl` and `bunzip2`, verifies the
+download and decompressed bytes against the lock, and atomically publishes the binary under
+`Kinetik/Bloom/openh264/2.6.0/`. Every worker launch verifies the installed bytes again. A locate
+path follows the same digest check. Runtime-fetched components are never bundled, fetched at
+startup, or accepted from an unverified mirror.
+
+The worker also carries a Bloom-owned API shim named `libopenh264.so.8` in its private `lib/`
+directory. The shim re-declares only the six public C entry points required by the FFmpeg wrapper,
+exports no codec implementation, reports a zero version with a shim marker, and makes encoder and
+decoder creation fail. It is installed in every worker build, including release builds with tests
+disabled. A verified Cisco directory is prepended to the worker environment for encode, decode,
+and fixture-generator processes; therefore the real binary shadows the shim only after the host
+has verified it. Decode never needs the Cisco binary: the shim keeps FFmpeg loadable, while only
+the H.264 software encoder requires the real Cisco implementation.
 
 ### Closed Resource Limits
 

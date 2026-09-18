@@ -23,6 +23,7 @@ enum class OutputPresetV1 : std::uint8_t {
     ProResMovV1 = 4,
     DnxhrMxfV1 = 5,
     PcmWavV1 = 6,
+    H264MovV1 = 7,
 };
 
 enum class OutputFacetIdV1 : std::uint8_t {

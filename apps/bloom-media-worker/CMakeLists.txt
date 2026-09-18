@@ -57,12 +57,17 @@ target_compile_definitions(bloom_media_provider PRIVATE
     BLOOM_MEDIA_OS="${CMAKE_SYSTEM_NAME}" BLOOM_MEDIA_ARCH="${CMAKE_SYSTEM_PROCESSOR}")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     bloom_find_dependency(FFmpeg)
+    set(BLOOM_OPENH264_SHIM_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/lib")
+    add_subdirectory(openh264_shim)
     add_library(bloom_media_ffmpeg_worker_provider STATIC ffmpeg_provider.cpp)
     target_link_libraries(bloom_media_ffmpeg_worker_provider PRIVATE bloom_media_provider
-                          FFmpeg::avformat FFmpeg::avcodec FFmpeg::swscale FFmpeg::swresample)
+                          FFmpeg::avformat FFmpeg::avcodec FFmpeg::swscale FFmpeg::swresample
+                          "${BLOOM_DEPENDENCY_PREFIX}/lib/libopenh264.so")
     bloom_enable_warnings(bloom_media_ffmpeg_worker_provider)
     add_executable(bloom-media-worker main.cpp)
-    target_link_libraries(bloom-media-worker PRIVATE bloom_media_provider bloom_media_ffmpeg_worker_provider bloom_platform_process)
+    add_dependencies(bloom-media-worker bloom_openh264_shim)
+    target_link_libraries(bloom-media-worker PRIVATE bloom_media_provider bloom_media_ffmpeg_worker_provider
+                          bloom_media_openh264_runtime bloom_platform_process)
     bloom_enable_warnings(bloom-media-worker)
     target_compile_definitions(bloom_media_worker_host PRIVATE BLOOM_ENCODE_WORKER="$<TARGET_FILE:bloom-media-worker>")
     target_compile_definitions(bloom_media_video PRIVATE BLOOM_VIDEO_WORKER="$<TARGET_FILE:bloom-media-worker>")
@@ -83,24 +88,76 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         endif()
     endforeach()
     install(TARGETS bloom-media-worker RUNTIME DESTINATION libexec/bloom/media/ffmpeg-v1)
+    install(TARGETS bloom_openh264_shim
+            LIBRARY DESTINATION libexec/bloom/media/ffmpeg-v1/lib
+            RUNTIME DESTINATION libexec/bloom/media/ffmpeg-v1/lib)
     install(FILES ${bloom_ffmpeg_private} DESTINATION libexec/bloom/media/ffmpeg-v1/lib)
 endif()
 
 if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Tests may exercise the newly-intaken FFmpeg wrapper only with the exact Cisco binary. This
+    # staging directory is build-only test data; it is never copied into the dependency prefix,
+    # installed, or used as a product runtime location.
+    set(bloom_openh264_test_archive
+        "${BLOOM_DEPENDENCY_PREFIX}/../superbuild/downloads/libopenh264-2.6.0-linux64.8.so.bz2")
+    set(bloom_openh264_test_license
+        "${BLOOM_DEPENDENCY_PREFIX}/../superbuild/downloads/BINARY_LICENSE.txt")
+    set(bloom_openh264_test_runtime "${CMAKE_CURRENT_BINARY_DIR}/openh264-test")
+    set(bloom_openh264_test_library "${bloom_openh264_test_runtime}/libopenh264.so.8")
+    if(EXISTS "${bloom_openh264_test_archive}" AND EXISTS "${bloom_openh264_test_license}")
+        add_custom_command(
+            OUTPUT "${bloom_openh264_test_library}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${bloom_openh264_test_runtime}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${bloom_openh264_test_archive}"
+                    "${bloom_openh264_test_runtime}/libopenh264-2.6.0-linux64.8.so.bz2"
+            COMMAND /usr/bin/bunzip2 --force
+                    "${bloom_openh264_test_runtime}/libopenh264-2.6.0-linux64.8.so.bz2"
+            COMMAND ${CMAKE_COMMAND} -E rename
+                    "${bloom_openh264_test_runtime}/libopenh264-2.6.0-linux64.8.so"
+                    "${bloom_openh264_test_library}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${bloom_openh264_test_license}"
+                    "${bloom_openh264_test_runtime}/BINARY_LICENSE.txt"
+            DEPENDS "${bloom_openh264_test_archive}" "${bloom_openh264_test_license}"
+            VERBATIM)
+        add_custom_target(bloom_media_openh264_test_runtime
+                          DEPENDS "${bloom_openh264_test_library}")
+        set(bloom_openh264_test_runtime_available TRUE)
+    else()
+        set(bloom_openh264_test_runtime_available FALSE)
+        message(STATUS "Cisco OpenH264 test binary is absent; FFmpeg encode/decode tests will skip")
+    endif()
     add_library(bloom_media_ffmpeg_fixture_worker_provider STATIC ffmpeg_provider.cpp)
     target_compile_definitions(bloom_media_ffmpeg_fixture_worker_provider PRIVATE BLOOM_MEDIA_FIXTURE_GENERATOR)
     target_link_libraries(bloom_media_ffmpeg_fixture_worker_provider PRIVATE bloom_media_provider
-                          FFmpeg::avformat FFmpeg::avcodec FFmpeg::swscale FFmpeg::swresample)
+                          FFmpeg::avformat FFmpeg::avcodec FFmpeg::swscale FFmpeg::swresample
+                          "${BLOOM_DEPENDENCY_PREFIX}/lib/libopenh264.so")
     bloom_enable_warnings(bloom_media_ffmpeg_fixture_worker_provider)
     add_executable(bloom_media_generate_fixtures tests/generate_fixtures.cpp)
     target_include_directories(bloom_media_generate_fixtures PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(bloom_media_generate_fixtures PRIVATE bloom_media_ffmpeg_fixture_worker_provider bloom_media_provider)
-    set_target_properties(bloom_media_generate_fixtures PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "$ORIGIN/lib")
+    add_dependencies(bloom_media_generate_fixtures bloom_openh264_shim)
+    set_target_properties(
+        bloom_media_generate_fixtures
+        PROPERTIES BUILD_RPATH_USE_ORIGIN TRUE
+                   BUILD_WITH_INSTALL_RPATH TRUE
+                   BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}/lib"
+                   INSTALL_RPATH "$ORIGIN/lib"
+                   INSTALL_RPATH_USE_LINK_PATH FALSE)
+    if(bloom_openh264_test_runtime_available)
+        add_dependencies(bloom_media_generate_fixtures bloom_media_openh264_test_runtime)
+    endif()
     bloom_enable_warnings(bloom_media_generate_fixtures)
     add_executable(bloom_media_encode_test "${PROJECT_SOURCE_DIR}/src/media/provider/tests/encode_tests.cpp")
+    if(bloom_openh264_test_runtime_available)
+        target_compile_definitions(bloom_media_encode_test PRIVATE
+            BLOOM_OPENH264_TEST_RUNTIME="${bloom_openh264_test_runtime}")
+    endif()
     target_link_libraries(bloom_media_encode_test PRIVATE bloom_media_worker_host)
     bloom_enable_warnings(bloom_media_encode_test)
     add_dependencies(bloom_media_encode_test bloom-media-worker)
+    if(bloom_openh264_test_runtime_available)
+        add_dependencies(bloom_media_encode_test bloom_media_openh264_test_runtime)
+    endif()
     bloom_add_test(NAME bloom.media.encode COMMAND bloom_media_encode_test
                    "${CMAKE_CURRENT_BINARY_DIR}/encode-fixtures" LABELS unit media TIMEOUT 120)
     add_executable(bloom_media_ffmpeg_test "${PROJECT_SOURCE_DIR}/src/media/provider/tests/ffmpeg_tests.cpp")

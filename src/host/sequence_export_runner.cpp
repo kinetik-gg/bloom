@@ -90,7 +90,33 @@ struct Work {
         s.frames = total();
         s.sampleRate = request.sampleRate;
         s.bwfDescription = request.bwfDescription;
-        if (request.preset == output::OutputPresetV1::DnxhrMxfV1) {
+        if (request.preset == output::OutputPresetV1::H264MovV1) {
+            s.videoCodec = "h264";
+            s.container = "mov";
+            s.profile = "high";
+            request.worker.vaapi = request.hardware;
+            if (!request.hardware) {
+                const auto status = output::verifyH264RuntimeV1();
+                if (!status.installed) {
+                    require(request.openh264Consent, "H.264 encoder not installed",
+                            Error::Unavailable);
+                    const auto installed =
+                        output::installH264RuntimeV1(true, [&](const std::uint64_t progress) {
+                            context.reportProgress(
+                                {"Installing OpenH264", "Cisco binary", progress, 100});
+                            checkpoint();
+                        });
+                    require(installed.installed, installed.detail.c_str(), Error::Unavailable);
+                    request.worker.openh264Directory = installed.directory.string();
+                    request.worker.openh264Version = installed.version;
+                    request.worker.openh264Digest = installed.digest;
+                } else {
+                    request.worker.openh264Directory = status.directory.string();
+                    request.worker.openh264Version = status.version;
+                    request.worker.openh264Digest = status.digest;
+                }
+            }
+        } else if (request.preset == output::OutputPresetV1::DnxhrMxfV1) {
             s.videoCodec = "dnxhd";
             s.container = "mxf";
         } else if (request.preset == output::OutputPresetV1::PcmWavV1) {
@@ -109,6 +135,12 @@ struct Work {
         }
         analysis = std::make_unique<output::MediaOutputAnalysisV1>(
             checked(output::analyzeMediaOutputV1(request.preset, std::move(s))));
+        if (request.preset == output::OutputPresetV1::H264MovV1) {
+            analysis->implementationNote +=
+                request.hardware ? "; encoder=vaapi vaapi-runtime-unqualified"
+                                 : "; encoder=openh264 " + request.worker.openh264Version +
+                                       " sha256=" + request.worker.openh264Digest;
+        }
         // Prepared frame, outbound protocol buffer and transport copy; one slot by construction.
         const auto bytes = static_cast<std::uint64_t>(settings().width) * settings().height * 24U +
                            std::uint64_t{8} * kEncodeChunkBytes;

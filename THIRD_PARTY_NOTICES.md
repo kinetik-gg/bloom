@@ -18,10 +18,19 @@ component, and its own records explain why the lock cannot represent it.
 | nanobind | 3.0.1 | BSD-3-Clause | Precompiled static core for the optional Python bridge | `dependencies/licenses/nanobind/` |
 | robin-map | 1.4.0 | MIT | Unmodified headers inside the nanobind archive and static core | `dependencies/licenses/robin_map/` |
 | FFmpeg | 8.1.2 | LGPL-2.1-or-later | Shared libraries for the future Linux `bloom-media-worker` only; ProRes is non-authorized preview output | `dependencies/licenses/ffmpeg/`, `dependencies/dependencies.lock.json` |
+| OpenH264 | 2.6.0 | BSD-2-Clause plus Cisco binary terms | Private source-built FFmpeg link-time stub; Cisco `libopenh264.so.8` is fetched by the end user's machine after consent and is never bundled | `dependencies/licenses/openh264/`, `dependencies/dependencies.lock.json` |
 
 FFmpeg's corresponding-source obligation is the exact locked official release archive. The lock,
 recipe, detached-signature evidence, and license/review/security records are the authority for the
 configuration and source offer; the desktop `bloom` target does not link FFmpeg.
+
+OpenH264's corresponding source is the locked Cisco v2.6.0 source archive. The redistributed
+runtime binary is downloaded only from Cisco's HTTPS endpoint, verified against the lock's archive
+and decompressed-library digests, and installed in a per-user directory. Bloom does not bundle or
+load the private source-built stub at runtime. Bloom's separate `libopenh264.so.8` loader shim is
+Bloom-owned code with six re-declared public ABI signatures, no Cisco implementation, and no
+third-party runtime contents; it keeps the worker loadable for decode when the Cisco binary is
+absent.
 
 ## Vendored interface assets
 

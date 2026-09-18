@@ -45,13 +45,23 @@
     "reviewedAt": "2026-09-17"
   },
   "patches": [],
-  "dependencies": [],
+  "dependencies": [
+    {
+      "name": "openh264",
+      "relationship": "link"
+    }
+  ],
   "profileBuilds": [
     {
       "profileId": "bloom.linux-x86-64-clang-release",
       "linkage": "shared",
       "cmakeOptions": [],
       "featureDecisions": [
+        {
+          "id": "bloom.feature.ffmpeg-openh264",
+          "state": "enabled",
+          "reason": "OpenH264 2.6.0 is built only as a private FFmpeg link-time stub; Cisco's runtime binary is fetched separately"
+        },
         {
           "id": "bloom.feature.ffmpeg-vaapi",
           "state": "enabled",
@@ -62,6 +72,9 @@
         "bloom.capability.ffmpeg",
         "bloom.capability.ffmpeg.decode",
         "bloom.capability.ffmpeg.encode",
+        "bloom.capability.ffmpeg.h264-software-openh264",
+        "bloom.capability.ffmpeg.h264-vaapi-encode",
+        "bloom.capability.ffmpeg.hevc-vaapi-encode",
         "bloom.capability.ffmpeg.prores-preview",
         "bloom.capability.ffmpeg.vaapi"
       ],

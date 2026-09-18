@@ -1,18 +1,39 @@
 #include <algorithm>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
+#include <bloom/media/provider/openh264_runtime.hpp>
 #include <bloom/output/media_output.hpp>
 #include <cmath>
 
 namespace bloom::output {
 using namespace media::provider;
+H264RuntimeAvailabilityV1 verifyH264RuntimeV1() {
+    const auto status = OpenH264Runtime().verify();
+    return {.installed = status.installed,
+            .version = status.version,
+            .digest = status.digest,
+            .directory = status.directory,
+            .detail = status.detail};
+}
+H264RuntimeAvailabilityV1 installH264RuntimeV1(const bool explicitConsent,
+                                               const std::function<void(std::uint64_t)>& progress) {
+    const auto result = OpenH264Runtime().install(explicitConsent, progress);
+    return {.installed = result.installed,
+            .version = OpenH264Runtime::version(),
+            .digest = result.installed ? OpenH264Runtime::libraryDigest() : std::string{},
+            .directory = result.directory,
+            .detail = result.detail};
+}
 Result<MediaOutputAnalysisV1> analyzeMediaOutputV1(OutputPresetV1 preset,
                                                    EncodeSettingsV1 settings) {
     const bool prores = preset == OutputPresetV1::ProResMovV1;
     const bool dnx = preset == OutputPresetV1::DnxhrMxfV1;
     const bool pcm = preset == OutputPresetV1::PcmWavV1;
-    if ((!prores && !dnx && !pcm) || !valid(settings) ||
+    const bool h264 = preset == OutputPresetV1::H264MovV1;
+    if ((!prores && !dnx && !pcm && !h264) || !valid(settings) ||
         (prores && (settings.videoCodec != "prores_ks" || settings.container != "mov")) ||
         (dnx && (settings.videoCodec != "dnxhd" || settings.container != "mxf")) ||
+        (h264 && (settings.videoCodec != "h264" || settings.container != "mov" ||
+                  settings.profile != "high")) ||
         (pcm && (!settings.videoCodec.empty() || settings.container != "wav" ||
                  (settings.audioCodec != "pcm_s16le" && settings.audioCodec != "pcm_s24le"))))
         return Unavailable{Error::InvalidValue, "Preset and encode settings differ"};
@@ -26,6 +47,8 @@ Result<MediaOutputAnalysisV1> analyzeMediaOutputV1(OutputPresetV1 preset,
     result.toleranceProfile = encodeTolerance(result.settings);
     if (prores)
         result.implementationNote = kProResExportNote;
+    if (h264)
+        result.implementationNote = "Review deliverable — not for archival";
     using F = OutputFacetIdV1;
     using S = OutputPreservationStateV1;
     const bool alpha =

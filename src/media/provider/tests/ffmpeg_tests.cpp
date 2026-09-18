@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
+#include <bloom/media/provider/openh264_runtime.hpp>
 #include <bloom/media/provider/worker_pool.hpp>
 #include <csignal>
 #include <filesystem>
@@ -78,6 +79,24 @@ struct Fixture {
     }
 };
 void run(const std::filesystem::path& directory) {
+    const auto absent = ffmpegHandshake(false, false);
+    test::check(std::ranges::none_of(absent.declarations,
+                                     [](const auto& declaration) {
+                                         return declaration.capability.role == Role::VideoEncode &&
+                                                declaration.capability.codec == "h264";
+                                     }),
+                "H.264 software encode is absent without a verified Cisco binary");
+    const auto installed =
+        ffmpegHandshake(false, true, OpenH264Runtime::version(), OpenH264Runtime::libraryDigest());
+    const auto h264 = std::ranges::find_if(installed.declarations, [](const auto& declaration) {
+        return declaration.capability.role == Role::VideoEncode &&
+               declaration.capability.codec == "h264";
+    });
+    test::check(h264 != installed.declarations.end() && h264->capability.profile == "high" &&
+                    h264->capability.bitDepth == 8 && h264->capability.chroma == "yuv420p" &&
+                    h264->capability.range == "limited" &&
+                    h264->execution.entitlement.find("openh264=2.6.0") != std::string::npos,
+                "verified Cisco binary adds the H.264 software capability tuple");
     Fixture fixture;
     const auto hardware = ffmpegHandshake(true);
     for (const auto& declaration : hardware.declarations) {

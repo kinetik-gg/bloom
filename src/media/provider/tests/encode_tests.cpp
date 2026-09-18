@@ -6,7 +6,9 @@
 #include <filesystem>
 #include <fstream>
 #include <numeric>
+#include <stdexcept>
 #include <unistd.h>
+#include <utility>
 using namespace bloom::media::provider;
 namespace {
 void ok(const std::optional<Unavailable>& e) {
@@ -64,8 +66,9 @@ AudioBlock sound(const EncodeSettingsV1& settings, std::uint64_t offset, std::ui
                     : static_cast<float>(static_cast<int>((offset + i + c) % 997) - 498) / 1024.0F;
     return block;
 }
-Bytes run(const EncodeSettingsV1& settings, const std::filesystem::path& destination) {
-    EncodeSessionV1 session({});
+Bytes run(const EncodeSettingsV1& settings, const std::filesystem::path& destination,
+          EncodeSessionOptionsV1 options = {}) {
+    EncodeSessionV1 session(std::move(options));
     ok(session.begin(settings));
     for (std::uint64_t i = 0; i < settings.frames; ++i) {
         ok(session.video(image(settings, i)));
@@ -211,10 +214,47 @@ void tests(const std::filesystem::path& directory) {
     settings.container = "tiff";
     (void)run(settings, directory / "export.tiff");
     settings.videoCodec = "h264";
+#ifdef BLOOM_OPENH264_TEST_RUNTIME
+    if (std::filesystem::is_directory(BLOOM_OPENH264_TEST_RUNTIME)) {
+        settings = {};
+        settings.width = 64;
+        settings.height = 48;
+        settings.frames = 48;
+        settings.videoCodec = "h264";
+        settings.profile = "high";
+        settings.container = "mov";
+        settings.audioCodec = "pcm_s16le";
+        settings.audioSamples = 96000;
+        EncodeSessionOptionsV1 openh264;
+        openh264.openh264Directory = BLOOM_OPENH264_TEST_RUNTIME;
+        (void)run(settings, directory / "export-h264.mov", std::move(openh264));
+        const auto render = std::filesystem::exists("/dev/dri/renderD128") ||
+                            std::filesystem::exists("/dev/dri/renderD129");
+        if (render) {
+            auto vaapiSettings = settings;
+            vaapiSettings.width = 128;
+            vaapiSettings.height = 128;
+            EncodeSessionOptionsV1 vaapi;
+            vaapi.vaapi = true;
+            try {
+                (void)run(vaapiSettings, directory / "export-h264-vaapi.mov", std::move(vaapi));
+            } catch (const std::runtime_error& error) {
+                std::cout << "SKIP: VA-API H.264 round trip — driver refused the encode context: "
+                          << error.what() << '\n';
+            }
+        } else {
+            std::cout << "SKIP: VA-API H.264 round trip — no render node\n";
+        }
+    } else {
+        std::cout << "SKIP: H.264 round trip — Cisco OpenH264 binary is not staged; shim only\n";
+    }
+#else
+    std::cout << "SKIP: H.264 round trip — Cisco OpenH264 binary is not staged; shim only\n";
+#endif
     EncodeSessionV1 rejected({});
     const auto unavailable = rejected.begin(settings);
     test::check(unavailable && unavailable->reason == Error::Unavailable &&
-                    unavailable->detail == "codec.h264.software-encoder-not-intaken",
+                    unavailable->detail == "H.264 encoder not installed",
                 "H264 typed unavailable");
     settings = {};
     settings.width = 64;

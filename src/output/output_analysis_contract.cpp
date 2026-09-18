@@ -31,6 +31,8 @@ std::optional<OutputPresetIdentityV1> outputPresetIdentityV1(const OutputPresetV
         return OutputPresetIdentityV1{"DnxhrMxfV1", 1, "bloom.output.dnxhr-mxf.v1"};
     case OutputPresetV1::PcmWavV1:
         return OutputPresetIdentityV1{"PcmWavV1", 1, "bloom.output.pcm-wav.v1"};
+    case OutputPresetV1::H264MovV1:
+        return OutputPresetIdentityV1{"H264MovV1", 1, "bloom.output.h264-mov-rec709-review.v1"};
     case OutputPresetV1::PngRgba8SrgbV1:
         return OutputPresetIdentityV1{"PngRgba8SrgbV1", kOutputPresetVersionV1,
                                       "bloom.output.png-rgba8-srgb.semantic.v1"};
