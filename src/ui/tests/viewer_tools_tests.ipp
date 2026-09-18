@@ -343,10 +343,12 @@ void testViewerProbe(Expectations& expectations) {
                         "retained process probe reads authored reference RGBA within 1e-6");
     expectations.expect(latest.display == render::Rgba8{99, 137, 188, 255} &&
                             std::abs(latest.normalized.red-99.0/255.0) < 1e-12 &&
+                            latest.working && std::abs(latest.working->red - 0.125) < 1e-6 &&
                             near(latest.coordinate.x, 1.5) && near(latest.coordinate.y, 1.5),
-                        "probe reports encoded RGBA8, normalized display and composition coordinates");
+                        "probe reports working/display values and composition coordinates");
     auto* cell = status.findChild<QLabel*>("windowStatusBarProbe");
-    expectations.expect(cell && cell->toolTip().contains("Reference linear"),
+    expectations.expect(cell && cell->toolTip().contains("Working space") &&
+                            cell->toolTip().contains("Display"),
                         "viewer probe signal feeds the status cell with a complete readout");
     QEvent leave(QEvent::Leave);
     QCoreApplication::sendEvent(&fixture.viewer, &leave);

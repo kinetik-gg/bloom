@@ -19,6 +19,17 @@ std::optional<core::Color4d> referencePixel(const runtime::PreparedPreviewFrame&
     return core::Color4d{static_cast<double>(p.red()), static_cast<double>(p.green()),
                          static_cast<double>(p.blue()), static_cast<double>(p.alpha())};
 }
+
+std::optional<core::Color4d> workingPixel(const std::optional<core::Color4d>& reference) {
+    if (!reference.has_value()) {
+        return std::nullopt;
+    }
+    if (reference->alpha == 0.0) {
+        return core::Color4d{0.0, 0.0, 0.0, 0.0};
+    }
+    return core::Color4d{reference->red / reference->alpha, reference->green / reference->alpha,
+                         reference->blue / reference->alpha, reference->alpha};
+}
 bool containsPixel(const render::ImageWindow window, QPoint pixel) {
     return pixel.x() >= window.originX() && pixel.x() < window.maxXExclusive() &&
            pixel.y() >= window.originY() && pixel.y() < window.maxYExclusive();
@@ -70,17 +81,28 @@ void ViewerEditor::refreshProbe(QPointF position) {
     ProbeReadout readout{.valid = true,
                          .coordinate = coordinate,
                          .display = display,
+                         .displayEncoded = display,
                          .normalized = {display.red / 255.0, display.green / 255.0,
                                         display.blue / 255.0, display.alpha / 255.0}};
-    if (probeCacheFrame_ == base && probeCachePixel_ == pixel)
+    readout.workingColorSpaceId =
+        QString::fromStdString(std::string(session_.colorIntent().workingColorSpaceId));
+    readout.displayName = base->desiredIdentity().displayName.empty()
+                              ? tr("default display")
+                              : QString::fromStdString(base->desiredIdentity().displayName);
+    if (probeCacheFrame_ == base && probeCachePixel_ == pixel) {
         readout.reference = probeCacheReference_;
+        readout.displayLinear = probeCacheDisplayLinear_;
+    }
     if (!readout.reference &&
         (!base->desiredIdentity().roi || containsPixel(*base->desiredIdentity().roi, pixel)))
         readout.reference = referencePixel(*base, pixel);
-    if (readout.reference) {
+    readout.working = workingPixel(readout.reference);
+    const bool needsDisplayLinear = base->isOcioQualified() && !readout.displayLinear.has_value();
+    if (readout.reference && !needsDisplayLinear) {
         probeCacheFrame_ = base;
         probeCachePixel_ = pixel;
         probeCacheReference_ = readout.reference;
+        probeCacheDisplayLinear_ = readout.displayLinear;
         if (probeTask_)
             probeTask_->cancel();
     } else {
@@ -126,6 +148,7 @@ void ViewerEditor::consumeProbe() {
     if (value && *value && (*value)->frame() &&
         (*value)->frame()->desiredIdentity() == probeIdentity_) {
         probeCacheReference_ = referencePixel(*(*value)->frame(), probeTaskPixel_);
+        probeCacheDisplayLinear_ = (*value)->frame()->displayLinearProbe();
         probeCacheFrame_ = probeTaskFrame_;
         probeCachePixel_ = probeTaskPixel_;
         probeFailure_.clear();

@@ -15,6 +15,7 @@
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QTimer>
@@ -204,6 +205,7 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     probe_ = makeCell(QStringLiteral("windowStatusBarProbe"), kit::TypeRole::UiSmall,
                       kit::Color::Muted, this);
     probe_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    probe_->installEventFilter(this);
     probe_->hide();
     message_ = makeCell(QStringLiteral("windowStatusBarMessage"), kit::TypeRole::UiSmall,
                         kit::Color::Foreground, this);
@@ -430,6 +432,7 @@ QString WindowStatusBar::messageTextForTest() const { return message_->text(); }
 QString WindowStatusBar::versionTextForTest() const { return version_->text(); }
 
 void WindowStatusBar::refreshProbeCell(const ProbeReadout& readout) {
+    probeReadout_ = readout;
     if (!readout.valid) {
         static_cast<kit::KLabel*>(probe_)->setElidedText({});
         probe_->setAccessibleName({});
@@ -443,21 +446,44 @@ void WindowStatusBar::refreshProbeCell(const ProbeReadout& readout) {
             .arg(value.blue, 0, 'g', 7)
             .arg(value.alpha, 0, 'g', 7);
     };
-    const auto reference = readout.reference              ? rgba(*readout.reference)
-                           : readout.pending              ? tr("Sampling…")
-                           : readout.diagnostic.isEmpty() ? tr("Unavailable")
-                                                          : readout.diagnostic;
-    const auto text = tr("(%1, %2)  Display RGBA8 %3 %4 %5 %6  Normalised %7  Reference linear %8")
+    const auto rgb = [](core::Color4d value) {
+        return QStringLiteral("%1 %2 %3")
+            .arg(value.red, 0, 'g', 7)
+            .arg(value.green, 0, 'g', 7)
+            .arg(value.blue, 0, 'g', 7);
+    };
+    const auto working = readout.working                ? rgba(*readout.working)
+                         : readout.pending              ? tr("Sampling…")
+                         : readout.diagnostic.isEmpty() ? tr("Unavailable")
+                                                        : readout.diagnostic;
+    const auto display = probeFloatFormat_ ? (readout.displayLinear ? rgb(*readout.displayLinear)
+                                                                    : tr("Unavailable"))
+                                           : QStringLiteral("%1 %2 %3")
+                                                 .arg(readout.displayEncoded.red)
+                                                 .arg(readout.displayEncoded.green)
+                                                 .arg(readout.displayEncoded.blue);
+    const auto text = tr("(%1, %2)  W: %3 · D: %4")
                           .arg(readout.coordinate.x, 0, 'f', 2)
                           .arg(readout.coordinate.y, 0, 'f', 2)
-                          .arg(readout.display.red)
-                          .arg(readout.display.green)
-                          .arg(readout.display.blue)
-                          .arg(readout.display.alpha)
-                          .arg(rgba(readout.normalized), reference);
+                          .arg(working, display);
     probe_->show();
     static_cast<kit::KLabel*>(probe_)->setElidedText(text);
     probe_->setAccessibleName(text);
+    probe_->setToolTip(tr("Working space: %1\nDisplay: %2\nCtrl-click to show %3 values")
+                           .arg(readout.workingColorSpaceId, readout.displayName,
+                                probeFloatFormat_ ? tr("float pre-encode") : tr("8-bit encoded")));
+}
+
+bool WindowStatusBar::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == probe_ && event->type() == QEvent::MouseButtonPress) {
+        const auto* mouse = static_cast<const QMouseEvent*>(event);
+        if (mouse->button() == Qt::LeftButton && mouse->modifiers().testFlag(Qt::ControlModifier)) {
+            probeFloatFormat_ = !probeFloatFormat_;
+            refreshProbeCell(probeReadout_);
+            return true;
+        }
+    }
+    return KSurface::eventFilter(watched, event);
 }
 
 } // namespace bloom::ui

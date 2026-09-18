@@ -14,9 +14,14 @@ struct ProbeReadout final {
     bool valid = false;
     document::Vec2d coordinate{};
     render::Rgba8 display{};
+    render::Rgba8 displayEncoded{};
     core::Color4d normalized{};
     // Exact premultiplied reference values, widened from Float32 without a color transform.
     std::optional<core::Color4d> reference = std::nullopt;
+    std::optional<core::Color4d> working = std::nullopt;
+    std::optional<core::Color4d> displayLinear = std::nullopt;
+    QString workingColorSpaceId{};
+    QString displayName{};
     bool pending = false;
     QString diagnostic{};
 };

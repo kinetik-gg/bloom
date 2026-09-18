@@ -144,8 +144,8 @@ frame outline. `ViewerWorkPadding` reserves breathing room around the frame; the
 also includes `ToolColumnWidth`. Image fitting, picking, selection overlays and panning all
 use this same padded rectangle. View's Background choices remain presentation preferences.
 
-The declared footer order is Channel, ROI toggle, Clear ROI, exposure (EV), gamma, RAM Preview,
-transport, an expanding gap, timecode, Fit/zoom, and resolution. Background is available through
+The declared footer order is Channel, ROI toggle, Clear ROI, exposure (EV), gamma, Display / View,
+Look, RAM Preview, transport, an expanding gap, timecode, Fit/zoom, and resolution. Background is available through
 View. The resolution dropdown is
 the only visible resolution readout; its tooltip reports the effective Auto factor. The old
 background and effective-resolution widget identities remain available to automation.
@@ -167,12 +167,14 @@ are named `viewerRoiToggle` and `viewerRoiClear`. Pending display work and failu
 exposure tooltip and task monitor; superseding controls or closing the viewer cancels its work.
 
 `ViewerEditor::probeChanged(ProbeReadout)` feeds the status bar's `windowStatusBarProbe` cell through
-the preview controller. The cell follows `makeCell`, using UiSmall typography and Muted ink. Hover
-reports composition coordinates, display RGBA8, normalized display RGBA, and exact premultiplied
-reference linear RGBA. It reads the display buffer before channel remapping or background painting.
-The reference readout can show Sampling or a diagnostic while its worker runs. A narrow status bar
-elides the line while preserving the complete tooltip and accessible name. Leaving the viewer
-clears the cell immediately, including when an earlier probe is still completing.
+the preview controller. The cell follows `makeCell`, using UiSmall typography and Muted ink. It
+reports `W: r g b a · D: r g b`, where W is un-premultiplied working-space RGBA and D is either the
+painted RGBA8 or the float display-stage value before encoding. Hover identifies the working-space
+id and selected display/view, and Ctrl-click cycles the D format. It reads the display buffer before
+channel remapping or background painting. The readout can show Sampling or a diagnostic while its
+worker runs. A narrow status bar elides the line while preserving the complete tooltip and
+accessible name. Leaving the viewer clears the cell immediately, including when an earlier probe is
+still completing.
 
 Viewer selection bounds use Accent cosmetic hairlines snapped to device-pixel centres. Eight
 `GizmoHandle` squares use Surface fill and Accent outlines; the anchor uses a crosshair ring.

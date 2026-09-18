@@ -122,6 +122,8 @@ class WindowStatusBar final : public kit::KSurface {
     [[nodiscard]] QString versionTextForTest() const;
 
   protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
   private:
     void refreshPreviewCells();
     void refreshProbeCell(const ProbeReadout& readout);
@@ -159,6 +161,8 @@ class WindowStatusBar final : public kit::KSurface {
     std::size_t memoryReserveBytes_ = 0;
     // When swap starts the same episode, its distinct notice follows the ordinary trim notice.
     bool pendingSwapNotice_ = false;
+    ProbeReadout probeReadout_{};
+    bool probeFloatFormat_ = false;
 };
 
 } // namespace bloom::ui
