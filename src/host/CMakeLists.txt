@@ -7,6 +7,7 @@ target_sources(
         copy_publication.cpp
         font_catalogue.cpp
         frame_export_publication.cpp
+        frame_export_publication_naming.cpp
         frame_range_runner.cpp
         sequence_export_runner.cpp
         output_analysis_attempt_runner.cpp

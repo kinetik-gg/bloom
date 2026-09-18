@@ -52,6 +52,15 @@
 //     established save/copy publication composition rather than inventing coordinator variants".
 namespace bloom::host {
 
+struct SequenceNamingV1 final {
+    std::optional<std::uint64_t> startFrame = {};
+    std::uint32_t framePadding = 4;
+    std::string namePattern = "<base>.####.<ext>";
+};
+[[nodiscard]] std::optional<std::filesystem::path> sequencePublicationPathV1(
+    const std::filesystem::path& destination, std::string_view compositionName, std::uint64_t frame,
+    std::uint64_t firstFrame, std::uint64_t lastFrame, const SequenceNamingV1& naming = {});
+
 struct FrameExportLimitsV1 final {
     std::chrono::steady_clock::duration totalDeadline = std::chrono::hours(24);
     std::chrono::steady_clock::duration noProgressInterval = std::chrono::seconds(120);

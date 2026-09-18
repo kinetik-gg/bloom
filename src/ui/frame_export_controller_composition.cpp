@@ -57,7 +57,10 @@ void FrameExportController::beginCompositionExport(CompositionExportRequest requ
             request.preset == output::OutputPresetV1::PcmWavV1 ? request.profile : "pcm_s16le",
         .bwfDescription = {},
         .assetBaseDirectory = {},
-        .worker = {}};
+        .worker = {},
+        .startFrame = request.range.naming.startFrame,
+        .framePadding = request.range.naming.framePadding,
+        .namePattern = request.range.naming.namePattern};
     mediaExport_ = std::make_unique<host::SequenceExportRunnerV1>(
         scheduler_, compiler_, publicationCoordinator_, artifactCoordinator_, ledger_,
         std::move(captured));

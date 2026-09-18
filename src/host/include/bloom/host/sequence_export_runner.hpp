@@ -18,6 +18,9 @@ struct SequenceExportRequestV1 {
     std::string pcmCodec = "pcm_s16le", bwfDescription;
     std::filesystem::path assetBaseDirectory;
     media::provider::EncodeSessionOptionsV1 worker;
+    std::optional<std::uint64_t> startFrame = {};
+    std::uint32_t framePadding = 4;
+    std::string namePattern = "<base>.####.<ext>";
     std::uint64_t queueByteLimit = 512ULL * 1024U * 1024U;
 };
 enum class SequenceExportStageV1 : std::uint8_t {

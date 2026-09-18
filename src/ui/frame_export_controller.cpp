@@ -443,8 +443,17 @@ void FrameExportController::beginRangeExport(FrameExportRangeRequest request) {
         return;
     }
 
-    pendingDestination_ =
-        sequenceFramePath(request.destination, request.firstFrame, request.lastFrame);
+    const auto compositionName = session_.composition()->name();
+    const auto firstPath =
+        host::sequencePublicationPathV1(request.destination, compositionName, request.firstFrame,
+                                        request.firstFrame, request.lastFrame, request.naming);
+    if (!firstPath) {
+        emit exportFinished(FrameExportOutcome::Refused,
+                            tr("Sequence names must be unique, ascending filenames with one frame "
+                               "token and the preset extension."));
+        return;
+    }
+    pendingDestination_ = *firstPath;
     pendingPreset_ = presetForDestination(request.destination);
     sequence_.emplace(SequenceState{.destination = std::move(request.destination),
                                     .firstFrame = request.firstFrame,
@@ -454,6 +463,8 @@ void FrameExportController::beginRangeExport(FrameExportRangeRequest request) {
                                     .frameRate = context->frameRate,
                                     .duration = context->duration,
                                     .plan = nullptr,
+                                    .naming = std::move(request.naming),
+                                    .compositionName = compositionName,
                                     .approved = false,
                                     .cancelled = false});
     emit rangeProgressChanged();
@@ -710,8 +721,14 @@ void FrameExportController::advanceSequence() {
     // call, so nothing may assume `sequence_` is still engaged across it.
     const auto frameIndex = sequence_->nextFrame;
     const auto plan = sequence_->plan;
-    pendingDestination_ =
-        sequenceFramePath(sequence_->destination, frameIndex, sequence_->lastFrame);
+    const auto path = host::sequencePublicationPathV1(
+        sequence_->destination, sequence_->compositionName, frameIndex, sequence_->firstFrame,
+        sequence_->lastFrame, sequence_->naming);
+    if (!path) {
+        finishSequence(FrameExportOutcome::Failed, tr("Invalid sequence filename."));
+        return;
+    }
+    pendingDestination_ = *path;
     if (!beginAttempt(plan, *time)) {
         finishSequence(
             FrameExportOutcome::Failed,

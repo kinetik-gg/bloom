@@ -76,6 +76,7 @@ struct FrameExportRangeRequest final {
     std::filesystem::path destination;
     std::uint64_t firstFrame = 0;
     std::uint64_t lastFrame = 0;
+    host::SequenceNamingV1 naming = {};
 };
 
 struct CompositionExportRequest final {
@@ -262,6 +263,8 @@ class FrameExportController final : public QObject {
         // -- the byte-equality guard and the per-frame publication intent are never bypassed -- but
         // the artist is not asked again. Asking per frame would make a hundred-frame range a
         // hundred modal dialogs, which is not an approval, it is an obstacle.
+        host::SequenceNamingV1 naming = {};
+        std::string compositionName = {};
         bool approved = false;
         bool cancelled = false;
     };

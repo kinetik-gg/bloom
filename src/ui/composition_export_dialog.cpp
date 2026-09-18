@@ -52,6 +52,17 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
     first->setRange(0, maximum);
     last->setRange(0, maximum);
     last->setValue(maximum);
+    auto* startFrame = new QSpinBox(&dialog);
+    startFrame->setObjectName("compositionExportStartFrame");
+    startFrame->setRange(0, std::numeric_limits<int>::max());
+    auto* padding = new QSpinBox(&dialog);
+    padding->setObjectName("compositionExportPadding");
+    padding->setRange(1, 20);
+    padding->setValue(4);
+    auto* pattern = new kit::KLineEdit(&dialog);
+    pattern->setObjectName("compositionExportPattern");
+    pattern->setText("<base>.####.<ext>");
+    QObject::connect(first, &QSpinBox::valueChanged, startFrame, &QSpinBox::setValue);
     auto* destination = new kit::KLineEdit(&dialog);
     destination->setObjectName("compositionExportDestination");
     auto* browse = new kit::KButton(QObject::tr("Browse…"), &dialog);
@@ -99,6 +110,9 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
     layout->addRow(QObject::tr("First frame"), first);
     layout->addRow(QObject::tr("Last frame"), last);
     layout->addRow(QObject::tr("Destination"), destinationRow);
+    layout->addRow(QObject::tr("Start frame"), startFrame);
+    layout->addRow(QObject::tr("Padding"), padding);
+    layout->addRow(QObject::tr("Pattern"), pattern);
     layout->addRow(audioRow);
     layout->addRow(note);
     layout->addRow(install);
@@ -137,6 +151,10 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
         const bool h264 = id == output::OutputPresetV1::H264MovV1;
         const bool video = h264 || id == output::OutputPresetV1::ProResMovV1 ||
                            id == output::OutputPresetV1::DnxhrMxfV1;
+        const bool sequence = !video && id != output::OutputPresetV1::PcmWavV1;
+        layout->setRowVisible(startFrame, sequence);
+        layout->setRowVisible(padding, sequence);
+        layout->setRowVisible(pattern, sequence);
         audio->setEnabled(video);
         audio->setVisible(video || id == output::OutputPresetV1::PcmWavV1);
         audioLabel->setVisible(video || id == output::OutputPresetV1::PcmWavV1);
@@ -225,6 +243,9 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
     request.range = {std::filesystem::path(destination->text().toStdString()),
                      static_cast<std::uint64_t>(first->value()),
                      static_cast<std::uint64_t>(last->value())};
+    request.range.naming = {.startFrame = static_cast<std::uint64_t>(startFrame->value()),
+                            .framePadding = static_cast<std::uint32_t>(padding->value()),
+                            .namePattern = pattern->text().toStdString()};
     request.preset = static_cast<output::OutputPresetV1>(preset->currentData().toInt());
     request.profile = profile->currentData().toString().toStdString();
     request.audio = audio->isChecked();
