@@ -32,11 +32,39 @@ Acceptance requirements #1–#3 are delivered for the MEDIA-K1 kernel and Linux 
    remains a qualification gate when those backends arrive; Linux evidence is not portable proof.
 
 The containing ADR remains **proposed** for broad real-codec/export/delivery qualification.
-Requirements #4–#8 and complete secure media-file capabilities, demux/index/seek, audio transport,
-external GPU leases, shared memory, and export/reopen/QC execution remain future work. Existing
+MEDIA-3 supplies the Linux read slice and MEDIA-4 supplies the export evidence below.
+Cross-platform qualification, external GPU leases, shared memory and strict delivery remain
+future work. Existing
 accepted v0 image/audio exceptions stay narrowly scoped; no further exceptions are admitted.
 The implemented wire format, limits, target boundaries, and worker rpath policy are specified in
 [`media-io.md`](../architecture/media-io.md#implemented-media-k1-contract-and-worker).
+
+## MEDIA-4 export evidence (2026-09-17)
+
+Owner decisions dated 2026-09-16 permit FFmpeg ProRes read and write for preview workflows with
+the explicit note "Decoded/encoded by FFmpeg; not an Apple-authorized ProRes implementation".
+The note appears in export and approval dialogs, the MOV metadata and the returned QC record.
+Both authority booleans remain false. H.264/HEVC software encoding is excluded from intake and
+returns typed `Unavailable`; no hardware determinism or delivery qualification is inferred.
+
+Requirement #5 now has a Linux implementation: `host::SequenceExportRunnerV1` compiles once,
+uses SCRIPT-0's exact rational frame mapping, approves every frame, admits a one-frame queue
+through the ledger, mixes timeline audio in bounded blocks, and uses the isolated encoder/muxer.
+Close/reopen QC checks frame/sample counts, timing, stream layout, first/last pixel tolerances and
+every PCM sample. Staged transfer and reopen hashing precede shared-coordinator atomic publication.
+The 48-frame motion/audio fixture, TIFF round trip, independent WAV byte oracle, cancellation,
+worker-crash/retry and identity oracles exercise this boundary.
+
+For #8, the provider handshake reports the ordered encode/mux/reopen roles and pinned execution
+identity. The Export Composition dialog exposes preset/profile, range, destination, source-rate
+audio, explicit ProRes limitations and provider-unavailable reasons. Headless callers receive the
+same typed settings, analysis and `MediaQcEvidenceV1`; SCRIPT-0 remains the owner of CLI surfaces.
+This is partial #8 evidence: macOS/Windows still use the explicit unavailable process backend,
+and no platform or recipient qualification is borrowed from Linux results. The ADR remains proposed
+for its broader acceptance conditions.
+
+The implemented export ladder, canonical records and immutable tolerance profiles are owned by
+[media-io.md](../architecture/media-io.md#time-based-export-media-4).
 
 ## Accepted v0 amendment: WAV and MP3 preview audio (2026-09-15)
 

@@ -112,7 +112,7 @@ void probe(Writer& w, const ProbeResult& p) {
         w.rational(s.rate);
         w.number(s.width);
         w.number(s.height);
-        w.enumeration(s.format, 1, 4);
+        w.enumeration(s.format, 1, 5);
         colour(w, s.colour);
         w.rational(s.duration);
         w.number(s.frameCount);
@@ -142,7 +142,7 @@ ProbeResult probe(Reader& r) {
         s.rate = r.rational();
         s.width = r.number<std::uint32_t>();
         s.height = r.number<std::uint32_t>();
-        s.format = r.enumeration<PixelFormat>(1, 4);
+        s.format = r.enumeration<PixelFormat>(1, 5);
         s.colour = colour(r);
         s.duration = r.rational();
         s.frameCount = r.number<std::uint64_t>();
@@ -162,7 +162,7 @@ ProbeResult probe(Reader& r) {
 }
 void frame(Writer& w, const FrameProduct& f) {
     require(valid(f));
-    w.enumeration(f.format, 1, 4);
+    w.enumeration(f.format, 1, 5);
     w.rational(f.pts);
     colour(w, f.colour);
     w.count(f.planes.size(), Limits::planes);
@@ -177,7 +177,7 @@ void frame(Writer& w, const FrameProduct& f) {
 }
 FrameProduct frame(Reader& r) {
     FrameProduct f;
-    f.format = r.enumeration<PixelFormat>(1, 4);
+    f.format = r.enumeration<PixelFormat>(1, 5);
     f.pts = r.rational();
     f.colour = colour(r);
     const auto n = r.count(Limits::planes);
@@ -251,6 +251,62 @@ AudioBlock audio(Reader& r) {
     require(valid(value));
     return value;
 }
+void settings(Writer& w, const EncodeSettingsV1& v) {
+    require(valid(v));
+    for (const auto* s : {&v.container, &v.videoCodec, &v.profile, &v.audioCodec})
+        w.text(*s);
+    w.number(v.width);
+    w.number(v.height);
+    w.rational(v.rate);
+    w.number(v.frames);
+    w.number(v.audioSamples);
+    w.number(v.sampleRate);
+    w.number(v.channels);
+    w.text(v.bwfDescription);
+    w.number(v.byteLimit);
+}
+EncodeSettingsV1 settings(Reader& r) {
+    EncodeSettingsV1 v;
+    for (auto* s : {&v.container, &v.videoCodec, &v.profile, &v.audioCodec})
+        *s = r.text();
+    v.width = r.number<std::uint32_t>();
+    v.height = r.number<std::uint32_t>();
+    v.rate = r.rational();
+    v.frames = r.number<std::uint64_t>();
+    v.audioSamples = r.number<std::uint64_t>();
+    v.sampleRate = r.number<std::uint32_t>();
+    v.channels = r.number<std::uint32_t>();
+    v.bwfDescription = r.text();
+    v.byteLimit = r.number<std::uint64_t>();
+    require(valid(v));
+    return v;
+}
+void qc(Writer& w, const EncodeQcV1& v) {
+    require(v.bytes > 0 && v.bytes <= Limits::sourceBytes && v.frames <= Limits::indexEntries);
+    w.number(v.bytes);
+    w.number(v.frames);
+    w.number(v.audioSamples);
+    w.rational(v.duration);
+    for (const auto* d : {&v.artifact, &v.firstFrame, &v.lastFrame, &v.audio})
+        w.hash(*d);
+    require(v.maximumError <= 65535 && v.meanError <= v.maximumError);
+    w.number(v.maximumError);
+    w.number(v.meanError);
+}
+EncodeQcV1 qc(Reader& r) {
+    EncodeQcV1 v;
+    v.bytes = r.number<std::uint64_t>();
+    v.frames = r.number<std::uint64_t>();
+    v.audioSamples = r.number<std::uint64_t>();
+    v.duration = r.rational();
+    for (auto* d : {&v.artifact, &v.firstFrame, &v.lastFrame, &v.audio})
+        *d = r.hash();
+    v.maximumError = r.number<std::uint32_t>();
+    v.meanError = r.number<std::uint32_t>();
+    Writer validation;
+    qc(validation, v);
+    return v;
+}
 } // namespace
 Result<Bytes> encodeMessage(const Message& m) {
     try {
@@ -260,7 +316,7 @@ Result<Bytes> encodeMessage(const Message& m) {
         w.number(magic);
         w.number(kProtocolVersion);
         w.number(kSchemaVersion);
-        w.enumeration(m.kind, 1, 10);
+        w.enumeration(m.kind, 1, 15);
         w.number(m.session);
         w.number(m.sequence);
         switch (m.kind) {
@@ -282,12 +338,29 @@ Result<Bytes> encodeMessage(const Message& m) {
         case MessageKind::Audio:
             audio(w, std::get<AudioBlock>(m.payload));
             break;
+        case MessageKind::EncodeBegin:
+            settings(w, std::get<EncodeSettingsV1>(m.payload));
+            break;
+        case MessageKind::EncodeRead:
+            w.number(std::get<std::uint64_t>(m.payload));
+            break;
+        case MessageKind::EncodedChunk: {
+            const auto& chunk = std::get<EncodedChunkV1>(m.payload);
+            w.number(chunk.offset);
+            w.count(chunk.bytes.size(), kEncodeChunkBytes);
+            w.bytes.insert(w.bytes.end(), chunk.bytes.begin(), chunk.bytes.end());
+            break;
+        }
+        case MessageKind::EncodeQc:
+            qc(w, std::get<EncodeQcV1>(m.payload));
+            break;
         case MessageKind::Failure: {
             const auto& e = std::get<Unavailable>(m.payload);
             w.enumeration(e.reason, 1, static_cast<std::uint8_t>(Error::SourceChanged));
             w.text(e.detail);
             break;
         }
+        case MessageKind::EncodeFinish:
         case MessageKind::Cancel:
         case MessageKind::Shutdown:
         case MessageKind::Ack:
@@ -334,7 +407,7 @@ Result<Message> decodeMessage(std::span<const std::byte> bytes) {
         const auto schema = r.number<std::uint16_t>();
         require(protocol == kProtocolVersion && schema == kSchemaVersion, Error::VersionMismatch);
         Message m;
-        m.kind = r.enumeration<MessageKind>(1, 10);
+        m.kind = r.enumeration<MessageKind>(1, 15);
         m.session = r.number<std::uint64_t>();
         m.sequence = r.number<std::uint64_t>();
         require(m.session != 0 && m.sequence != 0);
@@ -357,6 +430,25 @@ Result<Message> decodeMessage(std::span<const std::byte> bytes) {
         case MessageKind::Audio:
             m.payload = audio(r);
             break;
+        case MessageKind::EncodeBegin:
+            m.payload = settings(r);
+            break;
+        case MessageKind::EncodeRead:
+            m.payload = r.number<std::uint64_t>();
+            break;
+        case MessageKind::EncodedChunk: {
+            EncodedChunkV1 chunk;
+            chunk.offset = r.number<std::uint64_t>();
+            const auto count = r.count(kEncodeChunkBytes);
+            require(count <= r.bytes.size(), Error::BadLength);
+            chunk.bytes.assign(r.bytes.begin(), r.bytes.begin() + count);
+            r.bytes = r.bytes.subspan(count);
+            m.payload = std::move(chunk);
+            break;
+        }
+        case MessageKind::EncodeQc:
+            m.payload = qc(r);
+            break;
         case MessageKind::Failure: {
             Unavailable e;
             e.reason = r.enumeration<Error>(1, static_cast<std::uint8_t>(Error::SourceChanged));
@@ -364,6 +456,7 @@ Result<Message> decodeMessage(std::span<const std::byte> bytes) {
             m.payload = std::move(e);
             break;
         }
+        case MessageKind::EncodeFinish:
         case MessageKind::Cancel:
         case MessageKind::Shutdown:
         case MessageKind::Ack:

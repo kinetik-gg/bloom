@@ -257,6 +257,14 @@ FrameExportPublicationResultV1 executeExportPublication(
     const bool isPng = attempt.preset() == output::OutputPresetV1::PngRgba8SrgbV1;
     const bool isTiff = attempt.preset() == output::OutputPresetV1::TiffRgba16SrgbV1;
     std::uint64_t preparedBytes = 0;
+    if (isTiff) {
+        const auto* descriptor = attempt.frame()->processImage().descriptor();
+        if (!descriptor)
+            return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
+                FrameExportPublicationStageV1::Preflight, FrameExportUnexpectedFailureV1{}));
+        // One prepared frame plus protocol serialization/copy; acknowledgement bounds the queue.
+        preparedBytes = static_cast<std::uint64_t>(descriptor->layout().pixelStorageBytes) * 2U;
+    }
     if (isPng) {
         const auto counted = output::checkedPngPreparedByteCountV1(attempt);
         if (!counted.has_value()) {
@@ -350,9 +358,15 @@ FrameExportPublicationResultV1 executeExportPublication(
         }
     } else if (isTiff) {
         const output::TiffExportWriterV1 writer;
-        const auto tiffResult = writer.run(attempt, scratch.path());
+        const auto tiffResult =
+            writer.run(attempt, scratch.path(), nullptr, context.cancellation());
         writeVerify.cancelled = tiffResult.cancelled;
         writeVerify.written = tiffResult.written;
+        if (tiffResult.written) {
+            writeVerify.semanticDigest = tiffResult.semanticDigest;
+            writeVerify.artifactDigest = tiffResult.artifactDigest;
+            writeVerify.artifactByteCount = tiffResult.artifactBytes;
+        }
         if (!writeVerify.written && !writeVerify.cancelled) {
             writeVerify.stage = FrameExportPublicationStageV1::Writing;
             writeVerify.payload = tiffResult.error;

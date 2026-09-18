@@ -13,7 +13,7 @@ file(GLOB_RECURSE bloom_media_identity_sources CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/src/platform/include/bloom/platform/process_*.hpp"
      "${PROJECT_SOURCE_DIR}/src/core/sha256.cpp"
      "${PROJECT_SOURCE_DIR}/src/core/include/bloom/core/sha256.hpp"
-     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp")
+     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp" "${CMAKE_CURRENT_SOURCE_DIR}/*encode.ipp")
 list(FILTER bloom_media_identity_sources EXCLUDE REGEX "/tests/")
 list(APPEND bloom_media_identity_sources "${CMAKE_CURRENT_LIST_FILE}"
      "${PROJECT_SOURCE_DIR}/src/media/provider/CMakeLists.txt"
@@ -43,6 +43,9 @@ bloom_enable_warnings(bloom-media-fake-worker)
 
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ffmpeg_provider_fixtures.ipp")
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/ffmpeg_provider_fixtures.ipp" bloom_ffmpeg_fixture_digest)
+set(bloom_encode_fixture_source "${PROJECT_SOURCE_DIR}/src/media/provider/tests/encode_tests.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${bloom_encode_fixture_source}")
+file(SHA256 "${bloom_encode_fixture_source}" bloom_ffmpeg_encode_fixture_digest)
 # FFmpeg remains private to the Linux worker. The host sees only codec-free manifests.
 set(bloom_ffmpeg_build_id "ffmpeg-v1:${bloom_media_build_digest}")
 target_sources(bloom_media_provider PRIVATE "${PROJECT_SOURCE_DIR}/src/media/provider/ffmpeg_manifest.cpp")
@@ -50,6 +53,7 @@ target_compile_definitions(bloom_media_provider PRIVATE
     BLOOM_MEDIA_DEPENDENCY_LOCK="${bloom_media_lock_digest}"
     BLOOM_FFMPEG_BUILD_ID="${bloom_ffmpeg_build_id}"
     BLOOM_FFMPEG_FIXTURE_ID="${bloom_ffmpeg_fixture_digest}"
+    BLOOM_FFMPEG_ENCODE_FIXTURE_ID="${bloom_ffmpeg_encode_fixture_digest}"
     BLOOM_MEDIA_OS="${CMAKE_SYSTEM_NAME}" BLOOM_MEDIA_ARCH="${CMAKE_SYSTEM_PROCESSOR}")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     bloom_find_dependency(FFmpeg)
@@ -60,6 +64,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(bloom-media-worker main.cpp)
     target_link_libraries(bloom-media-worker PRIVATE bloom_media_provider bloom_media_ffmpeg_worker_provider bloom_platform_process)
     bloom_enable_warnings(bloom-media-worker)
+    target_compile_definitions(bloom_media_worker_host PRIVATE BLOOM_ENCODE_WORKER="$<TARGET_FILE:bloom-media-worker>")
     target_compile_definitions(bloom_media_video PRIVATE BLOOM_VIDEO_WORKER="$<TARGET_FILE:bloom-media-worker>")
     set_target_properties(bloom-media-worker PROPERTIES BUILD_RPATH_USE_ORIGIN TRUE BUILD_WITH_INSTALL_RPATH TRUE
                           INSTALL_RPATH "$ORIGIN/lib" INSTALL_RPATH_USE_LINK_PATH FALSE)
@@ -92,6 +97,12 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(bloom_media_generate_fixtures PRIVATE bloom_media_ffmpeg_fixture_worker_provider bloom_media_provider)
     set_target_properties(bloom_media_generate_fixtures PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "$ORIGIN/lib")
     bloom_enable_warnings(bloom_media_generate_fixtures)
+    add_executable(bloom_media_encode_test "${PROJECT_SOURCE_DIR}/src/media/provider/tests/encode_tests.cpp")
+    target_link_libraries(bloom_media_encode_test PRIVATE bloom_media_worker_host)
+    bloom_enable_warnings(bloom_media_encode_test)
+    add_dependencies(bloom_media_encode_test bloom-media-worker)
+    bloom_add_test(NAME bloom.media.encode COMMAND bloom_media_encode_test
+                   "${CMAKE_CURRENT_BINARY_DIR}/encode-fixtures" LABELS unit media TIMEOUT 120)
     add_executable(bloom_media_ffmpeg_test "${PROJECT_SOURCE_DIR}/src/media/provider/tests/ffmpeg_tests.cpp")
     target_link_libraries(bloom_media_ffmpeg_test PRIVATE bloom_media_worker_host)
     target_compile_definitions(bloom_media_ffmpeg_test PRIVATE BLOOM_FFMPEG_WORKER="$<TARGET_FILE:bloom-media-worker>")

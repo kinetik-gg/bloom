@@ -44,7 +44,13 @@ enum class Implementation : std::uint8_t { Software = 1, Hardware = 2 };
 enum class Availability : std::uint8_t { Available = 1, Unavailable = 2 };
 enum class QcResult : std::uint8_t { Pass = 1, Fail = 2, Incomplete = 3 };
 enum class MediaKind : std::uint8_t { Video = 1, Audio = 2, Data = 3 };
-enum class PixelFormat : std::uint8_t { Rgba8 = 1, Rgba32f = 2, Yuv420p8 = 3, Yuva444p16 = 4 };
+enum class PixelFormat : std::uint8_t {
+    Rgba8 = 1,
+    Rgba32f = 2,
+    Yuv420p8 = 3,
+    Yuva444p16 = 4,
+    Rgba16 = 5
+};
 enum class Error : std::uint8_t {
     InvalidValue = 1,
     Truncated,
@@ -154,6 +160,13 @@ struct MediaQcEvidenceV1 {
     bool independentReader = false;
     AuthorityRecordV1 externalQc;
     QcResult result = QcResult::Incomplete;
+    std::uint64_t artifactBytes = 0, frameCount = 0, audioSamples = 0;
+    Rational duration;
+    Digest firstFrame, lastFrame, audioDigest, approval, toleranceProfile;
+    MediaDeterminismV1 determinism = MediaDeterminismV1::NoDeterminismClaim;
+    bool appleAuthorized = false, deliveryQualified = false;
+    std::string implementationNote;
+    std::uint32_t maximumError = 0, meanError = 0;
     friend bool operator==(const MediaQcEvidenceV1&, const MediaQcEvidenceV1&) = default;
 };
 struct ColourTags {

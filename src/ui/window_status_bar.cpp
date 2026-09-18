@@ -218,6 +218,14 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     layout->addWidget(mediaDiskCacheCell_);
     layout->addWidget(probe_, 1);
     layout->addWidget(message_, 1);
+    exportCancel_ = new kit::KMenuButton(this);
+    exportCancel_->setObjectName(QStringLiteral("windowStatusBarCancelExport"));
+    exportCancel_->setText(tr("Cancel"));
+    exportCancel_->setAccessibleName(tr("Cancel export"));
+    exportCancel_->setToolTip(tr("Cancel export"));
+    exportCancel_->hide();
+    layout->addWidget(exportCancel_);
+    connect(exportCancel_, &QToolButton::clicked, this, &WindowStatusBar::cancelExportRequested);
 
     transientTimer_ = new QTimer(this);
     transientTimer_->setSingleShot(true);
@@ -393,6 +401,8 @@ QString WindowStatusBar::droppedFrameTextForTest() const { return droppedFrames_
 QString WindowStatusBar::cacheTextForTest() const { return cache_->text(); }
 
 QString WindowStatusBar::mediaDiskCacheTextForTest() const { return mediaDiskCacheCell_->text(); }
+
+void WindowStatusBar::setExportActive(bool active) { exportCancel_->setVisible(active); }
 
 QString WindowStatusBar::messageTextForTest() const { return message_->text(); }
 

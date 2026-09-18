@@ -1,5 +1,6 @@
 #include "support.hpp"
 #include <array>
+#include <bloom/media/provider/encode.hpp>
 #include <limits>
 
 using namespace bloom::media::provider;
@@ -47,6 +48,42 @@ Digest fixtureDigest(std::uint8_t byte) {
 void repeatedDigest(Oracle& oracle, std::uint8_t byte) {
     for (unsigned index = 0; index < 32; ++index)
         oracle.integer(byte, 1);
+}
+void encodeIdentity() {
+    EncodeSettingsV1 settings;
+    settings.width = 256;
+    settings.height = 128;
+    settings.frames = 48;
+    settings.audioCodec = "pcm_s16le";
+    settings.audioSamples = 96000;
+    Oracle oracle;
+    oracle.domain("EncodeSettingsV1");
+    oracle.text("mov");
+    oracle.text("prores_ks");
+    oracle.text("hq");
+    oracle.text("pcm_s16le");
+    oracle.integer(256, 4);
+    oracle.integer(128, 4);
+    oracle.integer(24, 8);
+    oracle.integer(1, 8);
+    oracle.integer(48, 8);
+    oracle.integer(96000, 8);
+    oracle.integer(48000, 4);
+    oracle.integer(2, 4);
+    oracle.text("");
+    oracle.integer(3, 1);
+    const std::string tolerance =
+        "bloom.video-rgba16-srgb.v1;first-last;absolute-max=22938;mean-ceil=1967;alpha-max=64;"
+        "timing=exact;stream-layout=exact;pcm=exact";
+    oracle.hash(digestBytes(std::as_bytes(std::span(tolerance.data(), tolerance.size()))));
+    test::check(oracle.hex.size() / 2 == 146, "frozen EncodeSettingsV1 byte size");
+    test::check(oracle.finish() == std::get<Digest>(digest(settings)),
+                "independent encode identity oracle");
+    settings.byteLimit = 1000;
+    test::check(oracle.finish() == std::get<Digest>(digest(settings)),
+                "execution byte budget outside semantic preset identity");
+    settings.profile = "lt";
+    test::check(oracle.finish() != std::get<Digest>(digest(settings)), "profile binds approval");
 }
 void distinctFields() {
     // Distinct values make swaps of equal-width fields visible, including attributed authority,
@@ -213,6 +250,19 @@ void distinctFields() {
     qc.independentReader = true;
     qc.externalQc = q.authority;
     qc.result = QcResult::Fail;
+    qc.artifactBytes = 123456;
+    qc.frameCount = 48;
+    qc.audioSamples = 96000;
+    qc.duration = {2, 1};
+    qc.firstFrame = fixtureDigest(6);
+    qc.lastFrame = fixtureDigest(7);
+    qc.audioDigest = fixtureDigest(8);
+    qc.approval = fixtureDigest(9);
+    qc.toleranceProfile = fixtureDigest(10);
+    qc.determinism = MediaDeterminismV1::DecodedSemanticTolerance;
+    qc.implementationNote = "FFmpeg preview";
+    qc.maximumError = 231;
+    qc.meanError = 42;
     Oracle g;
     g.domain("MediaQcEvidenceV1");
     repeatedDigest(g, 1);
@@ -232,11 +282,26 @@ void distinctFields() {
     g.text("2026-09-16");
     g.text("2027-09-16");
     g.integer(2, 1);
+    g.integer(123456, 8);
+    g.integer(48, 8);
+    g.integer(96000, 8);
+    g.integer(2, 8);
+    g.integer(1, 8);
+    for (unsigned i = 6; i <= 10; ++i)
+        repeatedDigest(g, static_cast<std::uint8_t>(i));
+    g.integer(3, 1);
+    g.integer(0, 1);
+    g.integer(0, 1);
+    g.text("FFmpeg preview");
+    g.integer(231, 4);
+    g.integer(42, 4);
+    test::check(g.hex.size() / 2 == 527, "expanded quality evidence frozen size");
     test::check(g.finish() == std::get<Digest>(digest(qc)),
                 "distinct quality evidence field order");
 }
 void run() {
     distinctFields();
+    encodeIdentity();
     const auto c = test::capability();
     const auto e = test::execution();
     const auto q = test::evidence();
@@ -328,6 +393,18 @@ void run() {
     g.integer(0, 1);
     absentAuthority(g);
     g.integer(3, 1);
+    for (int i = 0; i < 3; ++i)
+        g.integer(0, 8);
+    g.integer(0, 8);
+    g.integer(1, 8);
+    for (int i = 0; i < 5; ++i)
+        g.hash({});
+    g.integer(4, 1);
+    g.integer(0, 1);
+    g.integer(0, 1);
+    g.text("");
+    g.integer(0, 4);
+    g.integer(0, 4);
     test::check(g.finish() == std::get<Digest>(digest(qc)), "quality-control independent encoding");
     auto bad = c;
     bad.role = static_cast<Role>(0);

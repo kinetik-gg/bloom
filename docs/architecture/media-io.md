@@ -11,7 +11,8 @@ a private, pinned stb_image PNG/JPEG decoder and a bounded OpenEXR reader compil
 hard input and allocation limits. PNG16 is included. Images and numbered sequences become asset
 records; authoring source nodes reference stable asset IDs. Linux video preview read is implemented
 by MEDIA-3, described in [Video Read Implementation](#video-read-implementation-media-3). Other
-provider and delivery paths remain working research below.
+delivery paths remain working research below. Linux export is described under
+[Time-based Export](#time-based-export-media-4).
 The v0 gap rule is hold-previous with a visible warning; it supersedes the policy-selection
 research below for this closed image profile. See the component security review for limits.
 
@@ -37,10 +38,10 @@ PNG/JPEG.
 
 TIFF is content-probed by classic and BigTIFF magic, but its read and write operations are provider
 operations. `ImageProvider` carries explicit Decode and Encode callbacks matching the worker image
-product; no global registry is consulted. Until MEDIA-3 supplies the callback, TIFF returns
-`ProviderMissing` and the `TiffRgba16SrgbV1` export preset is listed as unavailable with that reason.
-The output contract is fixed as RGBA16, sRGB, straight alpha; enabling it later requires the
-worker provider to satisfy that contract and its reopen/verification path.
+product; no global registry is consulted. MEDIA-4 enables `TiffRgba16SrgbV1` export through the isolated FFmpeg worker on Linux.
+It writes RGBA16 little-endian, sRGB, straight alpha and verifies every decoded sample before
+publication. The general `ImageProvider` read callback remains a separate intake seam.
+Platforms without the process backend expose an unavailable preset with its reason.
 
 | Bound | v0 value |
 | --- | --- |
@@ -75,9 +76,9 @@ research below does not supersede this implemented boundary.
 ## FFmpeg dependency intake (2026-09-17)
 
 The Linux candidate is FFmpeg 8.1.2, selected from the maintained 8.1 release line for this
-intake. It is a dependency-only result: the future `bloom-media-worker` may consume its shared
-libraries, while the desktop `bloom` target must not link or load `libav*`. No worker or codec
-integration is part of this intake.
+intake. MEDIA-3 and MEDIA-4 consume its shared libraries exclusively in `bloom-media-worker`;
+the desktop `bloom` target must not link or load `libav*`. The dependency review and worker
+implementation are separate qualification boundaries.
 
 The lock records the official `ffmpeg-8.1.2.tar.xz` archive, detached-signature evidence, exact
 configure arguments, and a corresponding-source obligation. The recipe is shared-only,
@@ -1228,3 +1229,89 @@ execution key separately binds the dependency lock and provider build. The H.264
 baseline I_PCM macroblocks because the intake intentionally contains no H.264 encoder or FFmpeg
 CLI. The MOV muxer writes its MP4-compatible `isom` sample entry. Generated provenance describes
 the synthetic pixels, audio samples and tool version; no binary fixture is checked in.
+
+
+## Time-based Export (MEDIA-4)
+
+Implemented on Linux, 2026-09-17. The existing supervisor's explicit typed `Unavailable` backend
+is the supported macOS/Windows fallback. No in-process encoder or FFmpeg header is added to the
+host. Strict delivery and Apple authorization remain gated by ADR 0020.
+
+| Preset or worker capability | Implemented export | Preservation and qualification |
+| --- | --- | --- |
+| `ProResMovV1` | ProRes KS Proxy, LT, 422, HQ, 4444, 4444 XQ; optional PCM | Preview workflow; straight alpha for 4444 variants only; no Apple authorization or delivery claim |
+| `DnxhrMxfV1` | DNxHR LB, SQ, HQ, HQX, 444; optional PCM | Intra-frame lossy video; dimensions, rate and audio layout must satisfy the muxer |
+| `PcmWavV1` | Signed little-endian PCM 16/24; BWF description when supplied | Byte-exact pinned worker; RF64 auto promotion; BW64 remains pending |
+| `TiffRgba16SrgbV1` | Single frames and numbered sequences | Exact decoded RGBA16 after the declared lossy scene-linear-to-sRGB conversion |
+| Worker-only capabilities | DNxHD; AAC; MOV, MXF, Matroska, WAV mux | Closed stream layouts; unsupported profiles or timing return typed failures |
+| H.264/HEVC software encode | Unavailable | `codec.h264.software-encoder-not-intaken`; openh264/kvazaar intake remains undecided |
+
+The ProRes dialog, approval text, MOV comment and `MediaQcEvidenceV1` carry:
+
+> Decoded/encoded by FFmpeg; not an Apple-authorized ProRes implementation
+
+`apple_authorized=false` and `delivery_qualified=false` accompany that evidence. Preview export
+success does not establish an authorized pipeline. No VA-API export is selected or qualified.
+
+`host::SequenceExportRunnerV1` compiles one immutable snapshot. `output::CompositionOutputStreamV1`
+owns the codec clients, source-audio decoding and offline mix; host owns approvals and publication.
+The runner consumes SCRIPT-0's
+`FrameRangeRunnerV1::timeForFrame` mapping, then runs the existing per-frame analysis attempt and
+exact-digest approval on the authoring thread. One acknowledged frame slot provides back-pressure:
+the export ledger admits prepared pixels, transport copies and retained source audio before
+allocation. The worker retains only first/last frame references, codec buffers and bounded private
+file products. Audio uses the production `AudioEngine` mixer through its offline null-device pull,
+in blocks of at most 512 samples, stopping at each rational video-frame boundary. The final sample
+count is the floor of range duration times the chosen source sample rate. Nested clip time mappings,
+levels, mute and solo use the normal audio graph.
+
+The worker closes its private artifact and decodes it again with the same provider. QC checks every
+video timestamp, frame count, duration, codec, dimensions and stream layout; first/last decoded
+pixel digests and error measurements; and every PCM sample against the quantized mix. It makes no
+independent-reader claim. A bounded chunk transfer writes a private coordinator lease, closes it,
+reopens it and verifies the whole-file digest before atomic publication. Cancellation, worker
+failure, target changes and supersession cannot publish a partial movie. Existing destinations
+survive failures. PNG/EXR/TIFF sequences retain one atomic publication per frame; cancellation
+preserves complete frames already published.
+
+### Immutable tolerance profiles and records
+
+Lossy video uses `DecodedSemanticTolerance`. Its exact UTF-8 profile is:
+
+```text
+bloom.video-rgba16-srgb.v1;first-last;absolute-max=22938;mean-ceil=1967;alpha-max=64;timing=exact;stream-layout=exact;pcm=exact
+```
+
+SHA-256: `822d817ff9130218c44a4bd91de7327b349722681bb15f534894259138be3c56`.
+The maximum and mean thresholds use unsigned 16-bit sample units. Alpha is checked separately;
+TIFF requires exact equality. These are acceptance bounds, not predicted errors. An export outside
+the bound fails closed. AAC uses the exact profile
+`bloom.aac-f32.v1;sample-count=exact;priming=trim;absolute-max=0.25;rms=0.05`; video with AAC binds
+the SHA-256 of the two profile strings concatenated in video-then-audio order. PCM has no tolerance
+digest and uses `ByteExact`; TIFF uses `DecodedSemanticExact`.
+AAC profile SHA-256: `2c4c461185d7d9ba7741afefbc076060b7e55cb9b75e39d15a934eea133c03d8`.
+Combined video/AAC SHA-256: `5c263e8aa7f06b4b4586185df6e8a7d27d3590d1ffa9cc4e5162733c3f447546`.
+
+Wire protocol version 3 adds encode begin, frame/audio acknowledgements, finish/QC and bounded
+artifact chunks. `EncodeSettingsV1` canonical encoding orders container, codec, profile, audio codec,
+dimensions, rational rate, frame/sample counts, sample rate, channels, BWF description, determinism
+and tolerance digest after its versioned domain. Execution byte limits are excluded from semantic
+identity. The 256×128, 48-frame HQ/PCM fixture record is 146 bytes and independently derives
+`3eb779c366d82c3f12d9fabeb1dce7deff69e740e7db866fe619db7a4d804da2`.
+
+Media analysis binds the frozen preset byte (4 = ProRes, 5 = DNxHR, 6 = PCM), settings digest and
+all eleven ordered preservation facets. Its HQ/PCM fixture is 579 bytes and independently derives
+`9a5f56e4290356b06d838af31b272da8d83339b2bd9bd8fd8eb4ed6bf9771350`.
+The expanded QC oracle fixture is 527 bytes. The QC record appends artifact size, frame/sample counts, rational duration, first/last/audio and
+approval digests, tolerance, determinism, authority booleans, implementation note and measured
+errors. Independent oracles pin field order. The runner returns this immutable evidence with the
+publication outcome. The existing PNG/EXR frame identities and writer paths are unchanged.
+
+The pinned 48-frame, 24 fps motion fixture reopens both ProRes HQ MOV and DNxHR HQ MXF with
+2/1 duration and 96,000 stereo PCM samples. Every decoded sample equals the independently
+constructed source after mixing. Both motion exports measure maximum/mean RGB error 24/24 in
+unsigned 16-bit units. The separate worker pattern measures 28/24 for ProRes HQ and 243/76 for
+DNxHR HQ. TIFF decodes exactly; WAV matches an independent RIFF/PCM byte oracle. Tests also
+cover all admitted profiles, AAC acceptance and out-of-tolerance rejection, BWF metadata,
+H.264/HEVC refusal, cancellation, worker crash/retry, abandoned-client cleanup and sequence
+byte parity for PNG, EXR and TIFF.

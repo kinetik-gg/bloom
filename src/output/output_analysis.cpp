@@ -85,6 +85,10 @@ using bloom::output::OutputPresetV1;
 [[nodiscard]] constexpr bool ruleAcceptsPreset(const OutputFacetStableCodeRuleV1& rule,
                                                const OutputPresetV1 preset) noexcept {
     switch (preset) {
+    case OutputPresetV1::ProResMovV1:
+    case OutputPresetV1::DnxhrMxfV1:
+    case OutputPresetV1::PcmWavV1:
+        return false;
     case OutputPresetV1::PngRgba8SrgbV1:
         return rule.validForPng;
     case OutputPresetV1::FlatExrRgba32fLinRec709SceneV1:

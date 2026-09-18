@@ -512,9 +512,11 @@ dependency stacks are qualified and locked; the in-process Bloom Neutral CPU dis
 the color-managed viewer path with honest qualified/unqualified labeling, the flat OpenEXR
 adapter with strict semantic reopen verification, headless end-to-end EXR export publication,
 the interactive export command with explicit digest approval, and real-time playback are
-implemented on Linux. The constrained PNG codec is in progress; the export job's PNG
-color-preparation wiring, the supervised external-config helper, and durable project-level
-color-settings attachment (a future schema-minor migration) remain pending.
+implemented on Linux. The constrained PNG codec and export color-preparation wiring are also
+implemented. MEDIA-4 adds supervised TIFF sequences, ProRes preview MOV, DNxHR MXF and PCM
+WAV/BWF exports with close/reopen verification and atomic movie publication; see
+[Exporting video](user-guide/exporting-video.md). The supervised external-config helper and durable
+project-level color-settings attachment (a future schema-minor migration) remain pending.
 
 Implement:
 

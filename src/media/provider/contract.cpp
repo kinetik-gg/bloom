@@ -85,7 +85,7 @@ bool valid(const ProbeResult& v) {
             !text(s.pixelFormat) || s.timecode.size() > Limits::stringBytes ||
             !wire::validText(s.timecode))
             return false;
-        if (s.format < PixelFormat::Rgba8 || s.format > PixelFormat::Yuva444p16 ||
+        if (s.format < PixelFormat::Rgba8 || s.format > PixelFormat::Rgba16 ||
             s.kind < MediaKind::Video || s.kind > MediaKind::Data)
             return false;
         if (s.kind == MediaKind::Video && !extent(s.width, s.height))
@@ -100,7 +100,7 @@ bool valid(const ProbeResult& v) {
 }
 bool valid(const FrameProduct& v) {
     if (!valid(v.pts) || !colour(v.colour) || v.format < PixelFormat::Rgba8 ||
-        v.format > PixelFormat::Yuva444p16 || v.planes.empty() || v.planes.size() > Limits::planes)
+        v.format > PixelFormat::Rgba16 || v.planes.empty() || v.planes.size() > Limits::planes)
         return false;
     const bool yuv = v.format == PixelFormat::Yuv420p8;
     const bool yuva = v.format == PixelFormat::Yuva444p16;
@@ -110,7 +110,11 @@ bool valid(const FrameProduct& v) {
     for (std::size_t i = 0; i < v.planes.size(); ++i) {
         const auto& p = v.planes[i];
         const auto bytesPerPixel =
-            yuva ? 2U : (yuv ? 1U : (v.format == PixelFormat::Rgba8 ? 4U : 16U));
+            yuva ? 2U
+                 : (yuv ? 1U
+                        : (v.format == PixelFormat::Rgba8
+                               ? 4U
+                               : (v.format == PixelFormat::Rgba16 ? 8U : 16U)));
         if (!extent(p.width, p.height) || p.stride < p.width * bytesPerPixel ||
             p.bytes.size() != static_cast<std::uint64_t>(p.stride) * p.height)
             return false;

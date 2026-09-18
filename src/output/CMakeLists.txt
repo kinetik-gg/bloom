@@ -26,6 +26,8 @@ target_sources(
         png_reopen_verifier.cpp
         process_frame_semantic_identity.cpp
         tiff_export_write.cpp
+        media_output.cpp
+        composition_output_stream.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -46,6 +48,8 @@ target_sources(
             include/bloom/output/png_reopen_verifier.hpp
             include/bloom/output/process_frame_semantic_identity.hpp
             include/bloom/output/tiff_export_write.hpp
+            include/bloom/output/media_output.hpp
+            include/bloom/output/composition_output_stream.hpp
 )
 
 target_compile_features(bloom_output PUBLIC cxx_std_20)
@@ -68,8 +72,9 @@ target_link_libraries(
     # use explicit. No OpenColorIO type crosses either boundary (bloom_color_ocio links
     # OpenColorIO::OpenColorIO PRIVATE), and {"output", "color"} was already present in
     # tools/quality/repository_checks/repository_checks.cpp's kAllowedModuleDependencies allowlist.
-    PUBLIC bloom_color bloom_color_ocio bloom_core bloom_media_image bloom_platform bloom_render
+    PUBLIC bloom_color bloom_color_ocio bloom_core bloom_media_worker_host bloom_media_image bloom_platform bloom_render
            bloom_runtime_evaluator
+    PRIVATE bloom_media_audio bloom_media_video
 )
 bloom_enable_warnings(bloom_output)
 
@@ -99,6 +104,10 @@ bloom_find_dependency(ZLIB)
 target_link_libraries(bloom_output PRIVATE ZLIB::ZLIBSTATIC)
 
 if(BUILD_TESTING)
+    add_executable(bloom_output_media_output_test tests/media_output_tests.cpp)
+    target_link_libraries(bloom_output_media_output_test PRIVATE bloom_output)
+    bloom_enable_warnings(bloom_output_media_output_test)
+    bloom_add_test(NAME bloom.output.media-analysis COMMAND bloom_output_media_output_test LABELS unit output identity)
     include(BloomTesting)
     add_executable(
         bloom_output_process_frame_semantic_identity_test

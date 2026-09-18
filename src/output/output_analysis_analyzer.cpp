@@ -451,7 +451,9 @@ class OutputAnalysisAnalyzerV1 final {
                               : Code::TiffSquarePixelRequired)
                        : (roundedAspect->exact ? Code::None : Code::ExrParRoundedBinary32);
 
-            Code dependencyCode = png ? Code::PngOcioExternalReference : Code::None;
+            Code dependencyCode = png    ? Code::PngOcioExternalReference
+                                  : tiff ? Code::TiffWorkerExternalReference
+                                         : Code::None;
             if (exceedsResourceLimits(descriptor)) {
                 dependencyCode = Code::ResourceLimitExceeded;
             } else if (input.adapter == OutputAnalysisAdapterStateV1::Unavailable) {

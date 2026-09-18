@@ -114,7 +114,7 @@ Platform/GPU capability -> project semantics
 | `src/render` | image resources, node execution, CPU/GPU backend interfaces |
 | `src/media` | standards-backed image/media discovery, decode, metadata, and proxies |
 | `src/color` | qualified OCIO configuration resolution and Qt-free CPU display-processing adapters |
-| `src/output` | output analysis, PNG/EXR adapter orchestration, verification, and atomic publication requests |
+| `src/output` | output analysis, still/video/audio adapter orchestration, offline export mixing, verification, and atomic publication requests |
 | `src/platform` | narrow filesystem, system, and packaging services with OS parity |
 | `src/scripting` | optional Python runtime, stable proxies, package/add-on lifecycle, and API bridge |
 | `modules` | optional source-built pipeline modules that register coherent capabilities |

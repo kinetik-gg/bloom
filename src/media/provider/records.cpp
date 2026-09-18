@@ -163,5 +163,22 @@ void write(Writer& w, const MediaQcEvidenceV1& v) {
     w.number<std::uint8_t>(v.independentReader ? 1 : 0);
     authority(w, v.externalQc);
     w.enumeration(v.result, 1, 3);
+    require(v.artifactBytes <= Limits::sourceBytes && v.frameCount <= Limits::indexEntries);
+    w.number(v.artifactBytes);
+    w.number(v.frameCount);
+    w.number(v.audioSamples);
+    w.rational(v.duration);
+    for (const auto* d :
+         {&v.firstFrame, &v.lastFrame, &v.audioDigest, &v.approval, &v.toleranceProfile})
+        w.hash(*d);
+    w.enumeration(v.determinism, 1, 4);
+    require((v.determinism == MediaDeterminismV1::DecodedSemanticTolerance) ==
+            (v.toleranceProfile != Digest{}));
+    w.number<std::uint8_t>(v.appleAuthorized ? 1 : 0);
+    w.number<std::uint8_t>(v.deliveryQualified ? 1 : 0);
+    w.text(v.implementationNote);
+    require(v.maximumError <= 65535 && v.meanError <= v.maximumError);
+    w.number(v.maximumError);
+    w.number(v.meanError);
 }
 } // namespace bloom::media::provider::wire

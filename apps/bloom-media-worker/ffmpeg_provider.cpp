@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <array>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
+#include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -509,6 +511,7 @@ provider::Payload call(const provider::CallRequest& request, bool hardware) {
     }
 }
 } // namespace bloom::media::ffmpeg
+#include "ffmpeg_provider_encode.ipp"
 #ifdef BLOOM_MEDIA_FIXTURE_GENERATOR
 #include "ffmpeg_provider_fixtures.ipp"
 #endif

@@ -347,6 +347,9 @@ target_sources(
         editor_chrome.cpp
         editor_registry.cpp
         frame_export_controller.cpp
+        frame_export_controller_composition.cpp
+        composition_export_dialog.cpp
+        composition_export_dialog.hpp
         frameless_window_support.cpp
         jobs_editor.cpp
         licenses_window.cpp

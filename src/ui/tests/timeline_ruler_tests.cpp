@@ -24,6 +24,7 @@
 
 #include <QApplication>
 #include <QElapsedTimer>
+#include <QEvent>
 #include <QEventLoop>
 #include <QImage>
 #include <QKeyEvent>
@@ -66,6 +67,14 @@ class Expectations final {
 
   private:
     int failures_ = 0;
+};
+
+// A real Qt event loop drains detached rows before their sessions go away. These synchronous
+// fixture scopes must do that explicitly; processEvents() alone does not flush DeferredDelete.
+struct DeferredWidgetCleanup final {
+    ~DeferredWidgetCleanup() {
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
 };
 
 template <typename Predicate> bool waitUntil(Predicate predicate) {
@@ -152,6 +161,16 @@ struct SessionFixture final {
           session(document, commands, newProject.initialCompositionId),
           scheduler(testSchedulerConfig()), bridge(scheduler, nullptr, 1ms),
           controller(session, scheduler, bridge, pipeline.pipeline) {}
+    ~SessionFixture() {
+        controller.beginShutdown();
+        bridge.beginShutdown();
+        scheduler.beginShutdown();
+        // Rebuilt rows are detached and deleted later. Flush them while their referenced session
+        // is still alive, before another fixture pumps paint events for those top-level widgets.
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        if (!waitUntil([&] { return scheduler.isQuiescent(); }))
+            std::abort();
+    }
 };
 
 struct LayerIds final {
@@ -327,6 +346,7 @@ void testKeyframeRowsAppearOnePerAnimatedParameter(Expectations& expectations) {
 
     ui::CompositionSession session(document, commands, compositionId);
     ui::TimelineKeyframePanel panel(session);
+    const DeferredWidgetCleanup panelCleanup;
     expectations.expect(panel.findChildren<QWidget*>().empty() && !panel.isVisible(),
                         "no rows appear before any layer is selected");
 
@@ -360,6 +380,7 @@ void testKeyframeRowsCoverEveryAnimatableTransformParameter(Expectations& expect
 
     ui::CompositionSession session(document, commands, compositionId);
     ui::TimelineKeyframePanel panel(session);
+    const DeferredWidgetCleanup panelCleanup;
     session.selectLayer(ids.layer);
     expectations.expect(panel.findChildren<QWidget*>().size() == 5 && panel.isVisible(),
                         "all five animatable Layer Output parameters get their own keyframe lane");
@@ -382,6 +403,7 @@ void testKeyframeRowsCoverTheLayerSourceNodeToo(Expectations& expectations) {
 
     ui::CompositionSession session(document, commands, compositionId);
     ui::TimelineKeyframePanel panel(session);
+    const DeferredWidgetCleanup panelCleanup;
     session.selectLayer(ids.layer);
     expectations.expect(panel.findChildren<QWidget*>().size() == 1 && panel.isVisible(),
                         "an animated colour on the layer's SOURCE node gets its own keyframe lane, "
@@ -395,6 +417,7 @@ void testKeyframeRowsCoverTheLayerSourceNodeToo(Expectations& expectations) {
     (void)animateParameter(document, commands, compositionId, ids.opacity, time(0));
     ui::CompositionSession later(document, commands, compositionId);
     ui::TimelineKeyframePanel laterPanel(later);
+    const DeferredWidgetCleanup laterPanelCleanup;
     later.selectLayer(ids.layer);
     expectations.expect(laterPanel.findChildren<QWidget*>().size() == 6,
                         "the boundary's five lanes and the source's one coexist");
@@ -444,6 +467,7 @@ void testKeyframeClickSelectsByIdAndOneTruthSelectionSwap(Expectations& expectat
                         "the layer starts out as the primary selection");
 
     ui::TimelineKeyframePanel panel(session);
+    const DeferredWidgetCleanup panelCleanup;
     panel.resize(200, panel.sizeHint().height() > 0 ? panel.sizeHint().height() : 24);
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     const auto rows = panel.findChildren<QWidget*>();
@@ -516,6 +540,7 @@ void testDeleteGestureRemovesKeyAndRefusesTheLastOne(Expectations& expectations)
     ui::CompositionSession session(document, commands, compositionId);
     session.selectLayer(ids.layer);
     ui::TimelineKeyframePanel panel(session);
+    const DeferredWidgetCleanup panelCleanup;
 
     session.selectKeyframe(curveId, extraKeyId);
     const auto* selected = std::get_if<ui::KeyframeSelection>(&session.selection().primary);
@@ -636,6 +661,7 @@ void testDragMoveGestureSnapsCommitsUndoesAndRefuses(Expectations& expectations)
     ui::CompositionSession session(document, commands, compositionId);
     session.selectLayer(ids.layer);
     ui::TimelineKeyframePanel panel(session);
+    const DeferredWidgetCleanup panelCleanup;
     panel.resize(481, panel.sizeHint().height() > 0 ? panel.sizeHint().height() : 24);
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     const auto rows = panel.findChildren<QWidget*>();
@@ -819,6 +845,7 @@ void testDoubleClickInsertsWithSampledValueSelectsAndRefusesOccupiedTime(
     ui::CompositionSession session(document, commands, compositionId);
     session.selectLayer(ids.layer);
     ui::TimelineKeyframePanel panel(session);
+    const DeferredWidgetCleanup panelCleanup;
     panel.resize(2401, panel.sizeHint().height() > 0 ? panel.sizeHint().height() : 24);
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     const auto rows = panel.findChildren<QWidget*>();
@@ -957,6 +984,7 @@ void testDoubleClickInsertClampsToBoundaryValuesBeforeFirstAndAfterLastKey(
     ui::CompositionSession session(document, commands, compositionId);
     session.selectLayer(ids.layer);
     ui::TimelineKeyframePanel panel(session);
+    const DeferredWidgetCleanup panelCleanup;
     panel.resize(2401, panel.sizeHint().height() > 0 ? panel.sizeHint().height() : 24);
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     const auto rows = panel.findChildren<QWidget*>();
@@ -1301,6 +1329,7 @@ void testComponentRowsAndLaneSelections(Expectations& expectations) {
                         "component row commits through the component setter");
     ui::TimelineRuler ruler(session, fixture.controller);
     ui::TimelineKeyframePanel panel(session);
+    const DeferredWidgetCleanup panelCleanup;
     panel.resize(501, static_cast<int>(entries.size()) * ui::kTimelineRowHeight);
     panel.setRuler(ruler);
     panel.setGridEntries(entries, 0);
