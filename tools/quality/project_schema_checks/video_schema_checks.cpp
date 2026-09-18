@@ -63,4 +63,60 @@ void validateManifestSchemaV1_17(const json::Value& schema) {
     schema_detail::validateReferences(schema, schema);
     validateManifestSchemaV1_16(previousVideoVersion(schema, true));
 }
+
+namespace {
+json::Value previousDataBlockVersion(const json::Value& schema, const bool manifest) {
+    using namespace schema_detail;
+    const std::string kind = manifest ? "manifest" : "document";
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-" + kind + ":1.18",
+                       "data block schema id");
+    auto previous = schema;
+    auto& defs = previous.at("$defs").asObject();
+    std::erase_if(defs, [](const auto& member) {
+        return member.first == "fixedVersion-1.18" || member.first == "dataBlock-1.18";
+    });
+    if (!manifest) {
+        auto& project = previous.at("$defs").at("project-1.0");
+        std::erase_if(project.at("required").asArray(),
+                      [](const auto& value) { return value.asString() == "dataBlocks"; });
+        std::erase_if(project.at("properties").asObject(),
+                      [](const auto& member) { return member.first == "dataBlocks"; });
+        auto& high = previous.at("$defs").at("highestIssued-1.2");
+        std::erase_if(high.at("required").asArray(),
+                      [](const auto& value) { return value.asString() == "dataBlock"; });
+        std::erase_if(high.at("properties").asObject(),
+                      [](const auto& member) { return member.first == "dataBlock"; });
+    }
+    auto& version =
+        manifest ? previous.at("$defs").at("document-1.0").at("properties").at("schemaVersion")
+                 : previous.at("properties").at("schemaVersion");
+    version = json::parse(R"({"$ref":"#/$defs/fixedVersion-1.17"})");
+    previous.at("$id") = json::Value("urn:kinetik:bloom:schema:project-" + kind + ":1.17");
+    return previous;
+}
+} // namespace
+
+void validateDocumentSchemaV1_18(const json::Value& schema) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-document:1.18",
+                       "data block document id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.18").at("properties").at("minor"),
+                 R"({"const":18})", "data block minor");
+    requireExact(
+        schema.at("$defs").at("dataBlock-1.18").at("required"),
+        R"(["id","kind","owner","typeId","schemaVersion","mediaType","provenance","subject","payload","tags"])",
+        "data block required");
+    validateDocumentSchemaV1_17(previousDataBlockVersion(schema, false));
+}
+
+void validateManifestSchemaV1_18(const json::Value& schema) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-manifest:1.18",
+                       "data block manifest id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.18").at("properties").at("minor"),
+                 R"({"const":18})", "data block manifest minor");
+    validateManifestSchemaV1_17(previousDataBlockVersion(schema, true));
+}
 } // namespace bloom::quality

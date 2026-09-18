@@ -7,6 +7,7 @@ target_sources(
         color_settings.cpp
         document.cpp
         extension_records.cpp
+        data_block.cpp
         graph.cpp
         node_definition_registry.cpp
         node_layout.cpp
@@ -28,6 +29,7 @@ target_sources(
             include/bloom/document/composition_settings.hpp
             include/bloom/document/document.hpp
             include/bloom/document/extension_records.hpp
+            include/bloom/document/data_block.hpp
             include/bloom/document/graph.hpp
             include/bloom/document/node_definition_registry.hpp
             include/bloom/document/node_layout.hpp

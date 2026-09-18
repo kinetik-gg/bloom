@@ -7,6 +7,7 @@
 #include <QWidget>
 
 class QLineEdit;
+class QButtonGroup;
 class QPoint;
 class QTreeWidget;
 class QTreeWidgetItem;
@@ -41,15 +42,20 @@ class AssetsEditor final : public QWidget, public EditorChromeProvider {
     void removeSelected();
     void refreshDisclosure(QTreeWidgetItem* item);
     void buildFooter();
+    void setFilter(int filter);
 
     CompositionSession& session_;
     QLineEdit* search_ = nullptr;
+    QButtonGroup* filterButtons_ = nullptr;
     QTreeWidget* tree_ = nullptr;
     QWidget* headerMenuWidget_ = nullptr;
     QWidget* footerWidget_ = nullptr;
     bool rebuilding_ = false;
     QSet<qulonglong> collapsedFolders_;
     bool compositionsCollapsed_ = false;
+    // -1 preserves the pre-Inspector view: media and compositions are visible together. The
+    // Data choice opts into the separate data-root surface.
+    int filterMode_ = -1;
 };
 
 } // namespace bloom::ui

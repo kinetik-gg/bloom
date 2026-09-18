@@ -143,13 +143,17 @@ enum class Step {
     Paths,
     TextCapability,
     AssetOrganization,
-    Video
+    Video,
+    DataBlocks
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
 [[nodiscard]] bool alreadyMigrated(const JsonValue& value, const Scope scope, const Step step) {
     if (step == Step::AssetOrganization)
         return scope == Scope::Project && value.findMember("assetFolders");
+    if (step == Step::DataBlocks)
+        return (scope == Scope::Project && value.findMember("dataBlocks")) ||
+               (scope == Scope::HighestIssued && value.findMember("dataBlock"));
     if (step == Step::Images) {
         return (scope == Scope::Project && value.findMember("assets")) ||
                (scope == Scope::Composition && value.findMember("backgroundColor")) ||
@@ -207,13 +211,14 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::Paths             ? "{\"major\":1,\"minor\":14}"
                            : step == Step::TextCapability    ? "{\"major\":1,\"minor\":15}"
                            : step == Step::AssetOrganization ? "{\"major\":1,\"minor\":16}"
-                                                             : "{\"major\":1,\"minor\":17}");
+                           : step == Step::Video             ? "{\"major\":1,\"minor\":17}"
+                                                             : "{\"major\":1,\"minor\":18}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
                 return false;
         } else if (scope == Scope::Root && member.key() == "idAllocation" &&
-                   (step == Step::NodeGroups ||
-                    step == Step::Images)) { // NOLINT(bugprone-branch-clone)
+                   (step == Step::NodeGroups || step == Step::Images ||
+                    step == Step::DataBlocks)) { // NOLINT(bugprone-branch-clone)
             if (!descend(Scope::IdAllocation))
                 return false;
         } else if (scope == Scope::IdAllocation && member.key() == "highestIssued") {
@@ -290,6 +295,8 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
     }
     if (scope == Scope::HighestIssued && step == Step::NodeGroups)
         append(output, ",\"nodeGroup\":\"0\"");
+    if (scope == Scope::HighestIssued && step == Step::DataBlocks)
+        append(output, ",\"dataBlock\":\"0\"");
     if (step == Step::Images) {
         if (scope == Scope::Project)
             append(output, ",\"assets\":[]");
@@ -298,6 +305,8 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
         if (scope == Scope::HighestIssued)
             append(output, ",\"asset\":\"0\"");
     }
+    if (scope == Scope::Project && step == Step::DataBlocks)
+        append(output, ",\"dataBlocks\":[]");
     append(output, "}");
     return true;
 }
@@ -426,6 +435,15 @@ MigrationStepOutcome migrateVideoV1_16(const JsonValue& root, std::pmr::memory_r
                                        Buffer& output) {
     if (!sourceVersionIs(root, "16") || !transform(root, Scope::Root, Step::Video, output))
         return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+
+MigrationStepOutcome migrateDataBlocksV1_17(const JsonValue& root, std::pmr::memory_resource*,
+                                            Buffer& output) {
+    if (!sourceVersionIs(root, "17"))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    if (!transform(root, Scope::Root, Step::DataBlocks, output))
+        return MigrationStepOutcome::failure("/project/dataBlocks");
     return MigrationStepOutcome::success();
 }
 } // namespace bloom::project

@@ -533,7 +533,7 @@ void testNestedMergeEqualsFlat(Expectations& expectations) {
     text.drivenContent = runtime::ValueOutputIndex::fromRaw(1);
     definition.valueOperations.push_back(
         {kFrameNumberNode, runtime::ValueOutputIndex::fromRaw(0), 1,
-         runtime::CompiledValueUtility{document::ValueUtilityKernel::FrameNumber, {}, {}}});
+         runtime::CompiledValueUtility{document::ValueUtilityKernel::FrameNumber, {}, {}, {}}});
     definition.valueOperations.push_back(
         {kIntegerToStringNode, runtime::ValueOutputIndex::fromRaw(1), 1,
          runtime::CompiledValueUtility{document::ValueUtilityKernel::IntegerToString,
@@ -541,7 +541,8 @@ void testNestedMergeEqualsFlat(Expectations& expectations) {
                                         {{}, runtime::CompiledValue{std::int64_t{0}}},
                                         {{}, runtime::CompiledValue{std::string{}}},
                                         {{}, runtime::CompiledValue{std::string{}}}},
-                                       {core::kDefaultRadix}}});
+                                       {core::kDefaultRadix},
+                                       {}}});
     definition.valueOutputCount = 2;
     return std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
 }

@@ -1,5 +1,11 @@
 # Organizing Assets
 
+## Inspector
+
+The Assets panel has Media, Data, and Compositions filters. Data shows authored non-media blocks
+with their kind, provenance summary, and digest. Media continues to use the existing asset folders,
+tags, relinking, and missing-media indicators.
+
 Import media with **File > Import**, the Assets footer's **Import** button, or by dropping files
 onto the Assets panel. Imports keep stable identities, so organizing them preserves the nodes
 and layers that already use them.

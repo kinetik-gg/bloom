@@ -98,6 +98,7 @@ struct SortWindows final {
         }
     }
     plan.window1 = maximumOf(plan.window1, project.extensionRecords().size());
+    plan.window1 = maximumOf(plan.window1, project.typedDataBlocks().size());
     return plan;
 }
 
@@ -537,6 +538,9 @@ extensionTargetKind(const bloom::document::ExtensionTarget& target) noexcept {
     if (std::holds_alternative<NodeId>(target)) {
         return "node";
     }
+    if (std::holds_alternative<NodeGroupId>(target)) {
+        return "node-group";
+    }
     if (std::holds_alternative<EdgeId>(target)) {
         return "edge";
     }
@@ -552,6 +556,9 @@ extensionTargetKind(const bloom::document::ExtensionTarget& target) noexcept {
     if (std::holds_alternative<AnimationCurveId>(target)) {
         return "animation-curve";
     }
+    if (std::holds_alternative<AssetId>(target)) {
+        return "asset";
+    }
     return "keyframe";
 }
 
@@ -565,6 +572,9 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
     }
     if (const auto* nodeId = std::get_if<bloom::document::NodeId>(&target)) {
         return nodeId->value();
+    }
+    if (const auto* nodeGroupId = std::get_if<bloom::document::NodeGroupId>(&target)) {
+        return nodeGroupId->value();
     }
     if (const auto* edgeId = std::get_if<bloom::document::EdgeId>(&target)) {
         return edgeId->value();
@@ -580,6 +590,9 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
     }
     if (const auto* curveId = std::get_if<bloom::document::AnimationCurveId>(&target)) {
         return curveId->value();
+    }
+    if (const auto* assetId = std::get_if<bloom::document::AssetId>(&target)) {
+        return assetId->value();
     }
     const auto* keyframeId = std::get_if<bloom::document::KeyframeId>(&target);
     return keyframeId == nullptr ? 0 : keyframeId->value();
@@ -1763,6 +1776,259 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
         std::string_view(state.payloadScratch.data(), *encodedSize.value())));
 }
 
+[[nodiscard]] bool emitDigest(EmitState& state, const bloom::core::Sha256Digest& digest) noexcept {
+    const auto text = digest.toLowercaseHex();
+    return state.ok(state.writer.stringValue(std::string_view(text.data(), text.size())));
+}
+
+[[nodiscard]] bool emitDataBlockValue(EmitState& state,
+                                      const bloom::document::ParameterValue& value) noexcept {
+    return emitConstantValue(state, value);
+}
+
+[[nodiscard]] std::string_view
+dataBlockWireKind(const bloom::document::DataBlockKind kind) noexcept {
+    using bloom::document::DataBlockKind;
+    switch (kind) {
+    case DataBlockKind::Image:
+        return "image";
+    case DataBlockKind::Sequence:
+        return "sequence";
+    case DataBlockKind::Video:
+        return "video";
+    case DataBlockKind::Audio:
+        return "audio";
+    case DataBlockKind::Font:
+        return "font";
+    case DataBlockKind::Curve:
+        return "curve";
+    case DataBlockKind::Ramp:
+        return "ramp";
+    case DataBlockKind::Table:
+        return "table";
+    case DataBlockKind::PointSet:
+        return "point-set";
+    case DataBlockKind::Path:
+        return "path";
+    case DataBlockKind::Mask:
+        return "mask";
+    case DataBlockKind::Analysis:
+        return "analysis";
+    case DataBlockKind::Opaque:
+        return "opaque";
+    }
+    return "opaque";
+}
+
+[[nodiscard]] bool emitDataBlockPayload(EmitState& state,
+                                        const bloom::document::DataBlockRecord& block) noexcept {
+    using namespace bloom::document;
+    auto& writer = state.writer;
+    if (!state.ok(writer.beginObject()) || !state.ok(writer.memberName("kind")) ||
+        !state.ok(writer.stringValue(dataBlockWireKind(block.kind))))
+        return false;
+    if (const auto* curve = std::get_if<DataBlockCurve>(&block.payload)) {
+        if (!emitFloat64Member(state, "domainStart", curve->domainStart) ||
+            !emitFloat64Member(state, "domainEnd", curve->domainEnd) ||
+            !state.ok(writer.memberName("samples")) || !state.ok(writer.beginArray()))
+            return false;
+        for (const auto sample : curve->samples)
+            if (!state.ok(writer.float64Value(sample)))
+                return false;
+        if (!state.ok(writer.endArray()))
+            return false;
+    } else if (const auto* ramp = std::get_if<DataBlockRamp>(&block.payload)) {
+        if (!state.ok(writer.memberName("stops")) || !state.ok(writer.beginArray()))
+            return false;
+        for (const auto& stop : ramp->stops) {
+            if (!state.ok(writer.beginObject()) ||
+                !emitFloat64Member(state, "position", stop.position) ||
+                !state.ok(writer.memberName("color")) || !state.ok(writer.beginObject()) ||
+                !emitFloat64Member(state, "red", stop.color.red) ||
+                !emitFloat64Member(state, "green", stop.color.green) ||
+                !emitFloat64Member(state, "blue", stop.color.blue) ||
+                !emitFloat64Member(state, "alpha", stop.color.alpha) ||
+                !state.ok(writer.endObject()) || !state.ok(writer.endObject()))
+                return false;
+        }
+        if (!state.ok(writer.endArray()))
+            return false;
+    } else if (const auto* table = std::get_if<DataBlockTable>(&block.payload)) {
+        if (!state.ok(writer.memberName("columns")) || !state.ok(writer.beginArray()))
+            return false;
+        for (const auto& column : table->columns) {
+            if (!state.ok(writer.beginObject()) || !state.ok(writer.memberName("name")) ||
+                !state.ok(writer.stringValue(column.name)) ||
+                !state.ok(writer.memberName("valueKind")) ||
+                !state.ok(
+                    writer.stringValue(std::to_string(static_cast<unsigned>(column.valueKind)))) ||
+                !state.ok(writer.memberName("values")) || !state.ok(writer.beginArray()))
+                return false;
+            for (const auto& value : column.values)
+                if (!emitDataBlockValue(state, value))
+                    return false;
+            if (!state.ok(writer.endArray()) || !state.ok(writer.endObject()))
+                return false;
+        }
+        if (!state.ok(writer.endArray()))
+            return false;
+    } else if (const auto* points = std::get_if<DataBlockPointSet>(&block.payload)) {
+        if (!state.ok(writer.memberName("dimensions")) ||
+            !state.ok(writer.integerValue(points->dimensions)) ||
+            !state.ok(writer.memberName("points")) || !state.ok(writer.beginArray()))
+            return false;
+        for (const auto& point : points->points) {
+            if (!state.ok(writer.beginObject()) || !emitFloat64Member(state, "x", point.x) ||
+                !emitFloat64Member(state, "y", point.y) ||
+                !emitFloat64Member(state, "z", point.z) || !state.ok(writer.endObject()))
+                return false;
+        }
+        if (!state.ok(writer.endArray()) || !state.ok(writer.memberName("attributes")) ||
+            !state.ok(writer.beginArray()))
+            return false;
+        for (const auto& column : points->attributes) {
+            if (!state.ok(writer.beginObject()) || !state.ok(writer.memberName("name")) ||
+                !state.ok(writer.stringValue(column.name)) ||
+                !state.ok(writer.memberName("valueKind")) ||
+                !state.ok(
+                    writer.stringValue(std::to_string(static_cast<unsigned>(column.valueKind)))) ||
+                !state.ok(writer.memberName("values")) || !state.ok(writer.beginArray()))
+                return false;
+            for (const auto& value : column.values)
+                if (!emitDataBlockValue(state, value))
+                    return false;
+            if (!state.ok(writer.endArray()) || !state.ok(writer.endObject()))
+                return false;
+        }
+        if (!state.ok(writer.endArray()))
+            return false;
+    } else if (const auto* path = std::get_if<PathValue>(&block.payload)) {
+        if (!state.ok(writer.memberName("closed")) ||
+            !state.ok(writer.booleanValue(path->closed)) ||
+            !state.ok(writer.memberName("anchors")) || !state.ok(writer.beginArray()))
+            return false;
+        for (const auto& anchor : path->anchors) {
+            if (!state.ok(writer.beginObject()) || !state.ok(writer.memberName("point")) ||
+                !state.ok(writer.beginObject()) || !emitFloat64Member(state, "x", anchor.point.x) ||
+                !emitFloat64Member(state, "y", anchor.point.y) || !state.ok(writer.endObject()))
+                return false;
+            for (const auto* handle : {&anchor.inHandle, &anchor.outHandle}) {
+                const auto* name = handle == &anchor.inHandle ? "inHandle" : "outHandle";
+                if (!state.ok(writer.memberName(name)))
+                    return false;
+                if (!handle->has_value()) {
+                    if (!state.ok(writer.nullValue()))
+                        return false;
+                } else if (!state.ok(writer.beginObject()) ||
+                           !emitFloat64Member(state, "x", (**handle).x) ||
+                           !emitFloat64Member(state, "y", (**handle).y) ||
+                           !state.ok(writer.endObject()))
+                    return false;
+            }
+            if (!state.ok(writer.endObject()))
+                return false;
+        }
+        if (!state.ok(writer.endArray()))
+            return false;
+    } else if (const auto* mask = std::get_if<DataBlockMask>(&block.payload)) {
+        if (!emitNamedId(state, "coverageAsset", mask->coverageAsset.value()))
+            return false;
+    } else if (const auto* opaque = std::get_if<OpaqueExtensionPayload>(&block.payload)) {
+        if (!state.ok(writer.memberName("bytes")) || !emitPayload(state, *opaque))
+            return false;
+    } else {
+        return false;
+    }
+    return state.ok(writer.endObject());
+}
+
+[[nodiscard]] bool emitDataBlock(EmitState& state,
+                                 const bloom::document::DataBlockRecord& block) noexcept {
+    using namespace bloom::document;
+    const auto* id = std::get_if<DataBlockRecordId>(&block.id);
+    if (id == nullptr)
+        return false;
+    auto& writer = state.writer;
+    if (!state.ok(writer.beginObject()) || !emitNamedId(state, "id", id->value()) ||
+        !state.ok(writer.memberName("kind")) ||
+        !state.ok(writer.stringValue(dataBlockWireKind(block.kind))))
+        return false;
+    if (!state.ok(writer.memberName("owner")))
+        return false;
+    if (block.owner.has_value()) {
+        if (!emitTypedTarget(state, *block.owner))
+            return false;
+    } else if (!state.ok(writer.nullValue()))
+        return false;
+    if (!state.ok(writer.memberName("typeId")) || !state.ok(writer.stringValue(block.typeId)) ||
+        !state.ok(writer.memberName("schemaVersion")) ||
+        !emitVersion(state, block.schemaVersion, true) ||
+        !state.ok(writer.memberName("mediaType")) ||
+        !state.ok(writer.stringValue(block.mediaType)) ||
+        !state.ok(writer.memberName("provenance")) || !state.ok(writer.beginObject()))
+        return false;
+    if (const auto* locator = std::get_if<AssetLocator>(&block.provenance.source)) {
+        if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("source")) ||
+            !state.ok(writer.memberName("locator")) || !state.ok(writer.beginObject()) ||
+            !state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue(locator->kind)) ||
+            !state.ok(writer.memberName("portability")) ||
+            !state.ok(writer.stringValue(locator->portability)) ||
+            !state.ok(writer.memberName("path")) || !state.ok(writer.stringValue(locator->path)) ||
+            !state.ok(writer.memberName("relinkHint")) ||
+            !state.ok(writer.stringValue(locator->relinkHint)) || !state.ok(writer.endObject()))
+            return false;
+    } else {
+        const auto* producer = std::get_if<DataBlockProducer>(&block.provenance.source);
+        if (producer == nullptr)
+            return false;
+        if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("producer")) ||
+            !state.ok(writer.memberName("producer")) || !state.ok(writer.beginObject()) ||
+            !state.ok(writer.memberName("name")) || !state.ok(writer.stringValue(producer->name)) ||
+            !state.ok(writer.memberName("version")) ||
+            !state.ok(writer.stringValue(producer->version)) ||
+            !state.ok(writer.memberName("parametersDigest")) ||
+            !emitDigest(state, producer->parametersDigest) || !state.ok(writer.endObject()))
+            return false;
+    }
+    if (!state.ok(writer.memberName("createdAt")) ||
+        !state.ok(writer.stringValue(block.provenance.createdAt)) ||
+        !state.ok(writer.memberName("contentDigest")) ||
+        !emitDigest(state, block.provenance.contentDigest) || !state.ok(writer.endObject()) ||
+        !state.ok(writer.memberName("subject")))
+        return false;
+    if (block.subject.has_value()) {
+        if (!emitTypedTarget(state, *block.subject))
+            return false;
+    } else if (!state.ok(writer.nullValue()))
+        return false;
+    if (!state.ok(writer.memberName("payload")) || !emitDataBlockPayload(state, block) ||
+        !state.ok(writer.memberName("tags")) || !state.ok(writer.beginArray()))
+        return false;
+    for (const auto& tag : block.tags)
+        if (!state.ok(writer.stringValue(tag)))
+            return false;
+    return state.ok(writer.endArray()) && state.ok(writer.endObject());
+}
+
+[[nodiscard]] bool emitDataBlocks(EmitState& state) noexcept {
+    auto& writer = state.writer;
+    if (!state.ok(writer.memberName("dataBlocks")) || !state.ok(writer.beginArray()))
+        return false;
+    std::span<const std::size_t> order;
+    if (!makeOrder(
+            state.project.typedDataBlocks(),
+            [](const auto& block) noexcept {
+                const auto* id = std::get_if<bloom::document::DataBlockRecordId>(&block.id);
+                return id == nullptr ? 0U : id->value();
+            },
+            state.sort.window1, order, state.walk.error))
+        return false;
+    for (const auto index : order)
+        if (!emitDataBlock(state, state.project.typedDataBlocks()[index]))
+            return false;
+    return state.ok(writer.endArray());
+}
+
 [[nodiscard]] bool emitExtensionRecord(EmitState& state, const ExtensionRecord& record) noexcept {
     using namespace bloom::document;
     auto& writer = state.writer;
@@ -1961,7 +2227,8 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
                 return false;
             }
         }
-        if (!state.ok(writer.endArray()) || !emitAssets(state) || !emitAssetFolders(state)) {
+        if (!state.ok(writer.endArray()) || !emitAssets(state) || !emitAssetFolders(state) ||
+            !emitDataBlocks(state)) {
             return false;
         }
         if (!emitRetainedTrailing(state)) {
@@ -1996,7 +2263,8 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
                 !emitHighWaterMember(state, "nodeGroup", water.nodeGroup) ||
                 !emitHighWaterMember(state, "asset", water.asset) ||
                 (water.assetFolder != 0 &&
-                 !emitHighWaterMember(state, "assetFolder", water.assetFolder))) {
+                 !emitHighWaterMember(state, "assetFolder", water.assetFolder)) ||
+                !emitHighWaterMember(state, "dataBlock", water.dataBlock)) {
                 return false;
             }
             if (!emitRetainedTrailing(state)) {
@@ -2162,6 +2430,16 @@ locatorPortability(const bloom::document::OcioConfigLocator& locator) noexcept {
     }
     for (const auto& record : project.extensionRecords()) {
         const auto encodedSize = bloom::project::canonicalBase64EncodedSize(record.payload.size());
+        if (!encodedSize.hasValue() || *encodedSize.value() > document.payloadScratch.size()) {
+            walk.fail(CanonicalDocumentError::PayloadBufferTooSmall);
+            return walk;
+        }
+    }
+    for (const auto& block : project.typedDataBlocks()) {
+        const auto* payload = std::get_if<bloom::document::OpaqueExtensionPayload>(&block.payload);
+        if (payload == nullptr)
+            continue;
+        const auto encodedSize = bloom::project::canonicalBase64EncodedSize(payload->size());
         if (!encodedSize.hasValue() || *encodedSize.value() > document.payloadScratch.size()) {
             walk.fail(CanonicalDocumentError::PayloadBufferTooSmall);
             return walk;

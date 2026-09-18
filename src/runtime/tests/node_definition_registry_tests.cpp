@@ -105,11 +105,11 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // ADAPTED (task S7, then FIX1 item I, then UTIL-1): the seven structural node types,
     // the value library's first slice, and UTIL-1's twenty conversions, four
     // time conversions, fifteen string utilities, nineteen numeric and logic nodes and four
-    // readouts. The number is pinned rather than computed so that adding a node type is a
-    // deliberate edit here. MEDIA-1 adds one Image source definition, AUDIO-2 adds one Audio
-    // source definition, COMP-SRC adds Composition source, and LB-1 adds the Layer Bounds value
-    // readout. MEDIA-3 adds the Video source.
-    expectations.expect(registry.definitions().size() == 106,
+    // readouts, and DATA-1's four data-block readers. The number is pinned rather than computed so
+    // that adding a node type is a deliberate edit here. MEDIA-1 adds one Image source definition,
+    // AUDIO-2 adds one Audio source definition, COMP-SRC adds Composition source, and LB-1 adds the
+    // Layer Bounds value readout. MEDIA-3 adds the Video source.
+    expectations.expect(registry.definitions().size() == 110,
                         "startup contribution includes every built-in definition");
 
     for (const auto& [kind, version] : std::array<std::pair<std::string_view, std::uint32_t>, 4>{

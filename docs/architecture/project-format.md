@@ -1,5 +1,9 @@
 # Bloom Project Format
 
+The current document schema is 1.18. It adds the additive `project.dataBlocks` collection and the
+`dataBlock` allocator namespace. See [data blocks](data-blocks.md) for the model and provenance
+contract.
+
 Status: accepted
 
 Implementation status: bounded reservations and PMR allocation, canonical integer/rational,
@@ -38,13 +42,13 @@ is its normative v1 implementation contract.
 
 ## Version 1 Constants
 
-The container version remains `1.0`; the current document schema is `1.17`.
+The container version remains `1.0`; the current document schema is `1.18`.
 The earlier document `1.0` through `1.5` artifacts are retained for migration fixtures.
 Version objects
 always contain JSON-number members in `major`, `minor` order. Each is an unsigned 32-bit integer.
 
 The schemas use JSON Schema Draft 2020-12. Versioned artifacts through `1.11` remain checked as
-historical fixtures, with the current `1.17` contract also enforced by the canonical writer and
+historical fixtures, with the current `1.18` contract also enforced by the canonical writer and
 decoder tests. The manifest artifact still requires container `1.0`; its document
 declaration follows the current document minor. Every historical artifact from `1.0` through `1.11`,
 manifest and document, remains checked, and each version's checker validates what its own minor adds
@@ -97,7 +101,7 @@ document state.
 
 Document 1.14 adds a constant `path` value. The version-only 1.13 → 1.14 migration changes no
 existing value or pixel. Container version remains 1.0; the manifest declares whatever the current
-document minor is, which is 1.17 since video assets landed on top.
+document minor is, which is 1.18 since typed data blocks landed on top.
 
 ```json
 {"kind":"path","anchors":[{"point":{"x":0,"y":0},"outHandle":{"x":20,"y":0}},{"point":{"x":40,"y":40},"inHandle":{"x":40,"y":20}}],"closed":false}
@@ -848,9 +852,9 @@ schema-version path. Reconstruction applies the same registry validation to deco
 names the node ID. Old or future versions of a known kind are never silently upgraded, downgraded,
 or interpreted through another definition. No parameters or IDs are injected and no edges are dropped.
 
-The canonical writer is **1.17** and the load floor is **1.15**. Opening 1.15 applies the additive
-asset metadata defaults during typed decoding and reports the resulting document as 1.17. The
-registered 1.15 → 1.16 and 1.16 → 1.17 DOM transforms are tested against the same decoded result.
+The canonical writer is **1.18** and the load floor is **1.15**. Opening 1.15 applies the additive
+asset metadata defaults during typed decoding and reports the resulting document as 1.18. The
+registered 1.15 → 1.16, 1.16 → 1.17, and 1.17 → 1.18 DOM transforms are tested against the same decoded result.
 No node version,
 parameter source or rendering meaning changes. The earlier numbered ladder remains independently
 tested bookkeeping and does not admit files below the load floor. Historical schema
@@ -1283,7 +1287,7 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
 `1.17`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-Current artifacts are `document-1.17.schema.json` and `manifest-1.17.schema.json`.
+Current artifacts are `document-1.18.schema.json` and `manifest-1.18.schema.json`.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
 Its value is the canonical decimal-string LayerId of another boundary in the same composition.
@@ -1359,8 +1363,8 @@ name, folder, tags and order. No organization command changes render pixels.
 
 ## Video Assets In Document 1.17
 
-The current document and manifest schema artifacts are `document-1.17.schema.json` and
-`manifest-1.17.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
+The current document and manifest schema artifacts are `document-1.18.schema.json` and
+`manifest-1.18.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
 The 1.16 → 1.17 migration only advances the version; existing assets and pixels are unchanged.
 Opening 1.15 first applies asset-organization defaults and then the video version step.
 

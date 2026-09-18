@@ -1,5 +1,20 @@
 # Value Node Library
 
+## Data block readers
+
+Schema 1.18 adds four readers. Each selects a block through the `bloom.data.block` inline selector;
+the selected block is frozen into the compiled value graph, so reading it performs no project or
+filesystem I/O at evaluation time.
+
+- `Data Sample` reads a Curve at the time input and linearly interpolates adjacent samples.
+- `Ramp Sample` reads a Ramp at `t` and interpolates RGBA stops.
+- `Table Lookup` reads a typed Table by row and column; invalid coordinates and non-numeric values
+  produce typed diagnostics.
+- `Point Set` exposes the point count and the indexed Vec3 point.
+
+These are new node types only. Existing documents compile with the same plan and retain their
+identity goldens.
+
 The value graph's own node catalogue. `layer-graph-model.md` owns the value graph's SHAPE -- two
 graphs in one node set, socket kinds and promotion, drivers, reroutes, the fallback philosophy --
 and this document owns the LIBRARY: what each node is, what it accepts, and what it does at the

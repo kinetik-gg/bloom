@@ -24,6 +24,7 @@ struct AnimationCurveIdTag;
 struct KeyframeIdTag;
 struct DriverBindingIdTag;
 struct ExtensionRecordIdTag;
+struct DataBlockRecordIdTag;
 
 using AssetFolderId = core::Id<AssetFolderIdTag>;
 using AssetId = core::Id<AssetIdTag>;
@@ -39,6 +40,7 @@ using AnimationCurveId = core::Id<AnimationCurveIdTag>;
 using KeyframeId = core::Id<KeyframeIdTag>;
 using DriverBindingId = core::Id<DriverBindingIdTag>;
 using ExtensionRecordId = core::Id<ExtensionRecordIdTag>;
+using DataBlockRecordId = core::Id<DataBlockRecordIdTag>;
 
 struct IdAllocatorHighWater final {
     std::uint64_t composition = 0;
@@ -56,6 +58,7 @@ struct IdAllocatorHighWater final {
     std::uint64_t nodeGroup = 0;
     std::uint64_t asset = 0;
     std::uint64_t assetFolder = 0;
+    std::uint64_t dataBlock = 0;
 
     friend constexpr auto operator<=>(const IdAllocatorHighWater&,
                                       const IdAllocatorHighWater&) noexcept = default;
@@ -85,6 +88,7 @@ class IdAllocator final {
             .nodeGroup = nodeGroup_,
             .asset = asset_,
             .assetFolder = assetFolder_,
+            .dataBlock = dataBlock_,
         };
     }
 
@@ -117,6 +121,9 @@ class IdAllocator final {
     [[nodiscard]] std::optional<ExtensionRecordId> allocateExtensionRecord() noexcept {
         return allocate<ExtensionRecordId>(extensionRecord_);
     }
+    [[nodiscard]] std::optional<DataBlockRecordId> allocateDataBlock() noexcept {
+        return allocate<DataBlockRecordId>(dataBlock_);
+    }
 
     [[nodiscard]] std::optional<AssetId> allocateAsset() noexcept {
         return allocate<AssetId>(asset_);
@@ -143,6 +150,7 @@ class IdAllocator final {
     void reserveExisting(KeyframeId id) noexcept { reserve(id, keyframe_); }
     void reserveExisting(DriverBindingId id) noexcept { reserve(id, driverBinding_); }
     void reserveExisting(ExtensionRecordId id) noexcept { reserve(id, extensionRecord_); }
+    void reserveExisting(DataBlockRecordId id) noexcept { reserve(id, dataBlock_); }
 
     [[nodiscard]] constexpr bool covers(const CompositionId id) const noexcept {
         return coversId(id, composition_);
@@ -177,6 +185,9 @@ class IdAllocator final {
     [[nodiscard]] constexpr bool covers(const ExtensionRecordId id) const noexcept {
         return coversId(id, extensionRecord_);
     }
+    [[nodiscard]] constexpr bool covers(const DataBlockRecordId id) const noexcept {
+        return coversId(id, dataBlock_);
+    }
 
     void mergeHighWater(const IdAllocator& other) noexcept {
         composition_ = std::max(composition_, other.composition_);
@@ -192,6 +203,7 @@ class IdAllocator final {
         nodeGroup_ = std::max(nodeGroup_, other.nodeGroup_);
         asset_ = std::max(asset_, other.asset_);
         assetFolder_ = std::max(assetFolder_, other.assetFolder_);
+        dataBlock_ = std::max(dataBlock_, other.dataBlock_);
     }
 
   private:
@@ -201,7 +213,7 @@ class IdAllocator final {
           animationCurve_(highWater.animationCurve), keyframe_(highWater.keyframe),
           driverBinding_(highWater.driverBinding), extensionRecord_(highWater.extensionRecord),
           nodeGroup_(highWater.nodeGroup), asset_(highWater.asset),
-          assetFolder_(highWater.assetFolder) {}
+          assetFolder_(highWater.assetFolder), dataBlock_(highWater.dataBlock) {}
 
     template <core::TypedId IdType>
     [[nodiscard]] static std::optional<IdType> allocate(std::uint64_t& highestIssued) noexcept {
@@ -239,6 +251,7 @@ class IdAllocator final {
     std::uint64_t nodeGroup_ = 0;
     std::uint64_t asset_ = 0;
     std::uint64_t assetFolder_ = 0;
+    std::uint64_t dataBlock_ = 0;
 };
 
 } // namespace bloom::document

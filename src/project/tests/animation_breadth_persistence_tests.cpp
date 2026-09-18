@@ -35,7 +35,9 @@ namespace {
 void removeImageFields(std::string& text) {
     text = std::regex_replace(text, std::regex(R"(,\s*"backgroundColor"\s*:\s*\[[^\]]*\])"), "");
     text = std::regex_replace(text, std::regex(R"(,\s*"assets"\s*:\s*\[\])"), "");
+    text = std::regex_replace(text, std::regex(R"(,\s*"dataBlocks"\s*:\s*\[\])"), "");
     text = std::regex_replace(text, std::regex(R"(,\s*"asset"\s*:\s*"0")"), "");
+    text = std::regex_replace(text, std::regex(R"(,\s*"dataBlock"\s*:\s*"0")"), "");
 }
 
 using namespace bloom;
@@ -313,7 +315,7 @@ void roundTripAndReopen() {
            "and an eased key is written with the ease-in-out token");
     expect(text.find("\"red\"") != std::string::npos && text.find("\"alpha\"") != std::string::npos,
            "a colour key's value carries the same named channels a constant colour does");
-    expect(text.find("\"minor\": 17") != std::string::npos,
+    expect(text.find("\"minor\": 18") != std::string::npos,
            "both constructs declare the current document schema minor");
     expect(handleObject(text, "outgoingHandle") == R"({"time":0.125,"value":0.5})" &&
                handleObject(text, "incomingHandle") == R"({"time":0.875,"value":-0.25})",
@@ -373,11 +375,11 @@ std::vector<std::byte> legacyArchive(std::string& documentText) {
     const auto snapshot = unanimated.snapshot();
     documentText = documentTextOf(archiveOf(snapshot, settings));
 
-    const auto minor = documentText.find("\"minor\": 17");
+    const auto minor = documentText.find("\"minor\": 18");
     if (minor == std::string::npos) {
         throw std::logic_error("legacy minor anchor");
     }
-    documentText.replace(minor, std::string_view("\"minor\": 17").size(), "\"minor\": 2");
+    documentText.replace(minor, std::string_view("\"minor\": 18").size(), "\"minor\": 2");
 
     removeImageFields(documentText);
     const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 2}};
@@ -412,7 +414,7 @@ void minorGating() {
     const auto authored = authoredProject();
     const auto settings = neutralColorSettings();
     const auto baseline = documentTextOf(archiveOf(authored.document->snapshot(), settings));
-    const auto anchor = std::string_view("\"minor\": 17");
+    const auto anchor = std::string_view("\"minor\": 18");
     const auto minor = baseline.find(anchor);
     expect(minor != std::string::npos, "the animated fixture declares the current minor");
     if (minor == std::string::npos) {
@@ -446,7 +448,7 @@ void minorGating() {
     // additions additive rather than a one-version island.
     {
         auto text = baseline;
-        text.replace(minor, anchor.size(), "\"minor\": 18");
+        text.replace(minor, anchor.size(), "\"minor\": 19");
         auto dom = parseStrictJsonDom(test::toBytes(text), {}, memory());
         expect(static_cast<bool>(dom), "the 1.4-labelled document parses");
         if (!dom) {

@@ -536,8 +536,18 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
             }
             selectors.push_back(*stored);
         }
+        std::optional<document::DataBlockRecord> dataBlock;
+        if (document::isDataBlockReader(descriptor->kernel)) {
+            if (selectors.empty() || selectors.front() <= 0)
+                return std::nullopt;
+            const auto* block = request_.snapshot.project().findDataBlock(
+                document::DataBlockRecordId::fromRaw(static_cast<std::uint64_t>(selectors.front())));
+            if (block == nullptr)
+                return std::nullopt;
+            dataBlock = *block;
+        }
         return runtime::CompiledValueKernel{runtime::CompiledValueUtility{
-            descriptor->kernel, std::move(operands), std::move(selectors)}};
+            descriptor->kernel, std::move(operands), std::move(selectors), std::move(dataBlock)}};
     }
     case runtime::NodeLoweringKind::Shape:
     case runtime::NodeLoweringKind::Solid:

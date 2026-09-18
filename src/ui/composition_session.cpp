@@ -10,6 +10,7 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/curve_compilation.hpp>
 
@@ -422,6 +423,44 @@ void CompositionSession::toggleNodeSelection(const document::NodeId nodeId) {
         const auto primary = *nodes.begin();
         selectNodes(std::move(nodes), primary);
     }
+}
+
+std::set<document::NodeId>
+CompositionSession::dataBlockReaders(const document::DataBlockRecordId blockId) const {
+    std::set<document::NodeId> readers;
+    const auto* current = composition();
+    if (current == nullptr || !snapshot_.project().findDataBlock(blockId))
+        return readers;
+    for (const auto& node : current->graph().nodes()) {
+        const auto binding = std::ranges::find_if(node.parameters, [](const auto& item) {
+            return item.role == document::kDataBlockParameterRole;
+        });
+        if (binding == node.parameters.end())
+            continue;
+        const auto* parameter = current->parameters().find(binding->parameterId);
+        const auto* constant =
+            parameter ? std::get_if<document::ConstantValueSource>(&parameter->source) : nullptr;
+        const auto* stored = constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;
+        if (stored != nullptr && *stored > 0 &&
+            static_cast<std::uint64_t>(*stored) == blockId.value())
+            readers.insert(node.id);
+    }
+    return readers;
+}
+
+void CompositionSession::selectDataBlock(const document::DataBlockRecordId blockId) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!blockId.isValid() || snapshot_.project().findDataBlock(blockId) == nullptr) {
+        reportUnavailable(QStringLiteral("The selected data block is no longer available"));
+        return;
+    }
+    const auto readers = dataBlockReaders(blockId);
+    CompositionSelection next{.primary = blockId, .contextualLayer = std::nullopt};
+    if (selection_ == next && selectedNodes_ == readers)
+        return;
+    selection_ = next;
+    selectedNodes_ = readers;
+    emit selectionChanged();
 }
 
 void CompositionSession::selectParameter(const document::ParameterId parameterId) {
@@ -1392,6 +1431,9 @@ bool CompositionSession::selectionExists(const CompositionSelection& selection) 
     if (const auto* keySelection = std::get_if<KeyframeSelection>(&selection.primary)) {
         return keyframeSelectionExists(*keySelection);
     }
+    if (const auto* blockId = std::get_if<document::DataBlockRecordId>(&selection.primary)) {
+        return snapshot_.project().findDataBlock(*blockId) != nullptr;
+    }
     const auto* parameterId = std::get_if<document::ParameterId>(&selection.primary);
     return parameterId != nullptr && current->parameters().find(*parameterId) != nullptr;
 }
@@ -2160,6 +2202,9 @@ void CompositionSession::normalizeSelection() {
     } else if (const auto* nodeId = std::get_if<document::NodeId>(&selection_.primary)) {
         selectedNodes_.insert(*nodeId);
         selection_.contextualLayer = layerForNode(*nodeId);
+    } else if (const auto* blockId =
+                   std::get_if<document::DataBlockRecordId>(&selection_.primary)) {
+        selectedNodes_ = dataBlockReaders(*blockId);
     }
     if (before != selectedNodes_ || oldSelection != selection_)
         emit selectionChanged();

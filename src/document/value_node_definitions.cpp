@@ -607,7 +607,8 @@ bool isInlineSelectorSchemaKey(const std::string_view schemaKey) noexcept {
         schemaKey == kNumberRadixParameterSchemaKey || schemaKey == kStringCaseParameterSchemaKey ||
         schemaKey == kStringPadSideParameterSchemaKey ||
         schemaKey == kIntegerOperationParameterSchemaKey ||
-        schemaKey == kBooleanOperationParameterSchemaKey) {
+        schemaKey == kBooleanOperationParameterSchemaKey ||
+        schemaKey == kDataBlockParameterSchemaKey) {
         return true;
     }
     return schemaKey == kScalarOperationParameterSchemaKey ||

@@ -205,6 +205,46 @@ bool Project::removeExtensionRecord(const ExtensionRecordId id) {
     return true;
 }
 
+const DataBlockRecord* Project::findDataBlock(const DataBlockRecordId id) const noexcept {
+    const auto found = std::ranges::find_if(dataBlocks_, [id](const auto& block) {
+        const auto* blockId = std::get_if<DataBlockRecordId>(&block.id);
+        return blockId != nullptr && *blockId == id;
+    });
+    return found == dataBlocks_.end() ? nullptr : &*found;
+}
+
+DataBlockRecord* Project::findDataBlock(const DataBlockRecordId id) noexcept {
+    return const_cast<DataBlockRecord*>(std::as_const(*this).findDataBlock(id));
+}
+
+bool Project::addDataBlock(DataBlockRecord block) {
+    const auto* id = std::get_if<DataBlockRecordId>(&block.id);
+    if (id == nullptr || findDataBlock(*id) != nullptr || !block.validate(this).ok())
+        return false;
+    dataBlocks_.push_back(std::move(block));
+    std::ranges::sort(dataBlocks_, {},
+                      [](const auto& value) { return std::get<DataBlockRecordId>(value.id); });
+    return true;
+}
+
+bool Project::removeDataBlock(const DataBlockRecordId id) {
+    return std::erase_if(dataBlocks_, [id](const auto& block) {
+               return std::get<DataBlockRecordId>(block.id) == id;
+           }) != 0;
+}
+
+std::vector<DataBlockRecord> Project::dataBlocks() const {
+    std::vector<DataBlockRecord> blocks;
+    blocks.reserve(assets_.size() + extensionRecords_.size() + dataBlocks_.size());
+    for (const auto& asset : assets_)
+        blocks.push_back(DataBlockRecord::fromAsset(asset));
+    for (const auto& record : extensionRecords_)
+        blocks.push_back(DataBlockRecord::fromExtension(record));
+    for (const auto& block : dataBlocks_)
+        blocks.push_back(block);
+    return blocks;
+}
+
 ValidationResult Project::validateCompositionNesting() const {
     // Kahn's algorithm bounds stack use even for deeply nested or untrusted projects.
     std::unordered_map<CompositionId, std::size_t> incoming;
@@ -396,6 +436,21 @@ ValidationResult Project::validate() const {
     }
     result.append("", validateCompositionNesting());
     result.append("", validateExtensionRecords(*this));
+    std::size_t aggregateDataBlockBytes = 0;
+    std::unordered_set<DataBlockRecordId> dataBlockIds;
+    for (const auto& block : dataBlocks_) {
+        result.append("dataBlocks", block.validate(this));
+        if (!dataBlockIds.insert(std::get<DataBlockRecordId>(block.id)).second)
+            result.add(ValidationCode::DuplicateId, "dataBlocks.id", "Duplicate data block ID");
+        const auto bytes = block.payloadBytes();
+        if (bytes > kMaxAggregateDataBlockPayloadBytes -
+                        std::min(aggregateDataBlockBytes, kMaxAggregateDataBlockPayloadBytes)) {
+            result.add(ValidationCode::InvalidValue, "dataBlocks",
+                       "Data block payloads exceed the 128 MiB project limit");
+            break;
+        }
+        aggregateDataBlockBytes += bytes;
+    }
     return result;
 }
 

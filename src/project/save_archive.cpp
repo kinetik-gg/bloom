@@ -124,6 +124,8 @@ measureScratch(const bloom::document::Snapshot& snapshot) noexcept {
         }
     }
 
+    secondWindow = std::max(secondWindow, snapshot.project().typedDataBlocks().size());
+
     if (!checkedAdd(firstWindow, secondWindow, requirements.sortEntries) ||
         !checkedAdd(requirements.sortEntries, thirdWindow, requirements.sortEntries)) {
         requirements.overflow = true;
@@ -131,6 +133,17 @@ measureScratch(const bloom::document::Snapshot& snapshot) noexcept {
     }
     for (const auto& record : snapshot.project().extensionRecords()) {
         const auto encoded = bloom::project::canonicalBase64EncodedSize(record.payload.size());
+        if (!encoded.hasValue()) {
+            requirements.overflow = true;
+            return requirements;
+        }
+        requirements.payloadBytes = std::max(requirements.payloadBytes, *encoded.value());
+    }
+    for (const auto& block : snapshot.project().typedDataBlocks()) {
+        const auto* payload = std::get_if<bloom::document::OpaqueExtensionPayload>(&block.payload);
+        if (payload == nullptr)
+            continue;
+        const auto encoded = bloom::project::canonicalBase64EncodedSize(payload->size());
         if (!encoded.hasValue()) {
             requirements.overflow = true;
             return requirements;

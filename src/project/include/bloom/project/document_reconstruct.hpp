@@ -60,6 +60,7 @@ enum class ReconstructionStage : std::uint8_t {
     // example a duplicate id -- unreachable given decode's own sort/uniqueness check, but still a
     // typed possibility of that checked surface).
     ExtensionRecordAdd,
+    DataBlockAdd,
     // bloom::document::Project::validate() reported at least one issue after every composition and
     // extension record was added: a whole-project or cross-composition invariant (schema/role
     // agreement, orphan extension subject or host-table target, cross-composition id collision, an

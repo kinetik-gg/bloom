@@ -58,7 +58,7 @@ void roundTripAndValidation() {
     const auto settings = document::makeBloomNeutralColorSettingsV1({});
     auto archive = buildVerifiedSaveArchive({}, {.snapshot = &snapshot, .colorSettings = &settings},
                                             {}, memory());
-    expect(static_cast<bool>(archive), "organized project saves at 1.17");
+    expect(static_cast<bool>(archive), "organized project saves at 1.18");
     if (!archive)
         return;
     auto result = openProjectArchive(archive.archive()->bytes(), {}, memory());
@@ -67,8 +67,8 @@ void roundTripAndValidation() {
         return;
     auto opened = std::move(result).takeOpened();
     auto restored = opened.document->snapshot();
-    expect(opened.schemaMinor == 17 && *restored.project().findAsset(asset.id) == asset,
-           "name, tags, folder, order and media identity round-trip at 1.17");
+    expect(opened.schemaMinor == 18 && *restored.project().findAsset(asset.id) == asset,
+           "name, tags, folder, order and media identity round-trip at 1.18");
     expect(restored.project().assetFolders().size() == 2 &&
                *restored.project().findAssetFolder(child) ==
                    *snapshot.project().findAssetFolder(child),
@@ -141,8 +141,10 @@ void migration() {
         std::regex(
             R"regex(,\s*"name": "(?:Plate|Captured face Book)",\s*"tags": \[\],\s*"order": "0")regex"),
         "");
-    const auto version = legacy.find("\"minor\": 17");
-    legacy.replace(version, std::string_view("\"minor\": 17").size(), "\"minor\": 15");
+    legacy = std::regex_replace(legacy, std::regex(R"(,\s*"dataBlocks"\s*:\s*\[\])"), "");
+    legacy = std::regex_replace(legacy, std::regex(R"(,\s*"dataBlock"\s*:\s*"0")"), "");
+    const auto version = legacy.find("\"minor\": 18");
+    legacy.replace(version, std::string_view("\"minor\": 18").size(), "\"minor\": 15");
     auto operation = memory();
     auto parsed = parseStrictJsonDom(std::as_bytes(std::span(legacy)), {}, operation);
     if (!parsed)
@@ -177,7 +179,7 @@ void migration() {
     if (opened.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto result = std::move(opened).takeOpened();
-    expect(result.schemaMinor == 17 &&
+    expect(result.schemaMinor == 18 &&
                result.document->snapshot().project().assets().front().name == "shot.v02",
            "opened archive reports current schema and migrated display name");
 }

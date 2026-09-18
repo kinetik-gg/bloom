@@ -350,7 +350,7 @@ void testWriterDomRoundTrip(Expectations& expectations) {
         }
         if (const auto* minor =
                 expectChild(expectations, *schemaVersion, "minor", "minor exists")) {
-            expectNumber(expectations, *minor, "17", "the document schema minor is preserved");
+            expectNumber(expectations, *minor, "18", "the document schema minor is preserved");
         }
     }
 
@@ -358,7 +358,7 @@ void testWriterDomRoundTrip(Expectations& expectations) {
         expectChild(expectations, root, "project", "the root has a project member");
     if (project != nullptr) {
         expectKeyOrder(expectations, *project,
-                       {"id", "name", "colorSettings", "compositions", "assets"},
+                       {"id", "name", "colorSettings", "compositions", "assets", "dataBlocks"},
                        "project keeps its exact member order");
         if (const auto* id = expectChild(expectations, *project, "id", "project.id exists")) {
             expectString(expectations, *id, "1", "the project id is preserved as a decimal string");
@@ -578,7 +578,7 @@ void testWriterDomRoundTrip(Expectations& expectations) {
             expectKeyOrder(expectations, *highestIssued,
                            {"composition", "node", "edge", "layer", "layerSlot", "parameter",
                             "animationCurve", "keyframe", "driverBinding", "extensionRecord",
-                            "nodeGroup", "asset"},
+                            "nodeGroup", "asset", "dataBlock"},
                            "highestIssued keeps its exact member order across every namespace");
             if (const auto* composition = expectChild(expectations, *highestIssued, "composition",
                                                       "highestIssued.composition exists")) {

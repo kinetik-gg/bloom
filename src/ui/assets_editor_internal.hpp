@@ -14,6 +14,7 @@ inline constexpr int kAssetRole = Qt::UserRole + 2;
 inline constexpr int kFolderRole = Qt::UserRole + 3;
 inline constexpr int kTagsRole = Qt::UserRole + 4;
 inline constexpr int kCompositionRootRole = Qt::UserRole + 5;
+inline constexpr int kDataBlockRole = Qt::UserRole + 6;
 inline constexpr auto kInternalMimeType = "application/x-bloom-asset-list";
 inline document::CompositionId compositionId(const QTreeWidgetItem* item) {
     return document::CompositionId::fromRaw(item ? item->data(0, kCompositionRole).toULongLong()

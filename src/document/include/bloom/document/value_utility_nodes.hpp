@@ -105,6 +105,10 @@ enum class ValueUtilityKernel : std::uint8_t {
     FrameRate,
     CompositionDuration,
     CompositionSize,
+    DataSample,
+    RampSample,
+    TableLookup,
+    PointSetRead,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -178,6 +182,17 @@ inline constexpr std::string_view kFrameNumberNodeType = "bloom.frame-number";
 inline constexpr std::string_view kFrameRateNodeType = "bloom.frame-rate";
 inline constexpr std::string_view kCompositionDurationNodeType = "bloom.composition-duration";
 inline constexpr std::string_view kCompositionSizeNodeType = "bloom.composition-size";
+inline constexpr std::string_view kDataSampleNodeType = "bloom.data-sample";
+inline constexpr std::string_view kRampSampleNodeType = "bloom.ramp-sample";
+inline constexpr std::string_view kTableLookupNodeType = "bloom.table-lookup";
+inline constexpr std::string_view kPointSetReadNodeType = "bloom.point-set-read";
+inline constexpr std::string_view kDataBlockParameterSchemaKey = "bloom.data.block";
+inline constexpr std::string_view kDataBlockParameterRole = "block";
+
+[[nodiscard]] constexpr bool isDataBlockReader(const ValueUtilityKernel kernel) noexcept {
+    return kernel == ValueUtilityKernel::DataSample || kernel == ValueUtilityKernel::RampSample ||
+           kernel == ValueUtilityKernel::TableLookup || kernel == ValueUtilityKernel::PointSetRead;
+}
 
 // Whether this readout's value is a property of the COMPOSITION rather than of the frame being
 // rendered. The three that are get lowered to a constant -- a plan is compiled from one document

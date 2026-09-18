@@ -166,7 +166,7 @@ constexpr std::string_view kMinimalDocumentGolden =
     "{\n"
     "  \"schemaVersion\": {\n"
     "    \"major\": 1,\n"
-    "    \"minor\": 17\n"
+    "    \"minor\": 18\n"
     "  },\n"
     "  \"project\": {\n"
     "    \"id\": \"1\",\n"
@@ -286,7 +286,8 @@ constexpr std::string_view kMinimalDocumentGolden =
     "        ]\n"
     "      }\n"
     "    ],\n"
-    "    \"assets\": []\n"
+    "    \"assets\": [],\n"
+    "    \"dataBlocks\": []\n"
     "  },\n"
     "  \"idAllocation\": {\n"
     "    \"highestIssued\": {\n"
@@ -301,7 +302,8 @@ constexpr std::string_view kMinimalDocumentGolden =
     "      \"driverBinding\": \"0\",\n"
     "      \"extensionRecord\": \"0\",\n"
     "      \"nodeGroup\": \"0\",\n"
-    "      \"asset\": \"0\"\n"
+    "      \"asset\": \"0\",\n"
+    "      \"dataBlock\": \"0\"\n"
     "    }\n"
     "  },\n"
     "  \"extensions\": []\n"
@@ -345,7 +347,7 @@ void testComposedGoldenBytes(Expectations& expectations) {
     constexpr std::string_view expected = R"golden({
   "schemaVersion": {
     "major": 1,
-    "minor": 17
+    "minor": 18
   },
   "project": {
     "id": "1",
@@ -700,7 +702,8 @@ void testComposedGoldenBytes(Expectations& expectations) {
         ]
       }
     ],
-    "assets": []
+    "assets": [],
+    "dataBlocks": []
   },
   "idAllocation": {
     "highestIssued": {
@@ -715,7 +718,8 @@ void testComposedGoldenBytes(Expectations& expectations) {
       "driverBinding": "0",
       "extensionRecord": "0",
       "nodeGroup": "0",
-      "asset": "0"
+      "asset": "0",
+      "dataBlock": "0"
     }
   },
   "extensions": []
@@ -880,7 +884,7 @@ void testExtensionGoldenBytes(Expectations& expectations) {
         "{\n"
         "  \"schemaVersion\": {\n"
         "    \"major\": 1,\n"
-        "    \"minor\": 17\n"
+        "    \"minor\": 18\n"
         "  },\n"
         "  \"project\": {\n"
         "    \"id\": \"1\",\n"
@@ -1001,7 +1005,8 @@ void testExtensionGoldenBytes(Expectations& expectations) {
         "        ]\n"
         "      }\n"
         "    ],\n"
-        "    \"assets\": []\n"
+        "    \"assets\": [],\n"
+        "    \"dataBlocks\": []\n"
         "  },\n"
         "  \"idAllocation\": {\n"
         "    \"highestIssued\": {\n"
@@ -1016,7 +1021,8 @@ void testExtensionGoldenBytes(Expectations& expectations) {
         "      \"driverBinding\": \"0\",\n"
         "      \"extensionRecord\": \"9\",\n"
         "      \"nodeGroup\": \"0\",\n"
-        "      \"asset\": \"0\"\n"
+        "      \"asset\": \"0\",\n"
+        "      \"dataBlock\": \"0\"\n"
         "    }\n"
         "  },\n"
         "  \"extensions\": [\n"
@@ -1268,7 +1274,7 @@ void testDriverSourceEncoding(Expectations& expectations) {
                                            "              \"outputPort\": \"value\"\n") !=
                             std::string::npos,
                         "the driver source is written as the node-and-port pair it addresses");
-    expectations.expect(encoded.bytes.find("\"minor\": 17") != std::string::npos,
+    expectations.expect(encoded.bytes.find("\"minor\": 18") != std::string::npos,
                         "a document carrying a driver source declares the current schema minor");
 }
 
@@ -1575,10 +1581,10 @@ void testPlainWriteExplicitDefaultsUnchanged(Expectations& expectations) {
 // Version parameterization: schemaMinor alone (no overlay) changes only the root schemaVersion.
 void testSchemaMinorParameterization(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    // Seventeen is intentionally above the current minor so this test exercises the request field
+    // Nineteen is intentionally above the current minor so this test exercises the request field
     // rather than merely restating the default current version.
-    requireReplace(expected, "\"minor\": 17\n  },\n  \"project\"",
-                   "\"minor\": 18\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 18\n  },\n  \"project\"",
+                   "\"minor\": 19\n  },\n  \"project\"");
 
     auto newProject = makeMinimalProject();
     Document document{std::move(newProject.project)};
@@ -1592,22 +1598,22 @@ void testSchemaMinorParameterization(Expectations& expectations) {
                                       .payloadScratch = payloadScratch,
                                       .sortScratch = sortScratch,
                                       .roundTrip = nullptr,
-                                      .schemaMinor = 18};
+                                      .schemaMinor = 19};
     const auto size = bloom::project::canonicalDocumentSize(request);
     expectations.expect(size.hasValue() && *size.value() == expected.size(),
-                        "schemaMinor=18 with no overlay sizes exactly with the golden");
+                        "schemaMinor=19 with no overlay sizes exactly with the golden");
     const auto encoded = encodeWithSlack(request);
     expectBytesEqual(expectations,
                      encoded.ok ? std::string_view(encoded.bytes) : std::string_view{}, expected,
-                     "schemaMinor=18 with no overlay emits {1, 18} and is otherwise "
+                     "schemaMinor=19 with no overlay emits {1, 19} and is otherwise "
                      "byte-identical");
 }
 
 // The document root itself is an attachment point (its schema path is the empty path).
 void testOverlayRootAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 17\n  },\n  \"project\"",
-                   "\"minor\": 17\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 18\n  },\n  \"project\"",
+                   "\"minor\": 18\n  },\n  \"project\"");
     requireReplace(expected, "  \"extensions\": []\n}\n",
                    "  \"extensions\": [],\n  \"zzzRoot\": true\n}\n");
 
@@ -1641,15 +1647,17 @@ void testOverlayRootAttachmentPoint(Expectations& expectations) {
 // A singleton schema-path attachment point nested one level in (project).
 void testOverlayProjectAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 17\n  },\n  \"project\"",
-                   "\"minor\": 17\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 18\n  },\n  \"project\"",
+                   "\"minor\": 18\n  },\n  \"project\"");
     requireReplace(expected,
                    "    ],\n"
-                   "    \"assets\": []\n"
+                   "    \"assets\": [],\n"
+                   "    \"dataBlocks\": []\n"
                    "  },\n"
                    "  \"idAllocation\"",
                    "    ],\n"
                    "    \"assets\": [],\n"
+                   "    \"dataBlocks\": [],\n"
                    "    \"zzzProject\": \"hello\"\n"
                    "  },\n"
                    "  \"idAllocation\"");
@@ -1689,8 +1697,8 @@ void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations)
     std::string expected(kMinimalDocumentGolden);
     // The fixture is authored at the current schema minor so the overlay test changes only
     // retained members.
-    requireReplace(expected, "\"minor\": 17\n  },\n  \"project\"",
-                   "\"minor\": 17\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 18\n  },\n  \"project\"",
+                   "\"minor\": 18\n  },\n  \"project\"");
     requireReplace(expected,
                    "          \"frameRate\": {\n"
                    "            \"numerator\": \"24\",\n"
@@ -1722,7 +1730,8 @@ void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations)
                    "        ]\n"
                    "      }\n"
                    "    ],\n"
-                   "    \"assets\": []\n"
+                   "    \"assets\": [],\n"
+                   "    \"dataBlocks\": []\n"
                    "  },\n"
                    "  \"idAllocation\"",
                    "        \"nodeGroups\": [],\n"
@@ -1735,7 +1744,8 @@ void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations)
                    "        \"zzzComp\": -7\n"
                    "      }\n"
                    "    ],\n"
-                   "    \"assets\": []\n"
+                   "    \"assets\": [],\n"
+                   "    \"dataBlocks\": []\n"
                    "  },\n"
                    "  \"idAllocation\"");
 
@@ -1790,8 +1800,8 @@ void testOverlayCompositionAndFormatAttachmentPoints(Expectations& expectations)
 // A collection-element attachment point nested two levels in (a graph node).
 void testOverlayNodeAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 17\n  },\n  \"project\"",
-                   "\"minor\": 17\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 18\n  },\n  \"project\"",
+                   "\"minor\": 18\n  },\n  \"project\"");
     requireReplace(expected,
                    "              \"parameters\": []\n"
                    "            },\n"
@@ -1839,8 +1849,8 @@ void testOverlayNodeAttachmentPoint(Expectations& expectations) {
 // Composition/Node.
 void testOverlayEdgeAttachmentPoint(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 17\n  },\n  \"project\"",
-                   "\"minor\": 17\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 18\n  },\n  \"project\"",
+                   "\"minor\": 18\n  },\n  \"project\"");
     requireReplace(expected,
                    "              }\n"
                    "            }\n"
@@ -1888,16 +1898,18 @@ void testOverlayEdgeAttachmentPoint(Expectations& expectations) {
 // carrying a retained array of booleans.
 void testOverlayIdAllocationAttachmentPoints(Expectations& expectations) {
     std::string expected(kMinimalDocumentGolden);
-    requireReplace(expected, "\"minor\": 17\n  },\n  \"project\"",
-                   "\"minor\": 17\n  },\n  \"project\"");
+    requireReplace(expected, "\"minor\": 18\n  },\n  \"project\"",
+                   "\"minor\": 18\n  },\n  \"project\"");
     requireReplace(expected,
                    "      \"nodeGroup\": \"0\",\n"
-                   "      \"asset\": \"0\"\n"
+                   "      \"asset\": \"0\",\n"
+                   "      \"dataBlock\": \"0\"\n"
                    "    }\n"
                    "  },\n"
                    "  \"extensions\"",
                    "      \"nodeGroup\": \"0\",\n"
                    "      \"asset\": \"0\",\n"
+                   "      \"dataBlock\": \"0\",\n"
                    "      \"zzzHighWater\": 5\n"
                    "    },\n"
                    "    \"zzzIdAllocation\": [\n"
@@ -2174,8 +2186,8 @@ void testPreservationDeterminismCycle(Expectations& expectations) {
 
     std::string original(plainEncoded.bytes);
 
-    requireReplace(original, "\"minor\": 17\n  },\n  \"project\"",
-                   "\"minor\": 18\n  },\n  \"project\"");
+    requireReplace(original, "\"minor\": 18\n  },\n  \"project\"",
+                   "\"minor\": 19\n  },\n  \"project\"");
 
     requireReplace(original,
                    "                \"slotId\": \"1\",\n"
@@ -2233,7 +2245,8 @@ void testPreservationDeterminismCycle(Expectations& expectations) {
                    "        ]\n"
                    "      }\n"
                    "    ],\n"
-                   "    \"assets\": []\n"
+                   "    \"assets\": [],\n"
+                   "    \"dataBlocks\": []\n"
                    "  },\n"
                    "  \"idAllocation\"",
                    "        \"nodeGroups\": [],\n"
@@ -2246,17 +2259,20 @@ void testPreservationDeterminismCycle(Expectations& expectations) {
                    "        \"zzzComp\": true\n"
                    "      }\n"
                    "    ],\n"
-                   "    \"assets\": []\n"
+                   "    \"assets\": [],\n"
+                   "    \"dataBlocks\": []\n"
                    "  },\n"
                    "  \"idAllocation\"");
 
     requireReplace(original,
                    "    ],\n"
-                   "    \"assets\": []\n"
+                   "    \"assets\": [],\n"
+                   "    \"dataBlocks\": []\n"
                    "  },\n"
                    "  \"idAllocation\"",
                    "    ],\n"
                    "    \"assets\": [],\n"
+                   "    \"dataBlocks\": [],\n"
                    "    \"zzzProject\": \"hello world\"\n"
                    "  },\n"
                    "  \"idAllocation\"");
@@ -2313,7 +2329,7 @@ void testPreservationDeterminismCycle(Expectations& expectations) {
                                              .payloadScratch = overlayPayloadScratch,
                                              .sortScratch = overlaySortScratch,
                                              .roundTrip = decoded.roundTrip(),
-                                             .schemaMinor = 18};
+                                             .schemaMinor = 19};
     const auto overlaySize = bloom::project::canonicalDocumentSize(overlayRequest);
     expectations.expect(overlaySize.hasValue() && *overlaySize.value() == original.size(),
                         "the overlay re-encode sizes exactly to the spliced original's byte "

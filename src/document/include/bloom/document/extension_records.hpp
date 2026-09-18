@@ -46,8 +46,9 @@ class OpaqueExtensionPayload final {
     std::shared_ptr<const std::vector<std::byte>> storage_;
 };
 
-using ExtensionTarget = std::variant<ProjectId, CompositionId, NodeId, EdgeId, LayerId, LayerSlotId,
-                                     ParameterId, AnimationCurveId, KeyframeId>;
+using ExtensionTarget =
+    std::variant<ProjectId, CompositionId, NodeId, NodeGroupId, EdgeId, LayerId, LayerSlotId,
+                 ParameterId, AnimationCurveId, KeyframeId, AssetId>;
 
 struct ExtensionHostReference final {
     std::string key;
