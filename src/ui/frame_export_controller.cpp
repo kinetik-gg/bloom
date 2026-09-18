@@ -318,6 +318,8 @@ FrameExportController::~FrameExportController() {
         compiling->handle.cancel();
     } else if (auto* runner = std::get_if<host::OutputAnalysisAttemptRunnerV1>(&inFlight_)) {
         runner->requestCancellation();
+    } else if (auto* preparing = std::get_if<DeliverableHandle>(&inFlight_)) {
+        preparing->cancel();
     } else if (auto* job = std::get_if<ExportJobHandle>(&inFlight_)) {
         job->handle.cancel();
     }
@@ -338,7 +340,7 @@ const std::filesystem::path& FrameExportController::scratchDirectory() const noe
 }
 
 std::uint64_t FrameExportController::chargedResourceBytes() const noexcept {
-    return ledger_.chargedBytes();
+    return ledger_->chargedBytes();
 }
 
 void FrameExportController::setDestinationProvider(FrameExportDestinationProvider provider) {
@@ -463,6 +465,8 @@ void FrameExportController::beginRangeExport(FrameExportRangeRequest request) {
                                     .frameRate = context->frameRate,
                                     .duration = context->duration,
                                     .plan = nullptr,
+                                    .exr = std::move(request.exr),
+                                    .bypassLookNodes = request.bypassLookNodes,
                                     .naming = std::move(request.naming),
                                     .compositionName = compositionName,
                                     .approved = false,
@@ -483,6 +487,8 @@ void FrameExportController::requestCancellation() {
         compiling->handle.cancel();
     } else if (auto* runner = std::get_if<host::OutputAnalysisAttemptRunnerV1>(&inFlight_)) {
         runner->requestCancellation();
+    } else if (auto* preparing = std::get_if<DeliverableHandle>(&inFlight_)) {
+        preparing->cancel();
     } else if (auto* job = std::get_if<ExportJobHandle>(&inFlight_)) {
         job->handle.cancel();
     }
@@ -600,6 +606,10 @@ void FrameExportController::pollOnce() {
         handleAttemptResult(*runner);
         return;
     }
+    if (auto* preparing = std::get_if<DeliverableHandle>(&inFlight_)) {
+        pollDeliverablePreparation(*preparing);
+        return;
+    }
     if (auto* job = std::get_if<ExportJobHandle>(&inFlight_)) {
         handleExportJobResult(*job);
         return;
@@ -668,14 +678,15 @@ bool FrameExportController::beginAttempt(
                        .resolution = runtime::CompositionFormatResolution{},
                        .quality = runtime::EvaluationQuality::Reference,
                        .colorIntent = session_.colorIntent(),
-                       .pixelStorageByteLimit = kDefaultPreviewPixelStorageByteLimit},
+                       .pixelStorageByteLimit = kDefaultPreviewPixelStorageByteLimit,
+                       .bypassLookNodes = sequence_ && sequence_->bypassLookNodes},
         .targetPath = pendingDestination_,
         .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
         .owner = {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(1)},
         .preset = pendingPreset_,
         .displayProcessorProvider = displayProcessorProvider_};
 
-    auto begin = host::beginOutputAnalysisAttemptV1(scheduler_, artifactCoordinator_, ledger_,
+    auto begin = host::beginOutputAnalysisAttemptV1(scheduler_, artifactCoordinator_, *ledger_,
                                                     std::move(request));
     if (!begin) {
         return false;
@@ -791,6 +802,12 @@ void FrameExportController::handleAttemptResult(host::OutputAnalysisAttemptRunne
         return;
     }
 
+    if (sequence_ && pendingPreset_ == output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1 &&
+        (!sequence_->exr.outputColorSpaceId.empty() ||
+         sequence_->exr.compression != output::FlatExrCompressionV1::Zip)) {
+        beginDeliverablePreparation(std::move(attempt));
+        return;
+    }
     presentApproval(attempt);
 }
 
@@ -825,6 +842,17 @@ void FrameExportController::presentApproval(
     prompt.preset = attempt->preset();
     prompt.presetName = presetDisplayName(prompt.preset);
     prompt.facets = summarizeFacets(attempt->report()->view());
+    prompt.implementationNote =
+        QString::fromStdString(output::outputLookDescriptionV1(attempt->frame()->identity()));
+    if (const auto& exr = attempt->report()->exr(); exr) {
+        prompt.profile = tr("%1; %2").arg(
+            QString::fromStdString(exr->options().outputColorSpaceId),
+            QString::fromUtf8(output::flatExrCompressionNameV1(exr->options().compression).data())
+                .toUpper());
+    }
+    if (attempt->report()->display())
+        prompt.implementationNote +=
+            "\n" + QString::fromStdString(attempt->report()->display()->description());
     const auto digestHex = digest->toLowercaseHex();
     prompt.digestShortForm = QString::fromLatin1(digestHex.data(), 16);
 

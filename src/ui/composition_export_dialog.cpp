@@ -4,6 +4,7 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QMessageBox>
+#include <QSettings>
 #include <QSpinBox>
 #include <algorithm>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
@@ -17,13 +18,24 @@
 
 namespace bloom::ui {
 std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t maximumFrame,
-                                                                std::uint32_t sampleRate) {
+                                                                std::uint32_t sampleRate,
+                                                                const QString& projectKey) {
     QDialog dialog;
     dialog.setWindowTitle(QObject::tr("Export Composition"));
     dialog.setMinimumWidth(kit::px(kit::Size::DialogTextWidth));
     auto* layout = new QFormLayout(&dialog);
     auto* preset = new kit::KDropdown(&dialog);
     preset->setObjectName("compositionExportPreset");
+    preset->addItem(QObject::tr("VFX handoff EXR (ACES2065-1, PIZ, 1001, ####)"), 101);
+    preset->addItem(QObject::tr("Review H.264 (Rec.709, look on)"), 102);
+    preset->setItemEnabled(
+        1, output::outputPresetAvailabilityV1(output::OutputPresetV1::H264MovV1).available);
+    const auto selectedPreset = [&] {
+        const int value = preset->currentData().toInt();
+        return value == 101   ? output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1
+               : value == 102 ? output::OutputPresetV1::H264MovV1
+                              : static_cast<output::OutputPresetV1>(value);
+    };
     const std::array<std::pair<const char*, output::OutputPresetV1>, 7> presets{
         {{"ProRes MOV (preview)", output::OutputPresetV1::ProResMovV1},
          {"DNxHR MXF", output::OutputPresetV1::DnxhrMxfV1},
@@ -43,6 +55,21 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
                                   static_cast<qsizetype>(capability.reason.size())));
         }
     }
+    auto* outputSpace = new kit::KLineEdit(&dialog);
+    outputSpace->setObjectName("compositionExportOutputSpace");
+    outputSpace->setPlaceholderText(QObject::tr("Working colour space"));
+    auto* compression = new kit::KDropdown(&dialog);
+    compression->setObjectName("compositionExportCompression");
+    for (const auto value :
+         {output::FlatExrCompressionV1::Zip, output::FlatExrCompressionV1::Piz,
+          output::FlatExrCompressionV1::Zips, output::FlatExrCompressionV1::None})
+        compression->addItem(
+            QString::fromUtf8(output::flatExrCompressionNameV1(value).data()).toUpper(),
+            static_cast<int>(value));
+    auto* look = new kit::KCheckBox(&dialog);
+    look->setObjectName("compositionExportLook");
+    look->setText(QObject::tr("Bake look-tagged effects"));
+    look->setChecked(true);
     auto* profile = new kit::KDropdown(&dialog);
     profile->setObjectName("compositionExportProfile");
     auto* first = new QSpinBox(&dialog);
@@ -62,7 +89,12 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
     auto* pattern = new kit::KLineEdit(&dialog);
     pattern->setObjectName("compositionExportPattern");
     pattern->setText("<base>.####.<ext>");
-    QObject::connect(first, &QSpinBox::valueChanged, startFrame, &QSpinBox::setValue);
+    int previousFirst = first->value();
+    QObject::connect(first, &QSpinBox::valueChanged, startFrame, [&](int value) {
+        if (startFrame->value() == previousFirst)
+            startFrame->setValue(value);
+        previousFirst = value;
+    });
     auto* destination = new kit::KLineEdit(&dialog);
     destination->setObjectName("compositionExportDestination");
     auto* browse = new kit::KButton(QObject::tr("Browse…"), &dialog);
@@ -113,6 +145,9 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
     layout->addRow(QObject::tr("Start frame"), startFrame);
     layout->addRow(QObject::tr("Padding"), padding);
     layout->addRow(QObject::tr("Pattern"), pattern);
+    layout->addRow(QObject::tr("Output colour space"), outputSpace);
+    layout->addRow(QObject::tr("Compression"), compression);
+    layout->addRow(look);
     layout->addRow(audioRow);
     layout->addRow(note);
     layout->addRow(install);
@@ -120,7 +155,7 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
     layout->addRow(hardware);
     layout->addRow(buttons);
     const auto update = [&] {
-        const auto id = static_cast<output::OutputPresetV1>(preset->currentData().toInt());
+        const auto id = selectedPreset();
         profile->clearItems();
         if (id == output::OutputPresetV1::ProResMovV1) {
             for (const auto& item : std::array<std::pair<const char*, const char*>, 6>{
@@ -151,6 +186,10 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
         const bool h264 = id == output::OutputPresetV1::H264MovV1;
         const bool video = h264 || id == output::OutputPresetV1::ProResMovV1 ||
                            id == output::OutputPresetV1::DnxhrMxfV1;
+        const bool exr = id == output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1;
+        layout->setRowVisible(outputSpace, exr);
+        layout->setRowVisible(compression, exr);
+        look->setEnabled(exr);
         const bool sequence = !video && id != output::OutputPresetV1::PcmWavV1;
         layout->setRowVisible(startFrame, sequence);
         layout->setRowVisible(padding, sequence);
@@ -172,10 +211,26 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
         locate->setVisible(h264 && !openh264Installed && !hardware->isChecked());
         hardware->setEnabled(h264 && hasVaapiDevice);
     };
-    QObject::connect(preset, &kit::KDropdown::currentIndexChanged, &dialog, update);
-    update();
+    const auto applyPreset = [&] {
+        const bool handoff = preset->currentData().toInt() == 101;
+        outputSpace->setText(handoff ? "ACES2065-1" : "");
+        compression->setCurrentIndex(handoff ? 1 : 0);
+        startFrame->setValue(handoff ? 1001 : first->value());
+        padding->setValue(4);
+        pattern->setText("<base>.####.<ext>");
+        look->setChecked(!handoff);
+        update();
+    };
+    QObject::connect(preset, &kit::KDropdown::currentIndexChanged, &dialog, applyPreset);
+    QSettings settings;
+    const auto settingsKey = "export/projects/" + projectKey + "/deliverable";
+    const auto saved = projectKey.isEmpty() ? QString{} : settings.value(settingsKey).toString();
+    preset->setCurrentIndex(saved == "review" && preset->isItemEnabled(1) ? 1
+                            : saved == "handoff"                          ? 0
+                                                                          : 2);
+    applyPreset();
     const auto validate = [&] {
-        const auto id = static_cast<output::OutputPresetV1>(preset->currentData().toInt());
+        const auto id = selectedPreset();
         const bool h264 = id == output::OutputPresetV1::H264MovV1;
         proceed->setEnabled(
             !destination->text().trimmed().isEmpty() && first->value() <= last->value() &&
@@ -246,7 +301,17 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
     request.range.naming = {.startFrame = static_cast<std::uint64_t>(startFrame->value()),
                             .framePadding = static_cast<std::uint32_t>(padding->value()),
                             .namePattern = pattern->text().toStdString()};
-    request.preset = static_cast<output::OutputPresetV1>(preset->currentData().toInt());
+    request.preset = selectedPreset();
+    request.deliverable = preset->currentData().toInt() == 101   ? DeliverablePreset::VfxHandoff
+                          : preset->currentData().toInt() == 102 ? DeliverablePreset::Review
+                                                                 : DeliverablePreset::Custom;
+    request.range.exr = {.outputColorSpaceId = outputSpace->text().trimmed().toStdString(),
+                         .compression = static_cast<output::FlatExrCompressionV1>(
+                             compression->currentData().toInt())};
+    request.range.bypassLookNodes = !look->isChecked();
+    if (!projectKey.isEmpty() && request.deliverable != DeliverablePreset::Custom)
+        settings.setValue(settingsKey,
+                          request.deliverable == DeliverablePreset::Review ? "review" : "handoff");
     request.profile = profile->currentData().toString().toStdString();
     request.audio = audio->isChecked();
     request.hardware = hardware->isChecked();

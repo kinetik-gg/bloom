@@ -77,10 +77,15 @@ struct FrameExportRangeRequest final {
     std::uint64_t firstFrame = 0;
     std::uint64_t lastFrame = 0;
     host::SequenceNamingV1 naming = {};
+    output::FlatExrRgba32fOptionsV1 exr = {};
+    bool bypassLookNodes = false;
 };
+
+enum class DeliverablePreset { Custom, VfxHandoff, Review };
 
 struct CompositionExportRequest final {
     FrameExportRangeRequest range;
+    DeliverablePreset deliverable = DeliverablePreset::Custom;
     output::OutputPresetV1 preset = output::OutputPresetV1::ProResMovV1;
     std::string profile = "hq";
     bool audio = true;
@@ -184,6 +189,7 @@ class FrameExportController final : public QObject {
     // QMessageBox Export/Cancel prompt naming the selected preset), so
     // offscreen tests can drive the whole flow without a real dialog appearing.
     void setDestinationProvider(FrameExportDestinationProvider provider);
+    void setProjectPathProvider(FrameExportDestinationProvider provider);
     void setRangeProvider(FrameExportRangeProvider provider);
     void setApprovalDecisionProvider(FrameExportApprovalDecisionProvider provider);
 
@@ -238,6 +244,8 @@ class FrameExportController final : public QObject {
     struct CompileHandle final {
         runtime::TaskHandle<std::shared_ptr<const runtime::CompiledCompositionPlan>> handle;
     };
+    using DeliverableHandle =
+        runtime::TaskHandle<std::shared_ptr<const output::OutputAnalysisAttemptV1>>;
     struct ExportJobHandle final {
         runtime::TaskHandle<void> handle;
         std::shared_ptr<std::optional<host::FrameExportPublicationResultV1>> result;
@@ -263,6 +271,8 @@ class FrameExportController final : public QObject {
         // -- the byte-equality guard and the per-frame publication intent are never bypassed -- but
         // the artist is not asked again. Asking per frame would make a hundred-frame range a
         // hundred modal dialogs, which is not an approval, it is an obstacle.
+        output::FlatExrRgba32fOptionsV1 exr = {};
+        bool bypassLookNodes = false;
         host::SequenceNamingV1 naming = {};
         std::string compositionName = {};
         bool approved = false;
@@ -271,6 +281,8 @@ class FrameExportController final : public QObject {
 
     void pollOnce();
     void pollCompositionExport();
+    void beginDeliverablePreparation(std::shared_ptr<const output::OutputAnalysisAttemptV1>);
+    void pollDeliverablePreparation(DeliverableHandle&);
     void handleCompileResult(CompileHandle& compiling);
     void handleAttemptResult(host::OutputAnalysisAttemptRunnerV1& runner);
     void handleExportJobResult(ExportJobHandle& job);
@@ -298,10 +310,12 @@ class FrameExportController final : public QObject {
     host::PublicationCoordinator& publicationCoordinator_;
     platform::StagedArtifactCoordinator& artifactCoordinator_;
     runtime::QualifiedDisplayProcessorProvider* displayProcessorProvider_ = nullptr;
-    output::ExportResourceLedgerV1 ledger_;
+    std::shared_ptr<output::ExportResourceLedgerV1> ledger_ =
+        std::make_shared<output::ExportResourceLedgerV1>();
     std::filesystem::path scratchDirectory_;
 
     FrameExportDestinationProvider destinationProvider_;
+    FrameExportDestinationProvider projectPathProvider_;
     FrameExportRangeProvider rangeProvider_;
     FrameExportApprovalDecisionProvider approvalDecisionProvider_;
     std::optional<SequenceState> sequence_;
@@ -312,7 +326,7 @@ class FrameExportController final : public QObject {
     output::OutputPresetV1 pendingPreset_ = output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1;
 
     std::variant<std::monostate, CompileHandle, host::OutputAnalysisAttemptRunnerV1,
-                 ExportJobHandle>
+                 ExportJobHandle, DeliverableHandle>
         inFlight_;
 };
 

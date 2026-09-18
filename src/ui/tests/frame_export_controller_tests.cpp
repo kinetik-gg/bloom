@@ -1,10 +1,13 @@
 #include "composition_export_dialog.hpp"
 #include <QDialog>
+#include <QSettings>
+#include <QSpinBox>
 #include <QTimer>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/switch_control.hpp>
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/color.hpp>
@@ -1100,11 +1103,11 @@ void testCompositionExportUi(Expectations& expectations) {
         auto* profile = dialog->findChild<bloom::ui::kit::KDropdown*>("compositionExportProfile");
         auto* note = dialog->findChild<bloom::ui::kit::KLabel*>("compositionExportNote");
         expectations.expect(
-            preset && preset->count() == 7 &&
-                preset->isItemEnabled(3) ==
+            preset && preset->count() == 9 &&
+                preset->isItemEnabled(5) ==
                     output::outputPresetAvailabilityV1(output::OutputPresetV1::TiffRgba16SrgbV1)
                         .available,
-            "TIFF enabled alongside seven presets");
+            "two deliverables precede the seven raw presets");
         if (output::outputPresetAvailabilityV1(output::OutputPresetV1::ProResMovV1).available) {
             expectations.expect(profile && profile->count() == 6 &&
                                     profile->currentData().toString() == QStringLiteral("hq"),
@@ -1158,6 +1161,118 @@ void testCompositionExportUi(Expectations& expectations) {
         std::cerr << diagnostic.toStdString() << '\n';
 }
 
+void testDeliverableDialog(Expectations& expectations) {
+    QSettings settings;
+    settings.remove("export/projects/color5-a");
+    settings.remove("export/projects/color5-b");
+    QTimer::singleShot(0, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!dialog)
+            return;
+        auto* preset = dialog->findChild<bloom::ui::kit::KDropdown*>("compositionExportPreset");
+        auto* start = dialog->findChild<QSpinBox*>("compositionExportStartFrame");
+        auto* padding = dialog->findChild<QSpinBox*>("compositionExportPadding");
+        auto* compression =
+            dialog->findChild<bloom::ui::kit::KDropdown*>("compositionExportCompression");
+        auto* space = dialog->findChild<bloom::ui::kit::KLineEdit*>("compositionExportOutputSpace");
+        auto* look = dialog->findChild<bloom::ui::kit::KCheckBox*>("compositionExportLook");
+        if (!preset || !start || !padding || !compression || !space || !look) {
+            expectations.expect(false, "deliverable controls exist");
+            dialog->reject();
+            return;
+        }
+        preset->setCurrentIndex(0);
+        expectations.expect(start->value() == 1001 && padding->value() == 4 &&
+                                compression->currentData().toInt() ==
+                                    static_cast<int>(output::FlatExrCompressionV1::Piz) &&
+                                space->text() == "ACES2065-1" && !look->isChecked(),
+                            "handoff fills AP0, PIZ, 1001, four digits, look off");
+        start->setValue(1010);
+        padding->setValue(5);
+        dialog->accept();
+    });
+    const auto request = bloom::ui::compositionExportDialog(47, 48000, "color5-a");
+    expectations.expect(
+        request && request->deliverable == bloom::ui::DeliverablePreset::VfxHandoff &&
+            request->range.naming.startFrame == 1010 && request->range.naming.framePadding == 5 &&
+            request->range.bypassLookNodes,
+        "filled fields remain editable");
+    for (const auto& key : {QString("color5-a"), QString("color5-b")}) {
+        QTimer::singleShot(0, [&] {
+            auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!dialog)
+                return;
+            auto* preset = dialog->findChild<bloom::ui::kit::KDropdown*>("compositionExportPreset");
+            expectations.expect(preset && preset->currentIndex() == (key == "color5-a" ? 0 : 2),
+                                "last deliverable isolated per project key");
+            if (preset && preset->isItemEnabled(1)) {
+                preset->setCurrentIndex(1);
+                auto* look = dialog->findChild<bloom::ui::kit::KCheckBox*>("compositionExportLook");
+                expectations.expect(look && look->isChecked(), "review turns look on");
+            }
+            dialog->reject();
+        });
+        expectations.expect(!bloom::ui::compositionExportDialog(47, 48000, key),
+                            "persistence probe cancelled");
+    }
+    settings.remove("export/projects/color5-a");
+}
+
+void testHandoffApproval(Expectations& expectations) {
+    Fixture fixture;
+    if (!fixture.setUp(expectations, "handoff fixture"))
+        return;
+    const auto revision = bloom::color::ocioBuiltInContentRevision(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
+    if (!revision) {
+        expectations.expect(false, "ACES config available");
+        return;
+    }
+    auto settings = fixture.session.colorSettings();
+    settings.processColorSpaceId = "ACEScg";
+    settings.ocioConfig.locator =
+        document::BuiltInOcioConfigLocator{std::string(bloom::color::kAcesCgV1ConfigUri)};
+    settings.ocioConfig.expectedRevision.digest = *revision;
+    fixture.session.setColorSettings(std::move(settings));
+    expectations.expect(fixture.session.addSolidLayer("Shot", {0.18, 0.2, 0.3, 1}),
+                        "handoff solid");
+    int approvals = 0;
+    fixture.controller().setApprovalDecisionProvider([&](const FrameExportApprovalPrompt& prompt) {
+        ++approvals;
+        expectations.expect(prompt.implementationNote == "Look: OFF (handoff)",
+                            "handoff approval text pinned");
+        expectations.expect(prompt.profile == "ACES2065-1; PIZ" &&
+                                prompt.destination.filename() == "shot.1001.exr",
+                            "handoff approval declares output and naming");
+        return FrameExportApprovalDecision::Export;
+    });
+    bool finished = false;
+    FrameExportOutcome outcome = FrameExportOutcome::Failed;
+    QObject::connect(&fixture.controller(), &FrameExportController::exportFinished,
+                     [&](FrameExportOutcome value, const QString& message) {
+                         finished = true;
+                         outcome = value;
+                         if (value != FrameExportOutcome::Published)
+                             std::cerr << message.toStdString() << '\n';
+                     });
+    bloom::ui::CompositionExportRequest request;
+    request.preset = output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1;
+    request.deliverable = bloom::ui::DeliverablePreset::VfxHandoff;
+    request.range = {.destination = fixture.directory.path() / "shot.exr",
+                     .firstFrame = 0,
+                     .lastFrame = 1,
+                     .naming = {.startFrame = 1001},
+                     .exr = {.outputColorSpaceId = "ACES2065-1",
+                             .compression = output::FlatExrCompressionV1::Piz},
+                     .bypassLookNodes = true};
+    fixture.controller().beginCompositionExport(std::move(request));
+    expectations.expect(waitUntil([&] { return finished; }) &&
+                            outcome == FrameExportOutcome::Published && approvals == 1,
+                        "handoff sequence publishes with one approval");
+    expectations.expect(std::filesystem::exists(fixture.directory.path() / "shot.1002.exr"),
+                        "handoff second label published");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1175,6 +1290,8 @@ int main(int argc, char** argv) {
     testBothPresetsExportBackToBack(expectations);
     testSequenceWriterParity(expectations);
     testCompositionExportUi(expectations);
+    testDeliverableDialog(expectations);
+    testHandoffApproval(expectations);
     testFrameRangeExportsEveryFrameAtItsOwnTime(expectations);
     testFrameRangeRefusalAndCancellation(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
