@@ -23,7 +23,7 @@
                                                    ? "sequence"
                                                    : asset.kind == bloom::document::AssetKind::Audio
                                                          ? "audio"
-                                                         : asset.kind == bloom::document::AssetKind::Video ? "video" : "font")) ||
+                                                         : asset.kind == bloom::document::AssetKind::Video ? "video" : asset.kind == bloom::document::AssetKind::Lut ? "lut" : "font")) ||
             !state.ok(writer.memberName("locator")) || !emitAssetLocator(state, asset.locator) ||
             !state.ok(writer.memberName("contentDigest")) || !emitAssetDigest(state, asset.contentDigest) ||
             !state.ok(writer.memberName("interpretation")) || !state.ok(writer.beginObject()) ||

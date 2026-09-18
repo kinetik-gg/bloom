@@ -3,8 +3,12 @@
 #include "input_color_context.hpp"
 #include "operation_key.hpp"
 
+#include <algorithm>
 #include <array>
+#include <bloom/media/image.hpp>
+#include <chrono>
 #include <cmath>
+#include <thread>
 
 namespace bloom::runtime {
 std::shared_ptr<detail::ImageEffectContext> CpuCompositionEvaluator::imageEffectContext() const {
@@ -56,23 +60,63 @@ processorFailure(const color::OcioColorSpaceProcessorError error) {
 } // namespace
 
 PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effect,
-                                                const EvaluationColorIntent& intent) {
+                                                const EvaluationColorIntent& intent,
+                                                const std::filesystem::path& base,
+                                                const CancellationToken& cancellation) {
     if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel))
         return {};
-    const auto& cst = std::get<CstKernel>(effect.kernel);
-    const std::string from(cst.fromId.empty() ? intent.workingColorSpaceId : cst.fromId);
-    const std::string to(cst.toId.empty() ? intent.workingColorSpaceId : cst.toId);
+    PreparedImageEffect prepared;
     OperationKey key;
     key.add(std::string(intent.ocioConfigUri));
     const auto revision = intent.ocioConfigRevision.toLowercaseHex();
     key.add(std::string(revision.data(), revision.size()));
     key.add(std::string(intent.workingColorSpaceId));
+    const auto* cst = std::get_if<CstKernel>(&effect.kernel);
+    const auto* file = std::get_if<FileTransformKernel>(&effect.kernel);
+    const std::string from(cst && !cst->fromId.empty() ? cst->fromId : intent.workingColorSpaceId);
+    const std::string to(
+        cst ? (cst->toId.empty() ? intent.workingColorSpaceId : cst->toId)
+            : (file->processSpaceId.empty() ? intent.workingColorSpaceId : file->processSpaceId));
     key.add(from);
     key.add(to);
-    std::lock_guard lock(mutex_);
-    if (const auto found = processors_.find(key.bytes()); found != processors_.end())
-        return found->second;
-    PreparedImageEffect prepared;
+    color::LutFile resource;
+    const auto cancelled = [&cancellation] { return cancellation.isCancellationRequested(); };
+    if (file) {
+        if (!file->asset || file->asset->kind != document::AssetKind::Lut ||
+            file->asset->id != file->lutAssetId) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::LutTransformFailed,
+                                          "MissingFile: select a LUT asset");
+            prepared.cacheIdentity = "missing-lut";
+            return prepared;
+        }
+        resource =
+            color::readLutFile(media::resolveImagePath(file->asset->locator.path,
+                                                       file->asset->locator.relinkHint, base),
+                               cancelled);
+        const auto digest = resource.digest.toLowercaseHex();
+        key.add(std::string(digest.data(), digest.size()));
+        key.add(file->interpolation);
+        key.add(file->direction);
+        if (resource.error == color::LutError::None &&
+            resource.digest != file->asset->contentDigest)
+            resource.error = color::LutError::ChangedFile;
+        prepared.cacheIdentity = key.bytes() + std::string(color::lutErrorName(resource.error));
+        if (resource.error != color::LutError::None) {
+            prepared.cancelled = resource.error == color::LutError::HelperCancelled;
+            if (!prepared.cancelled)
+                prepared.diagnostic = refusal(EvaluationDiagnosticCode::LutTransformFailed,
+                                              std::string(color::lutErrorName(resource.error)));
+            return prepared;
+        }
+    }
+    // Never hold the cache mutex during configuration preparation, process startup or I/O.
+    {
+        std::lock_guard lock(mutex_);
+        if (const auto found = processors_.find(key.bytes());
+            found != processors_.end() &&
+            (!found->second.fileProcessor || found->second.fileProcessor->isAvailable()))
+            return found->second;
+    }
     auto config = resolveInputColorConfig(intent);
     if (!config) {
         prepared.diagnostic =
@@ -85,9 +129,33 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
         else
             prepared.diagnostic = processorFailure(result.error());
     }
-    if (processors_.size() >= 256)
-        processors_.clear();
-    processors_.emplace(key.bytes(), prepared);
+    if (file && !prepared.diagnostic) {
+        auto after = color::CpuColorSpaceProcessor::prepare(*config, to, from);
+        if (!after) {
+            prepared.diagnostic = processorFailure(after.error());
+        } else {
+            prepared.afterProcessor = std::move(after).takeProcessor();
+            auto lut = color::CpuFileTransformProcessor::prepare(
+                resource, static_cast<color::LutInterpolation>(file->interpolation),
+                static_cast<color::LutDirection>(file->direction), cancelled);
+            prepared.fileProcessor = std::move(lut.processor);
+            prepared.cancelled = lut.error == color::LutError::HelperCancelled;
+            if (lut.error != color::LutError::None && !prepared.cancelled)
+                prepared.diagnostic = refusal(EvaluationDiagnosticCode::LutTransformFailed,
+                                              std::string(color::lutErrorName(lut.error)));
+            // A proven identity LUT is an exact identity even across a nonlinear process space.
+            if (prepared.fileProcessor && prepared.fileProcessor->isIdentity()) {
+                prepared.processor.reset();
+                prepared.afterProcessor.reset();
+            }
+        }
+    }
+    if (!prepared.cancelled && !prepared.diagnostic) {
+        std::lock_guard lock(mutex_);
+        if (processors_.size() >= (file ? 4U : 256U))
+            processors_.clear();
+        processors_.insert_or_assign(key.bytes(), prepared);
+    }
     return prepared;
 }
 
@@ -124,32 +192,58 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                                         "Colour transform row is unavailable");
             return result;
         }
-        for (std::size_t x = 0; x < source.value()->size(); ++x) {
-            if (x % 256 == 0 && cancellation.isCancellationRequested()) {
+        constexpr std::size_t chunkSize = 4096;
+        std::array<std::array<float, 4>, chunkSize> buffer{};
+        for (std::size_t x = 0; x < source.value()->size(); x += chunkSize) {
+            if (cancellation.isCancellationRequested()) {
                 result.cancelled = true;
                 return result;
             }
-            const auto pixel = (*source.value())[x];
-            const auto alpha = pixel.alpha();
-            if (alpha == 0) {
-                (*target.value())[x] = pixel;
-                continue;
+            const auto count = std::min(chunkSize, source.value()->size() - x);
+            auto straight = std::span(buffer).first(count);
+            for (std::size_t i = 0; i < count; ++i) {
+                const auto pixel = (*source.value())[x + i];
+                const auto a = pixel.alpha();
+                straight[i] = a == 0 ? std::array<float, 4>{}
+                                     : std::array<float, 4>{pixel.red() / a, pixel.green() / a,
+                                                            pixel.blue() / a, a};
             }
-            std::array<std::array<float, 4>, 1> straight{
-                {{pixel.red() / alpha, pixel.green() / alpha, pixel.blue() / alpha, alpha}}};
-            if (!effect.processor->apply(straight)) {
+            if (effect.processor && !effect.processor->apply(straight)) {
                 result.diagnostic = refusal(EvaluationDiagnosticCode::ColorTransformFailed,
                                             "OCIO could not produce finite straight RGB");
                 return result;
             }
-            const auto value = render::Rgba32f::fromPremultiplied(
-                straight[0][0] * alpha, straight[0][1] * alpha, straight[0][2] * alpha, alpha);
-            if (!value) {
-                result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
-                                            "OCIO produced invalid premultiplied RGB");
+            if (effect.fileProcessor) {
+                const auto error = effect.fileProcessor->apply(
+                    straight, [&cancellation] { return cancellation.isCancellationRequested(); });
+                if (error != color::LutError::None) {
+                    result.cancelled = error == color::LutError::HelperCancelled;
+                    if (!result.cancelled)
+                        result.diagnostic = refusal(EvaluationDiagnosticCode::LutTransformFailed,
+                                                    std::string(color::lutErrorName(error)));
+                    return result;
+                }
+            }
+            if (effect.afterProcessor && !effect.afterProcessor->apply(straight)) {
+                result.diagnostic = refusal(EvaluationDiagnosticCode::ColorTransformFailed,
+                                            "OCIO could not return finite working RGB");
                 return result;
             }
-            (*target.value())[x] = *value.value();
+            for (std::size_t i = 0; i < count; ++i) {
+                const auto alpha = (*source.value())[x + i].alpha();
+                if (alpha == 0) {
+                    (*target.value())[x + i] = (*source.value())[x + i];
+                    continue;
+                }
+                const auto value = render::Rgba32f::fromPremultiplied(
+                    straight[i][0] * alpha, straight[i][1] * alpha, straight[i][2] * alpha, alpha);
+                if (!value) {
+                    result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
+                                                "OCIO produced invalid premultiplied RGB");
+                    return result;
+                }
+                (*target.value())[x + i] = *value.value();
+            }
         }
     }
     auto frozen = std::move(*builder.value()).freeze();

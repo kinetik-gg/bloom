@@ -230,7 +230,7 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
             return false;
         if (asset.id.value() <= previous ||
             (kind != "image" && kind != "sequence" && kind != "audio" && kind != "font" &&
-             kind != "video")) {
+             kind != "video" && kind != "lut")) {
             state.fail(DocumentDecodeError::DomainViolation, path);
             return false;
         }
@@ -238,7 +238,8 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
         // earlier minor naming one is a domain violation rather than a tolerated unknown. Mirrors
         // the `path` constant's own minor gate in document_decode_composition.cpp.
         if ((kind == "font" && state.documentMinor < 15) ||
-            (kind == "video" && state.documentMinor < 17)) {
+            (kind == "video" && state.documentMinor < 17) ||
+            (kind == "lut" && state.documentMinor < 21)) {
             state.fail(DocumentDecodeError::DomainViolation, path);
             return false;
         }
@@ -246,6 +247,7 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
         asset.kind = kind == "image"      ? document::AssetKind::Image
                      : kind == "sequence" ? document::AssetKind::Sequence
                      : kind == "audio"    ? document::AssetKind::Audio
+                     : kind == "lut"      ? document::AssetKind::Lut
                      : kind == "video"    ? document::AssetKind::Video
                                           : document::AssetKind::Font;
         constexpr std::array<std::string_view, 3> interpretationKeys{

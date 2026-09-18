@@ -347,11 +347,18 @@ enum class ScalarDomain : std::uint8_t {
                        hasValidScalarCurveReference(mapping.scale, plan, index, failure);
             },
             [index, &plan, &failure](const CompiledImageEffect& effect) {
-                if (effect.input.value() < index)
+                bool validKernel = true;
+                if (const auto* file = std::get_if<FileTransformKernel>(&effect.kernel))
+                    validKernel = file->interpolation >= 0 && file->interpolation <= 2 &&
+                                  file->direction >= 0 && file->direction <= 1 &&
+                                  file->processSpaceId.size() <= 256 &&
+                                  (!file->asset || (file->asset->kind == document::AssetKind::Lut &&
+                                                    file->asset->validate().ok()));
+                if (effect.input.value() < index && validKernel)
                     return true;
                 failure = diagnostic(
                     EvaluationDiagnosticCode::InvalidPlan,
-                    "Image effect has a non-topological input", {},
+                    "Image effect has an invalid kernel or non-topological input", {},
                     subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
                 return false;
             },
@@ -1756,7 +1763,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             if (const auto* effect = std::get_if<CompiledImageEffect>(&plan->operations()[index])) {
                 preparedEffect = request.bypassLookNodes && effect->look
                                      ? detail::PreparedImageEffect{}
-                                     : imageEffectContext()->prepare(*effect, request.colorIntent);
+                                     : imageEffectContext()->prepare(*effect, request.colorIntent,
+                                                                     mediaBase, cancellation);
+                if (preparedEffect->cancelled)
+                    return EvaluationResult::cancelled();
                 if (preparedEffect->diagnostic) {
                     auto warning = *preparedEffect->diagnostic;
                     warning.subject = operationSubject;
@@ -1913,10 +1923,21 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             key.add(nestedFrame->contentHash_);
                         } else if constexpr (std::is_same_v<Step, CompiledImageEffect>) {
                             key.add(std::string(request.colorIntent.ocioConfigUri));
+                            key.add(preparedEffect->cacheIdentity);
                             key.add(step.kernel.index());
                             if (const auto* cst = std::get_if<CstKernel>(&step.kernel)) {
                                 key.add(cst->fromId);
                                 key.add(cst->toId);
+                            }
+                            if (const auto* file = std::get_if<FileTransformKernel>(&step.kernel)) {
+                                key.add(file->lutAssetId);
+                                key.add(file->interpolation);
+                                key.add(file->direction);
+                                key.add(file->processSpaceId);
+                                if (file->asset) {
+                                    const auto digest = file->asset->contentDigest.toLowercaseHex();
+                                    key.add(std::string(digest.data(), digest.size()));
+                                }
                             }
                             key.add(step.bypass);
                             key.add(step.look);

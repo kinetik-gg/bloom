@@ -118,9 +118,9 @@ constexpr core::Sha256Digest::Bytes kRevisionBytes{
 // links no Bloom code; it was re-validated against every previously checked-in golden set,
 // including both lanes' pre-merge sets, before its combined values were trusted.
 constexpr std::string_view kExpectedExrDigest =
-    "d07988b616ef530dbaa5b43695311b551f5b9b5b8696fa4381a394915c086b87";
+    "2eda964b003e29778c7a3777df9ab9b91feee0c54a6158ef1be51159470eb3f6";
 constexpr std::string_view kExpectedPngDigest =
-    "e0c850d4953b7fcc5568d0c920c5373991ed9ebdea2e8415225e049b27a486d4";
+    "a9b4052aac642c0552e058bb8f33dd9f30eb86d7d693bb13e0030cfb9fb898be";
 
 class Expectations final {
   public:

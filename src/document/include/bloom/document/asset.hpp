@@ -10,7 +10,7 @@
 #include <vector>
 
 namespace bloom::document {
-enum class AssetKind : std::uint8_t { Image, Sequence, Audio, Font, Video };
+enum class AssetKind : std::uint8_t { Image, Sequence, Audio, Font, Video, Lut };
 enum class AssetColorSpace : std::uint8_t { Auto, Srgb, Linear, Raw };
 enum class AssetAlphaAssociation : std::uint8_t { Straight, Premultiplied };
 inline constexpr std::size_t kMaxAssetInputColorSpaceIdBytes = 256;

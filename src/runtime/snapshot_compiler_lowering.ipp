@@ -644,6 +644,21 @@ lowerImageEffect(const document::NodeRecord& node,
         if (from && to && bypass)
             return runtime::CompiledImageEffect{node.id, *input, runtime::CstKernel{*from, *to}, *bypass};
     }
+    if (node.typeId == "bloom.ocio-file-transform") {
+        const auto* lut = parameterConstant<std::int64_t>(findParameterBinding(node, "lut"));
+        const auto* interpolation = parameterConstant<std::int64_t>(findParameterBinding(node, "interpolation"));
+        const auto* direction = parameterConstant<std::int64_t>(findParameterBinding(node, "direction"));
+        const auto* space = parameterConstant<std::string>(findParameterBinding(node, "processSpace"));
+        const auto* bypass = parameterConstant<bool>(findParameterBinding(node, "bypass"));
+        const auto* look = parameterConstant<bool>(findParameterBinding(node, "look"));
+        if (lut && *lut >= 0 && interpolation && direction && space && bypass && look) {
+            const auto id = document::AssetId::fromRaw(static_cast<std::uint64_t>(*lut));
+            const auto* asset = request_.snapshot.project().findAsset(id);
+            return runtime::CompiledImageEffect{node.id, *input,
+                runtime::FileTransformKernel{id, *interpolation, *direction, *space,
+                    asset ? std::optional{*asset} : std::nullopt}, *bypass, *look};
+        }
+    }
     addTopologyFailure(node.id, "Image effect kernel or parameters are unsupported.");
     return std::nullopt;
 }

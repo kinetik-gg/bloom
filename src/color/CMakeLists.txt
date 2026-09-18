@@ -71,6 +71,12 @@ target_sources(
     PRIVATE
         ocio_builtin_registry.cpp
         ocio_cpu_color_space_processor.cpp
+        ocio_cpu_file_transform_processor.cpp
+        lut_file.cpp
+        lut_worker_protocol.hpp
+        lut_worker_ipc.hpp
+        lut_preflight.hpp
+        lut_resource_budget.hpp
         ocio_cpu_display_processor.cpp
         ocio_cpu_input_processor.cpp
         ocio_cpu_display_frame.cpp
@@ -81,6 +87,7 @@ target_sources(
         FILES
             include/bloom/color/ocio_builtin_registry.hpp
             include/bloom/color/ocio_cpu_color_space_processor.hpp
+            include/bloom/color/ocio_cpu_file_transform_processor.hpp
             include/bloom/color/ocio_cpu_display_processor.hpp
             include/bloom/color/ocio_cpu_input_processor.hpp
             include/bloom/color/ocio_cpu_display_frame.hpp
@@ -195,3 +202,20 @@ target_include_directories(bloom_color_video PUBLIC include)
 target_link_libraries(bloom_color_video PUBLIC bloom_core)
 bloom_enable_warnings(bloom_color_video)
 bloom_enable_strict_floating_point(bloom_color_video)
+
+# External LUT parsing and execution never enter the host process.
+add_executable(bloom-color-worker lut_worker.cpp lut_file.cpp)
+target_link_libraries(bloom-color-worker PRIVATE bloom_core bloom_platform_process OpenColorIO::OpenColorIO)
+target_include_directories(bloom-color-worker PRIVATE include)
+bloom_enable_warnings(bloom-color-worker)
+bloom_enable_strict_floating_point(bloom-color-worker)
+target_link_libraries(bloom_color_ocio PRIVATE bloom_platform_process)
+target_compile_definitions(bloom_color_ocio PRIVATE BLOOM_COLOR_WORKER="$<TARGET_FILE:bloom-color-worker>")
+add_dependencies(bloom_color_ocio bloom-color-worker)
+install(TARGETS bloom-color-worker RUNTIME DESTINATION libexec/bloom)
+if(BUILD_TESTING)
+    add_executable(bloom_color_ocio_file_transform_test tests/ocio_cpu_file_transform_processor_tests.cpp)
+    target_link_libraries(bloom_color_ocio_file_transform_test PRIVATE bloom_color_ocio)
+    bloom_enable_warnings(bloom_color_ocio_file_transform_test)
+    bloom_add_test(NAME bloom.color.ocio-file-transform COMMAND bloom_color_ocio_file_transform_test LABELS unit color ocio security)
+endif()

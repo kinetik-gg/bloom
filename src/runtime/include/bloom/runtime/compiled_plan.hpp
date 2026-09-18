@@ -186,7 +186,15 @@ struct CstKernel final {
     std::string toId;
     friend bool operator==(const CstKernel&, const CstKernel&) = default;
 };
-using ImageEffectKernel = std::variant<IdentityImageKernel, CstKernel>;
+struct FileTransformKernel final {
+    document::AssetId lutAssetId;
+    std::int64_t interpolation = 0;
+    std::int64_t direction = 0;
+    std::string processSpaceId;
+    std::optional<document::AssetRecord> asset;
+    friend bool operator==(const FileTransformKernel&, const FileTransformKernel&) = default;
+};
+using ImageEffectKernel = std::variant<IdentityImageKernel, CstKernel, FileTransformKernel>;
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
     OperationIndex input;

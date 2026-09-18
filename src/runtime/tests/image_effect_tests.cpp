@@ -1,4 +1,4 @@
-#include "../image_effect.hpp"
+#include "image_effect.hpp"
 
 #include <OpenColorIO/OpenColorIO.h>
 #include <bloom/color/bloom_neutral_builtin.hpp>
@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -170,12 +172,94 @@ void testLookBypass() {
            "turning the look on restores the original cached graph result");
 }
 
+void testFileTransform() {
+#ifdef __linux__
+    const auto directory = std::filesystem::current_path() / "color3-effect-fixtures";
+    std::filesystem::create_directories(directory);
+    struct Cleanup final {
+        std::filesystem::path directory;
+        ~Cleanup() { std::filesystem::remove_all(directory); }
+    } cleanup{directory};
+    const auto path = directory / "show.cube";
+    const auto write = [&path](const int gain) {
+        std::ofstream output(path);
+        output << "LUT_3D_SIZE 2\n";
+        for (int b = 0; b < 2; ++b)
+            for (int g = 0; g < 2; ++g)
+                for (int r = 0; r < 2; ++r)
+                    output << r * gain << ' ' << g * gain << ' ' << b * gain << '\n';
+    };
+    const auto kernelFor = [&path] {
+        const auto resource = color::readLutFile(path);
+        document::AssetRecord asset;
+        asset.id = document::AssetId::fromRaw(77);
+        asset.kind = document::AssetKind::Lut;
+        asset.name = "Show LUT";
+        asset.locator = {"file", "project-relative", "show.cube", "file://" + path.string()};
+        asset.contentDigest = resource.digest;
+        return runtime::FileTransformKernel{asset.id, 1, 0, "ACEScct", asset};
+    };
+    const core::Color4d sample{0.18, 0.5, 2.0, 0.5};
+    runtime::CpuCompositionEvaluator evaluator;
+    const auto source = planWith({}, sample);
+    const auto baseline = evaluator.evaluate(source, requestFor(*source), {});
+    write(1);
+    const auto identity = planWith({kernelFor()}, sample);
+    const auto identical = evaluator.evaluate(identity, requestFor(*identity), {});
+    expect(identical.diagnostics().empty() && samePixels(identical, baseline),
+           "identity cube in ACEScct is bit-identical to bypass");
+    write(2);
+    const auto changed = evaluator.evaluate(identity, requestFor(*identity), {});
+    expect(samePixels(changed, baseline) && changed.diagnostics().size() == 1 &&
+               changed.diagnostics()[0].code ==
+                   runtime::EvaluationDiagnosticCode::LutTransformFailed &&
+               changed.diagnostics()[0].summary.find("ChangedFile") != std::string::npos,
+           "changed LUT invalidates a memoized frame and refuses the stale asset digest");
+    const auto kernel = kernelFor();
+    const auto gain = planWith({kernel}, sample);
+    const auto transformed = evaluator.evaluate(gain, requestFor(*gain), {});
+    expect(transformed.frame() && transformed.diagnostics().empty(), "gain LUT evaluates");
+    const auto config = OCIO::Config::CreateFromBuiltinConfig(
+        std::string(color::kAcesCgV1BuiltinConfigName).c_str());
+    auto lut = OCIO::FileTransform::Create();
+    lut->setSrc(path.string().c_str());
+    lut->setInterpolation(OCIO::INTERP_TETRAHEDRAL);
+    std::array<float, 3> rgb{0.18F, 0.5F, 2.0F};
+    config->getProcessor("ACEScg", "ACEScct")->getDefaultCPUProcessor()->applyRGB(rgb.data());
+    OCIO::Config::CreateRaw()->getProcessor(lut)->getDefaultCPUProcessor()->applyRGB(rgb.data());
+    config->getProcessor("ACEScct", "ACEScg")->getDefaultCPUProcessor()->applyRGB(rgb.data());
+    float delta = 0;
+    if (transformed.frame())
+        for (const auto pixel : transformed.frame()->processImage().pixels())
+            delta = std::max({delta, std::abs(pixel.red() - rgb[0] * 0.5F),
+                              std::abs(pixel.green() - rgb[1] * 0.5F),
+                              std::abs(pixel.blue() - rgb[2] * 0.5F)});
+    expect(delta < 1e-5F, "ACEScct gain LUT matches an independent OCIO pipeline");
+    std::cout << "File Transform ACEScct oracle maximum delta: " << delta << '\n';
+    const auto chain = planWith({kernel, kernel, kernel}, sample);
+    const auto cold = evaluator.evaluate(chain, requestFor(*chain), {});
+    const auto warm = evaluator.evaluate(chain, requestFor(*chain), {});
+    expect(samePixels(cold, warm) && warm.frame()->operationCacheStatistics().hits == 7 &&
+               warm.frame()->operationCacheStatistics().misses == 0,
+           "three file effects memoize independently");
+    auto definition = gain->copyDefinition();
+    std::get<runtime::CompiledImageEffect>(definition.operations[1]).look = true;
+    const auto tagged =
+        std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
+    auto request = requestFor(*tagged);
+    request.bypassLookNodes = true;
+    expect(samePixels(evaluator.evaluate(tagged, request, {}), baseline),
+           "look-tagged File Transform bypasses without rewriting the graph");
+#endif
+}
+
 } // namespace
 
 int main() {
     try {
         testCst();
         testLookBypass();
+        testFileTransform();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

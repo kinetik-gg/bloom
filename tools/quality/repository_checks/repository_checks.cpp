@@ -338,6 +338,7 @@ constexpr auto kAllowedModuleDependencies =
         {"project", "platform"},   {"render", "core"},        {"runtime", "core"},
         {"runtime", "document"},   {"runtime", "render"},     {"media", "core"},
         {"commands", "media"}, /* Asset preparation runs before command publication. */
+        {"commands", "color"}, /* LUT import uses bounded off-thread color intake. */
         {"media", "color"},    /* Qualified input conversion belongs to color. */
         {"media", "platform"},     {"media", "runtime"}, /* Only bloom_media_worker_host uses the
                                                             core-only scheduler target. */

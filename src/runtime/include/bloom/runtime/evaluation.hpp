@@ -132,6 +132,7 @@ enum class EvaluationDiagnosticCode : std::uint8_t {
     ColorSpaceIsData,
     ColorTransformFailed,
     OcioConfigUnavailable,
+    LutTransformFailed,
 };
 
 [[nodiscard]] std::string_view evaluationDiagnosticCodeId(EvaluationDiagnosticCode code) noexcept;

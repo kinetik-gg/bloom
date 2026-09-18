@@ -1,6 +1,8 @@
 #include "command_test_support.hpp"
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/document/new_project.hpp>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 
 namespace bloom::commands::test {
@@ -14,6 +16,43 @@ CommandResult execute(Document& document, CommandStack& stack, Args&&... args) {
     transaction.emplace<Operation>(std::forward<Args>(args)...);
     return stack.execute(std::move(transaction));
 }
+void testLutImport(TestContext& test) {
+#ifdef __linux__
+    const auto directory = std::filesystem::current_path() / "color3-import-fixtures";
+    std::filesystem::create_directories(directory);
+    struct Cleanup final {
+        std::filesystem::path path;
+        ~Cleanup() { std::filesystem::remove_all(path); }
+    } cleanup{directory};
+    const auto path = directory / "show.cube";
+    {
+        std::ofstream out(path);
+        out << "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+    }
+    auto initial =
+        document::makeNewProject("LUT import", "Main", core::RationalTime::fromInteger(1));
+    Document document(std::move(initial.project));
+    CommandStack stack(document);
+    auto prepared =
+        std::make_unique<ImportAssets>(std::vector<std::filesystem::path>{path}, directory);
+    Transaction transaction("Import LUT", document.snapshot().revision());
+    requireFixture(transaction.add(std::move(prepared)), "prepared LUT operation");
+    const auto result = stack.execute(std::move(transaction));
+    test.expect(result.changed() && document.snapshot().project().assets().size() == 1,
+                "LUT import publishes one asset");
+    const auto snapshot = document.snapshot();
+    if (!snapshot.project().assets().empty()) {
+        const auto& asset = snapshot.project().assets().front();
+        test.expect(asset.kind == document::AssetKind::Lut && asset.locator.path == "show.cube" &&
+                        asset.contentDigest != core::Sha256Digest{},
+                    "LUT import retains locator and exact content digest");
+    }
+    test.expect(stack.undo().changed() && document.snapshot().project().assets().empty(),
+                "LUT import undo");
+    test.expect(stack.redo().changed(), "LUT import redo");
+#endif
+}
+
 void testOrganization(TestContext& test) {
     auto initial = document::makeNewProject("Assets", "Main", core::RationalTime::fromInteger(24));
     const auto composition = initial.initialCompositionId;
@@ -201,6 +240,7 @@ void testRelinkAndSaturatedOrder(TestContext& test) {
 int main() {
     bloom::commands::test::TestContext test;
     try {
+        bloom::commands::test::testLutImport(test);
         bloom::commands::test::testOrganization(test);
         bloom::commands::test::testRelinkAndSaturatedOrder(test);
     } catch (const std::exception& error) {

@@ -474,6 +474,26 @@ template <typename Definition>
             NodeCategory::Sources};
 }
 
+[[nodiscard]] NodeDefinition fileTransformDefinition() {
+    return {
+        {"bloom.ocio-file-transform", 1},
+        NodeLoweringKind::ImageEffect,
+        {{"input", SocketValueKind::Image}},
+        {{"image", SocketValueKind::Image}},
+        {{"lut", "bloom.ocio-file.lut", ParameterValueKind::Integer, true, false, std::int64_t{0}},
+         {"interpolation", "bloom.ocio-file.interpolation", ParameterValueKind::Integer, true,
+          false, std::int64_t{0}},
+         {"direction", "bloom.ocio-file.direction", ParameterValueKind::Integer, true, false,
+          std::int64_t{0}},
+         {"processSpace", "bloom.ocio-file.process-space", ParameterValueKind::String, true, false,
+          std::string{}},
+         {"bypass", "bloom.ocio-effect.bypass", ParameterValueKind::Boolean, true, false, false},
+         {"look", "bloom.ocio-effect.look", ParameterValueKind::Boolean, true, false, false}},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Color};
+}
+
 [[nodiscard]] NodeDefinition cstDefinition() {
     return {
         {"bloom.ocio-colour-space-transform", 1},
@@ -691,6 +711,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
                                             textDefinition(),
                                             imageDefinition(),
                                             cstDefinition(),
+                                            fileTransformDefinition(),
                                             videoDefinition(),
                                             audioDefinition(),
                                             compositionSourceDefinition()};

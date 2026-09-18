@@ -46,6 +46,8 @@ std::string_view evaluationDiagnosticCodeId(const EvaluationDiagnosticCode code)
         return "bloom.runtime.evaluation.color-space-is-data";
     case EvaluationDiagnosticCode::ColorTransformFailed:
         return "bloom.runtime.evaluation.color-transform-failed";
+    case EvaluationDiagnosticCode::LutTransformFailed:
+        return "bloom.runtime.evaluation.lut-transform-failed";
     case EvaluationDiagnosticCode::OcioConfigUnavailable:
         return "bloom.runtime.evaluation.ocio-config-unavailable";
     case EvaluationDiagnosticCode::InternalInvariant:

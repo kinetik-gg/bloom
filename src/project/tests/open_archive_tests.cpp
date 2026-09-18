@@ -157,7 +157,7 @@ void testOpenMinimalRoundTrip(Expectations& expectations) {
     auto snapshot = document.snapshot();
     const auto colorSettings = neutralColorSettings();
 
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 20}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 21}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
 
     auto built =
@@ -201,7 +201,7 @@ void testOpenMinimalRoundTrip(Expectations& expectations) {
                         "open minimal: the empty requirement set decodes empty");
     expectations.expect(openedValue.containerVersion == bloom::document::SchemaVersion{1, 0} &&
                             openedValue.documentSchemaVersion ==
-                                bloom::document::SchemaVersion{1, 20},
+                                bloom::document::SchemaVersion{1, 21},
                         "open minimal: container decodes to {1,0} and the document to {1,19}");
 
     const CanonicalManifestV1 resaveManifest{.documentSchemaVersion =
@@ -373,7 +373,7 @@ void testOpenComposedRoundTrip(Expectations& expectations) {
          .schemaVersion = {1, 0},
          .providedNodeTypeIds = {"vendor.nodes.blur"}},
     };
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 20},
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 21},
                                        .requirements = requirements};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
 
@@ -471,14 +471,14 @@ void testOpenRoundTrippedNewerMinorRoundTrip(Expectations& expectations) {
         return;
     }
 
-    const std::string anchor = "\"minor\": 20\n  },\n  \"project\"";
+    const std::string anchor = "\"minor\": 21\n  },\n  \"project\"";
     const auto anchorPos = text.find(anchor);
     expectations.expect(anchorPos != std::string::npos,
                         "open RT: root schemaVersion anchor is located in the baseline");
     if (anchorPos == std::string::npos) {
         return;
     }
-    text.replace(anchorPos, std::string_view("\"minor\": 20").size(), "\"minor\": 21");
+    text.replace(anchorPos, std::string_view("\"minor\": 21").size(), "\"minor\": 22");
 
     expectations.expect(text.size() >= 2 && text.back() == '\n' && text[text.size() - 2] == '}',
                         "open RT: baseline ends with the root's closing brace and final LF");
@@ -509,11 +509,11 @@ void testOpenRoundTrippedNewerMinorRoundTrip(Expectations& expectations) {
     }
     auto reconstructedSnapshot = reconstructed.value()->document->snapshot();
 
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 21}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 22}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &reconstructedSnapshot,
                                             .colorSettings = &reconstructed.value()->colorSettings,
                                             .roundTrip = decoded.roundTrip(),
-                                            .schemaMinor = 21};
+                                            .schemaMinor = 22};
 
     auto built =
         buildVerifiedSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
@@ -534,7 +534,7 @@ void testOpenRoundTrippedNewerMinorRoundTrip(Expectations& expectations) {
         return;
     }
     auto openedValue = std::move(opened).takeOpened();
-    expectations.expect(openedValue.schemaMinor == 21, "open RT: schemaMinor decodes to 21");
+    expectations.expect(openedValue.schemaMinor == 22, "open RT: schemaMinor decodes to 21");
     expectations.expect(openedValue.roundTrip.has_value(),
                         "open RT: RoundTripState is present for the newer-minor document");
     if (!openedValue.roundTrip.has_value()) {
@@ -651,8 +651,8 @@ void testUnsupportedNodeVersions(Expectations& expectations) {
                 throw std::logic_error("node version fixture version");
             text.replace(nodeVersion, std::string_view("\"schemaVersion\": 2").size(),
                          "\"schemaVersion\": " + std::to_string(version));
-            const auto schema = text.find("\"minor\": 20");
-            text.replace(schema, std::string_view("\"minor\": 20").size(),
+            const auto schema = text.find("\"minor\": 21");
+            text.replace(schema, std::string_view("\"minor\": 21").size(),
                          "\"minor\": " + std::to_string(minor));
             const auto bytes = project::test::buildConformingArchive(
                 project::test::makeStoredEntry("manifest.json", manifestBytesOrAbort({1, minor})),
@@ -672,8 +672,8 @@ void testUnsupportedNodeVersions(Expectations& expectations) {
     for (std::uint32_t minor = 0; minor < bloom::project::kMinimumDocumentSchemaVersionV1.minor;
          ++minor) {
         auto text = current;
-        const auto schema = text.find("\"minor\": 20");
-        text.replace(schema, std::string_view("\"minor\": 20").size(),
+        const auto schema = text.find("\"minor\": 21");
+        text.replace(schema, std::string_view("\"minor\": 21").size(),
                      "\"minor\": " + std::to_string(minor));
         const auto bytes = project::test::buildConformingArchive(
             project::test::makeStoredEntry("manifest.json", manifestBytesOrAbort({1, minor})),
@@ -726,14 +726,14 @@ void testDocumentSidePreservedReadOnly(Expectations& expectations) {
     auto documentBytes = minimalCanonicalDocumentBytesOrAbort();
     std::string text(reinterpret_cast<const char*>(documentBytes.data()), documentBytes.size());
 
-    const std::string minorAnchor = "\"minor\": 20\n  },\n  \"project\"";
+    const std::string minorAnchor = "\"minor\": 21\n  },\n  \"project\"";
     const auto minorPos = text.find(minorAnchor);
     expectations.expect(minorPos != std::string::npos,
                         "document-side preservation: root schemaVersion anchor is located");
     if (minorPos == std::string::npos) {
         return;
     }
-    text.replace(minorPos, std::string_view("\"minor\": 20").size(), "\"minor\": 21");
+    text.replace(minorPos, std::string_view("\"minor\": 21").size(), "\"minor\": 22");
 
     const std::string kindAnchor = R"("kind": "builtin")";
     const auto kindPos = text.find(kindAnchor);
@@ -746,7 +746,7 @@ void testDocumentSidePreservedReadOnly(Expectations& expectations) {
 
     std::vector<std::byte> splicedDocumentBytes(text.size());
     std::memcpy(splicedDocumentBytes.data(), text.data(), text.size());
-    const auto manifestBytes = manifestBytesOrAbort({1, 21});
+    const auto manifestBytes = manifestBytesOrAbort({1, 22});
 
     auto manifestEntry = makeStoredEntry("manifest.json", manifestBytes);
     auto documentEntry = makeStoredEntry("document.json", splicedDocumentBytes);
@@ -836,7 +836,7 @@ void testSemanticDecodeFailure(Expectations& expectations) {
     using bloom::project::test::makeStoredEntry;
     using bloom::project::test::toBytes;
 
-    const auto manifestBytes = manifestBytesOrAbort({1, 20});
+    const auto manifestBytes = manifestBytesOrAbort({1, 21});
     const auto documentBytes = minimalCanonicalDocumentBytesOrAbort();
     std::string corrupted(reinterpret_cast<const char*>(documentBytes.data()),
                           documentBytes.size());
@@ -909,7 +909,7 @@ void testVersionDisagreementFailure(Expectations& expectations) {
         expectations.expect(
             payload != nullptr &&
                 payload->manifestVersion == bloom::document::SchemaVersion{1, 17} &&
-                payload->documentVersion == bloom::document::SchemaVersion{1, 20},
+                payload->documentVersion == bloom::document::SchemaVersion{1, 21},
             "open version disagreement: failure names the exact mismatched versions");
     }
 }
@@ -943,7 +943,7 @@ void testUncoveredRequirementFailure(Expectations& expectations) {
     auto snapshot = document.snapshot();
     const auto colorSettings = neutralColorSettings();
 
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 20}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 21}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
     auto built = buildSaveArchive(manifest, documentInput, SaveArchiveLimits{}, makeOperation());
     expectations.expect(static_cast<bool>(built),
@@ -1008,7 +1008,7 @@ void testUncoveredRequirementFailure(Expectations& expectations) {
                                                          .capabilityId = "vendor.bulk.cap",
                                                          .schemaVersion = {1, 0},
                                                          .providedNodeTypeIds = {}}};
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 20},
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 21},
                                        .requirements = requirements};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
 
@@ -1097,7 +1097,7 @@ void testDeterminism(Expectations& expectations) {
     bloom::document::Document document{std::move(newProject.project)};
     auto snapshot = document.snapshot();
     const auto colorSettings = neutralColorSettings();
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 20}, .requirements = {}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 21}, .requirements = {}};
     const CanonicalDocumentV1 documentInput{.snapshot = &snapshot, .colorSettings = &colorSettings};
 
     auto built =

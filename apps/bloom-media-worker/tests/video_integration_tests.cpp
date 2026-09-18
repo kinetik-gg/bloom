@@ -83,7 +83,7 @@ void run(const std::filesystem::path& directory) {
                                   return std::holds_alternative<runtime::CompiledVideoSource>(op);
                               }),
           "typed video arm");
-    check(compiled.plan->planSemanticsVersion() == 7, "plan version 7");
+    check(compiled.plan->planSemanticsVersion() == 8, "plan version 8");
     const auto time = core::RationalTime::create(35, 24);
     if (!time)
         throw std::runtime_error("scrub time");
@@ -139,11 +139,11 @@ void run(const std::filesystem::path& directory) {
     const auto colors = document::makeBloomNeutralColorSettingsV1({});
     auto archive = project::buildVerifiedSaveArchive(
         {}, {.snapshot = &saved, .colorSettings = &colors}, {}, memory());
-    check(static_cast<bool>(archive), "video archive writes schema 1.20");
+    check(static_cast<bool>(archive), "video archive writes schema 1.21");
     auto opened = project::openProjectArchive(archive.archive()->bytes(), {}, memory());
     check(opened.outcome() == project::OpenArchiveOutcome::Opened, "video archive reopens");
     auto restored = std::move(opened).takeOpened();
-    check(restored.schemaMinor == 20 &&
+    check(restored.schemaMinor == 21 &&
               *restored.document->snapshot().project().findAsset(asset.id) == asset,
           "video streams, timing and identity round trip");
     {
