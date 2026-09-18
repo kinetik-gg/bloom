@@ -28,6 +28,7 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <span>
@@ -177,6 +178,7 @@ class CompositionSession final : public QObject {
 
     CompositionSession(document::Document& document, commands::CommandStack& commandStack,
                        document::CompositionId compositionId, QObject* parent = nullptr);
+    ~CompositionSession() override;
 
     [[nodiscard]] const document::Snapshot& snapshot() const noexcept;
     [[nodiscard]] document::CompositionId compositionId() const noexcept;
@@ -548,9 +550,13 @@ class CompositionSession final : public QObject {
     void drivenValuesChanged();
 
   private:
+    struct CommandObserverState;
+
     AssetController* assetController_ = nullptr;
 
+    void attachCommandObserver();
     [[nodiscard]] bool execute(commands::Transaction&& transaction);
+    void handleCommandEvent(const commands::CommandEvent& event);
     [[nodiscard]] bool handleResult(const commands::CommandResult& result);
     [[nodiscard]] const document::NodeRecord*
     nodeForSelection(const CompositionSelection& selection) const noexcept;
@@ -672,6 +678,8 @@ class CompositionSession final : public QObject {
     std::shared_ptr<SessionColorConverterState> colorConverterState_;
     document::Document* document_;
     commands::CommandStack* commandStack_;
+    commands::CommandObserverId commandObserverId_ = 0;
+    std::shared_ptr<CommandObserverState> commandObserverState_;
     document::Snapshot snapshot_;
     document::CompositionId compositionId_;
     core::RationalTime currentTime_ = core::RationalTime::fromInteger(0);

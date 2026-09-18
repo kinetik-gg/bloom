@@ -1,0 +1,31 @@
+[
+  {
+    "op": "bloom.composition.add",
+    "args": {
+      "name": "Scripted Composition",
+      "width": 1920,
+      "height": 1080,
+      "duration": [48, 1]
+    }
+  },
+  {
+    "op": "bloom.layer.add-solid",
+    "args": {
+      "composition": 1,
+      "name": "Red Solid",
+      "color": [0.8, 0.05, 0.02, 1.0],
+      "position": [960.0, 540.0]
+    }
+  },
+  {
+    "op": "bloom.layer.add-text",
+    "args": {
+      "composition": 1,
+      "name": "Title",
+      "text": "Hello, Bloom",
+      "position": [960.0, 540.0],
+      "size": 96.0,
+      "color": [1.0, 1.0, 1.0, 1.0]
+    }
+  }
+]

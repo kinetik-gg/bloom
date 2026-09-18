@@ -5,12 +5,30 @@
 #include <bloom/document/document.hpp>
 
 #include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace bloom::commands {
+
+enum class CommandEventKind : std::uint8_t {
+    RevisionChanged,
+    HistoryChanged,
+    Rejected,
+};
+
+struct CommandEvent final {
+    CommandEventKind kind = CommandEventKind::Rejected;
+    CommandResult result;
+};
+
+using CommandObserverId = std::uint64_t;
+using CommandObserver = std::function<void(const CommandEvent&)>;
 
 class CommandStack final {
   public:
@@ -34,6 +52,9 @@ class CommandStack final {
 
     void clear();
 
+    [[nodiscard]] CommandObserverId addObserver(CommandObserver observer);
+    void removeObserver(CommandObserverId observerId) noexcept;
+
   private:
     struct HistoryEntry {
         std::string label;
@@ -43,11 +64,15 @@ class CommandStack final {
 
     [[nodiscard]] std::optional<CommandResult> staleResult(CommandAction action, std::string label,
                                                            const document::Snapshot& current) const;
+    void notify(const CommandResult& result) const noexcept;
 
     std::vector<HistoryEntry> history_;
     std::size_t cursor_ = 0;
     document::Revision trackedRevision_;
     document::Document& document_;
+    mutable std::mutex observerMutex_;
+    std::vector<std::pair<CommandObserverId, CommandObserver>> observers_;
+    CommandObserverId nextObserverId_ = 1;
 };
 
 } // namespace bloom::commands

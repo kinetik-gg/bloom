@@ -204,21 +204,57 @@ struct KeyframeCommandLabels final {
 
 } // namespace
 
+struct CompositionSession::CommandObserverState final {
+    CompositionSession* owner = nullptr;
+};
+
 CompositionSession::CompositionSession(document::Document& document,
                                        commands::CommandStack& commandStack,
                                        document::CompositionId compositionId, QObject* parent)
     : QObject(parent), document_(&document), commandStack_(&commandStack),
       snapshot_(document.snapshot()), compositionId_(compositionId) {
+    attachCommandObserver();
     if (composition() == nullptr && !snapshot_.project().compositions().empty()) {
         compositionId_ = lowestCompositionId(snapshot_.project());
     }
 }
 
+CompositionSession::~CompositionSession() {
+    if (commandObserverState_ != nullptr) {
+        commandObserverState_->owner = nullptr;
+        commandObserverState_.reset();
+    }
+}
+
+void CompositionSession::attachCommandObserver() {
+    auto state = std::make_shared<CommandObserverState>();
+    state->owner = this;
+    commandObserverState_ = state;
+    commandObserverId_ =
+        commandStack_->addObserver([weakState = std::weak_ptr<CommandObserverState>(state)](
+                                       const commands::CommandEvent& event) {
+            if (const auto locked = weakState.lock(); locked != nullptr && locked->owner != nullptr)
+                locked->owner->handleCommandEvent(event);
+        });
+}
+
 void CompositionSession::rebind(document::Document& document, commands::CommandStack& commandStack,
                                 const document::CompositionId compositionId) {
     Q_ASSERT(QThread::currentThread() == thread());
+    // ProjectHost replaces the live ProjectSession before emitting sessionReplaced(), so the old
+    // stack may already have been destroyed by the time this adapter is rebound. Invalidate the
+    // callback unconditionally; remove it only when the stack identity is known to be unchanged.
+    if (commandStack_ == &commandStack && commandStack_ != nullptr && commandObserverId_ != 0) {
+        commandStack_->removeObserver(commandObserverId_);
+    }
+    if (commandObserverState_ != nullptr) {
+        commandObserverState_->owner = nullptr;
+        commandObserverState_.reset();
+    }
     document_ = &document;
     commandStack_ = &commandStack;
+    commandObserverId_ = 0;
+    attachCommandObserver();
     snapshot_ = document_->snapshot();
     compositionId_ = compositionId;
     currentTime_ = core::RationalTime::fromInteger(0);
@@ -1275,32 +1311,39 @@ bool CompositionSession::execute(commands::Transaction&& transaction) {
     return handleResult(commandStack_->execute(std::move(transaction)));
 }
 
-bool CompositionSession::handleResult(const commands::CommandResult& result) {
-    const auto previousRevision = snapshot_.revision();
-    snapshot_ = document_->snapshot();
-    invalidateTransformInteractionOnStaleRevision();
-    if (valueEdit_ && valueEdit_->revision != snapshot_.revision())
-        cancelValueEdit();
-
-    if (!result.succeeded()) {
-        const auto message = statusMessage(result);
-        if (!message.isEmpty()) {
-            emit commandRejected(message);
+void CompositionSession::handleCommandEvent(const commands::CommandEvent& event) {
+    if (event.kind == commands::CommandEventKind::Rejected) {
+        // The direct CompositionSession command methods retain ownership of the user-facing
+        // rejection signal in handleResult(). External adapters (for example the node-editor
+        // fixture and future editor panels) may already publish that signal after calling the
+        // command stack, so the seam only publishes the non-duplicating history transition here.
+        emit historyChanged();
+        return;
+    }
+    if (event.kind == commands::CommandEventKind::RevisionChanged) {
+        const auto previousRevision = snapshot_.revision();
+        snapshot_ = document_->snapshot();
+        invalidateTransformInteractionOnStaleRevision();
+        if (valueEdit_ && valueEdit_->revision != snapshot_.revision()) {
+            cancelValueEdit();
         }
         if (snapshot_.revision() != previousRevision) {
             normalizeSelection();
             emit snapshotChanged();
         }
-        emit historyChanged();
-        return false;
-    }
-
-    if (snapshot_.revision() != previousRevision) {
-        normalizeSelection();
-        emit snapshotChanged();
+        return;
     }
     emit historyChanged();
-    return true;
+}
+
+bool CompositionSession::handleResult(const commands::CommandResult& result) {
+    if (!result.succeeded()) {
+        const auto message = statusMessage(result);
+        if (!message.isEmpty()) {
+            emit commandRejected(message);
+        }
+    }
+    return result.succeeded();
 }
 
 const document::NodeRecord*

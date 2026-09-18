@@ -207,6 +207,53 @@ Document::Document(Project initialProject, const IdAllocatorHighWater persistedH
 
 Document::~Document() = default;
 
+DocumentObserverId Document::addObserver(DocumentObserver observer) {
+    if (!observer) {
+        return 0;
+    }
+    const std::scoped_lock lock(mutex_);
+    if (nextObserverId_ == 0) {
+        return 0;
+    }
+    const auto id = nextObserverId_++;
+    if (nextObserverId_ == 0) {
+        nextObserverId_ = 0;
+    }
+    observers_.emplace_back(id, std::move(observer));
+    return id;
+}
+
+void Document::removeObserver(const DocumentObserverId observerId) noexcept {
+    if (observerId == 0) {
+        return;
+    }
+    const std::scoped_lock lock(mutex_);
+    std::erase_if(observers_,
+                  [observerId](const auto& entry) { return entry.first == observerId; });
+}
+
+void Document::notify(const DocumentEvent& event) const noexcept {
+    std::vector<DocumentObserver> callbacks;
+    try {
+        const std::scoped_lock lock(mutex_);
+        callbacks.reserve(observers_.size());
+        for (const auto& [id, observer] : observers_) {
+            static_cast<void>(id);
+            callbacks.push_back(observer);
+        }
+    } catch (...) {
+        return;
+    }
+    for (const auto& callback : callbacks) {
+        try {
+            callback(event);
+        } catch (...) {
+            // Observers are diagnostic seams. A faulty observer must never change document truth.
+            static_cast<void>(0);
+        }
+    }
+}
+
 Snapshot Document::snapshot() const {
     const std::scoped_lock lock(mutex_);
     return Snapshot(revision_, identity_, state_);
@@ -223,36 +270,39 @@ Draft Document::draft(const Snapshot& base) const {
 }
 
 CommitResult Document::commit(const Revision expectedRevision, Draft&& draftValue) {
+    const auto reject = [this, expectedRevision](CommitResult result) {
+        const auto currentRevision = snapshot().revision();
+        notify({.kind = DocumentEventKind::Rejected,
+                .status = result.status,
+                .beforeRevision = expectedRevision,
+                .afterRevision = currentRevision});
+        return result;
+    };
     if (draftValue.identity_ != identity_) {
-        return provenanceResult("draft", "Draft is owned by another document");
+        return reject(provenanceResult("draft", "Draft is owned by another document"));
     }
     if (draftValue.baseRevision_ != expectedRevision) {
-        return baseMismatchResult();
+        return reject(baseMismatchResult());
     }
-    {
-        const std::scoped_lock lock(mutex_);
-        if (expectedRevision != revision_) {
-            return conflictResult();
-        }
-    }
-
     if (draftValue.state_ == nullptr) {
         ValidationResult validation;
         validation.add(ValidationCode::InvalidValue, "draft", "Draft has no document state");
-        return {CommitStatus::InvalidDraft, std::nullopt, std::move(validation)};
+        return reject({CommitStatus::InvalidDraft, std::nullopt, std::move(validation)});
     }
     auto validation = draftValue.validate();
     if (!validation.ok()) {
-        return {CommitStatus::InvalidDraft, std::nullopt, std::move(validation)};
+        return reject({CommitStatus::InvalidDraft, std::nullopt, std::move(validation)});
     }
 
-    const std::scoped_lock lock(mutex_);
+    std::unique_lock lock(mutex_);
     if (expectedRevision != revision_) {
-        return conflictResult();
+        lock.unlock();
+        return reject(conflictResult());
     }
     const auto publishedRevision = nextRevision(revision_);
     if (!publishedRevision.has_value()) {
-        return overflowResult();
+        lock.unlock();
+        return reject(overflowResult());
     }
 
     draftValue.state_->ids.mergeHighWater(state_->ids);
@@ -260,39 +310,50 @@ CommitResult Document::commit(const Revision expectedRevision, Draft&& draftValu
     state_ = std::make_shared<detail::DocumentState>(std::move(*draftValue.state_));
     draftValue.state_.reset();
     revision_ = *publishedRevision;
-    return {CommitStatus::Committed, Snapshot(revision_, identity_, state_), {}};
+    auto result = CommitResult{CommitStatus::Committed, Snapshot(revision_, identity_, state_), {}};
+    // The lock is deliberately released before callbacks run. `notify()` takes the same mutex to
+    // snapshot the observer list and observers are allowed to read the new snapshot.
+    lock.unlock();
+    notify({.kind = DocumentEventKind::RevisionChanged,
+            .status = result.status,
+            .beforeRevision = expectedRevision,
+            .afterRevision = result.snapshot->revision()});
+    return result;
 }
 
 CommitResult Document::restore(const Revision expectedRevision,
                                const Snapshot& historicalSnapshot) {
+    const auto reject = [this, expectedRevision](CommitResult result) {
+        const auto currentRevision = snapshot().revision();
+        notify({.kind = DocumentEventKind::Rejected,
+                .status = result.status,
+                .beforeRevision = expectedRevision,
+                .afterRevision = currentRevision});
+        return result;
+    };
     if (historicalSnapshot.identity_ != identity_) {
-        return provenanceResult("snapshot", "Snapshot is owned by another document");
+        return reject(provenanceResult("snapshot", "Snapshot is owned by another document"));
     }
-    {
-        const std::scoped_lock lock(mutex_);
-        if (expectedRevision != revision_) {
-            return conflictResult();
-        }
-    }
-
     if (historicalSnapshot.state_ == nullptr) {
         ValidationResult validation;
         validation.add(ValidationCode::InvalidValue, "snapshot",
                        "Historical snapshot has no document state");
-        return {CommitStatus::InvalidDraft, std::nullopt, std::move(validation)};
+        return reject({CommitStatus::InvalidDraft, std::nullopt, std::move(validation)});
     }
     const auto validation = historicalSnapshot.project().validate();
     if (!validation.ok()) {
-        return {CommitStatus::InvalidDraft, std::nullopt, validation};
+        return reject({CommitStatus::InvalidDraft, std::nullopt, validation});
     }
 
-    const std::scoped_lock lock(mutex_);
+    std::unique_lock lock(mutex_);
     if (expectedRevision != revision_) {
-        return conflictResult();
+        lock.unlock();
+        return reject(conflictResult());
     }
     const auto publishedRevision = nextRevision(revision_);
     if (!publishedRevision.has_value()) {
-        return overflowResult();
+        lock.unlock();
+        return reject(overflowResult());
     }
 
     auto restoredState = std::make_shared<detail::DocumentState>(*historicalSnapshot.state_);
@@ -300,7 +361,13 @@ CommitResult Document::restore(const Revision expectedRevision,
     detail::reserveProjectIds(restoredState->ids, restoredState->project);
     state_ = std::move(restoredState);
     revision_ = *publishedRevision;
-    return {CommitStatus::Committed, Snapshot(revision_, identity_, state_), {}};
+    auto result = CommitResult{CommitStatus::Committed, Snapshot(revision_, identity_, state_), {}};
+    lock.unlock();
+    notify({.kind = DocumentEventKind::RevisionChanged,
+            .status = result.status,
+            .beforeRevision = expectedRevision,
+            .afterRevision = result.snapshot->revision()});
+    return result;
 }
 
 } // namespace bloom::document

@@ -1,8 +1,8 @@
 # Scripting And Add-ons
 
-Status: accepted direction
+Status: accepted; SCRIPT-0 host contracts delivered
 
-Updated: 2026-08-25
+Updated: 2026-09-17
 
 ## Purpose
 
@@ -50,6 +50,10 @@ an advanced tier, not as the compatibility baseline every add-on must pay for.
 
 ## Language-neutral Host Boundary
 
+ADR 0022 is implemented by SCRIPT-0. The Qt-free `bloom::scripting` facade and `bloom-cli` are the
+reference host boundary for the future Python and MCP clients. The six contracts below are live in
+the headless build; Python binding and MCP transport remain SCRIPT-1 clients.
+
 Python consumes the same owned application boundaries as the UI and headless frontend:
 
 ```text
@@ -64,6 +68,14 @@ diagnostics and capability reporting
 These contracts use stable IDs, revisioned values, explicit outcomes, and serializable request or
 result objects. They do not expose Qt widgets, mutable document containers, renderer internals, raw
 C++ pointers, GPU handles, or a global service locator.
+
+The command registry covers every production `commands::Operation::typeId()` and reports the
+operation ID and offending argument in typed diagnostics. Command-stack and document observers
+publish revision, history, and rejection events. `bloom-cli` uses the same session, transaction,
+task, render, and publication paths as the UI, including exact frame-range naming and timing.
+
+The facade versioning and compatibility policy is recorded in
+[`ADR 0022`](../decisions/0022-language-neutral-host-boundary.md).
 
 ## Public Python Model
 

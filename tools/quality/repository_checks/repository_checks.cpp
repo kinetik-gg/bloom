@@ -350,7 +350,8 @@ constexpr auto kAllowedModuleDependencies =
         {"host", "commands"},      {"host", "core"},          {"host", "document"},
         {"host", "output"},        {"host", "platform"},      {"host", "project"},
         {"host", "runtime"},       {"scripting", "commands"}, {"scripting", "core"},
-        {"scripting", "document"}, {"scripting", "host"},     {"scripting", "runtime"},
+        {"scripting", "document"}, {"scripting", "host"},     {"scripting", "output"},
+        {"scripting", "platform"}, {"scripting", "runtime"},
     });
 
 [[nodiscard]] constexpr auto isAllowedDependency(const std::string_view module,

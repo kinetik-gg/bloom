@@ -48,6 +48,8 @@ provide research or rationale, but they are not binding until adopted here.
   importing from it on Linux, macOS and Windows.
 - [Memory](user-guide/memory.md) — the cache budgets Bloom chooses, the two override keys, and what
   "Memory pressure: caches trimmed" means.
+- [Headless scripting](user-guide/scripting.md) — `bloom-cli`, JSON transactions, and headless
+  frame/range rendering.
 
 ## Current Checkpoint
 
