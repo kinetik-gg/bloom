@@ -63,6 +63,33 @@ Handshake ffmpegHandshake(bool hardware) {
              {"aac", "mp3", "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be", "pcm_s32le",
               "pcm_s32be", "pcm_f32le", "pcm_f32be", "pcm_f64le", "pcm_f64be", "pcm_u8", "pcm_s8"})
             add(Role::AudioDecode, codec);
+    if (!hardware) {
+        auto encode = [&](Role role, const char* codec, const char* container,
+                          const char* profile) {
+            add(role, codec);
+            auto& d = h.declarations.back();
+            d.capability.purpose = Purpose::Export;
+            d.capability.container = container;
+            d.capability.profile = profile;
+            d.capability.mapping = "bounded-encode-v1";
+            d.capability.surfaceSemantics = "rgba16-srgb-pcm-v1";
+            d.evidence.qualification = Qualification::Development;
+            if (const auto fixtures = Digest::fromLowercaseHex(BLOOM_FFMPEG_ENCODE_FIXTURE_ID))
+                d.evidence.fixtures = *fixtures;
+        };
+        for (const auto* profile : {"proxy", "lt", "422", "hq", "4444", "4444xq"})
+            encode(Role::VideoEncode, "prores_ks", "mov", profile);
+        for (const auto* profile :
+             {"dnxhd", "dnxhr_lb", "dnxhr_sq", "dnxhr_hq", "dnxhr_hqx", "dnxhr_444"})
+            encode(Role::VideoEncode, "dnxhd", "mxf", profile);
+        encode(Role::VideoEncode, "tiff", "tiff", "rgba16");
+        for (const auto* codec : {"pcm_s16le", "pcm_s24le", "aac"})
+            encode(Role::AudioEncode, codec, "intake-muxers-v1", "source-rate");
+        for (const auto* container : {"mov", "mxf", "matroska", "wav", "tiff"}) {
+            encode(Role::Mux, "intake-encoders-v1", container, "closed-stream-layout-v1");
+            encode(Role::ReopenDecode, "intake-encoders-v1", container, "first-last-pcm-v1");
+        }
+    }
     h.transports = {Transport::PipeCopiesV0};
     return h;
 }
@@ -80,6 +107,17 @@ PipelineQualificationV1 ffmpegPipeline(const ProviderDeclaration& d) {
     p.reopenPolicy = "read-only";
     p.qcProfile = "media3-generated-read-v1";
     p.result = d.evidence.result;
+    if (d.capability.purpose == Purpose::Export) {
+        p.purpose = Purpose::Export;
+        p.profile = "media4-export-component-v1";
+        EncodeSettingsV1 settings;
+        settings.videoCodec = d.capability.role == Role::AudioEncode ? "" : d.capability.codec;
+        settings.audioCodec = d.capability.role == Role::AudioEncode ? d.capability.codec : "";
+        p.determinism = encodeDeterminism(settings);
+        p.toleranceProfile = encodeTolerance(settings);
+        p.reopenPolicy = "same-provider-not-independent";
+        p.qcProfile = "first-last-layout-time-pcm-v1";
+    }
     return p;
 }
 } // namespace bloom::media::provider

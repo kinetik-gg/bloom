@@ -1,5 +1,5 @@
 # No Qt or codec dependency belongs in the host-side contract library.
-add_library(bloom_media_provider STATIC contract.cpp records.cpp)
+add_library(bloom_media_provider STATIC contract.cpp records.cpp encode.cpp)
 target_include_directories(bloom_media_provider PUBLIC include)
 target_compile_features(bloom_media_provider PUBLIC cxx_std_20)
 target_link_libraries(bloom_media_provider PUBLIC bloom_core)
@@ -30,7 +30,7 @@ endif()
 
 # Host facade only. bloom_runtime (the scheduler) depends on core, not media; the evaluator's
 # separate media-image dependency cannot cycle back through this target.
-add_library(bloom_media_worker_host STATIC worker_pool.cpp)
+add_library(bloom_media_worker_host STATIC worker_pool.cpp encode_session.cpp)
 target_link_libraries(bloom_media_worker_host PUBLIC bloom_media_provider bloom_platform_process bloom_runtime)
 bloom_enable_warnings(bloom_media_worker_host)
 

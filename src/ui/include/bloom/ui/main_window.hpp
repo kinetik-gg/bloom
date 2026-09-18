@@ -151,6 +151,7 @@ class MainWindow final : public QMainWindow {
     // Task S5, item 3a: the frame-range export, and the cancel a long sequence needs -- the single
     // frame export never had one because it is one attempt plus one publish.
     QAction* exportFrameRangeAction_ = nullptr;
+    QAction* exportCompositionAction_ = nullptr;
     QAction* cancelFrameExportAction_ = nullptr;
     QAction* quitAction_ = nullptr;
     QAction* undoAction_ = nullptr;

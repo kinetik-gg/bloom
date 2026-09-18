@@ -1,6 +1,7 @@
 #include <bloom/ui/frame_export_controller.hpp>
 
 #include "composition_editor_support.hpp"
+#include "composition_export_dialog.hpp"
 #include "network_share_paths.hpp"
 
 #include <bloom/ui/composition_preview_controller.hpp>
@@ -225,15 +226,14 @@ FrameExportController::FrameExportController(
 
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this, &FrameExportController::pollOnce);
 
-    // All closed version 1 presets are listed; TIFF is visibly offered but unavailable until the
-    // MEDIA-3 worker adapter exists. The chosen extension -- not the selected filter
-    // entry -- is what actually selects the preset (presetForDestination() above), so a path typed
-    // by hand behaves identically to one picked through a filter. OpenEXR stays first so the
-    // dialog's default selection, and therefore every existing artist habit, is unchanged.
-    // A real QFileDialog instance rather than the static getSaveFileName() convenience: still
-    // native when the platform theme provides one (unchanged behaviour), but constructing it lets
-    // configureFileDialogSidebar() add the mounted network shares before exec(), which the static
-    // function gives no opportunity to do.
+    // All frame presets are listed; TIFF uses the supervised worker. The chosen extension -- not
+    // the selected filter entry -- is what actually selects the preset (presetForDestination()
+    // above), so a path typed by hand behaves identically to one picked through a filter. OpenEXR
+    // stays first so the dialog's default selection, and therefore every existing artist habit, is
+    // unchanged. A real QFileDialog instance rather than the static getSaveFileName() convenience:
+    // still native when the platform theme provides one (unchanged behaviour), but constructing it
+    // lets configureFileDialogSidebar() add the mounted network shares before exec(), which the
+    // static function gives no opportunity to do.
     destinationProvider_ = []() -> std::optional<std::filesystem::path> {
         QFileDialog dialog(nullptr, tr("Export Frame"), {},
                            tr("OpenEXR (*.exr);;PNG (*.png);;TIFF (*.tif *.tiff)"));
@@ -286,13 +286,17 @@ FrameExportController::FrameExportController(
 
     approvalDecisionProvider_ = [](const FrameExportApprovalPrompt& prompt) {
         QMessageBox box;
-        box.setWindowTitle(tr("Export Frame"));
-        box.setText(tr("Export this frame to %1?")
+        box.setWindowTitle(tr("Approve Export"));
+        box.setText(tr("Export to %1?")
                         .arg(QString::fromStdString(prompt.destination.filename().string())));
         QStringList lines;
         lines << tr("Destination: %1").arg(QString::fromStdString(prompt.destination.string()));
         lines << tr("Resolution: %1 x %2").arg(prompt.width).arg(prompt.height);
         lines << tr("Preset: %1").arg(prompt.presetName);
+        if (!prompt.profile.isEmpty())
+            lines << tr("Profile: %1").arg(prompt.profile);
+        if (!prompt.implementationNote.isEmpty())
+            lines << prompt.implementationNote;
         lines << tr("Preserved exactly: %1 of %2 facets")
                      .arg(prompt.facets.exactFacetCount)
                      .arg(prompt.facets.exactFacetCount + prompt.facets.nonExactFacetCount);
@@ -350,13 +354,19 @@ void FrameExportController::setApprovalDecisionProvider(
     approvalDecisionProvider_ = std::move(provider);
 }
 
-bool FrameExportController::isExportingRange() const noexcept { return sequence_.has_value(); }
+bool FrameExportController::isExportingRange() const noexcept {
+    return sequence_.has_value() || mediaExport_ != nullptr;
+}
 
 std::uint64_t FrameExportController::publishedFrameCount() const noexcept {
+    if (mediaExport_)
+        return mediaExport_->encodedFrames();
     return sequence_.has_value() ? sequence_->publishedFrames : 0;
 }
 
 std::uint64_t FrameExportController::totalFrameCount() const noexcept {
+    if (mediaExport_)
+        return mediaExport_->totalFrames();
     return sequence_.has_value() ? sequence_->lastFrame - sequence_->firstFrame + 1 : 0;
 }
 
@@ -453,6 +463,8 @@ void FrameExportController::beginRangeExport(FrameExportRangeRequest request) {
 }
 
 void FrameExportController::requestCancellation() {
+    if (mediaExport_)
+        mediaExport_->cancel();
     if (sequence_.has_value()) {
         sequence_->cancelled = true;
     }
@@ -565,6 +577,10 @@ void FrameExportController::beginExport(std::filesystem::path destination) {
 }
 
 void FrameExportController::pollOnce() {
+    if (mediaExport_) {
+        pollCompositionExport();
+        return;
+    }
     if (auto* compiling = std::get_if<CompileHandle>(&inFlight_)) {
         handleCompileResult(*compiling);
         return;

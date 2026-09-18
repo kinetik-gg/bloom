@@ -6,4 +6,6 @@ namespace bloom::media::provider {
 [[nodiscard]] PipelineQualificationV1 ffmpegPipeline(const ProviderDeclaration& declaration);
 inline constexpr const char* kProResPreviewNote =
     "Decoded by FFmpeg; not an Apple-authorized ProRes implementation";
+inline constexpr const char* kProResExportNote =
+    "Decoded/encoded by FFmpeg; not an Apple-authorized ProRes implementation";
 } // namespace bloom::media::provider

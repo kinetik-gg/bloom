@@ -20,6 +20,9 @@ enum class OutputPresetV1 : std::uint8_t {
     PngRgba8SrgbV1 = 1,
     FlatExrRgba32fLinRec709SceneV1 = 2,
     TiffRgba16SrgbV1 = 3,
+    ProResMovV1 = 4,
+    DnxhrMxfV1 = 5,
+    PcmWavV1 = 6,
 };
 
 enum class OutputFacetIdV1 : std::uint8_t {
@@ -86,6 +89,7 @@ enum class OutputFacetStableCodeV1 : std::uint8_t {
     DependencyMissing,
     AdapterUnavailable,
     ResourceLimitExceeded,
+    TiffWorkerExternalReference,
 };
 
 struct OutputPresetIdentityV1 final {

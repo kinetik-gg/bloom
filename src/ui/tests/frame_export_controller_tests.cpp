@@ -1,4 +1,10 @@
+#include "composition_export_dialog.hpp"
+#include <QDialog>
+#include <QTimer>
+#include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
+#include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/color.hpp>
@@ -1024,6 +1030,128 @@ void testFrameRangeRefusalAndCancellation(Expectations& expectations) {
         "frame range refusal: no frame was written");
 }
 
+void testSequenceWriterParity(Expectations& expectations) {
+    const auto duration = core::RationalTime::create(2, 24);
+    if (!duration)
+        return;
+    Fixture fixture(smallFormat(), *duration);
+    if (!fixture.setUp(expectations, "sequence parity fixture"))
+        return;
+    expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Constant"),
+                                                      core::Color4d{0.2, 0.3, 0.4, 1.0}),
+                        "sequence parity solid");
+    fixture.controller().setApprovalDecisionProvider(
+        [](const FrameExportApprovalPrompt&) { return FrameExportApprovalDecision::Export; });
+    bool finished = false;
+    FrameExportOutcome outcome = FrameExportOutcome::Failed;
+    QString diagnostic;
+    QObject::connect(&fixture.controller(), &FrameExportController::exportFinished,
+                     [&](FrameExportOutcome result, const QString& message) {
+                         finished = true;
+                         outcome = result;
+                         diagnostic = message;
+                     });
+    const auto read = [](const std::filesystem::path& path) {
+        std::ifstream file(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    };
+    for (const char* extension : {".png", ".exr", ".tiff"}) {
+        if (std::string_view(extension) == ".tiff" &&
+            !output::outputPresetAvailabilityV1(output::OutputPresetV1::TiffRgba16SrgbV1).available)
+            continue;
+        const auto single = fixture.directory.path() / (std::string("single") + extension);
+        finished = false;
+        fixture.controller().beginExport(single);
+        expectations.expect(waitUntil([&] { return finished; }), "single export completes");
+        expectations.expect(outcome == FrameExportOutcome::Published, "single export publishes");
+        if (outcome != FrameExportOutcome::Published) {
+            std::cerr << diagnostic.toStdString() << '\n';
+            continue;
+        }
+        const auto bytes = read(single);
+        expectations.expect(!bytes.empty(), "single output bytes");
+        const auto base = fixture.directory.path() / (std::string("sequence") + extension);
+        finished = false;
+        fixture.controller().beginRangeExport({base, 0, 1});
+        expectations.expect(waitUntil([&] { return finished; }), "sequence completes");
+        expectations.expect(outcome == FrameExportOutcome::Published, "sequence publishes");
+        if (outcome != FrameExportOutcome::Published)
+            std::cerr << diagnostic.toStdString() << '\n';
+        for (std::uint64_t index = 0; index < 2; ++index)
+            expectations.expect(read(FrameExportController::sequenceFramePath(base, index, 1)) ==
+                                    bytes,
+                                "PNG/EXR/TIFF sequence bytes match existing single-frame writer");
+    }
+}
+
+void testCompositionExportUi(Expectations& expectations) {
+    QTimer::singleShot(0, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        expectations.expect(dialog != nullptr, "composition dialog opens");
+        if (!dialog)
+            return;
+        auto* preset = dialog->findChild<bloom::ui::kit::KDropdown*>("compositionExportPreset");
+        auto* profile = dialog->findChild<bloom::ui::kit::KDropdown*>("compositionExportProfile");
+        auto* note = dialog->findChild<bloom::ui::kit::KLabel*>("compositionExportNote");
+        expectations.expect(
+            preset && preset->count() == 6 &&
+                preset->isItemEnabled(3) ==
+                    output::outputPresetAvailabilityV1(output::OutputPresetV1::TiffRgba16SrgbV1)
+                        .available,
+            "TIFF enabled alongside six presets");
+        if (output::outputPresetAvailabilityV1(output::OutputPresetV1::ProResMovV1).available) {
+            expectations.expect(profile && profile->count() == 6 &&
+                                    profile->currentData().toString() == QStringLiteral("hq"),
+                                "six ProRes profiles default to HQ");
+            expectations.expect(
+                note &&
+                    note->text() == QString::fromUtf8(bloom::media::provider::kProResExportNote),
+                "dialog carries exact ProRes implementation note");
+        }
+        dialog->reject();
+    });
+    expectations.expect(!bloom::ui::compositionExportDialog(47, 48000),
+                        "dialog cancellation yields no request");
+    if (!output::outputPresetAvailabilityV1(output::OutputPresetV1::ProResMovV1).available)
+        return;
+    const auto format = document::CompositionFormat::create(256, 128);
+    const auto duration = core::RationalTime::create(2, 24);
+    if (!format || !duration)
+        return;
+    Fixture fixture(*format, *duration);
+    if (!fixture.setUp(expectations, "movie UI fixture"))
+        return;
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Picture"), core::Color4d{0.2, 0.2, 0.2, 1}),
+        "movie picture");
+    int approvals = 0;
+    fixture.controller().setApprovalDecisionProvider([&](const FrameExportApprovalPrompt& prompt) {
+        ++approvals;
+        expectations.expect(prompt.implementationNote ==
+                                QString::fromUtf8(bloom::media::provider::kProResExportNote),
+                            "approval carries exact ProRes note");
+        return FrameExportApprovalDecision::Export;
+    });
+    bool finished = false;
+    FrameExportOutcome outcome = FrameExportOutcome::Failed;
+    QString diagnostic;
+    QObject::connect(&fixture.controller(), &FrameExportController::exportFinished,
+                     [&](FrameExportOutcome result, const QString& message) {
+                         finished = true;
+                         outcome = result;
+                         diagnostic = message;
+                     });
+    bloom::ui::CompositionExportRequest request;
+    request.range = {fixture.directory.path() / "movie.mov", 0, 1};
+    request.audio = false;
+    fixture.controller().beginCompositionExport(request);
+    expectations.expect(waitUntil([&] { return finished; }), "movie controller completes");
+    expectations.expect(outcome == FrameExportOutcome::Published && approvals == 1,
+                        "movie publishes after one user approval");
+    if (outcome != FrameExportOutcome::Published)
+        std::cerr << diagnostic.toStdString() << '\n';
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1039,6 +1167,8 @@ int main(int argc, char** argv) {
     testPngDestinationRoutesToPngPresetAndPublishes(expectations);
     testPngExportContainsRasterizedText(expectations);
     testBothPresetsExportBackToBack(expectations);
+    testSequenceWriterParity(expectations);
+    testCompositionExportUi(expectations);
     testFrameRangeExportsEveryFrameAtItsOwnTime(expectations);
     testFrameRangeRefusalAndCancellation(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

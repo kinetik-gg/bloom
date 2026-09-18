@@ -22,8 +22,14 @@ struct Fixture {
         for (const auto& d : hello.declarations) {
             test::check(std::holds_alternative<Digest>(registry.registerProvider(d)),
                         "register FFmpeg");
-            test::check(std::holds_alternative<Digest>(registry.qualifyPipeline(ffmpegPipeline(d))),
-                        "qualify FFmpeg");
+            const auto qualification = registry.qualifyPipeline(ffmpegPipeline(d));
+            if (d.capability.purpose == Purpose::Export) {
+                const auto* error = std::get_if<Unavailable>(&qualification);
+                test::check(error && error->reason == Error::Unavailable,
+                            "preview export does not qualify a strict export pipeline");
+            } else {
+                test::check(std::holds_alternative<Digest>(qualification), "qualify FFmpeg read");
+            }
         }
     }
     WorkerPoolOptions options() {

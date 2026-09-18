@@ -11,6 +11,7 @@
 
 class QLabel;
 class QTimer;
+class QToolButton;
 
 namespace bloom::media::cache {
 class MediaDiskCache;
@@ -94,7 +95,12 @@ class WindowStatusBar final : public kit::KSurface {
     // A message that stays until it is replaced or cleared: "Saving…", "Opening…", export range
     // progress. Passing an empty string clears it.
     void setPersistentMessage(const QString& message);
+    void setExportActive(bool active);
 
+  signals:
+    void cancelExportRequested();
+
+  public:
     // CACHEFIX-1 pressure response. Drives one poll with a given MemAvailable reading instead of
     // the host's, so a test can exercise the trim and the notice on any machine. Mirrors the
     // *ForTest precedent used elsewhere in this class.
@@ -134,6 +140,7 @@ class WindowStatusBar final : public kit::KSurface {
     QLabel* cache_ = nullptr;
     QLabel* mediaDiskCacheCell_ = nullptr;
     QLabel* message_ = nullptr;
+    QToolButton* exportCancel_ = nullptr;
     QLabel* version_ = nullptr;
     QLabel* probe_ = nullptr;
     QTimer* transientTimer_ = nullptr;

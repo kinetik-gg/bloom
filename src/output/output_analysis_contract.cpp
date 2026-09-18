@@ -1,3 +1,4 @@
+#include <bloom/media/provider/encode_session.hpp>
 #include <bloom/output/output_analysis.hpp>
 
 #include <cstdint>
@@ -24,6 +25,12 @@ namespace bloom::output {
 
 std::optional<OutputPresetIdentityV1> outputPresetIdentityV1(const OutputPresetV1 preset) noexcept {
     switch (preset) {
+    case OutputPresetV1::ProResMovV1:
+        return OutputPresetIdentityV1{"ProResMovV1", 1, "bloom.output.prores-mov.preview.v1"};
+    case OutputPresetV1::DnxhrMxfV1:
+        return OutputPresetIdentityV1{"DnxhrMxfV1", 1, "bloom.output.dnxhr-mxf.v1"};
+    case OutputPresetV1::PcmWavV1:
+        return OutputPresetIdentityV1{"PcmWavV1", 1, "bloom.output.pcm-wav.v1"};
     case OutputPresetV1::PngRgba8SrgbV1:
         return OutputPresetIdentityV1{"PngRgba8SrgbV1", kOutputPresetVersionV1,
                                       "bloom.output.png-rgba8-srgb.semantic.v1"};
@@ -38,15 +45,17 @@ std::optional<OutputPresetIdentityV1> outputPresetIdentityV1(const OutputPresetV
 }
 
 OutputPresetAvailabilityV1 outputPresetAvailabilityV1(const OutputPresetV1 preset) noexcept {
-    switch (preset) {
-    case OutputPresetV1::PngRgba8SrgbV1:
-    case OutputPresetV1::FlatExrRgba32fLinRec709SceneV1:
+    if (!outputPresetIdentityV1(preset))
+        return {};
+    if (preset == OutputPresetV1::PngRgba8SrgbV1 ||
+        preset == OutputPresetV1::FlatExrRgba32fLinRec709SceneV1)
         return {.available = true, .reason = {}};
-    case OutputPresetV1::TiffRgba16SrgbV1:
-        return {.available = false,
-                .reason = "TIFF provider is missing; MEDIA-3 must provide the worker adapter"};
-    }
-    return {};
+#if defined(__linux__)
+    return {.available = true, .reason = {}};
+#else
+    return {.available = false,
+            .reason = "The supervised FFmpeg worker is unavailable on this platform"};
+#endif
 }
 
 std::optional<OutputFacetDescriptorSchemasV1>
@@ -213,6 +222,9 @@ outputFacetStableCodeRuleV1(const OutputFacetStableCodeV1 code) noexcept {
     case OutputFacetStableCodeV1::MetadataUnsupported:
         return one("metadata.unsupported", OutputFacetIdV1::Metadata,
                    OutputPreservationStateV1::Unsupported, true, true, false, true);
+    case OutputFacetStableCodeV1::TiffWorkerExternalReference:
+        return one("tiff.worker-external-reference", OutputFacetIdV1::ExternalDependencies,
+                   OutputPreservationStateV1::ExternalReference, false, false, true, true);
     case OutputFacetStableCodeV1::PngOcioExternalReference:
         return one("png.ocio-external-reference", OutputFacetIdV1::ExternalDependencies,
                    OutputPreservationStateV1::ExternalReference, true, false, true);

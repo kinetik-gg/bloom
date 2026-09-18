@@ -75,8 +75,7 @@ struct FlatExrRgba32fLinRec709SceneAnalysisInputV1 final {
 
 struct TiffRgba16SrgbAnalysisInputV1 final {
     OutputAnalysisProcessSourceV1 process;
-    // TIFF remains unavailable until MEDIA-3 supplies the worker adapter. Keeping this state in
-    // the closed analysis input makes the report truthful without inventing an encoder here.
+    // Callers explicitly supply verified worker availability; the default remains fail-closed.
     OutputAnalysisAdapterStateV1 adapter = OutputAnalysisAdapterStateV1::Unavailable;
     OutputAnalysisCompressionStateV1 compression = OutputAnalysisCompressionStateV1::Available;
     OutputAnalysisOtherDependencyStateV1 otherDependency =

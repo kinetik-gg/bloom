@@ -1,0 +1,60 @@
+#pragma once
+#include <bloom/host/frame_export_publication.hpp>
+#include <bloom/host/frame_range_runner.hpp>
+#include <bloom/host/output_analysis_attempt_runner.hpp>
+#include <bloom/output/media_output.hpp>
+#include <bloom/runtime/snapshot_compiler.hpp>
+
+namespace bloom::host {
+struct SequenceExportRequestV1 {
+    runtime::SnapshotCompileRequest composition;
+    FrameRangeRequestV1 range;
+    output::OutputPresetV1 preset = output::OutputPresetV1::ProResMovV1;
+    std::string profile = "hq";
+    bool audio = true;
+    std::uint32_t sampleRate = 48000;
+    std::string pcmCodec = "pcm_s16le", bwfDescription;
+    std::filesystem::path assetBaseDirectory;
+    media::provider::EncodeSessionOptionsV1 worker;
+    std::uint64_t queueByteLimit = 512ULL * 1024U * 1024U;
+};
+enum class SequenceExportStageV1 : std::uint8_t {
+    Compiling,
+    Analyzing,
+    AwaitingApproval,
+    Encoding,
+    Verifying,
+    Complete
+};
+struct SequenceExportResultV1 {
+    platform::StagedArtifactPublicationResult publication;
+    std::optional<media::provider::Unavailable> failure;
+    std::optional<media::provider::MediaQcEvidenceV1> evidence;
+    std::uint64_t encodedFrames = 0;
+    [[nodiscard]] bool published() const noexcept { return publication.targetWasPublished(); }
+};
+// Authoring-thread driver. poll() never blocks: it composes the existing attempt/approval stages.
+// One compile, exact SCRIPT-0 frame mapping, one acknowledged product at a time, one publication.
+class SequenceExportRunnerV1 final {
+  public:
+    SequenceExportRunnerV1(runtime::TaskScheduler&, const runtime::SnapshotCompiler&,
+                           PublicationCoordinator&, platform::StagedArtifactCoordinator&,
+                           output::ExportResourceLedgerV1&, SequenceExportRequestV1);
+    ~SequenceExportRunnerV1();
+    SequenceExportRunnerV1(const SequenceExportRunnerV1&) = delete;
+    SequenceExportRunnerV1& operator=(const SequenceExportRunnerV1&) = delete;
+    void poll();
+    void cancel();
+    [[nodiscard]] SequenceExportStageV1 stage() const;
+    [[nodiscard]] const output::MediaOutputAnalysisV1* analysis() const;
+    [[nodiscard]] std::optional<core::Sha256Digest> frameApprovalDigest() const;
+    [[nodiscard]] bool approve(core::Sha256Digest mediaDigest, core::Sha256Digest frameDigest);
+    [[nodiscard]] std::uint64_t encodedFrames() const;
+    [[nodiscard]] std::uint64_t totalFrames() const;
+    [[nodiscard]] const std::optional<SequenceExportResultV1>& result() const;
+
+  private:
+    struct State;
+    std::unique_ptr<State> state_;
+};
+} // namespace bloom::host

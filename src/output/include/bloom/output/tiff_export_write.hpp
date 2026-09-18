@@ -15,6 +15,8 @@ enum class TiffExportWriteErrorCodeV1 : std::uint8_t {
 };
 
 struct TiffExportWriteResultV1 final {
+    core::Sha256Digest artifactDigest{}, semanticDigest{};
+    std::uint64_t artifactBytes = 0;
     bool written = false;
     bool cancelled = false;
     TiffExportWriteErrorCodeV1 error = TiffExportWriteErrorCodeV1::None;
@@ -32,14 +34,13 @@ struct TiffExportWriteResultV1 final {
     }
 };
 
-// TIFF is intentionally only a bridge to the provider-neutral media seam. MEDIA-3 supplies the
-// callback later; an absent callback returns ImageDiagnosticCode::ProviderMissing before a worker
-// or filesystem encoder is invoked.
+// TIFF encoding and exact reopen verification run in the isolated media worker.
 class TiffExportWriterV1 final {
   public:
     [[nodiscard]] TiffExportWriteResultV1
     run(const OutputAnalysisAttemptV1& attempt, const std::filesystem::path& destination,
-        const media::ImageProvider* provider = nullptr) const noexcept;
+        const media::ImageProvider* provider = nullptr,
+        const runtime::CancellationToken& cancellation = {}) const noexcept;
 };
 
 } // namespace bloom::output

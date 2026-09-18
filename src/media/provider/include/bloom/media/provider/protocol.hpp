@@ -1,8 +1,9 @@
 #pragma once
+#include <bloom/media/provider/encode.hpp>
 #include <bloom/media/provider/registry.hpp>
 
 namespace bloom::media::provider {
-inline constexpr std::uint16_t kProtocolVersion = 1, kSchemaVersion = 2;
+inline constexpr std::uint16_t kProtocolVersion = 1, kSchemaVersion = 3;
 inline constexpr std::uint32_t kEnvelopeBytes = 25;
 enum class MessageKind : std::uint8_t {
     Handshake = 1,
@@ -14,7 +15,12 @@ enum class MessageKind : std::uint8_t {
     Ack = 7,
     Failure = 8,
     Index = 9,
-    Audio = 10
+    Audio = 10,
+    EncodeBegin = 11,
+    EncodeFinish = 12,
+    EncodeRead = 13,
+    EncodedChunk = 14,
+    EncodeQc = 15
 };
 struct Handshake {
     ProviderExecutionKeyV1 execution;
@@ -32,7 +38,8 @@ struct CallRequest {
     Digest sourceDigest{};
 };
 using Payload = std::variant<Handshake, CallRequest, ProbeResult, FrameProduct, DemuxIndex,
-                             AudioBlock, std::monostate, Unavailable>;
+                             AudioBlock, EncodeSettingsV1, EncodedChunkV1, EncodeQcV1,
+                             std::uint64_t, std::monostate, Unavailable>;
 struct Message {
     MessageKind kind = MessageKind::Ack;
     std::uint64_t session = 0, sequence = 0;

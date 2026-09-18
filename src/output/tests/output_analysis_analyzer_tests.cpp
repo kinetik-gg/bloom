@@ -146,6 +146,11 @@ void testNominalPresetsAndDigestGoldens(Expectations& expectations) {
                       "d07988b616ef530dbaa5b43695311b551f5b9b5b8696fa4381a394915c086b87"),
         "the analyzer-produced EXR report preserves the independent digest golden");
 
+    const auto availableTiff = analyzeTiffRgba16SrgbV1(
+        {.process = readySource(identity), .adapter = OutputAnalysisAdapterStateV1::Qualified});
+    expectations.expect(availableTiff && availableTiff.report() &&
+                            availableTiff.report()->approvable(),
+                        "TIFF worker external-reference facet permits explicit approval");
     const auto tiff = analyzeTiffRgba16SrgbV1(
         {.process = readySource(identity), .adapter = OutputAnalysisAdapterStateV1::Unavailable});
     expectations.expect(tiff && tiff.report() != nullptr && !tiff.report()->approvable(),

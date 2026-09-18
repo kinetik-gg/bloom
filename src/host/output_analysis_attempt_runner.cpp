@@ -385,7 +385,11 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                     : preset == output::OutputPresetV1::TiffRgba16SrgbV1
                         ? output::analyzeTiffRgba16SrgbV1(
                               {.process = processSource,
-                               .adapter = output::OutputAnalysisAdapterStateV1::Unavailable})
+                               .adapter = output::outputPresetAvailabilityV1(
+                                              output::OutputPresetV1::TiffRgba16SrgbV1)
+                                                  .available
+                                              ? output::OutputAnalysisAdapterStateV1::Qualified
+                                              : output::OutputAnalysisAdapterStateV1::Unavailable})
                         : output::analyzeFlatExrRgba32fLinRec709SceneV1({.process = processSource});
                 if (!analyzed.hasReport()) {
                     return runtime::TaskResult<BuildOutcomeV1>::succeeded(

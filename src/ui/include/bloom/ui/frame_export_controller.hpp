@@ -6,6 +6,7 @@
 #include <bloom/host/frame_export_publication.hpp>
 #include <bloom/host/output_analysis_attempt_runner.hpp>
 #include <bloom/host/publication_coordinator.hpp>
+#include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/output/output_analysis.hpp>
 #include <bloom/output/output_analysis_attempt.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
@@ -58,6 +59,8 @@ struct FrameExportApprovalPrompt final {
     // The first 16 lowercase hex characters of attempt->digest()->toLowercaseHex() -- "the digest's
     // short form" (design decision 3).
     QString digestShortForm;
+    QString implementationNote{};
+    QString profile{};
 };
 
 enum class FrameExportApprovalDecision : std::uint8_t {
@@ -73,6 +76,14 @@ struct FrameExportRangeRequest final {
     std::filesystem::path destination;
     std::uint64_t firstFrame = 0;
     std::uint64_t lastFrame = 0;
+};
+
+struct CompositionExportRequest final {
+    FrameExportRangeRequest range;
+    output::OutputPresetV1 preset = output::OutputPresetV1::ProResMovV1;
+    std::string profile = "hq";
+    bool audio = true;
+    std::uint32_t sampleRate = 48000;
 };
 
 // Terminal, artist-facing outcomes. Mirrors ProjectHostOperationOutcome's honesty contract: never
@@ -166,7 +177,7 @@ class FrameExportController final : public QObject {
 
     // Seam setters (ProjectHost's decision-4 precedent). Defaults are installed at construction (a
     // real QFileDialog::getSaveFileName offering the closed ".exr"/".png"/".tiff" filters; TIFF is
-    // shown as unavailable until MEDIA-3 provides its worker callback; a real
+    // backed by the supervised worker when available; a real
     // QMessageBox Export/Cancel prompt naming the selected preset), so
     // offscreen tests can drive the whole flow without a real dialog appearing.
     void setDestinationProvider(FrameExportDestinationProvider provider);
@@ -200,6 +211,8 @@ class FrameExportController final : public QObject {
     // "File -> Export Frame Range..." entry point: refuses while busy or without a composition,
     // else invokes the range-dialog seam, then beginRangeExport().
     void requestRangeExport();
+    void requestCompositionExport();
+    void beginCompositionExport(CompositionExportRequest request);
     // The dialog-free primitive, mirroring beginExport(). A range whose frames are not all inside
     // the composition's own valid index range is refused outright rather than silently clamped.
     void beginRangeExport(FrameExportRangeRequest request);
@@ -252,6 +265,7 @@ class FrameExportController final : public QObject {
     };
 
     void pollOnce();
+    void pollCompositionExport();
     void handleCompileResult(CompileHandle& compiling);
     void handleAttemptResult(host::OutputAnalysisAttemptRunnerV1& runner);
     void handleExportJobResult(ExportJobHandle& job);
@@ -286,6 +300,7 @@ class FrameExportController final : public QObject {
     FrameExportRangeProvider rangeProvider_;
     FrameExportApprovalDecisionProvider approvalDecisionProvider_;
     std::optional<SequenceState> sequence_;
+    std::unique_ptr<host::SequenceExportRunnerV1> mediaExport_;
 
     FrameExportActivity activity_ = FrameExportActivity::Idle;
     std::filesystem::path pendingDestination_;

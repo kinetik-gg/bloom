@@ -12,13 +12,11 @@ publication (analysis attempt graph, immutable export request, and the shared-co
 publication job), the interactive frame-export command with explicit digest approval, the
 constrained PNG codec with strict chunk-profile verification and kind-1 identity issuance, and
 the PNG export path end to end (attempt color preparation, prepared-stream production, and the
-export command's preset choice) are implemented. The supervised external-config helper and the
-export command's preset choice) are implemented. TIFF's typed RGBA16/sRGB preset and media-provider
-seam are represented, but remain unavailable until MEDIA-3 supplies the worker adapter. The
-supervised external-config helper and the non-built-in locator kinds remain the pending color-side
-work.
+export command's preset choice) are implemented. MEDIA-4 enables TIFF through the isolated worker
+and adds ProRes MOV, DNxHR MXF and PCM WAV composition export. The supervised external-config
+helper and non-built-in locator kinds remain pending color-side work.
 
-Updated: 2026-08-31
+Updated: 2026-09-17
 
 ## Purpose
 
@@ -45,11 +43,11 @@ primitive-semantics versions, and process cache identity. Its color identity is 
 `lin_rec709_scene`: scene-referred linear-light Rec.709 primaries with a D65 white point. A config
 alias, role, display name, or approximate transform does not reinterpret that v1 process frame.
 
-The two initial presets are closed, versioned contracts:
+The frame presets are closed, versioned contracts:
 
 - `PngRgba8SrgbV1`
 - `FlatExrRgba32fLinRec709SceneV1`
-- `TiffRgba16SrgbV1` (provider unavailable until MEDIA-3)
+- `TiffRgba16SrgbV1` (Linux supervised worker; explicit unavailable fallback elsewhere)
 
 Their typed identity derives every portable string and version; callers never provide the fields
 independently and enum ordinals are never serialized:
@@ -64,8 +62,8 @@ A mismatched preset ID, version, or profile tuple is invalid. For PNG, the separ
 revision must equal both the revision embedded in the canonical `DisplayProcessorIdentity` and the
 64 lowercase hexadecimal digits in the target external-dependency descriptor. The EXR preset
 rejects a nonempty OCIO revision or display identity. TIFF has the same zero-byte identity shape
-while its external-dependencies facet is `adapter.unavailable` until the provider seam is wired;
-it cannot be approved or published in this wave.
+with its external-dependencies facet qualified only when the supervised worker is available.
+Absent providers produce `adapter.unavailable`.
 
 A preset version participates in analysis, semantic output identity, verification, and
 reproducibility.
@@ -935,3 +933,16 @@ Primary references:
 - [Color-management contract](color-management.md)
 - [Task-system contract](task-system.md)
 - [Dependency-intake contract](dependency-intake.md)
+
+## Composition export
+
+`ProResMovV1`, `DnxhrMxfV1` and `PcmWavV1` bind their explicit codec/profile, frame and audio
+settings in `MediaOutputAnalysisV1`. The eleven ordered facets state the lossy display conversion,
+codec precision, omitted or retained alpha, exact cadence, stream layout and external provider.
+Each evaluated frame still receives a separate immutable attempt and authoring-thread digest
+approval. The composition driver uses SCRIPT-0's host frame-time mapping and publishes one staged,
+closed, reopened and verified movie or WAV. The original PNG/EXR sequence loop and frame record
+encodings remain intact; TIFF joins the same sequence publication path.
+
+See [media I/O](media-io.md#time-based-export-media-4) for the resource, tolerance and QC records,
+and [Exporting video](../user-guide/exporting-video.md) for artist-facing controls.

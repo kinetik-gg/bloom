@@ -150,12 +150,11 @@ void testPresetIdentityAndSchemaMatrix(Expectations& expectations) {
                         "the EXR typed preset derives its exact portable identity tuple");
     const auto tiff = output::outputPresetIdentityV1(Preset::TiffRgba16SrgbV1);
     const auto tiffAvailability = output::outputPresetAvailabilityV1(Preset::TiffRgba16SrgbV1);
-    expectations.expect(tiff && tiff->serializedId == "TiffRgba16SrgbV1" && tiff->version == 1 &&
-                            tiff->outputPixelSemanticsProfileId ==
-                                "bloom.output.tiff-rgba16-srgb.semantic.v1" &&
-                            !tiffAvailability.available &&
-                            tiffAvailability.reason.find("provider") != std::string_view::npos,
-                        "the TIFF preset identity is frozen and unavailable without MEDIA-3");
+    expectations.expect(
+        tiff && tiff->serializedId == "TiffRgba16SrgbV1" && tiff->version == 1 &&
+            tiff->outputPixelSemanticsProfileId == "bloom.output.tiff-rgba16-srgb.semantic.v1" &&
+            (tiffAvailability.available || !tiffAvailability.reason.empty()),
+        "the TIFF preset identity is frozen and missing platforms explain availability");
     expectations.expect(!output::outputPresetIdentityV1(enumWithBits<Preset>(0xFFU)),
                         "an unknown preset fails closed");
 
@@ -300,6 +299,8 @@ void testStableCodeMapping(Expectations& expectations) {
              bit(Facet::ExternalDependencies), true, true, false},
         Case{Code::ResourceLimitExceeded, "resource.limit-exceeded", State::Missing,
              bit(Facet::ExternalDependencies), true, true, false},
+        Case{Code::TiffWorkerExternalReference, "tiff.worker-external-reference",
+             State::ExternalReference, bit(Facet::ExternalDependencies), false, false, true},
     };
 
     bool allMappingsMatch = true;
@@ -314,7 +315,8 @@ void testStableCodeMapping(Expectations& expectations) {
     }
     expectations.expect(allMappingsMatch,
                         "every version-one stable code has its exact closed derived rule");
-    expectations.expect(cases.size() == static_cast<std::size_t>(Code::ResourceLimitExceeded) + 1U,
+    expectations.expect(cases.size() ==
+                            static_cast<std::size_t>(Code::TiffWorkerExternalReference) + 1U,
                         "the mapping test enumerates every closed stable-code value");
     expectations.expect(!output::outputFacetStableCodeRuleV1(enumWithBits<Code>(0xFFU)),
                         "an unknown stable code fails closed");

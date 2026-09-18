@@ -8,6 +8,7 @@ target_sources(
         font_catalogue.cpp
         frame_export_publication.cpp
         frame_range_runner.cpp
+        sequence_export_runner.cpp
         output_analysis_attempt_runner.cpp
         project_session.cpp
         publication_coordinator.cpp
@@ -25,6 +26,7 @@ target_sources(
             include/bloom/host/copy_publication.hpp
             include/bloom/host/frame_export_publication.hpp
             include/bloom/host/frame_range_runner.hpp
+            include/bloom/host/sequence_export_runner.hpp
             include/bloom/host/font_catalogue.hpp
             include/bloom/host/output_analysis_attempt_runner.hpp
             include/bloom/host/project_session.hpp
@@ -243,6 +245,13 @@ if(BUILD_TESTING)
         # the PNG round-trip test proves the published artifact against a second, independent
         # reading. Same rationale and same target as bloom_host_session_open_test's own direct
         # ZLIB::ZLIB link above.
+        add_executable(bloom_host_sequence_export_runner_test ${PROJECT_SOURCE_DIR}/tests/sequence_export_runner_tests.cpp)
+        target_link_libraries(bloom_host_sequence_export_runner_test PRIVATE bloom_host bloom_commands bloom_media_video)
+        add_dependencies(bloom_host_sequence_export_runner_test bloom-media-worker)
+        bloom_enable_warnings(bloom_host_sequence_export_runner_test)
+        bloom_add_test(NAME bloom.host.sequence-export COMMAND bloom_host_sequence_export_runner_test
+                       "${CMAKE_CURRENT_BINARY_DIR}/sequence-export-fixtures" LABELS unit host media output TIMEOUT 180)
+
         add_executable(bloom_host_frame_export_publication_test
                        tests/frame_export_publication_tests.cpp)
         target_link_libraries(bloom_host_frame_export_publication_test PRIVATE bloom_host
