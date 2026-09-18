@@ -143,6 +143,7 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
     QWidget* headerMenus_ = nullptr;
     QWidget* headerRight_ = nullptr;
     QMenu* editMenu_ = nullptr;
+    QMenu* blankLayerContextMenu_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
     QAction* deleteLayerAction_ = nullptr;
@@ -217,6 +218,7 @@ class TimelineLayerStack final : public kit::KListSurface {
     // Emitted whenever this column's own viewport height changes, so the editor can re-derive the
     // shared scrollbar's range from the new viewport rather than polling it.
     void viewportResized();
+    void blankContextMenuRequested(QPoint globalPosition);
     void expansionRequested(document::LayerId layer);
     void groupExpansionRequested(document::LayerId layer, QString group);
     void parameterExpansionRequested(document::ParameterId parameter);

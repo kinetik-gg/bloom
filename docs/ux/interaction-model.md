@@ -267,17 +267,21 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | Drag row | Reorder stable slots at the insertion indicator |
 | Double-click name | Inline rename; Return commits, Escape cancels |
 | Right-click row | Duplicate, Delete, Rename, Blending, Label Color, Split at Playhead |
+| Right-click empty layer-table space | Add submenu (existing Solid, Text and shape actions); direct Keyframes, Graph Editor, Snap to Frames, Zoom to Fit, Select All and Deselect All actions. Opening or dismissing the menu preserves selection |
 | `Ctrl+wheel` over ruler or lanes | Zoom time about the pointer; the pointer's time stays fixed until a composition boundary clamps the range |
 | `Shift+wheel` or horizontal wheel | Scroll the visible time range |
 | Drag the navigator window | Scroll; drag either window edge to resize the visible range; `Escape` cancels |
 | `Ctrl+0` | Timeline View → Zoom to Fit |
 | `Ctrl++` / `Ctrl+-` | Timeline View → Zoom In / Zoom Out about the visible center |
-| `Ctrl+A` / `Ctrl+Shift+A` | Timeline Select → All / None (shared layer-boundary selection) |
+| `Ctrl+A` / `Ctrl+Shift+A` | Timeline Select → Select All / Deselect All (shared layer-boundary selection) |
 | `Delete` / `Backspace` with layer stack or lanes focused | Timeline Edit → Delete Layer, through `RemoveNodes` on the selected layers' Layer nodes |
 
-The header offers **Add** (Solid, Text), **View**, **Edit**, and **Select** menus. Edit reuses the
-application's Undo/Redo actions and shortcuts. Delete in a keyframe lane retains its keyframe
-behavior. Menus collapse into one `…` popup when their available header width is too small.
+The visible header offers **Add** (Solid, Text and shapes), **View**, and **Select**, in that order.
+Edit remains available in the overflow menu and reuses the application's Undo/Redo actions and
+shortcuts. Delete in a keyframe lane retains its keyframe behavior. Menus collapse into one `…`
+popup when their available header width is too small. The blank-layer context menu reuses these
+actions and styling, with only Add nested; existing layer selection is preserved until an explicit
+selection command is chosen.
 
 View → Frames / Timecode changes the ruler's labels, and persists the preference in
 `timeline/time-format` -- the same key the Viewer footer's own readout reads and writes, so the two

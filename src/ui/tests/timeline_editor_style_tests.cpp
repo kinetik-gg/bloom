@@ -1413,6 +1413,103 @@ void testClickingTheLeftColumnSelectsAndClears(Expectations& expectations) {
     finishFixture(fixture);
 }
 
+void testBlankLayerContextMenu(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Blank layer menu"));
+    ui::EditorRegistry registry;
+    (void)registry.registerEditor({"bloom.timeline", "Timeline", [&](QWidget* parent) {
+                                       return new ui::TimelineEditor(fixture.session,
+                                                                     fixture.controller, parent);
+                                   }});
+    {
+        ui::EditorArea area(registry, "bloom.timeline");
+        area.resize(1200, 500);
+        area.show();
+        QCoreApplication::processEvents();
+        auto* editor = area.findChild<ui::TimelineEditor*>();
+        auto* stack = editor->layerStackForTest();
+        auto* menu = area.findChild<QMenu*>("timelineBlankLayerContextMenu");
+        auto* add = area.findChild<QMenu*>("addLayerMenu");
+        auto* view = area.findChild<QMenu*>("timelineViewMenu");
+        auto* select = area.findChild<QMenu*>("timelineSelectMenu");
+        expectations.expect(menu && add && view && select,
+                            "blank menu and shared header menus exist");
+        if (!menu || !add || !view || !select)
+            return;
+        const auto openBlankMenu = [&] {
+            const QPoint point(stack->width() / 2, stack->contentHeight() + 4);
+            QContextMenuEvent event(QContextMenuEvent::Mouse, point, stack->mapToGlobal(point));
+            QApplication::sendEvent(stack, &event);
+            QCoreApplication::processEvents();
+            expectations.expect(menu->isVisible(),
+                                "right-click below all rows opens the blank menu");
+        };
+        openBlankMenu();
+        int submenuCount = 0;
+        for (auto* action : menu->actions()) {
+            if (action->menu()) {
+                ++submenuCount;
+                expectations.expect(action->menu() == add, "Add reuses the existing submenu");
+            } else if (!action->isSeparator()) {
+                expectations.expect(
+                    view->actions().contains(action) || select->actions().contains(action),
+                    "direct context actions are the existing view/selection actions");
+            }
+        }
+        expectations.expect(submenuCount == 1,
+                            "only Add is nested; View and Select are not copied");
+        auto* all = area.findChild<QAction*>("timelineSelectAllAction");
+        auto* none = area.findChild<QAction*>("timelineSelectNoneAction");
+        expectations.expect(!all->isEnabled() && !none->isEnabled(),
+                            "selection commands are disabled for an empty composition");
+        menu->hide();
+        auto* solid = area.findChild<QAction*>("addSolidLayerAction");
+        const auto beforeAdd = fixture.commands.size();
+        solid->trigger();
+        expectations.expect(stack->rowCount() == 1 && fixture.commands.size() == beforeAdd + 1,
+                            "the shared Add action creates one undoable layer");
+        (void)fixture.session.addSolidLayer(QStringLiteral("Second"), core::Color4d{1, 0, 0, 1});
+        const auto selected = fixture.session.selectedNodes();
+        const auto revision = fixture.session.snapshot().revision();
+        openBlankMenu();
+        expectations.expect(fixture.session.selectedNodes() == selected &&
+                                fixture.session.snapshot().revision() == revision,
+                            "opening blank-space context preserves selection and project state");
+        expectations.expect(all->isEnabled() && none->isEnabled(),
+                            "selection actions reflect populated selected layers");
+        all->trigger();
+        expectations.expect(fixture.session.selectedNodes().size() == 2,
+                            "direct Select All uses shared layer selection");
+        none->trigger();
+        expectations.expect(fixture.session.selectedNodes().empty(),
+                            "direct Deselect All clears selection");
+        auto* graph = area.findChild<QAction*>("timelineGraphEditorAction");
+        auto* keyframes = area.findChild<QAction*>("timelineKeyframesAction");
+        const bool previousGraph = graph->isChecked();
+        const bool previousKeyframes = keyframes->isChecked();
+        graph->trigger();
+        expectations.expect(graph->isChecked() != previousGraph &&
+                                menu->actions().contains(graph) && view->actions().contains(graph),
+                            "context and header share live editor-mode checked state");
+        menu->hide();
+        openBlankMenu();
+        expectations.expect(!none->isEnabled(), "reopening refreshes selection availability");
+        menu->hide();
+        const QPoint rowPoint(stack->width() / 2, ui::kTimelineRowHeight / 2);
+        QContextMenuEvent rowEvent(QContextMenuEvent::Mouse, rowPoint,
+                                   stack->mapToGlobal(rowPoint));
+        QApplication::sendEvent(stack, &rowEvent);
+        auto* rowMenu = stack->findChild<QMenu*>("timelineLayerContextMenu");
+        expectations.expect(rowMenu && rowMenu->isVisible() && !menu->isVisible(),
+                            "populated rows retain their existing layer context menu");
+        if (rowMenu)
+            rowMenu->hide();
+        graph->setChecked(previousGraph);
+        keyframes->setChecked(previousKeyframes);
+    }
+    finishFixture(fixture);
+}
+
 // Decision 5: the play/pause button's ICON swaps alongside its already-pinned text()/isChecked()
 // contract (playback_controller_tests.cpp owns that contract byte-for-byte).
 void testRangeRowsAndWorkAreaCommands(Expectations& expectations) {
@@ -2656,6 +2753,7 @@ int main(int argc, char** argv) {
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     Expectations expectations;
     try {
+        testBlankLayerContextMenu(expectations);
         testTimelinePolishInteractions(expectations);
         testOutputMergeRows(expectations);
         testHeaderTogglesArePersistedAndLive(expectations);

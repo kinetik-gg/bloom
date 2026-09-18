@@ -891,8 +891,12 @@ void TimelineLayerStack::mouseDoubleClickEvent(QMouseEvent* event) {
 }
 void TimelineLayerStack::contextMenuEvent(QContextMenuEvent* event) {
     const int row = (event->pos().y() + scrollOffset_) / kTimelineRowHeight;
-    if (row < 0 || row >= rowCount() ||
-        entries_[static_cast<std::size_t>(row)].rowKind != TimelineLayerEntry::Kind::Layer)
+    if (row < 0 || row >= rowCount()) {
+        emit blankContextMenuRequested(event->globalPos());
+        event->accept();
+        return;
+    }
+    if (entries_[static_cast<std::size_t>(row)].rowKind != TimelineLayerEntry::Kind::Layer)
         return;
     const auto layerId = entries_[static_cast<std::size_t>(row)].layerId;
     if (!isLayerSelected(session_, layerId))
@@ -1725,6 +1729,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     bodyLayout->setContentsMargins(0, 0, 0, 0);
     bodyLayout->setSpacing(0);
     stack_ = new TimelineLayerStack(session_, *scrollBar_, body);
+    connect(stack_, &TimelineLayerStack::blankContextMenuRequested, this,
+            [this](QPoint globalPosition) { blankLayerContextMenu_->popup(globalPosition); });
     stack_->setMinimumWidth(layerColumnWidth_);
     columnHeaders_->setMinimumWidth(layerColumnWidth_);
     lanes_ = new TimelineLaneRegion(session_, *ruler_, *scrollBar_, body);

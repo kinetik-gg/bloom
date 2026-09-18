@@ -110,8 +110,9 @@ void TimelineEditor::createHeaderMenus() {
     snapAction_ = toggle(tr("Snap to Frames"), "timelineSnappingAction",
                          [this](bool checked) { setSnappingEnabled(checked); });
     view->addSeparator();
-    localAction(view, tr("Zoom to Fit"), QStringLiteral("timelineZoomToFitAction"),
-                QKeySequence(Qt::CTRL | Qt::Key_0), [this] { ruler_->zoomToFit(); });
+    auto* zoomToFit =
+        localAction(view, tr("Zoom to Fit"), QStringLiteral("timelineZoomToFitAction"),
+                    QKeySequence(Qt::CTRL | Qt::Key_0), [this] { ruler_->zoomToFit(); });
     localAction(
         view, tr("Zoom In"), QStringLiteral("timelineZoomInAction"), QKeySequence::ZoomIn,
         [this] { ruler_->zoomBy(1.25, (ruler_->width() - kit::px(kit::Size::Hairline)) / 2.0); });
@@ -170,12 +171,29 @@ void TimelineEditor::createHeaderMenus() {
     bar->addMenu(editMenu_, QStringLiteral("timelineEditButton"), false);
 
     auto* select = menu(tr("Select"), QStringLiteral("timelineSelectMenu"));
-    localAction(select, tr("All"), QStringLiteral("timelineSelectAllAction"),
-                QKeySequence::SelectAll, [this] { selectAllLayers(); });
-    localAction(select, tr("None"), QStringLiteral("timelineSelectNoneAction"),
-                QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A),
-                [this] { session_.clearSelection(); });
+    auto* selectAll =
+        localAction(select, tr("Select All"), QStringLiteral("timelineSelectAllAction"),
+                    QKeySequence::SelectAll, [this] { selectAllLayers(); });
+    auto* selectNone = localAction(
+        select, tr("Deselect All"), QStringLiteral("timelineSelectNoneAction"),
+        QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A), [this] { session_.clearSelection(); });
     bar->addMenu(select, QStringLiteral("timelineSelectButton"));
+    // Reuse the existing actions and Add popup: one command/checked state/shortcut owner.
+    // The empty-table menu is contextual, not another copy of the header's menu hierarchy.
+    blankLayerContextMenu_ = kit::makeMenu(this);
+    blankLayerContextMenu_->setObjectName("timelineBlankLayerContextMenu");
+    blankLayerContextMenu_->addMenu(add);
+    blankLayerContextMenu_->addSeparator();
+    blankLayerContextMenu_->addActions({keyframesAction_, graphAction_, snapAction_, zoomToFit});
+    blankLayerContextMenu_->addSeparator();
+    blankLayerContextMenu_->addActions({selectAll, selectNone});
+    connect(blankLayerContextMenu_, &QMenu::aboutToShow, this, [this, add, selectAll, selectNone] {
+        refreshHeaderMenus();
+        add->menuAction()->setEnabled(session_.composition() != nullptr);
+        selectAll->setEnabled(stack_->rowCount() > 0);
+        selectNone->setEnabled(!session_.selectedNodes().empty());
+    });
+    connect(select, &QMenu::aboutToShow, this, &TimelineEditor::refreshHeaderMenus);
     connect(editMenu_, &QMenu::aboutToShow, this, &TimelineEditor::refreshHeaderMenus);
     connect(&session_, &CompositionSession::selectionChanged, this,
             &TimelineEditor::refreshHeaderMenus);

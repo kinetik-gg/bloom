@@ -362,6 +362,10 @@ These controls appear only in View, with no header tool buttons. Header menu ord
 Select, with text-only menu buttons and no caret indicators; the composition dropdown is absent.
 These are the unchanged shared KMenuButton/EditorChromeRowSpec controls and application theme used
 by Assets, Viewer and Nodes: no Timeline-specific menu painting, stylesheet or background palette.
+Right-clicking empty layer-table space opens a shared kit popup with the existing Add submenu,
+then direct Keyframes, Graph Editor, Snap to Frames, Zoom to Fit, Select All and Deselect All actions.
+There are no View/Select wrapper submenus or selection-only layer commands; action objects and
+checked state are shared with the header. Opening the popup never changes the layer selection.
 Timeline's fullscreen button sits at the right edge of the layer-table header, beside the divider.
 Keys off hides both key lanes and collapsed summary
 glyphs. Empty key-lane labels paint no chip. Lane snapping is `snapping && !Shift`.
