@@ -5,10 +5,13 @@
 
 #include <compare>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace bloom::document {
 
@@ -101,6 +104,21 @@ struct CommitResult {
     [[nodiscard]] bool committed() const noexcept { return status == CommitStatus::Committed; }
 };
 
+enum class DocumentEventKind : std::uint8_t {
+    RevisionChanged,
+    Rejected,
+};
+
+struct DocumentEvent final {
+    DocumentEventKind kind = DocumentEventKind::Rejected;
+    CommitStatus status = CommitStatus::InvalidDraft;
+    Revision beforeRevision;
+    Revision afterRevision;
+};
+
+using DocumentObserverId = std::uint64_t;
+using DocumentObserver = std::function<void(const DocumentEvent&)>;
+
 class Document final {
   public:
     explicit Document(Project initialProject);
@@ -117,11 +135,18 @@ class Document final {
     [[nodiscard]] CommitResult restore(Revision expectedRevision,
                                        const Snapshot& historicalSnapshot);
 
+    [[nodiscard]] DocumentObserverId addObserver(DocumentObserver observer);
+    void removeObserver(DocumentObserverId observerId) noexcept;
+
   private:
+    void notify(const DocumentEvent& event) const noexcept;
+
     mutable std::mutex mutex_;
     std::shared_ptr<const detail::DocumentIdentity> identity_;
     Revision revision_;
     std::shared_ptr<const detail::DocumentState> state_;
+    mutable std::vector<std::pair<DocumentObserverId, DocumentObserver>> observers_;
+    mutable DocumentObserverId nextObserverId_ = 1;
 };
 
 } // namespace bloom::document

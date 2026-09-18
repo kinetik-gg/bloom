@@ -6,7 +6,8 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
-#include <bloom/ui/timeline_frame_math.hpp>
+
+#include <bloom/host/frame_range_runner.hpp>
 
 #include <bloom/document/project.hpp>
 #include <bloom/render/image.hpp>
@@ -362,20 +363,7 @@ std::uint64_t FrameExportController::totalFrameCount() const noexcept {
 std::filesystem::path
 FrameExportController::sequenceFramePath(const std::filesystem::path& destination,
                                          const std::uint64_t index, const std::uint64_t lastIndex) {
-    // At least four digits -- the sequence convention every compositor and every shell glob already
-    // expects -- widened only when the range itself needs more, so a frame number is never
-    // truncated and the names of one range always sort lexicographically in frame order.
-    auto digits = std::string(std::to_string(lastIndex)).size();
-    digits = std::max<std::size_t>(digits, 4);
-    std::string number = std::to_string(index);
-    if (number.size() < digits) {
-        number.insert(0, digits - number.size(), '0');
-    }
-    auto stem = destination.stem().string();
-    if (stem.empty()) {
-        stem = "frame";
-    }
-    return destination.parent_path() / (stem + "." + number + destination.extension().string());
+    return host::FrameRangeRunnerV1::sequenceFramePath(destination, index, lastIndex);
 }
 
 void FrameExportController::requestExport() {
@@ -690,8 +678,12 @@ void FrameExportController::advanceSequence() {
                 .arg(QString::fromStdString(sequence_->destination.parent_path().string())));
         return;
     }
-    const auto time =
-        frameTimeForIndex(sequence_->frameRate, sequence_->duration, sequence_->nextFrame);
+    const host::FrameRangeRequestV1 frameRequest{.destination = sequence_->destination,
+                                                 .firstFrame = sequence_->firstFrame,
+                                                 .lastFrame = sequence_->lastFrame,
+                                                 .frameRate = sequence_->frameRate,
+                                                 .duration = sequence_->duration};
+    const auto time = host::FrameRangeRunnerV1::timeForFrame(frameRequest, sequence_->nextFrame);
     if (!time.has_value()) {
         finishSequence(
             FrameExportOutcome::Failed,

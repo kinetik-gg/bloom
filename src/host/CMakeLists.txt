@@ -7,6 +7,7 @@ target_sources(
         copy_publication.cpp
         font_catalogue.cpp
         frame_export_publication.cpp
+        frame_range_runner.cpp
         output_analysis_attempt_runner.cpp
         project_session.cpp
         publication_coordinator.cpp
@@ -23,6 +24,7 @@ target_sources(
             include/bloom/host/copy_async_io.hpp
             include/bloom/host/copy_publication.hpp
             include/bloom/host/frame_export_publication.hpp
+            include/bloom/host/frame_range_runner.hpp
             include/bloom/host/font_catalogue.hpp
             include/bloom/host/output_analysis_attempt_runner.hpp
             include/bloom/host/project_session.hpp
@@ -115,6 +117,15 @@ if(BUILD_TESTING)
         NAME bloom.host.bloom-neutral-profile
         COMMAND bloom_host_bloom_neutral_profile_test --root "${PROJECT_SOURCE_DIR}"
         LABELS unit host color quality
+    )
+
+    add_executable(bloom_host_frame_range_runner_test tests/frame_range_runner_tests.cpp)
+    target_link_libraries(bloom_host_frame_range_runner_test PRIVATE bloom_host)
+    bloom_enable_warnings(bloom_host_frame_range_runner_test)
+    bloom_add_test(
+        NAME bloom.host.frame-range-runner
+        COMMAND bloom_host_frame_range_runner_test
+        LABELS unit host rendering
     )
 
     # Gated Linux-only exactly as bloom.project.staged_save is gated: this exercises a real

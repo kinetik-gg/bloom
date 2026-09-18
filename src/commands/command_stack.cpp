@@ -66,22 +66,85 @@ CommandResult resultForCommit(CommandAction action, std::string label,
 CommandStack::CommandStack(document::Document& document)
     : trackedRevision_(document.snapshot().revision()), document_(document) {}
 
+CommandObserverId CommandStack::addObserver(CommandObserver observer) {
+    if (!observer) {
+        return 0;
+    }
+    const std::scoped_lock lock(observerMutex_);
+    if (nextObserverId_ == 0) {
+        return 0;
+    }
+    const auto id = nextObserverId_++;
+    if (nextObserverId_ == 0) {
+        nextObserverId_ = 0;
+    }
+    observers_.emplace_back(id, std::move(observer));
+    return id;
+}
+
+void CommandStack::removeObserver(const CommandObserverId observerId) noexcept {
+    if (observerId == 0) {
+        return;
+    }
+    const std::scoped_lock lock(observerMutex_);
+    std::erase_if(observers_,
+                  [observerId](const auto& entry) { return entry.first == observerId; });
+}
+
+void CommandStack::notify(const CommandResult& result) const noexcept {
+    std::vector<CommandObserver> callbacks;
+    try {
+        const std::scoped_lock lock(observerMutex_);
+        callbacks.reserve(observers_.size());
+        for (const auto& [id, observer] : observers_) {
+            static_cast<void>(id);
+            callbacks.push_back(observer);
+        }
+    } catch (...) {
+        return;
+    }
+
+    const auto send = [&callbacks, &result](const CommandEventKind kind) noexcept {
+        for (const auto& callback : callbacks) {
+            try {
+                callback(CommandEvent{.kind = kind, .result = result});
+            } catch (...) {
+                // Observers cannot change the command outcome or interrupt history publication.
+                static_cast<void>(0);
+            }
+        }
+    };
+    if (!result.succeeded()) {
+        send(CommandEventKind::Rejected);
+        return;
+    }
+    if (result.changed()) {
+        send(CommandEventKind::RevisionChanged);
+    }
+    send(CommandEventKind::HistoryChanged);
+}
+
 CommandResult CommandStack::execute(Transaction&& transaction) {
     const document::Snapshot before = document_.snapshot();
     if (const auto stale =
             staleResult(CommandAction::Execute, std::string(transaction.label()), before)) {
-        return *stale;
+        auto result = *stale;
+        notify(result);
+        return result;
     }
     if (transaction.expectedRevision().has_value() &&
         *transaction.expectedRevision() != before.revision()) {
         auto result = makeResult(CommandAction::Execute, CommandStatus::StaleRevision, before,
                                  std::string(transaction.label()));
         result.expectedRevision = transaction.expectedRevision();
+        notify(result);
         return result;
     }
     if (transaction.empty()) {
-        return makeResult(CommandAction::Execute, CommandStatus::NoChange, before,
-                          std::string(transaction.label()));
+        auto result = makeResult(CommandAction::Execute, CommandStatus::NoChange, before,
+                                 std::string(transaction.label()));
+        notify(result);
+        return result;
     }
 
     document::Draft draft = document_.draft(before);
@@ -105,6 +168,7 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
                 result.operationFailures.push_back(
                     {operationIndex, std::string(operation->typeId()), std::move(issue)});
             }
+            notify(result);
             return result;
         }
         for (auto& output : operationResult.outputs) {
@@ -119,13 +183,16 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
         auto result = makeResult(CommandAction::Execute, CommandStatus::NoChange, before,
                                  std::string(transaction.label()));
         result.outputs = std::move(outputs);
+        notify(result);
         return result;
     }
 
     document::CommitResult commitResult = document_.commit(before.revision(), std::move(draft));
     if (!commitResult.committed() || !commitResult.snapshot.has_value()) {
-        return resultForCommit(CommandAction::Execute, std::string(transaction.label()), before,
-                               std::move(commitResult));
+        auto result = resultForCommit(CommandAction::Execute, std::string(transaction.label()),
+                                      before, std::move(commitResult));
+        notify(result);
+        return result;
     }
 
     document::Snapshot after = *commitResult.snapshot;
@@ -136,23 +203,31 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     history_.push_back({std::string(transaction.label()), before, after});
     cursor_ = history_.size();
     trackedRevision_ = after.revision();
+    notify(result);
     return result;
 }
 
 CommandResult CommandStack::undo() {
     const document::Snapshot before = document_.snapshot();
     if (!canUndo()) {
-        return makeResult(CommandAction::Undo, CommandStatus::NothingToUndo, before);
+        auto result = makeResult(CommandAction::Undo, CommandStatus::NothingToUndo, before);
+        notify(result);
+        return result;
     }
 
     const HistoryEntry& entry = history_[cursor_ - 1];
     if (const auto stale = staleResult(CommandAction::Undo, entry.label, before)) {
-        return *stale;
+        auto result = *stale;
+        notify(result);
+        return result;
     }
 
     document::CommitResult restoreResult = document_.restore(before.revision(), entry.before);
     if (!restoreResult.committed() || !restoreResult.snapshot.has_value()) {
-        return resultForCommit(CommandAction::Undo, entry.label, before, std::move(restoreResult));
+        auto result =
+            resultForCommit(CommandAction::Undo, entry.label, before, std::move(restoreResult));
+        notify(result);
+        return result;
     }
 
     const document::Revision restoredRevision = restoreResult.snapshot->revision();
@@ -160,23 +235,31 @@ CommandResult CommandStack::undo() {
         resultForCommit(CommandAction::Undo, entry.label, before, std::move(restoreResult));
     --cursor_;
     trackedRevision_ = restoredRevision;
+    notify(result);
     return result;
 }
 
 CommandResult CommandStack::redo() {
     const document::Snapshot before = document_.snapshot();
     if (!canRedo()) {
-        return makeResult(CommandAction::Redo, CommandStatus::NothingToRedo, before);
+        auto result = makeResult(CommandAction::Redo, CommandStatus::NothingToRedo, before);
+        notify(result);
+        return result;
     }
 
     const HistoryEntry& entry = history_[cursor_];
     if (const auto stale = staleResult(CommandAction::Redo, entry.label, before)) {
-        return *stale;
+        auto result = *stale;
+        notify(result);
+        return result;
     }
 
     document::CommitResult restoreResult = document_.restore(before.revision(), entry.after);
     if (!restoreResult.committed() || !restoreResult.snapshot.has_value()) {
-        return resultForCommit(CommandAction::Redo, entry.label, before, std::move(restoreResult));
+        auto result =
+            resultForCommit(CommandAction::Redo, entry.label, before, std::move(restoreResult));
+        notify(result);
+        return result;
     }
 
     const document::Revision restoredRevision = restoreResult.snapshot->revision();
@@ -184,6 +267,7 @@ CommandResult CommandStack::redo() {
         resultForCommit(CommandAction::Redo, entry.label, before, std::move(restoreResult));
     ++cursor_;
     trackedRevision_ = restoredRevision;
+    notify(result);
     return result;
 }
 
@@ -202,9 +286,14 @@ std::optional<std::string_view> CommandStack::redoLabel() const noexcept {
 }
 
 void CommandStack::clear() {
+    if (history_.empty() && cursor_ == 0) {
+        return;
+    }
     history_.clear();
     cursor_ = 0;
-    trackedRevision_ = document_.snapshot().revision();
+    const auto snapshot = document_.snapshot();
+    trackedRevision_ = snapshot.revision();
+    notify(makeResult(CommandAction::Execute, CommandStatus::NoChange, snapshot));
 }
 
 std::optional<CommandResult> CommandStack::staleResult(CommandAction action, std::string label,
