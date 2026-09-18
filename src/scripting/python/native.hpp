@@ -42,6 +42,8 @@ class NativeHost final {
     }
     [[nodiscard]] bool cancel(std::uint64_t id);
     [[nodiscard]] nb::dict context() const;
+    // The same values, in the language-neutral shape contextual arguments are filled from.
+    [[nodiscard]] OperationContext operationContext() const;
 
     std::function<PythonContext()> contextProvider;
     std::function<bool()> cancelProvider;

@@ -10,7 +10,21 @@ def snapshot() -> Mapping:
     return _state.freeze(_state.host().snapshot())
 
 
-@dataclass(frozen=True)
+_LABELS = {"project": "Project", "compositions": "Composition", "assets": "Asset",
+           "layers": "Layer", "nodes": "Node", "parameters": "Parameter", "curves": "Curve"}
+
+
+def _label(record, kind) -> str:
+    """The artist-facing name of a record: its own name, or the leaf of its type."""
+    name = record.get("name")
+    if not name and kind == "nodes":
+        name = record.get("type_id", "").rsplit(".", 1)[-1].replace("-", " ").title()
+    if not name and kind == "parameters":
+        name = record.get("schema_key", "")
+    return name or ""
+
+
+@dataclass(frozen=True, repr=False)
 class Proxy:
     id: int
     kind: str
@@ -20,6 +34,14 @@ class Proxy:
     def __post_init__(self):
         if self._owner is None:
             object.__setattr__(self, "_owner", _state.host())
+
+    def __repr__(self):
+        label = _LABELS.get(self.kind, self.kind.rstrip("s").capitalize())
+        try:
+            name = _label(self.resolve(), self.kind)
+        except StaleObjectError:
+            return f"<{label} {self.id} (stale)>"
+        return f"<{label} {self.id} {name!r}>" if name else f"<{label} {self.id}>"
 
     def resolve(self) -> Mapping:
         if self._owner is not _state.host():
@@ -85,6 +107,10 @@ class Collection(Sequence):
 
 compositions = Collection("compositions")
 assets = Collection("assets")
+
+
+def layers(composition) -> Collection:
+    return Collection("layers", composition)
 
 
 def nodes(composition) -> Collection:

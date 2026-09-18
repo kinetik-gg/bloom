@@ -23,6 +23,42 @@ The build-tree package is in `build/<configuration>/python`; an external matchin
 import it when that directory is explicitly placed on its import path. The install destination is
 `lib/bloom/python`. `.pyi` files and `py.typed` describe the public package.
 
+## First five minutes
+
+Open the Script editor, or run `bloom-cli python`, and type these lines. Nothing here names a
+composition or a time: both come from what you are looking at.
+
+```python
+bloom.context                                   # <bloom.context project=... composition=... >
+bloom.ops.layer.add_solid("Red", (1, 0, 0, 1))  # a red solid in the current composition
+help(bloom.ops.layer.add_solid)                 # arguments, defaults and an example call
+```
+
+Key the solid's position X across the first second as one undo step, render a frame, and undo:
+
+```python
+position = bloom.data.nodes(bloom.context.composition)[-1].parameters["position"]
+with bloom.transactions.group("Slide the solid"):
+    bloom.ops.animation.create_for_parameter(position, time=0)
+    bloom.ops.animation.set_keyframe_at_time_for_parameter_component(position, 0, 200.0, time=0)
+    bloom.ops.animation.set_keyframe_at_time_for_parameter_component(position, 0, 1200.0, time=24)
+
+bloom.render.frame(12, out="frame-12.png")
+bloom.transactions.undo()
+```
+
+`examples/scripting/first_five_minutes.py` is the same session as a runnable script:
+`bloom-cli run examples/scripting/first_five_minutes.py`.
+
+If a call is missing something, the rejection says which argument, what it expected and a call you
+can paste:
+
+```
+>>> bloom.ops.layer.add_solid()
+OperationError: bloom.layer.add-solid: argument 'name' is required.
+Example: bloom.ops.layer.add_solid(name="Red", color=(1, 0, 0, 1))
+```
+
 ## Read data and discover operations
 
 ```python
@@ -39,6 +75,10 @@ for operation_id, operation in bloom.ops.registry().items():
     print(operation_id, operation.schema)
 ```
 
+Proxies print as what they are: `<Composition 1 'Composition 1'>`, `<Node 12 'Solid'>`, and
+`<Node 12 (stale)>` once the object is gone. `repr(bloom.context)` summarises the project,
+composition, selection size and time.
+
 `bloom.data.snapshot()` returns an immutable revisioned projection. Collections such as
 `bloom.data.compositions`, `bloom.data.nodes(composition)` and
 `bloom.data.parameters(composition)` return stable-ID proxies. `collection.get(id)` resolves by ID;
@@ -46,13 +86,33 @@ integer indexing is only a collection position. A removed object raises `StaleOb
 `id` and `revision`. Assigning to a proxy or snapshot does not change the project.
 
 Every registered operation has a callable under `bloom.ops`: hyphens become underscores, so
-`bloom.layer.add-solid` is `bloom.ops.layer.add_solid`. Calls accept schema-defined keyword arguments.
-Python keywords receive a trailing underscore (`bloom.asset.import` becomes
-`bloom.ops.asset.import_`). IDs may be integers or live proxies. The registry has 75 IDs and eleven
-implemented factories. A known operation without an adapter remains discoverable and raises `OperationError`;
-its `diagnostics` retain the host code, operation and argument. Parameter animation, component keyframes and direct node removal use the owning registry
-adapters shared by Python, JSON scripts and MCP. `bloom.ui`, `bloom.addons`, `bloom.props` and contribution types are reserved stubs whose
-unsupported access raises `NotImplementedError` with ADR 0022 and ADR 0012 references.
+`bloom.layer.add-solid` is `bloom.ops.layer.add_solid`. Python keywords receive a trailing
+underscore (`bloom.asset.import` becomes `bloom.ops.asset.import_`). Every registered ID has a
+complete argument schema and a working factory, so everything you can discover you can call.
+
+Calls take positional arguments in schema order, keywords, or both. IDs may be integers or live
+proxies; vectors and colours may be tuples or lists; a time may be a whole frame, a `Fraction`, a
+float or an exact `(numerator, denominator)` pair.
+
+```python
+bloom.ops.layer.add_solid("Red", (1, 0, 0, 1))
+bloom.ops.layer.add_solid(name="Red", color=[1, 0, 0, 1], position=(960, 540))
+bloom.ops.composition.set_duration(Fraction(3, 2))
+```
+
+Arguments that name what you are already looking at default from `bloom.context` when you omit
+them: `composition`, `time`, and `layer`/`selection` for operations that edit the selection. They
+stay keyword-only, so an explicit target always reads as one. The schema carries the same
+`contextual` flag that the CLI and MCP clients use, so all three apply identical defaults, and
+`help()` names the context value each one falls back to. When the session cannot answer — a
+headless run has no selection — the rejection says which `bloom.context` value was missing rather
+than reporting a bare missing keyword.
+
+`help(bloom.ops.layer.add_solid)` prints the signature, every argument with its kind, whether it is
+required, optional or filled from context, and an example call. `dir(bloom.ops)` lists the operation
+families and `dir(bloom.ops.layer)` the operations in one. `bloom.ui`, `bloom.addons`, `bloom.props`
+and contribution types are reserved stubs whose unsupported access raises `NotImplementedError` with
+ADR 0022 and ADR 0012 references.
 
 ## Transactions and undo
 

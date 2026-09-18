@@ -13,6 +13,9 @@ bloom-cli render [--project <file>] (--frame N | --range A-B) \
 
 `run` accepts a JSON array of `{ "op": "<stable-id>", "args": { ... } }` transactions. Each
 transaction is validated against the operation registry and receives an expected current revision.
+Arguments the registry marks contextual -- `composition`, `time`, `layer`, `selection` -- may be
+omitted; the session fills them exactly as the Python and MCP clients do, so a headless step that
+names no composition edits the project's first one.
 Malformed arguments, unknown IDs, stale revisions, and command rejection produce a typed diagnostic
 and a non-zero exit status. The run starts from a new in-memory session; use `new` or the facade's
 Save As operation when a durable project is required.

@@ -30,8 +30,8 @@ Use `tools/call` with `name` and `arguments`:
 
 | Tool | Arguments and result |
 | --- | --- |
-| `query` | `kind`: project, compositions, nodes, parameters, assets or operations; nodes/parameters also need `composition`. Returns a revision and read projection, including constant parameter values, curve/driver references, or registry descriptors. |
-| `transact` | `expectedRevision`, an `operations` array of `{op,args}`, and optional `label`. Returns one atomic command result, created IDs and structured diagnostics. |
+| `query` | `kind`: project, compositions, nodes, parameters, assets or operations; nodes/parameters also need `composition`. Returns a revision and read projection, including constant parameter values, curve/driver references, or registry descriptors. An operations record carries every argument's `kind`, `required`, `contextual`, `context` and `summary`, plus a pasteable `example` call. |
+| `transact` | `expectedRevision`, an `operations` array of `{op,args}`, and optional `label`. Returns one atomic command result, created IDs and structured diagnostics. Arguments the descriptor marks `contextual` may be omitted and are filled from the session. |
 | `render` | `composition`, `frame` or inclusive `first`/`last`, `preset`, `destination`. Returns published frame count, preservation report, paths and SHA-256 file digests. |
 | `export` | Render arguments plus optional `profile`, `audio` and `sampleRate`. Uses the existing MEDIA-4 composition runner for ProRes preview, DNxHR and PCM output. |
 | `events` | `sinceRevision`, optionally `afterSequence`. Returns revision-inclusive events, a sequence cursor and `resetRequired` when retained history cannot cover the cursor. |

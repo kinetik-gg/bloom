@@ -76,6 +76,39 @@ class Protocol(unittest.TestCase):
         self.assertGreaterEqual(len(ids), 75)
         self.assertEqual(len(ids), len(set(ids)))
         self.assertIn('bloom.data-block.remove', ids)
+        # Every id is constructible: it names its arguments, describes them, and publishes a
+        # pasteable example. An entry with no schema is an id an agent can see and never call.
+        for record in records:
+            self.assertTrue(record['arguments'], record['id'])
+            self.assertTrue(record['example'].startswith('bloom.ops.'), record['id'])
+            for argument in record['arguments']:
+                self.assertTrue(argument['summary'], f"{record['id']}.{argument['name']}")
+                self.assertEqual(argument['contextual'], argument['context'] != '')
+
+    def test_context_defaults_match_the_python_client(self):
+        """Omitted contextual arguments come from the session, exactly as they do in Python."""
+        responses = exchange([
+            INIT, READY,
+            tool(2, 'query', {'kind': 'operations'}),
+            tool(3, 'transact', {'expectedRevision': 0, 'operations': [
+                {'op': 'bloom.layer.add-solid', 'args': {'name': 'Red', 'color': [1, 0, 0, 1]}},
+                {'op': 'bloom.composition.set-name', 'args': {'name': 'From context'}}]}),
+            tool(4, 'query', {'kind': 'compositions'}),
+            tool(5, 'transact', {'expectedRevision': 1, 'operations': [
+                {'op': 'bloom.layer.set-enabled', 'args': {'enabled': False}}]})])
+        schema = next(record for record in responses[1]['result']['structuredContent']['records']
+                      if record['id'] == 'bloom.layer.add-solid')
+        composition = next(a for a in schema['arguments'] if a['name'] == 'composition')
+        self.assertTrue(composition['contextual'])
+        self.assertEqual(composition['context'], 'composition')
+        self.assertTrue(responses[2]['result']['structuredContent']['succeeded'])
+        self.assertEqual(responses[3]['result']['structuredContent']['records'][0]['name'],
+                         'From context')
+        # A headless session has no selection, so a layer argument stays unanswered and the
+        # rejection says which context value was missing.
+        rejected = responses[4]['result']['structuredContent']
+        self.assertFalse(rejected['succeeded'])
+        self.assertIn('bloom.context', rejected['diagnostics'][0]['message'])
 
     def test_hostile_requests(self):
         hostile = [

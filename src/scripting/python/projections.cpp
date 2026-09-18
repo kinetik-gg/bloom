@@ -90,6 +90,24 @@ nb::dict projectSnapshot(const document::Snapshot& snapshot) {
             nodes.append(record);
         }
         row["nodes"] = nodes;
+        nb::list layers;
+        for (const auto& boundary : composition.graph().layerOutputs()) {
+            nb::dict record;
+            record["id"] = boundary.layerId.value();
+            record["name"] = boundary.name;
+            record["node_id"] = boundary.nodeId.value();
+            record["enabled"] = boundary.enabled;
+            record["solo"] = boundary.solo;
+            record["locked"] = boundary.locked;
+            record["parent"] =
+                boundary.parent.has_value() ? nb::cast(boundary.parent->value()) : nb::none();
+            record["in"] =
+                nb::make_tuple(boundary.inPoint.numerator(), boundary.inPoint.denominator());
+            record["out"] =
+                nb::make_tuple(boundary.outPoint.numerator(), boundary.outPoint.denominator());
+            layers.append(record);
+        }
+        row["layers"] = layers;
         nb::list parameters;
         for (const auto& parameter : composition.parameters().records()) {
             nb::dict record;

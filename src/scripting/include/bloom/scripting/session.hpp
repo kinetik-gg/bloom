@@ -16,11 +16,19 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
+#include <vector>
 
 namespace bloom::scripting {
 
 class EventStream;
+
+// The layers a node selection names. Selecting a layer selects its Layer Output boundary node, and
+// nothing else in the graph carries a LayerId, so anything else in the selection contributes none.
+[[nodiscard]] std::vector<std::uint64_t> selectedLayers(const document::Snapshot& snapshot,
+                                                        std::uint64_t composition,
+                                                        std::span<const std::uint64_t> selection);
 
 struct SessionDiagnostic final {
     std::string code;
@@ -122,6 +130,11 @@ class Session final {
     [[nodiscard]] SessionCommandResult
     executeJsonOperation(std::string_view operation, const Arguments& arguments,
                          const std::optional<std::string>& label = {});
+
+    // The values contextual arguments fall back to for a client that has no editor selection of
+    // its own: the project, its first composition, an empty selection and the zero time. A live
+    // authoring surface passes its own context instead.
+    [[nodiscard]] OperationContext operationContext() const;
 
     [[nodiscard]] SessionSaveResult save();
     [[nodiscard]] SessionSaveResult saveAs(const std::filesystem::path& path);

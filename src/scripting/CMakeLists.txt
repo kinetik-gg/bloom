@@ -51,6 +51,14 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_scripting_live_session_test)
     bloom_add_test(NAME bloom.scripting.live-session COMMAND bloom_scripting_live_session_test
         LABELS unit scripting host commands document)
+    add_executable(bloom_scripting_operation_schema_test tests/operation_schema_tests.cpp)
+    target_link_libraries(bloom_scripting_operation_schema_test PRIVATE bloom_scripting)
+    bloom_enable_warnings(bloom_scripting_operation_schema_test)
+    bloom_add_test(
+        NAME bloom.scripting.operation-schemas
+        COMMAND bloom_scripting_operation_schema_test
+        LABELS unit scripting commands document
+    )
     add_executable(bloom_scripting_facade_test tests/facade_tests.cpp)
     target_link_libraries(bloom_scripting_facade_test PRIVATE bloom_scripting)
     bloom_enable_warnings(bloom_scripting_facade_test)

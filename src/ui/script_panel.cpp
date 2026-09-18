@@ -42,8 +42,11 @@ ScriptPanel::ScriptPanel(std::shared_ptr<ScriptPanelRuntime> runtime, QWidget* p
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    output_ = new kit::KLabel(QStringLiteral("Python • bloom is pre-imported\n"
-                                             "Use bloom.tasks for long work."),
+    // The first thing the panel says is the first thing to type. Completion is not available in
+    // a single-line input, so the hint names a call that works and the help that explains it.
+    output_ = new kit::KLabel(QStringLiteral("Python • bloom is pre-imported • try "
+                                             "bloom.ops.layer.add_solid(\"Red\", (1, 0, 0, 1)) or "
+                                             "help(bloom.ops.layer.add_solid)"),
                               scroll, kit::TypeRole::Value);
     output_->setObjectName(QStringLiteral("scriptOutput"));
     output_->setTextFormat(Qt::PlainText);
