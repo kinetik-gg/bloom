@@ -4,6 +4,7 @@ target_sources(
     bloom_output
     PRIVATE
         bound_output_analysis.cpp
+        flat_exr_options.cpp
         flat_exr_export_write.cpp
         flat_exr_output_adapter.cpp
         flat_exr_preset_contract.hpp
@@ -32,6 +33,7 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/output/flat_exr_options.hpp
             include/bloom/output/flat_exr_export_write.hpp
             include/bloom/output/flat_exr_output_adapter.hpp
             include/bloom/output/flat_exr_reopen_verifier.hpp

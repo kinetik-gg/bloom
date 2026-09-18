@@ -167,7 +167,8 @@ checkAttributeValues(const Imf::Header& header, const Imath::Box2i& expectedData
                      const Imath::Box2i& expectedDisplayWindow,
                      const std::uint32_t expectedPixelAspectBits,
                      const std::string_view expectedColorSpaceId,
-                     const std::array<std::uint32_t, 8>& expectedChromaticityBits) noexcept {
+                     const std::array<std::uint32_t, 8>& expectedChromaticityBits,
+                     const output::FlatExrCompressionV1 compression) noexcept {
     using output::FlatExrVerifyErrorCodeV1;
     if (header.dataWindow() != expectedDataWindow) {
         return ::diag(FlatExrVerifyErrorCodeV1::WindowMismatch, "dataWindow");
@@ -178,7 +179,8 @@ checkAttributeValues(const Imf::Header& header, const Imath::Box2i& expectedData
     if (header.lineOrder() != Imf::INCREASING_Y) {
         return ::diag(FlatExrVerifyErrorCodeV1::AttributeValueMismatch, "lineOrder");
     }
-    if (header.compression() != Imf::ZIP_COMPRESSION) {
+    if (header.compression() !=
+        static_cast<Imf::Compression>(output::detail::flatExrLibraryCompressionV1(compression))) {
         return ::diag(FlatExrVerifyErrorCodeV1::AttributeValueMismatch, "compression");
     }
     if (std::bit_cast<std::uint32_t>(header.pixelAspectRatio()) != expectedPixelAspectBits) {
@@ -337,16 +339,20 @@ FlatExrVerifyResultV1 FlatExrRgba32fLinRec709SceneReopenVerifierV1::verify(
             return FlatExrVerifyResultV1::failed(
                 ::diag(FlatExrVerifyErrorCodeV1::InternalInvariant));
         }
+        const auto* exr = report->exr().get();
+        const auto outputId =
+            exr ? std::string_view(exr->options().outputColorSpaceId)
+                : std::string_view(frame->identity().colorIntent.workingColorSpaceId);
+        const auto compression = exr ? exr->options().compression : FlatExrCompressionV1::Zip;
         const auto expectedChromaticities =
-            output::detail::flatExrChromaticityBitsForWorkingColorSpaceV1(
-                frame->identity().colorIntent.workingColorSpaceId);
+            output::detail::flatExrChromaticityBitsForWorkingColorSpaceV1(outputId);
         if (!expectedChromaticities.has_value()) {
             return FlatExrVerifyResultV1::failed(
                 ::diag(FlatExrVerifyErrorCodeV1::InternalInvariant));
         }
         if (const auto valueDiag = ::checkAttributeValues(
-                header, *expectedDataBox, *expectedDisplayBox, expectedRounded->bits,
-                frame->identity().colorIntent.workingColorSpaceId, *expectedChromaticities)) {
+                header, *expectedDataBox, *expectedDisplayBox, expectedRounded->bits, outputId,
+                *expectedChromaticities, compression)) {
             return FlatExrVerifyResultV1::failed(*valueDiag);
         }
         if (const auto channelDiag = ::checkChannelList(header)) {
@@ -407,6 +413,7 @@ FlatExrVerifyResultV1 FlatExrRgba32fLinRec709SceneReopenVerifierV1::verify(
             std::max<std::size_t>(1, kOutputAdapterMaximumStreamingChunkBytesV1 /
                                          std::max<std::size_t>(rowStrideBytes, 1)));
         const auto sourcePixels = frame->processImage().pixels();
+        std::vector<std::array<float, 4>> transformed(exr ? static_cast<std::size_t>(width) : 0);
         const auto sourceOriginY = descriptor->dataWindow().originY();
         std::int64_t y = dataBox.min.y;
         std::uint64_t completedScanlines = 0;
@@ -427,15 +434,24 @@ FlatExrVerifyResultV1 FlatExrRgba32fLinRec709SceneReopenVerifierV1::verify(
                                              static_cast<std::size_t>(width);
                 const auto destRowOffset = static_cast<std::size_t>(rowY - dataBox.min.y) *
                                            static_cast<std::size_t>(width);
+                if (exr && !exr->apply(sourcePixels.subspan(sourceRowOffset,
+                                                            static_cast<std::size_t>(width)),
+                                       transformed))
+                    return FlatExrVerifyResultV1::failed(
+                        ::diag(FlatExrVerifyErrorCodeV1::SampleMismatch));
                 for (std::uint64_t x = 0; x < width; ++x) {
                     const auto& sourcePixel =
                         sourcePixels[sourceRowOffset + static_cast<std::size_t>(x)];
-                    const std::array<std::uint32_t, 4> expectedBits{
+                    std::array<std::uint32_t, 4> expectedBits{
                         std::bit_cast<std::uint32_t>(sourcePixel.red()),
                         std::bit_cast<std::uint32_t>(sourcePixel.green()),
                         std::bit_cast<std::uint32_t>(sourcePixel.blue()),
                         std::bit_cast<std::uint32_t>(sourcePixel.alpha()),
                     };
+                    if (exr)
+                        for (std::size_t c = 0; c < 4; ++c)
+                            expectedBits[c] = std::bit_cast<std::uint32_t>(
+                                transformed[static_cast<std::size_t>(x)][c]);
                     const auto pixelIndex = destRowOffset + static_cast<std::size_t>(x);
                     for (std::uint8_t channel = 0; channel < 4U; ++channel) {
                         if (componentBits[pixelIndex * 4U + channel] != expectedBits[channel]) {
@@ -459,6 +475,7 @@ FlatExrVerifyResultV1 FlatExrRgba32fLinRec709SceneReopenVerifierV1::verify(
                               static_cast<std::int32_t>(header.displayWindow().min.y),
                               static_cast<std::int32_t>(header.displayWindow().max.x),
                               static_cast<std::int32_t>(header.displayWindow().max.y)},
+            .compression = compression,
             .pixelAspectRatioBits = std::bit_cast<std::uint32_t>(header.pixelAspectRatio()),
             .chromaticityBits =
                 [&] {

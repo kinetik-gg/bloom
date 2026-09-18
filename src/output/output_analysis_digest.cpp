@@ -286,6 +286,12 @@ computeOutputAnalysisDigestV1(const ProcessFrameSemanticIdentityV1& processIdent
             OutputAnalysisDigestErrorCodeV1::ResourceLimitExceeded);
     }
 
+    if (report.preset == OutputPresetV1::FlatExrRgba32fLinRec709SceneV1 &&
+        report.facets[2].stableCode == OutputFacetStableCodeV1::ExrOutputColorTransform &&
+        !targetDependencyMatches(report.facets[10].targetDescriptor,
+                                 processFrame.identity().colorIntent.ocioConfigRevision))
+        return OutputAnalysisDigestV1Result::failure(
+            OutputAnalysisDigestErrorCodeV1::TargetDependencyRevisionMismatch);
     const auto presetIdentity = outputPresetIdentityV1(report.preset);
     if (!presetIdentity) {
         return OutputAnalysisDigestV1Result::failure(

@@ -49,6 +49,7 @@
 #include <optional>
 #include <string>
 #include <system_error>
+#include <vector>
 
 namespace {
 
@@ -192,8 +193,14 @@ FlatExrWriteResultV1 FlatExrWriteResultV1::failed(const FlatExrWriteErrorCodeV1 
 
 FlatExrWriteResultV1 FlatExrRgba32fLinRec709SceneWriterV1::write(
     const runtime::ProcessFrame& frame, const std::filesystem::path& destination,
-    const runtime::CancellationToken& cancellation,
-    const FlatExrWriteProgressCallbackV1& progress) const noexcept {
+    const runtime::CancellationToken& cancellation, const FlatExrWriteProgressCallbackV1& progress,
+    const PreparedFlatExrOutputV1* output) const noexcept {
+    if (output && !output->matches(frame.identity().colorIntent))
+        return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination, false);
+    const auto outputId = output
+                              ? std::string_view(output->options().outputColorSpaceId)
+                              : std::string_view(frame.identity().colorIntent.workingColorSpaceId);
+    const auto compression = output ? output->options().compression : FlatExrCompressionV1::Zip;
     const auto& image = frame.processImage();
     if (!image.isValid()) {
         return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination, false);
@@ -228,16 +235,16 @@ FlatExrWriteResultV1 FlatExrRgba32fLinRec709SceneWriterV1::write(
 
     bool destinationCreated = false;
     try {
-        Imf::Header header(geometry->displayWindow, geometry->dataWindow,
-                           geometry->pixelAspectRatio, Imath::V2f(0.0F, 0.0F), 1.0F,
-                           Imf::INCREASING_Y, Imf::ZIP_COMPRESSION);
+        Imf::Header header(
+            geometry->displayWindow, geometry->dataWindow, geometry->pixelAspectRatio,
+            Imath::V2f(0.0F, 0.0F), 1.0F, Imf::INCREASING_Y,
+            static_cast<Imf::Compression>(detail::flatExrLibraryCompressionV1(compression)));
         header.channels().insert("R", Imf::Channel(Imf::FLOAT));
         header.channels().insert("G", Imf::Channel(Imf::FLOAT));
         header.channels().insert("B", Imf::Channel(Imf::FLOAT));
         header.channels().insert("A", Imf::Channel(Imf::FLOAT));
 
-        const auto chromaticities = detail::flatExrChromaticityBitsForWorkingColorSpaceV1(
-            frame.identity().colorIntent.workingColorSpaceId);
+        const auto chromaticities = detail::flatExrChromaticityBitsForWorkingColorSpaceV1(outputId);
         if (!chromaticities.has_value()) {
             return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination,
                           destinationCreated);
@@ -249,12 +256,14 @@ FlatExrWriteResultV1 FlatExrRgba32fLinRec709SceneWriterV1::write(
         }
         Imf::addChromaticities(header, Imf::Chromaticities(chromaBits[0], chromaBits[1],
                                                            chromaBits[2], chromaBits[3]));
-        header.insert("colorInteropID", Imf::StringAttribute(std::string(
-                                            frame.identity().colorIntent.workingColorSpaceId)));
+        header.insert("colorInteropID", Imf::StringAttribute(std::string(outputId)));
 
         destinationCreated = true;
         Imf::OutputFile outputFile(destination.string().c_str(), header, 1);
 
+        std::vector<std::array<float, 4>> transformed;
+        if (output && output->processor())
+            transformed.resize(descriptor->dataWindow().extent().width());
         const auto* base = reinterpret_cast<const char*>(pixels.data());
         constexpr std::size_t xStride = sizeof(render::Rgba32f);
         Imf::FrameBuffer frameBuffer;
@@ -279,7 +288,37 @@ FlatExrWriteResultV1 FlatExrRgba32fLinRec709SceneWriterV1::write(
                 return FlatExrWriteResultV1::cancelled(::removeDestinationBestEffort(destination));
             }
             const auto chunk = std::min(rowsPerChunk, remaining);
-            outputFile.writePixels(static_cast<int>(chunk));
+            if (transformed.empty()) {
+                outputFile.writePixels(static_cast<int>(chunk));
+            } else {
+                const auto width = transformed.size();
+                for (std::uint32_t row = 0; row < chunk; ++row) {
+                    if (cancellation.isCancellationRequested())
+                        return FlatExrWriteResultV1::cancelled(
+                            ::removeDestinationBestEffort(destination));
+                    if (!output->apply(
+                            pixels.subspan(static_cast<std::size_t>(completed + row) * width,
+                                           width),
+                            transformed))
+                        return ::fail(FlatExrWriteErrorCodeV1::InternalInvariant, destination,
+                                      destinationCreated);
+                    const auto rowY =
+                        geometry->dataWindow.min.y + static_cast<int>(completed + row);
+                    const Imath::Box2i rowBox({geometry->dataWindow.min.x, rowY},
+                                              {geometry->dataWindow.max.x, rowY});
+                    Imf::FrameBuffer converted;
+                    constexpr std::array names{"R", "G", "B", "A"};
+                    for (std::size_t c = 0; c < names.size(); ++c)
+                        converted.insert(
+                            names[c],
+                            Imf::Slice::Make(Imf::FLOAT,
+                                             reinterpret_cast<const char*>(transformed.data()) +
+                                                 c * sizeof(float),
+                                             rowBox, xStride, rowStrideBytes));
+                    outputFile.setFrameBuffer(converted);
+                    outputFile.writePixels(1);
+                }
+            }
             remaining -= chunk;
             completed += chunk;
             ::reportProgress(progress, {completed, height});

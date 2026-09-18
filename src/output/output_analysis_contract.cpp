@@ -224,6 +224,19 @@ outputFacetStableCodeRuleV1(const OutputFacetStableCodeV1 code) noexcept {
     case OutputFacetStableCodeV1::MetadataUnsupported:
         return one("metadata.unsupported", OutputFacetIdV1::Metadata,
                    OutputPreservationStateV1::Unsupported, true, true, false, true);
+    case OutputFacetStableCodeV1::ExrOutputColorTransform:
+        return OutputFacetStableCodeRuleV1{
+            "exr.output-color-transform",
+            static_cast<std::uint16_t>(facetBit(OutputFacetIdV1::Pixels) |
+                                       facetBit(OutputFacetIdV1::Color)),
+            OutputPreservationStateV1::Approximated,
+            false,
+            true,
+            false,
+            true};
+    case OutputFacetStableCodeV1::ExrOcioExternalReference:
+        return one("exr.ocio-external-reference", OutputFacetIdV1::ExternalDependencies,
+                   OutputPreservationStateV1::ExternalReference, false, true, true);
     case OutputFacetStableCodeV1::TiffWorkerExternalReference:
         return one("tiff.worker-external-reference", OutputFacetIdV1::ExternalDependencies,
                    OutputPreservationStateV1::ExternalReference, false, false, true, true);

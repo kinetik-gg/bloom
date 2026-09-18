@@ -170,4 +170,34 @@ buildOutputAnalysisAttemptV1(OutputAnalysisAttemptBuildInputsV1 inputs,
     }
 }
 
+OutputAnalysisAttemptBuildResultV1
+prepareFlatExrAttemptV1(const OutputAnalysisAttemptV1& source, FlatExrRgba32fOptionsV1 options,
+                        ExportResourceLedgerV1& ledger) noexcept {
+    try {
+        if (source.preset() != OutputPresetV1::FlatExrRgba32fLinRec709SceneV1 || !source.frame())
+            return OutputAnalysisAttemptBuildResultV1::failure(
+                OutputAnalysisAttemptErrorCodeV1::InvalidReport);
+        const auto prepared = PreparedFlatExrOutputV1::prepare(
+            source.frame()->identity().colorIntent, std::move(options));
+        if (!prepared)
+            return OutputAnalysisAttemptBuildResultV1::failure(
+                OutputAnalysisAttemptErrorCodeV1::InvalidReport);
+        const auto report = analyzeFlatExrRgba32fLinRec709SceneV1(
+            {.process = {.readyIdentity = source.processIdentity(), .missingDescriptor = {}},
+             .exr = prepared});
+        if (!report)
+            return OutputAnalysisAttemptBuildResultV1::failure(
+                OutputAnalysisAttemptErrorCodeV1::InvalidReport);
+        return buildOutputAnalysisAttemptV1({.frame = source.frame(),
+                                             .processIdentity = source.processIdentity(),
+                                             .report = report.report(),
+                                             .target = source.target(),
+                                             .display = {}},
+                                            ledger);
+    } catch (...) {
+        return OutputAnalysisAttemptBuildResultV1::failure(
+            OutputAnalysisAttemptErrorCodeV1::InternalInvariant);
+    }
+}
+
 } // namespace bloom::output

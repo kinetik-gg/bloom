@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/core/sha256.hpp>
+#include <bloom/output/flat_exr_options.hpp>
 #include <bloom/output/output_analysis.hpp>
 #include <bloom/output/process_frame_semantic_identity.hpp>
 #include <bloom/render/image.hpp>
@@ -67,6 +68,7 @@ struct PngRgba8SrgbAnalysisInputV1 final {
 
 struct FlatExrRgba32fLinRec709SceneAnalysisInputV1 final {
     OutputAnalysisProcessSourceV1 process;
+    std::shared_ptr<const PreparedFlatExrOutputV1> exr = {};
     OutputAnalysisAdapterStateV1 adapter = OutputAnalysisAdapterStateV1::Qualified;
     OutputAnalysisCompressionStateV1 compression = OutputAnalysisCompressionStateV1::Available;
     OutputAnalysisOtherDependencyStateV1 otherDependency =
@@ -117,10 +119,14 @@ class OutputAnalysisReportV1 final {
     [[nodiscard]] OutputAnalysisPermissionMaskV1 permissionMask() const noexcept {
         return permissionMask_;
     }
+    [[nodiscard]] const std::shared_ptr<const PreparedFlatExrOutputV1>& exr() const noexcept {
+        return exr_;
+    }
     [[nodiscard]] bool approvable() const noexcept { return permissionMask_.allPermitted(); }
     [[nodiscard]] std::size_t descriptorByteCount() const noexcept { return descriptorByteCount_; }
 
   private:
+    std::shared_ptr<const PreparedFlatExrOutputV1> exr_;
     struct OwnedAssessment final {
         OutputFacetIdV1 facet = OutputFacetIdV1::Pixels;
         OutputPreservationStateV1 state = OutputPreservationStateV1::Exact;

@@ -35,7 +35,7 @@ constexpr std::uint8_t kExrPayloadKind = 2;
 constexpr std::uint8_t kPackedRgba8 = 1;
 constexpr std::uint8_t kStraightAlpha = 1;
 constexpr std::uint8_t kPngSrgbRenderingIntent = 0;
-constexpr std::uint8_t kZipCompression = 1;
+
 constexpr std::uint8_t kIncreasingY = 1;
 constexpr std::uint64_t kPngMaximumPayloadBytes = 268'435'456U;
 constexpr std::uint64_t kExrMaximumPayloadBytes = 1'073'741'824U;
@@ -361,7 +361,13 @@ preflightPng(const output::PngRgba8SrgbOutputSemanticIdentityInputV1& input) noe
     if (processFrame == nullptr) {
         return preflightFailure<ExrPreflight>(Error::InvalidProcessIdentity);
     }
-    const auto workingColorSpaceId = processFrame->identity().colorIntent.workingColorSpaceId;
+    const auto* exr = boundAnalysis->report()->exr().get();
+    const auto workingColorSpaceId =
+        exr ? std::string_view(exr->options().outputColorSpaceId)
+            : std::string_view(processFrame->identity().colorIntent.workingColorSpaceId);
+    if (metadata.compression !=
+        (exr ? exr->options().compression : output::FlatExrCompressionV1::Zip))
+        return preflightFailure<ExrPreflight>(Error::InvalidSemanticPayload);
     const auto expectedChromaticities =
         output::detail::flatExrChromaticityBitsForWorkingColorSpaceV1(workingColorSpaceId);
     if (!expectedChromaticities.has_value() ||
@@ -521,8 +527,11 @@ hashExr(const output::FlatExrRgba32fLinRec709SceneOutputSemanticIdentityInputV1&
         const output::OutputSemanticIdentityProgressCallbackV1& progress) noexcept {
     const auto& metadata = input.verifiedProduct.metadata();
     const auto& processIdentity = *input.verifiedProduct.boundAnalysis()->processIdentity();
-    const auto& workingColorSpaceId =
-        processIdentity.processFrame()->identity().colorIntent.workingColorSpaceId;
+    const auto* exr = input.verifiedProduct.boundAnalysis()->report()->exr().get();
+    const auto workingColorSpaceId =
+        exr ? std::string_view(exr->options().outputColorSpaceId)
+            : std::string_view(
+                  processIdentity.processFrame()->identity().colorIntent.workingColorSpaceId);
     DigestStream stream;
     bool streamed =
         streamCommon(stream, preflight.common, {}, kExrPayloadKind) &&
@@ -532,7 +541,8 @@ hashExr(const output::FlatExrRgba32fLinRec709SceneOutputSemanticIdentityInputV1&
         stream.integer(metadata.displayWindow.yMin) &&
         stream.integer(metadata.displayWindow.xMax) &&
         stream.integer(metadata.displayWindow.yMax) &&
-        stream.integer(metadata.pixelAspectRatioBits) && stream.integer(kZipCompression) &&
+        stream.integer(metadata.pixelAspectRatioBits) &&
+        stream.integer(static_cast<std::uint8_t>(metadata.compression)) &&
         stream.integer(kIncreasingY) && stream.text(workingColorSpaceId);
     for (const auto bits : metadata.chromaticityBits) {
         streamed = streamed && stream.integer(bits);
