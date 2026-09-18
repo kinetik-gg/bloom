@@ -10,10 +10,13 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <algorithm>
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/host/font_catalogue.hpp>
+#include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
@@ -26,12 +29,62 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <tuple>
+#include <utility>
 
 namespace bloom::ui {
 namespace {
 
 [[nodiscard]] bool isFontSchema(const std::string_view schema) {
     return schema == document::kTextFontParameterSchemaKey;
+}
+
+[[nodiscard]] bool isInputColorSpaceSchema(const std::string_view schema) {
+    return schema == document::kImageInputColorSpaceIdParameterSchemaKey ||
+           schema == document::kVideoInputColorSpaceIdParameterSchemaKey;
+}
+
+[[nodiscard]] std::optional<color::ResolvedBloomNeutralConfig>
+inputColorConfig(const CompositionSession& session) {
+    const auto& settings = session.colorSettings();
+    const auto* builtIn =
+        std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator);
+    if (builtIn == nullptr ||
+        settings.ocioConfig.expectedRevision.algorithm != document::OcioRevisionAlgorithm::Sha256)
+        return {};
+    auto result = color::resolveOcioBuiltIn(
+        color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri,
+        settings.ocioConfig.expectedRevision.digest, session.colorIntent().workingColorSpaceId);
+    if (!result.ready())
+        return {};
+    return std::move(result).takeResolved();
+}
+
+[[nodiscard]] QString sourceAssetInputColorSpace(const CompositionSession& session,
+                                                 const document::NodeRecord* node) {
+    if (node == nullptr)
+        return {};
+    for (const auto& binding : node->parameters) {
+        if (binding.role != "asset")
+            continue;
+        const auto stored = session.constantStringValue(binding.parameterId);
+        if (!stored)
+            return {};
+        bool numeric = false;
+        const auto raw = stored->toULongLong(&numeric);
+        if (!numeric)
+            return {};
+        const auto* asset = session.snapshot().project().findAsset(
+            document::AssetId::fromRaw(static_cast<std::uint64_t>(raw)));
+        if (asset == nullptr)
+            return {};
+        if (const auto* controller = session.assetController())
+            return controller->inputColorSpaceDisplay(asset->id);
+        return asset->interpretation.inputColorSpaceId.empty()
+                   ? QString{}
+                   : QString::fromStdString(asset->interpretation.inputColorSpaceId);
+    }
+    return {};
 }
 
 [[nodiscard]] QString fontReference(const platform::FontFace& face) {
@@ -111,7 +164,8 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
     setProperty("parameterId", QVariant::fromValue(static_cast<qulonglong>(parameter.value())));
     setProperty("role", QString::fromStdString(definition_.role));
     const auto label =
-        definition_.schemaKey == document::kTextParameterSchemaKey            ? tr("Text")
+        isInputColorSpaceSchema(definition_.schemaKey)               ? tr("Input colour space")
+        : definition_.schemaKey == document::kTextParameterSchemaKey ? tr("Text")
         : definition_.schemaKey == document::kTextAlignmentParameterSchemaKey ? tr("Text Alignment")
         : definition_.schemaKey == document::kTextLineHeightParameterSchemaKey ? tr("Line Height")
         : definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey
@@ -156,7 +210,8 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         segments_->setFixedSize(segments_->sizeHint());
         layout->addWidget(segments_);
         connect(segments_, &kit::KRadioGroup::currentIndexChanged, this, [this] { commit(); });
-    } else if (!items.empty() || definition_.schemaKey == "bloom.image.asset" ||
+    } else if (isInputColorSpaceSchema(definition_.schemaKey) || !items.empty() ||
+               definition_.schemaKey == "bloom.image.asset" ||
                definition_.schemaKey == "bloom.video.asset" ||
                definition_.schemaKey == "bloom.audio.asset" ||
                isFontSchema(definition_.schemaKey)) {
@@ -167,7 +222,11 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             : isFontSchema(definition_.schemaKey)                ? "propertiesTextFont"
             : definition_.schemaKey == "bloom.image.loop-mode"   ? "propertiesImageLoopMode"
             : definition_.schemaKey == "bloom.image.color-space" ? "propertiesImageColorSpace"
-                                                                 : "propertiesRegistryEnum");
+            : definition_.schemaKey == document::kImageInputColorSpaceIdParameterSchemaKey
+                ? "propertiesImageInputColorSpace"
+            : definition_.schemaKey == document::kVideoInputColorSpaceIdParameterSchemaKey
+                ? "propertiesVideoInputColorSpace"
+                : "propertiesRegistryEnum");
         selector_->setControlSize(kit::KDropdown::ControlSize::Compact);
         if (isFontSchema(definition_.schemaKey)) {
             selector_->setSearchable(true);
@@ -180,6 +239,9 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             for (const auto& face : platform::FontCatalogueProvider::embeddedCatalogue().faces)
                 embeddedProbe->addItem(QString::fromStdString(face.family));
             embeddedProbe->hide();
+        } else if (isInputColorSpaceSchema(definition_.schemaKey)) {
+            selector_->setSearchable(true);
+            populateInputColorSpaceSelector();
         } else {
             for (const auto& [name, stored] : items)
                 selector_->addItem(name, QVariant::fromValue(stored));
@@ -322,6 +384,8 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         outer->addWidget(multiline_);
     connect(&session_, &CompositionSession::liveValueChanged, this,
             &PropertiesRegistryRow::refresh);
+    if (auto* controller = session_.assetController())
+        connect(controller, &AssetController::changed, this, &PropertiesRegistryRow::refresh);
     refresh();
 }
 
@@ -377,6 +441,40 @@ void PropertiesRegistryRow::populateFontSelector() {
             break;
         }
     }
+}
+
+void PropertiesRegistryRow::populateInputColorSpaceSelector() {
+    if (selector_ == nullptr || !isInputColorSpaceSchema(definition_.schemaKey))
+        return;
+    const QSignalBlocker blocker(selector_);
+    const auto current = session_.constantStringValue(parameter_).value_or(QString{});
+    selector_->clearItems();
+    const auto automatic = selector_->addItem(tr("Auto"), QString{});
+    selector_->setItemToolTip(automatic, tr("Inherit the asset's automatic interpretation"));
+    const auto config = inputColorConfig(session_);
+    if (!config) {
+        const auto unavailable = selector_->addItem(tr("OCIO config unavailable"), QString{});
+        selector_->setItemEnabled(unavailable, false);
+    } else {
+        auto spaces = config->colorSpaces();
+        std::ranges::sort(spaces, [](const auto& left, const auto& right) {
+            return std::tie(left.family, left.id) < std::tie(right.family, right.id);
+        });
+        for (const auto& space : spaces) {
+            const auto family = QString::fromStdString(space.family);
+            const auto name = QString::fromStdString(space.id);
+            const auto label = family.isEmpty() ? name : family + QStringLiteral(" / ") + name;
+            const auto index = selector_->addItem(label, name);
+            selector_->setItemToolTip(index, tr("OCIO colour space id: %1").arg(name));
+        }
+    }
+    auto index = selector_->findData(current);
+    if (index < 0 && !current.isEmpty()) {
+        index = selector_->addItem(tr("Missing config space"), current);
+        selector_->setItemToolTip(index, current);
+    }
+    selector_->setCurrentIndex(index < 0 ? automatic : index);
+    selector_->setWidthFloor(kit::px(kit::Size::PropertiesDropdownWidth));
 }
 
 void PropertiesRegistryRow::pollFontCatalogue() {
@@ -508,6 +606,24 @@ void PropertiesRegistryRow::refresh() {
                         break;
                     }
             }
+            if (selector_ && isInputColorSpaceSchema(definition_.schemaKey)) {
+                auto automatic = tr("Auto");
+                if (text->empty()) {
+                    const auto resolved = sourceAssetInputColorSpace(session_, node);
+                    if (!resolved.isEmpty())
+                        automatic = resolved;
+                }
+                selector_->setItemText(0, automatic);
+                selector_->setItemToolTip(0,
+                                          text->empty() && automatic != tr("Auto")
+                                              ? tr("Resolved by the asset: %1").arg(automatic)
+                                              : tr("Inherit the asset's automatic interpretation"));
+                for (int index = 0; index < selector_->count(); ++index)
+                    if (selector_->itemData(index).toString() == QString::fromStdString(*text)) {
+                        selector_->setCurrentIndex(index);
+                        break;
+                    }
+            }
             if (text_)
                 text_->setText(QString::fromStdString(*text));
             if (multiline_ && !multiline_->hasFocus())
@@ -560,7 +676,8 @@ void PropertiesRegistryRow::commit() {
                                          tr("Set Text Font"));
         refresh();
         return;
-    } else if (selector_ && (definition_.schemaKey == "bloom.image.asset" ||
+    } else if (selector_ && (isInputColorSpaceSchema(definition_.schemaKey) ||
+                             definition_.schemaKey == "bloom.image.asset" ||
                              definition_.schemaKey == "bloom.video.asset" ||
                              definition_.schemaKey == "bloom.audio.asset"))
         value = selector_->itemData(selector_->currentIndex()).toString().toStdString();

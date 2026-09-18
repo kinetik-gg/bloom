@@ -154,8 +154,19 @@ runtime::EvaluationColorIntent CompositionSession::colorIntent() const noexcept 
         currentComposition != nullptr && currentComposition->workingColorSpaceId().has_value()
             ? std::string_view{*currentComposition->workingColorSpaceId()}
             : std::string_view{colorSettings_.processColorSpaceId};
+    std::string_view ocioConfigUri;
+    if (const auto* builtIn =
+            std::get_if<document::BuiltInOcioConfigLocator>(&colorSettings_.ocioConfig.locator))
+        ocioConfigUri = builtIn->uri;
+    else if (const auto* externalArchive =
+                 std::get_if<document::ExternalOciozLocator>(&colorSettings_.ocioConfig.locator))
+        ocioConfigUri = externalArchive->uri;
+    else if (const auto* externalConfig = std::get_if<document::ExternalOcioConfigLocator>(
+                 &colorSettings_.ocioConfig.locator))
+        ocioConfigUri = externalConfig->uri;
     return {.workingColorSpaceId = workingColorSpaceId,
-            .ocioConfigRevision = colorSettings_.ocioConfig.expectedRevision.digest};
+            .ocioConfigRevision = colorSettings_.ocioConfig.expectedRevision.digest,
+            .ocioConfigUri = ocioConfigUri};
 }
 
 void CompositionSession::setColorSettings(document::ColorSettings settings) {

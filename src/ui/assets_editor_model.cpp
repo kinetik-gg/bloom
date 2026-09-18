@@ -68,6 +68,18 @@ QString itemKey(const QTreeWidgetItem* item) {
     }
     return QStringLiteral("compositions");
 }
+
+QString videoContainerTags(const document::AssetRecord& asset) {
+    QStringList tags;
+    for (const auto& stream : asset.videoStreams)
+        tags.push_back(QObject::tr("Stream %1: primaries=%2, transfer=%3, matrix=%4, range=%5")
+                           .arg(stream.id)
+                           .arg(stream.primaries)
+                           .arg(stream.transfer)
+                           .arg(stream.matrix)
+                           .arg(stream.range));
+    return tags.join(QStringLiteral("\n"));
+}
 } // namespace
 void AssetsEditor::refreshDisclosure(QTreeWidgetItem* item) {
     if (!item || (!assets::folderId(item) && !item->data(0, assets::kCompositionRootRole).toBool()))
@@ -255,11 +267,29 @@ void AssetsEditor::rebuild() {
         item->setData(0, assets::kTagsRole, tags);
         const auto* controller = session_.assetController();
         const bool missing = controller && controller->missing(asset.id);
-        item->setToolTip(0, missing ? (font    ? tr("Missing font — Relink in Assets")
-                                       : audio ? tr("Missing audio — Relink in Assets")
-                                       : video ? tr("Missing video — Relink in Assets")
-                                               : tr("Missing image — Relink in Assets"))
-                                    : QString::fromStdString(asset.locator.path));
+        auto tooltip = missing ? (font    ? tr("Missing font — Relink in Assets")
+                                  : audio ? tr("Missing audio — Relink in Assets")
+                                  : video ? tr("Missing video — Relink in Assets")
+                                          : tr("Missing image — Relink in Assets"))
+                               : QString::fromStdString(asset.locator.path);
+        if (video) {
+            const auto containerTags = videoContainerTags(asset);
+            if (!containerTags.isEmpty())
+                tooltip += QStringLiteral("\n") + tr("Container colour tags:\n") + containerTags;
+        }
+        if (controller) {
+            auto input = controller->inputColorSpaceDisplay(asset.id);
+            if (input.isEmpty() && !asset.interpretation.inputColorSpaceId.empty())
+                input = QString::fromStdString(asset.interpretation.inputColorSpaceId);
+            if (!input.isEmpty())
+                tooltip += QStringLiteral("\n") + tr("Input colour space: ") + input;
+            const auto warning = controller->inputColorSpaceWarning(asset.id);
+            if (!warning.isEmpty())
+                tooltip += QStringLiteral("\n") + tr("Colour note: ") + warning;
+        } else if (!asset.interpretation.inputColorSpaceId.empty())
+            tooltip += QStringLiteral("\nInput colour space: ") +
+                       QString::fromStdString(asset.interpretation.inputColorSpaceId);
+        item->setToolTip(0, tooltip);
         if (video && std::ranges::any_of(asset.videoStreams, [](const auto& stream) {
                 return stream.codec == "prores";
             }))

@@ -5,14 +5,65 @@ Status: accepted
 Implementation status: version 1 durable value validation, the domain-separated content revision
 primitives, the canonical display-processor identity, the built-in registry with concrete
 Bloom Neutral and ACES 1.3 CG built-in resolution, in-process CPU display processing, project and
-composition working-space selection, and the checked alpha/pixel flow are implemented and qualified
-on Linux. The separable
+composition working-space selection, config-managed asset input transforms, and the checked
+alpha/pixel flow are implemented and qualified on Linux. The separable
 blend modes under "Blend modes" below are implemented in the CPU reference compositing kernel and
 qualified by per-mode goldens. The
 supervised helper, the archive and loose locator kinds, viewer/staged-graph integration, the
 processor cache, and cross-platform qualification remain pending.
 
-Updated: 2026-09-15
+Updated: 2026-09-18
+
+## Current Version 1.20 Decisions — Asset Input Transforms
+
+Document schema 1.20 gives every image and video asset a durable `inputColorSpaceId` beside the
+legacy integer interpretation. An empty id is Auto. A non-empty id is resolved only in the exact
+OCIO configuration and revision selected by the project; it must name a non-data colour space.
+Image and Video source nodes retain their integer `colorSpace` rows (`0` inherits the asset, and
+the legacy `sRGB`/`Linear`/`Raw` values remain for compatibility) and add a non-animatable string
+`inputColorSpaceId` row. An empty node id inherits the asset's id or automatic interpretation.
+
+The deterministic 1.19 → 1.20 migration retains the legacy enum and adds the equivalent config id:
+`Auto` becomes empty, `Srgb` becomes the selected config's sRGB-texture id,
+`Linear` becomes the working-space id, and `Raw` remains empty and data/no-conversion. The
+configuration is resolved before the migration result is accepted; if it is unavailable, the
+durable id is not guessed.
+
+`color::CpuColorSpaceProcessor` is the general CPU-only input path. It builds an OCIO
+`ColorSpaceTransform` from a non-data source id to the effective working-space id, preserves alpha
+and premultiplication order, and records the config content revision in the processor identity.
+Missing ids, data spaces, invalid working spaces, non-invertible transforms, unavailable CPU
+processors, hostile-resource failures, and an incompatible floating-point environment are typed
+failures. The existing display-inverse `CpuInputProcessor` remains the colour-picker boundary.
+
+### Automatic asset rules
+
+Auto resolution is format-specific and never uses an ambient `$OCIO` or a decoder default:
+
+| Source | Automatic input id / result |
+| --- | --- |
+| 8/16-bit PNG, JPEG, TIFF | Config sRGB-texture space: `color_picking`, `texture_paint`, or the config's named sRGB-texture id; Bloom Neutral uses `srgb_rec709_display` |
+| EXR with AP0 chromaticities | `ACES2065-1` |
+| EXR with AP1 chromaticities | `ACEScg` |
+| EXR with Rec.709/D65 chromaticities | `lin_rec709_scene` or the config's Rec.709 camera/video mapping |
+| EXR with other chromaticities | Refuse with a typed reason; choose an explicit config id |
+| EXR without chromaticities | Working space, with a visible warning |
+| Video: Rec.709 primaries/matrix + BT.709 transfer | Config Rec.709 camera/video space |
+| Video: sRGB transfer | Config sRGB-texture space |
+| Video: linear transfer | Working space |
+| Video: Rec.2020, HLG, or PQ tags | Typed refusal; an explicit config id is required and the pixel path must be qualified for that mapping |
+
+ARRI LogC3 and RED Log3G10 are not container-tagged automatic cases. The Assets and Properties
+pickers list every non-data colour space, grouped by the config's family, so an artist can choose
+those spaces explicitly for camera footage. The resolved id and config revision are shown in the
+Assets tooltip and source row; video tooltips also retain the numeric H.273 container tags.
+
+The read path is probe/metadata resolution → bounded decode to straight RGB `RGBA32F` → OCIO
+input transform → unchanged alpha association/premultiplication into the working space. Decoded
+image and video-frame keys include source/member identity, resolved input id, effective working id,
+and OCIO config revision. Changing any of those values re-decodes thumbnails, proxies, and frames.
+The CPU AP0 EXR read is pinned against the OCIO reference processor to an absolute channel delta of
+`1e-5`; Neutral sRGB PNG defaults retain the existing byte-identical goldens.
 
 ## Current Version 1.19 Decisions — Working Colour Space
 

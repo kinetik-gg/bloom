@@ -180,6 +180,7 @@ struct CompiledImageSource {
     std::int64_t startFrame = 0;
     std::int64_t loopMode = 0;
     std::int64_t colorSpace = 0;
+    std::string inputColorSpaceId;
     bool premultiply = true;
     friend bool operator==(const CompiledImageSource&, const CompiledImageSource&) = default;
 };
@@ -190,6 +191,7 @@ struct CompiledVideoSource {
     std::int64_t startFrame = 0;
     std::int64_t loopMode = 0;
     std::int64_t colorSpace = 0;
+    std::string inputColorSpaceId;
     friend bool operator==(const CompiledVideoSource&, const CompiledVideoSource&) = default;
 };
 

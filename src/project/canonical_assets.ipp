@@ -28,6 +28,7 @@
             !state.ok(writer.memberName("contentDigest")) || !emitAssetDigest(state, asset.contentDigest) ||
             !state.ok(writer.memberName("interpretation")) || !state.ok(writer.beginObject()) ||
             !state.ok(writer.memberName("colorSpace")) || !state.ok(writer.integerValue(static_cast<std::uint32_t>(asset.interpretation.colorSpace))) ||
+            !state.ok(writer.memberName("inputColorSpaceId")) || !state.ok(writer.stringValue(asset.interpretation.inputColorSpaceId)) ||
             !state.ok(writer.memberName("alphaAssociation")) || !state.ok(writer.integerValue(static_cast<std::uint32_t>(asset.interpretation.alphaAssociation))) ||
             !state.ok(writer.endObject()) || !state.ok(writer.memberName("width")) || !state.ok(writer.integerValue(asset.width)) ||
             !state.ok(writer.memberName("height")) || !state.ok(writer.integerValue(asset.height)) ||

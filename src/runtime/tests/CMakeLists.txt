@@ -12,6 +12,7 @@ add_executable(bloom_runtime_value_conversion_test value_conversion_tests.cpp)
 add_executable(bloom_runtime_string_node_test string_node_tests.cpp)
 add_executable(bloom_runtime_value_math_test value_math_tests.cpp)
 add_executable(bloom_runtime_data_block_reader_test data_block_reader_tests.cpp)
+add_executable(bloom_runtime_input_color_context_test input_color_context_tests.cpp)
 
 target_link_libraries(bloom_runtime_task_test PRIVATE bloom_runtime)
 target_link_libraries(bloom_runtime_regression_test PRIVATE bloom_runtime)
@@ -36,6 +37,7 @@ target_link_libraries(bloom_runtime_value_conversion_test PRIVATE bloom_runtime_
 target_link_libraries(bloom_runtime_string_node_test PRIVATE bloom_runtime_evaluator)
 target_link_libraries(bloom_runtime_value_math_test PRIVATE bloom_runtime_evaluator)
 target_link_libraries(bloom_runtime_data_block_reader_test PRIVATE bloom_runtime_evaluator)
+target_link_libraries(bloom_runtime_input_color_context_test PRIVATE bloom_runtime_evaluator)
 target_include_directories(bloom_runtime_regression_test PRIVATE ..)
 target_include_directories(bloom_runtime_gpu_task_test PRIVATE ..)
 target_include_directories(bloom_runtime_snapshot_compiler_test PRIVATE ..)
@@ -53,6 +55,7 @@ bloom_enable_warnings(bloom_runtime_value_conversion_test)
 bloom_enable_warnings(bloom_runtime_string_node_test)
 bloom_enable_warnings(bloom_runtime_value_math_test)
 bloom_enable_warnings(bloom_runtime_data_block_reader_test)
+bloom_enable_warnings(bloom_runtime_input_color_context_test)
 bloom_enable_strict_floating_point(bloom_runtime_value_graph_test)
 bloom_enable_strict_floating_point(bloom_runtime_value_conversion_test)
 bloom_enable_strict_floating_point(bloom_runtime_value_math_test)
@@ -183,3 +186,9 @@ target_link_libraries(bloom_runtime_memory_budget_ledger_test PRIVATE bloom_runt
 bloom_enable_warnings(bloom_runtime_memory_budget_ledger_test)
 bloom_add_test(NAME bloom.runtime.memory_budget_ledger COMMAND bloom_runtime_memory_budget_ledger_test
               LABELS unit runtime TIMEOUT 30)
+
+bloom_add_test(
+    NAME bloom.runtime.input-color-context
+    COMMAND bloom_runtime_input_color_context_test
+    LABELS unit runtime media color
+)

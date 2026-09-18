@@ -145,7 +145,8 @@ enum class Step {
     AssetOrganization,
     Video,
     DataBlocks,
-    WorkingColorSpace
+    WorkingColorSpace,
+    AssetInputColorSpace
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -169,12 +170,118 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
         return false;
     if (step == Step::WorkingColorSpace)
         return false;
+    if (step == Step::AssetInputColorSpace)
+        return false;
     if (scope == Scope::Composition) {
         return value.findMember(step == Step::NodeLayout   ? "nodeLayout"
                                 : step == Step::NodeGroups ? "nodeGroups"
                                                            : "safeAreas") != nullptr;
     }
     return scope == Scope::HighestIssued && value.findMember("nodeGroup") != nullptr;
+}
+
+[[nodiscard]] std::optional<std::string_view> legacySrgbTextureSpace(const JsonValue& project) {
+    const auto* colorSettings = project.findMember("colorSettings");
+    const auto* ocioConfig = colorSettings ? colorSettings->findMember("ocioConfig") : nullptr;
+    const auto* locator = ocioConfig ? ocioConfig->findMember("locator") : nullptr;
+    const auto* uri = locator ? locator->findMember("uri") : nullptr;
+    const auto uriText = uri ? uri->asString() : std::nullopt;
+    if (!uriText)
+        return std::nullopt;
+    if (*uriText == "bloom://ocio/neutral-v1/config.ocio")
+        return "srgb_rec709_display";
+    if (*uriText == "ocio://cg-config-v1.0.0_aces-v1.3_ocio-v2.1")
+        return "sRGB - Texture";
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::string_view> legacyWorkingSpace(const JsonValue& project) {
+    const auto* colorSettings = project.findMember("colorSettings");
+    const auto* value = colorSettings ? colorSettings->findMember("processColorSpaceId") : nullptr;
+    return value ? value->asString() : std::nullopt;
+}
+
+[[nodiscard]] bool emitMigratedInterpretation(const JsonValue& interpretation,
+                                              const JsonValue& project, Buffer& output) {
+    const auto* colorSpace = interpretation.findMember("colorSpace");
+    const auto* alphaAssociation = interpretation.findMember("alphaAssociation");
+    const auto colorSpaceToken = colorSpace ? colorSpace->asNumberToken() : std::nullopt;
+    const auto alphaAssociationToken =
+        alphaAssociation ? alphaAssociation->asNumberToken() : std::nullopt;
+    if (interpretation.kind() != JsonValueKind::Object || colorSpace == nullptr ||
+        alphaAssociation == nullptr || interpretation.objectMembers().size() != 2 ||
+        !colorSpaceToken || !alphaAssociationToken)
+        return false;
+    const auto parsed = parseCanonicalAllocatorHighWater(*colorSpaceToken);
+    if (!parsed || *parsed.value() > 3)
+        return false;
+    std::string_view inputId;
+    switch (*parsed.value()) {
+    case 0: // Auto remains Auto and resolves from the media descriptor.
+    case 3: // Raw remains the explicit data/no-conversion legacy mode.
+        break;
+    case 1: {
+        const auto id = legacySrgbTextureSpace(project);
+        if (!id)
+            return false;
+        inputId = *id;
+        break;
+    }
+    case 2: {
+        const auto id = legacyWorkingSpace(project);
+        if (!id || id->empty())
+            return false;
+        inputId = *id;
+        break;
+    }
+    default:
+        return false;
+    }
+    append(output, "{\"colorSpace\":");
+    if (!copyValue(*colorSpace, output))
+        return false;
+    append(output, ",\"inputColorSpaceId\":");
+    if (!quoted(output, inputId))
+        return false;
+    append(output, ",\"alphaAssociation\":");
+    if (!copyValue(*alphaAssociation, output))
+        return false;
+    append(output, "}");
+    return true;
+}
+
+[[nodiscard]] bool emitMigratedAssets(const JsonValue& assets, const JsonValue& project,
+                                      Buffer& output) {
+    if (assets.kind() != JsonValueKind::Array)
+        return false;
+    append(output, "[");
+    bool first = true;
+    for (const auto& asset : assets.arrayElements()) {
+        if (asset.kind() != JsonValueKind::Object || asset.findMember("interpretation") == nullptr)
+            return false;
+        if (!first)
+            append(output, ",");
+        first = false;
+        append(output, "{");
+        bool firstMember = true;
+        for (const auto& member : asset.objectMembers()) {
+            if (!firstMember)
+                append(output, ",");
+            firstMember = false;
+            if (!quoted(output, member.key()))
+                return false;
+            append(output, ":");
+            if (member.key() == "interpretation") {
+                if (!emitMigratedInterpretation(member.value(), project, output))
+                    return false;
+            } else if (!copyValue(member.value(), output)) {
+                return false;
+            }
+        }
+        append(output, "}");
+    }
+    append(output, "]");
+    return true;
 }
 
 bool transform(const JsonValue& value, const Scope scope, const Step step, Buffer& output) {
@@ -216,7 +323,8 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::AssetOrganization ? "{\"major\":1,\"minor\":16}"
                            : step == Step::Video             ? "{\"major\":1,\"minor\":17}"
                            : step == Step::DataBlocks        ? "{\"major\":1,\"minor\":18}"
-                                                             : "{\"major\":1,\"minor\":19}");
+                           : step == Step::WorkingColorSpace ? "{\"major\":1,\"minor\":19}"
+                                                             : "{\"major\":1,\"minor\":20}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
                 return false;
@@ -269,6 +377,10 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                 append(output, "}");
             }
             append(output, "]");
+        } else if (scope == Scope::Project && member.key() == "assets" &&
+                   step == Step::AssetInputColorSpace) {
+            if (!emitMigratedAssets(member.value(), value, output))
+                return false;
         } else if (scope == Scope::Project && member.key() == "compositions") {
             if (member.value().kind() != JsonValueKind::Array)
                 return false;
@@ -458,6 +570,14 @@ MigrationStepOutcome migrateWorkingColorSpaceV1_18(const JsonValue& root,
     if (!sourceVersionIs(root, "18") ||
         !transform(root, Scope::Root, Step::WorkingColorSpace, output))
         return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+
+MigrationStepOutcome migrateAssetInputColorSpaceV1_19(const JsonValue& root,
+                                                      std::pmr::memory_resource*, Buffer& output) {
+    if (!sourceVersionIs(root, "19") ||
+        !transform(root, Scope::Root, Step::AssetInputColorSpace, output))
+        return MigrationStepOutcome::failure("/project/assets");
     return MigrationStepOutcome::success();
 }
 } // namespace bloom::project

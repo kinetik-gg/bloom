@@ -75,6 +75,9 @@ ValidationResult AssetRecord::validate() const {
                static_cast<std::uint64_t>(width) * height > 16777216)
         result.add(ValidationCode::InvalidValue, "dimensions", "Invalid image dimensions");
     if (interpretation.colorSpace > AssetColorSpace::Raw ||
+        interpretation.inputColorSpaceId.size() > kMaxAssetInputColorSpaceIdBytes ||
+        !core::isValidUtf8(interpretation.inputColorSpaceId) ||
+        interpretation.inputColorSpaceId.find('\0') != std::string::npos ||
         interpretation.alphaAssociation > AssetAlphaAssociation::Premultiplied)
         result.add(ValidationCode::InvalidValue, "interpretation", "Invalid image interpretation");
     if (kind == AssetKind::Video) {

@@ -37,3 +37,25 @@ The Viewer and PNG output transform from the effective working space to the sele
 Flat EXR keeps scene-linear pixels and writes the working-space id plus its primaries in the EXR
 header. Projects that stay on `lin_rec709_scene` retain Bloom's earlier reference-display and output
 goldens.
+
+## Importing plates and camera footage
+
+Assets use **Input colour space: Auto** by default. Bloom resolves that choice from the selected
+project configuration and shows the result in the Assets tooltip and the source row in Properties.
+8/16-bit PNG, JPEG, and TIFF use the config's sRGB-texture space. EXR plates use their declared
+chromaticities: AP0 maps to **ACES2065-1**, AP1 to **ACEScg**, and Rec.709/D65 to the config's
+Rec.709 scene space. An EXR with no chromaticities assumes the working space and shows a warning;
+unrecognized chromaticities require an explicit choice.
+
+For camera footage, Bloom reads the stream's container colour tags. Rec.709-tagged footage uses the
+config's Rec.709 camera/video space, sRGB-tagged footage uses the sRGB-texture space, and linear
+footage uses the working space. The video asset tooltip retains the numeric container tags. ARRI
+LogC3 and RED Log3G10 are not reliable container tags, so choose their colour space explicitly in
+the searchable **Input colour space** picker. The picker lists every non-data colour space from the
+selected configuration grouped by family.
+
+Choose an explicit input id when the camera metadata is wrong or incomplete. The source-node choice
+overrides the asset; **Auto** inherits the asset interpretation. Rec.2020, HLG, and PQ tags remain
+unavailable on the unqualified preview path and report a typed diagnostic until a qualified config
+mapping is explicitly selected. Changing the input choice or project working space re-decodes the
+thumbnail, proxy, and rendered frame; no stale colour conversion is reused.

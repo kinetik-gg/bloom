@@ -13,8 +13,11 @@ namespace bloom::document {
 enum class AssetKind : std::uint8_t { Image, Sequence, Audio, Font, Video };
 enum class AssetColorSpace : std::uint8_t { Auto, Srgb, Linear, Raw };
 enum class AssetAlphaAssociation : std::uint8_t { Straight, Premultiplied };
+inline constexpr std::size_t kMaxAssetInputColorSpaceIdBytes = 256;
 struct AssetInterpretation {
     AssetColorSpace colorSpace = AssetColorSpace::Auto;
+    // Empty means Auto. Non-empty values are exact ids from the qualified project OCIO config.
+    std::string inputColorSpaceId;
     AssetAlphaAssociation alphaAssociation = AssetAlphaAssociation::Straight;
     friend bool operator==(const AssetInterpretation&, const AssetInterpretation&) = default;
 };

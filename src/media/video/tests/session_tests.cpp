@@ -25,9 +25,18 @@ void run(const std::filesystem::path& directory) {
     check(first == cached, "decoded frame cache hit");
     const auto next = std::get<std::shared_ptr<const provider::FrameProduct>>(
         session.frame(probe, 0, 13, 0, &cache));
-    check(cache.residentBytes() == 4608 && !cache.find({probe.sourceDigest, 0, 12, 0}),
+    check(cache.residentBytes() == 4608 && !cache.find({probe.sourceDigest, 0, 12, 0, {}, {}, {}}),
           "LRU eviction obeys byte budget");
-    check(!cache.find({probe.sourceDigest, 0, 13, 1}), "interpretation is part of the cache key");
+    check(!cache.find({probe.sourceDigest, 0, 13, 1, {}, {}, {}}),
+          "interpretation is part of the cache key");
+    const provider::Digest configRevision = probe.sourceDigest;
+    const video::FrameKey transformedKey{probe.sourceDigest, 0, 12, 0, "sRGB - Texture", "ACEScg",
+                                         configRevision};
+    cache.store(transformedKey, first);
+    check(cache.find(transformedKey) == first,
+          "input colour-space, working-space, and config revision form the video cache key");
+    check(!cache.find({probe.sourceDigest, 0, 12, 0, "sRGB - Texture", "ACEScg", {}}),
+          "a changed config revision misses the video frame cache");
     cache.setByteBudget(0);
     check(cache.residentBytes() == 0, "budget shrink releases resident frames");
     const auto window = bloom::render::ImageWindow::create(0, 0, 64, 48);

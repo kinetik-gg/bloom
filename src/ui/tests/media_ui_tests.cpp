@@ -180,6 +180,10 @@ void run() {
     QApplication::processEvents();
     auto* selector = properties.findChild<ui::kit::KDropdown*>("propertiesImageAsset");
     require(selector && selector->currentIndex() > 0, "asset selector reflects source binding");
+    auto* inputSpace = properties.findChild<ui::kit::KDropdown*>("propertiesImageInputColorSpace");
+    require(inputSpace && inputSpace->count() > 1 &&
+                inputSpace->itemText(0).startsWith("Auto (resolved: "),
+            "Properties resolves Auto input colour space and lists config spaces");
     auto* dimensions = properties.findChild<ui::kit::KLabel*>("propertiesImageDimensions");
     require(dimensions && dimensions->text() == QString::fromUtf8("32 × 16"), "source dimensions");
     ui::node_editor::NodeItem* card = nullptr;

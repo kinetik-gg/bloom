@@ -67,6 +67,12 @@ inline constexpr std::string_view kOpacityParameterSchemaKey = "bloom.layer.opac
 // be created over it.
 inline constexpr std::string_view kBlendModeParameterSchemaKey = "bloom.layer.blend-mode";
 inline constexpr std::string_view kAudioLevelParameterSchemaKey = "bloom.audio.level";
+inline constexpr std::string_view kImageInputColorSpaceIdParameterRole = "inputColorSpaceId";
+inline constexpr std::string_view kImageInputColorSpaceIdParameterSchemaKey =
+    "bloom.image.input-color-space-id";
+inline constexpr std::string_view kVideoInputColorSpaceIdParameterRole = "inputColorSpaceId";
+inline constexpr std::string_view kVideoInputColorSpaceIdParameterSchemaKey =
+    "bloom.video.input-color-space-id";
 
 // ---------------------------------------------------------------------------------------------
 // Value-graph parameter schemas (task S7).

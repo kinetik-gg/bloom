@@ -64,6 +64,16 @@ QIcon KDropdown::itemIcon(const int index) const {
     return item == nullptr ? QIcon{} : item->icon();
 }
 
+void KDropdown::setItemText(const int index, const QString& text) {
+    auto* item = model_->item(index);
+    if (item == nullptr)
+        return;
+    item->setText(text);
+    if (index == currentIndex_)
+        update();
+    updateGeometry();
+}
+
 void KDropdown::setItemToolTip(const int index, const QString& toolTip) {
     auto* item = model_->item(index);
     if (item == nullptr) {

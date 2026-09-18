@@ -71,6 +71,8 @@ target_sources(
         video_source.hpp
         image_source.cpp
         image_source.hpp
+        input_color_context.cpp
+        input_color_context.hpp
         layer_parent_transform.hpp
         operation_key.hpp
         animation_sampling.cpp
@@ -99,6 +101,7 @@ target_sources(
             include/bloom/runtime/animation_sampling.hpp
             include/bloom/runtime/cpu_composition_evaluator.hpp
             include/bloom/runtime/evaluation.hpp
+            include/bloom/runtime/input_color_context.hpp
             include/bloom/runtime/prepared_preview_frame.hpp
             include/bloom/runtime/qualified_display_preparation.hpp
             include/bloom/runtime/qualified_display_processor_provider.hpp

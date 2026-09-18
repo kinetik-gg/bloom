@@ -281,14 +281,11 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
             asset.contentDigest = probe.value->contentDigest;
             asset.width = probe.value->width;
             asset.height = probe.value->height;
-            asset.interpretation.colorSpace =
-                probe.value->colorSpace == media::ImageColorSpace::Srgb
-                    ? document::AssetColorSpace::Srgb
-                : probe.value->colorSpace == media::ImageColorSpace::Linear
-                    ? document::AssetColorSpace::Linear
-                : probe.value->colorSpace == media::ImageColorSpace::Raw
-                    ? document::AssetColorSpace::Raw
-                    : document::AssetColorSpace::Auto;
+            // New imports keep the legacy interpretation at Auto.  The probe's format,
+            // bit-depth, and EXR chromaticities are metadata for the config-managed resolver;
+            // copying its compatibility enum here would turn a fresh automatic import into an
+            // authored legacy override and would bypass the EXR chromaticity rules.
+            asset.interpretation.colorSpace = document::AssetColorSpace::Auto;
             asset.interpretation.alphaAssociation =
                 probe.value->alphaAssociation == media::ImageAlphaAssociation::Premultiplied
                     ? document::AssetAlphaAssociation::Premultiplied

@@ -85,6 +85,11 @@ void testReadyExactDigest(Expectations& expectations) {
                         "the discovered view name is srgb_rec709_display");
     expectations.expect(resolved->expectedRevision() == bloom::color::kBloomNeutralV1ConfigDigest,
                         "the resolved config retains the caller's expected revision");
+    expectations.expect(
+        resolved->sRgbTextureColorSpaceId() == "srgb_rec709_display" &&
+            resolved->rec709VideoColorSpaceId() == "lin_rec709_scene" &&
+            !resolved->colorSpaces().empty(),
+        "the resolved config exposes its sRGB, video, and non-data space inventory");
 }
 
 void testChangedPerturbedRevision(Expectations& expectations) {

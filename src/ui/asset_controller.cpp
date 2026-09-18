@@ -15,6 +15,7 @@
 #include <bloom/media/video/session.hpp>
 #include <bloom/platform/font_catalog.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/input_color_context.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/runtime/video_asset.hpp>
@@ -90,11 +91,17 @@ struct ThumbnailSelection {
     std::filesystem::path path;
     core::Sha256Digest digest;
     media::ImageInterpretation interpretation;
+    std::shared_ptr<const color::CpuColorSpaceProcessor> inputProcessor;
+    std::string inputColorSpaceName;
+    std::string inputColorSpaceWarning;
+    std::string workingColorSpaceId;
+    core::Sha256Digest configRevision;
+    bool inputColorSpaceAutomatic = false;
     std::string cacheKey;
     // The same disk-cache key format image_source.cpp's selectImageSource() builds (see
-    // media::cache::buildImageCacheKey()): asset digest + member frame + interpretation + Bloom
-    // Neutral config digest + decoder identity, so a proxy decode here and a full evaluator decode
-    // of the same source share one disk entry (docs/architecture/media-io.md "Disk cache").
+    // media::cache::buildImageCacheKey()): asset digest + member frame + interpretation + input/
+    // working colour-space ids + config revision + decoder identity, so a proxy decode here and a
+    // full evaluator decode of the same source share one disk entry.
     std::string diskCacheKey;
     bool available = false;
 };
@@ -140,7 +147,8 @@ struct ThumbnailSelection {
 ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
                                    core::RationalTime time, document::FrameRate rate,
                                    const std::filesystem::path& directory,
-                                   const runtime::CancellationToken& cancel) {
+                                   const runtime::CancellationToken& cancel,
+                                   const runtime::EvaluationColorIntent& colorIntent) {
     ThumbnailSelection selected;
     if (!source.asset)
         return selected;
@@ -183,25 +191,60 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
     selected.interpretation.colorSpace = static_cast<media::ImageColorSpace>(
         source.colorSpace == 0 ? static_cast<std::int64_t>(asset.interpretation.colorSpace)
                                : source.colorSpace);
+    selected.interpretation.inputColorSpaceId = !source.inputColorSpaceId.empty()
+                                                    ? source.inputColorSpaceId
+                                                    : asset.interpretation.inputColorSpaceId;
     selected.interpretation.alphaAssociation = source.premultiply
                                                    ? media::ImageAlphaAssociation::Straight
                                                    : media::ImageAlphaAssociation::Premultiplied;
     const auto probe =
         media::probeImage(selected.path, [&] { return cancel.isCancellationRequested(); });
     selected.available = probe.value && probe.value->contentDigest == selected.digest;
+    if (selected.available) {
+        const auto config = runtime::detail::resolveInputColorConfig(colorIntent);
+        if (!config) {
+            selected.available = false;
+            selected.inputColorSpaceWarning =
+                "The selected OCIO input configuration is unavailable";
+        } else {
+            const auto resolution = runtime::detail::resolveImageInputColorSpace(
+                *config, *probe.value, selected.interpretation.colorSpace,
+                selected.interpretation.inputColorSpaceId);
+            selected.inputColorSpaceAutomatic = resolution.automatic;
+            selected.inputColorSpaceName = resolution.name;
+            selected.inputColorSpaceWarning = resolution.warning;
+            selected.workingColorSpaceId = std::string(config->processColorSpaceId());
+            selected.configRevision = config->expectedRevision();
+            if (!resolution.noConversion && resolution.id.empty())
+                selected.available = false;
+            if (selected.available) {
+                selected.interpretation.inputColorSpaceId = resolution.id;
+                std::string diagnostic;
+                selected.inputProcessor =
+                    runtime::detail::prepareInputColorProcessor(*config, resolution, diagnostic);
+                if (!resolution.noConversion && !selected.inputProcessor) {
+                    selected.available = false;
+                    selected.inputColorSpaceWarning = std::move(diagnostic);
+                }
+            }
+        }
+    }
     const auto hex = selected.digest.toLowercaseHex();
-    const auto config = color::kBloomNeutralV1ConfigDigest.toLowercaseHex();
+    const auto config = selected.configRevision.toLowercaseHex();
     selected.cacheKey = std::string(hex.begin(), hex.end()) + ":" + std::to_string(memberFrame) +
                         ":" + std::to_string(static_cast<int>(selected.interpretation.colorSpace)) +
-                        ":" +
+                        ":" + selected.interpretation.inputColorSpaceId + ":" +
+                        selected.workingColorSpaceId + ":" +
                         std::to_string(static_cast<int>(selected.interpretation.alphaAssociation)) +
                         ":" + std::string(config.begin(), config.end());
     media::cache::ImageCacheKeyInputs diskInputs;
     diskInputs.contentDigest = selected.digest;
     diskInputs.memberFrame = memberFrame;
     diskInputs.colorSpace = selected.interpretation.colorSpace;
+    diskInputs.inputColorSpaceId = selected.interpretation.inputColorSpaceId;
+    diskInputs.workingColorSpaceId = selected.workingColorSpaceId;
     diskInputs.alphaAssociation = selected.interpretation.alphaAssociation;
-    diskInputs.configDigest = color::kBloomNeutralV1ConfigDigest;
+    diskInputs.configDigest = selected.configRevision;
     selected.diskCacheKey =
         media::cache::buildImageCacheKey(diskInputs, media::cache::kImageDecoderIdentity);
     return selected;
@@ -299,6 +342,18 @@ QImage AssetController::thumbnail(document::AssetId id) const {
 QImage AssetController::nodeThumbnail(document::NodeId id) const {
     const auto found = nodePreviews_.find(id);
     return found == nodePreviews_.end() ? QImage{} : found->second.image;
+}
+QString AssetController::inputColorSpaceDisplay(const document::AssetId id) const {
+    const auto found = previews_.find(id);
+    if (found == previews_.end() || found->second.inputColorSpaceName.empty())
+        return {};
+    const auto name = QString::fromStdString(found->second.inputColorSpaceName);
+    return found->second.inputColorSpaceAutomatic ? tr("Auto (resolved: %1)").arg(name) : name;
+}
+QString AssetController::inputColorSpaceWarning(const document::AssetId id) const {
+    const auto found = previews_.find(id);
+    return found == previews_.end() ? QString{}
+                                    : QString::fromStdString(found->second.inputColorSpaceWarning);
 }
 std::shared_ptr<const media::audio::WaveformSummary>
 AssetController::waveform(const document::AssetId id) const {
@@ -438,6 +493,7 @@ void AssetController::refresh() {
     const auto snapshot = session_.snapshot();
     const auto directory = baseDirectory();
     const auto time = session_.currentTime();
+    const auto colorIntent = session_.colorIntent();
     const auto* composition = session_.composition();
     const auto rate =
         composition ? composition->format().frameRate() : document::FrameRate::framesPerSecond24();
@@ -468,6 +524,9 @@ void AssetController::refresh() {
                         source.loopMode = *integer;
                     if (binding.role == "colorSpace")
                         source.colorSpace = *integer;
+                } else if (binding.role == "inputColorSpaceId") {
+                    if (const auto* value = std::get_if<std::string>(&constant->value))
+                        source.inputColorSpaceId = *value;
                 } else if (binding.role == "premultiply") {
                     if (const auto* value = std::get_if<bool>(&constant->value))
                         source.premultiply = *value;
@@ -480,9 +539,9 @@ void AssetController::refresh() {
             "Media thumbnails",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Background, runtime::TaskExecutor::BlockingIo),
-        [snapshot, directory, time, rate, sources = std::move(sources), cached = thumbnailCache_,
-         cachedAudio = audioBuffers_, cachedWaveforms = waveforms_, cachedPreviews = previews_,
-         diskCache = mediaDiskCache_, proxyOwner = &proxyCacheBytes_,
+        [snapshot, directory, time, rate, colorIntent, sources = std::move(sources),
+         cached = thumbnailCache_, cachedAudio = audioBuffers_, cachedWaveforms = waveforms_,
+         cachedPreviews = previews_, diskCache = mediaDiskCache_, proxyOwner = &proxyCacheBytes_,
          audioOwner = &decodedAudioBytes_](runtime::TaskContext& context) mutable {
             auto results = std::make_shared<Thumbnails>();
             results->cache = std::move(cached);
@@ -517,9 +576,12 @@ void AssetController::refresh() {
             };
             const auto decode = [&](const runtime::CompiledImageSource& source) {
                 Preview preview;
-                const auto selected =
-                    selectThumbnail(source, time, rate, directory, context.cancellation());
+                const auto selected = selectThumbnail(source, time, rate, directory,
+                                                      context.cancellation(), colorIntent);
                 preview.key = selected.cacheKey;
+                preview.inputColorSpaceName = selected.inputColorSpaceName;
+                preview.inputColorSpaceWarning = selected.inputColorSpaceWarning;
+                preview.inputColorSpaceAutomatic = selected.inputColorSpaceAutomatic;
                 preview.missing = !selected.available;
                 if (preview.missing)
                     return preview;
@@ -536,7 +598,7 @@ void AssetController::refresh() {
                     selected.path, selected.interpretation, selected.digest, selected.diskCacheKey,
                     diskCache, /*writeAsync=*/false,
                     [&] { return context.isCancellationRequested(); }, {},
-                    media::kMaxImageStorageBytes);
+                    media::kMaxImageStorageBytes, selected.inputProcessor);
                 preview.missing = !decoded.value.has_value();
                 if (decoded.value.has_value()) {
                     const auto& image = **decoded.value;
@@ -589,27 +651,80 @@ void AssetController::refresh() {
                     Preview preview;
                     preview.missing = true;
                     const auto digest = asset.contentDigest.toLowercaseHex();
-                    preview.key =
-                        std::string(digest.begin(), digest.end()) + ":video:" +
-                        std::to_string(static_cast<unsigned>(asset.interpretation.colorSpace));
                     const auto path = media::resolveImagePath(asset.locator.path,
                                                               asset.locator.relinkHint, directory);
                     media::video::VideoDecodeSession video(path);
                     const auto probe = runtime::video::probeMetadata(asset);
                     const bool available = !video.verifySource(
                         asset.contentDigest, [&] { return context.isCancellationRequested(); });
-                    const auto cachedPreview = results->cache.find(preview.key);
-                    if (available && cachedPreview != results->cache.end()) {
-                        preview.image = cachedPreview->second;
-                        preview.missing = false;
-                    }
                     const auto stream =
                         std::ranges::find(probe.streams, media::provider::MediaKind::Video,
                                           &media::provider::StreamDescriptor::kind);
-                    if (available && preview.image.isNull() && stream != probe.streams.end()) {
-                        const auto frame = video.frame(probe, stream->id, 0, 0, nullptr, [&] {
-                            return context.isCancellationRequested();
-                        });
+                    std::shared_ptr<const color::CpuColorSpaceProcessor> inputProcessor;
+                    std::string inputId;
+                    std::string workingId;
+                    core::Sha256Digest configRevision;
+                    bool automatic = false;
+                    bool colorAvailable = false;
+                    if (stream != probe.streams.end()) {
+                        const auto config = runtime::detail::resolveInputColorConfig(colorIntent);
+                        if (config) {
+                            const media::provider::ColourTags tags{
+                                stream->colour.primaries, stream->colour.transfer,
+                                stream->colour.matrix, stream->colour.range};
+                            const auto resolution = media::video::resolveVideoInputColorSpace(
+                                *config, tags,
+                                static_cast<std::uint32_t>(asset.interpretation.colorSpace),
+                                asset.interpretation.inputColorSpaceId);
+                            inputId = resolution.id;
+                            workingId = std::string(config->processColorSpaceId());
+                            configRevision = config->expectedRevision();
+                            automatic = resolution.automatic;
+                            preview.inputColorSpaceName = resolution.name;
+                            preview.inputColorSpaceWarning = resolution.warning;
+                            if (resolution.noConversion) {
+                                colorAvailable = true;
+                            } else if (!resolution.id.empty()) {
+                                std::string diagnostic;
+                                inputProcessor = runtime::detail::prepareInputColorProcessor(
+                                    *config,
+                                    runtime::detail::InputColorSpaceResolution{
+                                        resolution.id, resolution.name, resolution.warning,
+                                        resolution.noConversion, resolution.automatic},
+                                    diagnostic);
+                                if (!resolution.noConversion && !inputProcessor) {
+                                    preview.inputColorSpaceWarning = std::move(diagnostic);
+                                    inputId.clear();
+                                } else
+                                    colorAvailable = true;
+                            }
+                        } else {
+                            preview.inputColorSpaceWarning =
+                                "The selected OCIO input configuration is unavailable";
+                        }
+                    }
+                    preview.inputColorSpaceAutomatic = automatic;
+                    const auto revision = configRevision.toLowercaseHex();
+                    preview.key = std::string(digest.begin(), digest.end());
+                    preview.key += ":video:";
+                    preview.key +=
+                        std::to_string(static_cast<unsigned>(asset.interpretation.colorSpace));
+                    preview.key += ':';
+                    preview.key += inputId;
+                    preview.key += ':';
+                    preview.key += workingId;
+                    preview.key += ':';
+                    preview.key.append(revision.begin(), revision.end());
+                    const auto cachedPreview = results->cache.find(preview.key);
+                    if (available && colorAvailable && cachedPreview != results->cache.end()) {
+                        preview.image = cachedPreview->second;
+                        preview.missing = false;
+                    }
+                    if (available && colorAvailable && preview.image.isNull() &&
+                        stream != probe.streams.end()) {
+                        const auto frame = video.frame(
+                            probe, stream->id, 0, 0, nullptr, inputId, workingId, configRevision,
+                            [&] { return context.isCancellationRequested(); });
                         if (const auto* product =
                                 std::get_if<std::shared_ptr<const media::provider::FrameProduct>>(
                                     &frame)) {
@@ -626,8 +741,8 @@ void AssetController::refresh() {
                                     const auto pixels = media::video::videoToSceneLinear(
                                         **product,
                                         static_cast<std::uint32_t>(asset.interpretation.colorSpace),
-                                        *descriptor.value(), scale, scale, 65536,
-                                        [&] { return context.isCancellationRequested(); });
+                                        inputId, inputProcessor, *descriptor.value(), scale, scale,
+                                        65536, [&] { return context.isCancellationRequested(); });
                                     if (const auto* image =
                                             std::get_if<render::Rgba32fImage>(&pixels)) {
                                         const auto extent =

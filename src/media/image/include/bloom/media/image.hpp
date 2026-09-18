@@ -1,6 +1,6 @@
 #pragma once
 
-#include <bloom/color/ocio_cpu_input_processor.hpp>
+#include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/render/image.hpp>
 #include <cstdint>
@@ -24,6 +24,7 @@ enum class ImageColorSpace : std::uint8_t { Auto, Srgb, Linear, Raw };
 enum class ImageAlphaAssociation : std::uint8_t { Auto, Straight, Premultiplied };
 struct ImageInterpretation {
     ImageColorSpace colorSpace = ImageColorSpace::Auto;
+    std::string inputColorSpaceId;
     ImageAlphaAssociation alphaAssociation = ImageAlphaAssociation::Auto;
     friend bool operator==(const ImageInterpretation&, const ImageInterpretation&) = default;
 };
@@ -52,6 +53,7 @@ enum class ImageDiagnosticCode : std::uint8_t {
     DigestMismatch,
     ProviderMissing,
     ProviderFailed,
+    ColorSpaceUnavailable,
     Cancelled,
 };
 
@@ -136,8 +138,8 @@ struct SequenceManifest {
                                                  const CancelImageWork& cancel = {},
                                                  const ImageProvider* provider = nullptr);
 [[nodiscard]] ImageResult<std::shared_ptr<const render::Rgba32fImage>>
-decodeImage(const std::filesystem::path& path, ImageInterpretation interpretation = {},
-            std::shared_ptr<const color::CpuInputProcessor> processor = {},
+decodeImage(const std::filesystem::path& path, const ImageInterpretation& interpretation = {},
+            std::shared_ptr<const color::CpuColorSpaceProcessor> processor = {},
             const CancelImageWork& cancel = {}, const ImageProgress& progress = {},
             std::size_t pixelBudget = kMaxImageStorageBytes,
             std::optional<core::Sha256Digest> expectedDigest = {},

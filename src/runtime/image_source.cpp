@@ -1,7 +1,7 @@
 #include "image_source.hpp"
+#include "input_color_context.hpp"
 #include "operation_key.hpp"
 #include <algorithm>
-#include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/media/cache/media_disk_cache_decode.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <charconv>
@@ -13,7 +13,8 @@ namespace bloom::runtime::detail {
 
 ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::RationalTime time,
                                        document::FrameRate rate, const std::filesystem::path& base,
-                                       const CancellationToken& cancel) {
+                                       const CancellationToken& cancel,
+                                       const EvaluationColorIntent& colorIntent) {
     ImageSourceSelection selected;
     if (!source.asset) {
         selected.warning = "Image asset is missing; choose an asset or relink in Assets";
@@ -66,6 +67,9 @@ ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::
     selected.interpretation.colorSpace = static_cast<media::ImageColorSpace>(
         source.colorSpace == 0 ? static_cast<std::int64_t>(asset.interpretation.colorSpace)
                                : source.colorSpace);
+    selected.interpretation.inputColorSpaceId = !source.inputColorSpaceId.empty()
+                                                    ? source.inputColorSpaceId
+                                                    : asset.interpretation.inputColorSpaceId;
     selected.interpretation.alphaAssociation = source.premultiply
                                                    ? media::ImageAlphaAssociation::Straight
                                                    : media::ImageAlphaAssociation::Premultiplied;
@@ -73,15 +77,49 @@ ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::
         media::probeImage(selected.path, [&] { return cancel.isCancellationRequested(); });
     selected.cancelled = probe.cancelled;
     selected.available = probe.value.has_value() && probe.value->contentDigest == selected.digest;
-    if (!selected.available)
+    if (selected.available) {
+        auto config = resolveInputColorConfig(colorIntent);
+        if (!config) {
+            selected.available = false;
+            selected.warning = "The selected OCIO input configuration is unavailable";
+        } else {
+            const auto resolution = resolveImageInputColorSpace(
+                *config, *probe.value, selected.interpretation.colorSpace,
+                selected.interpretation.inputColorSpaceId);
+            selected.inputColorSpaceAutomatic = resolution.automatic;
+            selected.resolvedInputColorSpaceName = resolution.name;
+            selected.inputColorSpaceWarning = resolution.warning;
+            selected.workingColorSpaceId = std::string(config->processColorSpaceId());
+            selected.configRevision = config->expectedRevision();
+            if (!resolution.warning.empty() && resolution.id.empty())
+                selected.warning = resolution.warning;
+            if (!resolution.noConversion && resolution.id.empty())
+                selected.available = false;
+            if (selected.available) {
+                selected.interpretation.inputColorSpaceId = resolution.id;
+                std::string diagnostic;
+                selected.inputProcessor =
+                    prepareInputColorProcessor(*config, resolution, diagnostic);
+                if (!resolution.noConversion && !selected.inputProcessor) {
+                    selected.available = false;
+                    selected.warning = diagnostic;
+                }
+            }
+        }
+    }
+    if (!selected.available && selected.warning.empty())
         selected.warning = probe.value.has_value() ? "Image changed; relink the asset in Assets"
                                                    : probe.diagnostic;
     OperationKey key;
     const auto digest = selected.digest.toLowercaseHex();
-    const auto config = color::kBloomNeutralV1ConfigDigest.toLowercaseHex();
+    const auto config = selected.configRevision.toLowercaseHex();
     key.add(std::string(digest.begin(), digest.end()));
     key.add(memberFrame);
     key.add(selected.interpretation.colorSpace);
+    key.add(selected.interpretation.inputColorSpaceId);
+    key.add(selected.workingColorSpaceId);
+    const auto revision = selected.configRevision.toLowercaseHex();
+    key.add(std::string(revision.begin(), revision.end()));
     key.add(selected.interpretation.alphaAssociation);
     key.add(std::string(config.begin(), config.end()));
     key.add(selected.available);
@@ -96,8 +134,10 @@ ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::
     diskInputs.contentDigest = selected.digest;
     diskInputs.memberFrame = memberFrame;
     diskInputs.colorSpace = selected.interpretation.colorSpace;
+    diskInputs.inputColorSpaceId = selected.interpretation.inputColorSpaceId;
+    diskInputs.workingColorSpaceId = selected.workingColorSpaceId;
     diskInputs.alphaAssociation = selected.interpretation.alphaAssociation;
-    diskInputs.configDigest = color::kBloomNeutralV1ConfigDigest;
+    diskInputs.configDigest = selected.configRevision;
     selected.diskCacheKey =
         media::cache::buildImageCacheKey(diskInputs, media::cache::kImageDecoderIdentity);
     return selected;
@@ -119,7 +159,7 @@ evaluateImageSource(const ImageSourceSelection& selected,
         auto decoded = media::cache::decodeThroughDiskCache(
             selected.path, selected.interpretation, selected.digest, selected.diskCacheKey,
             diskCache, /*writeAsync=*/true, [&] { return cancel.isCancellationRequested(); }, {},
-            std::min(budget, media::kMaxImageStorageBytes));
+            std::min(budget, media::kMaxImageStorageBytes), selected.inputProcessor);
         if (!decoded.value.has_value())
             return {{}, decoded.diagnostic, decoded.cancelled};
         image = std::move(*decoded.value);

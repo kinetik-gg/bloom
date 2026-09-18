@@ -81,12 +81,16 @@ providers for macOS and Windows are not available yet.
 Drag the asset into the Timeline to create a Video source and Layer at the normal Arrange position.
 The Layer carries image and, when present, audio connections. Its node card shows the first frame;
 a video with audio also supplies a waveform. Properties exposes Asset, Start Frame, Loop Mode and
-Colour Space. Start Frame offsets both image and audio. Loop and Ping-pong affect the image;
+legacy Colour Space plus **Input colour space**. Input colour space is Auto by default and is
+resolved from the selected OCIO configuration; choose an explicit config space when the container
+tags are incomplete or the footage is LogC3/Log3G10. Start Frame offsets both image and audio. Loop and Ping-pong affect the image;
 audio follows the ordinary clip duration.
 
-This preview path supports explicit Rec.709 matrix/primaries with Rec.709 or sRGB transfer.
-Rec.2020, HLG and PQ footage is currently unavailable. A file changed outside Bloom is marked
-unavailable until relinked, including when its old frame was cached.
+Auto maps Rec.709-tagged streams to the config's Rec.709 camera/video space, sRGB transfer to its
+sRGB-texture space, and linear transfer to the working space. The asset tooltip shows the numeric
+container tags. Rec.2020, HLG and PQ footage remains unavailable on the unqualified preview path
+and reports why. A file changed outside Bloom is marked unavailable until relinked, including when
+its old frame was cached.
 
 A ProRes asset's tooltip states: “Decoded by FFmpeg; not an Apple-authorized ProRes implementation”.
 This preview workflow carries no Apple authorization or ProRes delivery qualification.

@@ -173,4 +173,69 @@ void validateManifestSchemaV1_19(const json::Value& schema) {
         json::parse(R"({"$ref":"#/$defs/fixedVersion-1.18"})");
     validateManifestSchemaV1_18(previous);
 }
+
+void validateDocumentSchemaV1_20(const json::Value& schema) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-document:1.20",
+                       "asset input colour-space document id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.20").at("properties").at("minor"),
+                 R"({"const":20})", "asset input colour-space minor");
+    const auto& interpretation =
+        schema.at("$defs").at("asset-1.11").at("properties").at("interpretation");
+    requireExact(interpretation.at("required"),
+                 R"(["colorSpace","inputColorSpaceId","alphaAssociation"])",
+                 "asset interpretation required members");
+    requireExact(requireMember(interpretation.at("properties"), "inputColorSpaceId",
+                               "asset interpretation properties"),
+                 R"({"type":"string","maxLength":256})", "asset input colour-space id");
+    auto previous = schema;
+    auto& defs = previous.at("$defs");
+    auto fixed =
+        std::find_if(defs.asObject().begin(), defs.asObject().end(),
+                     [](const auto& member) { return member.first == "fixedVersion-1.20"; });
+    if (fixed == defs.asObject().end())
+        throw std::runtime_error("document 1.20 fixed version definition is missing");
+    fixed->first = "fixedVersion-1.19";
+    fixed->second.at("properties").at("minor") = json::parse(R"({"const":19})");
+    auto& previousInterpretation = defs.at("asset-1.11").at("properties").at("interpretation");
+    std::erase_if(previousInterpretation.at("required").asArray(),
+                  [](const auto& member) { return member.asString() == "inputColorSpaceId"; });
+    std::erase_if(previousInterpretation.at("properties").asObject(),
+                  [](const auto& member) { return member.first == "inputColorSpaceId"; });
+    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-document:1.19"));
+    previous.at("title") = json::Value(std::string("Bloom Project Document 1.19"));
+    previous.at("$comment") = json::Value(
+        std::string("Document 1.19 adds an optional per-composition working colour-space override; "
+                    "typed, provenance-carrying data blocks remain part of the current contract."));
+    previous.at("properties").at("schemaVersion") =
+        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.19"})");
+    validateDocumentSchemaV1_19(previous);
+}
+
+void validateManifestSchemaV1_20(const json::Value& schema) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-manifest:1.20",
+                       "asset input colour-space manifest id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.20").at("properties").at("minor"),
+                 R"({"const":20})", "asset input colour-space manifest minor");
+    auto previous = schema;
+    auto& defs = previous.at("$defs");
+    auto fixed =
+        std::find_if(defs.asObject().begin(), defs.asObject().end(),
+                     [](const auto& member) { return member.first == "fixedVersion-1.20"; });
+    if (fixed == defs.asObject().end())
+        throw std::runtime_error("manifest 1.20 fixed version definition is missing");
+    fixed->first = "fixedVersion-1.19";
+    fixed->second.at("properties").at("minor") = json::parse(R"({"const":19})");
+    previous.at("$id") = json::Value(std::string("urn:kinetik:bloom:schema:project-manifest:1.19"));
+    previous.at("title") = json::Value(std::string("Bloom Project Manifest for Document 1.19"));
+    previous.at("$comment") =
+        json::Value(std::string("Document 1.19 persists the current document version and the "
+                                "manifest remains structurally unchanged."));
+    previous.at("$defs").at("document-1.0").at("properties").at("schemaVersion") =
+        json::parse(R"({"$ref":"#/$defs/fixedVersion-1.19"})");
+    validateManifestSchemaV1_19(previous);
+}
 } // namespace bloom::quality

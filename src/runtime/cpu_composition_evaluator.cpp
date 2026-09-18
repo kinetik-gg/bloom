@@ -1740,8 +1740,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             }
             std::optional<detail::ImageSourceSelection> selectedImage;
             if (const auto* source = std::get_if<CompiledImageSource>(&plan->operations()[index])) {
-                selectedImage = detail::selectImageSource(
-                    *source, request.time, plan->format().frameRate(), mediaBase, cancellation);
+                selectedImage =
+                    detail::selectImageSource(*source, request.time, plan->format().frameRate(),
+                                              mediaBase, cancellation, request.colorIntent);
                 if (selectedImage->cancelled)
                     return EvaluationResult::cancelled();
                 if (!selectedImage->warning.empty())
@@ -1753,9 +1754,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             }
             std::optional<detail::VideoSourceSelection> selectedVideo;
             if (const auto* source = std::get_if<CompiledVideoSource>(&plan->operations()[index])) {
-                selectedVideo =
-                    detail::selectVideoSource(*source, request.time, plan->format().frameRate(),
-                                              mediaBase, *videoContext(), true, cancellation);
+                selectedVideo = detail::selectVideoSource(
+                    *source, request.time, plan->format().frameRate(), mediaBase, *videoContext(),
+                    true, cancellation, request.colorIntent);
                 if (selectedVideo->cancelled)
                     return EvaluationResult::cancelled();
                 if (!selectedVideo->warning.empty())
@@ -2135,6 +2136,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 return;
                             auto image = media::video::videoToSceneLinear(
                                 *selectedVideo->frame, selectedVideo->interpretation,
+                                selectedVideo->inputColorSpaceId, selectedVideo->inputProcessor,
                                 resolved.imageDescriptor, resolved.horizontalScale,
                                 resolved.verticalScale, remainingPixelBudget(),
                                 [&] { return cancellation.isCancellationRequested(); });

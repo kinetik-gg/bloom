@@ -38,6 +38,8 @@ class AssetController final : public QObject {
     [[nodiscard]] bool missing(document::AssetId id) const;
     [[nodiscard]] QImage thumbnail(document::AssetId id) const;
     [[nodiscard]] QImage nodeThumbnail(document::NodeId id) const;
+    [[nodiscard]] QString inputColorSpaceDisplay(document::AssetId id) const;
+    [[nodiscard]] QString inputColorSpaceWarning(document::AssetId id) const;
     [[nodiscard]] std::shared_ptr<const media::audio::WaveformSummary>
     waveform(document::AssetId id) const;
     [[nodiscard]] std::shared_ptr<const media::audio::AudioBuffer>
@@ -61,6 +63,9 @@ class AssetController final : public QObject {
     struct Preview {
         QImage image;
         std::string key;
+        std::string inputColorSpaceName;
+        std::string inputColorSpaceWarning;
+        bool inputColorSpaceAutomatic = false;
         bool missing = false;
     };
     using Previews = std::map<document::AssetId, Preview>;

@@ -43,10 +43,13 @@ enum class EvaluationQuality : std::uint8_t {
 };
 
 inline constexpr std::string_view kLinearRec709SceneColorSpaceId = "lin_rec709_scene";
+inline constexpr std::string_view kBloomNeutralOcioConfigUri =
+    "bloom://ocio/neutral-v1/config.ocio";
 
 struct EvaluationColorIntent final {
     std::string_view workingColorSpaceId{kLinearRec709SceneColorSpaceId};
     core::Sha256Digest ocioConfigRevision{};
+    std::string_view ocioConfigUri{kBloomNeutralOcioConfigUri};
 
     // Compatibility spelling for existing request builders. Its value is the generalized
     // identity {lin_rec709_scene, empty revision}; new plans should carry the selected config

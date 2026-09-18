@@ -232,6 +232,12 @@ constantMatchesSchema(const std::string_view schemaKey,
     }
     if (schemaKey == "bloom.image.asset")
         return std::holds_alternative<std::string>(constant.value);
+    if (schemaKey == kImageInputColorSpaceIdParameterSchemaKey ||
+        schemaKey == kVideoInputColorSpaceIdParameterSchemaKey) {
+        const auto* value = std::get_if<std::string>(&constant.value);
+        return value != nullptr && bloom::core::isValidUtf8(*value) && value->size() <= 256 &&
+               value->find('\0') == std::string::npos;
+    }
     if (schemaKey == "bloom.image.premultiply")
         return std::holds_alternative<bool>(constant.value);
     if (schemaKey == "bloom.image.start-frame" || schemaKey == "bloom.image.loop-mode" ||
