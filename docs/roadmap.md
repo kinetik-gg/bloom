@@ -616,3 +616,8 @@ These are deliberate deferrals, not permission for the current boundaries to mak
 The contracts and current topology refusals are owned by
 [`layer-graph-model.md`](architecture/layer-graph-model.md). CPU primitives remain unchanged;
 portable text rasterization and driver-record cloning remain unavailable.
+
+Instancing -- one operation producing N copies with per-element attributes, and layout solvers as
+array-valued value nodes -- is designed and unimplemented in
+[`architecture/instancing.md`](architecture/instancing.md) under
+[ADR 0023](decisions/0023-instances-and-per-element-data.md), which carries the lane plan.

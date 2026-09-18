@@ -49,14 +49,6 @@ class PropertiesRegistryRow final : public QWidget {
                           QWidget* parent);
     void refresh();
     void reset();
-    // CRASH-2: a font row's catalogue poll re-arms itself via QTimer::singleShot for as long as
-    // the (process-wide) font scan stays in flight. configureRegistryRows()/configureUpstream()
-    // tear a stale row down with setParent(nullptr) + deleteLater(), and deleteLater() only
-    // destroys the row once the event loop gets back to its DeferredDelete event -- there is no
-    // guarantee that wins the race against the row's own pending poll. Callers MUST call this
-    // before orphaning a row for deferred deletion, so a poll that still fires in that window
-    // can no longer touch session_ (which may, by then, refer to a destroyed CompositionSession).
-    void detachFromSession();
 
   private:
     void commit();
@@ -80,6 +72,5 @@ class PropertiesRegistryRow final : public QWidget {
     QPlainTextEdit* multiline_ = nullptr;
     KeyframeDiamond* diamond_ = nullptr;
     bool refreshing_ = false;
-    bool detached_ = false;
 };
 } // namespace bloom::ui
