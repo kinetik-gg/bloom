@@ -27,16 +27,17 @@ using bloom::color::ResolvedBloomNeutralConfig;
 // display/view names discovered by ResolvedBloomNeutralConfig (per docs/architecture/
 // color-management.md's "Qualified Display Intent And Identity").
 [[nodiscard]] std::optional<bloom::color::DisplayProcessorIdentityV1>
-buildIdentity(const ResolvedBloomNeutralConfig& resolved) {
+buildIdentity(const ResolvedBloomNeutralConfig& resolved, const std::string_view displayName,
+              const std::string_view viewName, const std::string_view outputColorSpaceId) {
     const DisplayProcessorIdentityV1InputView input{
         .expectedOcioRevision = resolved.expectedRevision(),
         .contextVariables = {},
         .sourceColorSpaceId = resolved.processColorSpaceId(),
-        .displayName = resolved.displayName(),
-        .viewName = resolved.viewName(),
+        .displayName = displayName,
+        .viewName = viewName,
         .lookMode = DisplayProcessorLookModeV1::Bypass,
         .lookNames = {},
-        .outputColorSpaceId = resolved.outputColorSpaceId(),
+        .outputColorSpaceId = outputColorSpaceId,
         .qualityId = bloom::color::kDisplayProcessorIdentityQualityId,
         .semanticsProfileId = bloom::color::kDisplayProcessorIdentitySemanticsProfileId,
         .packingId = bloom::color::kDisplayProcessorIdentityPackingId,
@@ -123,6 +124,11 @@ PreparedCpuDisplayProcessorHandle::referenceToDisplay(const core::Color4d value)
     return convertColor(impl_->cpuProcessor(), value, true);
 }
 
+std::optional<core::Color4d> PreparedCpuDisplayProcessorHandle::referenceToDisplayLinear(
+    const core::Color4d value) const noexcept {
+    return convertColor(impl_->cpuProcessor(), value, false);
+}
+
 std::optional<core::Color4d>
 PreparedCpuDisplayProcessorHandle::displayToReference(const core::Color4d value) const noexcept {
     return convertColor(impl_->inverseProcessor(), value, false);
@@ -140,6 +146,21 @@ PreparedCpuDisplayProcessorHandle::~PreparedCpuDisplayProcessorHandle() = defaul
 
 OcioBuildProcessorResult
 buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig& resolved) noexcept {
+    return buildBloomNeutralCpuDisplayProcessor(resolved, resolved.displayName(),
+                                                resolved.viewName());
+}
+
+OcioBuildProcessorResult
+buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig& resolved,
+                                     const std::string_view displayName,
+                                     const std::string_view viewName) noexcept {
+    const auto entry = std::find_if(
+        resolved.displays().begin(), resolved.displays().end(), [&](const auto& candidate) {
+            return candidate.display == displayName && candidate.view == viewName;
+        });
+    if (entry == resolved.displays().end()) {
+        return OcioBuildProcessorResult(OcioBuildProcessorError::DisplayViewNotFound);
+    }
     const auto& config = resolved.impl().config();
 
     OCIO::ConstProcessorRcPtr processor;
@@ -156,19 +177,19 @@ buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig& resolved)
         // ocio_builtin_registry.cpp's resolution-time comment for the companion assertion that
         // the config declares no "environment:" section of its own.
         const OCIO::ConstContextRcPtr emptyContext = OCIO::Context::Create();
-        processor = config->getProcessor(
-            emptyContext, std::string(resolved.processColorSpaceId()).c_str(),
-            std::string(resolved.displayName()).c_str(), std::string(resolved.viewName()).c_str(),
-            OCIO::TRANSFORM_DIR_FORWARD);
+        processor =
+            config->getProcessor(emptyContext, std::string(resolved.processColorSpaceId()).c_str(),
+                                 std::string(displayName).c_str(), std::string(viewName).c_str(),
+                                 OCIO::TRANSFORM_DIR_FORWARD);
         if (!processor) {
             return OcioBuildProcessorResult(OcioBuildProcessorError::GetProcessorFailed);
         }
         cacheId = processor->getCacheID();
         cpuProcessor = processor->getDefaultCPUProcessor();
-        const auto inverse = config->getProcessor(
-            emptyContext, std::string(resolved.processColorSpaceId()).c_str(),
-            std::string(resolved.displayName()).c_str(), std::string(resolved.viewName()).c_str(),
-            OCIO::TRANSFORM_DIR_INVERSE);
+        const auto inverse =
+            config->getProcessor(emptyContext, std::string(resolved.processColorSpaceId()).c_str(),
+                                 std::string(displayName).c_str(), std::string(viewName).c_str(),
+                                 OCIO::TRANSFORM_DIR_INVERSE);
         // Authoring must not turn display white into an artificial HDR value through fast pow.
         inverseProcessor = inverse->getOptimizedCPUProcessor(OCIO::OPTIMIZATION_LOSSLESS);
         if (!cpuProcessor || !inverseProcessor) {
@@ -180,7 +201,7 @@ buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig& resolved)
         return OcioBuildProcessorResult(OcioBuildProcessorError::GetProcessorFailed);
     }
 
-    auto identity = buildIdentity(resolved);
+    auto identity = buildIdentity(resolved, displayName, viewName, entry->colourSpaceId);
     if (!identity.has_value()) {
         return OcioBuildProcessorResult(OcioBuildProcessorError::IdentityConstructionFailed);
     }
@@ -191,6 +212,8 @@ buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig& resolved)
         .compilerVersion = compilerVersionString(),
         .targetTriple = BLOOM_COLOR_OCIO_TARGET_TRIPLE,
         .processorCacheId = cacheId,
+        .displayName = std::string(displayName),
+        .viewName = std::string(viewName),
         .dependencyLockDigest = std::nullopt,
         .qualifiedPrefixDigest = std::nullopt,
     };

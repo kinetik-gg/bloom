@@ -3,6 +3,7 @@
 #include <bloom/color/display_processor_identity.hpp>
 #include <bloom/color/ocio_content_revision.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -48,6 +49,21 @@ void testAcesCgBuiltIn(Expectations& expectations) {
     expectations.expect(resolved != nullptr && resolved->processColorSpaceId() == "ACEScg" &&
                             resolved->configName() == bloom::color::kAcesCgV1BuiltinConfigName,
                         "ACES CG resolves the requested ACEScg working space and stable name");
+    if (resolved != nullptr) {
+        const auto rec709 = std::ranges::find_if(resolved->displays(), [](const auto& entry) {
+            return entry.display == "Rec.1886 Rec.709 - Display" &&
+                   entry.view == "ACES 1.0 - SDR Video";
+        });
+        const auto srgb = std::ranges::find_if(resolved->displays(), [](const auto& entry) {
+            return entry.display == "sRGB - Display" && entry.view == "ACES 1.0 - SDR Video";
+        });
+        expectations.expect(rec709 != resolved->displays().end(),
+                            "ACES CG exposes the Rec.1886 Rec.709 SDR Video pair");
+        expectations.expect(srgb != resolved->displays().end(),
+                            "ACES CG exposes the sRGB SDR Video pair");
+        expectations.expect(!resolved->displays().empty() && resolved->displays()[0].isDefault,
+                            "the first ACES CG display/view pair is the config default");
+    }
 
     auto aces2065 =
         bloom::color::resolveOcioBuiltIn(OcioConfigLocatorKind::BloomBuiltIn,

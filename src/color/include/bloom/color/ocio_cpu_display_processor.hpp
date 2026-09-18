@@ -29,6 +29,8 @@ struct DisplayProcessorExecutionProvenance final {
     std::string compilerVersion;
     std::string targetTriple;
     std::string processorCacheId;
+    std::string displayName;
+    std::string viewName;
     std::optional<core::Sha256Digest> dependencyLockDigest;
     std::optional<core::Sha256Digest> qualifiedPrefixDigest;
 
@@ -70,6 +72,7 @@ enum class OcioBuildProcessorError : std::uint8_t {
     GetProcessorFailed,
     GetCpuProcessorFailed,
     IdentityConstructionFailed,
+    DisplayViewNotFound,
 };
 
 class PreparedCpuDisplayProcessorHandle;
@@ -77,6 +80,11 @@ class OcioBuildProcessorResult;
 
 [[nodiscard]] OcioBuildProcessorResult
 buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig& resolved) noexcept;
+
+[[nodiscard]] OcioBuildProcessorResult
+buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig& resolved,
+                                     std::string_view displayName,
+                                     std::string_view viewName) noexcept;
 
 // Boundary product 2 of the "CPU Display Processor Boundary" contract: "an immutable
 // DisplayProcessorIdentity, execution provenance, and either a qualified in-process built-in
@@ -108,6 +116,8 @@ class PreparedCpuDisplayProcessorHandle final {
     [[nodiscard]] std::optional<core::Color4d>
     referenceToDisplay(core::Color4d value) const noexcept;
     [[nodiscard]] std::optional<core::Color4d>
+    referenceToDisplayLinear(core::Color4d value) const noexcept;
+    [[nodiscard]] std::optional<core::Color4d>
     displayToReference(core::Color4d value) const noexcept;
 
     // Opaque handle consumed only by ocio_cpu_display_frame.cpp within this same library.
@@ -118,6 +128,9 @@ class PreparedCpuDisplayProcessorHandle final {
   private:
     friend OcioBuildProcessorResult
     buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig&) noexcept;
+    friend OcioBuildProcessorResult
+    buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig&, std::string_view,
+                                         std::string_view) noexcept;
 
     PreparedCpuDisplayProcessorHandle(std::unique_ptr<Impl> impl,
                                       DisplayProcessorIdentityV1 identity,
@@ -154,6 +167,9 @@ class [[nodiscard]] OcioBuildProcessorResult final {
   private:
     friend OcioBuildProcessorResult
     buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig&) noexcept;
+    friend OcioBuildProcessorResult
+    buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig&, std::string_view,
+                                         std::string_view) noexcept;
 
     explicit OcioBuildProcessorResult(PreparedCpuDisplayProcessorHandle handle) noexcept
         : handle_(std::move(handle)) {}

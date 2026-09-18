@@ -65,6 +65,7 @@ enum class OcioBuiltInInvalidReason : std::uint8_t {
     ProcessColorSpaceNotUniquelyMapped,
     OutputColorSpaceNotUniquelyMapped,
     DisplayViewNotUniquelyMapped,
+    DisplayViewEnumerationLimitExceeded,
     WorkingColorSpaceMissing,
     WorkingColorSpaceNotSceneLinear,
 };
@@ -78,6 +79,15 @@ struct OcioColorSpaceInfo final {
     bool sceneLinear = false;
 
     friend bool operator==(const OcioColorSpaceInfo&, const OcioColorSpaceInfo&) = default;
+};
+
+struct DisplayViewEntry final {
+    std::string display;
+    std::string view;
+    std::string colourSpaceId;
+    bool isDefault = false;
+
+    friend bool operator==(const DisplayViewEntry&, const DisplayViewEntry&) = default;
 };
 
 // Attempts to resolve one OcioConfigReference-shaped request against the in-process Bloom
@@ -146,6 +156,8 @@ class ResolvedBloomNeutralConfig final {
     // when a project or an asset chooses a working space.
     [[nodiscard]] const std::vector<OcioColorSpaceInfo>& colorSpaces() const& noexcept;
     [[nodiscard]] const std::vector<OcioColorSpaceInfo>& colorSpaces() const&& = delete;
+    [[nodiscard]] std::span<const DisplayViewEntry> displays() const& noexcept;
+    [[nodiscard]] std::span<const DisplayViewEntry> displays() const&& = delete;
     [[nodiscard]] std::string_view sRgbTextureColorSpaceId() const& noexcept;
     [[nodiscard]] std::string_view sRgbTextureColorSpaceId() const&& = delete;
     [[nodiscard]] std::string_view rec709VideoColorSpaceId() const& noexcept;
@@ -169,6 +181,7 @@ class ResolvedBloomNeutralConfig final {
                                std::string processColorSpaceId, std::string outputColorSpaceId,
                                std::string displayName, std::string viewName,
                                std::string configName, std::vector<OcioColorSpaceInfo> colorSpaces,
+                               std::vector<DisplayViewEntry> displays,
                                std::string sRgbTextureColorSpaceId,
                                std::string rec709VideoColorSpaceId) noexcept;
 
@@ -180,6 +193,7 @@ class ResolvedBloomNeutralConfig final {
     std::string viewName_;
     std::string configName_;
     std::vector<OcioColorSpaceInfo> colorSpaces_;
+    std::vector<DisplayViewEntry> displays_;
     std::string sRgbTextureColorSpaceId_;
     std::string rec709VideoColorSpaceId_;
 };
