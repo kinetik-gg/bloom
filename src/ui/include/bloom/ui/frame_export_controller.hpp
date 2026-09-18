@@ -320,6 +320,9 @@ class FrameExportController final : public QObject {
     FrameExportApprovalDecisionProvider approvalDecisionProvider_;
     std::optional<SequenceState> sequence_;
     std::unique_ptr<host::SequenceExportRunnerV1> mediaExport_;
+    // Guards pollCompositionExport against re-entrancy from the approval prompt's nested event
+    // loop.
+    bool pollingComposition_ = false;
 
     FrameExportActivity activity_ = FrameExportActivity::Idle;
     std::filesystem::path pendingDestination_;

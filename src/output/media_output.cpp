@@ -31,8 +31,15 @@ analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,
     const bool dnx = preset == OutputPresetV1::DnxhrMxfV1;
     const bool pcm = preset == OutputPresetV1::PcmWavV1;
     const bool h264 = preset == OutputPresetV1::H264MovV1;
+#if defined(__APPLE__)
+    // The preset is ProRes regardless of which provider name the settings carry; the macOS
+    // provider spells it "prores", while the shared EncodeSettingsV1 default remains "prores_ks".
+    const bool proresCodec = settings.videoCodec == "prores" || settings.videoCodec == "prores_ks";
+#else
+    const bool proresCodec = settings.videoCodec == "prores_ks";
+#endif
     if ((!prores && !dnx && !pcm && !h264) || !valid(settings) ||
-        (prores && (settings.videoCodec != "prores_ks" || settings.container != "mov")) ||
+        (prores && (!proresCodec || settings.container != "mov")) ||
         (dnx && (settings.videoCodec != "dnxhd" || settings.container != "mxf")) ||
         (h264 && (settings.videoCodec != "h264" || settings.container != "mov" ||
                   settings.profile != "high")) ||

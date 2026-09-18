@@ -89,6 +89,16 @@ void FrameExportController::beginCompositionExport(CompositionExportRequest requ
     taskUiBridge_.wake();
 }
 void FrameExportController::pollCompositionExport() {
+    // The approval prompt runs a nested Qt event loop, during which the task-bridge timer can fire
+    // this poll re-entrantly. A nested completion resets mediaExport_, and the outer frame would
+    // then dereference null; the guard makes the poll non-reentrant and tolerates a cleared export.
+    if (pollingComposition_ || !mediaExport_)
+        return;
+    pollingComposition_ = true;
+    struct PollGuard final {
+        bool& flag;
+        ~PollGuard() { flag = false; }
+    } pollGuard{pollingComposition_};
     const auto previous = mediaExport_->encodedFrames();
     mediaExport_->poll();
     if (mediaExport_->encodedFrames() != previous)

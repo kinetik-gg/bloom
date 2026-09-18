@@ -3,6 +3,7 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -66,9 +67,9 @@ void videoAssetRows(TestContext& context) {
             found = true;
             context.expect((*it)->text(1) == QStringLiteral("Video · 00:00:02"),
                            "video kind includes HH:MM:SS");
-            context.expect((*it)->toolTip(0).contains(QStringLiteral(
-                               "Decoded by FFmpeg; not an Apple-authorized ProRes implementation")),
-                           "ProRes tooltip carries exact non-authorization note");
+            context.expect((*it)->toolTip(0).contains(
+                               QString::fromUtf8(bloom::media::provider::kProResPreviewNote)),
+                           "ProRes tooltip carries the platform's ProRes provenance note");
         }
     context.expect(found, "video asset appears in Assets");
     commands::Transaction transaction("Add Video Layer", session.snapshot().revision());

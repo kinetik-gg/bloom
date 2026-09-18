@@ -99,6 +99,23 @@ struct Work {
         s.frames = total();
         s.sampleRate = request.sampleRate;
         s.bwfDescription = request.bwfDescription;
+#if defined(__APPLE__)
+        // macOS exports through the AVAssetWriter/VideoToolbox provider: MOV/MP4 video (ProRes or
+        // H.264) with PCM or AAC audio. WAV, MXF and TIFF need the FFmpeg worker and are refused
+        // here; outputPresetAvailabilityV1() reports them unavailable in the UI too.
+        if (request.preset == output::OutputPresetV1::ProResMovV1) {
+            s.videoCodec = "prores";
+            s.container = "mov";
+            s.profile = request.profile.empty() ? "hq" : request.profile;
+        } else if (request.preset == output::OutputPresetV1::H264MovV1) {
+            s.videoCodec = "h264";
+            s.container = "mov";
+            s.profile = "high";
+        } else {
+            require(false, "This export preset needs the FFmpeg worker, unavailable on macOS",
+                    Error::Unavailable);
+        }
+#else
         if (request.preset == output::OutputPresetV1::H264MovV1) {
             s.videoCodec = "h264";
             s.container = "mov";
@@ -134,6 +151,7 @@ struct Work {
             s.container = "wav";
             s.frames = 0;
         }
+#endif
         if (request.audio || request.preset == output::OutputPresetV1::PcmWavV1) {
             s.audioCodec = request.pcmCodec;
             require(s.sampleRate > 0 && s.sampleRate <= Limits::sampleRate,
@@ -149,12 +167,18 @@ struct Work {
         analysis =
             std::make_unique<output::MediaOutputAnalysisV1>(checked(output::analyzeMediaOutputV1(
                 request.preset, std::move(s), display, output::outputLookEffectCountV1(*plan))));
+#if defined(__APPLE__)
+        if (request.preset == output::OutputPresetV1::H264MovV1 ||
+            request.preset == output::OutputPresetV1::ProResMovV1)
+            analysis->implementationNote += "; encoder=videotoolbox";
+#else
         if (request.preset == output::OutputPresetV1::H264MovV1) {
             analysis->implementationNote +=
                 request.hardware ? "; encoder=vaapi vaapi-runtime-unqualified"
                                  : "; encoder=openh264 " + request.worker.openh264Version +
                                        " sha256=" + request.worker.openh264Digest;
         }
+#endif
         // Prepared frame, outbound protocol buffer and transport copy; one slot by construction.
         const auto bytes = static_cast<std::uint64_t>(settings().width) * settings().height * 24U +
                            std::uint64_t{8} * kEncodeChunkBytes;
@@ -352,7 +376,14 @@ struct SequenceExportRunnerV1::State {
             .targetPath = work->request.range.destination,
             .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
             .owner = owner,
+        // The per-frame preservation check compares the prepared float frame before encoding.
+#if defined(__APPLE__)
+            // The TIFF preset's adapter is unavailable on macOS (no FFmpeg worker), which made
+            // every video export unapprovable; use the always-available flat-EXR analyzer instead.
+            .preset = output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1};
+#else
             .preset = output::OutputPresetV1::TiffRgba16SrgbV1};
+#endif
         auto begin = beginOutputAnalysisAttemptV1(scheduler, artifacts, ledger, std::move(request));
         if (!begin) {
             fail({Error::Busy, "Frame analysis admission refused"});

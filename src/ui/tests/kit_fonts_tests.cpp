@@ -59,10 +59,20 @@ void testEveryBundledFaceIsInTheResourcePackAndRegisters(Expectations& expectati
     expectations.expect(status.interfaceRegistered, "the interface family registered");
     expectations.expect(status.monospaceRegistered, "the monospaced family registered");
 
-    for (const char* family :
-         {"Inter", "Inter Medium", "Inter SemiBold", "Geist Mono", "Geist Mono Medium"}) {
-        expectations.expect(status.registeredFamilies.contains(QString::fromLatin1(family)),
-                            std::string{"Qt registered the family "} + family);
+    // Platforms differ in how a weight-specific static face is named: Qt/Fontconfig can expose
+    // "Inter Medium" as its own family, while CoreText collapses it into "Inter" with style
+    // "Medium". Accept either spelling, and require every role to resolve to a family Qt actually
+    // registered.
+    for (const char* base : {"Inter", "Geist Mono"}) {
+        expectations.expect(status.registeredFamilies.contains(QString::fromLatin1(base)),
+                            std::string{"Qt registered the base family "} + base);
+    }
+    for (const auto role :
+         {kit::TypeRole::Ui, kit::TypeRole::UiSmall, kit::TypeRole::Title, kit::TypeRole::Value}) {
+        const QStringList roleFamilies = kit::fontFamiliesForRole(role);
+        expectations.expect(!roleFamilies.isEmpty() &&
+                                status.registeredFamilies.contains(roleFamilies.first()),
+                            "each type role resolves to a registered bundled family");
     }
     const QStringList interfaceStyles = QFontDatabase::styles(kit::interfaceFontFamily());
     for (const char* style : {"Regular", "Medium", "SemiBold"}) {
@@ -97,8 +107,9 @@ void testRegistrationIsIdempotent(Expectations& expectations) {
     const auto& again = kit::registerBundledFonts();
     expectations.expect(again.registeredFamilies == familiesBefore,
                         "re-registering returns the same result rather than duplicating faces");
-    expectations.expect(again.registeredFamilies.size() == 5,
-                        "the five shipped faces register exactly five distinct families, got " +
+    expectations.expect(again.registeredFamilies.size() >= 2 &&
+                            again.registeredFamilies.size() <= 5,
+                        "the shipped faces register de-duplicated families, got " +
                             again.registeredFamilies.join(QStringLiteral(" | ")).toStdString());
     expectations.expect(again.registeredFamilies.count(kit::interfaceFontFamily()) == 1,
                         "the one interface family the three interface faces share is collapsed, "
@@ -131,14 +142,21 @@ void testEveryTypeRoleResolvesToItsBundledFace(Expectations& expectations) {
 }
 
 void testHeavierWeightsResolveToTheirOwnStaticFace(Expectations& expectations) {
-    expectations.expect(kit::fontFamiliesForRole(kit::TypeRole::Ui).first() ==
-                            QStringLiteral("Inter Medium"),
-                        "UI asks for the bundled Medium static family");
-    expectations.expect(kit::fontFamiliesForRole(kit::TypeRole::Title).first() ==
-                            QStringLiteral("Inter SemiBold"),
-                        "Title asks for the bundled SemiBold static family");
+    // Where the platform exposes the weight as its own static family (Qt/Fontconfig) the role asks
+    // for that name; where it collapses the weight into the base family's styles (CoreText) the
+    // role asks for the base family and kit::font() selects the weight explicitly. Accept either,
+    // then prove the weight below by rasterized advance rather than by the requested name.
+    const QString uiFamily = kit::fontFamiliesForRole(kit::TypeRole::Ui).first();
+    expectations.expect(uiFamily == QStringLiteral("Inter Medium") ||
+                            uiFamily == QStringLiteral("Inter"),
+                        "UI asks for the bundled Medium static face");
+    const QString titleFamily = kit::fontFamiliesForRole(kit::TypeRole::Title).first();
+    expectations.expect(titleFamily == QStringLiteral("Inter SemiBold") ||
+                            titleFamily == QStringLiteral("Inter"),
+                        "Title asks for the bundled SemiBold static face");
     const QStringList valueFamilies = kit::fontFamiliesForRole(kit::TypeRole::Value);
-    expectations.expect(valueFamilies.first() == QStringLiteral("Geist Mono Medium"),
+    expectations.expect(valueFamilies.first() == QStringLiteral("Geist Mono Medium") ||
+                            valueFamilies.first() == QStringLiteral("Geist Mono"),
                         "the monospaced value role asks for the Medium face first");
 
     // Compare distinct static face advances; QFontInfo weight alone echoes the request.

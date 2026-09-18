@@ -225,9 +225,22 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
     QSettings settings;
     const auto settingsKey = "export/projects/" + projectKey + "/deliverable";
     const auto saved = projectKey.isEmpty() ? QString{} : settings.value(settingsKey).toString();
-    preset->setCurrentIndex(saved == "review" && preset->isItemEnabled(1) ? 1
-                            : saved == "handoff"                          ? 0
-                                                                          : 2);
+    int defaultIndex = saved == "review" && preset->isItemEnabled(1) ? 1
+                       : saved == "handoff"                          ? 0
+                                                                     : 2;
+    // A saved deliverable may name a preset this build cannot offer (for example a video
+    // deliverable on a platform without a codec provider), and the fallback default above assumes a
+    // preset that may likewise be unavailable. Fall back to the first enabled preset so the dialog
+    // never opens on an item the artist cannot use.
+    if (!preset->isItemEnabled(defaultIndex)) {
+        for (int index = 0; index < preset->count(); ++index) {
+            if (preset->isItemEnabled(index)) {
+                defaultIndex = index;
+                break;
+            }
+        }
+    }
+    preset->setCurrentIndex(defaultIndex);
     applyPreset();
     const auto validate = [&] {
         const auto id = selectedPreset();
@@ -309,9 +322,13 @@ std::optional<CompositionExportRequest> compositionExportDialog(std::uint64_t ma
                          .compression = static_cast<output::FlatExrCompressionV1>(
                              compression->currentData().toInt())};
     request.range.bypassLookNodes = !look->isChecked();
-    if (!projectKey.isEmpty() && request.deliverable != DeliverablePreset::Custom)
+    if (!projectKey.isEmpty() && request.deliverable != DeliverablePreset::Custom) {
         settings.setValue(settingsKey,
                           request.deliverable == DeliverablePreset::Review ? "review" : "handoff");
+        // Flush explicitly: on macOS QSettings writes are cached by cfprefsd, so a dialog reopened
+        // immediately (as the deliverable-isolation test does) could otherwise read the old value.
+        settings.sync();
+    }
     request.profile = profile->currentData().toString().toStdString();
     request.audio = audio->isChecked();
     request.hardware = hardware->isChecked();

@@ -1165,6 +1165,7 @@ void testDeliverableDialog(Expectations& expectations) {
     QSettings settings;
     settings.remove("export/projects/color5-a");
     settings.remove("export/projects/color5-b");
+    settings.sync();
     QTimer::singleShot(0, [&] {
         auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
         if (!dialog)
@@ -1203,8 +1204,16 @@ void testDeliverableDialog(Expectations& expectations) {
             if (!dialog)
                 return;
             auto* preset = dialog->findChild<bloom::ui::kit::KDropdown*>("compositionExportPreset");
-            expectations.expect(preset && preset->currentIndex() == (key == "color5-a" ? 0 : 2),
-                                "last deliverable isolated per project key");
+            // A fresh key opens on the dialog's default preset, which is availability-aware: a
+            // build without a codec provider disables the ProRes default and falls back to the
+            // first enabled preset. A saved key must reopen on its own deliverable regardless.
+            const int expected =
+                key == "color5-a" ? 0 : ((preset != nullptr && preset->isItemEnabled(2)) ? 2 : 0);
+            expectations.expect(
+                preset && preset->currentIndex() == expected,
+                std::string{"last deliverable isolated per project key "} + key.toStdString() +
+                    " (expected " + std::to_string(expected) + ", got " +
+                    (preset ? std::to_string(preset->currentIndex()) : "no-preset") + ")");
             if (preset && preset->isItemEnabled(1)) {
                 preset->setCurrentIndex(1);
                 auto* look = dialog->findChild<bloom::ui::kit::KCheckBox*>("compositionExportLook");
