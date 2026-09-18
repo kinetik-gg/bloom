@@ -222,7 +222,7 @@ jobs:
             -DBLOOM_BUILD_DESKTOP=OFF \
             -DBLOOM_BUILD_PYTHON=OFF \
             -DBUILD_TESTING=ON \
-            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH=/opt/homebrew
 
       - name: Build
@@ -274,7 +274,7 @@ jobs:
             -DBLOOM_BUILD_DESKTOP=ON \
             -DBLOOM_BUILD_PYTHON=OFF \
             -DBUILD_TESTING=ON \
-            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/qt/6.8.3/macos;/opt/homebrew" \
             -DCMAKE_EXE_LINKER_FLAGS="-F$RUNNER_TEMP/agl-frameworks" \
             -DCMAKE_SHARED_LINKER_FLAGS="-F$RUNNER_TEMP/agl-frameworks"
