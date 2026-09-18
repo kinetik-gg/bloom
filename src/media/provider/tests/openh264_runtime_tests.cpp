@@ -21,6 +21,11 @@ void clear(const std::filesystem::path& path) {
     test::check(!error, "clear OpenH264 test root");
 }
 
+// The OpenH264 runtime behaviours below are only reachable where the Cisco linux64.8 binary is
+// supported (Linux x86_64). Elsewhere only the typed UnsupportedPlatform fallback is compiled, so
+// these helpers are compiled out to avoid unused-function failures under -Werror.
+#if defined(__linux__) && defined(__x86_64__)
+
 void mismatchIsNotInstalled() {
     const auto directory = root() / "mismatch";
     clear(directory);
@@ -77,6 +82,8 @@ void emptyDirectoryIsNotInstalled() {
     test::check(!status.installed && status.failure == OpenH264RuntimeFailure::NotInstalled,
                 "empty OpenH264 directory is not installed");
 }
+
+#endif // Linux x86_64 OpenH264 runtime behaviours
 
 void licenseTextMatchesCiscoFixture() {
     std::ifstream file(BLOOM_OPENH264_LICENSE_FIXTURE, std::ios::binary);
