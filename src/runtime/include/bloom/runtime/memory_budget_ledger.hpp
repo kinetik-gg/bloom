@@ -1,6 +1,10 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
+#include <functional>
+#include <map>
+#include <mutex>
 #include <optional>
 
 namespace bloom::runtime {
@@ -9,25 +13,17 @@ inline constexpr std::size_t kDefaultOperationCacheBytes = std::size_t{1} * 1024
 inline constexpr std::size_t kMinimumPreviewFrameCacheByteBudget =
     std::size_t{2} * 1024U * 1024U * 1024U;
 // The low-memory floor: 3 GiB of cache in total, kept from CACHE-1 so a small machine still has a
-// usable RAM preview. Every rule below may reduce a budget only down TO this floor.
+// usable RAM preview. This floors the effective cap; pressure can reduce admission below it.
 inline constexpr std::size_t kFallbackUsableMemoryBudget =
     kMinimumPreviewFrameCacheByteBudget + kDefaultOperationCacheBytes;
 
-// CACHEFIX-1. The reserve is what Bloom leaves to the rest of the machine -- the kernel, the
-// compositor, a browser, and the swap that on a workstation is often only a few GiB. CACHE-1
-// reserved max(4 GiB, 25%), which on a 60 GiB machine let one process plan to hold 45 GiB and
-// froze the desktop.
+// The host reserve also determines when the eviction ladder engages.
 inline constexpr std::size_t kMinimumHostMemoryReserve = std::size_t{8} * 1024U * 1024U * 1024U;
 inline constexpr std::size_t kHostMemoryReservePercent = 40;
-// A second, independent ceiling on the DEFAULT total: whatever the reserve arithmetic allows, the
-// caches Bloom gives itself without being asked never add up to more than half the machine.
 inline constexpr std::size_t kDefaultTotalPhysicalPercent = 50;
-// And a ceiling derived from what is actually free at startup, so launching Bloom next to a loaded
-// machine does not immediately plan to consume memory that is already spoken for.
 inline constexpr std::size_t kDefaultTotalAvailablePercent = 80;
 
-// The ledger is deliberately a budget calculator, not a memory owner. The application composition
-// root resolves these numbers once and gives each cache its effective allowance.
+// Configured ceilings. Live admission budgets are supplied by the ledger callbacks below.
 struct MemoryBudgetAllocation final {
     std::size_t usableByteBudget = 0;
     std::size_t operationCacheByteBudget = 0;
@@ -38,33 +34,56 @@ struct MemoryBudgetAllocation final {
 
 [[nodiscard]] std::size_t physicalMemoryBytes() noexcept;
 
-// Memory the operating system says it can hand out right now without swapping: MemAvailable from
-// /proc/meminfo on Linux, sysconf(_SC_AVPHYS_PAGES) where that file cannot be read, ullAvailPhys on
-// Windows. 0 means "the platform did not say", which every caller reads as "do not apply the
-// availability cap" rather than as zero free memory.
+// Missing availability is distinct from a measured zero. Swap counters are zero on a machine
+// without swap or when the platform cannot report it; availability pressure remains supported.
+struct MachineMemorySample final {
+    std::optional<std::size_t> availableBytes;
+    std::size_t swapTotalBytes = 0;
+    std::size_t swapUsedBytes = 0;
+};
+[[nodiscard]] MachineMemorySample machineMemorySample() noexcept;
 [[nodiscard]] std::size_t availableMemoryBytes() noexcept;
-
-// The FIRST reading of availableMemoryBytes() this process ever took, latched. Every ledger built
-// with default arguments -- in the composition root, in the status bar, in a test -- must agree on
-// one number, or two ledgers constructed a second apart would hand out different budgets for the
-// same machine. The default budget is a decision taken at startup; the live reading above is what
-// the runtime pressure response polls.
 [[nodiscard]] std::size_t startupAvailableMemoryBytes() noexcept;
+
+struct MemoryBudgetState final {
+    std::size_t configuredBytes = 0;
+    std::size_t effectiveBytes = 0;
+    std::size_t retainedBytes = 0;
+    MachineMemorySample machine;
+    // Admission stays reduced between polls: 100 -> 25 -> 10, then 25 -> 50 -> 100 on recovery.
+    unsigned retentionPercent = 100;
+    bool memoryPressure = false;
+    bool swapPressure = false;
+    bool memoryNotice = false;
+    bool swapNotice = false;
+};
 
 class MemoryBudgetLedger final {
   public:
-    // Supplying physical and available memory makes the policy deterministic for tests. The
-    // defaults read the host once, at construction, so callers do not observe a moving
-    // machine-sized budget -- and, for availability, so the default budget is a decision taken at
-    // startup rather than a number that drifts with whatever else the artist opened. Runtime
-    // pressure is answered by trimming the caches (see WindowStatusBar), not by re-deriving this.
-    explicit MemoryBudgetLedger(
-        std::size_t physicalMemory = physicalMemoryBytes(),
-        std::size_t availableMemory = startupAvailableMemoryBytes()) noexcept;
+    using Clock = std::chrono::steady_clock;
+    // Zero availability leaves the configured defaults independent of startup contention. The
+    // process ledger passes the startup sample explicitly to establish its initial effective cap.
+    explicit MemoryBudgetLedger(std::size_t physicalMemory = physicalMemoryBytes(),
+                                std::size_t availableMemory = 0) noexcept;
 
-    // The ceiling an EXPLICIT override may reach: physical memory minus the host reserve. An artist
-    // who asks for more than Bloom would choose on its own still gets what they asked for, up to
-    // the point where the machine itself would be starved.
+    // Every registered pool gets the same proportional policy. Ceilings are weights as well as
+    // upper bounds; their sum is normalized to the configured total. Registration/removal and
+    // callbacks are serialized, so removal waits for any in-progress callback before destruction.
+    // Poll on the UI thread when UI-owned pools are registered. Callbacks must not perform I/O,
+    // wait for workers, or modify registrations. Cache locks must never enclose ledger calls.
+    void registerCache(const void* owner, std::size_t ceiling,
+                       std::function<std::size_t()> retained,
+                       std::function<void(std::size_t)> applyBudget);
+    void unregisterCache(const void* owner);
+    [[nodiscard]] std::size_t setCacheCeiling(const void* owner, std::size_t ceiling);
+    [[nodiscard]] std::size_t cacheByteBudget(const void* owner) const;
+    void setConfiguredTotal(std::size_t bytes);
+    [[nodiscard]] MemoryBudgetState poll(MachineMemorySample sample,
+                                         Clock::time_point now = Clock::now());
+    [[nodiscard]] MemoryBudgetState state() const;
+
+    // Upper bound for configured override weights. The live cap and callback budgets can be
+    // smaller; an override is never a guaranteed minimum.
     [[nodiscard]] std::size_t usableByteBudget() const noexcept { return usableByteBudget_; }
 
     // The ceiling the DEFAULT split may reach: min(usable, 50% of physical, 80% of available),
@@ -91,11 +110,30 @@ class MemoryBudgetLedger final {
     [[nodiscard]] static std::size_t reserveForPhysicalMemory(std::size_t physicalMemory) noexcept;
 
   private:
+    struct Cache final {
+        std::size_t ceiling;
+        std::function<std::size_t()> retained;
+        std::function<void(std::size_t)> applyBudget;
+    };
+    [[nodiscard]] std::size_t cacheByteBudgetLocked(std::size_t ceiling) const;
+    [[nodiscard]] std::size_t capFor(const MachineMemorySample& sample,
+                                     std::size_t retained) const noexcept;
+    const std::size_t physicalMemory_;
+    // Recursive only for readback from synchronous UI budget-change notifications.
+    mutable std::recursive_mutex mutex_;
+    std::map<const void*, Cache> caches_;
+    MemoryBudgetState state_;
+    std::optional<Clock::time_point> lastCapChange_;
+    std::optional<Clock::time_point> recoveryStep_;
+    unsigned pressurePolls_ = 0;
+    bool hasPolled_ = false;
     std::size_t usableByteBudget_ = 0;
     std::size_t defaultTotalByteBudget_ = 0;
     std::size_t reserveByteBudget_ = 0;
 };
 
+// One narrowly scoped process budget coordinator, shared by all windows and cache owners.
+[[nodiscard]] MemoryBudgetLedger& processMemoryBudgetLedger();
 [[nodiscard]] std::size_t defaultOperationCacheByteBudget() noexcept;
 
 } // namespace bloom::runtime

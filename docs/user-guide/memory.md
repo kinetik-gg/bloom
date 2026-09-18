@@ -1,61 +1,77 @@
 # Memory
 
-Bloom keeps two caches in memory so that work you have already seen does not have to be computed
-again: the **operation cache**, which holds intermediate results of the node graph, and the **RAM
-preview**, which holds finished display frames so playing a range a second time is instant. Both
-are reported in the status bar's cache cell, each as "held / budget".
+Bloom keeps intermediate graph results in its **operation cache** and finished display frames in
+its **RAM preview**. The status bar reports each as "held / budget". Decoded video, audio,
+thumbnail images and queued disk-cache writes also share the memory allowance.
 
 ## How much memory Bloom gives itself
 
-Bloom chooses its own budgets from the size of the machine, deliberately conservatively, because a
-motion-graphics application is never the only thing running.
+Bloom adjusts its cache cap every five seconds as other applications use or release memory.
+Its configured default leaves the larger of 8 GiB or 40% of physical RAM for the rest of the
+machine, and never takes more than half of physical RAM. The operation/preview ceilings start
+with this split:
 
-It first sets aside a **reserve** for everything that is not Bloom -- the operating system, the
-window compositor, your browser, your decoders. The reserve is 40% of physical memory, and never
-less than 8 GiB. What remains is the most Bloom will use even if you ask it to.
-
-Without being asked, Bloom takes less than that: its two caches together never default to more than
-half of physical memory, nor more than 80% of the memory the system reported as free when Bloom
-started. Whichever of those is smallest wins, and the total is then split 60% to the operation cache
-and 40% to the RAM preview.
-
-| Your machine | Operation cache | RAM preview | Total |
+| Physical RAM | Operation ceiling | RAM preview ceiling | Configured total |
 | --- | --- | --- | --- |
-| 8 GB | 1 GB | 2 GB | 3 GB |
-| 16 GB | 4.8 GB | 3.2 GB | 8 GB |
-| 32 GB | 9.6 GB | 6.4 GB | 16 GB |
-| 64 GB | 19.2 GB | 12.8 GB | 32 GB |
+| 8 GiB | 1 GiB | 2 GiB | 3 GiB |
+| 16 GiB | 4.8 GiB | 3.2 GiB | 8 GiB |
+| 32 GiB | 9.6 GiB | 6.4 GiB | 16 GiB |
+| 60 GiB | 18 GiB | 12 GiB | 30 GiB |
 
-Small machines are held at a 3 GB floor -- 1 GB of operation cache and 2 GB of RAM preview -- so
-the preview still works on a laptop.
+The effective cap is the smallest of the configured total, half of physical RAM, and 80% of
+**currently available memory plus the bytes Bloom's caches already hold**. Adding those held bytes
+back means filling a cache does not by itself make Bloom shrink it again. The policy has a 3 GiB
+floor, bounded by physical RAM on smaller machines; pressure can still reduce actual cache
+budgets below that floor. Auxiliary caches share the total, so the operation and preview budgets
+shown in the status bar can be smaller than the table's ceilings.
+
+For example, on a 16 GiB machine with 3 GiB available and 4 GiB cached, the cap can fall from
+8 GiB to 5.6 GiB. On a 60 GiB machine with 12 GiB available and 8 GiB cached, it can fall from
+30 GiB to 16 GiB. Changes must exceed 10%, with at least five seconds between cap changes, to
+avoid reacting to every small fluctuation.
+
+Hover over the status bar's cache cell to see the **effective cap**, **configured total**,
+**MemAvailable**, pressure state and the percentage currently allowed for cache admission.
+"MemAvailable" uses the operating system's available-memory estimate; an unavailable reading is
+shown explicitly.
 
 ## Changing the budgets
 
-Two settings keys override the defaults. Both are **byte counts written as decimal numbers**, and
-both are read once, when Bloom starts.
+Two settings keys set ceilings. Both are **byte counts written as decimal numbers**, read when
+Bloom starts:
 
 | Key | What it sets |
 | --- | --- |
-| `playback/operation-cache-bytes` | The operation cache's budget |
-| `playback/ram-preview-memory-bytes` | The RAM preview's budget |
+| `playback/operation-cache-bytes` | The operation cache's configured ceiling |
+| `playback/ram-preview-memory-bytes` | The RAM preview's configured ceiling |
 
-For example, `playback/ram-preview-memory-bytes = 6442450944` asks for a 6 GiB RAM preview.
+For example, `playback/operation-cache-bytes = 10737418240` and
+`playback/ram-preview-memory-bytes = 6442450944` request 10 GiB and 6 GiB: a 16 GiB configured
+total. Those numbers are ceilings, not guaranteed allocations. If available memory plus held
+cache bytes falls to 10 GiB, the effective cap can fall to 8 GiB even with these overrides.
 
-An override is honoured as written, up to the reserve: you may give Bloom more than it would have
-chosen for itself, but not so much that the machine has nothing left. Setting only one key leaves
-the other to be computed from what remains. Setting both to more than the machine can give reduces
-them in proportion, so neither setting is silently ignored. A missing, zero, or unreadable value
-simply means "use the default". The status bar always shows the budgets Bloom is actually using,
-which is what to check after an edit.
+Setting one key leaves the other at its default where space permits. Oversized overrides are
+reduced proportionally; they cannot bypass the machine's live cap. A missing, zero or unreadable
+value uses the default. An explicitly small ceiling is never enlarged to satisfy the policy
+floor. The status bar shows the budgets actually in use.
 
 ## When memory runs short
 
-If the system reports less free memory than Bloom reserved for it, Bloom trims both caches to half
-their budgets and shows **Memory pressure: caches trimmed** in the status bar. Nothing is lost:
-trimmed entries are results that can be computed again, the budgets themselves are unchanged, and
-the caches refill as you keep working once the machine recovers. If you see this often, either
-something else on the machine is using a great deal of memory, or your overrides are larger than
-this machine can support.
+Bloom enters pressure mode if available memory falls below its reserve, or if more than 25% of
+swap is in use. At the first poll it trims caches to **25% of their effective budgets**. If
+pressure remains at the next poll, it trims to **10%**. New cache entries must fit those reduced
+limits too, so ongoing imports cannot immediately refill the caches.
 
-Media Bloom has decoded from disk is cached on disk as well, under a separate budget; see the media
-cache settings for that. Clearing the disk cache does not affect either memory budget.
+The status bar shows **Memory pressure: caches trimmed** once per episode. Swap pressure also
+shows **Swap pressure: caches trimmed** as a separate notice. Your project and configured
+settings are unchanged; evicted results can be computed again. Active decoding, playback and disk
+writes may still hold references until that work releases them, so process memory need not fall
+by exactly the cache counter's change.
+
+After the machine recovers, Bloom waits ten seconds, then restores budgets one step every ten
+seconds: 10% to 25%, then 50%, then 100%. The effective cap itself grows by at most 25% per
+step. New pressure interrupts recovery immediately.
+
+Decoded media stored on disk has a separate disk-space budget. Its pending writes consume RAM
+and follow the memory limits above; clearing stored disk entries does not change your memory
+settings.

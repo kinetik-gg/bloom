@@ -66,12 +66,28 @@ PreviewFrameCacheKey::forIdentity(const runtime::PreviewRequestIdentity& identit
             .viewAdjust = identity.viewAdjust};
 }
 
-PreviewFrameCache::PreviewFrameCache(const std::size_t byteBudget) noexcept
-    : byteBudget_(byteBudget) {
+PreviewFrameCache::PreviewFrameCache(const std::size_t byteBudget,
+                                     runtime::MemoryBudgetLedger& ledger)
+    : ledger_(ledger), byteBudget_(byteBudget) {
     notificationTimer_.setSingleShot(true);
     notificationTimer_.setInterval(50);
     connect(&notificationTimer_, &QTimer::timeout, this, &PreviewFrameCache::contentsChanged);
+    ledger_.registerCache(
+        this, byteBudget, [this] { return residentBytes(); },
+        [this](const std::size_t bytes) {
+            const bool pressure = ledger_.state().retentionPercent < 100;
+            if (pressure)
+                trimToBytes(bytes);
+            const bool changed = byteBudget_ != bytes;
+            byteBudget_ = bytes;
+            if (!pressure)
+                evictToBudget();
+            if (changed)
+                emit byteBudgetChanged();
+        });
 }
+
+PreviewFrameCache::~PreviewFrameCache() { ledger_.unregisterCache(this); }
 
 void PreviewFrameCache::scheduleNotification() {
     if (!notificationTimer_.isActive()) {
@@ -191,12 +207,7 @@ PreviewFrameCache::timesFor(const PreviewFrameCacheKey& probe) const {
 }
 
 void PreviewFrameCache::setByteBudget(const std::size_t bytes) {
-    if (byteBudget_ == bytes) {
-        return;
-    }
-    byteBudget_ = bytes;
-    evictToBudget();
-    emit byteBudgetChanged();
+    static_cast<void>(ledger_.setCacheCeiling(this, bytes));
 }
 
 void PreviewFrameCache::clear() {
@@ -253,9 +264,12 @@ namespace {
 
 runtime::MemoryBudgetAllocation cacheMemoryBudgetsFromSettings(const QSettings& settings) {
     const runtime::MemoryBudgetLedger ledger(physicalMemoryBytes());
-    return ledger.allocate(
+    const auto allocation = ledger.allocate(
         budgetOverride(settings, QLatin1StringView("playback/operation-cache-bytes")),
         budgetOverride(settings, QLatin1StringView(ramPreviewByteBudgetKey)));
+    runtime::processMemoryBudgetLedger().setConfiguredTotal(allocation.operationCacheByteBudget +
+                                                            allocation.previewFrameCacheByteBudget);
+    return allocation;
 }
 
 std::size_t ramPreviewByteBudgetFromSettings(const QSettings& settings) {

@@ -23,9 +23,8 @@ namespace bloom::ui {
 inline constexpr std::size_t kMinimumPreviewFrameCacheByteBudget =
     runtime::kMinimumPreviewFrameCacheByteBudget;
 
-// The default is the preview allocation from the shared runtime ledger: 40% of physical memory
-// remaining after the operating-system reserve, with the 2 GiB floor applied when that usable
-// budget allows it. The paired operation-cache allocation is 60% of the same usable budget.
+// The configured preview ceiling is 40% of the ledger default total, with a 2 GiB preview
+// minimum at the low-memory floor. Live admission can be smaller under contention or pressure.
 [[nodiscard]] std::size_t defaultPreviewFrameCacheByteBudget() noexcept;
 
 // Total physical memory in bytes, or 0 when the platform does not report it.
@@ -102,7 +101,9 @@ class PreviewFrameCache final : public QObject {
     };
 
     explicit PreviewFrameCache(
-        std::size_t byteBudget = defaultPreviewFrameCacheByteBudget()) noexcept;
+        std::size_t byteBudget = defaultPreviewFrameCacheByteBudget(),
+        runtime::MemoryBudgetLedger& ledger = runtime::processMemoryBudgetLedger());
+    ~PreviewFrameCache() override;
 
     // The cached frame for `identity`, re-stamped with that identity's own request generation so
     // the caller can publish it as the answer to THIS request (a frame's generation says which ask
@@ -124,8 +125,8 @@ class PreviewFrameCache final : public QObject {
 
     // Changing the budget evicts immediately if the new one is smaller.
     void setByteBudget(std::size_t bytes);
-    // Evicts down to `bytes` WITHOUT changing the budget -- the runtime memory-pressure response
-    // (see WindowStatusBar), which must be able to hand the allowance back. Never grows the cache.
+    // Explicit one-shot trim without changing admission. The ledger callback also reduces the
+    // admission budget, so ongoing work cannot undo a pressure trim before the next poll.
     void trimToBytes(std::size_t bytes);
     [[nodiscard]] std::size_t byteBudget() const noexcept { return byteBudget_; }
     [[nodiscard]] std::size_t residentBytes() const noexcept { return residentBytes_; }
@@ -161,6 +162,7 @@ class PreviewFrameCache final : public QObject {
 
     // Most-recently-used first.
     std::vector<Entry> entries_;
+    runtime::MemoryBudgetLedger& ledger_;
     std::size_t byteBudget_ = defaultPreviewFrameCacheByteBudget();
     std::size_t residentBytes_ = 0;
     std::optional<bool> displayQualified_;

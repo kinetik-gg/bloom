@@ -615,49 +615,86 @@ state. This metadata is derived runtime state and does not change serialized pla
 `playback/operation-cache-bytes` is the operation allocation from the session's one
 `MemoryBudgetLedger`, which also allocates `playback/ram-preview-memory-bytes`.
 
-The ledger computes three numbers. The **host reserve** is what Bloom leaves to the rest of the
-machine: `max(8 GiB, 40% of physical)`. The **usable budget** is physical memory minus that reserve,
-and is the ceiling an explicit override may reach. The **default total** is the ceiling the
-unconfigured 60% operation / 40% preview split may reach, and is the most conservative of three
-independent limits: the usable budget, 50% of physical memory, and 80% of `availableMemory` at
-startup. On Linux `availableMemory` is `MemAvailable` from `/proc/meminfo`, which is the kernel's own
-estimate of what can be allocated without swapping; where that file cannot be read it falls back to
-`sysconf(_SC_AVPHYS_PAGES)`, and on Windows to `MEMORYSTATUSEX::ullAvailPhys`. A platform that
-reports nothing (0) simply does not apply the availability limit.
+The **host reserve** is `max(8 GiB, 40% of physical)`. The **usable budget** is physical memory
+minus that reserve, with the historical 3 GiB fallback bounded by reported physical memory. The
+configured default total is `min(usable, 50% of physical)`, with the same floor. The configured
+operation/preview split remains 60/40, except at the floor where it is 1/2 GiB:
 
-No rule may push a budget below the 3 GiB low-memory floor (2 GiB preview + 1 GiB operation), and no
-rule may invent more budget than the machine reports. The resulting defaults:
-
-| Physical | Reserve | Usable | Default total | Operation | Preview |
+| Physical | Reserve | Usable | Configured total | Operation ceiling | Preview ceiling |
 | --- | --- | --- | --- | --- | --- |
 | 8 GiB | 8 GiB | 3 GiB (floor) | 3 GiB (floor) | 1 GiB | 2 GiB |
 | 16 GiB | 8 GiB | 8 GiB | 8 GiB | 4.8 GiB | 3.2 GiB |
 | 32 GiB | 12.8 GiB | 19.2 GiB | 16 GiB | 9.6 GiB | 6.4 GiB |
 | 60 GiB | 24 GiB | 36 GiB | 30 GiB | 18 GiB | 12 GiB |
 
-The rule exists because the previous one -- reserve `max(4 GiB, 25%)`, then split all of it --
-allocated 27 GiB operation + 18 GiB preview on a 60 GiB workstation. One application may not
-legitimately plan to hold 45 of 60 GiB while the kernel, the compositor and a browser need the rest
-and the swap is 3 GiB.
+`MemoryBudgetLedger` recalculates the live cap on each status-bar poll (five seconds):
 
-Missing, invalid, or zero settings use the default split; one override keeps its exact value where
-possible, clamped to the **usable** budget rather than the default total, and reduces the other
-cache; two overcommitted overrides are proportionally clamped. An artist who deliberately asks for
-more than Bloom would choose still gets it, up to the point where the machine itself would starve.
-The preview allocation retains its 2 GiB floor when the default total allows it. The effective pair,
-not the raw settings, is what the window status bar reports. If physical memory is unavailable or
-too small to leave the reserve, the 3 GiB floor is used without exceeding reported physical memory.
+```text
+candidate = max(3 GiB, min(configured total, 50% physical,
+                          80% × (MemAvailable + registered retained bytes)))
+```
+
+The floor is bounded by physical memory on a machine reporting less than 3 GiB. Unknown physical
+memory uses the 3 GiB fallback. Missing availability omits only that term; a measured zero is a
+real pressure sample. Adding retained bytes back prevents Bloom's own cache fill from repeatedly
+shrinking the cap. Startup availability seeds the first effective cap; subsequent samples replace
+it. A cap change requires a difference strictly greater than 10% and at least five seconds since
+the previous change. Increases additionally use the recovery cadence below.
+
+Missing, invalid or zero settings use the default split. Overrides determine configured ceilings:
+one override reduces the other allocation if necessary; two overcommitted overrides are reduced
+proportionally to the usable budget. They do not bypass the live cap or guarantee a minimum.
+Explicit ceilings below the policy floor stay small. The configured total is the resulting
+operation/preview sum, and every registered pool's ceiling supplies its proportional weight.
+Weights are normalized by `max(configured total, sum of registered ceilings)`, so auxiliary caches
+share the total rather than add unbounded allowances on top. Video's configured allowance is
+reserved from operation space by the composition root. Each callback receives its weighted
+fraction of the effective cap, further reduced by the current pressure percentage.
+
+For example, on 16 GiB with the default 8 GiB configured total, 3 GiB available plus 4 GiB held
+produces a 5.6 GiB candidate. On 60 GiB with the default 30 GiB total, 12 GiB available plus 8 GiB
+held produces 16 GiB. The 10/6 GiB overrides configure a 16 GiB ceiling on that machine; if
+availability plus held bytes later falls to 10 GiB, the candidate becomes 8 GiB. Hysteresis can
+retain the previous cap for a small change or until the next eligible poll.
+
+Linux reads `MemAvailable`, `SwapTotal` and `SwapFree` from `/proc/meminfo`, falling back to
+available physical pages when necessary. Windows reads available physical RAM with
+`GlobalMemoryStatusEx` and actual page-file use with `K32EnumPageFilesW`, rather than treating
+commit charge as swap. macOS uses free plus inactive VM pages as a conservative availability
+estimate, `hw.memsize` for physical RAM and `vm.swapusage` for swap. When swap sampling is
+unavailable, availability pressure remains supported. These policies are Qt-free; UI-owned pools
+are polled on the UI thread, and cache registration/removal serializes against callbacks.
 
 ### Memory pressure response
 
-Budgets are a plan; they are not a promise the machine will keep. The window status bar polls
-`availableMemoryBytes()` on its existing five-second disk-cache cadence. When `MemAvailable` falls
-below the ledger's reserve, both in-memory caches are trimmed to 50% of their budgets --
-`OperationCache::trimToBytes()` and `PreviewFrameCache::trimToBytes()`, neither of which changes the
-configured budget, so the caches refill once the machine recovers -- and the bar shows the transient
-notice "Memory pressure: caches trimmed". The trim is not repeated while pressure persists; it is
-armed again once availability recovers above the reserve, so a machine that stays busy does not
-produce a message every five seconds.
+Pressure means availability below the host reserve **or** swap use strictly above 25% of swap
+size. No swap configured means no swap-pressure signal. The ledger applies one ladder to all
+registered pools:
+
+1. The first pressure poll trims to 25% of effective budgets and reduces admission to the same
+   limits immediately.
+2. A second consecutive pressure poll reduces those limits to 10%. They stay reduced between
+   polls, including while more frames arrive.
+3. Recovery requires an observed healthy sample. The first starts a ten-second hold; subsequent
+   ten-second steps restore the retention percentage through 25%, 50%, then 100%. Cap increases
+   also happen at most once per ten seconds, by at most 25% of the current cap per step, subject to
+   the same 10% hysteresis. Renewed pressure immediately interrupts recovery.
+
+Operation and decoded-media entries, display previews, decoded video frames, the disk write
+queue, proxy thumbnails and decoded audio all use the same callback boundary. Proxy eviction
+also drops image aliases in asset/node preview maps. Audio from both standalone audio assets and
+video clips participates. A reduced allowance cancels pending thumbnail work; publication checks
+the current limits again so an old result cannot refill the caches. In-flight decode work and
+references already handed to a viewer or playback are active work, not reclaimable cache entries.
+An active disk write keeps its byte charge until it finishes; queued writes are dropped and new
+writes are refused while its charge exceeds the allowance. Pressure callbacks never perform disk
+I/O or wait for the writer.
+
+The bar reports **Memory pressure: caches trimmed** once per pressure episode. Swap pressure
+also produces a distinct **Swap pressure: caches trimmed** notice; if both start together, it
+follows the existing notice. The cache tooltip shows the effective cap, configured total,
+availability, pressure state and current admission percentage. The main cache cell continues to
+show held bytes and the current admission budgets. Configuration and project truth are unchanged.
 
 Separately, and independent of any poll, a cache insert never takes a process past a failed
 allocation. `std::bad_alloc` raised while retaining an entry -- in `OperationCache::store()` or
@@ -667,17 +704,18 @@ renders.
 
 ### Cache byte accounting
 
-Every cache in the process counts its bytes against a budget or a hard cap. The accounting surface
-is test- and diagnostic-only; none of it is UI.
+Every cache counts retained bytes against a configured ceiling and a live admission budget. The
+status bar shows the operation/preview accounts; other counters support tests and diagnostics.
 
 | Pool | Bound | Counter |
 | --- | --- | --- |
 | `OperationCache`, operation entries | operation budget | `retainedBytes(Operation)` |
 | `OperationCache`, decoded media entries | operation budget (shared) | `retainedBytes(DecodedMedia)` |
 | `PreviewFrameCache` display buffers | preview budget | `residentBytes()` |
-| `MediaDiskCache` pending async writes | 64 entries **and** 256 MiB | `statistics().asyncQueueBytes`, `peakAsyncQueueBytes` |
-| `AssetController` proxy thumbnails | 512 entries **and** 8 MiB | `proxyCacheBytes()` |
-| `AssetController` decoded audio buffers | 2 GiB aggregate | `decodedAudioBytes()` |
+| `DecodedVideoCache` frames | weighted video allowance | `residentBytes()` |
+| `MediaDiskCache` pending async writes | 64 entries **and** up to 256 MiB, scaled by ledger | `statistics().asyncQueueBytes`, `peakAsyncQueueBytes` |
+| `AssetController` proxy thumbnails | 512 entries **and** up to 8 MiB, scaled by ledger | `proxyCacheBytes()` |
+| `AssetController` decoded audio buffers | up to 2 GiB aggregate, scaled by ledger | `decodedAudioBytes()` |
 | Viewer display buffers | one retained frame plus at most one channel-remap copy, per open viewer | -- |
 
 The disk cache's pending-write queue is the pool that mattered. It was bounded at 64 entries and

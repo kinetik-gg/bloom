@@ -1,6 +1,21 @@
 #include <algorithm>
 #include <bloom/media/video/session.hpp>
 namespace bloom::media::video {
+DecodedVideoCache::DecodedVideoCache(const std::size_t budget, runtime::MemoryBudgetLedger& ledger)
+    : ledger_(ledger), budget_(budget) {
+    ledger_.registerCache(
+        this, budget, [this] { return residentBytes(); },
+        [this](const std::size_t bytes) {
+            std::lock_guard lock(mutex_);
+            budget_ = bytes;
+            while (!entries_.empty() && resident_ > budget_) {
+                resident_ -= entries_.back().bytes;
+                entries_.pop_back();
+            }
+        });
+}
+DecodedVideoCache::~DecodedVideoCache() { ledger_.unregisterCache(this); }
+
 std::shared_ptr<const provider::FrameProduct> DecodedVideoCache::find(const FrameKey& key) {
     std::lock_guard lock(mutex_);
     auto found = std::ranges::find(entries_, key, &Entry::key);
@@ -30,13 +45,8 @@ void DecodedVideoCache::store(FrameKey key, std::shared_ptr<const provider::Fram
     entries_.push_front({key, std::move(frame), bytes});
     resident_ += bytes;
 }
-void DecodedVideoCache::setByteBudget(std::size_t budget) {
-    std::lock_guard lock(mutex_);
-    budget_ = budget;
-    while (!entries_.empty() && resident_ > budget_) {
-        resident_ -= entries_.back().bytes;
-        entries_.pop_back();
-    }
+void DecodedVideoCache::setByteBudget(const std::size_t budget) {
+    static_cast<void>(ledger_.setCacheCeiling(this, budget));
 }
 std::size_t DecodedVideoCache::residentBytes() const {
     std::lock_guard lock(mutex_);

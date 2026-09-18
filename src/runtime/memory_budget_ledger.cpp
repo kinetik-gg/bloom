@@ -7,9 +7,19 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
+
+// The page-file declarations require the Windows SDK types first.
+#include <psapi.h>
+#elif defined(__APPLE__)
+#include <mach/mach.h>
+#include <sys/sysctl.h>
 #else
 #include <unistd.h>
 #endif
@@ -29,33 +39,43 @@ namespace {
     return left > limit || right > limit - left;
 }
 
-#if !defined(_WIN32)
-// MemAvailable is the kernel's own estimate of what can be allocated without swapping -- the
-// reclaimable page cache included -- which is exactly the question a cache budget asks. MemFree is
-// not: a machine with a warm page cache reports almost no free memory while most of it is
-// reclaimable.
-[[nodiscard]] std::size_t memAvailableFromProcMeminfo() noexcept {
+[[nodiscard]] std::size_t saturatedAdd(const std::size_t left, const std::size_t right) noexcept {
+    return left + std::min(right, std::numeric_limits<std::size_t>::max() - left);
+}
+
+#if defined(__linux__)
+[[nodiscard]] MachineMemorySample sampleProcMeminfo() {
     std::ifstream meminfo("/proc/meminfo");
-    if (!meminfo)
-        return 0;
+    MachineMemorySample sample;
+    std::optional<std::size_t> swapFree;
     std::string line;
     while (std::getline(meminfo, line)) {
-        constexpr std::string_view label = "MemAvailable:";
-        auto rest = std::string_view(line);
-        if (!rest.starts_with(label))
+        const auto colon = line.find(':');
+        if (colon == std::string::npos)
             continue;
-        rest.remove_prefix(label.size());
+        const auto label = std::string_view(line).substr(0, colon);
+        if (label != "MemAvailable" && label != "SwapTotal" && label != "SwapFree")
+            continue;
+        auto rest = std::string_view(line).substr(colon + 1);
         while (!rest.empty() && rest.front() == ' ')
             rest.remove_prefix(1);
         std::uint64_t kibibytes = 0;
         const auto parsed = std::from_chars(rest.data(), rest.data() + rest.size(), kibibytes);
-        if (parsed.ec != std::errc{} || kibibytes == 0)
-            return 0;
-        if (kibibytes > std::numeric_limits<std::size_t>::max() / 1024U)
-            return std::numeric_limits<std::size_t>::max();
-        return static_cast<std::size_t>(kibibytes) * 1024U;
+        if (parsed.ec != std::errc{})
+            continue;
+        const auto bytes = static_cast<std::size_t>(std::min<std::uint64_t>(
+                               kibibytes, std::numeric_limits<std::size_t>::max() / 1024U)) *
+                           1024U;
+        if (label == "MemAvailable")
+            sample.availableBytes = bytes;
+        else if (label == "SwapTotal")
+            sample.swapTotalBytes = bytes;
+        else
+            swapFree = bytes;
     }
-    return 0;
+    if (swapFree)
+        sample.swapUsedBytes = sample.swapTotalBytes - std::min(*swapFree, sample.swapTotalBytes);
+    return sample;
 }
 #endif
 
@@ -68,6 +88,12 @@ std::size_t physicalMemoryBytes() noexcept {
     if (GlobalMemoryStatusEx(&status) == 0)
         return 0;
     return static_cast<std::size_t>(status.ullTotalPhys);
+#elif defined(__APPLE__)
+    std::uint64_t bytes = 0;
+    auto size = sizeof(bytes);
+    return sysctlbyname("hw.memsize", &bytes, &size, nullptr, 0) == 0
+               ? static_cast<std::size_t>(bytes)
+               : 0;
 #else
     const auto pages = sysconf(_SC_PHYS_PAGES);
     const auto pageSize = sysconf(_SC_PAGE_SIZE);
@@ -81,29 +107,67 @@ std::size_t physicalMemoryBytes() noexcept {
 #endif
 }
 
-std::size_t availableMemoryBytes() noexcept {
+MachineMemorySample machineMemorySample() noexcept {
+    MachineMemorySample sample;
 #if defined(_WIN32)
     MEMORYSTATUSEX status{};
     status.dwLength = sizeof(status);
-    if (GlobalMemoryStatusEx(&status) == 0)
-        return 0;
-    return static_cast<std::size_t>(status.ullAvailPhys);
+    if (GlobalMemoryStatusEx(&status) != 0)
+        sample.availableBytes = static_cast<std::size_t>(status.ullAvailPhys);
+    // Actual page-file usage, not commit charge (ullTotalPageFile includes physical RAM).
+    const auto callback = [](LPVOID context, PENUM_PAGE_FILE_INFORMATION info, LPCWSTR) -> BOOL {
+        auto& result = *static_cast<MachineMemorySample*>(context);
+        SYSTEM_INFO system{};
+        GetSystemInfo(&system);
+        result.swapTotalBytes =
+            saturatedAdd(result.swapTotalBytes, info->TotalSize * system.dwPageSize);
+        result.swapUsedBytes =
+            saturatedAdd(result.swapUsedBytes, info->TotalInUse * system.dwPageSize);
+        return TRUE;
+    };
+    static_cast<void>(K32EnumPageFilesW(callback, &sample));
+#elif defined(__APPLE__)
+    const auto host = mach_host_self();
+    vm_statistics64_data_t statistics{};
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    vm_size_t pageSize = 0;
+    if (host_page_size(host, &pageSize) == KERN_SUCCESS &&
+        host_statistics64(
+            host, HOST_VM_INFO64,
+            reinterpret_cast<host_info64_t>(&statistics), // NOLINT(*-reinterpret-cast)
+            &count) == KERN_SUCCESS)
+        sample.availableBytes =
+            (static_cast<std::size_t>(statistics.free_count) + statistics.inactive_count) *
+            pageSize;
+    mach_port_deallocate(mach_task_self(), host);
+    xsw_usage swap{};
+    auto size = sizeof(swap);
+    if (sysctlbyname("vm.swapusage", &swap, &size, nullptr, 0) == 0) {
+        sample.swapTotalBytes = static_cast<std::size_t>(swap.xsu_total);
+        sample.swapUsedBytes = static_cast<std::size_t>(swap.xsu_used);
+    }
 #else
-    if (const auto available = memAvailableFromProcMeminfo(); available != 0)
-        return available;
-    // Every platform without /proc still answers this, and it is the closest standard equivalent:
-    // free pages, without the reclaimable page cache MemAvailable would have counted. Reading low
-    // here only makes the default budget more conservative, never less.
-    const auto pages = sysconf(_SC_AVPHYS_PAGES);
-    const auto pageSize = sysconf(_SC_PAGE_SIZE);
-    if (pages <= 0 || pageSize <= 0)
-        return 0;
-    const auto pagesAsSize = static_cast<std::size_t>(pages);
-    const auto pageSizeAsSize = static_cast<std::size_t>(pageSize);
-    if (pagesAsSize > std::numeric_limits<std::size_t>::max() / pageSizeAsSize)
-        return std::numeric_limits<std::size_t>::max();
-    return pagesAsSize * pageSizeAsSize;
+#if defined(__linux__)
+    try {
+        sample = sampleProcMeminfo();
+    } catch (...) {
+        // Sampling is best effort even while the process is short of allocation headroom.
+        sample = {};
+    }
 #endif
+    if (!sample.availableBytes) {
+        const auto pages = sysconf(_SC_AVPHYS_PAGES);
+        const auto pageSize = sysconf(_SC_PAGE_SIZE);
+        if (pages >= 0 && pageSize > 0)
+            sample.availableBytes =
+                static_cast<std::size_t>(pages) * static_cast<std::size_t>(pageSize);
+    }
+#endif
+    return sample;
+}
+
+std::size_t availableMemoryBytes() noexcept {
+    return machineMemorySample().availableBytes.value_or(0);
 }
 
 std::size_t startupAvailableMemoryBytes() noexcept {
@@ -132,7 +196,8 @@ MemoryBudgetLedger::usableByteBudgetForPhysicalMemory(const std::size_t physical
 
 MemoryBudgetLedger::MemoryBudgetLedger(const std::size_t physicalMemory,
                                        const std::size_t availableMemory) noexcept
-    : usableByteBudget_(usableByteBudgetForPhysicalMemory(physicalMemory)),
+    : physicalMemory_(physicalMemory),
+      usableByteBudget_(usableByteBudgetForPhysicalMemory(physicalMemory)),
       reserveByteBudget_(physicalMemory == 0 ? kMinimumHostMemoryReserve
                                              : reserveForPhysicalMemory(physicalMemory)) {
     // The default total is the most conservative of three independent ceilings, then raised back to
@@ -145,6 +210,12 @@ MemoryBudgetLedger::MemoryBudgetLedger(const std::size_t physicalMemory,
     const auto floor = physicalMemory == 0 ? kFallbackUsableMemoryBudget
                                            : std::min(physicalMemory, kFallbackUsableMemoryBudget);
     defaultTotalByteBudget_ = std::min(usableByteBudget_, std::max(total, floor));
+    state_.configuredBytes = std::max(
+        floor, std::min(usableByteBudget_,
+                        physicalMemory == 0 ? usableByteBudget_ : fraction(physicalMemory, 1, 2)));
+    state_.effectiveBytes = defaultTotalByteBudget_;
+    if (availableMemory != 0)
+        state_.machine.availableBytes = availableMemory;
 }
 
 MemoryBudgetAllocation
@@ -181,6 +252,152 @@ MemoryBudgetLedger::allocate(const std::optional<std::size_t> operationOverride,
     return {.usableByteBudget = usableByteBudget_,
             .operationCacheByteBudget = operation,
             .previewFrameCacheByteBudget = preview};
+}
+
+void MemoryBudgetLedger::registerCache(const void* owner, const std::size_t ceiling,
+                                       std::function<std::size_t()> retained,
+                                       std::function<void(std::size_t)> applyBudget) {
+    const std::lock_guard lock(mutex_);
+    const auto entry =
+        caches_.insert_or_assign(owner, Cache{ceiling, std::move(retained), std::move(applyBudget)})
+            .first;
+    // A pool created during pressure must not regain a full ceiling until the next timer tick.
+    // Its owner has initialized its storage before registration and is not published yet.
+    if (hasPolled_) {
+        try {
+            entry->second.applyBudget(cacheByteBudgetLocked(ceiling));
+        } catch (...) {
+            caches_.erase(entry);
+            throw;
+        }
+    }
+}
+
+void MemoryBudgetLedger::unregisterCache(const void* owner) {
+    const std::lock_guard lock(mutex_);
+    caches_.erase(owner);
+}
+
+std::size_t MemoryBudgetLedger::setCacheCeiling(const void* owner, const std::size_t ceiling) {
+    const std::lock_guard lock(mutex_);
+    const auto found = caches_.find(owner);
+    if (found == caches_.end())
+        return ceiling;
+    found->second.ceiling = ceiling;
+    const auto bytes = hasPolled_ ? cacheByteBudgetLocked(ceiling) : ceiling;
+    // Apply while still serialized with polls; a caller must not publish an old allowance after
+    // a concurrent pressure callback has already reduced it.
+    found->second.applyBudget(bytes);
+    return bytes;
+}
+
+std::size_t MemoryBudgetLedger::cacheByteBudgetLocked(const std::size_t ceiling) const {
+    long double total = 0;
+    for (const auto& [owner, cache] : caches_)
+        total += static_cast<long double>(cache.ceiling);
+    total = std::max(total, static_cast<long double>(state_.configuredBytes));
+    if (total == 0)
+        return 0;
+    const auto scaled = static_cast<std::size_t>(
+        static_cast<long double>(ceiling) *
+        std::min(total, static_cast<long double>(state_.effectiveBytes)) / total);
+    return fraction(std::min(ceiling, scaled), state_.retentionPercent, 100);
+}
+
+std::size_t MemoryBudgetLedger::cacheByteBudget(const void* owner) const {
+    const std::lock_guard lock(mutex_);
+    const auto found = caches_.find(owner);
+    return found == caches_.end() ? 0 : cacheByteBudgetLocked(found->second.ceiling);
+}
+
+void MemoryBudgetLedger::setConfiguredTotal(const std::size_t bytes) {
+    const std::lock_guard lock(mutex_);
+    state_.configuredBytes = bytes;
+    state_.effectiveBytes = capFor(state_.machine, state_.retainedBytes);
+    lastCapChange_.reset();
+}
+
+std::size_t MemoryBudgetLedger::capFor(const MachineMemorySample& sample,
+                                       const std::size_t retained) const noexcept {
+    auto cap = state_.configuredBytes;
+    if (physicalMemory_ != 0)
+        cap = std::min(cap, fraction(physicalMemory_, 1, 2));
+    if (sample.availableBytes)
+        cap = std::min(cap, fraction(saturatedAdd(*sample.availableBytes, retained), 4, 5));
+    // The policy floor never forces a client above its explicitly smaller ceiling.
+    return std::max(cap, physicalMemory_ == 0
+                             ? kFallbackUsableMemoryBudget
+                             : std::min(physicalMemory_, kFallbackUsableMemoryBudget));
+}
+
+MemoryBudgetState MemoryBudgetLedger::poll(MachineMemorySample sample,
+                                           const Clock::time_point now) {
+    const std::lock_guard lock(mutex_);
+    hasPolled_ = true;
+    std::size_t retained = 0;
+    for (const auto& [owner, cache] : caches_)
+        retained = saturatedAdd(retained, cache.retained());
+    state_.retainedBytes = retained;
+    const bool wasPressure = state_.memoryPressure || state_.swapPressure;
+    const bool wasSwap = state_.swapPressure;
+    // An unavailable sample cannot assert recovery or discard an existing pressure episode.
+    if (sample.availableBytes)
+        state_.memoryPressure = *sample.availableBytes < reserveByteBudget_;
+    state_.swapPressure =
+        sample.swapTotalBytes != 0 && sample.swapUsedBytes > sample.swapTotalBytes / 4;
+    const bool pressure = state_.memoryPressure || state_.swapPressure;
+    state_.memoryNotice = pressure && !wasPressure;
+    state_.swapNotice = state_.swapPressure && !wasSwap;
+    state_.machine = sample;
+    bool restore = false;
+    if (pressure) {
+        pressurePolls_ = std::min(pressurePolls_ + 1, 2U);
+        state_.retentionPercent =
+            std::min(state_.retentionPercent, pressurePolls_ >= 2 ? 10U : 25U);
+        recoveryStep_.reset();
+    } else if (sample.availableBytes) {
+        pressurePolls_ = 0;
+        if (!recoveryStep_)
+            recoveryStep_ = now;
+        if (now - *recoveryStep_ >= std::chrono::seconds(10)) {
+            restore = true;
+            recoveryStep_ = now;
+            if (state_.retentionPercent < 25)
+                state_.retentionPercent = 25;
+            else if (state_.retentionPercent < 50)
+                state_.retentionPercent = 50;
+            else
+                state_.retentionPercent = 100;
+        }
+    }
+    auto candidate = capFor(sample, retained);
+    if (candidate > state_.effectiveBytes) {
+        if (!restore)
+            candidate = state_.effectiveBytes;
+        else
+            candidate =
+                std::min(candidate, saturatedAdd(state_.effectiveBytes, state_.effectiveBytes / 4));
+    }
+    const auto difference = candidate > state_.effectiveBytes ? candidate - state_.effectiveBytes
+                                                              : state_.effectiveBytes - candidate;
+    if (difference > state_.effectiveBytes / 10 &&
+        (!lastCapChange_ || now - *lastCapChange_ >= std::chrono::seconds(5))) {
+        state_.effectiveBytes = candidate;
+        lastCapChange_ = now;
+    }
+    for (const auto& [owner, cache] : caches_)
+        cache.applyBudget(cacheByteBudgetLocked(cache.ceiling));
+    return state_;
+}
+
+MemoryBudgetState MemoryBudgetLedger::state() const {
+    const std::lock_guard lock(mutex_);
+    return state_;
+}
+
+MemoryBudgetLedger& processMemoryBudgetLedger() {
+    static MemoryBudgetLedger ledger(physicalMemoryBytes(), startupAvailableMemoryBytes());
+    return ledger;
 }
 
 std::size_t defaultOperationCacheByteBudget() noexcept {

@@ -262,8 +262,8 @@ struct ParsedHeader final {
 
 } // namespace
 
-MediaDiskCache::MediaDiskCache(MediaDiskCacheConfig config)
-    : root_(std::move(config.rootDirectory)),
+MediaDiskCache::MediaDiskCache(MediaDiskCacheConfig config, runtime::MemoryBudgetLedger& ledger)
+    : ledger_(ledger), root_(std::move(config.rootDirectory)),
       byteBudget_(config.byteBudget != 0 ? config.byteBudget : kDefaultMediaDiskCacheCapBytes),
       maxEntryCount_(config.maxEntryCount),
       asyncQueueByteCapacity_(config.asyncQueueByteCapacity != 0
@@ -271,9 +271,41 @@ MediaDiskCache::MediaDiskCache(MediaDiskCacheConfig config)
                                   : kMediaDiskCacheAsyncQueueByteCapacity),
       enabled_(config.enabled) {
     writer_ = std::thread([this] { writerLoop(); });
+    try {
+        ledger_.registerCache(
+            this, static_cast<std::size_t>(asyncQueueByteCapacity()),
+            [this] {
+                std::lock_guard lock(queueMutex_);
+                return static_cast<std::size_t>(queuedBytes_);
+            },
+            [this](const std::size_t bytes) {
+                std::lock_guard lock(queueMutex_);
+                asyncQueueByteCapacity_.store(bytes, std::memory_order_relaxed);
+                std::uint64_t dropped = 0;
+                while (!queue_.empty() && queuedBytes_ > bytes) {
+                    queuedBytes_ -= queue_.back().bytes;
+                    queue_.pop_back();
+                    ++dropped;
+                }
+                // An active write keeps its charge until it releases the image. No I/O or wait
+                // occurs here, and new writes cannot enter while that charge exceeds the limit.
+                droppedAsyncWrites_ += dropped;
+                if (queue_.empty() && inFlight_ == 0)
+                    idleCv_.notify_all();
+            });
+    } catch (...) {
+        {
+            std::lock_guard lock(queueMutex_);
+            stopping_ = true;
+        }
+        queueCv_.notify_all();
+        writer_.join();
+        throw;
+    }
 }
 
 MediaDiskCache::~MediaDiskCache() {
+    ledger_.unregisterCache(this);
     {
         std::lock_guard lock(queueMutex_);
         stopping_ = true;
@@ -471,25 +503,18 @@ void MediaDiskCache::storeAsync(std::string key,
     // capacity is refused here rather than staged and then discarded by the writer.
     const std::uint64_t bytes =
         image && image->isValid() ? std::as_bytes(image->pixels()).size_bytes() : 0;
-    const auto dropped = [this] {
-        std::lock_guard statsLock(mutex_);
-        ++statistics_.droppedAsyncWrites;
-    };
     {
         std::lock_guard lock(queueMutex_);
         if (stopping_)
             return;
         if (queue_.size() >= kMediaDiskCacheAsyncQueueCapacity ||
-            bytes > asyncQueueByteCapacity_ - std::min(queuedBytes_, asyncQueueByteCapacity_)) {
-            dropped();
+            bytes > asyncQueueByteCapacity() - std::min(queuedBytes_, asyncQueueByteCapacity())) {
+            ++droppedAsyncWrites_;
             return;
         }
         queue_.push_back({std::move(key), std::move(image), bytes});
         queuedBytes_ += bytes;
-        const auto queued = queuedBytes_;
-        const std::lock_guard statsLock(mutex_);
-        statistics_.asyncQueueBytes = queued;
-        statistics_.peakAsyncQueueBytes = std::max(statistics_.peakAsyncQueueBytes, queued);
+        peakQueuedBytes_ = std::max(peakQueuedBytes_, queuedBytes_);
     }
     queueCv_.notify_one();
 }
@@ -520,11 +545,6 @@ void MediaDiskCache::writerLoop() {
             std::lock_guard lock(queueMutex_);
             queuedBytes_ -= std::min(queuedBytes_, work.bytes);
             --inFlight_;
-            const auto queued = queuedBytes_;
-            {
-                const std::lock_guard statsLock(mutex_);
-                statistics_.asyncQueueBytes = queued;
-            }
             if (queue_.empty() && inFlight_ == 0)
                 idleCv_.notify_all();
         }
@@ -538,6 +558,11 @@ void MediaDiskCache::flush() {
 
 void MediaDiskCache::clear() {
     flush();
+    {
+        std::lock_guard lock(queueMutex_);
+        droppedAsyncWrites_ = 0;
+        peakQueuedBytes_ = queuedBytes_;
+    }
     std::lock_guard lock(mutex_);
     loadIndexLocked();
     for (const auto& key : lru_) {
@@ -552,8 +577,18 @@ void MediaDiskCache::clear() {
 }
 
 MediaDiskCacheStatistics MediaDiskCache::statistics() const {
-    std::lock_guard lock(mutex_);
-    return statistics_;
+    MediaDiskCacheStatistics result;
+    {
+        std::lock_guard lock(mutex_);
+        result = statistics_;
+    }
+    {
+        std::lock_guard lock(queueMutex_);
+        result.asyncQueueBytes = queuedBytes_;
+        result.peakAsyncQueueBytes = peakQueuedBytes_;
+        result.droppedAsyncWrites = droppedAsyncWrites_;
+    }
+    return result;
 }
 
 void MediaDiskCache::setByteBudget(const std::uint64_t bytes) {

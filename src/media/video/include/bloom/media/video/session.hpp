@@ -1,5 +1,6 @@
 #pragma once
 #include <bloom/media/provider/worker_pool.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <filesystem>
 #include <list>
 #include <mutex>
@@ -17,7 +18,9 @@ struct FrameKey {
 // Independent resident byte budget. Callers reserve this budget through their memory ledger.
 class DecodedVideoCache final {
   public:
-    explicit DecodedVideoCache(std::size_t budget) : budget_(budget) {}
+    explicit DecodedVideoCache(std::size_t budget, runtime::MemoryBudgetLedger& ledger =
+                                                       runtime::processMemoryBudgetLedger());
+    ~DecodedVideoCache();
     [[nodiscard]] std::shared_ptr<const provider::FrameProduct> find(const FrameKey& key);
     void store(FrameKey key, std::shared_ptr<const provider::FrameProduct> frame);
     void setByteBudget(std::size_t budget);
@@ -30,6 +33,7 @@ class DecodedVideoCache final {
         std::shared_ptr<const provider::FrameProduct> frame;
         std::size_t bytes;
     };
+    runtime::MemoryBudgetLedger& ledger_;
     mutable std::mutex mutex_;
     std::list<Entry> entries_;
     std::size_t budget_ = 0, resident_ = 0;

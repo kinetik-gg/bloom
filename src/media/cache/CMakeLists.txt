@@ -14,7 +14,7 @@ target_sources(
 )
 
 target_compile_features(bloom_media_cache PUBLIC cxx_std_20)
-target_link_libraries(bloom_media_cache PUBLIC bloom_core bloom_render bloom_media_image)
+target_link_libraries(bloom_media_cache PUBLIC bloom_core bloom_render bloom_media_image bloom_runtime)
 bloom_enable_warnings(bloom_media_cache)
 bloom_enable_strict_floating_point(bloom_media_cache)
 

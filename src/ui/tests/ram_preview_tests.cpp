@@ -519,6 +519,26 @@ void testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(Expectations& expecta
                         "the cache fills back up after a trim, because the budget survived");
     cache.clear();
 
+    {
+        constexpr auto gib = std::size_t{1024} * 1024 * 1024;
+        runtime::MemoryBudgetLedger ledger(16 * gib, 16 * gib);
+        ledger.setConfiguredTotal(frameBytes * 4);
+        ui::PreviewFrameCache participating(frameBytes * 4, ledger);
+        for (const auto& frame : frames)
+            participating.insert(frame);
+        const auto state = ledger.poll({.availableBytes = gib});
+        expectations.expect(state.retentionPercent == 25 &&
+                                participating.residentBytes() <= frameBytes &&
+                                participating.byteBudget() <= frameBytes,
+                            "the shared ledger trims preview storage and admission together");
+        for (const auto& frame : frames)
+            participating.insert(frame);
+        static_cast<void>(ledger.poll({.availableBytes = gib}));
+        expectations.expect(participating.residentBytes() == 0 &&
+                                participating.byteBudget() < frameBytes,
+                            "two pressure polls prevent the preview cache from refilling");
+    }
+
     // A newer revision makes every retained entry unreachable, and inserting one drops them.
     cache.setByteBudget(frameBytes * 8);
     for (const auto& frame : frames) {

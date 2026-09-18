@@ -1,6 +1,7 @@
 #include "network_share_paths.hpp"
 #include <QDir>
 #include <QFileDialog>
+#include <QTimer>
 #include <QUrl>
 #include <QUuid>
 #include <algorithm>
@@ -14,6 +15,7 @@
 #include <bloom/media/video/session.hpp>
 #include <bloom/platform/font_catalog.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/runtime/video_asset.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -42,6 +44,38 @@ constexpr std::size_t kDecodedAudioByteCapacity = std::size_t{2} * 1024U * 1024U
     std::size_t bytes = sizeof(media::audio::AudioBuffer);
     for (const auto& plane : buffer.planes)
         bytes += plane.capacity() * sizeof(float);
+    return bytes;
+}
+
+// Prune aliasing preview images too: erasing a map entry alone does not release its pixels.
+template <typename Cache, typename Assets, typename Nodes>
+std::size_t trimProxyStorage(Cache& cache, Assets& assets, Nodes& nodes, const std::size_t limit) {
+    std::size_t bytes = 0;
+    for (const auto& [key, image] : cache)
+        bytes += proxyByteCost(image);
+    while (!cache.empty() && (bytes > limit || cache.size() > kProxyCacheEntryLimit)) {
+        bytes -= proxyByteCost(cache.begin()->second);
+        cache.erase(cache.begin());
+    }
+    const auto trimAliases = [&cache](auto& previews) {
+        for (auto& [id, preview] : previews)
+            if (!cache.contains(preview.key))
+                preview.image = {};
+    };
+    trimAliases(assets);
+    trimAliases(nodes);
+    return bytes;
+}
+
+template <typename Buffers>
+std::size_t trimAudioStorage(Buffers& buffers, const std::size_t limit) {
+    std::size_t bytes = 0;
+    for (const auto& [id, buffer] : buffers)
+        bytes += audioBufferByteCost(*buffer);
+    while (!buffers.empty() && bytes > limit) {
+        bytes -= audioBufferByteCost(*buffers.begin()->second);
+        buffers.erase(buffers.begin());
+    }
     return bytes;
 }
 
@@ -184,6 +218,38 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
                                  media::cache::MediaDiskCache* mediaDiskCache, QObject* parent)
     : QObject(parent), session_(session), host_(host), scheduler_(scheduler), bridge_(bridge),
       mediaDiskCache_(mediaDiskCache) {
+    auto& ledger = runtime::processMemoryBudgetLedger();
+    ledger.registerCache(
+        &proxyCacheBytes_, kProxyCacheByteCapacity, [this] { return proxyCacheBytes_; },
+        [this, previous = kProxyCacheByteCapacity](const std::size_t bytes) mutable {
+            if (bytes < previous && previewPending_) {
+                previewDirty_ = true;
+                preview_.cancel();
+            }
+            previous = bytes;
+            const auto before = proxyCacheBytes_;
+            proxyCacheBytes_ = trimProxyStorage(thumbnailCache_, previews_, nodePreviews_, bytes);
+            if (proxyCacheBytes_ != before)
+                QTimer::singleShot(0, this, &AssetController::changed);
+        });
+    try {
+        ledger.registerCache(
+            &decodedAudioBytes_, kDecodedAudioByteCapacity, [this] { return decodedAudioBytes_; },
+            [this, previous = kDecodedAudioByteCapacity](const std::size_t bytes) mutable {
+                if (bytes < previous && previewPending_) {
+                    previewDirty_ = true;
+                    preview_.cancel();
+                }
+                previous = bytes;
+                const auto before = decodedAudioBytes_;
+                decodedAudioBytes_ = trimAudioStorage(audioBuffers_, bytes);
+                if (decodedAudioBytes_ != before)
+                    QTimer::singleShot(0, this, &AssetController::changed);
+            });
+    } catch (...) {
+        ledger.unregisterCache(&proxyCacheBytes_);
+        throw;
+    }
     dragToken_ = QUuid::createUuid().toByteArray();
     session_.setAssetController(this);
     connect(&bridge_, &TaskUiBridge::snapshotsPolled, this, &AssetController::poll);
@@ -206,6 +272,8 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
     refresh();
 }
 AssetController::~AssetController() {
+    runtime::processMemoryBudgetLedger().unregisterCache(&proxyCacheBytes_);
+    runtime::processMemoryBudgetLedger().unregisterCache(&decodedAudioBytes_);
     cancel();
     session_.setAssetController(nullptr);
 }
@@ -414,7 +482,8 @@ void AssetController::refresh() {
             runtime::TaskPriority::Background, runtime::TaskExecutor::BlockingIo),
         [snapshot, directory, time, rate, sources = std::move(sources), cached = thumbnailCache_,
          cachedAudio = audioBuffers_, cachedWaveforms = waveforms_, cachedPreviews = previews_,
-         diskCache = mediaDiskCache_](runtime::TaskContext& context) mutable {
+         diskCache = mediaDiskCache_, proxyOwner = &proxyCacheBytes_,
+         audioOwner = &decodedAudioBytes_](runtime::TaskContext& context) mutable {
             auto results = std::make_shared<Thumbnails>();
             results->cache = std::move(cached);
             // The proxy cache carries over from the previous run, so its byte account has to carry
@@ -422,6 +491,30 @@ void AssetController::refresh() {
             // whatever the previous run had already put in it.
             for (const auto& [key, image] : results->cache)
                 results->proxyBytes += proxyByteCost(image);
+            const auto proxyLimit = [proxyOwner] {
+                return runtime::processMemoryBudgetLedger().cacheByteBudget(proxyOwner);
+            };
+            const auto audioLimit = [audioOwner] {
+                return runtime::processMemoryBudgetLedger().cacheByteBudget(audioOwner);
+            };
+            const auto keepAudio =
+                [&](const document::AssetId id,
+                    const std::shared_ptr<const media::audio::AudioBuffer>& buffer) {
+                    const auto cost = audioBufferByteCost(*buffer);
+                    const auto limit = audioLimit();
+                    if (cost <= limit - std::min(results->audioBytes, limit)) {
+                        results->audioBuffers.emplace(id, buffer);
+                        results->audioBytes += cost;
+                    }
+                };
+            const auto keepProxy = [&](const std::string& key, const QImage& image) {
+                const auto limit = proxyLimit();
+                const auto cost = proxyByteCost(image);
+                if (cost <= limit)
+                    results->cache.insert_or_assign(key, image);
+                results->proxyBytes =
+                    trimProxyStorage(results->cache, results->assets, results->nodes, limit);
+            };
             const auto decode = [&](const runtime::CompiledImageSource& source) {
                 Preview preview;
                 const auto selected =
@@ -477,19 +570,7 @@ void AssetController::refresh() {
                     // CACHEFIX-1: the 512-entry bound was only ever a bound on COUNT, and the
                     // 8 MiB it claimed was an unmeasured inference from "at most 64 x 64 RGBA8".
                     // Charge the real bytes, keep both bounds, and make the figure readable.
-                    const auto cost = proxyByteCost(preview.image);
-                    while (!results->cache.empty() &&
-                           (results->cache.size() >= kProxyCacheEntryLimit ||
-                            cost > kProxyCacheByteCapacity -
-                                       std::min(results->proxyBytes, kProxyCacheByteCapacity))) {
-                        results->proxyBytes -= std::min(
-                            results->proxyBytes, proxyByteCost(results->cache.begin()->second));
-                        results->cache.erase(results->cache.begin());
-                    }
-                    if (cost <= kProxyCacheByteCapacity) {
-                        results->cache.emplace(preview.key, preview.image);
-                        results->proxyBytes += cost;
-                    }
+                    keepProxy(preview.key, preview.image);
                 }
                 return preview;
             };
@@ -580,9 +661,7 @@ void AssetController::refresh() {
                         }
                     }
                     if (!preview.image.isNull()) {
-                        if (results->cache.size() >= 512)
-                            results->cache.erase(results->cache.begin());
-                        results->cache.insert_or_assign(preview.key, preview.image);
+                        keepProxy(preview.key, preview.image);
                     }
                     const auto previous = cachedPreviews.find(asset.id);
                     const auto cachedBuffer = cachedAudio.find(asset.id);
@@ -590,7 +669,7 @@ void AssetController::refresh() {
                     if (available && previous != cachedPreviews.end() &&
                         previous->second.key == preview.key && cachedBuffer != cachedAudio.end() &&
                         waveform != cachedWaveforms.end()) {
-                        results->audioBuffers.emplace(asset.id, cachedBuffer->second);
+                        keepAudio(asset.id, cachedBuffer->second);
                         results->waveforms.emplace(asset.id, waveform->second);
                     } else if (available && asset.channels > 0) {
                         auto decoded = media::video::decodeAudioClip(
@@ -601,9 +680,8 @@ void AssetController::refresh() {
                                 results->waveforms.emplace(
                                     asset.id, std::make_shared<const media::audio::WaveformSummary>(
                                                   *summary.value()));
-                            results->audioBuffers.emplace(
-                                asset.id, std::make_shared<const media::audio::AudioBuffer>(
-                                              std::move(*audio)));
+                            keepAudio(asset.id, std::make_shared<const media::audio::AudioBuffer>(
+                                                    std::move(*audio)));
                         }
                     }
                     results->assets.emplace(asset.id, std::move(preview));
@@ -621,21 +699,8 @@ void AssetController::refresh() {
                             results->waveforms.emplace(
                                 asset.id, std::make_shared<const media::audio::WaveformSummary>(
                                               *summary.value()));
-                            // CACHEFIX-1: a decoded buffer is capped per asset by
-                            // AudioDecodeLimits::kDefaultSampleBudget (48M samples, ~192 MB), but
-                            // the MAP of them had no aggregate bound at all -- a project with
-                            // twenty long audio assets could retain multiple gigabytes the memory
-                            // ledger never saw. The waveform summary is kept either way, so the
-                            // timeline still draws the asset; only the playable buffer is refused.
-                            const auto audioCost = audioBufferByteCost(*decoded.value());
-                            if (audioCost <=
-                                kDecodedAudioByteCapacity -
-                                    std::min(results->audioBytes, kDecodedAudioByteCapacity)) {
-                                results->audioBuffers.emplace(
-                                    asset.id, std::make_shared<const media::audio::AudioBuffer>(
-                                                  std::move(*decoded.value())));
-                                results->audioBytes += audioCost;
-                            }
+                            keepAudio(asset.id, std::make_shared<const media::audio::AudioBuffer>(
+                                                    std::move(*decoded.value())));
                         }
                     }
                     results->assets.emplace(asset.id, std::move(preview));
@@ -650,6 +715,8 @@ void AssetController::refresh() {
                                          document::AssetAlphaAssociation::Straight;
                     results->assets.emplace(asset.id, decode(source));
                 }
+                results->proxyBytes =
+                    trimProxyStorage(results->cache, results->assets, results->nodes, proxyLimit());
                 progress();
             }
             for (const auto& source : sources) {
@@ -661,6 +728,8 @@ void AssetController::refresh() {
                         results->nodes.emplace(source.sourceNodeId, asset->second);
                 } else
                     results->nodes.emplace(source.sourceNodeId, decode(source));
+                results->proxyBytes =
+                    trimProxyStorage(results->cache, results->assets, results->nodes, proxyLimit());
                 progress();
             }
             return runtime::TaskResult<std::shared_ptr<Thumbnails>>::succeeded(std::move(results));
@@ -709,8 +778,11 @@ void AssetController::poll() {
                 thumbnailCache_ = std::move((*result->value())->cache);
                 waveforms_ = std::move((*result->value())->waveforms);
                 audioBuffers_ = std::move((*result->value())->audioBuffers);
-                proxyCacheBytes_ = (*result->value())->proxyBytes;
-                decodedAudioBytes_ = (*result->value())->audioBytes;
+                auto& ledger = runtime::processMemoryBudgetLedger();
+                proxyCacheBytes_ = trimProxyStorage(thumbnailCache_, previews_, nodePreviews_,
+                                                    ledger.cacheByteBudget(&proxyCacheBytes_));
+                decodedAudioBytes_ =
+                    trimAudioStorage(audioBuffers_, ledger.cacheByteBudget(&decodedAudioBytes_));
                 emit changed();
             }
         }

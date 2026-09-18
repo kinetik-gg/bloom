@@ -49,8 +49,9 @@ struct OperationCacheValue final {
 // Owned by the evaluator session. Concurrent preview/export tasks share this bounded LRU.
 class OperationCache final {
   public:
-    explicit OperationCache(std::size_t budget = defaultOperationCacheByteBudget())
-        : budget_(budget) {}
+    explicit OperationCache(std::size_t budget = defaultOperationCacheByteBudget(),
+                            MemoryBudgetLedger& ledger = processMemoryBudgetLedger());
+    ~OperationCache();
     [[nodiscard]] std::optional<OperationCacheValue> find(const std::string& content,
                                                           document::Revision revision);
     void store(std::string content, document::Revision revision, OperationCacheValue value,
@@ -62,9 +63,8 @@ class OperationCache final {
     // expensive half (one 4K RGBA32F frame is 126.6 MiB), and it is the half a grace period keeps
     // alive, so an audit that cannot separate the two cannot say where the bytes went.
     [[nodiscard]] std::size_t retainedBytes(OperationCacheEntryKind kind) const;
-    // Evicts down to `bytes` WITHOUT changing the budget: the runtime memory-pressure response
-    // (see WindowStatusBar) gives the cache back its allowance once the machine recovers, so the
-    // configured budget must survive the trim. Never grows the cache.
+    // Explicit one-shot trim without changing admission. The ledger pressure callback separately
+    // lowers admission and evicts atomically; configured ceilings remain in the ledger.
     void trimToBytes(std::size_t bytes);
     [[nodiscard]] OperationCacheAccessStatistics statistics() const;
 
@@ -96,6 +96,7 @@ class OperationCache final {
     void removeLocked(std::list<Entry>::iterator candidate);
     [[nodiscard]] std::list<Entry>::iterator evictionCandidate();
 
+    MemoryBudgetLedger& ledger_;
     mutable std::mutex mutex_;
     std::size_t budget_;
     std::size_t bytes_ = 0;

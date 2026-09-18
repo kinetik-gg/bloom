@@ -174,9 +174,11 @@ QString mediaDiskCacheStatusText(const media::cache::MediaDiskCacheStatistics& s
 WindowStatusBar::WindowStatusBar(CompositionSession& session,
                                  CompositionPreviewController* const previewController,
                                  media::cache::MediaDiskCache* const mediaDiskCache,
-                                 runtime::OperationCache* const operationCache, QWidget* parent)
-    : kit::KSurface(parent), session_(session), previewController_(previewController),
-      operationCache_(operationCache), mediaDiskCache_(mediaDiskCache) {
+                                 runtime::OperationCache* const operationCache, QWidget* parent,
+                                 runtime::MemoryBudgetLedger& ledger)
+    : kit::KSurface(parent), memoryLedger_(ledger), session_(session),
+      previewController_(previewController), operationCache_(operationCache),
+      mediaDiskCache_(mediaDiskCache) {
     setObjectName(QStringLiteral("windowStatusBar"));
     setAccessibleName(tr("Application status"));
     setFixedHeight(kit::px(kit::Size::Control));
@@ -249,8 +251,7 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     // Bloom had done anything to it.
     connect(mediaDiskCacheTimer_, &QTimer::timeout, this, &WindowStatusBar::pollMemoryPressure);
     mediaDiskCacheTimer_->start();
-    memoryReserveBytes_ =
-        runtime::MemoryBudgetLedger::reserveForPhysicalMemory(runtime::physicalMemoryBytes());
+    memoryReserveBytes_ = memoryLedger_.reserveByteBudget();
 
     // A refused command is a notice, not a dialog: the artist asked for something the document
     // could not do, the command did not run, and the reason belongs where every other notice is.
@@ -279,48 +280,62 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
                 &WindowStatusBar::refreshPreviewCells);
     }
     if (operationCache_ != nullptr) {
-        cache_->setToolTip(
-            tr("RAM preview frames and operation-cache hits, misses, retained bytes, and budgets. "
-               "Bloom reserves the larger of 8 GB or 40% of memory for the rest of the machine, "
-               "and its default caches never exceed half of it."));
         cache_->setAccessibleName(tr("Cache statistics"));
     }
+    refreshMemoryToolTip();
     refreshPreviewCells();
     refreshMessage();
 }
 
-void WindowStatusBar::pollMemoryPressure() { applyMemoryPressure(runtime::availableMemoryBytes()); }
+void WindowStatusBar::pollMemoryPressure() {
+    applyMemoryPressure(runtime::machineMemorySample(), runtime::MemoryBudgetLedger::Clock::now());
+}
 
 void WindowStatusBar::pollMemoryPressureForTest(const std::size_t availableBytes) {
-    applyMemoryPressure(availableBytes);
+    runtime::MachineMemorySample sample;
+    if (availableBytes != 0)
+        sample.availableBytes = availableBytes;
+    applyMemoryPressure(sample, runtime::MemoryBudgetLedger::Clock::now());
 }
 
-void WindowStatusBar::applyMemoryPressure(const std::size_t availableBytes) {
-    // A platform that reports nothing (0) reports nothing: never invent pressure from silence.
-    if (availableBytes == 0 || memoryReserveBytes_ == 0) {
-        return;
+void WindowStatusBar::pollMemoryPressureForTest(
+    runtime::MachineMemorySample sample, runtime::MemoryBudgetLedger::Clock::time_point now) {
+    applyMemoryPressure(sample, now);
+}
+
+void WindowStatusBar::applyMemoryPressure(runtime::MachineMemorySample sample,
+                                          runtime::MemoryBudgetLedger::Clock::time_point now) {
+    const auto state = memoryLedger_.poll(sample, now);
+    if (state.memoryNotice)
+        showTransientMessage(tr("Memory pressure: caches trimmed"));
+    if (state.swapNotice) {
+        if (state.memoryNotice)
+            pendingSwapNotice_ = true;
+        else
+            showTransientMessage(tr("Swap pressure: caches trimmed"));
     }
-    if (availableBytes >= memoryReserveBytes_) {
-        memoryPressureActive_ = false;
-        return;
-    }
-    if (memoryPressureActive_) {
-        return;
-    }
-    memoryPressureActive_ = true;
-    // Half of each budget, and the BUDGETS ARE NOT CHANGED: the ledger's or the artist's decision
-    // about how much Bloom may hold survives an episode of pressure, so the caches fill back up
-    // once the machine recovers instead of staying permanently halved by one busy moment.
-    if (operationCache_ != nullptr) {
-        operationCache_->trimToBytes(operationCache_->byteBudget() / 2);
-    }
-    if (previewController_ != nullptr) {
-        auto& frameCache = previewController_->frameCache();
-        frameCache.trimToBytes(frameCache.byteBudget() / 2);
-    }
-    showTransientMessage(tr("Memory pressure: caches trimmed"));
+    refreshMemoryToolTip();
     refreshPreviewCells();
 }
+
+void WindowStatusBar::refreshMemoryToolTip() {
+    const auto state = memoryLedger_.state();
+    const auto available = state.machine.availableBytes ? formatBytes(*state.machine.availableBytes)
+                                                        : tr("Unavailable");
+    const auto pressure = state.swapPressure             ? tr("Swap pressure")
+                          : state.memoryPressure         ? tr("Memory pressure")
+                          : state.retentionPercent < 100 ? tr("Recovering")
+                                                         : tr("Normal");
+    cache_->setToolTip(tr("RAM preview and operation-cache statistics.\n"
+                          "Effective cap: %1 · Configured total: %2\n"
+                          "MemAvailable: %3 · Pressure state: %4\n"
+                          "Cache admission: %5% of effective budgets")
+                           .arg(formatBytes(state.effectiveBytes),
+                                formatBytes(state.configuredBytes), available, pressure)
+                           .arg(state.retentionPercent));
+}
+
+QString WindowStatusBar::cacheToolTipForTest() const { return cache_->toolTip(); }
 
 void WindowStatusBar::refreshPreviewCells() {
     if (previewController_ == nullptr) {
@@ -379,6 +394,10 @@ void WindowStatusBar::clearTransientMessage() {
     transientTimer_->stop();
     transientMessage_.clear();
     refreshMessage();
+    if (pendingSwapNotice_) {
+        pendingSwapNotice_ = false;
+        showTransientMessage(tr("Swap pressure: caches trimmed"));
+    }
 }
 
 void WindowStatusBar::setPersistentMessage(const QString& message) {
