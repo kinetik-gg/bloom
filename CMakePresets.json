@@ -38,7 +38,8 @@
       "inherits": "ci-linux-native",
       "binaryDir": "${sourceDir}/build/ci-linux-desktop",
       "cacheVariables": {
-        "BLOOM_BUILD_DESKTOP": "ON"
+        "BLOOM_BUILD_DESKTOP": "ON",
+        "BLOOM_ENABLE_TEST_CLANG_TIDY": "OFF"
       }
     },
     {
