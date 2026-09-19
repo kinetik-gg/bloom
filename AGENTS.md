@@ -41,3 +41,9 @@
   owning editor, document, command, node, render, adapter, and task boundaries.
 - Prefer a small vertical slice over speculative subsystem breadth.
 - Add tests for durable document, command, project I/O, and rendering behavior.
+
+## Commit Messages
+
+- Every commit must use Conventional Commits: `type(scope): summary` (scope is optional).
+- Use the appropriate type, such as `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, or `build`;
+  preserve required attribution trailers. This is a hard requirement.
