@@ -175,6 +175,24 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     )
 endif()
 
+# Pure CPU present-image test: the corrected fragment composition (display-space checkerboard,
+# destination/source mapping, channel remap per texel BEFORE the filter, premultiplied bilinear
+# filtering of the straight RGBA8 source, premultiplied overlay) reproduced on the CPU, plus the
+# embedded viewer_present SPIR-V digest pins. No GPU, window, or Qt is needed, so it registers
+# unconditionally and also runs in a CPU-stub build. The independent QPainter SmoothPixmapTransform
+# oracle and the real-device offscreen proof live in the UI test directory (they need Qt).
+add_executable(bloom_render_gpu_present_image_test gpu_present_image_tests.cpp)
+target_link_libraries(bloom_render_gpu_present_image_test PRIVATE bloom_render)
+target_include_directories(bloom_render_gpu_present_image_test
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+bloom_enable_warnings(bloom_render_gpu_present_image_test)
+bloom_enable_strict_floating_point(bloom_render_gpu_present_image_test)
+bloom_add_test(
+    NAME bloom.render.gpu_present_image
+    COMMAND bloom_render_gpu_present_image_test
+    LABELS unit gpu render
+)
+
 # Device-free presentation-target unit tests (format refusal table and wait-result
 # classification). Only meaningful where the private Vulkan header is available.
 if(BLOOM_RENDER_VULKAN_AVAILABLE)

@@ -23,7 +23,12 @@
 // report the quarantine fuse instead of silently destroying Vulkan state off the owner thread.
 
 #include <bloom/render/gpu_device.hpp>
+#include <bloom/render/gpu_image_upload.hpp>
+#include <bloom/render/gpu_present_image.hpp>
 #include <bloom/render/gpu_presentation_target.hpp>
+#include <bloom/render/gpu_resident_display.hpp>
+#include <bloom/render/image.hpp>
+#include <bloom/render/image_types.hpp>
 
 #include <QGuiApplication>
 #include <QTimer>
@@ -104,6 +109,80 @@ template <typename Predicate>
 
 [[nodiscard]] std::uint64_t surfaceBits(const VkSurfaceKHR surface) {
     return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(surface));
+}
+
+// Builds one small GPU-resident RGBA8 display image through the public upload -> resident-display
+// path, so the P3 presentImage member can be exercised against the real swapchain. This is the only
+// P3 wiring in the fixture; it performs no readback and no full-frame upload.
+[[nodiscard]] std::shared_ptr<const bloom::render::GpuDisplayImage>
+makeResidentDisplayImage(bloom::render::GpuDevice& device) {
+    using namespace bloom::render;
+    constexpr std::uint64_t kBudget = std::uint64_t{1} << 32;
+    const auto window = ImageWindow::create(0, 0, 2, 2);
+    if (!window) {
+        return nullptr;
+    }
+    const auto descriptor = Rgba32fImageDescriptor::create(*window.value(), *window.value(),
+                                                           bloom::core::PixelAspectRatio::square());
+    if (!descriptor) {
+        return nullptr;
+    }
+    auto builder = Rgba32fImageBuilder::create(*descriptor.value(), kBudget);
+    if (!builder) {
+        return nullptr;
+    }
+    const float values[4][4] = {{1.0F, 0.0F, 0.0F, 1.0F},
+                                {0.0F, 1.0F, 0.0F, 1.0F},
+                                {0.0F, 0.0F, 1.0F, 1.0F},
+                                {1.0F, 1.0F, 1.0F, 1.0F}};
+    for (std::uint32_t y = 0; y < 2; ++y) {
+        const auto row = builder.value()->row(y);
+        if (!row) {
+            return nullptr;
+        }
+        for (std::uint32_t x = 0; x < 2; ++x) {
+            const auto pixel =
+                Rgba32f::fromPremultiplied(values[y * 2 + x][0], values[y * 2 + x][1],
+                                           values[y * 2 + x][2], values[y * 2 + x][3]);
+            if (!pixel) {
+                return nullptr;
+            }
+            (*row.value())[x] = *pixel.value();
+        }
+    }
+    auto frozen = std::move(*builder.value()).freeze();
+    if (!frozen) {
+        return nullptr;
+    }
+    auto uploader = GpuImageUpload::create(device);
+    auto display = GpuResidentDisplay::create(device);
+    if (!uploader || !display) {
+        return nullptr;
+    }
+    auto source = std::make_shared<const Rgba32fImage>(std::move(*frozen.value()));
+    if (uploader.upload->begin({std::move(source)}, kBudget).code !=
+        GpuImageUploadDiagnosticCode::None) {
+        return nullptr;
+    }
+    auto uploadPoll = GpuImageUploadPollResult::Pending;
+    while (uploadPoll == GpuImageUploadPollResult::Pending) {
+        uploadPoll = uploader.upload->poll();
+    }
+    if (uploadPoll != GpuImageUploadPollResult::Ready) {
+        return nullptr;
+    }
+    auto resident = std::make_shared<const GpuImage>(uploader.upload->takeImage());
+    if (display.display->begin(resident, kBudget).code != GpuResidentDisplayDiagnosticCode::None) {
+        return nullptr;
+    }
+    auto displayPoll = GpuResidentDisplayPollResult::Pending;
+    while (displayPoll == GpuResidentDisplayPollResult::Pending) {
+        displayPoll = display.display->poll();
+    }
+    if (displayPoll != GpuResidentDisplayPollResult::Ready) {
+        return nullptr;
+    }
+    return std::make_shared<const GpuDisplayImage>(display.display->takeImage());
 }
 
 // A requested device/surface that cannot be produced is a skip for a host without a GPU, but a hard
@@ -291,6 +370,60 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // P3: sample a real resident RGBA8 display image into the real acquired swapchain image and
+    // present it, so the production present-image wiring (not just the clear path) is exercised
+    // against an actual surface. The resident image stays device-local; no readback is performed.
+    auto displayImage = makeResidentDisplayImage(device);
+    if (!displayImage) {
+        window->hide();
+        delete window;
+        instance.destroy();
+        std::cerr << "FAIL: the resident display image could not be produced\n";
+        return 1;
+    }
+    const auto residentParams = [](const std::uint32_t width, const std::uint32_t height) {
+        bloom::render::GpuPresentImageParams params;
+        params.targetWidth = width;
+        params.targetHeight = height;
+        params.destination = bloom::render::GpuPresentRect{0.0F, 0.0F, static_cast<float>(width),
+                                                           static_cast<float>(height)};
+        params.source = bloom::render::GpuPresentSourceWindow{0.0, 0.0, 2.0, 2.0};
+        params.background = bloom::render::GpuPresentBackground::Black;
+        return params;
+    };
+    const auto presentResident = [&](const std::uint32_t width, const std::uint32_t height) {
+        const auto params = residentParams(width, height);
+        for (int attempt = 0; attempt < 400; ++attempt) {
+            static_cast<void>(target.pollRetirement());
+            const auto acquire = target.acquire();
+            if (acquire == bloom::render::GpuPresentationTargetCode::Ok ||
+                acquire == bloom::render::GpuPresentationTargetCode::Suboptimal) {
+                const auto present =
+                    target.presentImage(displayImage, params, bloom::render::GpuPresentOverlay{});
+                if (present == bloom::render::GpuPresentationTargetCode::Ok ||
+                    present == bloom::render::GpuPresentationTargetCode::Suboptimal) {
+                    return true;
+                }
+                if (present == bloom::render::GpuPresentationTargetCode::InvalidArgument ||
+                    present == bloom::render::GpuPresentationTargetCode::PresentationUnavailable) {
+                    std::cerr << "FAIL: presentImage rejected the frame: " << target.lastMessage()
+                              << '\n';
+                    return false;
+                }
+            }
+            pump(8);
+        }
+        return false;
+    };
+    if (!presentResident(description.width, description.height)) {
+        window->hide();
+        delete window;
+        instance.destroy();
+        std::cerr << "FAIL: no resident display frame could be presented (" << target.lastMessage()
+                  << ")\n";
+        return 1;
+    }
+
     // A foreign-thread acquire fails closed without touching the driver.
     {
         std::atomic<int> foreign{0};
@@ -306,33 +439,51 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Repeated resize/recreate at a positive extent, then present again. The old generation's
-    // present must be proven retired first, so poll and retry recreate while it reports NotReady.
-    bloom::render::GpuPresentationTargetDescription resized = description;
-    resized.width = 400;
-    resized.height = 300;
-    auto recreated = bloom::render::GpuPresentationTargetCode::NotReady;
-    for (int attempt = 0; attempt < 2000; ++attempt) {
-        static_cast<void>(target.pollRetirement());
-        recreated = target.recreate(resized);
-        if (recreated != bloom::render::GpuPresentationTargetCode::NotReady) {
-            break;
+    // Resize/recreate TWICE before the next present, at positive extents. The first recreate waits
+    // for the previous present to be proven retired; the second runs with no present in between, so
+    // the presenter's cached views/framebuffers must have been dropped with the first generation.
+    const auto recreateTo = [&](const std::uint32_t width, const std::uint32_t height) {
+        bloom::render::GpuPresentationTargetDescription resized = description;
+        resized.width = width;
+        resized.height = height;
+        auto recreated = bloom::render::GpuPresentationTargetCode::NotReady;
+        for (int attempt = 0; attempt < 2000; ++attempt) {
+            static_cast<void>(target.pollRetirement());
+            recreated = target.recreate(resized);
+            if (recreated != bloom::render::GpuPresentationTargetCode::NotReady) {
+                break;
+            }
+            pump(8);
         }
-        pump(8);
-    }
-    if (recreated != bloom::render::GpuPresentationTargetCode::Ok &&
-        recreated != bloom::render::GpuPresentationTargetCode::Suboptimal) {
+        return recreated == bloom::render::GpuPresentationTargetCode::Ok ||
+               recreated == bloom::render::GpuPresentationTargetCode::Suboptimal;
+    };
+    if (!recreateTo(400, 300) || !recreateTo(420, 320)) {
         window->hide();
         delete window;
         instance.destroy();
-        std::cerr << "FAIL: recreate failed: " << target.lastMessage() << '\n';
+        std::cerr << "FAIL: two recreates before the next present failed: " << target.lastMessage()
+                  << '\n';
         return 1;
     }
-    if (!presentFrame()) {
+    // The presented info must reflect the final generation's actual format/extent, not a stale one.
+    const auto resizedInfo = target.info();
+    if (resizedInfo.width != 420 || resizedInfo.height != 320 ||
+        resizedInfo.format == bloom::render::GpuPresentationFormat::Unknown) {
         window->hide();
         delete window;
         instance.destroy();
-        std::cerr << "FAIL: no frame could be presented after recreate\n";
+        std::cerr << "FAIL: target info was not refreshed after recreate\n";
+        return 1;
+    }
+    // A real resident image present must work after the two recreates (the presenter was rebuilt
+    // for the new generation).
+    if (!presentResident(420, 320)) {
+        window->hide();
+        delete window;
+        instance.destroy();
+        std::cerr << "FAIL: no resident display frame could be presented after two recreates ("
+                  << target.lastMessage() << ")\n";
         return 1;
     }
     drain();

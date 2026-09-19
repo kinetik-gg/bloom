@@ -217,6 +217,29 @@ are unchanged. This is bootstrap and lifecycle only: no service/viewer/image-pre
 checkerboard/channel/overlay present, no performance or reference-parity claim, and XCB/Xlib/Xrandr
 presentation remains deferred to a reviewed intake.
 
+The presentation lane now samples the resident display image into the acquired swapchain. The
+Qt-free `bloom/render/gpu_present_image.hpp` describes the display-space background/checkerboard,
+the viewer channel remap, an explicit affine destination/source mapping, and an optional
+premultiplied RGBA8 overlay; `GpuPresentationTarget::presentImage` takes the strong
+`shared_ptr<const GpuDisplayImage>` and presents it, with `renderResidentIntoAcquired` supplying the
+fixed sampler pipeline (checked caller parameters rejected `InvalidArgument` before any command is
+recorded, same compute/present queue required, UNORM-only attachment, no readback or full-frame
+upload). The fragment shader remaps per texel and premultiplies each tap before the bilinear filter,
+matching QPainter's `SmoothPixmapTransform`; the attachment format owns channel packing, so no manual
+BGRA swizzle remains. Both shaders are pinned by SHA-256 with a manifest binding and a
+configure-time glslangValidator/spirv-val regeneration check against the embedded SPIR-V digest. The
+presenter caches views/framebuffers against a monotonic swapchain-generation counter rather than raw
+handles; the whole presenter is dropped once retirement is proven and before a resize replaces the
+swapchain, and the resident input pin and committed view are updated together so a failed
+preparation can never leave a view without its strong source pin. A partial device-resource creation
+failure never marks the pipeline ready, and a later attempt rebuilds safely. The native offscreen
+proof runs on a real device against an independent QPainter oracle and the CPU OCIO oracle (every
+pixel for 257x19 and 1280x720, RGBA8/BGRA8, channel/checker/crop/PAR/premultiplied-overlay/
+failed-overlay-pin/partial-ready cases), and the real Wayland fixture now drives a resident image
+present through a resize-and-two-recreate before presenting and retiring. The CPU-unavailable stub
+provides the same API. This remains render-side only: no viewer/service selection, no
+whole-application benchmark, and no reference-parity or performance claim.
+
 The render layer now owns the two GPU compositing operations and the runtime owns a bounded
 owner-thread content cache, still without any scene evaluator, service, or viewer wiring.
 `GpuComposite` (`gpu_composite.hpp`, with a portable CPU-unavailable stub) runs
@@ -279,7 +302,7 @@ selects a command, so no performance claim is made.
 
 Pending and unchanged: the GPU scene executor that dispatches these prepared commands and the service
 selection that consumes them, per-layer GPU compositing selection, resident GPU viewer buffers,
-WSI/swapchain presentation, a whole-application benchmark, the full per-operation qualification
+the service/viewer activation that consumes the render-side image-present path, a whole-application benchmark, the full per-operation qualification
 fixtures for a future `ReferenceParity` profile (the qualified display transform remains
 `PreviewOnly`; scene operations have no runtime qualification yet), general graph
 execution, presentation/swapchain integration, the cross-platform Linux/macOS/Windows parity spike,

@@ -24,6 +24,10 @@
 
 namespace bloom::render {
 
+class GpuDisplayImage;
+struct GpuPresentImageParams;
+struct GpuPresentOverlay;
+
 // Bloom-owned swapchain format choice. Bgra8Unorm with an SRGB_NONLINEAR color space is preferred
 // because the display shader already emits sRGB-encoded bytes; that pairing avoids a second gamma
 // encode. Bgra8Srgb is only a fallback when the UNORM format is not offered.
@@ -116,6 +120,19 @@ class GpuPresentationTarget final {
     // Clears the acquired image to `color` on the owner thread and presents it. Bounded to one
     // outstanding present; a second call while one is outstanding returns NothingAcquired.
     [[nodiscard]] GpuPresentationTargetCode present(GpuClearColor color);
+
+    // Samples a resident display image (and optional premultiplied RGBA8 overlay) into the acquired
+    // swapchain image and presents it. Implemented by the GPU present-image module, which owns the
+    // fixed sampler pipeline; this target only supplies its acquired image and retirement
+    // machinery. The display image stays resident (no readback, no full-frame upload) and must be
+    // bound to this device generation. The target's UNORM format is required; an _SRGB attachment
+    // is rejected because the resident bytes are already sRGB-encoded. Owner-thread only.
+    // Strong-ownership entry point: the target pins the shared resident image until its render
+    // fence is known complete (or the target is quarantined), so the caller may release its own
+    // reference once this returns.
+    [[nodiscard]] GpuPresentationTargetCode
+    presentImage(std::shared_ptr<const GpuDisplayImage> input, const GpuPresentImageParams& params,
+                 const GpuPresentOverlay& overlay);
 
     // Non-blocking retirement progress. Never blocks and never waits idle. Returns Retired only
     // when every present is proven complete by the presentation engine and every render submit has

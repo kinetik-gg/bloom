@@ -35,6 +35,12 @@ GpuPresentationTargetCode GpuPresentationTarget::present(GpuClearColor) {
     return GpuPresentationTargetCode::PresentationUnavailable;
 }
 
+GpuPresentationTargetCode
+GpuPresentationTarget::presentImage(std::shared_ptr<const GpuDisplayImage>,
+                                    const GpuPresentImageParams&, const GpuPresentOverlay&) {
+    return GpuPresentationTargetCode::PresentationUnavailable;
+}
+
 GpuPresentationTargetCode GpuPresentationTarget::pollRetirement() {
     return GpuPresentationTargetCode::PresentationUnavailable;
 }

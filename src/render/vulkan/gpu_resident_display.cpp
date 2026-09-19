@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <new>
 #include <string>
@@ -401,6 +402,23 @@ GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const Gpu
         return impl.jobDiagnostic;
     }
 
+    // The shader atomicOr-accumulates into the status word, so it MUST be zeroed by the host
+    // before the dispatch; otherwise recycled mapped memory is reported as a shader
+    // rejection. The hostToCompute barrier below already declares VK_ACCESS_HOST_WRITE_BIT
+    // for exactly this write.
+    if (impl.jobStatus.info.pMappedData == nullptr) {
+        impl.fail(GpuResidentDisplayDiagnosticCode::DeviceUnavailable,
+                  "the resident display status buffer is not mapped");
+        return impl.jobDiagnostic;
+    }
+    *static_cast<std::uint32_t*>(impl.jobStatus.info.pMappedData) = 0U;
+    if (vmaFlushAllocation(impl.control->allocator, impl.jobStatus.allocation, 0,
+                           sizeof(std::uint32_t)) != VK_SUCCESS) {
+        impl.fail(GpuResidentDisplayDiagnosticCode::DeviceUnavailable,
+                  "the resident display status buffer could not be flushed");
+        return impl.jobDiagnostic;
+    }
+
     std::array<vk::DescriptorBufferInfo, 3> infos{};
     infos[0] = vk::DescriptorBufferInfo{impl.jobInput.buffer, 0, VK_WHOLE_SIZE};
     infos[1] = vk::DescriptorBufferInfo{impl.jobOutput.buffer, 0, VK_WHOLE_SIZE};
@@ -477,12 +495,22 @@ GpuResidentDisplayDiagnostic GpuResidentDisplay::begin(std::shared_ptr<const Gpu
     impl.commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *impl.pipeline);
     impl.commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *impl.pipelineLayout, 0,
                                           {*impl.descriptorSet}, {});
-    const std::uint32_t pixelCount = width * height;
+    // One-dimensional dispatch over the whole pixel count: the shader reads only
+    // gl_GlobalInvocationID.x, so a 2D dispatch re-runs lanes and leaves the tail of every
+    // width-grouped row unprocessed for non-multiples of the workgroup size.
+    const std::uint64_t pixelCount64 =
+        static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
+    if (pixelCount64 > std::numeric_limits<std::uint32_t>::max()) {
+        impl.fail(GpuResidentDisplayDiagnosticCode::OverBudget,
+                  "the pixel count exceeds the uint32 push-constant range");
+        return impl.jobDiagnostic;
+    }
+    const std::uint32_t pixelCount = static_cast<std::uint32_t>(pixelCount64);
     impl.commandBuffer.pushConstants(*impl.pipelineLayout, vk::ShaderStageFlagBits::eCompute, 0,
                                      static_cast<std::uint32_t>(sizeof(std::uint32_t)),
                                      &pixelCount);
-    const std::uint32_t groups = (width + kWorkgroupSizeX - 1U) / kWorkgroupSizeX;
-    impl.commandBuffer.dispatch(groups, height, 1);
+    const std::uint32_t groups = (pixelCount + kWorkgroupSizeX - 1U) / kWorkgroupSizeX;
+    impl.commandBuffer.dispatch(groups, 1, 1);
 
     VkBufferMemoryBarrier packedToTransfer = hostToCompute[0];
     packedToTransfer.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;

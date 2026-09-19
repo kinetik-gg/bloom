@@ -16,6 +16,14 @@ std::atomic<std::uint32_t> gConstructionFault{UINT32_MAX};
     return gConstructionFault.load(std::memory_order_acquire) == stage;
 }
 
+// Monotonic identity source for swapchain/attachment generations. Never reused, so a presenter
+// cache can tell a recycled raw handle from the original generation.
+std::atomic<std::uint64_t> gSwapchainGeneration{1};
+
+[[nodiscard]] std::uint64_t nextSwapchainGeneration() noexcept {
+    return gSwapchainGeneration.fetch_add(1, std::memory_order_relaxed);
+}
+
 // Creates the swapchain through the raw entry point and adopts the handle into RAII ownership,
 // mirroring the existing render-resource idiom (no exception-enabled Vulkan-Hpp create wrappers).
 [[nodiscard]] vk::raii::SwapchainKHR
@@ -95,6 +103,7 @@ SwapchainResources::SwapchainResources(
     : format(chosenFormat), colorSpace(chosenColorSpace), presentMode(chosenPresentMode),
       retirement(chosenRetirement), width(extent.width), height(extent.height) {
     static_cast<void>(physical);
+    generation = nextSwapchainGeneration();
     const auto* dispatcher = device.getDispatcher();
     if (faultAt(0U)) {
         error = "injected swapchain-construction fault before creation";
@@ -196,6 +205,53 @@ SwapchainResources::SwapchainResources(
         return;
     }
     commandBuffers.emplace_back(device, rawCommand, rawPool);
+    valid = true;
+}
+
+// Private offscreen test seam (no real swapchain): one caller-owned color image, acquiredIndex 0,
+// one command buffer and render fence, and a configurable render-pass finalLayout. It reuses the
+// production renderResidentIntoAcquired/ensureSwapchainResources pipeline/descriptor/draw path.
+SwapchainResources::SwapchainResources(vk::raii::Device const& device, VkExtent2D extent,
+                                       VkFormat chosenFormat, VkImage offscreenImage,
+                                       VkImageLayout chosenFinalLayout, std::uint32_t queueFamily)
+    : format(chosenFormat), colorSpace(VK_COLOR_SPACE_SRGB_NONLINEAR_KHR),
+      presentMode(VK_PRESENT_MODE_FIFO_KHR), offscreen(true), finalLayout(chosenFinalLayout),
+      retirement(GpuPresentationRetirement::None), width(extent.width), height(extent.height) {
+    generation = nextSwapchainGeneration();
+    images.push_back(offscreenImage);
+    presentPending.assign(1, false);
+    presentIds.assign(1, 0);
+    acquiredIndex = 0;
+    const auto* dispatcher = device.getDispatcher();
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    poolInfo.queueFamilyIndex = queueFamily;
+    VkCommandPool rawPool = VK_NULL_HANDLE;
+    if (dispatcher->vkCreateCommandPool(*device, &poolInfo, nullptr, &rawPool) != VK_SUCCESS ||
+        rawPool == VK_NULL_HANDLE) {
+        return;
+    }
+    commandPool = vk::raii::CommandPool(device, rawPool);
+    VkCommandBufferAllocateInfo allocate{};
+    allocate.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocate.commandPool = rawPool;
+    allocate.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocate.commandBufferCount = 1;
+    VkCommandBuffer rawCommand = VK_NULL_HANDLE;
+    if (dispatcher->vkAllocateCommandBuffers(*device, &allocate, &rawCommand) != VK_SUCCESS ||
+        rawCommand == VK_NULL_HANDLE) {
+        return;
+    }
+    commandBuffers.emplace_back(device, rawCommand, rawPool);
+    VkFenceCreateInfo fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    VkFence rawFence = VK_NULL_HANDLE;
+    if (dispatcher->vkCreateFence(*device, &fenceInfo, nullptr, &rawFence) != VK_SUCCESS ||
+        rawFence == VK_NULL_HANDLE) {
+        return;
+    }
+    renderFence = vk::raii::Fence(device, rawFence);
     valid = true;
 }
 
@@ -355,11 +411,31 @@ GpuPresentationTargetCode presentImage(SwapchainResources& resources,
         return GpuPresentationTargetCode::DriverUnavailable;
     }
 
+    return submitAndPresentAcquired(resources, device, presentQueue, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                    message);
+}
+
+GpuPresentationTargetCode submitAndPresentAcquired(SwapchainResources& resources,
+                                                   vk::raii::Device const& device,
+                                                   vk::raii::Queue const& presentQueue,
+                                                   VkPipelineStageFlags waitStage,
+                                                   std::string& message) {
+    if (!resources.acquiredIndex.has_value() || resources.commandBuffers.empty() ||
+        resources.images.empty()) {
+        message = "no recorded acquired image to present";
+        return GpuPresentationTargetCode::NothingAcquired;
+    }
+    const std::uint32_t index = *resources.acquiredIndex;
+    if (index >= resources.images.size()) {
+        message = "the acquired image index is out of range";
+        return GpuPresentationTargetCode::DriverUnavailable;
+    }
+    const auto* dispatcher = device.getDispatcher();
+    const VkCommandBuffer command = *resources.commandBuffers.front();
     const VkSemaphore acquire = *resources.acquireSemaphore;
     const VkSemaphore render = *resources.renderSemaphores[index];
     const VkFence renderFence = *resources.renderFence;
     dispatcher->vkResetFences(*device, 1, &renderFence);
-    VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
     VkSubmitInfo submit{};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.waitSemaphoreCount = 1;
@@ -370,7 +446,7 @@ GpuPresentationTargetCode presentImage(SwapchainResources& resources,
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &render;
     if (dispatcher->vkQueueSubmit(*presentQueue, 1, &submit, renderFence) != VK_SUCCESS) {
-        message = "the clear command could not be submitted";
+        message = "the presentation command could not be submitted";
         return GpuPresentationTargetCode::DriverUnavailable;
     }
     resources.renderInFlight = true;

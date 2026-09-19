@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <new>
 #include <string>
@@ -168,7 +169,16 @@ ResidentDisplaySupport queryResidentDisplaySupport(DeviceAllocatorState& state,
         support.reason = "extent exceeds maxStorageBufferRange";
         return support;
     }
-    const std::uint64_t groupCount = (static_cast<std::uint64_t>(width) + 255U) / 256U;
+    // The neutral display dispatch is one-dimensional over pixelCount (the shader reads only
+    // gl_GlobalInvocationID.x). The product must fit uint32 and the real 1D group count, not
+    // the width, must fit the physical limit.
+    const std::uint64_t pixelCount =
+        static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
+    if (pixelCount > std::numeric_limits<std::uint32_t>::max()) {
+        support.reason = "the pixel count exceeds the uint32 push-constant range";
+        return support;
+    }
+    const std::uint64_t groupCount = (pixelCount + 255U) / 256U;
     if (groupCount > properties.limits.maxComputeWorkGroupCount[0] ||
         properties.limits.maxComputeWorkGroupSize[0] < 256U ||
         properties.limits.maxComputeWorkGroupInvocations < 256U) {
@@ -312,6 +322,10 @@ bool GpuDisplayImage::isBoundTo(GpuDevice& device) const noexcept {
 }
 GpuDisplayImage makeGpuDisplayImage(std::unique_ptr<GpuDisplayImageImpl> impl) noexcept {
     return GpuDisplayImage(std::move(impl));
+}
+
+const GpuDisplayImageImpl* gpuDisplayImageImpl(const GpuDisplayImage& image) noexcept {
+    return image.impl_.get();
 }
 
 GpuDisplayImageReadback readbackResidentDisplayImage(const GpuDisplayImage& image,

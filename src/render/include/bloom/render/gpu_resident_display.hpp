@@ -55,6 +55,10 @@ class GpuDisplayImage final {
     friend GpuDisplayImage makeGpuDisplayImage(std::unique_ptr<GpuDisplayImageImpl> impl) noexcept;
     friend GpuDisplayImageReadback readbackResidentDisplayImage(const GpuDisplayImage& image,
                                                                 std::uint64_t byteBudget) noexcept;
+    // Read-only seam for the in-module presentation sampler: exposes the resident VkImage and its
+    // generation to another src/render translation unit without any native handle reaching a public
+    // consumer. Declared and defined inside src/render only.
+    friend const GpuDisplayImageImpl* gpuDisplayImageImpl(const GpuDisplayImage& image) noexcept;
     explicit GpuDisplayImage(std::unique_ptr<GpuDisplayImageImpl> impl) noexcept;
     void releaseOwnedImpl() noexcept;
 

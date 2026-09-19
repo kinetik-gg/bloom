@@ -29,6 +29,22 @@ std::atomic_bool gTargetCreationFused{false};
 
 using presentation_detail::SwapchainResources;
 
+// Maps a chosen swapchain VkFormat to the published Bloom format enum.
+[[nodiscard]] GpuPresentationFormat presentationFormatFromVk(const VkFormat format) noexcept {
+    switch (format) {
+    case VK_FORMAT_B8G8R8A8_UNORM:
+        return GpuPresentationFormat::Bgra8Unorm;
+    case VK_FORMAT_B8G8R8A8_SRGB:
+        return GpuPresentationFormat::Bgra8Srgb;
+    case VK_FORMAT_R8G8B8A8_UNORM:
+        return GpuPresentationFormat::Rgba8Unorm;
+    case VK_FORMAT_R8G8B8A8_SRGB:
+        return GpuPresentationFormat::Rgba8Srgb;
+    default:
+        return GpuPresentationFormat::Unknown;
+    }
+}
+
 struct PlannedSwapchain final {
     VkFormat format = VK_FORMAT_UNDEFINED;
     VkColorSpaceKHR colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
@@ -184,24 +200,6 @@ planSwapchain(GpuDevice& device, const GpuPresentationTargetDescription& descrip
 
 } // namespace
 
-struct GpuPresentationTarget::Impl final {
-    std::thread::id owner;
-    // Non-owning: the target is created from, and must not outlive, this device. The header and
-    // README state that the owner retires the target before destroying the device generation.
-    GpuDevice* device = nullptr;
-    std::shared_ptr<vulkan_detail::DeviceAllocatorState> control;
-    GpuPresentationEpoch epoch;
-    std::uint64_t surfaceBits = 0;
-    GpuPresentationTargetDescription description;
-    std::unique_ptr<SwapchainResources> resources;
-    GpuPresentationTargetInfo info;
-    bool deviceLost = false;
-    bool retiring = false;
-    bool retired = false;
-    GpuPresentationTargetCode lastCode = GpuPresentationTargetCode::Ok;
-    std::string lastMessage;
-};
-
 GpuPresentationTarget::GpuPresentationTarget(std::unique_ptr<Impl> impl) noexcept
     : impl_(std::move(impl)) {}
 
@@ -321,20 +319,7 @@ GpuPresentationTarget::create(GpuDevice& device,
     impl->epoch = description.surface.epoch;
     impl->surfaceBits = description.surface.surface_bits;
     impl->description = description;
-    impl->info.format = [&] {
-        switch (planned.format) {
-        case VK_FORMAT_B8G8R8A8_UNORM:
-            return GpuPresentationFormat::Bgra8Unorm;
-        case VK_FORMAT_B8G8R8A8_SRGB:
-            return GpuPresentationFormat::Bgra8Srgb;
-        case VK_FORMAT_R8G8B8A8_UNORM:
-            return GpuPresentationFormat::Rgba8Unorm;
-        case VK_FORMAT_R8G8B8A8_SRGB:
-            return GpuPresentationFormat::Rgba8Srgb;
-        default:
-            return GpuPresentationFormat::Unknown;
-        }
-    }();
+    impl->info.format = presentationFormatFromVk(planned.format);
     impl->info.srgb_nonlinear = planned.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     impl->info.width = planned.extent.width;
     impl->info.height = planned.extent.height;
@@ -425,6 +410,10 @@ GpuPresentationTargetCode GpuPresentationTarget::pollRetirement() {
         return code;
     }
     if (impl_->retiring && code == GpuPresentationTargetCode::Retired) {
+        // Every present is proven complete. Drop the cached generation resources (views,
+        // framebuffers, and the resident display pin) before the swapchain itself is destroyed, so
+        // no cached view outlives the images it references.
+        impl_->presenter.reset();
         impl_->resources.reset();
         impl_->retired = true;
         impl_->lastCode = GpuPresentationTargetCode::Retired;
@@ -489,8 +478,14 @@ GpuPresentationTarget::recreate(const GpuPresentationTargetDescription& descript
             message.empty() ? "the replacement swapchain could not be created" : std::move(message);
         return impl_->lastCode;
     }
+    // The old generation's presenter caches (views, framebuffers, resident display pin) reference
+    // the old swapchain images and must be dropped before those resources are released. The whole
+    // presenter is reset here; it is rebuilt lazily on the next resident present.
+    impl_->presenter.reset();
     impl_->resources = std::move(resources);
     impl_->description = description;
+    impl_->info.format = presentationFormatFromVk(planned.format);
+    impl_->info.srgb_nonlinear = planned.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     impl_->info.width = planned.extent.width;
     impl_->info.height = planned.extent.height;
     impl_->info.image_count = static_cast<std::uint32_t>(impl_->resources->images.size());
@@ -561,6 +556,44 @@ GpuPresentationTargetCode GpuPresentationTarget::lastCode() const noexcept {
 const std::string& GpuPresentationTarget::lastMessage() const noexcept {
     static const std::string kEmpty;
     return impl_ != nullptr ? impl_->lastMessage : kEmpty;
+}
+
+GpuPresentationTargetCode
+GpuPresentationTarget::presentImage(std::shared_ptr<const GpuDisplayImage> input,
+                                    const GpuPresentImageParams& params,
+                                    const GpuPresentOverlay& overlay) {
+    if (impl_ == nullptr) {
+        return GpuPresentationTargetCode::PresentationUnavailable;
+    }
+    if (std::this_thread::get_id() != impl_->owner) {
+        return GpuPresentationTargetCode::WrongThread;
+    }
+    if (impl_->deviceLost) {
+        return GpuPresentationTargetCode::DeviceLost;
+    }
+    if (impl_->retiring || impl_->retired || impl_->resources == nullptr) {
+        return impl_->retired ? GpuPresentationTargetCode::Retired
+                              : GpuPresentationTargetCode::RetirePending;
+    }
+    std::string message;
+    const GpuPresentationTargetCode rendered = present_image_detail::renderResidentIntoAcquired(
+        *impl_->resources, impl_->control, impl_->presenter, std::move(input), params, overlay,
+        message);
+    if (rendered != GpuPresentationTargetCode::Ok &&
+        rendered != GpuPresentationTargetCode::Suboptimal) {
+        impl_->lastCode = rendered;
+        impl_->lastMessage = std::move(message);
+        return rendered;
+    }
+    const GpuPresentationTargetCode presented = presentation_detail::submitAndPresentAcquired(
+        *impl_->resources, impl_->control->device, impl_->control->presentQueue,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, message);
+    if (presented == GpuPresentationTargetCode::DeviceLost) {
+        impl_->deviceLost = true;
+    }
+    impl_->lastCode = presented;
+    impl_->lastMessage = std::move(message);
+    return presented;
 }
 
 } // namespace bloom::render

@@ -27,6 +27,11 @@ namespace bloom::render {
 // header.
 [[nodiscard]] const GpuImageImpl* gpuImageImpl(const GpuImage& image) noexcept;
 
+// Read-only accessor for the resident display image impl, usable only from another src/render
+// translation unit. The public header exposes no native handle; this is the narrow seam the
+// present-image sampler uses to obtain the resident VkImage and generation.
+[[nodiscard]] const GpuDisplayImageImpl* gpuDisplayImageImpl(const GpuDisplayImage& image) noexcept;
+
 struct GpuDisplayImageImpl final {
     GpuDisplayImageImpl() = default;
     GpuDisplayImageImpl(const GpuDisplayImageImpl&) = delete;

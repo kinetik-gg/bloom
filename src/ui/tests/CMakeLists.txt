@@ -88,6 +88,14 @@ add_executable(bloom_gpu_preview_app_test
 add_executable(bloom_ui_gpu_presentation_target_test
     gpu_presentation_target_tests.cpp
 )
+# Independent QPainter oracle for the present-image shader's filtering/channel rules. Qt-only, links
+# Qt6::Gui (the app supplies Qt6::Widgets); it never mirrors the shader algebra.
+add_executable(bloom_ui_gpu_present_image_qpainter_oracle_test
+    gpu_present_image_qpainter_oracle_tests.cpp
+)
+# Native offscreen proof for the P2/P3 presentation sampling path. Qt supplies the independent
+# QPainter oracle; the production render draw is compiled against the render module's private
+# Vulkan headers, so the target is created only where that private seam is available (below).
 add_executable(bloom_composition_session_animation_test
     composition_session_animation_tests.cpp
 )
@@ -196,9 +204,14 @@ target_link_libraries(bloom_composition_preview_cpu_stage_test PRIVATE bloom_ui)
 target_link_libraries(bloom_gpu_preview_submitter_test PRIVATE bloom_ui)
 target_link_libraries(bloom_gpu_preview_app_test PRIVATE bloom_ui bloom_runtime_evaluator)
 target_link_libraries(bloom_ui_gpu_presentation_target_test PRIVATE bloom_ui bloom_render)
+# The QPainter oracle is Qt-only (Qt6::Gui); it never links render. It uses std::source_location,
+# so it needs the project's C++20 level explicitly (Qt's default here is C++17).
+target_link_libraries(bloom_ui_gpu_present_image_qpainter_oracle_test PRIVATE Qt6::Gui)
+target_compile_features(bloom_ui_gpu_present_image_qpainter_oracle_test PRIVATE cxx_std_20)
 # QVulkanInstance's public class requires <vulkan/vulkan.h> on the application include path; the
-# pinned dependency prefix supplies it. Only the test needs this; the UI and render modules stay
-# Vulkan-header-free in their public interfaces.
+# pinned dependency prefix supplies it. Only the tests need this; the UI and render modules stay
+# Vulkan-header-free in their public interfaces. The offscreen native proof also needs the prefix's
+# Vulkan-Hpp/VMA headers because it compiles against the render module's private Vulkan headers.
 if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/include/vulkan")
     target_include_directories(bloom_ui_gpu_presentation_target_test
         SYSTEM PRIVATE "${BLOOM_DEPENDENCY_PREFIX}/include")
@@ -226,6 +239,24 @@ if(BLOOM_UI_PRESENTATION_TARGET_PRIVATE_SEAM)
         PRIVATE BLOOM_UI_GPU_PRESENTATION_TARGET_PRIVATE_SEAM=1)
     target_include_directories(bloom_ui_gpu_presentation_target_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src/render/vulkan")
+    # The offscreen native proof includes the render module's private Vulkan headers and needs the
+    # same prefix-provided Vulkan-Hpp/VMA headers. It links bloom_render + bloom_color_ocio (the
+    # latter only for the independent CPU OCIO oracle) and Qt6::Gui (the QPainter oracle).
+    add_executable(bloom_ui_gpu_present_image_offscreen_test
+        gpu_present_image_offscreen_tests.cpp
+    )
+    target_link_libraries(bloom_ui_gpu_present_image_offscreen_test
+        PRIVATE bloom_ui bloom_render bloom_color_ocio Qt6::Gui)
+    target_include_directories(bloom_ui_gpu_present_image_offscreen_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/render/vulkan" "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/include/vulkan")
+        target_include_directories(bloom_ui_gpu_present_image_offscreen_test
+            SYSTEM PRIVATE "${BLOOM_DEPENDENCY_PREFIX}/include")
+    endif()
+    target_compile_definitions(bloom_ui_gpu_present_image_offscreen_test
+        PRIVATE BLOOM_RENDER_TEST_VULKAN_BACKEND=1)
+    bloom_enable_warnings(bloom_ui_gpu_present_image_offscreen_test)
+    bloom_enable_strict_floating_point(bloom_ui_gpu_present_image_offscreen_test)
 endif()
 target_link_libraries(bloom_composition_session_animation_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_session_rebind_test PRIVATE bloom_ui)
@@ -287,6 +318,7 @@ bloom_enable_warnings(bloom_composition_preview_cpu_stage_test)
 bloom_enable_warnings(bloom_gpu_preview_submitter_test)
 bloom_enable_warnings(bloom_gpu_preview_app_test)
 bloom_enable_warnings(bloom_ui_gpu_presentation_target_test)
+bloom_enable_warnings(bloom_ui_gpu_present_image_qpainter_oracle_test)
 bloom_enable_warnings(bloom_composition_session_animation_test)
 bloom_enable_warnings(bloom_composition_session_rebind_test)
 bloom_enable_warnings(bloom_application_shutdown_test)
@@ -551,6 +583,24 @@ bloom_add_test(
     TIMEOUT 120
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
+
+bloom_add_test(
+    NAME bloom.ui.gpu_present_image_qpainter_oracle
+    COMMAND bloom_ui_gpu_present_image_qpainter_oracle_test
+    LABELS ui unit gpu
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+if(TARGET bloom_ui_gpu_present_image_offscreen_test)
+    bloom_add_test(
+        NAME bloom.ui.gpu_present_image_offscreen
+        COMMAND bloom_ui_gpu_present_image_offscreen_test
+        LABELS ui integration gpu
+        TIMEOUT 600
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
+endif()
 
 bloom_add_test(
     NAME bloom.ui.composition_session_animation

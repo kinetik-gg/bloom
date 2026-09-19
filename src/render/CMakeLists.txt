@@ -416,6 +416,103 @@ else()
         "solid_covered.comp digest is still enforced.")
 endif()
 
+# --- Fixed ViewerPresentV2 vertex/fragment shaders: source pins and regeneration checks ----------
+#
+# Offline artifacts from the same tools/gpu-shaders compile/validate/embed recipe (no new generator).
+# Both checked-in sources are pinned here, the manifest must bind both source digests, and, when the
+# locked glslangValidator/spirv-val are present, configure recompiles them and confirms the SPIR-V
+# digests embedded in viewer_present_spirv.inc. Runtime code never compiles or loads a shader.
+set(BLOOM_VIEWER_PRESENT_VERT
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/viewer_present.vert")
+set(BLOOM_VIEWER_PRESENT_FRAG
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/viewer_present.frag")
+set(BLOOM_VIEWER_PRESENT_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/viewer_present.manifest")
+set(BLOOM_VIEWER_PRESENT_INC
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/viewer_present_spirv.inc")
+set(BLOOM_VIEWER_PRESENT_VERT_SHA256
+    "c72b8de52cab61b39d3441a18d7bad08f5116154206a0e59b653b49e5589e6ff")
+set(BLOOM_VIEWER_PRESENT_FRAG_SHA256
+    "817fdaeb48bf7037b69aa38e8a51ee9aee2b28d7beecbfdacbece59fe34ee7b6")
+set(BLOOM_VIEWER_PRESENT_VERT_SPV_SHA256
+    "02530de5a4b2abf9944d5b9ee40c610069c97b20fdbbfdc27e9f99f2f9aa415a")
+set(BLOOM_VIEWER_PRESENT_FRAG_SPV_SHA256
+    "8a2120e1c7580034e85c1954c8cce9702ceb4344868d5458e9f9980a08b15105")
+
+file(SHA256 "${BLOOM_VIEWER_PRESENT_VERT}" bloom_viewer_present_vert_sha256)
+if(NOT bloom_viewer_present_vert_sha256 STREQUAL BLOOM_VIEWER_PRESENT_VERT_SHA256)
+    message(FATAL_ERROR
+        "viewer_present.vert SHA-256 mismatch: measured ${bloom_viewer_present_vert_sha256}, "
+        "pinned ${BLOOM_VIEWER_PRESENT_VERT_SHA256}. Regenerate only through the tools/gpu-shaders "
+        "recipe and update the pin and the embedded SPIR-V together.")
+endif()
+file(SHA256 "${BLOOM_VIEWER_PRESENT_FRAG}" bloom_viewer_present_frag_sha256)
+if(NOT bloom_viewer_present_frag_sha256 STREQUAL BLOOM_VIEWER_PRESENT_FRAG_SHA256)
+    message(FATAL_ERROR
+        "viewer_present.frag SHA-256 mismatch: measured ${bloom_viewer_present_frag_sha256}, "
+        "pinned ${BLOOM_VIEWER_PRESENT_FRAG_SHA256}. Regenerate only through the tools/gpu-shaders "
+        "recipe and update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_VIEWER_PRESENT_MANIFEST}" bloom_viewer_present_manifest_text)
+if(NOT bloom_viewer_present_manifest_text MATCHES "${BLOOM_VIEWER_PRESENT_VERT_SHA256}" OR
+   NOT bloom_viewer_present_manifest_text MATCHES "${BLOOM_VIEWER_PRESENT_FRAG_SHA256}")
+    message(FATAL_ERROR
+        "viewer_present.manifest does not bind both pinned viewer_present.vert/frag SHA-256 digests.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_viewer_present_vert_spv
+        "${CMAKE_CURRENT_BINARY_DIR}/viewer_present.vert.generated.spv")
+    set(bloom_viewer_present_frag_spv
+        "${CMAKE_CURRENT_BINARY_DIR}/viewer_present.frag.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_VIEWER_PRESENT_VERT}" -o "${bloom_viewer_present_vert_spv}"
+        RESULT_VARIABLE bloom_viewer_present_vert_glslang_result)
+    if(NOT bloom_viewer_present_vert_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile viewer_present.vert.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_VIEWER_PRESENT_FRAG}" -o "${bloom_viewer_present_frag_spv}"
+        RESULT_VARIABLE bloom_viewer_present_frag_glslang_result)
+    if(NOT bloom_viewer_present_frag_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile viewer_present.frag.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2 "${bloom_viewer_present_vert_spv}"
+        RESULT_VARIABLE bloom_viewer_present_vert_val_result)
+    if(NOT bloom_viewer_present_vert_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated ViewerPresentV2 vertex SPIR-V.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2 "${bloom_viewer_present_frag_spv}"
+        RESULT_VARIABLE bloom_viewer_present_frag_val_result)
+    if(NOT bloom_viewer_present_frag_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated ViewerPresentV2 fragment SPIR-V.")
+    endif()
+    file(SHA256 "${bloom_viewer_present_vert_spv}" bloom_viewer_present_vert_spv_sha256)
+    file(SHA256 "${bloom_viewer_present_frag_spv}" bloom_viewer_present_frag_spv_sha256)
+    if(NOT bloom_viewer_present_vert_spv_sha256 STREQUAL BLOOM_VIEWER_PRESENT_VERT_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated viewer_present vertex SPIR-V SHA-256 "
+            "${bloom_viewer_present_vert_spv_sha256} does not match the embedded "
+            "${BLOOM_VIEWER_PRESENT_VERT_SPV_SHA256}; the checked-in .vert and "
+            "viewer_present_spirv.inc disagree.")
+    endif()
+    if(NOT bloom_viewer_present_frag_spv_sha256 STREQUAL BLOOM_VIEWER_PRESENT_FRAG_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated viewer_present fragment SPIR-V SHA-256 "
+            "${bloom_viewer_present_frag_spv_sha256} does not match the embedded "
+            "${BLOOM_VIEWER_PRESENT_FRAG_SPV_SHA256}; the checked-in .frag and "
+            "viewer_present_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: viewer_present.vert/frag regenerated and SPIR-V-validated "
+        "(${bloom_viewer_present_vert_spv_sha256}, ${bloom_viewer_present_frag_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "viewer_present.vert/frag digests are still enforced.")
+endif()
+
 set(BLOOM_RENDER_VULKAN_AVAILABLE OFF)
 if(BLOOM_RENDER_ENABLE_VULKAN AND DEFINED BLOOM_DEPENDENCY_MODE)
     if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
@@ -482,6 +579,7 @@ target_sources(
             include/bloom/render/gpu_image.hpp
             include/bloom/render/gpu_image_upload.hpp
             include/bloom/render/gpu_neutral_display.hpp
+            include/bloom/render/gpu_present_image.hpp
             include/bloom/render/gpu_presentation_target.hpp
             include/bloom/render/gpu_presentation_types.hpp
             include/bloom/render/gpu_resident_display.hpp
@@ -510,6 +608,9 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_neutral_display.cpp
         vulkan/gpu_neutral_display_private.hpp
         vulkan/gpu_neutral_display_resources.cpp
+        vulkan/gpu_present_image.cpp
+        vulkan/gpu_present_image_private.hpp
+        vulkan/gpu_present_image_resources.cpp
         vulkan/gpu_presentation_target.cpp
         vulkan/gpu_presentation_target_private.hpp
         vulkan/gpu_presentation_target_resources.cpp
@@ -534,12 +635,16 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/shaders/source_over.comp
         vulkan/shaders/source_over.manifest
         vulkan/shaders/source_over_spirv.inc
+        vulkan/shaders/viewer_present.vert
+        vulkan/shaders/viewer_present.frag
+        vulkan/shaders/viewer_present.manifest
+        vulkan/shaders/viewer_present_spirv.inc
     )
 else()
     target_sources(bloom_render PRIVATE gpu_composite_stub.cpp gpu_device_stub.cpp
                                      gpu_image_upload_stub.cpp gpu_neutral_display_stub.cpp
-                                     gpu_presentation_target_stub.cpp gpu_resident_display_stub.cpp
-                                     gpu_solid_stub.cpp)
+                                     gpu_present_image_stub.cpp gpu_presentation_target_stub.cpp
+                                     gpu_resident_display_stub.cpp gpu_solid_stub.cpp)
 endif()
 
 target_compile_features(bloom_render PUBLIC cxx_std_20)
