@@ -4,10 +4,10 @@
 
 namespace bloom::ui {
 
-// An editor panel that can apply global preferences to its live state when the Settings window
+// An editor panel that can apply global preferences to its live state when the Preferences window
 // commits them.
 //
-// The Settings window writes the preferences once; the panels that read those values at
+// The Preferences window writes the preferences once; the panels that read those values at
 // construction would otherwise keep their old in-memory copy until restart, and the next time an
 // artist touched a panel's own menu the stale value would be written back over the new one. This
 // interface is how MainWindow hands the committed value to every open panel, so the Settings

@@ -1,4 +1,4 @@
-#include "settings_window.hpp"
+#include "preferences_window.hpp"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <bloom/ui/asset_controller.hpp>
@@ -305,17 +305,17 @@ void MainWindow::createMenus(QMenuBar& menuBar) {
     connect(&compositionSession_, &CompositionSession::historyChanged, this,
             &MainWindow::updateEditActions);
 
-    // Edit | Settings... (macOS routes a PreferencesRole action into the application menu with the
-    // standard shortcut; on Windows and Linux it stays here). This edits global application
+    // Edit | Preferences... (macOS routes a PreferencesRole action into the application menu with
+    // the standard shortcut; on Windows and Linux it stays here). This edits global application
     // preferences; it is deliberately separate from File | Project Settings..., which edits
     // project truth.
     editMenu->addSeparator();
-    settingsAction_ = editMenu->addAction(tr("Settings…"));
-    settingsAction_->setObjectName(QStringLiteral("settingsAction"));
-    settingsAction_->setMenuRole(QAction::PreferencesRole);
-    settingsAction_->setShortcut(QKeySequence::Preferences);
-    settingsAction_->setShortcutContext(Qt::WindowShortcut);
-    connect(settingsAction_, &QAction::triggered, this, &MainWindow::showSettings);
+    preferencesAction_ = editMenu->addAction(tr("Preferences…"));
+    preferencesAction_->setObjectName(QStringLiteral("preferencesAction"));
+    preferencesAction_->setMenuRole(QAction::PreferencesRole);
+    preferencesAction_->setShortcut(QKeySequence::Preferences);
+    preferencesAction_->setShortcutContext(Qt::WindowShortcut);
+    connect(preferencesAction_, &QAction::triggered, this, &MainWindow::showPreferences);
 
     compositionMenu_ = menuBar.addMenu("&Composition");
     createCompositionMenu(*compositionMenu_);
@@ -658,12 +658,13 @@ void MainWindow::showProjectColorSettings() {
                              tr("The selected colour configuration could not be resolved."));
 }
 
-void MainWindow::showSettings() {
+void MainWindow::showPreferences() {
     // The window edits a value, not QSettings; the commit path here is the only writer, so a
     // cancelled dialog leaves the stored preferences untouched.
     const QSettings currentSettings;
-    SettingsWindow dialog(loadApplicationPreferences(currentSettings), accelerationStatus_, this);
-    connect(&dialog, &SettingsWindow::preferencesApplied, this,
+    PreferencesWindow dialog(loadApplicationPreferences(currentSettings), accelerationStatus_,
+                             this);
+    connect(&dialog, &PreferencesWindow::preferencesApplied, this,
             [this](const ApplicationPreferences& preferences) {
                 QSettings settings;
                 saveApplicationPreferences(settings, preferences);

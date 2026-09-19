@@ -173,7 +173,7 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider, public P
 
   public:
     [[nodiscard]] EditorChromeSpec& editorChrome() override { return chrome_; }
-    // Applies the Settings window's committed viewer preferences by driving this panel's own
+    // Applies the Preferences window's committed viewer preferences by driving this panel's own
     // controls, so their existing persistence and preview-controller updates stay the single code
     // path.
     void applyApplicationPreferences(const ApplicationPreferences& preferences) override;

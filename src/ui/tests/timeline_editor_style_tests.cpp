@@ -2849,8 +2849,8 @@ void writeTimelineScreenshotIfRequested(Expectations& expectations) {
 
 } // namespace
 
-// The Settings window's committed timeline preferences must land on the panel's live state through
-// the same setters its own header menu uses.
+// The Preferences window's committed timeline preferences must land on the panel's live state
+// through the same setters its own header menu uses.
 void testApplyApplicationPreferences(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Preferences"));

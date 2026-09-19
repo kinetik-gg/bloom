@@ -23,22 +23,22 @@ class KSwitch;
 class KValueField;
 } // namespace kit
 
-// The application's Settings window: a left category rail over a stack of scrollable pages, each
+// The application's Preferences window: a left category rail over a stack of scrollable pages, each
 // built from the same kit::KSection and Properties row vocabulary the rest of the application uses.
 //
 // The window is a pure editor of an ApplicationPreferences value. It never reads or writes
 // QSettings itself; the caller supplies the current value and persists what preferences() returns.
-// That keeps the dialog testable without a settings file and keeps persistence ownership in one
+// That keeps the dialog testable without a preferences file and keeps persistence ownership in one
 // place (MainWindow, which broadcasts the result to live panels).
-class SettingsWindow final : public QDialog {
+class PreferencesWindow final : public QDialog {
     Q_OBJECT
 
   public:
     // `accelerationStatus` may be null, in which case the Performance page reports the CPU-only
     // truth. It is borrowed and must outlive the dialog.
-    explicit SettingsWindow(const ApplicationPreferences& current,
-                            const AccelerationStatusProvider* accelerationStatus = nullptr,
-                            QWidget* parent = nullptr);
+    explicit PreferencesWindow(const ApplicationPreferences& current,
+                               const AccelerationStatusProvider* accelerationStatus = nullptr,
+                               QWidget* parent = nullptr);
 
     [[nodiscard]] ApplicationPreferences preferences() const;
     // Pushes a value into every control. Signals are blocked while refreshing, so this never

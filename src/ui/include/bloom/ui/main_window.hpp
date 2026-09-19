@@ -71,8 +71,8 @@ class MainWindow final : public QMainWindow {
     // status bar's disk-cache cell (docs/architecture/media-io.md "Disk cache"). Null leaves the
     // menu item present but reporting "not enabled" rather than absent, matching `ramPreview`'s
     // own null convention above.
-    // `accelerationStatus` feeds the Settings window's read-only Performance page. Null reports the
-    // CPU-only truth. Borrowed and must outlive the window.
+    // `accelerationStatus` feeds the Preferences window's read-only Performance page. Null reports
+    // the CPU-only truth. Borrowed and must outlive the window.
     MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
                ProjectHost& projectHost, FrameExportController& frameExportController,
                RamPreviewController* ramPreview = nullptr,
@@ -100,8 +100,8 @@ class MainWindow final : public QMainWindow {
 
   signals:
     void shutdownRequested();
-    // Emitted after the Settings window commits and persists a new value, so the composition root
-    // can re-apply the preferences it owns (for example the audio engine).
+    // Emitted after the Preferences window commits and persists a new value, so the composition
+    // root can re-apply the preferences it owns (for example the audio engine).
     void preferencesChanged();
 
   protected:
@@ -128,7 +128,7 @@ class MainWindow final : public QMainWindow {
     void updateCompositionActions();
     void toggleFullScreen();
     void showProjectColorSettings();
-    void showSettings();
+    void showPreferences();
     void applyPreferencesToOpenEditors(const ApplicationPreferences& preferences);
 
     CompositionSession& compositionSession_;
@@ -164,7 +164,7 @@ class MainWindow final : public QMainWindow {
     QAction* saveProjectAsAction_ = nullptr;
     QAction* saveProjectCopyAction_ = nullptr;
     QAction* projectColorSettingsAction_ = nullptr;
-    QAction* settingsAction_ = nullptr;
+    QAction* preferencesAction_ = nullptr;
     QAction* exportFrameAction_ = nullptr;
     // Task S5, item 3a: the frame-range export, and the cancel a long sequence needs -- the single
     // frame export never had one because it is one attempt plus one publish.

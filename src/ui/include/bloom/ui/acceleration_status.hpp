@@ -1,6 +1,6 @@
 #pragma once
 
-// Read-only acceleration status for the Settings window's Performance page.
+// Read-only acceleration status for the Preferences window's Performance page.
 //
 // This is deliberately a seam, not a GPU dependency. The GPU backend lives in `src/render` behind a
 // Qt- and Vulkan-free surface (docs/architecture/gpu-backend.md) and is not part of this build, so

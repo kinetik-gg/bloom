@@ -38,7 +38,7 @@ shown explicitly.
 
 ## Changing the budgets
 
-Set these under **Edit → Settings… → Memory & Caches**. They are read when Bloom starts, so a
+Set these under **Edit → Preferences… → Memory & Caches**. They are read when Bloom starts, so a
 change takes effect after restart. Underneath, two settings keys set the ceilings; both are **byte
 counts written as decimal numbers**:
 

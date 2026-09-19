@@ -87,8 +87,8 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider, public
 
   public:
     [[nodiscard]] EditorChromeSpec& editorChrome() override { return chrome_; }
-    // Applies the Settings window's committed timeline preferences through the panel's own setters,
-    // so the Settings window and the Timeline's own View menu share one code path.
+    // Applies the Preferences window's committed timeline preferences through the panel's own
+    // setters, so the Preferences window and the Timeline's own View menu share one code path.
     void applyApplicationPreferences(const ApplicationPreferences& preferences) override;
     // Task VIEW-1 moved the transport -- and with it the RAM Preview button this constructor used
     // to take a controller for -- to the viewer footer. This panel is the layer stack, the ruler,

@@ -479,20 +479,20 @@ void testHelpMenuItemsExistAndFire(Expectations& expectations) {
                         "help menu: Open Source Licenses opens a real LicensesWindow");
 }
 
-// The Settings window is opened from Edit | Settings... and carries PreferencesRole, which is how
-// Qt routes it into the macOS application menu with the standard shortcut. Triggering it is not
+// The Preferences window is opened from Edit | Preferences... and carries PreferencesRole, which is
+// how Qt routes it into the macOS application menu with the standard shortcut. Triggering it is not
 // exercised here: it calls QDialog::exec() and would block this test.
-void testSettingsActionIsInTheEditMenuWithPreferencesRole(Expectations& expectations) {
+void testPreferencesActionIsInTheEditMenuWithPreferencesRole(Expectations& expectations) {
     bool ok = false;
     Fixture fixture(&ok);
     if (!ok) {
-        expectations.expect(false, "settings action: fixture editors registered");
+        expectations.expect(false, "preferences action: fixture editors registered");
         return;
     }
     MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
                       fixture.frameExportController);
 
-    auto* settings = window.findChild<QAction*>(QStringLiteral("settingsAction"));
+    auto* settings = window.findChild<QAction*>(QStringLiteral("preferencesAction"));
     expectations.expect(settings != nullptr, "edit menu: a Settings action exists");
     if (settings == nullptr) {
         return;
@@ -759,7 +759,7 @@ int main(int argc, char** argv) {
     testWindowTitleIsJustTheDocumentTitle(expectations);
     testViewMenuItemsExistAndFire(expectations);
     testHelpMenuItemsExistAndFire(expectations);
-    testSettingsActionIsInTheEditMenuWithPreferencesRole(expectations);
+    testPreferencesActionIsInTheEditMenuWithPreferencesRole(expectations);
     testWindowStatusBarIsAKitStripWithEveryCell(expectations);
     testWindowStatusBarTrimsCachesUnderMemoryPressure(expectations);
     testWindowStatusBarMessagesClearThemselves(expectations);

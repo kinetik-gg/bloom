@@ -5,7 +5,7 @@
 // Settings used to be read and written ad hoc at each call site: a panel read a QSettings key in
 // its constructor and wrote it back from a menu toggle, with the key string and the default spelled
 // again in both places. That is fine while exactly one surface edits a key, and it stops being fine
-// the moment a Settings window is a second writer. This header is the single definition of every
+// the moment a Preferences window is a second writer. This header is the single definition of every
 // global key, its default, and its stored spelling, so the window, the panels, and the tests cannot
 // disagree about any of them.
 //

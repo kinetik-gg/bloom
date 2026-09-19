@@ -1,4 +1,4 @@
-#include "settings_window.hpp"
+#include "preferences_window.hpp"
 
 #include "properties_sections.hpp"
 
@@ -35,7 +35,7 @@ namespace {
 
 constexpr double kBytesPerGiB = 1024.0 * 1024.0 * 1024.0;
 
-constexpr auto kRestartBadgeObjectName = "settingsRestartBadge";
+constexpr auto kRestartBadgeObjectName = "preferencesRestartBadge";
 
 [[nodiscard]] QLabel* makeValueLabel(const QString& text, QWidget* parent) {
     auto* label = properties::makeReadOnlyValueLabel(kit::TypeRole::Value, parent);
@@ -65,12 +65,12 @@ constexpr auto kRestartBadgeObjectName = "settingsRestartBadge";
 
 } // namespace
 
-SettingsWindow::SettingsWindow(const ApplicationPreferences& current,
-                               const AccelerationStatusProvider* const accelerationStatus,
-                               QWidget* parent)
+PreferencesWindow::PreferencesWindow(const ApplicationPreferences& current,
+                                     const AccelerationStatusProvider* const accelerationStatus,
+                                     QWidget* parent)
     : QDialog(parent), draft_(current), applied_(current), accelerationStatus_(accelerationStatus) {
-    setObjectName(QStringLiteral("settingsWindow"));
-    setWindowTitle(tr("Settings"));
+    setObjectName(QStringLiteral("preferencesWindow"));
+    setWindowTitle(tr("Preferences"));
     resize(880, 620);
 
     auto* root = new QVBoxLayout(this);
@@ -82,13 +82,13 @@ SettingsWindow::SettingsWindow(const ApplicationPreferences& current,
     body->setSpacing(kit::px(kit::Spacing::L));
 
     categoryRail_ = new kit::KRadioGroup(this);
-    categoryRail_->setObjectName(QStringLiteral("settingsCategoryRail"));
+    categoryRail_->setObjectName(QStringLiteral("preferencesCategoryRail"));
     categoryRail_->setPresentation(kit::KRadioGroup::Presentation::Discrete);
     categoryRail_->setFixedWidth(180);
     body->addWidget(categoryRail_, 0);
 
     pages_ = new QStackedWidget(this);
-    pages_->setObjectName(QStringLiteral("settingsPages"));
+    pages_->setObjectName(QStringLiteral("preferencesPages"));
     body->addWidget(pages_, 1);
     root->addLayout(body, 1);
 
@@ -108,11 +108,11 @@ SettingsWindow::SettingsWindow(const ApplicationPreferences& current,
         new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel |
                                  QDialogButtonBox::Apply | QDialogButtonBox::RestoreDefaults,
                              this);
-    buttons->setObjectName(QStringLiteral("settingsButtonBox"));
+    buttons->setObjectName(QStringLiteral("preferencesButtonBox"));
     applyButton_ = buttons->button(QDialogButtonBox::Apply);
-    applyButton_->setObjectName(QStringLiteral("settingsApplyButton"));
+    applyButton_->setObjectName(QStringLiteral("preferencesApplyButton"));
     if (auto* restore = buttons->button(QDialogButtonBox::RestoreDefaults); restore != nullptr) {
-        restore->setObjectName(QStringLiteral("settingsRestoreDefaultsButton"));
+        restore->setObjectName(QStringLiteral("preferencesRestoreDefaultsButton"));
         connect(restore, &QPushButton::clicked, this,
                 [this] { setPreferences(defaultApplicationPreferences()); });
     }
@@ -128,27 +128,27 @@ SettingsWindow::SettingsWindow(const ApplicationPreferences& current,
     updateApplyEnabled();
 }
 
-ApplicationPreferences SettingsWindow::preferences() const { return draft_; }
+ApplicationPreferences PreferencesWindow::preferences() const { return draft_; }
 
-void SettingsWindow::setPreferences(const ApplicationPreferences& preferences) {
+void PreferencesWindow::setPreferences(const ApplicationPreferences& preferences) {
     draft_ = preferences;
     refreshControls();
     updateApplyEnabled();
 }
 
-void SettingsWindow::refreshControls() {
+void PreferencesWindow::refreshControls() {
     for (const auto& refresh : refreshCallbacks_) {
         refresh();
     }
 }
 
-void SettingsWindow::commitPreferences() {
+void PreferencesWindow::commitPreferences() {
     applied_ = draft_;
     emit preferencesApplied(applied_);
     updateApplyEnabled();
 }
 
-void SettingsWindow::updateApplyEnabled() {
+void PreferencesWindow::updateApplyEnabled() {
     if (applyButton_ != nullptr) {
         applyButton_->setEnabled(draft_ != applied_);
     }
@@ -156,9 +156,9 @@ void SettingsWindow::updateApplyEnabled() {
 
 // --- Row helpers -------------------------------------------------------------------------------
 
-kit::KSwitch* SettingsWindow::addSwitchRow(QVBoxLayout* layout, QWidget* parent,
-                                           const QString& objectName, const QString& label,
-                                           const bool restartRequired) {
+kit::KSwitch* PreferencesWindow::addSwitchRow(QVBoxLayout* layout, QWidget* parent,
+                                              const QString& objectName, const QString& label,
+                                              const bool restartRequired) {
     auto* control = new kit::KSwitch(parent);
     control->setObjectName(objectName);
     control->setAccessibleName(label);
@@ -171,8 +171,8 @@ kit::KSwitch* SettingsWindow::addSwitchRow(QVBoxLayout* layout, QWidget* parent,
     return control;
 }
 
-kit::KDropdown* SettingsWindow::addDropdownRow(QVBoxLayout* layout, QWidget* parent,
-                                               const QString& objectName, const QString& label) {
+kit::KDropdown* PreferencesWindow::addDropdownRow(QVBoxLayout* layout, QWidget* parent,
+                                                  const QString& objectName, const QString& label) {
     auto* control = new kit::KDropdown(parent);
     control->setObjectName(objectName);
     control->setAccessibleName(label);
@@ -180,11 +180,12 @@ kit::KDropdown* SettingsWindow::addDropdownRow(QVBoxLayout* layout, QWidget* par
     return control;
 }
 
-kit::KValueField* SettingsWindow::addValueFieldRow(QVBoxLayout* layout, QWidget* parent,
-                                                   const QString& objectName, const QString& label,
-                                                   const double minimum, const double maximum,
-                                                   const int decimals, const QString& unit,
-                                                   const bool restartRequired) {
+kit::KValueField* PreferencesWindow::addValueFieldRow(QVBoxLayout* layout, QWidget* parent,
+                                                      const QString& objectName,
+                                                      const QString& label, const double minimum,
+                                                      const double maximum, const int decimals,
+                                                      const QString& unit,
+                                                      const bool restartRequired) {
     properties::ValueCellSpec spec;
     spec.objectName = objectName;
     spec.accessibleName = label;
@@ -205,7 +206,7 @@ kit::KValueField* SettingsWindow::addValueFieldRow(QVBoxLayout* layout, QWidget*
 
 // --- Pages -------------------------------------------------------------------------------------
 
-std::vector<SettingsWindow::Page> SettingsWindow::buildPages() {
+std::vector<PreferencesWindow::Page> PreferencesWindow::buildPages() {
     std::vector<Page> pages;
     pages.push_back({QStringLiteral("general"), tr("General"), buildGeneralPage()});
     pages.push_back({QStringLiteral("memory"), tr("Memory & Caches"), buildMemoryPage()});
@@ -216,7 +217,7 @@ std::vector<SettingsWindow::Page> SettingsWindow::buildPages() {
     return pages;
 }
 
-QWidget* SettingsWindow::buildGeneralPage() {
+QWidget* PreferencesWindow::buildGeneralPage() {
     auto* content = new QWidget;
     auto* layout = new QVBoxLayout(content);
     layout->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
@@ -224,11 +225,11 @@ QWidget* SettingsWindow::buildGeneralPage() {
     layout->setSpacing(kit::px(kit::Spacing::S));
 
     auto* section = properties::makeSection(
-        layout, content, QStringLiteral("settingsGeneralSection"), tr("Playback"),
-        QStringLiteral("settings/sections/general/collapsed"));
+        layout, content, QStringLiteral("preferencesGeneralSection"), tr("Playback"),
+        QStringLiteral("preferences/sections/general/collapsed"));
     auto* rows = section->bodyLayout();
 
-    auto* audio = addSwitchRow(rows, content, QStringLiteral("settingsAudioEnabledSwitch"),
+    auto* audio = addSwitchRow(rows, content, QStringLiteral("preferencesAudioEnabledSwitch"),
                                tr("Audio playback"), false);
     audio->setChecked(draft_.audioEnabled);
     connect(audio, &QAbstractButton::toggled, this, [this](const bool enabled) {
@@ -240,7 +241,7 @@ QWidget* SettingsWindow::buildGeneralPage() {
         audio->setChecked(draft_.audioEnabled);
     });
 
-    auto* loop = addSwitchRow(rows, content, QStringLiteral("settingsLoopPlaybackSwitch"),
+    auto* loop = addSwitchRow(rows, content, QStringLiteral("preferencesLoopPlaybackSwitch"),
                               tr("Loop playback"), false);
     loop->setChecked(draft_.loopPlayback);
     connect(loop, &QAbstractButton::toggled, this, [this](const bool enabled) {
@@ -253,10 +254,10 @@ QWidget* SettingsWindow::buildGeneralPage() {
     });
 
     layout->addStretch(1);
-    return wrapInScroll(content, QStringLiteral("settingsGeneralPage"));
+    return wrapInScroll(content, QStringLiteral("preferencesGeneralPage"));
 }
 
-QWidget* SettingsWindow::buildMemoryPage() {
+QWidget* PreferencesWindow::buildMemoryPage() {
     auto* content = new QWidget;
     auto* layout = new QVBoxLayout(content);
     layout->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
@@ -267,17 +268,17 @@ QWidget* SettingsWindow::buildMemoryPage() {
         tr("Memory budgets and the disk cache are read when Bloom starts. Changes here take effect "
            "after restart."),
         content);
-    notice->setObjectName(QStringLiteral("settingsRestartNotice"));
+    notice->setObjectName(QStringLiteral("preferencesRestartNotice"));
     notice->setWordWrap(true);
     layout->addWidget(notice);
 
-    auto* memory =
-        properties::makeSection(layout, content, QStringLiteral("settingsMemorySection"),
-                                tr("Memory"), QStringLiteral("settings/sections/memory/collapsed"));
+    auto* memory = properties::makeSection(layout, content,
+                                           QStringLiteral("preferencesMemorySection"), tr("Memory"),
+                                           QStringLiteral("preferences/sections/memory/collapsed"));
     auto* memoryRows = memory->bodyLayout();
 
     auto* operation =
-        addValueFieldRow(memoryRows, content, QStringLiteral("settingsOperationCacheBytesField"),
+        addValueFieldRow(memoryRows, content, QStringLiteral("preferencesOperationCacheBytesField"),
                          tr("Operation cache budget"), 0.0, 256.0, 2, QStringLiteral("GiB"), true);
     operation->setValue(static_cast<double>(draft_.operationCacheBytes) / kBytesPerGiB);
     connect(operation, &kit::KValueField::valueChanged, this, [this](const double value) {
@@ -291,7 +292,7 @@ QWidget* SettingsWindow::buildMemoryPage() {
     });
 
     auto* ram =
-        addValueFieldRow(memoryRows, content, QStringLiteral("settingsRamPreviewBytesField"),
+        addValueFieldRow(memoryRows, content, QStringLiteral("preferencesRamPreviewBytesField"),
                          tr("RAM preview budget"), 0.0, 256.0, 2, QStringLiteral("GiB"), true);
     ram->setValue(static_cast<double>(draft_.ramPreviewBytes) / kBytesPerGiB);
     connect(ram, &kit::KValueField::valueChanged, this, [this](const double value) {
@@ -306,17 +307,17 @@ QWidget* SettingsWindow::buildMemoryPage() {
 
     auto* hint =
         new kit::KLabel(tr("A budget of 0 GiB uses the machine-derived default."), content);
-    hint->setObjectName(QStringLiteral("settingsMemoryHint"));
+    hint->setObjectName(QStringLiteral("preferencesMemoryHint"));
     hint->setWordWrap(true);
     memoryRows->addWidget(hint);
 
     auto* disk = properties::makeSection(
-        layout, content, QStringLiteral("settingsMediaCacheSection"), tr("Media disk cache"),
-        QStringLiteral("settings/sections/media-cache/collapsed"));
+        layout, content, QStringLiteral("preferencesMediaCacheSection"), tr("Media disk cache"),
+        QStringLiteral("preferences/sections/media-cache/collapsed"));
     auto* diskRows = disk->bodyLayout();
 
     auto* enabled =
-        addSwitchRow(diskRows, content, QStringLiteral("settingsMediaDiskCacheEnabledSwitch"),
+        addSwitchRow(diskRows, content, QStringLiteral("preferencesMediaDiskCacheEnabledSwitch"),
                      tr("Enable disk cache"), true);
     enabled->setChecked(draft_.mediaDiskCacheEnabled);
     connect(enabled, &QAbstractButton::toggled, this, [this](const bool value) {
@@ -329,11 +330,11 @@ QWidget* SettingsWindow::buildMemoryPage() {
     });
 
     auto* directory = new kit::KLineEdit(content);
-    directory->setObjectName(QStringLiteral("settingsMediaDiskCacheDirectoryEdit"));
+    directory->setObjectName(QStringLiteral("preferencesMediaDiskCacheDirectoryEdit"));
     directory->setAccessibleName(tr("Cache directory"));
     directory->setText(QString::fromStdString(draft_.mediaDiskCacheDirectory));
     auto* browse = new kit::KButton(tr("Browse…"), content);
-    browse->setObjectName(QStringLiteral("settingsMediaDiskCacheBrowseButton"));
+    browse->setObjectName(QStringLiteral("preferencesMediaDiskCacheBrowseButton"));
     connect(browse, &QPushButton::clicked, this, [this, directory] {
         const auto picked = QFileDialog::getExistingDirectory(this, tr("Choose a cache directory"),
                                                               directory->text());
@@ -356,7 +357,7 @@ QWidget* SettingsWindow::buildMemoryPage() {
                        nullptr, {directory, browse});
 
     auto* budget =
-        addValueFieldRow(diskRows, content, QStringLiteral("settingsMediaDiskCacheBudgetField"),
+        addValueFieldRow(diskRows, content, QStringLiteral("preferencesMediaDiskCacheBudgetField"),
                          tr("Disk cache budget"), 0.0, 1024.0, 2, QStringLiteral("GiB"), true);
     budget->setValue(static_cast<double>(draft_.mediaDiskCacheBudgetBytes) / kBytesPerGiB);
     connect(budget, &kit::KValueField::valueChanged, this, [this](const double value) {
@@ -370,10 +371,10 @@ QWidget* SettingsWindow::buildMemoryPage() {
     });
 
     layout->addStretch(1);
-    return wrapInScroll(content, QStringLiteral("settingsMemoryPage"));
+    return wrapInScroll(content, QStringLiteral("preferencesMemoryPage"));
 }
 
-QWidget* SettingsWindow::buildTimelinePage() {
+QWidget* PreferencesWindow::buildTimelinePage() {
     auto* content = new QWidget;
     auto* layout = new QVBoxLayout(content);
     layout->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
@@ -381,12 +382,12 @@ QWidget* SettingsWindow::buildTimelinePage() {
     layout->setSpacing(kit::px(kit::Spacing::S));
 
     auto* section = properties::makeSection(
-        layout, content, QStringLiteral("settingsTimelineSection"), tr("Timeline"),
-        QStringLiteral("settings/sections/timeline/collapsed"));
+        layout, content, QStringLiteral("preferencesTimelineSection"), tr("Timeline"),
+        QStringLiteral("preferences/sections/timeline/collapsed"));
     auto* rows = section->bodyLayout();
 
     auto* format = addDropdownRow(
-        rows, content, QStringLiteral("settingsTimelineTimeFormatDropdown"), tr("Time format"));
+        rows, content, QStringLiteral("preferencesTimelineTimeFormatDropdown"), tr("Time format"));
     format->addItem(tr("Frames"), QStringLiteral("frames"));
     format->addItem(tr("Timecode"), QStringLiteral("timecode"));
     format->setCurrentIndex(
@@ -410,11 +411,11 @@ QWidget* SettingsWindow::buildTimelinePage() {
         bool ApplicationPreferences::* field;
     };
     const SwitchSpec switches[] = {
-        {"settingsTimelineSnappingSwitch", QT_TR_NOOP("Snap to edges"),
+        {"preferencesTimelineSnappingSwitch", QT_TR_NOOP("Snap to edges"),
          &ApplicationPreferences::timelineSnapping},
-        {"settingsTimelineKeyframesSwitch", QT_TR_NOOP("Show keyframes"),
+        {"preferencesTimelineKeyframesSwitch", QT_TR_NOOP("Show keyframes"),
          &ApplicationPreferences::timelineKeyframesVisible},
-        {"settingsTimelineGraphEditorSwitch", QT_TR_NOOP("Graph editor"),
+        {"preferencesTimelineGraphEditorSwitch", QT_TR_NOOP("Graph editor"),
          &ApplicationPreferences::timelineGraphEditor},
     };
     for (const auto& spec : switches) {
@@ -436,9 +437,9 @@ QWidget* SettingsWindow::buildTimelinePage() {
     // enforce it). Mirror that here so the window cannot present a pair the editor would silently
     // resolve differently.
     auto* keyframesSwitch =
-        content->findChild<kit::KSwitch*>(QStringLiteral("settingsTimelineKeyframesSwitch"));
+        content->findChild<kit::KSwitch*>(QStringLiteral("preferencesTimelineKeyframesSwitch"));
     auto* graphSwitch =
-        content->findChild<kit::KSwitch*>(QStringLiteral("settingsTimelineGraphEditorSwitch"));
+        content->findChild<kit::KSwitch*>(QStringLiteral("preferencesTimelineGraphEditorSwitch"));
     if (keyframesSwitch != nullptr && graphSwitch != nullptr) {
         connect(keyframesSwitch, &QAbstractButton::toggled, this,
                 [this, graphSwitch](const bool on) {
@@ -455,7 +456,7 @@ QWidget* SettingsWindow::buildTimelinePage() {
     }
 
     auto* width =
-        addValueFieldRow(rows, content, QStringLiteral("settingsTimelineLayerColumnWidthField"),
+        addValueFieldRow(rows, content, QStringLiteral("preferencesTimelineLayerColumnWidthField"),
                          tr("Layer column width"), 80.0, 600.0, 0, QStringLiteral("px"), false);
     width->setValue(static_cast<double>(draft_.timelineLayerColumnWidth));
     connect(width, &kit::KValueField::valueChanged, this, [this](const double value) {
@@ -468,10 +469,10 @@ QWidget* SettingsWindow::buildTimelinePage() {
     });
 
     layout->addStretch(1);
-    return wrapInScroll(content, QStringLiteral("settingsTimelinePage"));
+    return wrapInScroll(content, QStringLiteral("preferencesTimelinePage"));
 }
 
-QWidget* SettingsWindow::buildNodeGraphPage() {
+QWidget* PreferencesWindow::buildNodeGraphPage() {
     auto* content = new QWidget;
     auto* layout = new QVBoxLayout(content);
     layout->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
@@ -479,12 +480,12 @@ QWidget* SettingsWindow::buildNodeGraphPage() {
     layout->setSpacing(kit::px(kit::Spacing::S));
 
     auto* section = properties::makeSection(
-        layout, content, QStringLiteral("settingsNodeGraphSection"), tr("Node Graph"),
-        QStringLiteral("settings/sections/node-graph/collapsed"));
+        layout, content, QStringLiteral("preferencesNodeGraphSection"), tr("Node Graph"),
+        QStringLiteral("preferences/sections/node-graph/collapsed"));
     auto* rows = section->bodyLayout();
 
-    auto* linkStyle = addDropdownRow(rows, content, QStringLiteral("settingsNodeLinkStyleDropdown"),
-                                     tr("Link style"));
+    auto* linkStyle = addDropdownRow(
+        rows, content, QStringLiteral("preferencesNodeLinkStyleDropdown"), tr("Link style"));
     linkStyle->addItem(tr("Spline"), QStringLiteral("spline"));
     linkStyle->addItem(tr("Straight"), QStringLiteral("straight"));
     linkStyle->addItem(tr("Angled"), QStringLiteral("angled"));
@@ -506,7 +507,7 @@ QWidget* SettingsWindow::buildNodeGraphPage() {
             linkStyle->findData(QLatin1String(nodeLinkStyleValue(draft_.nodeLinkStyle))));
     });
 
-    auto* snap = addSwitchRow(rows, content, QStringLiteral("settingsNodeSnapSwitch"),
+    auto* snap = addSwitchRow(rows, content, QStringLiteral("preferencesNodeSnapSwitch"),
                               tr("Snap to grid"), false);
     snap->setChecked(draft_.nodeSnap);
     connect(snap, &QAbstractButton::toggled, this, [this](const bool value) {
@@ -518,7 +519,7 @@ QWidget* SettingsWindow::buildNodeGraphPage() {
         snap->setChecked(draft_.nodeSnap);
     });
 
-    auto* grid = addValueFieldRow(rows, content, QStringLiteral("settingsNodeGridSizeField"),
+    auto* grid = addValueFieldRow(rows, content, QStringLiteral("preferencesNodeGridSizeField"),
                                   tr("Grid size"), 2.0, 200.0, 0, QStringLiteral("px"), false);
     grid->setValue(draft_.nodeGridSize);
     connect(grid, &kit::KValueField::valueChanged, this, [this](const double value) {
@@ -531,23 +532,23 @@ QWidget* SettingsWindow::buildNodeGraphPage() {
     });
 
     layout->addStretch(1);
-    return wrapInScroll(content, QStringLiteral("settingsNodeGraphPage"));
+    return wrapInScroll(content, QStringLiteral("preferencesNodeGraphPage"));
 }
 
-QWidget* SettingsWindow::buildViewerPage() {
+QWidget* PreferencesWindow::buildViewerPage() {
     auto* content = new QWidget;
     auto* layout = new QVBoxLayout(content);
     layout->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
                                kit::px(kit::Spacing::M), kit::px(kit::Spacing::M));
     layout->setSpacing(kit::px(kit::Spacing::S));
 
-    auto* section =
-        properties::makeSection(layout, content, QStringLiteral("settingsViewerSection"),
-                                tr("Viewer"), QStringLiteral("settings/sections/viewer/collapsed"));
+    auto* section = properties::makeSection(
+        layout, content, QStringLiteral("preferencesViewerSection"), tr("Viewer"),
+        QStringLiteral("preferences/sections/viewer/collapsed"));
     auto* rows = section->bodyLayout();
 
     auto* resolution = addDropdownRow(
-        rows, content, QStringLiteral("settingsViewerResolutionDropdown"), tr("Resolution"));
+        rows, content, QStringLiteral("preferencesViewerResolutionDropdown"), tr("Resolution"));
     resolution->addItem(tr("Auto"), QStringLiteral("Auto"));
     resolution->addItem(tr("Full"), QStringLiteral("Full"));
     resolution->addItem(tr("Half"), QStringLiteral("Half"));
@@ -573,7 +574,7 @@ QWidget* SettingsWindow::buildViewerPage() {
     });
 
     auto* background = addDropdownRow(
-        rows, content, QStringLiteral("settingsViewerBackgroundDropdown"), tr("Background"));
+        rows, content, QStringLiteral("preferencesViewerBackgroundDropdown"), tr("Background"));
     background->addItem(tr("Solid"), QStringLiteral("Solid"));
     background->addItem(tr("Checkerboard"), QStringLiteral("Checkerboard"));
     background->addItem(tr("Black"), QStringLiteral("Black"));
@@ -604,13 +605,15 @@ QWidget* SettingsWindow::buildViewerPage() {
         bool ApplicationPreferences::* field;
     };
     const SwitchSpec overlays[] = {
-        {"settingsViewerSafeAreasSwitch", QT_TR_NOOP("Safe areas"),
+        {"preferencesViewerSafeAreasSwitch", QT_TR_NOOP("Safe areas"),
          &ApplicationPreferences::viewerSafeAreas},
-        {"settingsViewerCentreCrossSwitch", QT_TR_NOOP("Centre cross"),
+        {"preferencesViewerCentreCrossSwitch", QT_TR_NOOP("Centre cross"),
          &ApplicationPreferences::viewerCentreCross},
-        {"settingsViewerThirdsSwitch", QT_TR_NOOP("Thirds"), &ApplicationPreferences::viewerThirds},
-        {"settingsViewerRulersSwitch", QT_TR_NOOP("Rulers"), &ApplicationPreferences::viewerRulers},
-        {"settingsViewerPixelGridSwitch", QT_TR_NOOP("Pixel grid"),
+        {"preferencesViewerThirdsSwitch", QT_TR_NOOP("Thirds"),
+         &ApplicationPreferences::viewerThirds},
+        {"preferencesViewerRulersSwitch", QT_TR_NOOP("Rulers"),
+         &ApplicationPreferences::viewerRulers},
+        {"preferencesViewerPixelGridSwitch", QT_TR_NOOP("Pixel grid"),
          &ApplicationPreferences::viewerPixelGrid},
     };
     for (const auto& spec : overlays) {
@@ -629,10 +632,10 @@ QWidget* SettingsWindow::buildViewerPage() {
     }
 
     layout->addStretch(1);
-    return wrapInScroll(content, QStringLiteral("settingsViewerPage"));
+    return wrapInScroll(content, QStringLiteral("preferencesViewerPage"));
 }
 
-QWidget* SettingsWindow::buildPerformancePage() {
+QWidget* PreferencesWindow::buildPerformancePage() {
     auto* content = new QWidget;
     auto* layout = new QVBoxLayout(content);
     layout->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
@@ -643,8 +646,8 @@ QWidget* SettingsWindow::buildPerformancePage() {
                                                        : cpuOnlyAccelerationStatus();
 
     auto* section = properties::makeSection(
-        layout, content, QStringLiteral("settingsPerformanceSection"), tr("Acceleration"),
-        QStringLiteral("settings/sections/performance/collapsed"));
+        layout, content, QStringLiteral("preferencesPerformanceSection"), tr("Acceleration"),
+        QStringLiteral("preferences/sections/performance/collapsed"));
     auto* rows = section->bodyLayout();
 
     const auto addStatusRow = [&](const QString& objectName, const QString& label,
@@ -654,19 +657,21 @@ QWidget* SettingsWindow::buildPerformancePage() {
         properties::addRow(rows, content, properties::makeRowLabel(label, content), nullptr,
                            valueLabel);
     };
-    addStatusRow(QStringLiteral("settingsPerformanceBackendValue"), tr("Backend"), status.backend);
-    addStatusRow(QStringLiteral("settingsPerformanceStateValue"), tr("Device state"),
+    addStatusRow(QStringLiteral("preferencesPerformanceBackendValue"), tr("Backend"),
+                 status.backend);
+    addStatusRow(QStringLiteral("preferencesPerformanceStateValue"), tr("Device state"),
                  status.deviceState);
     if (!status.deviceName.isEmpty()) {
-        addStatusRow(QStringLiteral("settingsPerformanceDeviceValue"), tr("Device"),
+        addStatusRow(QStringLiteral("preferencesPerformanceDeviceValue"), tr("Device"),
                      status.deviceName);
     }
     if (!status.driver.isEmpty()) {
-        addStatusRow(QStringLiteral("settingsPerformanceDriverValue"), tr("Driver"), status.driver);
+        addStatusRow(QStringLiteral("preferencesPerformanceDriverValue"), tr("Driver"),
+                     status.driver);
     }
 
     auto* summary = new kit::KLabel(status.summary, content);
-    summary->setObjectName(QStringLiteral("settingsPerformanceSummary"));
+    summary->setObjectName(QStringLiteral("preferencesPerformanceSummary"));
     summary->setWordWrap(true);
     rows->addWidget(summary);
 
@@ -674,12 +679,12 @@ QWidget* SettingsWindow::buildPerformancePage() {
         tr("GPU execution is an acceleration over the same evaluation; the CPU reference remains "
            "the correctness oracle."),
         content);
-    note->setObjectName(QStringLiteral("settingsPerformanceNote"));
+    note->setObjectName(QStringLiteral("preferencesPerformanceNote"));
     note->setWordWrap(true);
     layout->addWidget(note);
 
     layout->addStretch(1);
-    return wrapInScroll(content, QStringLiteral("settingsPerformancePage"));
+    return wrapInScroll(content, QStringLiteral("preferencesPerformancePage"));
 }
 
 } // namespace bloom::ui

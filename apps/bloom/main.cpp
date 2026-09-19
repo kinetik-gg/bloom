@@ -262,8 +262,8 @@ int main(int argc, char* argv[]) {
                      applyAudioMix);
     (void)audioPlaybackSession.refresh();
     applyAudioMix();
-    // The Settings window's read-only Performance page reads this; the default provider reports the
-    // CPU reference path because no GPU backend is built here. Declared before the window so it
+    // The Preferences window's read-only Performance page reads this; the default provider reports
+    // the CPU reference path because no GPU backend is built here. Declared before the window so it
     // outlives the borrowed pointer the window holds.
     bloom::ui::CpuOnlyAccelerationStatus accelerationStatus;
     // Native (server-side) window chrome only (task C1): MainWindow no longer takes a chrome mode

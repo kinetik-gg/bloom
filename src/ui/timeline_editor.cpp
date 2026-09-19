@@ -1250,7 +1250,7 @@ void TimelineEditor::setSnappingEnabled(const bool enabled) {
 void TimelineEditor::applyApplicationPreferences(const ApplicationPreferences& preferences) {
     setTimecodeFormat(preferences.timelineTimeFormat == TimelineTimeFormat::Timecode);
     setSnappingEnabled(preferences.timelineSnapping);
-    // Keyframes and the graph editor are mutually exclusive in this panel; the Settings window
+    // Keyframes and the graph editor are mutually exclusive in this panel; the Preferences window
     // enforces the same rule, so the stored value is already consistent. Apply the graph choice
     // last so a legacy inconsistent pair resolves the way the panel's own menus would.
     setKeyframesVisible(preferences.timelineKeyframesVisible);

@@ -284,7 +284,7 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     [[nodiscard]] NodeGraphicsScene* graphScene() const noexcept;
     [[nodiscard]] NodeGraphicsView* graphView() const noexcept;
 
-    // Applies the Settings window's committed node-graph preferences through the scene's own
+    // Applies the Preferences window's committed node-graph preferences through the scene's own
     // setters.
     void applyApplicationPreferences(const ApplicationPreferences& preferences) override;
 

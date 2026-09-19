@@ -439,7 +439,7 @@ thumbnail cache). It is the same store both consult: `decodeThroughDiskCache()`
 **Location.** The platform cache directory (`bloom::platform::userCacheDirectory()`, Linux
 `$XDG_CACHE_HOME/bloom` or `$HOME/.cache/bloom`) plus a `media` leaf, or a `media/disk-cache-directory`
 QSettings override (an absolute path; anything else falls back to the platform default). The
-enable flag, directory, and byte budget are edited under **Edit → Settings… → Memory & Caches**
+enable flag, directory, and byte budget are edited under **Edit → Preferences… → Memory & Caches**
 (the disk cache also has **Composition → Clear Media Cache…**); the operation-cache and RAM-preview
 budgets share that page. These values are read once at startup, so a change takes effect after
 restart. The owning reader is `bloom::ui::media_disk_cache_settings` for the disk cache and

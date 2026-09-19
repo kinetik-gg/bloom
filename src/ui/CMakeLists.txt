@@ -355,8 +355,8 @@ target_sources(
         composition_export_dialog.hpp
         acceleration_status.cpp
         application_preferences.cpp
-        settings_window.cpp
-        settings_window.hpp
+        preferences_window.cpp
+        preferences_window.hpp
         frameless_window_support.cpp
         jobs_editor.cpp
         licenses_window.cpp
