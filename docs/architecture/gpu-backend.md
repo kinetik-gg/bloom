@@ -128,8 +128,35 @@ The CPU-unavailable stub, the existing CPU render tests, and a Qt-free CPU appli
 Vulkan loader also pass. Actual device/driver facts from a run are diagnostic evidence, not
 qualification.
 
-Pending and unchanged: the dedicated GPU service thread and the runtime/scheduler integration, any
-UI activation of the qualified operation, the full per-operation qualification fixtures for a future
+The product and the dedicated runtime service now exist on top of that qualification. The product
+(`bloom/runtime/gpu_preview_display_product.hpp`) wraps one successful native packed readback into
+the existing display-only preview frame with `PreviewDisplayProvider::GpuNeutral` provenance,
+retaining the dispatch's exact immutable qualification report and re-checking the one authoritative
+`gpuNeutralDisplayStageIsEligible` predicate, so the service's pre-dispatch choice and the finalizer
+cannot drift apart; it retains no Float32 process image and introduces no fourth frame variant. The
+runtime service (`bloom/runtime/gpu_preview_display_service.hpp`,
+`gpu_preview_display_service.cpp`, `gpu_preview_display_service_jobs.cpp`) owns one dedicated service
+thread and the native device/pipeline created and used only on it, attaches the scheduler GPU
+executor, and tracks device bootstrap, the exact embedded neutral CPU processor build, and
+cancellation-aware qualification as a scheduler GPU startup task, so `isQuiescent()` cannot report
+true while initialization is running. It returns one stable final `submitGpu` handle per request:
+the CPU stage child compiles/evaluates/selects under a distinct coalescing key, and only when the
+report's measured eligible interval and the overhead-adjusted comparison
+(`native_full_ms + two active-poll handoffs < cpu_full_ms`) both admit it does the service run one
+bounded native dispatch; otherwise (non-neutral, obviously tiny, unsupported, oversize, or
+post-stage ineligible) the same evaluated stage is mapped by the CPU display fallback and is never
+compiled or evaluated twice. Parent cancellation, supersession, and group cancellation cancel
+children and mark native discard while retaining completion and admission until children are
+terminal and the native submission is retired; a native begin/poll/readback failure, or expiry of
+the bounded per-dispatch deadline, drains/quarantines the native pipeline on its owner thread,
+disables the GPU, and takes the same-frame CPU fallback. `beginShutdown()` is non-blocking, the
+destructor drains before releasing the lease, and requests that race shutdown are rejected rather
+than turned into new work. A device-gated service test drives real provenance and pixel parity,
+the same-stage CPU fallback, the bounded-deadline retirement, and a paired service-versus-CPU
+median benchmark over one warm operation cache; a whole-application benchmark remains pending UI
+activation of the service.
+
+Pending and unchanged: UI activation of the qualified service and its controller/cache wiring, the full per-operation qualification fixtures for a future
 `ReferenceParity` profile (this operation stays `PreviewOnly`), general graph execution,
 presentation/swapchain integration, the cross-platform Linux/macOS/Windows parity spike, shader
 compilation of generated OCIO programs, and Windows/macOS GPU support. The qualified Linux prefix

@@ -241,3 +241,26 @@ bloom_add_test(
     LABELS runtime unit gpu color
     TIMEOUT 120
 )
+
+# GPU preview display service: dedicated service thread, native device/pipeline owner, stable final
+# submitGpu handle, and bounded lifecycle. Non-device cases run unconditionally; native qualification,
+# provenance/parity, deadline retirement, and the paired benchmark are driven with
+# --loader/--require-device/--benchmark by the local supervisor.
+add_executable(
+    bloom_runtime_gpu_preview_display_service_test
+    gpu_preview_display_service_tests.cpp
+    gpu_preview_display_service_lifecycle_tests.cpp
+)
+target_link_libraries(
+    bloom_runtime_gpu_preview_display_service_test
+    PRIVATE bloom_runtime_evaluator
+)
+target_include_directories(bloom_runtime_gpu_preview_display_service_test PRIVATE ..)
+bloom_enable_warnings(bloom_runtime_gpu_preview_display_service_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_preview_display_service_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_preview_display_service
+    COMMAND bloom_runtime_gpu_preview_display_service_test
+    LABELS runtime unit gpu color
+    TIMEOUT 300
+)
