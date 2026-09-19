@@ -556,6 +556,30 @@ class CompositionSession final : public QObject {
     // this accessor does not claim a preparation has already run for it.
     [[nodiscard]] const document::Snapshot& evaluationSnapshot() const noexcept;
 
+    // TEMPORAL-2A. One half-open [start, end) span of COMPOSITION time whose rendered output is
+    // represented by one genuine document snapshot. Every span names a real snapshot the session
+    // read from this document; no revision is ever rewritten. Spans are sorted, non-overlapping,
+    // and together cover the composition's [0, duration).
+    struct EvaluationSnapshotRange final {
+        core::RationalTime start;
+        core::RationalTime end;
+        document::Snapshot snapshot;
+    };
+
+    // The cap past which split-span bookkeeping stops being worth it: a transaction whose finite
+    // changed range would produce more spans than this resets the whole composition to the live
+    // snapshot conservatively. Bounded so an adversarial sequence of disjoint edits cannot grow
+    // session state without limit.
+    static constexpr std::size_t kMaxEvaluationSnapshotRanges = 32;
+
+    // The genuine snapshot that represents composition time `time`. Within [0, duration) this is
+    // the snapshot of the covering span; outside it, the current live snapshot conservatively.
+    [[nodiscard]] const document::Snapshot&
+    evaluationSnapshotForTime(core::RationalTime time) const noexcept;
+
+    // The whole time-indexed provenance, for the next slice's frame-cache retention. Read-only.
+    [[nodiscard]] std::vector<EvaluationSnapshotRange> evaluationSnapshotRanges() const;
+
   signals:
     // Fired by rebind() AFTER the new live and evaluation snapshots are installed but BEFORE every
     // other signal, so a consumer can drop state that belongs to the old document -- most
@@ -686,6 +710,21 @@ class CompositionSession final : public QObject {
     // revision also cancel"). Called after handleResult() adopts a new snapshot.
     void invalidateTransformInteractionOnStaleRevision();
 
+    // TEMPORAL-2A. Rebuilds the time-indexed provenance to a single full-cover span of the live
+    // snapshot. Used on rebind, composition switch, and every conservative (whole/unknown/mixed)
+    // transition. Returns true when the provenance actually changed.
+    [[nodiscard]] bool resetEvaluationRangesToLive();
+    // Applies a finite footprint: spans outside the half-open changed intervals keep their genuine
+    // snapshot, spans inside switch to the live snapshot. Returns true when anything changed;
+    // returns std::nullopt (via out-param) when the evidence is not trustworthy and the caller must
+    // fall back to resetEvaluationRangesToLive().
+    [[nodiscard]] bool
+    applyFiniteEvaluationFootprint(const commands::AffectedTimeFootprint& footprint,
+                                   bool& trustworthy);
+    // The composition's frame mapping is usable for time-indexed provenance: a real composition
+    // with a positive duration and a constructible frame-time mapping.
+    [[nodiscard]] bool evaluationTimeBaseUsable() const noexcept;
+
     // Session-only, never persisted (docs/architecture/animation-and-time.md, "Direct
     // Manipulation And Preview Overrides"). Named after exactly what the contract freezes.
     struct TransformInteraction final {
@@ -722,9 +761,10 @@ class CompositionSession final : public QObject {
     commands::CommandObserverId commandObserverId_ = 0;
     std::shared_ptr<CommandObserverState> commandObserverState_;
     document::Snapshot snapshot_;
-    // Retained alongside the live snapshot; see evaluationSnapshot(). Declared after snapshot_ so
-    // the constructor can seed it from the same initial document read.
-    document::Snapshot evaluationSnapshot_;
+    // TEMPORAL-2A time-indexed provenance. Sorted, non-overlapping, full-cover spans of the active
+    // composition's time, each naming a genuine snapshot. Empty until the first refresh; then a
+    // single full-cover span of the live snapshot.
+    std::vector<EvaluationSnapshotRange> evaluationRanges_;
     document::CompositionId compositionId_;
     core::RationalTime currentTime_ = core::RationalTime::fromInteger(0);
     CompositionSelection selection_;

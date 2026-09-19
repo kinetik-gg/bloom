@@ -1764,6 +1764,257 @@ void testWorkAreaEditDoesNotRefreshOrResurrect(Expectations& expectations) {
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
 
+// TEMPORAL-2A. An operation that carries a chosen changed-time footprint without touching the
+// document, so session provenance can be driven directly and deterministically.
+class SessionFootprintOp final : public bloom::commands::Operation {
+  public:
+    explicit SessionFootprintOp(bloom::commands::AffectedTimeFootprint footprint)
+        : footprint_(std::move(footprint)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.test.session-footprint";
+    }
+    [[nodiscard]] bloom::commands::OperationResult apply(bloom::document::Draft&) const override {
+        auto result = bloom::commands::OperationResult::applied();
+        result.affectedTimes = footprint_;
+        return result;
+    }
+
+  private:
+    bloom::commands::AffectedTimeFootprint footprint_;
+};
+
+class ForeignFootprintOp final : public bloom::commands::Operation {
+  public:
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.test.foreign-footprint";
+    }
+    [[nodiscard]] bloom::commands::OperationResult apply(bloom::document::Draft&) const override {
+        auto result = bloom::commands::OperationResult::applied();
+        result.affectedTimes = bloom::commands::AffectedTimeFootprint{
+            .compositionId = bloom::document::CompositionId::fromRaw(999),
+            .intervals = {{bloom::core::RationalTime::fromInteger(1),
+                           bloom::core::RationalTime::fromInteger(2)}}};
+        return result;
+    }
+};
+
+void testEvaluationSnapshotTimeIndexedProvenance(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Time Indexed Provenance");
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    expectations.expect(
+        session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
+        "the provenance fixture has a layer");
+    const auto layerId = session.composition()->graph().layerOutputs().front().layerId;
+    const auto duration = core::RationalTime::fromInteger(10);
+    const auto setLayerRange = [&](const std::int64_t in, const std::int64_t out) {
+        commands::Transaction transaction("Set Range", session.snapshot().revision());
+        transaction.emplace<commands::SetLayerRange>(compositionId, layerId,
+                                                     core::RationalTime::fromInteger(in),
+                                                     core::RationalTime::fromInteger(out));
+        return session.executeTransaction(std::move(transaction));
+    };
+    static_cast<void>(setLayerRange(0, 10));
+
+    const auto initialRevision = session.snapshot().revision();
+    expectations.expect(session.evaluationSnapshotRanges().size() == 1 &&
+                            session.evaluationSnapshotRanges().front().start ==
+                                core::RationalTime{} &&
+                            session.evaluationSnapshotRanges().front().end == duration &&
+                            session.evaluationSnapshot().revision() == initialRevision,
+                        "initial provenance is one full-cover live span");
+
+    // Trim right [0,10) -> [0,4): [0,4) retains, [4,10) advances.
+    expectations.expect(setLayerRange(0, 4).changed(), "trim right publishes");
+    const auto trimRevision = session.snapshot().revision();
+    const auto afterTrim = session.evaluationSnapshotRanges();
+    expectations.expect(afterTrim.size() == 2 && afterTrim[0].start == core::RationalTime{} &&
+                            afterTrim[0].end == core::RationalTime::fromInteger(4) &&
+                            afterTrim[0].snapshot.revision() == initialRevision &&
+                            afterTrim[1].start == core::RationalTime::fromInteger(4) &&
+                            afterTrim[1].end == duration &&
+                            afterTrim[1].snapshot.revision() == trimRevision,
+                        "trim retains the old span and advances the changed span");
+    expectations.expect(
+        session.evaluationSnapshotForTime(core::RationalTime::fromInteger(1)).revision() ==
+                initialRevision &&
+            session.evaluationSnapshotForTime(core::RationalTime::fromInteger(5)).revision() ==
+                trimRevision &&
+            session.evaluationSnapshotForTime(duration).revision() == trimRevision &&
+            session.evaluationSnapshotForTime(core::RationalTime::fromInteger(-1)).revision() ==
+                trimRevision,
+        "for-time provenance is correct inside, at the boundary, and outside");
+    expectations.expect(session.evaluationSnapshot().revision() == trimRevision,
+                        "the compatibility accessor is conservative when provenance is mixed");
+
+    // Extend [0,4) -> [0,7): [4,7) advances; three genuine revisions are retained.
+    expectations.expect(setLayerRange(0, 7).changed(), "extend publishes");
+    const auto extendRevision = session.snapshot().revision();
+    const auto afterExtend = session.evaluationSnapshotRanges();
+    expectations.expect(afterExtend.size() == 3 &&
+                            afterExtend[1].start == core::RationalTime::fromInteger(4) &&
+                            afterExtend[1].end == core::RationalTime::fromInteger(7) &&
+                            afterExtend[1].snapshot.revision() == extendRevision &&
+                            afterExtend[2].snapshot.revision() == trimRevision,
+                        "extend retains several genuine revisions");
+
+    // Undo/redo replay the symmetric stored footprint and only advance the changed range.
+    expectations.expect(session.undo(), "undo publishes");
+    const auto undoRevision = session.snapshot().revision();
+    const auto afterUndo = session.evaluationSnapshotRanges();
+    expectations.expect(afterUndo.size() == 3 &&
+                            afterUndo[0].snapshot.revision() == initialRevision &&
+                            afterUndo[1].snapshot.revision() == undoRevision &&
+                            afterUndo[2].snapshot.revision() == trimRevision,
+                        "undo advances only the changed range");
+    expectations.expect(session.redo(), "redo publishes");
+    expectations.expect(session.evaluationSnapshotRanges().size() == 3,
+                        "redo restores the three genuine spans");
+
+    // A neutral work-area edit preserves every span owner exactly.
+    const auto beforeNeutral = session.evaluationSnapshotRanges();
+    commands::Transaction neutral("Work Area", session.snapshot().revision());
+    neutral.emplace<commands::SetWorkArea>(compositionId, core::RationalTime::fromInteger(1),
+                                           core::RationalTime::fromInteger(5));
+    expectations.expect(session.executeTransaction(std::move(neutral)).changed(),
+                        "a neutral edit publishes");
+    const auto afterNeutral = session.evaluationSnapshotRanges();
+    expectations.expect(afterNeutral.size() == beforeNeutral.size(),
+                        "a neutral edit preserves the provenance shape");
+    for (std::size_t index = 0; index < afterNeutral.size(); ++index) {
+        expectations.expect(afterNeutral[index].start == beforeNeutral[index].start &&
+                                afterNeutral[index].end == beforeNeutral[index].end &&
+                                afterNeutral[index].snapshot.revision() ==
+                                    beforeNeutral[index].snapshot.revision() &&
+                                &afterNeutral[index].snapshot.project() ==
+                                    &beforeNeutral[index].snapshot.project(),
+                            "a neutral edit preserves every span owner");
+    }
+
+    // A whole pixel edit resets all provenance to the live snapshot.
+    commands::Transaction whole("Disable layer", session.snapshot().revision());
+    whole.emplace<commands::SetLayerEnabled>(compositionId, layerId, false);
+    expectations.expect(session.executeTransaction(std::move(whole)).changed() &&
+                            session.evaluationSnapshotRanges().size() == 1 &&
+                            session.evaluationSnapshotRanges().front().snapshot.revision() ==
+                                session.snapshot().revision(),
+                        "a whole pixel edit resets provenance to live");
+
+    // A finite footprint with two disjoint intervals over the new live base.
+    {
+        commands::Transaction transaction("Two spans", session.snapshot().revision());
+        commands::AffectedTimeFootprint footprint;
+        footprint.compositionId = compositionId;
+        footprint.intervals = {
+            {core::RationalTime::fromInteger(0), core::RationalTime::fromInteger(2)},
+            {core::RationalTime::fromInteger(7), core::RationalTime::fromInteger(9)}};
+        transaction.emplace<SessionFootprintOp>(footprint);
+        const auto liveRevision = session.snapshot().revision();
+        expectations.expect(session.executeTransaction(std::move(transaction)).changed(),
+                            "a two-interval footprint publishes");
+        const auto ranges = session.evaluationSnapshotRanges();
+        expectations.expect(
+            ranges.size() == 4 &&
+                session.evaluationSnapshotForTime(core::RationalTime::fromInteger(3)).revision() ==
+                    liveRevision &&
+                session.evaluationSnapshotForTime(core::RationalTime::fromInteger(0)).revision() !=
+                    liveRevision,
+            "a two-interval footprint retains the gaps and advances both ranges");
+    }
+    // A footprint scoped to another composition resets to whole live.
+    commands::Transaction foreign("Foreign footprint", session.snapshot().revision());
+    foreign.emplace<ForeignFootprintOp>();
+    expectations.expect(session.executeTransaction(std::move(foreign)).changed() &&
+                            session.evaluationSnapshotRanges().size() == 1,
+                        "a foreign-composition footprint resets to whole live");
+}
+
+void testEvaluationSnapshotRebindAndSwitch(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Provenance Rebind");
+    const auto firstCompositionId = newProject.initialCompositionId;
+    const auto secondCompositionId = document::CompositionId::fromRaw(2);
+    expectations.expect(newProject.project.addComposition(makeSecondComposition()),
+                        "the switch fixture adds a second composition");
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, firstCompositionId);
+    expectations.expect(
+        session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
+        "the rebind fixture has a layer");
+    const auto layerId = session.composition()->graph().layerOutputs().front().layerId;
+    commands::Transaction trim("Set Range", session.snapshot().revision());
+    trim.emplace<commands::SetLayerRange>(firstCompositionId, layerId, core::RationalTime{},
+                                          core::RationalTime::fromInteger(4));
+    expectations.expect(session.executeTransaction(std::move(trim)).changed() &&
+                            session.evaluationSnapshotRanges().size() == 2,
+                        "the first composition has mixed provenance");
+    const auto firstProjectAddress = &session.snapshot().project();
+
+    expectations.expect(session.setComposition(secondCompositionId), "composition switch");
+    const auto switched = session.evaluationSnapshotRanges();
+    expectations.expect(switched.size() == 1 && switched.front().start == core::RationalTime{} &&
+                            switched.front().end == core::RationalTime::fromInteger(10) &&
+                            switched.front().snapshot.revision() == session.snapshot().revision(),
+                        "a composition switch resets provenance to the new composition live");
+
+    // Rebind to a different document with the same numeric ProjectId/CompositionId/revision.
+    auto secondProject = makeTestProject("Provenance Rebind");
+    const auto secondInitialCompositionId = secondProject.initialCompositionId;
+    document::Document secondDocument(std::move(secondProject.project));
+    commands::CommandStack secondCommands(secondDocument);
+    const auto secondRevision = secondDocument.snapshot().revision();
+    session.rebind(secondDocument, secondCommands, secondInitialCompositionId);
+    const auto rebound = session.evaluationSnapshotRanges();
+    expectations.expect(
+        rebound.size() == 1 && rebound.front().snapshot.revision() == secondRevision &&
+            &rebound.front().snapshot.project() != firstProjectAddress &&
+            &rebound.front().snapshot.project() == &secondDocument.snapshot().project(),
+        "rebind adopts the new document and never reuses colliding numeric IDs");
+}
+
+void testEvaluationSnapshotCapFallback(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Provenance Cap");
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    bool grew = false;
+    bool resetObserved = false;
+    std::size_t previous = session.evaluationSnapshotRanges().size();
+    for (int edit = 0; edit < 10; ++edit) {
+        commands::AffectedTimeFootprint footprint;
+        footprint.compositionId = compositionId;
+        for (int index = 0; index < 8; ++index) {
+            const auto start = core::RationalTime::create(index * 100 + edit * 8, 1000);
+            const auto end = core::RationalTime::create(index * 100 + edit * 8 + 1, 1000);
+            expectations.expect(start.has_value() && end.has_value(),
+                                "the cap fixture times are valid");
+            if (!start.has_value() || !end.has_value())
+                return;
+            footprint.intervals.push_back({*start, *end});
+        }
+        commands::Transaction transaction("Footprint sweep", session.snapshot().revision());
+        transaction.emplace<SessionFootprintOp>(footprint);
+        expectations.expect(session.executeTransaction(std::move(transaction)).changed(),
+                            "a multi-interval footprint edit publishes");
+        const auto size = session.evaluationSnapshotRanges().size();
+        if (size > previous)
+            grew = true;
+        if (previous > 1 && size == 1)
+            resetObserved = true;
+        expectations.expect(size <= ui::CompositionSession::kMaxEvaluationSnapshotRanges,
+                            "the range count never exceeds the cap");
+        previous = size;
+    }
+    expectations.expect(grew, "the provenance grew before the cap was reached");
+    expectations.expect(resetObserved, "the cap deterministically falls back to full live");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1790,6 +2041,9 @@ int main(int argc, char** argv) {
         testRebindWithCollidingIdentitiesRendersNewPixels(expectations);
         testRebindInFlightFrameCannotPublishOldPixels(expectations);
         testWorkAreaEditDoesNotRefreshOrResurrect(expectations);
+        testEvaluationSnapshotTimeIndexedProvenance(expectations);
+        testEvaluationSnapshotRebindAndSwitch(expectations);
+        testEvaluationSnapshotCapFallback(expectations);
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return 1;

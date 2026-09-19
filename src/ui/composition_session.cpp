@@ -8,6 +8,7 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/result.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/core/utf8.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
@@ -329,11 +330,13 @@ CompositionSession::CompositionSession(document::Document& document,
     : QObject(parent),
       colorSettings_(document::makeBloomNeutralColorSettingsV1(color::kBloomNeutralV1ConfigDigest)),
       document_(&document), commandStack_(&commandStack), snapshot_(document.snapshot()),
-      evaluationSnapshot_(snapshot_), compositionId_(compositionId) {
+      compositionId_(compositionId) {
     attachCommandObserver();
     if (composition() == nullptr && !snapshot_.project().compositions().empty()) {
         compositionId_ = lowestCompositionId(snapshot_.project());
     }
+    // One full-cover live span, the conservative starting provenance.
+    static_cast<void>(resetEvaluationRangesToLive());
 }
 
 CompositionSession::~CompositionSession() {
@@ -373,10 +376,11 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
     commandObserverId_ = 0;
     attachCommandObserver();
     snapshot_ = document_->snapshot();
-    // Reset the retained evaluation snapshot to the newly bound document BEFORE any signal is
-    // published, so no observer can ever pair a new document with the old document's eval state.
-    evaluationSnapshot_ = snapshot_;
+    // Reset the time-indexed evaluation provenance to the newly bound document BEFORE any signal is
+    // published, so no observer can pair a new document with the old document's eval state, and a
+    // same-numeric-ID document can never reuse it.
     compositionId_ = compositionId;
+    static_cast<void>(resetEvaluationRangesToLive());
     currentTime_ = core::RationalTime::fromInteger(0);
     selection_ = {};
     keyframeClipboard_.clear();
@@ -402,8 +406,142 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
 
 const document::Snapshot& CompositionSession::snapshot() const noexcept { return snapshot_; }
 
+namespace {
+// Two snapshots share an "actual snapshot owner" exactly when they are copies of one document
+// state at one revision. `project()` lives inside that shared state, so its address identifies the
+// owner while either snapshot retains it -- the same provenance rule the compiled-plan cache uses.
+[[nodiscard]] bool sameSnapshotOwner(const document::Snapshot& left,
+                                     const document::Snapshot& right) noexcept {
+    return left.revision() == right.revision() && &left.project() == &right.project();
+}
+} // namespace
+
 const document::Snapshot& CompositionSession::evaluationSnapshot() const noexcept {
-    return evaluationSnapshot_;
+    // Compatibility accessor (TEMPORAL-2A): a single snapshot can only represent the whole
+    // composition when every time-indexed span already names the same genuine snapshot. When the
+    // provenance is mixed -- a finite edit retained one range and advanced another -- a whole-
+    // render consumer must be conservative and see the live snapshot. The next slice replaces this
+    // accessor with evaluationSnapshotForTime() in every consumer.
+    if (evaluationRanges_.empty())
+        return snapshot_;
+    const auto& first = evaluationRanges_.front().snapshot;
+    for (const auto& range : evaluationRanges_) {
+        if (!sameSnapshotOwner(range.snapshot, first))
+            return snapshot_;
+    }
+    return first;
+}
+
+bool CompositionSession::evaluationTimeBaseUsable() const noexcept {
+    const auto* current = composition();
+    if (current == nullptr || current->duration() <= core::RationalTime{})
+        return false;
+    const auto rate = current->format().frameRate();
+    return core::FrameTimeMapping::create(current->duration(), rate.numerator(), rate.denominator())
+        .hasValue();
+}
+
+bool CompositionSession::resetEvaluationRangesToLive() {
+    std::vector<EvaluationSnapshotRange> next;
+    const auto* current = composition();
+    const auto duration = current == nullptr ? core::RationalTime{} : current->duration();
+    next.push_back({core::RationalTime{}, duration, snapshot_});
+    const bool changed = evaluationRanges_.size() != next.size() || evaluationRanges_.empty() ||
+                         !(evaluationRanges_.front().start == next.front().start &&
+                           evaluationRanges_.front().end == next.front().end &&
+                           sameSnapshotOwner(evaluationRanges_.front().snapshot, snapshot_));
+    evaluationRanges_ = std::move(next);
+    return changed;
+}
+
+bool CompositionSession::applyFiniteEvaluationFootprint(
+    const commands::AffectedTimeFootprint& footprint, bool& trustworthy) {
+    trustworthy = false;
+    const auto* current = composition();
+    if (current == nullptr || !evaluationTimeBaseUsable() ||
+        footprint.compositionId != compositionId_) {
+        // A footprint for another composition is conservatively treated as whole-render: proving a
+        // nested/transitive dependency absent is a separate concern this slice does not add.
+        return false;
+    }
+    const auto duration = current->duration();
+    for (const auto& interval : footprint.intervals) {
+        if (interval.start < core::RationalTime{} || interval.start >= interval.end ||
+            interval.end > duration) {
+            return false;
+        }
+    }
+    std::vector<core::RationalTime> points{core::RationalTime{}};
+    for (const auto& range : evaluationRanges_) {
+        points.push_back(range.start);
+        points.push_back(range.end);
+    }
+    for (const auto& interval : footprint.intervals) {
+        points.push_back(interval.start);
+        points.push_back(interval.end);
+    }
+    std::ranges::sort(points);
+    points.erase(std::unique(points.begin(), points.end()), points.end());
+    const auto snapshotAt = [this](const core::RationalTime time) -> const document::Snapshot& {
+        for (const auto& range : evaluationRanges_) {
+            if (time >= range.start && time < range.end)
+                return range.snapshot;
+        }
+        return snapshot_;
+    };
+    std::vector<EvaluationSnapshotRange> next;
+    for (std::size_t index = 0; index + 1 < points.size(); ++index) {
+        const auto start = points[index];
+        const auto end = points[index + 1];
+        if (start >= end)
+            continue;
+        const bool affected = std::ranges::any_of(
+            footprint.intervals, [&](const commands::AffectedTimeRange& interval) {
+                return interval.start <= start && start < interval.end;
+            });
+        const auto& source = affected ? snapshot_ : snapshotAt(start);
+        if (!next.empty() && next.back().end == start &&
+            sameSnapshotOwner(next.back().snapshot, source)) {
+            next.back().end = end;
+            continue;
+        }
+        next.push_back({start, end, source});
+        if (next.size() > kMaxEvaluationSnapshotRanges) {
+            // Conservative full-live reset at the cap.
+            return false;
+        }
+    }
+    trustworthy = true;
+    const bool changed =
+        next.size() != evaluationRanges_.size() ||
+        !std::ranges::equal(
+            next, evaluationRanges_,
+            [](const EvaluationSnapshotRange& left, const EvaluationSnapshotRange& right) {
+                return left.start == right.start && left.end == right.end &&
+                       sameSnapshotOwner(left.snapshot, right.snapshot);
+            });
+    evaluationRanges_ = std::move(next);
+    return changed;
+}
+
+const document::Snapshot&
+CompositionSession::evaluationSnapshotForTime(const core::RationalTime time) const noexcept {
+    const auto* current = composition();
+    const auto duration = current == nullptr ? core::RationalTime{} : current->duration();
+    if (time >= core::RationalTime{} && time < duration && current != nullptr) {
+        for (const auto& range : evaluationRanges_) {
+            if (time >= range.start && time < range.end)
+                return range.snapshot;
+        }
+    }
+    // Outside [0, duration), or a gap that cannot exist in a full cover: current live snapshot
+    // conservatively.
+    return snapshot_;
+}
+
+std::vector<CompositionSession::EvaluationSnapshotRange>
+CompositionSession::evaluationSnapshotRanges() const {
+    return evaluationRanges_;
 }
 
 document::CompositionId CompositionSession::compositionId() const noexcept {
@@ -428,12 +566,15 @@ bool CompositionSession::setComposition(const document::CompositionId compositio
         return false;
     }
 
-    // A composition switch cancels any active interaction (docs/architecture/animation-and-time.md,
-    // "Direct Manipulation And Preview Overrides"): its frozen target/mapping belong to the OLD
-    // composition.
+    // A composition switch resets the time-indexed provenance to the new composition's live
+    // snapshot BEFORE any cancellation signal, so a handler never pairs the new composition with
+    // the old composition's retained snapshots. It then cancels any active interaction
+    // (docs/architecture/animation-and-time.md, "Direct Manipulation And Preview Overrides"): its
+    // frozen target/mapping belong to the OLD composition.
+    compositionId_ = compositionId;
+    static_cast<void>(resetEvaluationRangesToLive());
     cancelValueEdit();
     cancelTransformInteraction();
-    compositionId_ = compositionId;
     const bool timeChanged = currentTime_ != core::RationalTime::fromInteger(0);
     currentTime_ = core::RationalTime::fromInteger(0);
     const bool hadSelection = selection_.primary.index() != 0;
@@ -1491,22 +1632,30 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
         snapshot_ = document_->snapshot();
         const bool rangeChanged = workArea() != previousWorkArea;
         const bool revisionAdvanced = snapshot_.revision() != previousRevision;
-        // Retain the last genuine evaluation snapshot only when this command proved, from its own
-        // published metadata, that it changed no rendered pixel and sat exactly on the live
-        // revision chain of the same project. Every other case -- an unclassified or
-        // render-affecting command, a stale/external revision, a different project -- advances the
-        // evaluation snapshot to live, which is the conservative choice.
-        const bool retainEvaluationSnapshot =
-            revisionAdvanced && !event.result.renderAffecting && event.result.succeeded() &&
-            event.result.beforeRevision == previousRevision &&
-            event.result.afterRevision == snapshot_.revision() &&
-            evaluationSnapshot_.project().id() == snapshot_.project().id();
-        // Adopt the new evaluation snapshot BEFORE invalidating interactions or cancelling value
-        // edits: both emit signals whose handlers build a preview request, and a request built
-        // during that window must already see the revision it is allowed to evaluate. This is the
-        // same reason rebind() resets it before publishing.
-        if (revisionAdvanced && !retainEvaluationSnapshot) {
-            evaluationSnapshot_ = snapshot_;
+        // TEMPORAL-2A: update the time-indexed provenance BEFORE invalidating interactions or
+        // cancelling value edits, because both emit signals whose handlers may build a request and
+        // must already see the provenance they are allowed to evaluate.
+        bool provenanceChanged = false;
+        if (revisionAdvanced) {
+            // Trust the evidence only on a contiguous command chain: the operation's own before and
+            // after revisions must match the session's previous and new live revisions. A stale or
+            // external revision, or any mismatch, resets conservatively.
+            const bool chainValid = event.result.succeeded() &&
+                                    event.result.beforeRevision == previousRevision &&
+                                    event.result.afterRevision == snapshot_.revision();
+            if (!chainValid) {
+                provenanceChanged = resetEvaluationRangesToLive();
+            } else if (!event.result.renderAffecting) {
+                // Neutral: preserve every retained span exactly.
+            } else if (event.result.affectedTimes.has_value()) {
+                bool trustworthy = false;
+                const bool changed =
+                    applyFiniteEvaluationFootprint(*event.result.affectedTimes, trustworthy);
+                provenanceChanged = trustworthy ? changed : resetEvaluationRangesToLive();
+            } else {
+                // Whole/unknown/mixed: conservative full-live reset.
+                provenanceChanged = resetEvaluationRangesToLive();
+            }
         }
         invalidateTransformInteractionOnStaleRevision();
         if (valueEdit_ && valueEdit_->revision != snapshot_.revision()) {
@@ -1515,7 +1664,7 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
         if (revisionAdvanced) {
             normalizeSelection();
             emit snapshotChanged();
-            if (!retainEvaluationSnapshot)
+            if (provenanceChanged)
                 emit evaluationChanged();
         }
         // The effective range is compared against the live snapshot before and after the edit, so a
