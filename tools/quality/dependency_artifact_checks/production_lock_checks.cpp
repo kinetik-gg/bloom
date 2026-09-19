@@ -289,8 +289,8 @@ void validateProductionRuntimeFetch(const Value& runtime, const std::string& loc
     verifyProductionArtifactReference(license.at("text"), location + ".license.text", root);
 }
 
-void validateComponentProduction(const Value& value, const std::string& location,
-                                 const Path& root) {
+void validateComponentProduction(const Value& value, const std::string& location, const Path& root,
+                                 const bool buildOnlyLinkage) {
     objectWithOptionalMembers(value,
                               {{"name", false},
                                {"version", false},
@@ -419,7 +419,11 @@ void validateComponentProduction(const Value& value, const std::string& location
                 "shippingRoles", "conformanceFixtureSets"},
                buildLocation);
         identifier(build.at("profileId"), buildLocation + ".profileId");
-        enumString(build.at("linkage"), {"static", "shared"}, buildLocation + ".linkage");
+        const auto& linkage =
+            buildOnlyLinkage
+                ? enumString(build.at("linkage"), {"static", "shared", "header-only", "executable"},
+                             buildLocation + ".linkage")
+                : enumString(build.at("linkage"), {"static", "shared"}, buildLocation + ".linkage");
 
         const auto& options =
             array(build.at("cmakeOptions"), buildLocation + ".cmakeOptions", 8192);
@@ -466,8 +470,12 @@ void validateComponentProduction(const Value& value, const std::string& location
             capabilities, [](const Value& child) { return child.asString(); },
             buildLocation + ".capabilities");
 
+        // Empty shippingRoles is honest only for a non-shipping build-only tool (linkage
+        // executable) and only where the schema version admits that vocabulary. Every other kind
+        // still declares at least one shipped role.
+        const std::size_t minimumRoles = buildOnlyLinkage && linkage == "executable" ? 0 : 1;
         const auto& roles =
-            array(build.at("shippingRoles"), buildLocation + ".shippingRoles", 8, 1);
+            array(build.at("shippingRoles"), buildLocation + ".shippingRoles", 8, minimumRoles);
         for (std::size_t roleIndex = 0; roleIndex < roles.size(); ++roleIndex) {
             enumString(roles[roleIndex],
                        {"library", "executable", "plugin", "data", "cmake-package", "license",
@@ -574,9 +582,15 @@ void validateProductionLockDocument(const Value& value, const Path& root) {
     const auto& version = value.at("schemaVersion");
     object(version, {"major", "minor"}, "$.schemaVersion");
     if (!version.at("major").isNumber() || version.at("major").asNumber().spelling != "1" ||
-        !version.at("minor").isNumber() || version.at("minor").asNumber().spelling != "2") {
-        fail("version", "$.schemaVersion", "expected exact version 1.2");
+        !version.at("minor").isNumber() ||
+        (version.at("minor").asNumber().spelling != "2" &&
+         version.at("minor").asNumber().spelling != "3")) {
+        fail("version", "$.schemaVersion", "expected exact version 1.2 or 1.3");
     }
+    // Minor 3 admits the honest header-only and executable linkage vocabulary; minor 2 remains
+    // frozen to static/shared. The version is read exactly, never inferred, and an unknown minor
+    // is rejected above rather than falling back to a looser contract.
+    const bool buildOnlyLinkage = version.at("minor").asNumber().spelling == "3";
 
     validateProductionUnicodeProfile(value.at("unicodeProfile"));
 
@@ -590,7 +604,8 @@ void validateProductionLockDocument(const Value& value, const Path& root) {
     const auto& components = array(value.at("components"), "$.components", 4096, 1);
     for (std::size_t index = 0; index < components.size(); ++index) {
         validateComponentProduction(components[index],
-                                    "$.components[" + std::to_string(index) + ']', root);
+                                    "$.components[" + std::to_string(index) + ']', root,
+                                    buildOnlyLinkage);
     }
     requireOrdered(
         components, [](const Value& child) { return child.at("name").asString(); }, "$.components");

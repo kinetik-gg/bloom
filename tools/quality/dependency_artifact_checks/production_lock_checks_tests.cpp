@@ -384,6 +384,70 @@ void testCrossReferencesAndSets(const Path& repositoryRoot, Expectations& expect
                         "ordered sets remain duplicate-free");
 }
 
+void testMinorThreeBuildOnlyLinkage(const Path& repositoryRoot, Expectations& expectations) {
+    const ProductionFixture fixture(repositoryRoot);
+
+    auto headerOnly = minimalProductionLock();
+    replace(headerOnly.at("schemaVersion"), "minor", number(3));
+    auto& headerBuild =
+        headerOnly.at("components").asArray().front().at("profileBuilds").asArray().front();
+    replace(headerBuild, "linkage", text("header-only"));
+    replace(headerBuild, "shippingRoles", array({text("cmake-package")}));
+    fixture.temporary.write("dependencies/dependencies.lock.json",
+                            dependency::encodeCanonical(headerOnly));
+    const auto acceptedHeaderOnly = dependency::validateProductionLock(fixture.temporary.root());
+    expectations.expect(acceptedHeaderOnly.present,
+                        "minor 3 accepts header-only linkage with a declared shipping role");
+
+    auto executable = minimalProductionLock();
+    replace(executable.at("schemaVersion"), "minor", number(3));
+    auto& toolBuild =
+        executable.at("components").asArray().front().at("profileBuilds").asArray().front();
+    replace(toolBuild, "linkage", text("executable"));
+    replace(toolBuild, "shippingRoles", array({}));
+    fixture.temporary.write("dependencies/dependencies.lock.json",
+                            dependency::encodeCanonical(executable));
+    const auto acceptedExecutable = dependency::validateProductionLock(fixture.temporary.root());
+    expectations.expect(acceptedExecutable.present,
+                        "minor 3 accepts a build-only executable with empty shipping roles");
+
+    auto headerOnlyAt12 = headerOnly;
+    replace(headerOnlyAt12.at("schemaVersion"), "minor", number(2));
+    fixture.rejectsWith(headerOnlyAt12, "enum", expectations,
+                        "minor 2 rejects header-only linkage");
+
+    auto executableAt12 = executable;
+    replace(executableAt12.at("schemaVersion"), "minor", number(2));
+    fixture.rejectsWith(executableAt12, "enum", expectations, "minor 2 rejects executable linkage");
+
+    auto emptyNonExecutable = minimalProductionLock();
+    replace(emptyNonExecutable.at("schemaVersion"), "minor", number(3));
+    auto& emptyBuild =
+        emptyNonExecutable.at("components").asArray().front().at("profileBuilds").asArray().front();
+    replace(emptyBuild, "linkage", text("header-only"));
+    replace(emptyBuild, "shippingRoles", array({}));
+    fixture.rejectsWith(emptyNonExecutable, "count", expectations,
+                        "minor 3 requires a shipping role for every non-executable linkage");
+
+    auto emptyAt12 = minimalProductionLock();
+    replace(emptyAt12.at("components").asArray().front().at("profileBuilds").asArray().front(),
+            "shippingRoles", array({}));
+    fixture.rejectsWith(emptyAt12, "count", expectations,
+                        "minor 2 rejects empty shipping roles for static linkage");
+
+    auto unknownLinkage = minimalProductionLock();
+    replace(unknownLinkage.at("schemaVersion"), "minor", number(3));
+    replace(unknownLinkage.at("components").asArray().front().at("profileBuilds").asArray().front(),
+            "linkage", text("dynamic"));
+    fixture.rejectsWith(unknownLinkage, "enum", expectations,
+                        "minor 3 rejects an unknown linkage kind");
+
+    auto unknownMinor = minimalProductionLock();
+    replace(unknownMinor.at("schemaVersion"), "minor", number(4));
+    fixture.rejectsWith(unknownMinor, "version", expectations,
+                        "an unknown schema minor is rejected rather than loosened");
+}
+
 } // namespace
 
 namespace bloom::quality::dependencies::tests {
@@ -398,6 +462,7 @@ auto runProductionLockTests(const std::filesystem::path& repositoryRoot) -> int 
     testArtifactReferenceDigests(repositoryRoot, expectations);
     testPatchRules(repositoryRoot, expectations);
     testCrossReferencesAndSets(repositoryRoot, expectations);
+    testMinorThreeBuildOnlyLinkage(repositoryRoot, expectations);
     return expectations.failures();
 }
 

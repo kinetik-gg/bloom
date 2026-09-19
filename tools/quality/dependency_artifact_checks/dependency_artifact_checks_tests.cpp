@@ -163,6 +163,25 @@ void testSchemaArtifacts(const Fixture& fixture, Expectations& expectations) {
                                     .asNumber()
                                     .spelling == "1",
                         "minor lock schema records the 1.1 version and accepts optional members");
+    auto lockSchema13 = dependency::loadSchemaArtifact(
+        fixture.root / "dependencies/schemas/dependency-lock-1.3.schema.json");
+    dependency::validateSchemaArtifact(lockSchema13.value, dependency::ArtifactKind::LockV1_3);
+    const auto& linkageEnum = lockSchema13.value.at("$defs")
+                                  .at("profileBuild")
+                                  .at("properties")
+                                  .at("linkage")
+                                  .at("enum")
+                                  .asArray();
+    expectations.expect(lockSchema13.value.at("title").asString() == "Bloom Dependency Lock 1.3" &&
+                            lockSchema13.value.at("$defs")
+                                    .at("fixedVersion")
+                                    .at("properties")
+                                    .at("minor")
+                                    .at("const")
+                                    .asNumber()
+                                    .spelling == "3" &&
+                            linkageEnum.size() == 4,
+                        "minor 3 schema records the version and the extended linkage vocabulary");
     auto lockSchema = dependency::loadSchemaArtifact(
         fixture.root / "dependencies/schemas/dependency-lock-1.0.schema.json");
     replace(lockSchema.value.at("properties").at("schemaVersion"), "$ref", number(7));

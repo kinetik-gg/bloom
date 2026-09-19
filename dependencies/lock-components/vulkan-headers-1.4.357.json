@@ -1,0 +1,83 @@
+{
+  "name": "vulkan-headers",
+  "version": "1.4.357.0",
+  "source": {
+    "url": "https://codeload.github.com/KhronosGroup/Vulkan-Headers/tar.gz/refs/tags/vulkan-sdk-1.4.357.0",
+    "archiveSha256": "sha256:e87dce08116151f6b6d7de6b6faf41498e87e6cf848ff16fa3bd5402190ad4a3",
+    "archiveSizeBytes": 3376379,
+    "retrievedAt": "2026-09-19",
+    "commit": "e3b1eec08173d6b825cd3ac88c885a63b621504a",
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/vulkan-headers/provenance.md",
+      "sha256": "sha256:c186b25b02a52bcea8b3d688fbd0ea34249a6c079a91be8367ec67dd0f1016f4"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "Apache-2.0 OR MIT",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/vulkan-headers/Apache-2.0.txt",
+        "sha256": "sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "path": "dependencies/licenses/vulkan-headers/LICENSE.md",
+        "sha256": "sha256:95ad366d23fadf701d355bc45fb8b82ae2d700239471d35d41286ac3b08ff903"
+      },
+      {
+        "path": "dependencies/licenses/vulkan-headers/MIT.txt",
+        "sha256": "sha256:1ca3502222d967f3be5751c55f6b7ee735b5383909c3b501495f54b216dbf227"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/vulkan-headers/review.md",
+      "sha256": "sha256:0b556af415fb6fafd14a346b0e49ef986fda58b3af6511eec671c294be15d29f"
+    },
+    "reviewedAt": "2026-09-19"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [
+    {
+      "profileId": "bloom.linux-x86-64-clang-release",
+      "linkage": "header-only",
+      "cmakeOptions": [
+        {
+          "name": "VULKAN_HEADERS_ENABLE_INSTALL",
+          "value": "ON"
+        },
+        {
+          "name": "VULKAN_HEADERS_ENABLE_MODULE",
+          "value": "OFF"
+        },
+        {
+          "name": "VULKAN_HEADERS_ENABLE_TESTS",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.vulkan-headers"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "data",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    }
+  ],
+  "securityReview": {
+    "reviewedAt": "2026-09-19",
+    "record": {
+      "path": "dependencies/licenses/vulkan-headers/security.md",
+      "sha256": "sha256:9d8030a84b8fe1d520962e29c3373acc6681416f510d2fc5e465559e15633f50"
+    },
+    "vulnerabilities": []
+  }
+}
