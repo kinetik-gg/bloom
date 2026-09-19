@@ -82,7 +82,7 @@ struct ApplicationPreferences final {
 
     // Viewer.
     ViewerResolutionPreference viewerResolution = ViewerResolutionPreference::Auto;
-    ViewerBackgroundPreference viewerBackground = ViewerBackgroundPreference::Solid;
+    ViewerBackgroundPreference viewerBackground = ViewerBackgroundPreference::Checkerboard;
     bool viewerSafeAreas = false;
     bool viewerCentreCross = false;
     bool viewerThirds = false;

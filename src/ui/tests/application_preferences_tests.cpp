@@ -100,8 +100,8 @@ void testInvalidValuesFallBack(Expectations& check) {
                  "an unrecognized link style reads as Spline");
     check.expect(loaded.viewerResolution == ui::ViewerResolutionPreference::Auto,
                  "an unrecognized resolution reads as Auto");
-    check.expect(loaded.viewerBackground == ui::ViewerBackgroundPreference::Solid,
-                 "an unrecognized background reads as Solid");
+    check.expect(loaded.viewerBackground == ui::ViewerBackgroundPreference::Checkerboard,
+                 "an unrecognized background reads as Checkerboard");
     check.expect(loaded.nodeGridSize == 16.0, "an unparseable grid size reads as 16");
     check.expect(loaded.operationCacheBytes == 0,
                  "an unparseable operation-cache budget reads as the default");

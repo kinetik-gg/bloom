@@ -474,7 +474,7 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider, public P
     QAction* stepToEndAction_ = nullptr;
     QMetaObject::Connection focusConnection_;
     ViewerChannel channel_ = ViewerChannel::Rgba;
-    ViewerBackground background_ = ViewerBackground::Solid;
+    ViewerBackground background_ = ViewerBackground::Checkerboard;
     // The channel remap's one cached result. Keyed on the FRAME HANDLE (held by value, so the
     // bytes it was built from cannot be freed and a later frame cannot reuse the address) plus the
     // channel, so a repaint at an unchanged channel and frame costs nothing and playback does not

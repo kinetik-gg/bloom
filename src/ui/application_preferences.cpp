@@ -134,7 +134,10 @@ void writeByteBudget(QSettings& settings, const char* const key, const std::uint
         return ViewerBackgroundPreference::Black;
     if (value == QLatin1StringView("White"))
         return ViewerBackgroundPreference::White;
-    return ViewerBackgroundPreference::Solid;
+    if (value == QLatin1StringView("Solid"))
+        return ViewerBackgroundPreference::Solid;
+    // An unrecognized spelling reads as the default, which is Checkerboard.
+    return ViewerBackgroundPreference::Checkerboard;
 }
 
 } // namespace
@@ -169,7 +172,8 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
     preferences.viewerResolution = viewerResolutionFromString(
         settings.value(QLatin1String(kViewerResolutionKey), QStringLiteral("Auto")).toString());
     preferences.viewerBackground = viewerBackgroundFromString(
-        settings.value(QLatin1String(kViewerBackgroundKey), QStringLiteral("Solid")).toString());
+        settings.value(QLatin1String(kViewerBackgroundKey), QStringLiteral("Checkerboard"))
+            .toString());
     preferences.viewerSafeAreas =
         settings.value(QLatin1String(kViewerSafeAreasKey), false).toBool();
     preferences.viewerCentreCross =

@@ -1214,8 +1214,8 @@ void testChannelDropdownRemapsOnlyThePresentedImage(Expectations& expectations) 
     reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
 }
 
-// The background dropdown chooses what the canvas surround is, defaults to Solid, and persists the
-// choice under "viewer/background".
+// The background dropdown chooses what the canvas surround is, defaults to Checkerboard, and
+// persists the choice under "viewer/background".
 void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectations) {
     using namespace bloom;
     QSettings().remove("viewer/background");
@@ -1227,9 +1227,10 @@ void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectati
         auto* background =
             fixture.viewer.findChild<ui::kit::KDropdown*>("viewerBackgroundDropdown");
         expectations.expect(background != nullptr && background->count() == 4 &&
-                                background->currentText() == QStringLiteral("Solid") &&
-                                fixture.viewer.backgroundForTest() == ui::ViewerBackground::Solid,
-                            "the footer offers four backgrounds and defaults to Solid");
+                                background->currentText() == QStringLiteral("Checkerboard") &&
+                                fixture.viewer.backgroundForTest() ==
+                                    ui::ViewerBackground::Checkerboard,
+                            "the footer offers four backgrounds and defaults to Checkerboard");
         if (background == nullptr) {
             reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
             return;
@@ -1242,7 +1243,12 @@ void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectati
             return fixture.viewer.grab().toImage().pixelColor(
                 fixture.viewer.canvasRectForTest().topLeft().toPoint() + QPoint(2, 2));
         };
-        expectations.expect(corner() == QColor(Qt::black), "Solid defaults to opaque black");
+        // Choose Solid explicitly: it paints the panel's own background token, so the surround
+        // blends with the panel chrome, and it is deliberately not the composition's black.
+        background->setCurrentIndex(0); // Solid
+        QCoreApplication::processEvents();
+        const QColor panelBackground = ui::kit::color(ui::kit::Color::Canvas);
+        expectations.expect(corner() == panelBackground, "Solid paints the panel background token");
         commands::Transaction backgroundEdit("Background", fixture.session.snapshot().revision());
         backgroundEdit.emplace<commands::SetCompositionBackgroundColor>(
             fixture.session.compositionId(), core::Color4d{0.2, 0.4, 0.6, 1.0});
@@ -1250,8 +1256,8 @@ void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectati
             fixture.session.executeTransaction(std::move(backgroundEdit)).succeeded(),
             "authored background edit commits");
         QCoreApplication::processEvents();
-        expectations.expect(corner() == QColor(51, 102, 153),
-                            "Solid paints the authored composition colour");
+        expectations.expect(corner() == panelBackground,
+                            "Solid ignores the authored composition background");
         background->setCurrentIndex(2); // Black
         QCoreApplication::processEvents();
         expectations.expect(fixture.viewer.backgroundForTest() == ui::ViewerBackground::Black &&
@@ -1285,8 +1291,9 @@ void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectati
     QSettings().setValue("viewer/background", QStringLiteral("nonsense"));
     {
         ViewerFixture invalid(makeTestProject("Background Fallback Test"));
-        expectations.expect(invalid.viewer.backgroundForTest() == ui::ViewerBackground::Solid,
-                            "an unrecognized saved background falls back to Solid");
+        expectations.expect(invalid.viewer.backgroundForTest() ==
+                                ui::ViewerBackground::Checkerboard,
+                            "an unrecognized saved background falls back to Checkerboard");
         reachQuiescence(invalid.controller, invalid.bridge, invalid.scheduler, expectations);
     }
     QSettings().remove("viewer/background");

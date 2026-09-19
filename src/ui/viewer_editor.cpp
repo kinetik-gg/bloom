@@ -363,9 +363,11 @@ void drawCheckerboard(QPainter& painter, const QRectF& bounds) {
 // The canvas surround (task VIEW-1), chosen by the footer's Background dropdown and persisted under
 // "viewer/background". Black and White are literal, because that is exactly what an artist asks for
 // when checking edges against a known value -- a token would be a different, softer colour and
-// would defeat the purpose of the choice. Solid reads the authored composition background.
+// would defeat the purpose of the choice. Solid paints the panel's own background token, so the
+// surround blends with the panel chrome rather than reading as a separate black rectangle; literal
+// black is the Black choice.
 void drawCanvasBackground(QPainter& painter, const QRectF& bounds,
-                          const ViewerBackground background, const core::Color4d color) {
+                          const ViewerBackground background) {
     switch (background) {
     case ViewerBackground::Checkerboard:
         drawCheckerboard(painter, bounds);
@@ -379,11 +381,7 @@ void drawCanvasBackground(QPainter& painter, const QRectF& bounds,
     case ViewerBackground::Solid:
         break;
     }
-    painter.fillRect(bounds,
-                     QColor::fromRgbF(static_cast<float>(std::clamp(color.red, 0.0, 1.0)),
-                                      static_cast<float>(std::clamp(color.green, 0.0, 1.0)),
-                                      static_cast<float>(std::clamp(color.blue, 0.0, 1.0)),
-                                      static_cast<float>(std::clamp(color.alpha, 0.0, 1.0))));
+    painter.fillRect(bounds, kit::color(kit::Color::Canvas));
 }
 
 } // namespace
@@ -1472,9 +1470,11 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     for (const auto* name : kBackgroundNames) {
         backgroundDropdown_->addItem(tr(name));
     }
+    // The default background is Checkerboard, so alpha behind the composition is always visible. A
+    // missing or unrecognized viewer/background reads as it.
     const auto savedBackground =
-        QSettings().value(kBackgroundSetting, QStringLiteral("Solid")).toString();
-    int backgroundIndex = 0;
+        QSettings().value(kBackgroundSetting, QStringLiteral("Checkerboard")).toString();
+    int backgroundIndex = static_cast<int>(ViewerBackground::Checkerboard);
     for (std::size_t i = 0; i < kBackgroundNames.size(); ++i) {
         if (savedBackground == QLatin1StringView(kBackgroundNames[i])) {
             backgroundIndex = static_cast<int>(i);
@@ -2243,18 +2243,14 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
         // Honest empty state (decision 5): no evaluation warnings, no busywork -- a quiet,
         // product-neutral invitation. Muted ink, Ui type (Value/Geist Mono is reserved for
         // numeric/timecode surfaces, not prose -- kit/tokens.hpp).
-        drawCanvasBackground(painter, surround, background_,
-                             session_.composition() ? session_.composition()->backgroundColor()
-                                                    : core::Color4d{0.0, 0.0, 0.0, 1.0});
+        drawCanvasBackground(painter, surround, background_);
         painter.setFont(kit::font(kit::TypeRole::Ui));
         painter.setPen(kit::color(kit::Color::Muted));
         painter.drawText(frame, Qt::AlignCenter, tr("Create a layer to begin"));
         return;
     }
 
-    drawCanvasBackground(painter, surround, background_,
-                         session_.composition() ? session_.composition()->backgroundColor()
-                                                : core::Color4d{0.0, 0.0, 0.0, 1.0});
+    drawCanvasBackground(painter, surround, background_);
 
     const PreparedPreviewFrameHandle displayedFrame = this->displayedFrame();
     if (displayedFrame != nullptr) {
