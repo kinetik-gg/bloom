@@ -1,11 +1,14 @@
 #pragma once
 
-// Real-video fixtures for the CPU GPU-scene media preparation tests. The fixture files are the
-// generated media-worker fixtures (numbered-h264.mp4, numbered-prores.mov, alpha-prores.mov,
-// integration-prores.mov) supplied by the caller. Each asset is probed with the SAME
-// media::video::VideoDecodeSession (and therefore the same qualified worker) the production
-// evaluator uses, so the tests exercise genuine demux, decode and colour conversion rather than a
-// fake media handle. The probe-to-AssetRecord mapping mirrors commands::ImportAssets.
+// Real-video fixtures for the CPU GPU-scene media preparation tests. The only fixture files read
+// here are the three canonical generated media-worker fixtures (numbered-h264.mp4,
+// numbered-prores.mov, alpha-prores.mov) owned by
+// apps/bloom-media-worker/ffmpeg_provider_fixtures.ipp and supplied by the caller. Files written
+// by sibling tests into the same directory are not fixtures and are never consumed. Each asset is
+// probed with the SAME media::video::VideoDecodeSession (and therefore the same qualified worker)
+// the production evaluator uses, so the tests exercise genuine demux, decode and colour conversion
+// rather than a fake media handle. The probe-to-AssetRecord mapping mirrors
+// commands::ImportAssets.
 
 #include "gpu_scene_preparation_test_support.hpp"
 

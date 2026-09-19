@@ -85,11 +85,14 @@ struct FixtureSpec final {
     std::uint64_t idBase;
 };
 
-constexpr std::array<FixtureSpec, 4> kFixtures{{
+// The only video fixtures owned by the media-worker generator
+// (apps/bloom-media-worker/ffmpeg_provider_fixtures.ipp). No other file in the shared fixture
+// directory is a generated fixture; in particular the sibling video-integration scratch copy is
+// private to that test and mutates mid-run, so it is never assumed here.
+constexpr std::array<FixtureSpec, 3> kFixtures{{
     {"numbered-h264.mp4", 10000},
     {"numbered-prores.mov", 11000},
     {"alpha-prores.mov", 12000},
-    {"integration-prores.mov", 13000},
 }};
 
 // Every real fixture decodes and converts two DISTINCT selected frames, each matching the uncached
