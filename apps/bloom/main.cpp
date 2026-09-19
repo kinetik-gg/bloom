@@ -7,6 +7,7 @@
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/ui/acceleration_status.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/audio_playback_session.hpp>
@@ -261,12 +262,25 @@ int main(int argc, char* argv[]) {
                      applyAudioMix);
     (void)audioPlaybackSession.refresh();
     applyAudioMix();
+    // The Settings window's read-only Performance page reads this; the default provider reports the
+    // CPU reference path because no GPU backend is built here. Declared before the window so it
+    // outlives the borrowed pointer the window holds.
+    bloom::ui::CpuOnlyAccelerationStatus accelerationStatus;
     // Native (server-side) window chrome only (task C1): MainWindow no longer takes a chrome mode
     // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,
                                  frameExportController, &ramPreviewController, &previewController,
                                  nullptr, &playback, cpuEvaluator.operationCache().get(),
-                                 mediaDiskCache.get());
+                                 mediaDiskCache.get(), &accelerationStatus);
+    // Settings the composition root owns take effect immediately: the window has already saved the
+    // value, and these read the same keys back. Cache budgets and the disk cache are startup-read
+    // and deliberately not re-applied here.
+    QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &playback, [&playback] {
+        const QSettings settings;
+        playback.setAudioEnabled(
+            settings.value(QStringLiteral("playback/audio-enabled"), true).toBool());
+        playback.setLooping(settings.value(QStringLiteral("playback/loop"), true).toBool());
+    });
     playback.installWindowShortcut(window);
     QObject::connect(&ramPreviewController, &bloom::ui::RamPreviewController::stateChanged,
                      &playback, [&] {

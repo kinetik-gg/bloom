@@ -1,13 +1,17 @@
+#include "settings_window.hpp"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/main_window.hpp>
+#include <bloom/ui/preferences_aware.hpp>
 #include <memory>
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/host/project_session.hpp>
+#include <bloom/ui/acceleration_status.hpp>
+#include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
@@ -78,11 +82,13 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                        CompositionPreviewController* const previewController, QWidget* parent,
                        PlaybackController* const playbackController,
                        runtime::OperationCache* const operationCache,
-                       media::cache::MediaDiskCache* const mediaDiskCache)
+                       media::cache::MediaDiskCache* const mediaDiskCache,
+                       const AccelerationStatusProvider* const accelerationStatus)
     : QMainWindow(parent), compositionSession_(compositionSession), projectHost_(projectHost),
       frameExportController_(frameExportController), ramPreview_(ramPreview),
       previewController_(previewController), playbackController_(playbackController),
-      operationCache_(operationCache), mediaDiskCache_(mediaDiskCache) {
+      operationCache_(operationCache), mediaDiskCache_(mediaDiskCache),
+      accelerationStatus_(accelerationStatus) {
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
     resize(1600, 1000);
@@ -298,6 +304,18 @@ void MainWindow::createMenus(QMenuBar& menuBar) {
     connect(redoAction_, &QAction::triggered, &compositionSession_, &CompositionSession::redo);
     connect(&compositionSession_, &CompositionSession::historyChanged, this,
             &MainWindow::updateEditActions);
+
+    // Edit | Settings... (macOS routes a PreferencesRole action into the application menu with the
+    // standard shortcut; on Windows and Linux it stays here). This edits global application
+    // preferences; it is deliberately separate from File | Project Settings..., which edits
+    // project truth.
+    editMenu->addSeparator();
+    settingsAction_ = editMenu->addAction(tr("Settings…"));
+    settingsAction_->setObjectName(QStringLiteral("settingsAction"));
+    settingsAction_->setMenuRole(QAction::PreferencesRole);
+    settingsAction_->setShortcut(QKeySequence::Preferences);
+    settingsAction_->setShortcutContext(Qt::WindowShortcut);
+    connect(settingsAction_, &QAction::triggered, this, &MainWindow::showSettings);
 
     compositionMenu_ = menuBar.addMenu("&Composition");
     createCompositionMenu(*compositionMenu_);
@@ -638,6 +656,35 @@ void MainWindow::showProjectColorSettings() {
     if (status == host::ProjectSessionColorSettingsStatus::InvalidSettings)
         QMessageBox::warning(this, tr("Project Settings"),
                              tr("The selected colour configuration could not be resolved."));
+}
+
+void MainWindow::showSettings() {
+    // The window edits a value, not QSettings; the commit path here is the only writer, so a
+    // cancelled dialog leaves the stored preferences untouched.
+    const QSettings currentSettings;
+    SettingsWindow dialog(loadApplicationPreferences(currentSettings), accelerationStatus_, this);
+    connect(&dialog, &SettingsWindow::preferencesApplied, this,
+            [this](const ApplicationPreferences& preferences) {
+                QSettings settings;
+                saveApplicationPreferences(settings, preferences);
+                settings.sync();
+                applyPreferencesToOpenEditors(preferences);
+                emit preferencesChanged();
+            });
+    dialog.exec();
+}
+
+void MainWindow::applyPreferencesToOpenEditors(const ApplicationPreferences& preferences) {
+    // Editors are constructed with only their session and controller, not a preferences reference,
+    // so the window reaches the live ones through the widget tree. A widget that does not implement
+    // PreferencesAware is skipped; new editors built after this point read the saved value at
+    // construction.
+    const auto descendants = findChildren<QWidget*>();
+    for (QWidget* widget : descendants) {
+        if (auto* aware = dynamic_cast<PreferencesAware*>(widget); aware != nullptr) {
+            aware->applyApplicationPreferences(preferences);
+        }
+    }
 }
 
 void MainWindow::updateFileActions() {

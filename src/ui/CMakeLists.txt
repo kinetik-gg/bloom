@@ -449,6 +449,7 @@ target_sources(
             include/bloom/ui/node_editor.hpp
             include/bloom/ui/node_layout_arrange.hpp
             include/bloom/ui/playback_controller.hpp
+            include/bloom/ui/preferences_aware.hpp
             include/bloom/ui/preview_frame_cache.hpp
             include/bloom/ui/project_host.hpp
             include/bloom/ui/ram_preview_controller.hpp

@@ -29,7 +29,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeySequence>
 #include <QLabel>
+#include <QMenu>
 #include <QMenuBar>
 #include <QMouseEvent>
 #include <QObject>
@@ -477,6 +479,39 @@ void testHelpMenuItemsExistAndFire(Expectations& expectations) {
                         "help menu: Open Source Licenses opens a real LicensesWindow");
 }
 
+// The Settings window is opened from Edit | Settings... and carries PreferencesRole, which is how
+// Qt routes it into the macOS application menu with the standard shortcut. Triggering it is not
+// exercised here: it calls QDialog::exec() and would block this test.
+void testSettingsActionIsInTheEditMenuWithPreferencesRole(Expectations& expectations) {
+    bool ok = false;
+    Fixture fixture(&ok);
+    if (!ok) {
+        expectations.expect(false, "settings action: fixture editors registered");
+        return;
+    }
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
+                      fixture.frameExportController);
+
+    auto* settings = window.findChild<QAction*>(QStringLiteral("settingsAction"));
+    expectations.expect(settings != nullptr, "edit menu: a Settings action exists");
+    if (settings == nullptr) {
+        return;
+    }
+    expectations.expect(settings->menuRole() == QAction::PreferencesRole,
+                        "edit menu: Settings carries PreferencesRole so macOS routes it");
+    expectations.expect(settings->shortcut() == QKeySequence(QKeySequence::Preferences),
+                        "edit menu: Settings uses the standard Preferences shortcut");
+
+    QMenu* editMenu = nullptr;
+    for (QAction* action : window.menuBar()->actions()) {
+        if (action->text() == QStringLiteral("&Edit") && action->menu() != nullptr) {
+            editMenu = action->menu();
+        }
+    }
+    expectations.expect(editMenu != nullptr && editMenu->actions().contains(settings),
+                        "edit menu: Settings lives in Edit, not File");
+}
+
 // --- Task VIEW-1: the window status bar --------------------------------------------------------
 
 // A kit strip under the workspace, never QMainWindow's own QStatusBar, and it carries every cell
@@ -724,6 +759,7 @@ int main(int argc, char** argv) {
     testWindowTitleIsJustTheDocumentTitle(expectations);
     testViewMenuItemsExistAndFire(expectations);
     testHelpMenuItemsExistAndFire(expectations);
+    testSettingsActionIsInTheEditMenuWithPreferencesRole(expectations);
     testWindowStatusBarIsAKitStripWithEveryCell(expectations);
     testWindowStatusBarTrimsCachesUnderMemoryPressure(expectations);
     testWindowStatusBarMessagesClearThemselves(expectations);

@@ -22,6 +22,8 @@ class MediaDiskCache;
 
 namespace bloom::ui {
 
+struct ApplicationPreferences;
+class AccelerationStatusProvider;
 class CompositionPreviewController;
 class CompositionSession;
 class EditorRegistry;
@@ -69,13 +71,16 @@ class MainWindow final : public QMainWindow {
     // status bar's disk-cache cell (docs/architecture/media-io.md "Disk cache"). Null leaves the
     // menu item present but reporting "not enabled" rather than absent, matching `ramPreview`'s
     // own null convention above.
+    // `accelerationStatus` feeds the Settings window's read-only Performance page. Null reports the
+    // CPU-only truth. Borrowed and must outlive the window.
     MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
                ProjectHost& projectHost, FrameExportController& frameExportController,
                RamPreviewController* ramPreview = nullptr,
                CompositionPreviewController* previewController = nullptr, QWidget* parent = nullptr,
                PlaybackController* playbackController = nullptr,
                runtime::OperationCache* operationCache = nullptr,
-               media::cache::MediaDiskCache* mediaDiskCache = nullptr);
+               media::cache::MediaDiskCache* mediaDiskCache = nullptr,
+               const AccelerationStatusProvider* accelerationStatus = nullptr);
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);
@@ -95,6 +100,9 @@ class MainWindow final : public QMainWindow {
 
   signals:
     void shutdownRequested();
+    // Emitted after the Settings window commits and persists a new value, so the composition root
+    // can re-apply the preferences it owns (for example the audio engine).
+    void preferencesChanged();
 
   protected:
     void closeEvent(QCloseEvent* event) override;
@@ -120,6 +128,8 @@ class MainWindow final : public QMainWindow {
     void updateCompositionActions();
     void toggleFullScreen();
     void showProjectColorSettings();
+    void showSettings();
+    void applyPreferencesToOpenEditors(const ApplicationPreferences& preferences);
 
     CompositionSession& compositionSession_;
     ProjectHost& projectHost_;
@@ -134,6 +144,8 @@ class MainWindow final : public QMainWindow {
     runtime::OperationCache* operationCache_ = nullptr;
     // Borrowed, may be null; owned by the application composition root.
     media::cache::MediaDiskCache* mediaDiskCache_ = nullptr;
+    // Borrowed, may be null; null means the Performance page reports the CPU-only truth.
+    const AccelerationStatusProvider* accelerationStatus_ = nullptr;
     QMenuBar* menuBar_ = nullptr;
     QMenu* windowMenu_ = nullptr;
     QMenu* viewMenu_ = nullptr;
@@ -152,6 +164,7 @@ class MainWindow final : public QMainWindow {
     QAction* saveProjectAsAction_ = nullptr;
     QAction* saveProjectCopyAction_ = nullptr;
     QAction* projectColorSettingsAction_ = nullptr;
+    QAction* settingsAction_ = nullptr;
     QAction* exportFrameAction_ = nullptr;
     // Task S5, item 3a: the frame-range export, and the cancel a long sequence needs -- the single
     // frame export never had one because it is one attempt plus one publish.
