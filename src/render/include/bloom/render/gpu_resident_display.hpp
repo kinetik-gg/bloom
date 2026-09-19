@@ -49,6 +49,10 @@ class GpuDisplayImage final {
     [[nodiscard]] std::optional<ImageWindow> displayWindow() const noexcept;
     [[nodiscard]] core::PixelAspectRatio pixelAspect() const noexcept;
     [[nodiscard]] std::uint32_t generation() const noexcept;
+    // Actual VMA allocation size in bytes for this resident display image (>= width*height*4 due to
+    // driver allocation granularity). Zero for a moved-from/invalid image. This is the byte figure
+    // a resident-frame lease budget must charge.
+    [[nodiscard]] std::uint64_t allocationBytes() const noexcept;
     [[nodiscard]] bool isBoundTo(GpuDevice& device) const noexcept;
 
   private:

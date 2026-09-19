@@ -300,6 +300,30 @@ lifetime, and performance, and the ordinary Solid/composite, CPU image-primitive
 composition-evaluator regressions. The user-facing application is unwired: no service or scheduler
 selects a command, so no performance claim is made.
 
+The runtime now also owns a bounded, owner-thread GPU-resident frame lease registry
+(`bloom/runtime/gpu_resident_frame_lease.hpp`, with `gpu_resident_frame_lease.cpp`), still without
+service, product, cache, or viewer wiring. A copyable opaque `GpuResidentFrameLease` token carries
+only immutable geometry metadata (extent, display window, pixel aspect, actual allocation bytes), its
+lease id, the registry epoch, and one atomic validity flag; it holds no native image, device, or
+Vulkan object, so copying, reading, or dropping it on the UI thread never touches Vulkan or frees
+native memory. The `GpuResidentFrameLeaseRegistry` binds to exactly one actual `GpuDevice` on its
+owner thread (`create()` refuses a foreign thread or a non-`Ready`/moved-from/stub device before any
+allocation or native call), takes strong native ownership of one device-bound `GpuDisplayImage` in
+`publish()`, charges the actual VMA allocation bytes reported by the new
+`GpuDisplayImage::allocationBytes()` accessor (stub 0), and returns a move-only owner-thread
+`GpuResidentFramePin` for a native present. There is deliberately no accessor that returns a strong
+`shared_ptr<const GpuDisplayImage>` outside that pin, and the documented alias-safe contract keeps
+the pin alive through the presentation fence. Refusals (foreign device, wrong thread, over-budget,
+metadata cap, stale or foreign-registry token) do not disturb active leases; pinned tombstones stay
+charged until their pin is released; the metadata cap defaults to a finite 4096 and the actual byte
+budget is authoritative. `invalidateAll()` is the explicit lease-loss path, and a token that outlives
+its registry reports invalid. Verified locally with the pinned loader on a real device: the SolidV1
+-> `GpuResidentDisplay` chain feeding the lease, the UI-thread last-token release with owner
+collection, the pinned-tombstone charge, foreign-device/registry and stale/wrong-thread refusals, and
+a 1000-round concurrent release-vs-collect stress. This is the lease layer only: no
+`PreparedPreviewFrame` arm, no service/product/cache/viewer selection, and no performance or
+ReferenceParity claim.
+
 Pending and unchanged: the GPU scene executor that dispatches these prepared commands and the service
 selection that consumes them, per-layer GPU compositing selection, resident GPU viewer buffers,
 the service/viewer activation that consumes the render-side image-present path, a whole-application benchmark, the full per-operation qualification

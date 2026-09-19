@@ -313,6 +313,9 @@ core::PixelAspectRatio GpuDisplayImage::pixelAspect() const noexcept {
 std::uint32_t GpuDisplayImage::generation() const noexcept {
     return impl_ != nullptr ? impl_->generation : 0;
 }
+std::uint64_t GpuDisplayImage::allocationBytes() const noexcept {
+    return impl_ != nullptr ? impl_->allocationBytes : 0;
+}
 bool GpuDisplayImage::isBoundTo(GpuDevice& device) const noexcept {
     if (impl_ == nullptr || !impl_->onOwnerThread()) {
         return false;

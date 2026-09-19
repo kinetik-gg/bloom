@@ -26,6 +26,7 @@ core::PixelAspectRatio GpuDisplayImage::pixelAspect() const noexcept {
     return core::PixelAspectRatio::square();
 }
 std::uint32_t GpuDisplayImage::generation() const noexcept { return 0; }
+std::uint64_t GpuDisplayImage::allocationBytes() const noexcept { return 0; }
 bool GpuDisplayImage::isBoundTo(GpuDevice&) const noexcept { return false; }
 void GpuDisplayImage::releaseOwnedImpl() noexcept {}
 GpuDisplayImage makeGpuDisplayImage(std::unique_ptr<GpuDisplayImageImpl> impl) noexcept {

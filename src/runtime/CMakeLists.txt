@@ -92,6 +92,7 @@ target_sources(
         gpu_neutral_display_qualification.cpp
         gpu_neutral_display_qualification_fixtures.cpp
         gpu_preview_display_product.cpp
+        gpu_resident_frame_lease.cpp
         gpu_preview_display_service.cpp
         gpu_preview_display_service_jobs.cpp
         gpu_preview_display_service_private.hpp
@@ -117,6 +118,7 @@ target_sources(
             include/bloom/runtime/gpu_neutral_display_qualification.hpp
             include/bloom/runtime/gpu_preview_display_product.hpp
             include/bloom/runtime/gpu_preview_display_service.hpp
+            include/bloom/runtime/gpu_resident_frame_lease.hpp
             include/bloom/runtime/gpu_scene_cache.hpp
             include/bloom/runtime/gpu_scene_coverage_cache.hpp
             include/bloom/runtime/input_color_context.hpp
