@@ -1130,6 +1130,117 @@ void testRenderAffectingClassification(TestContext& test) {
     }
 }
 
+// TEMPORAL-DELETE: RemoveNodes proves a finite changed-time footprint only when every removed node
+// is an ordinary layer boundary whose deletion cannot influence output outside its active span.
+void testRemovalTimeFootprint(TestContext& test) {
+    using document::CompositionId;
+    const auto expectSpan = [&test](const std::optional<AffectedTimeFootprint>& footprint,
+                                    const std::int64_t start, const std::int64_t end,
+                                    const std::string_view message) {
+        test.expect(footprint.has_value() && footprint->compositionId == kCompositionId &&
+                        footprint->intervals.size() == 1 &&
+                        footprint->intervals.front().start ==
+                            core::RationalTime::fromInteger(start) &&
+                        footprint->intervals.front().end == core::RationalTime::fromInteger(end),
+                    message);
+    };
+    {
+        Fixture fixture;
+        const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
+        test.expect(result.changed() && result.renderAffecting, "layer removal publishes");
+        expectSpan(result.affectedTimes, 0, 10,
+                   "an ordinary full-span layer deletion is confined to its active span");
+    }
+    {
+        Fixture fixture;
+        (void)apply<SetLayerRange>(fixture, kFirstLayerId, core::RationalTime::fromInteger(2),
+                                   core::RationalTime::fromInteger(5));
+        const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
+        expectSpan(result.affectedTimes, 2, 5, "a finite clip reports only its half-open span");
+    }
+    {
+        Fixture fixture;
+        (void)apply<SetLayerRange>(fixture, kFirstLayerId, core::RationalTime::fromInteger(1),
+                                   core::RationalTime::fromInteger(4));
+        (void)apply<SetLayerRange>(fixture, kSecondLayerId, core::RationalTime::fromInteger(6),
+                                   core::RationalTime::fromInteger(9));
+        const auto result =
+            apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId, kSecondLayerNodeId});
+        test.expect(
+            result.changed() && result.affectedTimes.has_value() &&
+                result.affectedTimes->intervals.size() == 2 &&
+                result.affectedTimes->intervals[0].start == core::RationalTime::fromInteger(1) &&
+                result.affectedTimes->intervals[0].end == core::RationalTime::fromInteger(4) &&
+                result.affectedTimes->intervals[1].start == core::RationalTime::fromInteger(6) &&
+                result.affectedTimes->intervals[1].end == core::RationalTime::fromInteger(9),
+            "multiple independent clips publish their normalized union");
+    }
+    {
+        // Undo/redo replay the stored deletion footprint.
+        Fixture fixture;
+        (void)apply<SetLayerRange>(fixture, kFirstLayerId, core::RationalTime::fromInteger(2),
+                                   core::RationalTime::fromInteger(5));
+        const auto removed = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
+        test.expect(removed.changed() && removed.affectedTimes.has_value(),
+                    "the deletion publishes a footprint");
+        const auto undo = fixture.stack.undo();
+        test.expect(
+            undo.changed() && undo.affectedTimes.has_value() &&
+                undo.affectedTimes->intervals.front().start == core::RationalTime::fromInteger(2) &&
+                undo.affectedTimes->intervals.front().end == core::RationalTime::fromInteger(5),
+            "undo replays the deletion footprint");
+        const auto redo = fixture.stack.redo();
+        test.expect(redo.changed() && redo.affectedTimes.has_value() &&
+                        redo.affectedTimes->intervals.size() == 1,
+                    "redo replays the deletion footprint");
+    }
+    {
+        Fixture fixture;
+        const auto source = apply<AddNode>(fixture, std::string(kSolidSourceNodeType), Vec2d{})
+                                .outputId<NodeId>(kAddNodeOutput);
+        if (!source.has_value())
+            throw std::logic_error("removal footprint source fixture");
+        const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{*source});
+        test.expect(result.changed() && result.renderAffecting && !result.affectedTimes.has_value(),
+                    "removing a non-layer node is whole-render");
+    }
+    {
+        Fixture fixture;
+        (void)apply<SetLayerParent>(fixture, kSecondLayerId, kFirstLayerId);
+        const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
+        test.expect(result.changed() && !result.affectedTimes.has_value(),
+                    "a surviving child parented to the removed boundary forces whole-render");
+    }
+    {
+        Fixture fixture;
+        (void)apply<SetLayerSolo>(fixture, kFirstLayerId, true);
+        const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
+        test.expect(result.changed() && !result.affectedTimes.has_value(),
+                    "removing a solo layer can unsuppress others, so it is whole-render");
+    }
+    {
+        Fixture fixture;
+        (void)apply<ConnectPorts>(fixture, OutputPortRef{kFirstLayerNodeId, "image"},
+                                  InputPortRef{NodeInputRef{kSecondLayerNodeId, "image"}});
+        const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
+        test.expect(result.changed() && !result.affectedTimes.has_value(),
+                    "a non-merge downstream consumer forces whole-render");
+    }
+    {
+        Fixture fixture;
+        const auto before = fixture.document.snapshot();
+        const auto history = fixture.stack.size();
+        Transaction transaction("Atomic refusal");
+        transaction.emplace<SetProjectName>("Must roll back");
+        transaction.emplace<RemoveNodes>(kCompositionId, std::set<NodeId>{kLayerStackNodeId});
+        const auto result = fixture.stack.execute(std::move(transaction));
+        test.expect(result.status == CommandStatus::Rejected && !result.affectedTimes.has_value() &&
+                        fixture.document.snapshot().revision() == before.revision() &&
+                        fixture.stack.size() == history,
+                    "a rejected removal publishes no reuse evidence");
+    }
+}
+
 void testParentCommands(TestContext& test) {
     Fixture mixed;
     test.expect(apply<ConnectPorts>(mixed, OutputPortRef{kFirstLayerNodeId, "image"},
@@ -1199,6 +1310,7 @@ int main() {
         bloom::commands::test::testNodeGroups(test);
         bloom::commands::test::testRenderAffectingClassification(test);
         bloom::commands::test::testLayerRangeTimeFootprint(test);
+        bloom::commands::test::testRemovalTimeFootprint(test);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

@@ -590,6 +590,18 @@ snapshot revisions are unchanged but whose pixels are not -- the qualified displ
 available, a colour-settings change, and rebind -- and still forces a fresh derivation; that is why a
 "same revision" test can never be used to keep a display-qualified frame.
 
+**Deletion.** TEMPORAL-DELETE classifies `RemoveNodes` from the graph BEFORE erasing. When every
+removed node is an ordinary layer boundary whose output feeds only the Merge stack, no surviving
+child is parented to a removed boundary, no surviving parameter is driver-bound to a removed node,
+no removed boundary is solo (removing a solo layer can unsuppress others), and the removed set is
+not empty of merge participation, the changed time is the normalized union of the removed boundaries'
+half-open active spans (absent `outPoint` means the composition duration). An isolated boundary
+contributes nothing, and an all-isolated set publishes a deliberate empty footprint. Anything else —
+a source, effect, reroute, or value node; a non-merge downstream consumer; a dependent child; a
+driver dependency; a solo layer — leaves the whole-render default. The result rides the same
+`documentEvaluationChanged`/cache-retention path as a clip trim, so unaffected cached frames are
+retained with zero preparation and only the deleted span re-derives.
+
 **Cache retention.** The cache holds an accepted-provenance policy: while a composition's time is
 inside a span, only that span's revision may be retained there. A finite edit prunes exactly the
 entries whose own revision is no longer accepted for their time (counted as `staleDrops`) while
