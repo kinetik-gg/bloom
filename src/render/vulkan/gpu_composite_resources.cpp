@@ -390,6 +390,7 @@ GpuCompositeDiagnostic GpuComposite::beginSourceOver(const GpuSourceOverParamete
     resident->state = impl.control;
     resident->dataWindow = parameters.destination->dataWindow();
     resident->displayWindow = parameters.destination->displayWindow();
+    resident->pixelAspect = parameters.destination->pixelAspect();
     resident->generation = impl.control->generation;
     if (!createResidentImage(*impl.control, destWidth, destHeight, *resident)) {
         return compositeDiagnostic(GpuCompositeDiagnosticCode::AllocationFailed,
@@ -414,6 +415,7 @@ GpuCompositeDiagnostic GpuComposite::beginSourceOver(const GpuSourceOverParamete
         return compositeDiagnostic(GpuCompositeDiagnosticCode::OverBudget,
                                    "the actual source-over allocations exceed the byte budget");
     }
+    impl.lastJobBytes = retainedActual;
 
     impl.residentImage = std::make_unique<GpuImage>(makeGpuImage(std::move(resident)));
     impl.retainedSource = parameters.source;

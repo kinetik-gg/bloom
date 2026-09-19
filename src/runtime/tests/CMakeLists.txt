@@ -293,6 +293,44 @@ bloom_add_test(
     TIMEOUT 300
 )
 
+# Owner-thread non-blocking GPU scene executor. It drives real GpuSolid/CoveredSolid/GpuComposite
+# dispatches through a real device and a real GpuSceneCache; without a loader it skips unless the
+# supervisor passes --loader/--require-device. It compiles and runs against the CPU stub too, printing
+# an explicit skip there.
+add_executable(bloom_runtime_gpu_scene_executor_test gpu_scene_executor_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_scene_executor_test PRIVATE bloom_runtime_evaluator bloom_render)
+bloom_enable_warnings(bloom_runtime_gpu_scene_executor_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_scene_executor_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_scene_executor
+    COMMAND bloom_runtime_gpu_scene_executor_test
+    LABELS runtime unit gpu render
+    TIMEOUT 600
+)
+
+# Test-only fault variant: the same tests compiled with the executor fault hook and linked against
+# the fault-instrumented native render closure (defined in src/render/tests). Only this variant runs
+# the native retirement vector (stalled deadline / unknown fence / device loss); the default target
+# prints an explicit NOTE for it. The fault header and macro never reach a product build, and the
+# installed production API is unchanged.
+if(TARGET bloom_render_gpu_scene_executor_fault)
+    add_executable(bloom_runtime_gpu_scene_executor_fault_test gpu_scene_executor_tests.cpp)
+    target_compile_definitions(bloom_runtime_gpu_scene_executor_fault_test
+        PRIVATE BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION)
+    target_include_directories(bloom_runtime_gpu_scene_executor_fault_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests")
+    target_link_libraries(bloom_runtime_gpu_scene_executor_fault_test
+        PRIVATE bloom_render_gpu_scene_executor_fault bloom_runtime_evaluator bloom_render)
+    bloom_enable_warnings(bloom_runtime_gpu_scene_executor_fault_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_scene_executor_fault_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_scene_executor_fault
+        COMMAND bloom_runtime_gpu_scene_executor_fault_test
+        LABELS runtime unit gpu render
+        TIMEOUT 600
+    )
+endif()
+
 # Owner-bound GPU-resident frame lease + registry. The leased images are real SolidV1 ->
 # GpuResidentDisplay results, so it depends only on runtime create() availability and runs against
 # the CPU stub with an explicit skip. --loader/--require-device are supplied by the local supervisor

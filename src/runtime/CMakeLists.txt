@@ -97,6 +97,10 @@ target_sources(
         gpu_preview_display_service_jobs.cpp
         gpu_preview_display_service_private.hpp
         gpu_scene_cache.cpp
+        gpu_scene_executor.cpp
+        gpu_scene_executor_planner.cpp
+        gpu_scene_executor_execution.cpp
+        gpu_scene_executor_private.hpp
         view_adjust.cpp
         view_adjust_support.hpp
         value_graph_evaluation.cpp
@@ -121,6 +125,7 @@ target_sources(
             include/bloom/runtime/gpu_resident_frame_lease.hpp
             include/bloom/runtime/gpu_scene_cache.hpp
             include/bloom/runtime/gpu_scene_coverage_cache.hpp
+            include/bloom/runtime/gpu_scene_executor.hpp
             include/bloom/runtime/input_color_context.hpp
             include/bloom/runtime/prepared_gpu_scene.hpp
             include/bloom/runtime/prepared_preview_frame.hpp

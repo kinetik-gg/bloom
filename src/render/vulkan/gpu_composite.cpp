@@ -2,6 +2,10 @@
 
 #include "gpu_composite_private.hpp"
 
+#ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+#include "gpu_scene_executor_fault_injection.hpp"
+#endif
+
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -103,6 +107,14 @@ bool GpuComposite::isBoundTo(GpuDevice& device) const noexcept {
     }
     const auto deviceState = GpuRendererAccess::state(device);
     return deviceState != nullptr && deviceState == impl_->control;
+}
+
+bool GpuComposite::hasUnretiredSubmission() const noexcept {
+    return impl_ != nullptr && impl_->queueSubmitted;
+}
+
+std::uint64_t GpuComposite::lastJobAllocationBytes() const noexcept {
+    return impl_ != nullptr ? impl_->lastJobBytes : 0;
 }
 
 bool GpuComposite::Impl::drainAndRetire() noexcept {
@@ -417,6 +429,7 @@ GpuCompositeDiagnostic GpuComposite::beginTranslation(const GpuTranslationParame
                               "the actual translation allocations or transient peak exceed the "
                               "byte budget");
     }
+    impl.lastJobBytes = retainedActual > peakActual ? retainedActual : peakActual;
 
     impl.residentImage = std::make_unique<GpuImage>(makeGpuImage(std::move(resident)));
     impl.retainedSource = parameters.source;
@@ -554,6 +567,39 @@ GpuCompositePollResult GpuComposite::poll() {
     if (!impl.onOwnerThread()) {
         return GpuCompositePollResult::WrongThread;
     }
+#ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+    // TEST-ONLY fault hook, inert in every production build. It lets the executor retirement tests
+    // observe a real submitted job as stalled, device-lost or unproven against the real fence.
+    if (const auto injected = gpu_scene_executor_fault::take();
+        injected != gpu_scene_executor_fault::PollFault::None) {
+        if (injected == gpu_scene_executor_fault::PollFault::StallPending) {
+            return GpuCompositePollResult::Pending;
+        }
+        if (injected == gpu_scene_executor_fault::PollFault::DeviceLost) {
+            // Bounded wait proves the REAL submission retired before pretending loss. Only
+            // VK_SUCCESS may clear the submission; a timeout or an unknown wait result must preserve
+            // it and fail safe, because the fence is not proven signalled.
+            const VkFence faultFence = static_cast<VkFence>(*impl.fence);
+            const VkResult faultWait = impl.control->device.getDispatcher()->vkWaitForFences(
+                static_cast<VkDevice>(*impl.control->device), 1, &faultFence, VK_TRUE,
+                1'000'000'000ULL);
+            if (faultWait == VK_SUCCESS) {
+                impl.deviceLost = true;
+                impl.queueSubmitted = false;
+                impl.fail(GpuCompositeDiagnosticCode::DeviceLost,
+                          "injected device loss after proven retirement");
+            } else {
+                impl.fail(GpuCompositeDiagnosticCode::DeviceUnavailable,
+                          "injected device loss could not prove fence retirement; the submission "
+                          "is retained");
+            }
+            return GpuCompositePollResult::Failure;
+        }
+        impl.fail(GpuCompositeDiagnosticCode::DeviceUnavailable,
+                  "injected unknown fence status; the submission is not retired");
+        return GpuCompositePollResult::Failure;
+    }
+#endif
     if (impl.jobState == GpuCompositeJobState::Ready) {
         return GpuCompositePollResult::Ready;
     }

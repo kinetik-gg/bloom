@@ -63,6 +63,8 @@ const GpuSolidDiagnostic& GpuSolid::diagnostic() const noexcept {
     return unavailable;
 }
 bool GpuSolid::isBoundTo(GpuDevice&) const noexcept { return false; }
+bool GpuSolid::hasUnretiredSubmission() const noexcept { return false; }
+std::uint64_t GpuSolid::lastJobAllocationBytes() const noexcept { return 0; }
 GpuSolidDiagnostic GpuSolid::begin(const GpuSolidParameters&, std::uint64_t) {
     return diagnostic();
 }

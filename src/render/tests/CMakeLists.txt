@@ -212,3 +212,35 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         LABELS unit gpu render
     )
 endif()
+
+# Test-only fault-instrumented copy of the executor's native GPU operation closure (VMA, device,
+# image, solid + covered, composite). It reuses the exact production private headers, sources, and
+# strict compile profile, and is compiled only under the executor fault macro with the proof-only
+# gpu_scene_executor_fault_injection.hpp on the include path. Because these objects define the same
+# symbols first, the normal bloom_render native archive members are never pulled into the fault test,
+# exactly as the external proof closure did; the installed production API and the default rebuild are
+# unchanged. This target exists only where the Vulkan backend is built.
+if(BLOOM_RENDER_VULKAN_AVAILABLE)
+    add_library(bloom_render_gpu_scene_executor_fault OBJECT
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/vma.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_device.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid_covered.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite_resources.cpp"
+    )
+    target_include_directories(bloom_render_gpu_scene_executor_fault PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../include"
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../core/include"
+    )
+    target_compile_features(bloom_render_gpu_scene_executor_fault PRIVATE cxx_std_20)
+    target_compile_definitions(bloom_render_gpu_scene_executor_fault
+        PRIVATE BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION)
+    target_link_libraries(bloom_render_gpu_scene_executor_fault
+        PRIVATE Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+    bloom_enable_warnings(bloom_render_gpu_scene_executor_fault)
+    bloom_enable_strict_floating_point(bloom_render_gpu_scene_executor_fault)
+endif()

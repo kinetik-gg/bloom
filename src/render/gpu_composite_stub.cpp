@@ -63,6 +63,8 @@ const GpuCompositeDiagnostic& GpuComposite::diagnostic() const noexcept {
     return unavailable;
 }
 bool GpuComposite::isBoundTo(GpuDevice&) const noexcept { return false; }
+bool GpuComposite::hasUnretiredSubmission() const noexcept { return false; }
+std::uint64_t GpuComposite::lastJobAllocationBytes() const noexcept { return 0; }
 GpuCompositeDiagnostic GpuComposite::beginTranslation(const GpuTranslationParameters&,
                                                       std::uint64_t) {
     return diagnostic();

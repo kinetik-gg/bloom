@@ -413,6 +413,7 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
             GpuSolidDiagnosticCode::OverBudget,
             "actual VMA allocation sizes exceed the configured or requested byte budget");
     }
+    impl.lastJobBytes = actualRetained;
 
     const VkDevice rawDevice = static_cast<VkDevice>(*impl.control->device);
     const auto* dispatcher = impl.control->device.getDispatcher();

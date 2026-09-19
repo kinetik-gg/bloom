@@ -300,6 +300,40 @@ lifetime, and performance, and the ordinary Solid/composite, CPU image-primitive
 composition-evaluator regressions. The user-facing application is unwired: no service or scheduler
 selects a command, so no performance claim is made.
 
+The owner-thread non-blocking GPU scene executor is now implemented on top of that preparation
+foundation, still without service, product, viewer, or UI selection. `GpuSceneExecutor`
+(`bloom/runtime/gpu_scene_executor.hpp`, `gpu_scene_executor.cpp` with a planner and an execution
+translation unit plus a private header) takes one immutable `PreparedGpuScene` and drives a bounded
+sequence of already-typed native operations on an existing `GpuDevice`: `GpuSolid::begin`,
+`GpuSolid::beginCovered`, `GpuComposite::beginTranslation`, and `GpuComposite::beginSourceOver`.
+`begin` validates the whole scene and flattens the reachable DAG, consulting `GpuSceneCache` first so a
+warm unchanged output performs zero native dispatches and a fractional covered solid's superseded
+solid command is unreachable; `poll` is non-blocking and starts at most one native dispatch per call.
+The request byte budget bounds the actual LIVE unique pinned image bytes (deduped aliases, cached
+inputs, and the output; the cache keeps its own separate ledger) and releases each charge at the last
+dependency, so a long sequential graph whose peak live set fits is accepted even when its cumulative
+allocation exceeds the budget. Each native op's real retained allocation comes from a new additive
+`GpuSolid`/`GpuComposite` `hasUnretiredSubmission()` / `lastJobAllocationBytes()` accessor pair (stub
+`false`/0) instead of a requested extent, and only a native result that PROVES fence retirement may
+release pins: a `DeviceUnavailable` with the submission still outstanding fails `NativeUnproven`,
+retains every pin, and refuses reuse until the owner polls the submission to retirement or destroys
+the executor. Cancellation, a per-job deadline, wrong-thread use, and device loss fail closed with no
+published image; `DeviceLost` is terminal. Destruction is owner-thread and native-first: the owned
+`GpuSolid`/`GpuComposite` pipelines are reset before the scene and executor pins, so the pipeline's
+bounded drain or whole-`Impl` quarantine strongly owns the in-flight inputs. The executor owns no
+thread, service, Qt surface, viewer, media decode, upload, or readback path, and `SourceOverV1` now
+preserves the destination pixel aspect so a non-square-PAR merge does not lose PAR. Verified locally
+with the pinned loader on a real device against a genuine uncached `CpuCompositionEvaluator` oracle
+for every output pixel and the actual returned native descriptor: merged solids, fractional +0.3/-0.3
+covered coverage, integer translation, HDR signed alpha, odd/nonzero-origin windows, proxy with
+non-square PAR, opacity endpoints, empty/inactive time, byte-exact covered fill, warm zero-dispatch
+cache reuse, retained lower subtrees, live-peak budgets with refusal/reuse and alias accounting,
+cancellation, wrong-thread/foreign-device and mismatched-descriptor-cache rejection, native ownership
+across teardown, and -- in a test-only fault-instrumented native build -- the stalled-deadline,
+unknown-fence, proven-cancellation, and device-loss retirement contracts. This is a tested checkpoint
+only: no service, product, presentation, viewer, media upload, or application-benchmark selection is
+activated, and no `ReferenceParity` claim is made.
+
 The runtime now also owns a bounded, owner-thread GPU-resident frame lease registry
 (`bloom/runtime/gpu_resident_frame_lease.hpp`, with `gpu_resident_frame_lease.cpp`), still without
 service, product, cache, or viewer wiring. A copyable opaque `GpuResidentFrameLease` token carries
@@ -324,8 +358,8 @@ a 1000-round concurrent release-vs-collect stress. This is the lease layer only:
 `PreparedPreviewFrame` arm, no service/product/cache/viewer selection, and no performance or
 ReferenceParity claim.
 
-Pending and unchanged: the GPU scene executor that dispatches these prepared commands and the service
-selection that consumes them, per-layer GPU compositing selection, resident GPU viewer buffers,
+Pending and unchanged: the service selection that dispatches prepared commands through the executor,
+per-layer GPU compositing selection, resident GPU viewer buffers,
 the service/viewer activation that consumes the render-side image-present path, a whole-application benchmark, the full per-operation qualification
 fixtures for a future `ReferenceParity` profile (the qualified display transform remains
 `PreviewOnly`; scene operations have no runtime qualification yet), general graph

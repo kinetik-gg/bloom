@@ -99,6 +99,8 @@ class GpuSolid final {
     [[nodiscard]] GpuSolidJobState state() const noexcept;
     [[nodiscard]] const GpuSolidDiagnostic& diagnostic() const noexcept;
     [[nodiscard]] bool isBoundTo(GpuDevice& device) const noexcept;
+    [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
+    [[nodiscard]] std::uint64_t lastJobAllocationBytes() const noexcept;
 
     // Validates geometry/budget/device limits, creates the resident image,
     // records and submits one dispatch. Returns None when accepted; otherwise

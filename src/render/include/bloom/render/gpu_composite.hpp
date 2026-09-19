@@ -122,6 +122,8 @@ class GpuComposite final {
     [[nodiscard]] GpuCompositeJobState state() const noexcept;
     [[nodiscard]] const GpuCompositeDiagnostic& diagnostic() const noexcept;
     [[nodiscard]] bool isBoundTo(GpuDevice& device) const noexcept;
+    [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
+    [[nodiscard]] std::uint64_t lastJobAllocationBytes() const noexcept;
 
     // Both validate geometry/budgets/device limits, prepare host metadata, create the resident
     // image, and submit one dispatch. None when accepted.
