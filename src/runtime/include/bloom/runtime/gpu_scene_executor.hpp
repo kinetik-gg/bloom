@@ -208,6 +208,14 @@ class GpuSceneExecutor final {
     // meanwhile.
     [[nodiscard]] bool ownerDrainRequired() const noexcept;
 
+    // True while this executor's own native-in-flight flag is set OR any owned native pipeline
+    // still holds an unretired submission. This is deliberately broader than ownerDrainRequired():
+    // the latter is only the reuse gate latched by an unproven failure, while an ordinary cancelled
+    // or pending job is unretired WITHOUT latching it. Retirement is proven only when this is false
+    // and state() is not Pending; a Ready output must be taken/discarded first. Additive accessor:
+    // no field or layout change.
+    [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
+
     // True once a device generation loss was observed. This executor is terminal and unusable; it
     // must be destroyed on the owner thread and recreated on a new generation.
     [[nodiscard]] bool deviceLost() const noexcept;

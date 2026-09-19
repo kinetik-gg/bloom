@@ -3,12 +3,18 @@
 // Private implementation surface shared by the two service translation units and the narrow test
 // access hook. Nothing here is part of the public contract.
 
+#include "gpu_preview_display_service_presentation_private.hpp"
+#include "gpu_preview_display_service_resident_private.hpp"
+
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_neutral_display.hpp>
+#include <bloom/render/gpu_resident_display.hpp>
 #include <bloom/runtime/gpu_neutral_display_qualification.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
+#include <bloom/runtime/gpu_scene_cache.hpp>
+#include <bloom/runtime/gpu_scene_executor.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -39,8 +45,18 @@ struct PreviewDisplayStageRecord final {
     GpuTaskCompletion<PreviewPreparationResultHandle> completion;
     TaskHandle<PreviewCpuStageOutcomeHandle> stageChild;
     TaskHandle<PreviewPreparationResultHandle> fallbackChild;
+    TaskHandle<PreviewGpuSceneStageOutcomeHandle> gpuStageChild;
     std::shared_ptr<const PreviewCpuStage> stage;
     std::shared_ptr<const GpuNeutralDisplayQualificationReport> report;
+    // Resident route only: the prepared immutable GPU scene and its selected processor, plus the
+    // resident native sub-state. `resident` is set when this record was started through the GPU
+    // scene stage function.
+    std::shared_ptr<const PreviewGpuSceneStage> gpuStage;
+    std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> residentProcessor;
+    bool resident = false;
+    ResidentNativePhase residentPhase = ResidentNativePhase::None;
+    // Bounded owner-thread retirement pumps spent while proving an unretired resident submission.
+    std::size_t residentRetirePumps = 0;
 
     TaskPriority priority = TaskPriority::Background;
     TaskOwner owner;
@@ -49,6 +65,12 @@ struct PreviewDisplayStageRecord final {
     std::optional<std::string> childCoalescingKey;
     std::size_t requestOwnedBytes = 0;
     std::size_t pixelStorageByteLimit = 0;
+    // Retained only for the resident route so a GPU-subset refusal or a resident native failure can
+    // take the SAME full original CPU path (compile + evaluate + display) without re-asking the
+    // caller. The packed path keeps its own evaluated stage instead.
+    std::optional<document::Snapshot> snapshot;
+    PreviewRequestIdentity identity;
+    std::vector<SnapshotParameterOverride> overrides;
 
     bool cancellationRequested = false;
     bool nativeDiscard = false;
@@ -77,6 +99,9 @@ struct PreviewDisplayServiceCore final {
     GpuPreviewDisplayServiceOptions options;
     PreviewCpuStageFunction stageFunction;
     PreviewCpuDisplayFallback fallback;
+    // Resident route: the GPU-scene CPU preparation seam. Empty selects the existing
+    // packed/CPU-only service; non-empty selects the resident-route overload.
+    PreviewGpuSceneStageFunction gpuStageFunction;
 
     std::shared_ptr<GpuExecutorLease> lease;
 
@@ -85,12 +110,72 @@ struct PreviewDisplayServiceCore final {
     std::unique_ptr<render::GpuNeutralDisplay> display;
     std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> processor;
 
-    // State protected by `stateMutex`.
+    // Resident route, service-thread-owned. Created only on the device owner thread when
+    // `gpuStageFunction` is set; destroyed before `device`. `residentDisplay` is the single
+    // GpuResidentDisplay used for both the startup qualification and every resident frame.
+    std::unique_ptr<GpuSceneCache> residentSceneCache;
+    std::unique_ptr<GpuSceneExecutor> residentExecutor;
+    std::unique_ptr<render::GpuResidentDisplay> residentDisplay;
+    // Genuine immutable resident qualification report, produced on the owner thread at startup
+    // independently of the packed readback qualification. Never fabricated.
+    std::shared_ptr<const GpuResidentPreviewQualificationReport> residentQualification;
+    // Set on the owner thread when the resident route is terminal (device lost, or a native fence
+    // could not be proven retired and the pipelines were destroyed). Future submits take the CPU
+    // path; the lost executor is never retried.
+    bool residentRouteTerminal = false;
+
+    // Service-thread-owned presentation generation (registry + coordinator on the same device).
+    // Null when presentation mode is Disabled or the capability is Unavailable. Destroyed on the
+    // service thread before `device`; destruction order is coordinator then registry.
+    std::unique_ptr<PreviewDisplayPresentation> presentation;
+    // Test-only: a second owner-thread registry on the same device, used to prove that a valid
+    // lease bound to a foreign registry is rejected by this service's coordinator. Never used in
+    // production paths.
+    std::unique_ptr<GpuResidentFrameLeaseRegistry> testForeignRegistry;
+    // Set true by any thread in beginShutdown(); observed by the owner drain before it begins the
+    // coordinator's bounded retirement. Kept separate so no non-atomic owner state is touched off
+    // the owner thread.
+    std::atomic_bool presentationShutdownRequested{false};
+    // Owner-thread only: whether the coordinator's beginShutdown() has been issued, how many owner
+    // pumps have been spent on retirement (bounded exactly like the coordinator's own drain
+    // budget), and whether the generation is fully retired.
+    bool presentationShutdownBegun = false;
+    std::size_t presentationPumps = 0;
+    bool presentationRetired = false;
+    // True when a live presentation generation could not be proven retired within the bounded
+    // drain. In that case the native device is deliberately retained (the process quarantine holds
+    // native targets that reference it) and the service reports the retention so the host refuses
+    // Qt teardown rather than pretending a safe acknowledgement.
+    bool presentationRetirementUnproven = false;
+
+    // State protected by `stateMutex`. The presentation fields are immutable copies published by
+    // the owner thread for safe UI-thread reads.
     mutable std::mutex stateMutex;
     GpuPreviewDisplayServiceState state = GpuPreviewDisplayServiceState::Initializing;
     bool gpuAvailable = false;
     std::shared_ptr<const GpuNeutralDisplayQualificationReport> qualification;
     GpuPreviewDisplayServiceDiagnostic diagnostic;
+    render::GpuPresentationAvailability publishedPresentationAvailability =
+        render::GpuPresentationAvailability::NotRequested;
+    std::string publishedPresentationDetail;
+    std::shared_ptr<GpuPresentationClient> publishedPresentationClient;
+    GpuPresentationShutdownStatus publishedPresentationShutdown;
+    // Resident route published snapshot (owner-written, UI-readable).
+    std::shared_ptr<const GpuResidentPreviewQualificationReport> publishedResidentQualification;
+    std::string publishedResidentDetail;
+    // Bounded cached counters, owner-written atomics and read locklessly/under lock by status().
+    std::atomic<std::uint64_t> counterResidentGraphJobs{0};
+    std::atomic<std::uint64_t> counterNativeDispatches{0};
+    std::atomic<std::uint64_t> counterResidentCompletions{0};
+    std::atomic<std::uint64_t> counterResidentFailures{0};
+    std::atomic<std::uint64_t> counterGpuCacheHits{0};
+    std::atomic<std::uint64_t> counterGpuCacheMisses{0};
+    std::atomic<std::uint64_t> counterCpuFallbacks{0};
+    std::atomic<std::uint64_t> counterFullFrameReadbacks{0};
+    std::atomic<std::uint64_t> counterDisplayStatusReads{0};
+    std::atomic<std::uint64_t> counterResidentLeaseRefusals{0};
+    std::atomic<std::uint64_t> counterRetirementUnprovenTeardowns{0};
+    std::atomic<std::uint64_t> counterResidentQualificationMicros{0};
 
     // Wake generation / condition flag: a notification can never be lost between the loop's check
     // and its wait because the generation is bumped under this lock.
@@ -106,11 +191,26 @@ struct PreviewDisplayServiceCore final {
     std::shared_ptr<PreviewDisplayStageRecord> nativeActive;
     bool nativeInFlight = false;
 
+    // Resident native job slot (independent of the packed slot; only one is ever used per service
+    // generation because the resident overload does not build the packed display).
+    std::deque<std::shared_ptr<PreviewDisplayStageRecord>> residentNativeReady;
+    std::shared_ptr<PreviewDisplayStageRecord> residentNativeActive;
+    bool residentNativeInFlight = false;
+
     // Narrow fault seam: injectable clock/poll for the bounded native-dispatch deadline.
     // Empty uses the real steady clock and the pipeline's own poll().
     std::function<std::chrono::steady_clock::time_point()> nativeClockOverride;
     std::function<render::GpuNeutralDisplayPollResult(render::GpuNeutralDisplay&)>
         nativePollOverride;
+    // Resident-route fault seam (test-only; never set in production). The overrides let a test
+    // force a deterministic stalled/unknown-fence retirement and observe that the production
+    // Retiring code retains the stage, completion and request-owned admission until the override
+    // reports proven retirement. Empty uses the real native accessors/poll.
+    std::function<GpuSceneExecutorPollResult(GpuSceneExecutor&)> residentExecutorPollOverride;
+    std::function<render::GpuResidentDisplayPollResult(render::GpuResidentDisplay&)>
+        residentDisplayPollOverride;
+    std::function<bool(const GpuSceneExecutor&)> residentExecutorUnretiredOverride;
+    std::function<bool(const render::GpuResidentDisplay&)> residentDisplayUnretiredOverride;
 
     // Root admission is synchronized with beginShutdown(): every accepted root (CPU fallback or
     // queued GPU parent) is either tracked and cancelled by shutdown, or -- if shutdown landed
@@ -193,6 +293,13 @@ void startGpuPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>& core
                           GpuTaskCompletion<PreviewPreparationResultHandle> completion,
                           PreviewStageSubmission submission);
 
+// Resident-route parent starter (service thread). Submits the GPU-scene CPU preparation child and
+// retains the final completion. The prepared scene is dispatched later on this same owner thread.
+void startResidentPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                               bool cancellationRequested,
+                               GpuTaskCompletion<PreviewPreparationResultHandle> completion,
+                               PreviewStageSubmission submission);
+
 // Service-loop jobs (service thread only).
 void processPreviewStages(const std::shared_ptr<PreviewDisplayServiceCore>& core);
 void processNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core);
@@ -200,6 +307,23 @@ void dispatchDisplayFallbackChild(const std::shared_ptr<PreviewDisplayServiceCor
                                   const std::shared_ptr<PreviewDisplayStageRecord>& stage);
 void disableGpuAfterNativeFailure(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                                   const std::string& detail);
+
+// Resident-route service-thread jobs.
+void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                               const std::shared_ptr<PreviewDisplayStageRecord>& stage,
+                               TaskResult<PreviewGpuSceneStageOutcomeHandle> result);
+// Dispatches the FULL original CPU path for a resident stage whose GPU subset is unavailable: the
+// CPU stage function is run again and then the display fallback, exactly the existing CPU pipeline.
+void dispatchResidentCpuFallbackChild(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                                      const std::shared_ptr<PreviewDisplayStageRecord>& stage);
+// Owner-thread resident native pump: advances the GpuSceneExecutor -> GpuResidentDisplay -> product
+// factory sequence for the active resident stage by at most one bounded step per call.
+void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core);
+
+// Copies the core's cached end-to-end counter snapshot into a status result. The caller must
+// already hold stateMutex. Kept beside the core so status() stays a thin lifecycle projection.
+void copyLifecycleCounters(const PreviewDisplayServiceCore& core,
+                           GpuPreviewDisplayServiceCounters& out) noexcept;
 
 // Conservative native selection. The service's active poll adds two handoff intervals the
 // qualification timings do not include (stage child completion -> service, native fence ->
@@ -276,8 +400,55 @@ struct GpuPreviewDisplayServiceTestAccess final {
     static std::size_t stageCount(const PreviewDisplayServiceCore& core) {
         return core.stages.size();
     }
+    // Resident-route probes. Read-only owner-created state; no native object is exposed.
+    static bool residentInFlight(const PreviewDisplayServiceCore& core) {
+        return core.residentNativeInFlight;
+    }
+    static bool residentRetiring(const PreviewDisplayServiceCore& core) {
+        return core.residentNativeActive != nullptr &&
+               core.residentNativeActive->residentPhase == ResidentNativePhase::Retiring;
+    }
+    static bool residentRouteTerminal(const PreviewDisplayServiceCore& core) {
+        return core.residentRouteTerminal;
+    }
+    static std::size_t residentReadyCount(const PreviewDisplayServiceCore& core) {
+        return core.residentNativeReady.size();
+    }
+    static bool residentRouteAvailable(const PreviewDisplayServiceCore& core) {
+        return core.residentExecutor != nullptr && core.residentDisplay != nullptr;
+    }
     static std::shared_ptr<PreviewDisplayServiceCore>
     coreOf(const GpuPreviewDisplayService& service);
+
+    // Presentation ownership probes. All read-only and owner-thread-created state; no native object
+    // is exposed. `ownershipEpoch` is this exact device generation, `presentationReady` is whether
+    // the owner actually created the registry + coordinator.
+    static bool presentationReady(const PreviewDisplayServiceCore& core) {
+        return core.presentation != nullptr && core.presentation->available;
+    }
+    static std::uint64_t ownershipEpoch(const PreviewDisplayServiceCore& core) {
+        return core.device == nullptr ? 0U : core.device->ownershipEpoch();
+    }
+    static bool sameOwnerThread(const PreviewDisplayServiceCore& core) {
+        return core.device != nullptr && core.device->isOwnerThread();
+    }
+    static std::shared_ptr<GpuPresentationClient>
+    presentationClient(const PreviewDisplayServiceCore& core) {
+        return core.presentation == nullptr ? nullptr : core.presentation->client;
+    }
+    static std::uint64_t registryEpoch(const PreviewDisplayServiceCore& core) {
+        return core.presentation == nullptr || core.presentation->registry == nullptr
+                   ? 0U
+                   : core.presentation->registry->epoch();
+    }
+
+    // Test-only: run one actual owner-thread scheduler GPU task that produces a real resident image
+    // and publishes an opaque lease into the service registry (`foreign == false`) or into a second
+    // owner-thread registry on the same device (`foreign == true`, for foreign-lease rejection).
+    [[nodiscard]] static bool requestPresentationTestLease(GpuPreviewDisplayService& service,
+                                                           PresentationTestLeaseResult& out,
+                                                           std::chrono::milliseconds timeout,
+                                                           bool foreign = false);
 };
 
 } // namespace detail

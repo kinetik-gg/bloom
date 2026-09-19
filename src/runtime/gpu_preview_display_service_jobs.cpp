@@ -232,8 +232,15 @@ void runGpuStartupImpl(const std::shared_ptr<PreviewDisplayServiceCore>& core, T
 
     render::GpuDeviceCreationOptions deviceOptions;
     deviceOptions.loader_path = core->options.loaderPath;
+    if (core->options.presentation == GpuPreviewDisplayServicePresentationMode::Wayland) {
+        deviceOptions.request_presentation = true;
+        deviceOptions.presentation_platform = render::GpuPresentationPlatform::Wayland;
+    }
     auto created = render::GpuDevice::create(deviceOptions);
     if (!created) {
+        // Report the requested presentation mode as Unavailable (never NotRequested) so the UI can
+        // see there is no blank activation, then fail the compute path as before.
+        publishServicePresentation(core);
         core->publishState(GpuPreviewDisplayServiceState::Unavailable, false,
                            {GpuPreviewDisplayServiceDiagnosticCode::LoaderUnavailable,
                             created.diagnostic.message.empty()
@@ -245,6 +252,13 @@ void runGpuStartupImpl(const std::shared_ptr<PreviewDisplayServiceCore>& core, T
     }
     core->device = std::move(created.device);
 
+    // Own the presentation generation on this same device and owner thread. When presentation mode
+    // is Disabled or the capability is not Ready this returns a non-available record and the
+    // compute/CPU path is completely unchanged. The immutable UI client and the actual shutdown
+    // snapshot are published immediately; they are refreshed on every owner pump.
+    core->presentation = createServicePresentation(core);
+    publishServicePresentation(core);
+
     auto built = buildBloomNeutralQualifiedDisplayProcessor();
     if (!built.succeeded()) {
         core->publishState(GpuPreviewDisplayServiceState::Unavailable, false,
@@ -252,6 +266,37 @@ void runGpuStartupImpl(const std::shared_ptr<PreviewDisplayServiceCore>& core, T
                             built.diagnostic().summary},
                            nullptr);
         static_cast<void>(std::move(completion).fail(startupDiagnostic()));
+        return;
+    }
+    core->processor = built.handle();
+
+    // Resident route: qualify the resident display independently of the packed readback
+    // qualification. The resident report is the only authority for resident selection.
+    if (core->gpuStageFunction != nullptr) {
+        const bool qualified = createAndQualifyResidentRoute(core);
+        if (!qualified) {
+            std::string detail;
+            {
+                std::lock_guard lock(core->stateMutex);
+                detail = core->publishedResidentDetail;
+            }
+            core->publishState(
+                GpuPreviewDisplayServiceState::Unavailable, false,
+                {GpuPreviewDisplayServiceDiagnosticCode::ResidentQualificationUnavailable,
+                 detail.empty() ? std::string("The resident preview route did not qualify.")
+                                : std::move(detail)},
+                nullptr);
+            static_cast<void>(std::move(completion).fail(startupDiagnostic()));
+            return;
+        }
+        core->publishState(GpuPreviewDisplayServiceState::Ready, true,
+                           {GpuPreviewDisplayServiceDiagnosticCode::None, {}}, nullptr);
+        if (context.isCancellationRequested() ||
+            core->shutdownRequested.load(std::memory_order_acquire)) {
+            static_cast<void>(std::move(completion).cancel());
+        } else {
+            static_cast<void>(std::move(completion).succeed(0));
+        }
         return;
     }
 
@@ -265,7 +310,6 @@ void runGpuStartupImpl(const std::shared_ptr<PreviewDisplayServiceCore>& core, T
         return;
     }
     core->display = std::move(native.display);
-    core->processor = built.handle();
 
     auto predicate = [core]() noexcept {
         return core->shutdownRequested.load(std::memory_order_acquire);
@@ -437,18 +481,29 @@ void processPreviewStages(const std::shared_ptr<PreviewDisplayServiceCore>& core
             if (stage->stageChild.isValid()) {
                 stage->stageChild.cancel();
             }
+            if (stage->gpuStageChild.isValid()) {
+                stage->gpuStageChild.cancel();
+            }
             if (stage->fallbackChild.isValid()) {
                 stage->fallbackChild.cancel();
             }
             if (stage->nativeDispatched) {
                 stage->nativeDiscard = true;
-                if (core->display != nullptr) {
+                if (stage->resident) {
+                    residentCancelNative(core);
+                } else if (core->display != nullptr) {
                     core->display->cancel();
                 }
             }
         }
 
         try {
+            if (stage->phase == StagePhase::AwaitingStage && stage->gpuStageChild.isValid()) {
+                if (auto result = stage->gpuStageChild.tryTakeResult()) {
+                    handleGpuStageChildResult(core, stage, std::move(*result));
+                }
+            }
+
             if (stage->phase == StagePhase::AwaitingStage && stage->stageChild.isValid()) {
                 if (auto result = stage->stageChild.tryTakeResult()) {
                     handleStageChildResult(core, stage, std::move(*result));

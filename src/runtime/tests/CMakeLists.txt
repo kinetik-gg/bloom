@@ -265,6 +265,27 @@ bloom_add_test(
     TIMEOUT 300
 )
 
+# Resident-route service dispatch: the narrow estimatePixels regression and the additive resident
+# overload's disabled/status contract run without hardware. The real enabled Wayland acceptance is in
+# the UI test tree; --loader/--require-device are supplied by the local supervisor.
+add_executable(
+    bloom_runtime_gpu_preview_display_service_resident_test
+    gpu_preview_display_service_resident_tests.cpp
+)
+target_link_libraries(
+    bloom_runtime_gpu_preview_display_service_resident_test
+    PRIVATE bloom_runtime_evaluator
+)
+target_include_directories(bloom_runtime_gpu_preview_display_service_resident_test PRIVATE ..)
+bloom_enable_warnings(bloom_runtime_gpu_preview_display_service_resident_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_preview_display_service_resident_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_preview_display_service_resident
+    COMMAND bloom_runtime_gpu_preview_display_service_resident_test
+    LABELS runtime unit gpu resident
+    TIMEOUT 300
+)
+
 # Bounded owner-thread GPU scene content cache. It drives real resident images produced by SolidV1,
 # so it depends only on runtime create() availability and runs against the CPU stub with an explicit
 # skip; --loader/--require-device are supplied by the local supervisor for a native run.

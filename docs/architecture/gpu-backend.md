@@ -208,9 +208,10 @@ quarantines an unproved submission rather than destroying it in flight. Verified
 device with the pinned loader: the SolidV1 CPU-oracle parity and the embedded-SPIR-V digest pin, the
 resident Neutral display parity (RGB within one code, alpha exact) with subnormal-status rejection
 and budget refusal, and bit-exact host-upload readback; the CPU stubs compile clean under the same
-strict flags. These are rendering primitives only: no scene evaluator selects them yet, they are not
-wired into `GpuPreviewDisplayService`, not composed per layer, and not presented through a viewer, so
-no performance claim is made here.
+strict flags. These are rendering primitives only: no scene evaluator selects them here, they are not
+composed per layer, and not presented through a viewer, so no performance claim is made here. (A
+later slice wires the solid/display primitives into the opt-in `GpuPreviewDisplayService` resident
+route described below; that route is not activated by any application surface.)
 
 The presentation lane now has a governed Wayland bootstrap and a swapchain lifecycle, still without
 any viewer/service wiring. The qualified Linux loader is rebuilt with `BUILD_WSI_WAYLAND_SUPPORT=ON`
@@ -543,8 +544,36 @@ keeps pumping until the surfaces it owns are genuinely retired. No `ViewerEditor
 viewer/controller, product, or service route implements or consumes the interface yet; CPU-only
 platforms never see it and their synchronous behavior is unchanged.
 
-Pending and unchanged: the service selection that dispatches prepared commands through the executor,
-per-layer GPU compositing selection, resident GPU viewer buffers,
+The existing `GpuPreviewDisplayService` now additionally owns an opt-in resident dispatch route: a
+genuine startup `qualifyResidentPreview()` report (independent of the packed readback qualification), a
+prepared GPU scene driven through the existing `GpuSceneExecutor` -> `GpuResidentDisplay` -> resident
+product factory, and an opaque owner-bound `GpuResidentFrameLease` published into the service's own
+presentation registry -- all on the service's single owner thread, device, and scheduler GPU lease,
+with zero full-frame readback. The default constructor is unchanged; the resident route is an additive
+constructor overload selected only for an eligible device/processor, a usable presentation generation,
+a neutral request, and a trusted output descriptor that fits the measured eligible interval. Anything
+else takes the full original CPU path on the same snapshot/identity/overrides. A stage whose
+failure/deadline/cancellation/lost generation leaves a native submission unretired enters an explicit
+`Retiring` phase that retains the stage, its `GpuTaskCompletion`, and the native pins until retirement
+is actually proven; `GpuSceneExecutor::hasUnretiredSubmission()` and
+`GpuResidentDisplay::hasUnretiredSubmission()` are the authoritative tests (the executor's
+`ownerDrainRequired()` is only the reuse gate latched by an unproven failure, and a logical display
+`Failure` may still hold a queued submission), so ordinary cancellation and logical failure cannot
+release the parent admission early. Healthy registry budget pressure is a temporary refusal that falls
+back to the CPU without invalidating live leases or pins. Verified on the current native closure with
+the pinned loader: the real enabled Wayland acceptance (genuine resident qualification, a real solid
+prepared frame as `GpuResident` display and process provenance with no CPU buffer and no process
+frame, a valid lease presented through a real `QWindow`/`VkSurfaceKHR`, warm-identical reuse with zero
+additional native operations, an unsupported subset taking the full CPU path, cancellation during the
+CPU stage, and host-ordered shutdown), plus the portable estimate/status regression and the existing
+CPU/packed service suites. This is not activated: no application/`ViewerEditor`/controller/host
+constructs the resident overload, the service constructor remains unused until that app wiring lands,
+and the broader media `SourceOver` route and a presented-swapchain pixel oracle remain deferred
+vertical-acceptance work, so no application-FPS or `ReferenceParity` claim is made. The startup
+resident qualification time is a display-route microbenchmark only.
+
+Pending and unchanged: the application usage of the service resident overload, per-layer GPU
+compositing selection, resident GPU viewer buffers,
 the service/viewer activation that consumes the render-side image-present path, a whole-application benchmark, the full per-operation qualification
 fixtures for a future `ReferenceParity` profile (the qualified display transform and the resident
 scene route remain `PreviewOnly`; no operation reaches `ReferenceParity`), general graph

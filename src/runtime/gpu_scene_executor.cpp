@@ -340,4 +340,11 @@ bool GpuSceneExecutor::teardownDrainIncomplete() noexcept {
            render::GpuImageUpload::teardownDrainIncomplete();
 }
 
+// Folded additive accessor (declared in the public header). It introduces no field or layout
+// change; it reports both the executor's own native-in-flight flag and any owned pipeline's
+// unretired submission. Kept here in the owning translation unit rather than a tiny separate one.
+bool GpuSceneExecutor::hasUnretiredSubmission() const noexcept {
+    return impl_ != nullptr && (impl_->nativeInFlight || impl_->hasUnretiredNative());
+}
+
 } // namespace bloom::runtime

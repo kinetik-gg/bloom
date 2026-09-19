@@ -80,5 +80,6 @@ GpuDisplayImageReadback GpuResidentDisplay::readback() noexcept {
 }
 void GpuResidentDisplay::cancel() noexcept {}
 bool GpuResidentDisplay::teardownDrainIncomplete() noexcept { return false; }
+bool GpuResidentDisplay::hasUnretiredSubmission() const noexcept { return false; }
 
 } // namespace bloom::render

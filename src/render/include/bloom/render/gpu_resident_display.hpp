@@ -163,6 +163,14 @@ class GpuResidentDisplay final {
 
     [[nodiscard]] static bool teardownDrainIncomplete() noexcept;
 
+    // True while a submitted native job's fence retirement is NOT proven (the native Impl's
+    // queueSubmitted flag). Logical job state (Idle/Ready/Failure) is NOT retirement proof: an
+    // unknown fence result sets Failure WITHOUT clearing the submission. A caller must keep the
+    // stage, its completion/admission, and the native pins until this is false, or destroy this
+    // pipeline on the owner thread (its destructor performs a bounded drain/quarantine). Additive
+    // accessor: no field or layout change.
+    [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
+
   private:
     struct Impl;
     explicit GpuResidentDisplay(std::unique_ptr<Impl> impl) noexcept;

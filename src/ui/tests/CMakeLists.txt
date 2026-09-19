@@ -1139,6 +1139,22 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         PRIVATE bloom_ui Vulkan::Headers)
     bloom_enable_warnings(bloom_ui_gpu_presentation_coordinator_test)
 
+    add_executable(bloom_ui_gpu_preview_display_service_presentation_test
+        gpu_preview_display_service_presentation_tests.cpp)
+    target_include_directories(bloom_ui_gpu_preview_display_service_presentation_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+    target_link_libraries(bloom_ui_gpu_preview_display_service_presentation_test
+        PRIVATE bloom_ui Vulkan::Headers)
+    bloom_enable_warnings(bloom_ui_gpu_preview_display_service_presentation_test)
+
+    add_executable(bloom_ui_gpu_preview_display_service_resident_test
+        gpu_preview_display_service_resident_tests.cpp)
+    target_include_directories(bloom_ui_gpu_preview_display_service_resident_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+    target_link_libraries(bloom_ui_gpu_preview_display_service_resident_test
+        PRIVATE bloom_ui Vulkan::Headers)
+    bloom_enable_warnings(bloom_ui_gpu_preview_display_service_resident_test)
+
     add_executable(bloom_ui_viewer_gpu_presenter_test
         viewer_gpu_presenter_fake_port_tests.cpp)
     target_include_directories(bloom_ui_viewer_gpu_presenter_test
@@ -1162,6 +1178,18 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_add_test(
         NAME bloom.ui.gpu_presentation_coordinator
         COMMAND bloom_ui_gpu_presentation_coordinator_test ${bloom_ui_vulkan_loader_args}
+        LABELS ui integration gpu presentation TIMEOUT 300
+        ENVIRONMENT "QT_QPA_PLATFORM=wayland"
+    )
+    bloom_add_test(
+        NAME bloom.ui.gpu_preview_display_service_presentation
+        COMMAND bloom_ui_gpu_preview_display_service_presentation_test ${bloom_ui_vulkan_loader_args}
+        LABELS ui integration gpu presentation TIMEOUT 300
+        ENVIRONMENT "QT_QPA_PLATFORM=wayland"
+    )
+    bloom_add_test(
+        NAME bloom.ui.gpu_preview_display_service_resident
+        COMMAND bloom_ui_gpu_preview_display_service_resident_test ${bloom_ui_vulkan_loader_args}
         LABELS ui integration gpu presentation TIMEOUT 300
         ENVIRONMENT "QT_QPA_PLATFORM=wayland"
     )

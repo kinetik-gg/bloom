@@ -115,6 +115,12 @@ target_sources(
         gpu_preview_display_service.cpp
         gpu_preview_display_service_jobs.cpp
         gpu_preview_display_service_private.hpp
+        gpu_preview_display_service_loop.hpp
+        gpu_preview_display_service_presentation.cpp
+        gpu_preview_display_service_presentation_private.hpp
+        gpu_preview_display_service_resident.cpp
+        gpu_preview_display_service_resident_jobs.cpp
+        gpu_preview_display_service_resident_private.hpp
         gpu_scene_cache.cpp
         gpu_scene_executor.cpp
         gpu_scene_executor_planner.cpp
