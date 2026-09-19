@@ -223,7 +223,17 @@ function(bloom_find_dependency package)
         endif()
         bloom_validate_shared_dependency_inventory("${package}")
     elseif(BLOOM_DEPENDENCY_MODE STREQUAL "developer-system")
-        find_package(${package} REQUIRED CONFIG)
+        if(package STREQUAL "ZLIB")
+            # Homebrew's zlib ships no CMake package config, and the shared library's own native
+            # export names its target ZLIB::ZLIBSTATIC. Resolve with the host's module-mode FindZLIB
+            # and alias the conventional target so downstream links work unchanged on every platform.
+            find_package(ZLIB REQUIRED)
+            if(NOT TARGET ZLIB::ZLIBSTATIC AND TARGET ZLIB::ZLIB)
+                add_library(ZLIB::ZLIBSTATIC ALIAS ZLIB::ZLIB)
+            endif()
+        else()
+            find_package(${package} REQUIRED CONFIG)
+        endif()
         bloom_validate_shared_dependency_inventory("${package}")
     else()
         message(FATAL_ERROR

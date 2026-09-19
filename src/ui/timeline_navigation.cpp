@@ -95,10 +95,11 @@ std::uint64_t TimelineAxis::frameIndexForPixel(const int pixelX) const noexcept 
         }
     }
     const long double seconds = static_cast<long double>(t0) +
-                                static_cast<long double>(pixel) / span *
+                                static_cast<long double>(pixel) / static_cast<long double>(span) *
                                     (static_cast<long double>(t1) - static_cast<long double>(t0));
-    const long double index =
-        std::floor(seconds * frameRate.numerator() / frameRate.denominator() + 0.5L);
+    const long double index = std::floor(seconds * static_cast<long double>(frameRate.numerator()) /
+                                             static_cast<long double>(frameRate.denominator()) +
+                                         0.5L);
     if (index <= 0.0L) {
         return 0;
     }

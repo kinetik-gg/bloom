@@ -11,4 +11,5 @@ Desktop.ini
 *.suo
 *.vcxproj.user
 *.autosave
+aqtinstall.log
 compile_commands.json

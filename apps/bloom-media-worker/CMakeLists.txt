@@ -94,6 +94,82 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     install(FILES ${bloom_ffmpeg_private} DESTINATION libexec/bloom/media/ffmpeg-v1/lib)
 endif()
 
+if(APPLE)
+    # The macOS worker loads exactly one provider generation: the Apple-framework VideoToolbox/
+    # AVFoundation provider. There is no bundled third-party codec, so the worker links system
+    # frameworks directly and installs into its own generation directory.
+    target_sources(bloom_media_provider
+                   PRIVATE "${PROJECT_SOURCE_DIR}/src/media/provider/videotoolbox_manifest.cpp")
+    target_compile_definitions(bloom_media_provider PRIVATE
+        BLOOM_MEDIA_DEPENDENCY_LOCK="${bloom_media_lock_digest}"
+        BLOOM_VIDEOTOOLBOX_BUILD_ID="videotoolbox-v1:${bloom_media_build_digest}"
+        BLOOM_VIDEOTOOLBOX_FIXTURE_ID="${bloom_media_build_digest}"
+        BLOOM_VIDEOTOOLBOX_ENCODE_FIXTURE_ID="${bloom_media_build_digest}"
+        BLOOM_MEDIA_OS="${CMAKE_SYSTEM_NAME}" BLOOM_MEDIA_ARCH="${CMAKE_SYSTEM_PROCESSOR}")
+    add_library(bloom_media_videotoolbox_worker_provider STATIC videotoolbox_provider.mm)
+    target_include_directories(bloom_media_videotoolbox_worker_provider
+                               PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(bloom_media_videotoolbox_worker_provider
+        PRIVATE bloom_media_provider
+                "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo"
+                "-framework VideoToolbox" "-framework CoreFoundation" "-framework Foundation")
+    bloom_enable_warnings(bloom_media_videotoolbox_worker_provider)
+    target_compile_options(bloom_media_videotoolbox_worker_provider
+                           PRIVATE -Wno-deprecated-declarations -Wno-old-style-cast)
+    add_executable(bloom-media-worker main.cpp)
+    target_compile_definitions(bloom-media-worker PRIVATE BLOOM_VIDEOTOOLBOX_WORKER)
+    target_link_libraries(bloom-media-worker
+        PRIVATE bloom_media_provider bloom_media_videotoolbox_worker_provider bloom_platform_process)
+    bloom_enable_warnings(bloom-media-worker)
+    target_compile_definitions(bloom_media_worker_host
+                               PRIVATE BLOOM_ENCODE_WORKER="$<TARGET_FILE:bloom-media-worker>")
+    target_compile_definitions(bloom_media_video
+                               PRIVATE BLOOM_VIDEO_WORKER="$<TARGET_FILE:bloom-media-worker>")
+    install(TARGETS bloom-media-worker RUNTIME DESTINATION libexec/bloom/media/videotoolbox-v1)
+
+    if(BUILD_TESTING)
+        include(BloomTesting)
+        add_executable(bloom_media_videotoolbox_test tests/videotoolbox_provider_tests.mm)
+        target_include_directories(bloom_media_videotoolbox_test
+                                   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+        target_link_libraries(bloom_media_videotoolbox_test
+            PRIVATE bloom_media_provider bloom_media_videotoolbox_worker_provider
+                    "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo"
+                    "-framework VideoToolbox" "-framework CoreFoundation" "-framework Foundation")
+        bloom_enable_warnings(bloom_media_videotoolbox_test)
+        target_compile_options(bloom_media_videotoolbox_test
+                               PRIVATE -Wno-deprecated-declarations -Wno-old-style-cast)
+        bloom_add_test(NAME bloom.media.videotoolbox COMMAND bloom_media_videotoolbox_test
+                       LABELS unit media)
+
+        # End-to-end export through the real worker process (host session -> worker -> encode ->
+        # reopen QC -> artifact). Single low-resolution frame, so a broken colour path, tolerance,
+        # or protocol step fails here instead of in the running application.
+        add_executable(bloom_media_videotoolbox_export_test
+                       tests/videotoolbox_export_tests.cpp)
+        target_link_libraries(bloom_media_videotoolbox_export_test PRIVATE bloom_media_worker_host)
+        bloom_enable_warnings(bloom_media_videotoolbox_export_test)
+        bloom_add_test(NAME bloom.media.videotoolbox-export
+                       COMMAND bloom_media_videotoolbox_export_test LABELS unit media)
+
+        # End-to-end decode through the real worker process (generated fixture -> host session ->
+        # worker -> probe/decode). Nothing binary is checked in.
+        add_executable(bloom_media_videotoolbox_decode_test
+                       tests/videotoolbox_decode_tests.mm)
+        target_include_directories(bloom_media_videotoolbox_decode_test
+                                   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+        target_link_libraries(bloom_media_videotoolbox_decode_test
+            PRIVATE bloom_media_video
+                    "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo"
+                    "-framework VideoToolbox" "-framework CoreFoundation" "-framework Foundation")
+        bloom_enable_warnings(bloom_media_videotoolbox_decode_test)
+        target_compile_options(bloom_media_videotoolbox_decode_test
+                               PRIVATE -Wno-deprecated-declarations -Wno-old-style-cast)
+        bloom_add_test(NAME bloom.media.videotoolbox-decode
+                       COMMAND bloom_media_videotoolbox_decode_test LABELS unit media)
+    endif()
+endif()
+
 if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # Tests may exercise the newly-intaken FFmpeg wrapper only with the exact Cisco binary. This
     # staging directory is build-only test data; it is never copied into the dependency prefix,

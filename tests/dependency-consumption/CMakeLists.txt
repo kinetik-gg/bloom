@@ -43,9 +43,21 @@ add_executable(bloom_ffmpeg_consume_smoke "${CMAKE_BINARY_DIR}/ffmpeg_consume_sm
 target_link_libraries(bloom_ffmpeg_consume_smoke PRIVATE FFmpeg::avcodec FFmpeg::avformat)
 target_compile_features(bloom_ffmpeg_consume_smoke PRIVATE cxx_std_20)
 
+# libavcodec records DT_NEEDED libopenh264.so.8, but the qualified prefix deliberately carries only
+# a text import stub and never an OpenH264 runtime binary (see openh264-boundary.cmake). The worker
+# runtime directory holds the six-symbol OpenH264 shim that satisfies the two symbols libavcodec
+# references, so resolve the link and run against it when the caller supplies that directory.
+set(BLOOM_FFMPEG_CONSUME_LIBRARY_PATH "${BLOOM_DEPENDENCY_PREFIX}/lib")
+if(DEFINED BLOOM_MEDIA_WORKER_RUNTIME)
+    target_link_directories(bloom_ffmpeg_consume_smoke PRIVATE "${BLOOM_MEDIA_WORKER_RUNTIME}")
+    target_link_options(bloom_ffmpeg_consume_smoke PRIVATE
+        "LINKER:-rpath-link,${BLOOM_MEDIA_WORKER_RUNTIME}")
+    string(APPEND BLOOM_FFMPEG_CONSUME_LIBRARY_PATH ":${BLOOM_MEDIA_WORKER_RUNTIME}")
+endif()
+
 add_test(NAME bloom.dependency.ffmpeg-consume COMMAND bloom_ffmpeg_consume_smoke)
 set_tests_properties(bloom.dependency.ffmpeg-consume PROPERTIES
-    ENVIRONMENT "LD_LIBRARY_PATH=${BLOOM_DEPENDENCY_PREFIX}/lib")
+    ENVIRONMENT "LD_LIBRARY_PATH=${BLOOM_FFMPEG_CONSUME_LIBRARY_PATH}")
 
 set(BLOOM_MEDIA_WORKER_RUNTIME_ARGUMENT)
 if(DEFINED BLOOM_MEDIA_WORKER_RUNTIME)

@@ -135,10 +135,19 @@ MachineMemorySample machineMemorySample() noexcept {
         host_statistics64(
             host, HOST_VM_INFO64,
             reinterpret_cast<host_info64_t>(&statistics), // NOLINT(*-reinterpret-cast)
-            &count) == KERN_SUCCESS)
-        sample.availableBytes =
-            (static_cast<std::size_t>(statistics.free_count) + statistics.inactive_count) *
-            pageSize;
+            &count) == KERN_SUCCESS) {
+        // The Linux sampler reads MemAvailable, which includes reclaimable page cache. macOS keeps
+        // most file cache in active/inactive pages, so free + inactive alone understates what the
+        // system can hand back and falsely declares pressure on a machine that is merely caching.
+        // Count free, inactive, speculative and purgeable pages, plus file-backed pages, which the
+        // VM reclaims under pressure.
+        auto pages = static_cast<std::size_t>(statistics.free_count);
+        pages = saturatedAdd(pages, static_cast<std::size_t>(statistics.inactive_count));
+        pages = saturatedAdd(pages, static_cast<std::size_t>(statistics.speculative_count));
+        pages = saturatedAdd(pages, static_cast<std::size_t>(statistics.purgeable_count));
+        pages = saturatedAdd(pages, static_cast<std::size_t>(statistics.external_page_count));
+        sample.availableBytes = pages * pageSize;
+    }
     mach_port_deallocate(mach_task_self(), host);
     xsw_usage swap{};
     auto size = sizeof(swap);
@@ -236,9 +245,11 @@ MemoryBudgetLedger::allocate(const std::optional<std::size_t> operationOverride,
         operation = std::min(*operationOverride, usableByteBudget_);
         preview = std::min(*previewOverride, usableByteBudget_);
         if (exceeds(operation, preview, usableByteBudget_)) {
-            const auto total = static_cast<long double>(operation) + preview;
-            operation = static_cast<std::size_t>(static_cast<long double>(operation) *
-                                                 usableByteBudget_ / total);
+            const auto total =
+                static_cast<long double>(operation) + static_cast<long double>(preview);
+            operation =
+                static_cast<std::size_t>(static_cast<long double>(operation) *
+                                         static_cast<long double>(usableByteBudget_) / total);
             preview = usableByteBudget_ - operation;
         }
     } else if (operationOverride.has_value()) {

@@ -29,6 +29,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <unistd.h>
 #include <utility>
 
 // SAVEFIX-1's recovery half, driven against the same real coordinators and per-test temporary

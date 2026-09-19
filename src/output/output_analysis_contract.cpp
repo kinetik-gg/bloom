@@ -54,6 +54,12 @@ OutputPresetAvailabilityV1 outputPresetAvailabilityV1(const OutputPresetV1 prese
         return {.available = true, .reason = {}};
 #if defined(__linux__)
     return {.available = true, .reason = {}};
+#elif defined(__APPLE__)
+    if (preset == OutputPresetV1::ProResMovV1 || preset == OutputPresetV1::H264MovV1)
+        return {.available = true, .reason = {}};
+    return {.available = false,
+            .reason = "The VideoToolbox provider writes MOV/MP4 video; this preset needs the "
+                      "FFmpeg worker"};
 #else
     return {.available = false,
             .reason = "The supervised FFmpeg worker is unavailable on this platform"};

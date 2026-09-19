@@ -3,6 +3,9 @@
 #include <bloom/media/image.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/provider/openh264_runtime.hpp>
+#if defined(__APPLE__)
+#include <bloom/media/provider/videotoolbox_manifest.hpp>
+#endif
 #include <bloom/media/video/audio.hpp>
 #include <bloom/output/composition_output_stream.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -209,8 +212,14 @@ Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& ana
             analysis.settings.videoCodec == "h264" &&
             analysis.implementationNote.find("encoder=vaapi") != std::string::npos;
         const bool openh264 = analysis.settings.videoCodec == "h264" && !hardware;
+#if defined(__APPLE__)
+        (void)hardware;
+        (void)openh264;
+        const auto hello = videoToolboxHandshake();
+#else
         const auto hello = ffmpegHandshake(hardware, openh264, OpenH264Runtime::version(),
                                            OpenH264Runtime::libraryDigest());
+#endif
         evidence.execution = checked(digest(hello.execution));
         // Bind all declared ordered export components; no delivery or independent-reader claim.
         PipelineQualificationV1 pipeline;
@@ -243,8 +252,13 @@ Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& ana
                                       checked(digest(found->evidence))});
         }
         evidence.pipeline = checked(digest(pipeline));
+#if defined(__APPLE__)
+        evidence.tool = "bloom.videotoolbox";
+        evidence.version = "VideoToolbox";
+#else
         evidence.tool = "bloom.ffmpeg";
         evidence.version = "FFmpeg-8.1.2";
+#endif
         evidence.profile = "media4-export-v1";
         evidence.coverage = "all frame timestamps/count; stream layout; duration; first/last "
                             "pixels; every PCM sample; staged digest";

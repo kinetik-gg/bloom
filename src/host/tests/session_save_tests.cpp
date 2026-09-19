@@ -41,6 +41,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unistd.h>
 #include <utility>
 #include <variant>
 #include <vector>

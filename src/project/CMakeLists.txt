@@ -1,5 +1,10 @@
 bloom_find_dependency(yyjson)
 bloom_find_dependency(libzip)
+# The constrained ZIP codec calls zlib directly (deflate/deflateBound/deflateEnd/
+# deflateInit2_/crc32_z), so zlib is a direct private link dependency rather than one inherited
+# transitively from libzip. On a static libzip that inheritance happened to work; a shared
+# libzip (Homebrew/macOS) hides its own zlib and the direct calls fail to link.
+bloom_find_dependency(ZLIB)
 
 add_library(bloom_project STATIC)
 
@@ -77,7 +82,7 @@ target_compile_features(bloom_project PUBLIC cxx_std_20)
 # needs bloom_platform's headers visible too. Every other bloom_project header stays
 # platform-free; only this one new public header drives the PUBLIC requirement.
 target_link_libraries(bloom_project PUBLIC bloom_core bloom_document bloom_platform)
-target_link_libraries(bloom_project PRIVATE yyjson::yyjson libzip::zip)
+target_link_libraries(bloom_project PRIVATE yyjson::yyjson libzip::zip ZLIB::ZLIBSTATIC)
 bloom_enable_warnings(bloom_project)
 
 if(BUILD_TESTING)

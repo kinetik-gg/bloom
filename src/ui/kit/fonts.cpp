@@ -38,6 +38,31 @@ std::optional<BundledFontStatus>& memo() {
     return value;
 }
 
+// Some platforms (CoreText on macOS) collapse a weight-specific static face into its base family
+// and expose the weight as a style, so "Inter Medium" registers as "Inter" with style "Medium".
+// The face is still the expected asset; only the family spelling differs. Stripping the weight
+// suffix lets role resolution accept either spelling without treating normalisation as a swapped
+// asset.
+[[nodiscard]] QString baseFamilyFor(const QString& family) {
+    for (const auto& suffix : {QStringLiteral(" Medium"), QStringLiteral(" SemiBold")}) {
+        if (family.endsWith(suffix)) {
+            return family.left(family.size() - suffix.size());
+        }
+    }
+    return family;
+}
+
+[[nodiscard]] QString resolvedRoleFamily(const BundledFontStatus& status, const QString& expected) {
+    if (status.registeredFamilies.contains(expected)) {
+        return expected;
+    }
+    QString base = baseFamilyFor(expected);
+    if (base != expected && status.registeredFamilies.contains(base)) {
+        return base;
+    }
+    return {};
+}
+
 [[nodiscard]] BundledFontStatus loadBundledFaces() {
     BundledFontStatus status;
     for (const auto& [resourcePath, expectedFamily, isMonospace] : kBundledFaces) {
@@ -64,13 +89,17 @@ std::optional<BundledFontStatus>& memo() {
                     .arg(resourcePath));
             continue;
         }
-        if (!families.contains(expectedFamily)) {
+        const QString expected = QString(expectedFamily);
+        const QString base = baseFamilyFor(expected);
+        const bool acceptedAsExpected = families.contains(expected);
+        const bool acceptedAsNormalised = base != expected && families.contains(base);
+        if (!acceptedAsExpected && !acceptedAsNormalised) {
             // The face loaded but is not the face this build expects -- a swapped or re-released
             // asset. Reported rather than trusted: fontFamiliesForRole() will simply not offer a
             // family it cannot see, and the role degrades to its next choice.
             status.diagnostics.append(
                 QStringLiteral("bundled font %1 registered as %2, not the expected %3")
-                    .arg(resourcePath, families.join(QStringLiteral(", ")), expectedFamily));
+                    .arg(resourcePath, families.join(QStringLiteral(", ")), expected));
         }
         status.registeredFamilies.append(families);
         if (isMonospace) {
@@ -132,21 +161,33 @@ QStringList fontFamiliesForRole(const TypeRole role) {
 
     switch (role) {
     case TypeRole::Ui:
-    case TypeRole::UiSmall:
-        appendIfRegistered(families, status, QStringLiteral("Inter Medium"));
+    case TypeRole::UiSmall: {
+        const QString medium = resolvedRoleFamily(status, QStringLiteral("Inter Medium"));
+        if (!medium.isEmpty()) {
+            families.append(medium);
+        }
         appendIfRegistered(families, status, interfaceFontFamily());
         families.append(platformFallback(QFontDatabase::GeneralFont));
         break;
-    case TypeRole::Title:
-        appendIfRegistered(families, status, QStringLiteral("Inter SemiBold"));
+    }
+    case TypeRole::Title: {
+        const QString semiBold = resolvedRoleFamily(status, QStringLiteral("Inter SemiBold"));
+        if (!semiBold.isEmpty()) {
+            families.append(semiBold);
+        }
         appendIfRegistered(families, status, interfaceFontFamily());
         families.append(platformFallback(QFontDatabase::GeneralFont));
         break;
-    case TypeRole::Value:
-        appendIfRegistered(families, status, QStringLiteral("Geist Mono Medium"));
+    }
+    case TypeRole::Value: {
+        const QString medium = resolvedRoleFamily(status, QStringLiteral("Geist Mono Medium"));
+        if (!medium.isEmpty()) {
+            families.append(medium);
+        }
         appendIfRegistered(families, status, monospaceFontFamily());
         families.append(platformFallback(QFontDatabase::FixedFont));
         break;
+    }
     }
     families.removeDuplicates();
     return families;

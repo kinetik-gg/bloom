@@ -20,7 +20,7 @@ jobs:
   linux:
     name: Linux Clang quality
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       CC: clang-22
       CXX: clang++-22
@@ -98,7 +98,7 @@ jobs:
   linux-desktop:
     name: Linux Qt desktop
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       CC: clang-22
       CXX: clang++-22
@@ -190,3 +190,106 @@ jobs:
           path: build/*.png
           if-no-files-found: ignore
           retention-days: 7
+
+  # macOS native/core qualification. The desktop and media provider are Apple-framework
+  # implementations (CoreText font catalogue, POSIX staged publication and process supervision, and
+  # the VideoToolbox/AVFoundation media worker), so this job builds and tests them off the Qt shell.
+  # Non-required: Linux remains the automated merge gate.
+  macos-native:
+    name: macOS Clang quality
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      # `src/core` uses floating-point std::from_chars/std::to_chars, which Apple's libc++ only
+      # ships from a recent Xcode; select the newest installed toolchain.
+      - name: Select newest Xcode
+        run: |
+          newest=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
+          xcodebuild -version || clang++ --version | head -1
+
+      - name: Install dependencies
+        run: brew install opencolorio openexr libzip yyjson zlib ninja
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/macos-native -G Ninja \
+            -DBLOOM_DEPENDENCY_MODE=developer-system \
+            -DBLOOM_BUILD_DESKTOP=OFF \
+            -DBLOOM_BUILD_PYTHON=OFF \
+            -DBUILD_TESTING=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH=/opt/homebrew
+
+      - name: Build
+        run: cmake --build build/macos-native --parallel
+
+      - name: Test
+        run: ctest --test-dir build/macos-native --output-on-failure -j 3 --timeout 900
+
+  # macOS desktop build: the Qt shell, the bundled media worker, and macdeployqt packaging.
+  # Non-required for the same reason as macos-native.
+  macos-desktop:
+    name: macOS Qt desktop
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Select newest Xcode
+        run: |
+          newest=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
+          xcodebuild -version || clang++ --version | head -1
+
+      - name: Install dependencies
+        run: brew install opencolorio openexr libzip yyjson zlib ninja
+
+      - name: Install Qt
+        # aqt writes aqtinstall.log into its working directory; run it outside the checkout so the
+        # repository hygiene check never sees it.
+        working-directory: ${{ runner.temp }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/aqt-venv"
+          "$RUNNER_TEMP/aqt-venv/bin/pip" install --quiet aqtinstall==3.2.1
+          "$RUNNER_TEMP/aqt-venv/bin/aqt" install-qt mac desktop 6.8.3 clang_64 \
+            --outputdir "$RUNNER_TEMP/qt"
+
+      # Some macOS SDKs removed the deprecated AGL framework that Qt's link line still names. Provide
+      # an empty stub so linking succeeds; it contributes no symbols.
+      - name: Provide AGL framework stub
+        run: |
+          mkdir -p "$RUNNER_TEMP/agl-frameworks/AGL.framework/Resources"
+          printf 'void __bloom_agl_stub(void) {}\n' > "$RUNNER_TEMP/agl.c"
+          clang -c "$RUNNER_TEMP/agl.c" -o "$RUNNER_TEMP/agl.o"
+          ar rcs "$RUNNER_TEMP/agl-frameworks/AGL.framework/AGL" "$RUNNER_TEMP/agl.o"
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/macos-desktop -G Ninja \
+            -DBLOOM_DEPENDENCY_MODE=developer-system \
+            -DBLOOM_BUILD_DESKTOP=ON \
+            -DBLOOM_BUILD_PYTHON=OFF \
+            -DBUILD_TESTING=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/qt/6.8.3/macos;/opt/homebrew" \
+            -DCMAKE_EXE_LINKER_FLAGS="-F$RUNNER_TEMP/agl-frameworks" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-F$RUNNER_TEMP/agl-frameworks"
+
+      - name: Build
+        run: cmake --build build/macos-desktop --parallel
+
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build/macos-desktop --output-on-failure -j 3 --timeout 900
+
+      - name: Package Bloom.app with macdeployqt
+        run: cmake --build build/macos-desktop --target bloom-deploy-macos
+

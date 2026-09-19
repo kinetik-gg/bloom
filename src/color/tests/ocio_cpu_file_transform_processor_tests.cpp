@@ -25,7 +25,7 @@ void cube(const std::filesystem::path& path, const float gain) {
                 file << static_cast<float>(r) * gain << ' ' << static_cast<float>(g) * gain << ' '
                      << static_cast<float>(b) * gain << '\n';
 }
-void testFormatsAndRefusals(const std::filesystem::path& root) {
+void testFormatsAndRefusals([[maybe_unused]] const std::filesystem::path& root) {
 #ifdef __linux__
     const auto testFormat = [&root](const char* name, const std::string& contents) {
         const auto path = root / name;

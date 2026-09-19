@@ -157,10 +157,9 @@ buildBloomNeutralCpuDisplayProcessor(const ResolvedBloomNeutralConfig& resolved,
     return buildCpuDisplayProcessorForView(resolved, displayName, viewName);
 }
 
-OcioBuildProcessorResult
-buildCpuDisplayProcessorForView(const ResolvedBloomNeutralConfig& resolved,
-                                const std::string_view displayName,
-                                const std::string_view viewName) noexcept {
+OcioBuildProcessorResult buildCpuDisplayProcessorForView(const ResolvedBloomNeutralConfig& resolved,
+                                                         const std::string_view displayName,
+                                                         const std::string_view viewName) noexcept {
     const auto entry = std::find_if(
         resolved.displays().begin(), resolved.displays().end(), [&](const auto& candidate) {
             return candidate.display == displayName && candidate.view == viewName;

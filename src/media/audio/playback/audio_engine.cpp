@@ -326,8 +326,9 @@ RationalTime AudioEngine::positionNow() const noexcept {
     std::scoped_lock lock(controlMutex_);
     const auto frames = framesWritten_.load(std::memory_order_acquire);
     if (playbackRateNumerator_ == playbackRateDenominator_) {
-        const auto numerator = static_cast<long double>(clockOrigin_.numerator()) * config_.rate +
-                               static_cast<long double>(frames) * clockOrigin_.denominator();
+        const auto numerator =
+            static_cast<long double>(clockOrigin_.numerator()) * config_.rate +
+            static_cast<long double>(frames) * static_cast<long double>(clockOrigin_.denominator());
         const auto denominator =
             static_cast<long double>(clockOrigin_.denominator()) * config_.rate;
         if (numerator >= static_cast<long double>(std::numeric_limits<std::int64_t>::min()) &&
