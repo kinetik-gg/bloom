@@ -191,6 +191,32 @@ fake service. The Vulkan device service, fence integration, resource retirement,
 qualification spike remain pending; a synchronous fence wait hidden inside a task function is not a
 valid interim implementation.
 
+### CPU Composition Seam
+
+The composition preview's CPU half is now split from the display product applied to it, so a later
+GPU display stage can reuse the evaluated frame instead of recomputing the graph:
+
+- `bloom::runtime::PreviewCpuStage` (`src/runtime/include/bloom/runtime/preview_cpu_stage.hpp`) is
+  the immutable result of compiling, evaluating, and selecting a CPU display processor for one
+  request: the evaluated `ProcessFrame`, the selected
+  `color::PreparedCpuDisplayProcessorHandle` (null on the reference/unqualified startup path), the
+  request identity, the display byte budget, and the compile/evaluation diagnostics. It introduces
+  no new document, plan, or color type.
+- `PreviewCpuStageFunction` runs the compile/evaluate/selection half and returns an explicit
+  `Evaluated` stage or an explicit `Unsupported` outcome; cancellation and genuine failure stay
+  terminal `TaskResult` states, never a fabricated empty frame.
+- `PreviewCpuDisplayFallback` applies the reference or qualified display product to the stage's own
+  `ProcessFrame` and never compiles or re-evaluates. The stage owns the identity and budget, so the
+  fallback reads them from the stage rather than taking duplicate parameters.
+- `bloom::ui::makeCompositionPreviewPipeline()` is now a thin composition of the two factories in
+  `src/ui/composition_preview_cpu_stage.cpp`; the public `PreviewPreparationFunction` alias and all
+  callers are unchanged. The qualified provider's Ready/Pending/Failed behavior, ACES and
+  non-default display/view selection, view adjustments, overrides, ROI, progress, and diagnostics
+  are preserved.
+
+This seam is CPU-only. No GPU service, device, or pipeline is activated by it, and the renderworker's
+`GpuNeutralDisplayPipeline` is not yet consumed here.
+
 - Requests carry snapshot identity, time, output, resolution, quality, color intent, and a
   cancellation generation.
 - A newer interactive request supersedes older preview work. Submitted GPU commands may complete,

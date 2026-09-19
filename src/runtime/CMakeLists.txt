@@ -105,6 +105,7 @@ target_sources(
             include/bloom/runtime/evaluation.hpp
             include/bloom/runtime/input_color_context.hpp
             include/bloom/runtime/prepared_preview_frame.hpp
+            include/bloom/runtime/preview_cpu_stage.hpp
             include/bloom/runtime/qualified_display_preparation.hpp
             include/bloom/runtime/qualified_display_processor_provider.hpp
             include/bloom/runtime/reference_display_preparation.hpp

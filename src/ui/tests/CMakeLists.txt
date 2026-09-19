@@ -76,6 +76,9 @@ add_executable(bloom_properties_editor_test
 add_executable(bloom_composition_preview_controller_test
     composition_preview_controller_tests.cpp
 )
+add_executable(bloom_composition_preview_cpu_stage_test
+    composition_preview_cpu_stage_tests.cpp
+)
 add_executable(bloom_composition_session_animation_test
     composition_session_animation_tests.cpp
 )
@@ -180,6 +183,7 @@ target_link_libraries(bloom_kit_tokens_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_composition_projection_test PRIVATE bloom_ui)
 target_link_libraries(bloom_properties_editor_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_preview_controller_test PRIVATE bloom_ui)
+target_link_libraries(bloom_composition_preview_cpu_stage_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_session_animation_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_session_rebind_test PRIVATE bloom_ui)
 target_link_libraries(bloom_application_shutdown_test PRIVATE bloom_ui)
@@ -236,6 +240,7 @@ bloom_enable_warnings(bloom_kit_tokens_test)
 bloom_enable_warnings(bloom_composition_projection_test)
 bloom_enable_warnings(bloom_properties_editor_test)
 bloom_enable_warnings(bloom_composition_preview_controller_test)
+bloom_enable_warnings(bloom_composition_preview_cpu_stage_test)
 bloom_enable_warnings(bloom_composition_session_animation_test)
 bloom_enable_warnings(bloom_composition_session_rebind_test)
 bloom_enable_warnings(bloom_application_shutdown_test)
@@ -464,6 +469,14 @@ bloom_add_test(
 bloom_add_test(
     NAME bloom.ui.composition_preview_controller
     COMMAND bloom_composition_preview_controller_test
+    LABELS ui integration
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.composition_preview_cpu_stage
+    COMMAND bloom_composition_preview_cpu_stage_test
     LABELS ui integration
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
