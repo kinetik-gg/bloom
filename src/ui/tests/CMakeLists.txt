@@ -798,6 +798,19 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# The Settings window: control/preference binding, dirty-state gating, Apply emission, restore
+# defaults, restart badges, category navigation, and the read-only Performance page.
+add_executable(bloom_settings_window_test settings_window_tests.cpp)
+target_link_libraries(bloom_settings_window_test PRIVATE bloom_ui)
+target_include_directories(bloom_settings_window_test PRIVATE ..)
+bloom_enable_warnings(bloom_settings_window_test)
+bloom_add_test(
+    NAME bloom.ui.settings-window
+    COMMAND bloom_settings_window_test
+    LABELS ui unit
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 add_executable(bloom_background_preview_test background_preview_tests.cpp)
 target_link_libraries(bloom_background_preview_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_background_preview_test)

@@ -117,24 +117,24 @@ void writeByteBudget(QSettings& settings, const char* const key, const std::uint
     return NodeLinkStyle::Spline;
 }
 
-[[nodiscard]] ViewerResolutionPolicy viewerResolutionFromString(const QString& value) {
+[[nodiscard]] ViewerResolutionPreference viewerResolutionFromString(const QString& value) {
     if (value == QLatin1StringView("Full"))
-        return ViewerResolutionPolicy::Full;
+        return ViewerResolutionPreference::Full;
     if (value == QLatin1StringView("Half"))
-        return ViewerResolutionPolicy::Half;
+        return ViewerResolutionPreference::Half;
     if (value == QLatin1StringView("Quarter"))
-        return ViewerResolutionPolicy::Quarter;
-    return ViewerResolutionPolicy::Auto;
+        return ViewerResolutionPreference::Quarter;
+    return ViewerResolutionPreference::Auto;
 }
 
-[[nodiscard]] ViewerBackground viewerBackgroundFromString(const QString& value) {
+[[nodiscard]] ViewerBackgroundPreference viewerBackgroundFromString(const QString& value) {
     if (value == QLatin1StringView("Checkerboard"))
-        return ViewerBackground::Checkerboard;
+        return ViewerBackgroundPreference::Checkerboard;
     if (value == QLatin1StringView("Black"))
-        return ViewerBackground::Black;
+        return ViewerBackgroundPreference::Black;
     if (value == QLatin1StringView("White"))
-        return ViewerBackground::White;
-    return ViewerBackground::Solid;
+        return ViewerBackgroundPreference::White;
+    return ViewerBackgroundPreference::Solid;
 }
 
 } // namespace
@@ -235,29 +235,29 @@ const char* nodeLinkStyleValue(const NodeLinkStyle style) noexcept {
     return "spline";
 }
 
-const char* viewerResolutionValue(const ViewerResolutionPolicy policy) noexcept {
+const char* viewerResolutionValue(const ViewerResolutionPreference policy) noexcept {
     switch (policy) {
-    case ViewerResolutionPolicy::Full:
+    case ViewerResolutionPreference::Full:
         return "Full";
-    case ViewerResolutionPolicy::Half:
+    case ViewerResolutionPreference::Half:
         return "Half";
-    case ViewerResolutionPolicy::Quarter:
+    case ViewerResolutionPreference::Quarter:
         return "Quarter";
-    case ViewerResolutionPolicy::Auto:
+    case ViewerResolutionPreference::Auto:
         break;
     }
     return "Auto";
 }
 
-const char* viewerBackgroundValue(const ViewerBackground background) noexcept {
+const char* viewerBackgroundValue(const ViewerBackgroundPreference background) noexcept {
     switch (background) {
-    case ViewerBackground::Checkerboard:
+    case ViewerBackgroundPreference::Checkerboard:
         return "Checkerboard";
-    case ViewerBackground::Black:
+    case ViewerBackgroundPreference::Black:
         return "Black";
-    case ViewerBackground::White:
+    case ViewerBackgroundPreference::White:
         return "White";
-    case ViewerBackground::Solid:
+    case ViewerBackgroundPreference::Solid:
         break;
     }
     return "Solid";

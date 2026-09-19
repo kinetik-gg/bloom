@@ -67,8 +67,8 @@ void testFullRoundTrip(Expectations& check) {
     prefs.nodeLinkStyle = ui::NodeLinkStyle::Angled;
     prefs.nodeSnap = true;
     prefs.nodeGridSize = 24.0;
-    prefs.viewerResolution = ui::ViewerResolutionPolicy::Half;
-    prefs.viewerBackground = ui::ViewerBackground::Checkerboard;
+    prefs.viewerResolution = ui::ViewerResolutionPreference::Half;
+    prefs.viewerBackground = ui::ViewerBackgroundPreference::Checkerboard;
     prefs.viewerSafeAreas = true;
     prefs.viewerCentreCross = true;
     prefs.viewerThirds = true;
@@ -98,9 +98,9 @@ void testInvalidValuesFallBack(Expectations& check) {
                  "an unrecognized time format reads as Frames");
     check.expect(loaded.nodeLinkStyle == ui::NodeLinkStyle::Spline,
                  "an unrecognized link style reads as Spline");
-    check.expect(loaded.viewerResolution == ui::ViewerResolutionPolicy::Auto,
+    check.expect(loaded.viewerResolution == ui::ViewerResolutionPreference::Auto,
                  "an unrecognized resolution reads as Auto");
-    check.expect(loaded.viewerBackground == ui::ViewerBackground::Solid,
+    check.expect(loaded.viewerBackground == ui::ViewerBackgroundPreference::Solid,
                  "an unrecognized background reads as Solid");
     check.expect(loaded.nodeGridSize == 16.0, "an unparseable grid size reads as 16");
     check.expect(loaded.operationCacheBytes == 0,
@@ -162,15 +162,16 @@ void testStoredSpellingsMatchReaders(Expectations& check) {
             std::string_view(ui::nodeLinkStyleValue(ui::NodeLinkStyle::Angled)) == "angled",
         "the node link-style vocabulary matches the existing reader");
     check.expect(
-        std::string_view(ui::viewerResolutionValue(ui::ViewerResolutionPolicy::Auto)) == "Auto" &&
-            std::string_view(ui::viewerResolutionValue(ui::ViewerResolutionPolicy::Quarter)) ==
+        std::string_view(ui::viewerResolutionValue(ui::ViewerResolutionPreference::Auto)) ==
+                "Auto" &&
+            std::string_view(ui::viewerResolutionValue(ui::ViewerResolutionPreference::Quarter)) ==
                 "Quarter",
         "the viewer resolution vocabulary matches the existing reader");
-    check.expect(
-        std::string_view(ui::viewerBackgroundValue(ui::ViewerBackground::Solid)) == "Solid" &&
-            std::string_view(ui::viewerBackgroundValue(ui::ViewerBackground::Checkerboard)) ==
-                "Checkerboard",
-        "the viewer background vocabulary matches the existing reader");
+    check.expect(std::string_view(
+                     ui::viewerBackgroundValue(ui::ViewerBackgroundPreference::Solid)) == "Solid" &&
+                     std::string_view(ui::viewerBackgroundValue(
+                         ui::ViewerBackgroundPreference::Checkerboard)) == "Checkerboard",
+                 "the viewer background vocabulary matches the existing reader");
 }
 
 } // namespace

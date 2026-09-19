@@ -356,6 +356,8 @@ target_sources(
         acceleration_status.cpp
         application_preferences.cpp
         application_preferences.hpp
+        settings_window.cpp
+        settings_window.hpp
         frameless_window_support.cpp
         jobs_editor.cpp
         licenses_window.cpp

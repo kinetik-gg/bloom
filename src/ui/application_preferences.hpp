@@ -38,14 +38,14 @@ enum class NodeLinkStyle : std::uint8_t {
     Angled,
 };
 
-enum class ViewerResolutionPolicy : std::uint8_t {
+enum class ViewerResolutionPreference : std::uint8_t {
     Auto,
     Full,
     Half,
     Quarter,
 };
 
-enum class ViewerBackground : std::uint8_t {
+enum class ViewerBackgroundPreference : std::uint8_t {
     Solid,
     Checkerboard,
     Black,
@@ -81,8 +81,8 @@ struct ApplicationPreferences final {
     double nodeGridSize = 16.0;
 
     // Viewer.
-    ViewerResolutionPolicy viewerResolution = ViewerResolutionPolicy::Auto;
-    ViewerBackground viewerBackground = ViewerBackground::Solid;
+    ViewerResolutionPreference viewerResolution = ViewerResolutionPreference::Auto;
+    ViewerBackgroundPreference viewerBackground = ViewerBackgroundPreference::Solid;
     bool viewerSafeAreas = false;
     bool viewerCentreCross = false;
     bool viewerThirds = false;
@@ -110,7 +110,7 @@ void saveApplicationPreferences(QSettings& settings, const ApplicationPreference
 // already use instead of re-spelling it.
 [[nodiscard]] const char* timelineTimeFormatValue(TimelineTimeFormat format) noexcept;
 [[nodiscard]] const char* nodeLinkStyleValue(NodeLinkStyle style) noexcept;
-[[nodiscard]] const char* viewerResolutionValue(ViewerResolutionPolicy policy) noexcept;
-[[nodiscard]] const char* viewerBackgroundValue(ViewerBackground background) noexcept;
+[[nodiscard]] const char* viewerResolutionValue(ViewerResolutionPreference policy) noexcept;
+[[nodiscard]] const char* viewerBackgroundValue(ViewerBackgroundPreference background) noexcept;
 
 } // namespace bloom::ui
