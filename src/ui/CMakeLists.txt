@@ -353,6 +353,7 @@ target_sources(
         frame_export_controller_deliverables.cpp
         composition_export_dialog.cpp
         composition_export_dialog.hpp
+        acceleration_status.cpp
         application_preferences.cpp
         application_preferences.hpp
         frameless_window_support.cpp
@@ -423,6 +424,7 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/ui/acceleration_status.hpp
             include/bloom/ui/background_preview_controller.hpp
             include/bloom/ui/application_shutdown_coordinator.hpp
             include/bloom/ui/composition_authoring.hpp
