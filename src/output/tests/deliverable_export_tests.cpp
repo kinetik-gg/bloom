@@ -243,78 +243,87 @@ unsigned sample16(const media::provider::Bytes& bytes, std::size_t offset) {
               "look: baked (1 look-tagged effects)",
           "review look evidence");
 #ifdef BLOOM_COLOR5_OPENH264_RUNTIME
-    using namespace media::provider;
-    EncodeSessionOptionsV1 worker;
-    worker.openh264Directory = BLOOM_COLOR5_OPENH264_RUNTIME;
-    worker.openh264Version = OpenH264Runtime::version();
-    worker.openh264Digest = OpenH264Runtime::libraryDigest();
-    EncodeSettingsV1 settings;
-    settings.container = "mov";
-    settings.videoCodec = "h264";
-    settings.profile = "high";
-    settings.width = 64;
-    settings.height = 64;
-    settings.frames = 2;
-    EncodeSessionV1 encoder(worker);
-    checked(encoder.begin(settings));
-    checked(encoder.video(prepared));
-    prepared.pts = {1, 24};
-    checked(encoder.video(std::move(prepared)));
-    const auto qc = checked(encoder.finish());
-    const auto path = directory / "review.mov";
-    std::ofstream file(path, std::ios::binary);
-    for (std::uint64_t offset = 0; offset < qc.bytes;) {
-        const auto chunk = checked(encoder.read(offset));
-        file.write(reinterpret_cast<const char*>(chunk.bytes.data()),
-                   static_cast<std::streamsize>(chunk.bytes.size()));
-        offset += chunk.bytes.size();
-    }
-    file.close();
-    check(static_cast<bool>(file), "review movie saved");
-    checked(encoder.close());
-    media::video::VideoDecodeSession decoder(path);
-    const auto probe = checked(decoder.probe());
-    const auto stream = std::ranges::find_if(
-        probe.streams, [](const auto& s) { return s.kind == MediaKind::Video; });
-    check(stream != probe.streams.end(), "review video stream");
-    const auto decoded = checked(decoder.frame(probe, stream->id, 0, 0, nullptr));
-    check(decoded->format == PixelFormat::Yuv420p8 && decoded->colour.primaries == 1 &&
-              decoded->colour.transfer == 1 && decoded->colour.matrix == 1 &&
-              decoded->colour.range == 1,
-          "worker decoded limited-range Rec.709 YUV420");
-    unsigned maximum = 0;
-    std::uint64_t total = 0;
-    // Independently reconstruct display RGB from the worker's planar Rec.709 samples.
-    for (std::size_t y = 0; y < 64; ++y)
-        for (std::size_t x = 0; x < 64; ++x) {
-            const auto channel = [&](std::size_t plane, std::size_t px, std::size_t py) {
-                return static_cast<double>(std::to_integer<unsigned>(
-                    decoded->planes[plane].bytes[py * decoded->planes[plane].stride + px]));
-            };
-            const auto luma = (channel(0, x, y) - 16.0) / 219.0;
-            const auto cb = (channel(1, x / 2, y / 2) - 128.0) / 224.0;
-            const auto cr = (channel(2, x / 2, y / 2) - 128.0) / 224.0;
-            const std::array rgb{luma + 1.5748 * cr, luma - 0.1873242729 * cb - 0.4681242729 * cr,
-                                 luma + 1.8556 * cb};
-            for (std::size_t c = 0; c < 3; ++c) {
-                const auto value =
-                    static_cast<int>(std::floor(std::clamp(rgb[c], 0.0, 1.0) * 65535.0 + 0.5));
-                const auto delta =
-                    static_cast<unsigned>(std::abs(value - static_cast<int>(quantized[c])));
-                maximum = std::max(maximum, delta);
-                total += delta;
-            }
+    // The Cisco OpenH264 binary is a consented runtime fetch, not a locked build input, so a
+    // checkout or CI runner without it still runs the deterministic EXR oracle above but cannot
+    // exercise the H.264 review encode.
+    const auto openh264Runtime =
+        OpenH264Runtime(std::filesystem::path(BLOOM_COLOR5_OPENH264_RUNTIME)).verify();
+    if (openh264Runtime.installed) {
+        using namespace media::provider;
+        EncodeSessionOptionsV1 worker;
+        worker.openh264Directory = BLOOM_COLOR5_OPENH264_RUNTIME;
+        worker.openh264Version = OpenH264Runtime::version();
+        worker.openh264Digest = OpenH264Runtime::libraryDigest();
+        EncodeSettingsV1 settings;
+        settings.container = "mov";
+        settings.videoCodec = "h264";
+        settings.profile = "high";
+        settings.width = 64;
+        settings.height = 64;
+        settings.frames = 2;
+        EncodeSessionV1 encoder(worker);
+        checked(encoder.begin(settings));
+        checked(encoder.video(prepared));
+        prepared.pts = {1, 24};
+        checked(encoder.video(std::move(prepared)));
+        const auto qc = checked(encoder.finish());
+        const auto path = directory / "review.mov";
+        std::ofstream file(path, std::ios::binary);
+        for (std::uint64_t offset = 0; offset < qc.bytes;) {
+            const auto chunk = checked(encoder.read(offset));
+            file.write(reinterpret_cast<const char*>(chunk.bytes.data()),
+                       static_cast<std::streamsize>(chunk.bytes.size()));
+            offset += chunk.bytes.size();
         }
-    const auto mean = (total + std::size_t{64} * 64U * 3U - 1) / (std::size_t{64} * 64U * 3U);
-    check(maximum <= 22938 && mean <= 1967,
-          "decoded review frame matches OCIO oracle within frozen tolerance");
-    const auto analysis = checked(
-        output::analyzeMediaOutputV1(output::OutputPresetV1::H264MovV1, settings, display, 1));
-    check(analysis.implementationNote.find("look: baked (1 look-tagged effects)") !=
-                  std::string::npos &&
-              analysis.implementationNote.find("Rec.1886 Rec.709 - Display") != std::string::npos,
-          "review evidence binds actual display and look");
-    std::cout << "review first frame OCIO error max=" << maximum << " mean=" << mean << '\n';
+        file.close();
+        check(static_cast<bool>(file), "review movie saved");
+        checked(encoder.close());
+        media::video::VideoDecodeSession decoder(path);
+        const auto probe = checked(decoder.probe());
+        const auto stream = std::ranges::find_if(
+            probe.streams, [](const auto& s) { return s.kind == MediaKind::Video; });
+        check(stream != probe.streams.end(), "review video stream");
+        const auto decoded = checked(decoder.frame(probe, stream->id, 0, 0, nullptr));
+        check(decoded->format == PixelFormat::Yuv420p8 && decoded->colour.primaries == 1 &&
+                  decoded->colour.transfer == 1 && decoded->colour.matrix == 1 &&
+                  decoded->colour.range == 1,
+              "worker decoded limited-range Rec.709 YUV420");
+        unsigned maximum = 0;
+        std::uint64_t total = 0;
+        // Independently reconstruct display RGB from the worker's planar Rec.709 samples.
+        for (std::size_t y = 0; y < 64; ++y)
+            for (std::size_t x = 0; x < 64; ++x) {
+                const auto channel = [&](std::size_t plane, std::size_t px, std::size_t py) {
+                    return static_cast<double>(std::to_integer<unsigned>(
+                        decoded->planes[plane].bytes[py * decoded->planes[plane].stride + px]));
+                };
+                const auto luma = (channel(0, x, y) - 16.0) / 219.0;
+                const auto cb = (channel(1, x / 2, y / 2) - 128.0) / 224.0;
+                const auto cr = (channel(2, x / 2, y / 2) - 128.0) / 224.0;
+                const std::array rgb{luma + 1.5748 * cr,
+                                     luma - 0.1873242729 * cb - 0.4681242729 * cr,
+                                     luma + 1.8556 * cb};
+                for (std::size_t c = 0; c < 3; ++c) {
+                    const auto value =
+                        static_cast<int>(std::floor(std::clamp(rgb[c], 0.0, 1.0) * 65535.0 + 0.5));
+                    const auto delta =
+                        static_cast<unsigned>(std::abs(value - static_cast<int>(quantized[c])));
+                    maximum = std::max(maximum, delta);
+                    total += delta;
+                }
+            }
+        const auto mean = (total + std::size_t{64} * 64U * 3U - 1) / (std::size_t{64} * 64U * 3U);
+        check(maximum <= 22938 && mean <= 1967,
+              "decoded review frame matches OCIO oracle within frozen tolerance");
+        const auto analysis = checked(
+            output::analyzeMediaOutputV1(output::OutputPresetV1::H264MovV1, settings, display, 1));
+        check(analysis.implementationNote.find("look: baked (1 look-tagged effects)") !=
+                      std::string::npos &&
+                  analysis.implementationNote.find("Rec.1886 Rec.709 - Display") !=
+                      std::string::npos,
+              "review evidence binds actual display and look");
+        std::cout << "review first frame OCIO error max=" << maximum << " mean=" << mean << '\n';
+    }
 #else
     (void)directory;
 #endif
