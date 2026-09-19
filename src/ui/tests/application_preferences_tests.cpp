@@ -1,4 +1,4 @@
-#include "application_preferences.hpp"
+#include <bloom/ui/application_preferences.hpp>
 
 #include <QApplication>
 #include <QSettings>

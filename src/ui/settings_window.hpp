@@ -1,6 +1,6 @@
 #pragma once
 
-#include "application_preferences.hpp"
+#include <bloom/ui/application_preferences.hpp>
 
 #include <QDialog>
 

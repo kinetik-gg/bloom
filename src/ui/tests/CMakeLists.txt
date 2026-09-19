@@ -789,7 +789,6 @@ bloom_add_test(
 # absolute-path/zero-budget rules the existing readers rely on.
 add_executable(bloom_application_preferences_test application_preferences_tests.cpp)
 target_link_libraries(bloom_application_preferences_test PRIVATE bloom_ui)
-target_include_directories(bloom_application_preferences_test PRIVATE ..)
 bloom_enable_warnings(bloom_application_preferences_test)
 bloom_add_test(
     NAME bloom.ui.application-preferences
