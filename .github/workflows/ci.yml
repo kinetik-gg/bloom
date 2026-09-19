@@ -104,6 +104,10 @@ jobs:
       CXX: clang++-22
       # Widgets tests run without a display server; the offscreen platform keeps them headless.
       QT_QPA_PLATFORM: offscreen
+      # clang-tidy still runs per translation unit, but ccache keeps the (large) Qt shell compile
+      # from repeating across runs. The content check is stable across cache restores.
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 2G
 
     steps:
       - name: Check out source
@@ -113,7 +117,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes ca-certificates cmake curl gnupg ninja-build \
-            libgl-dev libegl-dev libfontconfig1-dev libxkbcommon-dev libva-dev python3-dev
+            libgl-dev libegl-dev libfontconfig1-dev libxkbcommon-dev libva-dev python3-dev ccache
           llvm_key=$(mktemp)
           trap 'rm -f "$llvm_key"' EXIT
           curl --fail --silent --show-error --location \
@@ -146,6 +150,14 @@ jobs:
           python3 -m aqt install-qt linux desktop 6.8.3 linux_gcc_64 \
             --outputdir "${{ runner.temp }}/qt"
 
+      - name: Cache ccache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ccache
+          key: bloom-ccache-linux-desktop-${{ hashFiles('dependencies/dependencies.lock.json') }}
+          restore-keys: |
+            bloom-ccache-linux-desktop-
+
       # The key suffix is sha256(sorted "<component> <archiveSha256>\n" lines for every
       # dependencies.lock.json component that has its own downloaded archive), so it changes
       # deterministically whenever the locked archive set changes (a component added/removed/
@@ -174,9 +186,11 @@ jobs:
       - name: Configure desktop build
         run: |
           cmake --preset ci-linux-desktop -DBLOOM_BUILD_PYTHON=ON \
-            -DCMAKE_PREFIX_PATH="${{ runner.temp }}/qt/6.8.3/gcc_64"
+            -DCMAKE_PREFIX_PATH="${{ runner.temp }}/qt/6.8.3/gcc_64" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
-      - name: Build desktop with clang-tidy
+      - name: Build desktop
         run: cmake --build --preset ci-linux-desktop --parallel
 
       - name: Test desktop build
