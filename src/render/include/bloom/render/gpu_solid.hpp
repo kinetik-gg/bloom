@@ -1,18 +1,30 @@
 #pragma once
 
-// Bloom-owned, Qt-free and Vulkan-free SolidV1 compute operation.
+// Bloom-owned, Qt-free and Vulkan-free SolidV1 / CoveredSolidV1 compute operations.
 //
-// Writes one validated premultiplied lin_rec709_scene RGBA32F pixel into a
-// GPU-resident image and retains that image in device memory. The normal result
-// is resident: no CPU readback happens on begin/poll/image(). readback() exists
-// only for parity tests and the CPU oracle.
+// SolidV1 (ordinary, unmasked): writes one validated premultiplied lin_rec709_scene
+// RGBA32F pixel into a GPU-resident image and retains that image in device memory.
+// The normal result is resident: no CPU readback happens on begin/poll/image().
 //
-// One pipeline per device, one outstanding job, owner-thread
-// begin/poll/image/readback/cancel and destruction (matching the other render
-// GPU operations). Wrong-thread calls fail closed without mutating owned state.
-// A submission's command buffer, image, and fence are never destroyed while in
-// flight: cancellation marks a discard and the caller must destroy or drain the
-// pipeline on the owner thread before reuse.
+// CoveredSolidV1 (beginCovered): the CPU path a fractional Solid transform takes. The
+// host supplies the exact immutable R8 coverage bitmap the CPU PathRaster produces plus
+// the layer's separate Float32 opacity, and this operation materialises the same
+// premultiplied RGBA32F resident image the CPU vector arm does. The host precomputes a
+// 256-entry palette with the EXISTING render::coverageSolidRow() primitive (one entry
+// per coverage byte) followed by the exact separate Float32 opacity multiply and Rgba32f
+// validation; the shader only selects a stored palette entry, so the resident result is
+// bit-exact to the CPU arm. It is O(256) host metadata, never a full-frame CPU render,
+// and no Float64 arithmetic is required on the GPU. Bilinear translation of a filled
+// bitmap is deliberately NOT used: that would produce different pixels.
+//
+// readback()/readbackResidentImage() exist only for parity tests and the CPU oracle.
+//
+// One pipeline set per device, one outstanding job, owner-thread
+// begin/beginCovered/poll/image/readback/cancel and destruction (matching the other
+// render GPU operations). Wrong-thread calls fail closed without mutating owned state.
+// A submission's command buffer, image, mask/palette buffers, and fence are never
+// destroyed while in flight: cancellation marks a discard and the caller must destroy or
+// drain the pipeline on the owner thread before reuse.
 
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
@@ -20,6 +32,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -92,6 +105,21 @@ class GpuSolid final {
     // Busy/WrongThread/Unsupported/OverBudget.
     [[nodiscard]] GpuSolidDiagnostic begin(const GpuSolidParameters& parameters,
                                            std::uint64_t byteBudget);
+
+    // CoveredSolidV1. `base.pixel` is the resolved premultiplied solid pixel and
+    // `base.dataWindow`/`base.displayWindow`/`base.pixelAspect` are the coverage
+    // window and the untouched display/PAR metadata. `coverage` is exactly
+    // width*height contiguous R8 bytes (row-major over the data window) matching
+    // what CPU PathRaster::coverageRow produced; it is copied before this call
+    // returns, so the caller may release it immediately. `opacity` is the layer's
+    // separate Float32 opacity and must be finite and within [0, 1]. The resident
+    // image is bit-exact to the CPU coverageSolidRow + separate-opacity arm.
+    // Rejections: WrongThread/Busy/DeviceLost/InvalidArgument (size, opacity,
+    // non-finite palette)/Unsupported/OverBudget. Ownership and cancellation
+    // behave exactly like begin().
+    [[nodiscard]] GpuSolidDiagnostic beginCovered(const GpuSolidParameters& base,
+                                                  std::span<const std::uint8_t> coverage,
+                                                  float opacity, std::uint64_t byteBudget);
 
     // Non-blocking fence query. Pending/Ready/Failure; WrongThread from a foreign
     // thread.

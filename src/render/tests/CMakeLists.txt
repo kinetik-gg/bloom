@@ -88,6 +88,23 @@ bloom_add_test(
     LABELS unit gpu render
 )
 
+# CoveredSolidV1 resident-image test (the CPU vector-coverage path). Compiles unconditionally and
+# depends only on runtime create() availability, so the same target runs against the CPU stub. It
+# hashes the embedded SPIR-V array against the pinned digest, so a changed array word fails.
+add_executable(bloom_render_gpu_solid_covered_test gpu_solid_covered_tests.cpp)
+target_link_libraries(bloom_render_gpu_solid_covered_test PRIVATE bloom_render)
+target_include_directories(bloom_render_gpu_solid_covered_test
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+target_compile_definitions(bloom_render_gpu_solid_covered_test
+    PRIVATE "BLOOM_SOLID_COVERED_SPV_SHA256=\"3d54bcb0b9394b381df9f271cdfd05af4cb2f80620ba142227fec53ba26e1a9b\"")
+bloom_enable_warnings(bloom_render_gpu_solid_covered_test)
+bloom_enable_strict_floating_point(bloom_render_gpu_solid_covered_test)
+bloom_add_test(
+    NAME bloom.render.gpu_solid_covered
+    COMMAND bloom_render_gpu_solid_covered_test
+    LABELS unit gpu render
+)
+
 # GPU-resident Neutral V1 display test. It links bloom_color_ocio only for the independent CPU
 # oracle; the render module itself stays OCIO-free.
 add_executable(bloom_render_gpu_resident_display_test gpu_resident_display_tests.cpp)

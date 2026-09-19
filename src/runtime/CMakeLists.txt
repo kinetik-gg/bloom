@@ -77,6 +77,10 @@ target_sources(
         operation_key.hpp
         animation_sampling.cpp
         cpu_composition_evaluator.cpp
+        cpu_composition_resolution.hpp
+        cpu_gpu_scene_preparation.cpp
+        gpu_scene_preparation_private.hpp
+        gpu_scene_coverage_cache.cpp
         image_effect.cpp
         image_effect.hpp
         cpu_composition_evaluator_support.hpp
@@ -114,7 +118,9 @@ target_sources(
             include/bloom/runtime/gpu_preview_display_product.hpp
             include/bloom/runtime/gpu_preview_display_service.hpp
             include/bloom/runtime/gpu_scene_cache.hpp
+            include/bloom/runtime/gpu_scene_coverage_cache.hpp
             include/bloom/runtime/input_color_context.hpp
+            include/bloom/runtime/prepared_gpu_scene.hpp
             include/bloom/runtime/prepared_preview_frame.hpp
             include/bloom/runtime/preview_cpu_stage.hpp
             include/bloom/runtime/qualified_display_preparation.hpp

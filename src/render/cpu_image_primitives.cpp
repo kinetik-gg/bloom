@@ -550,6 +550,14 @@ LayerTransform::SamplePoint LayerTransform::forwardMap(const double localX,
         state_.pivotOutputY + (state_.forwardC * offsetX + state_.forwardD * offsetY)};
 }
 
+std::optional<LayerTransform::SamplePoint>
+LayerTransform::translationOnlyDeviceTranslation() const noexcept {
+    if (!state_.translationOnly) {
+        return std::nullopt;
+    }
+    return SamplePoint{state_.deviceTranslationX, state_.deviceTranslationY};
+}
+
 std::optional<ImageWindow> LayerTransform::supportBounds(const ImageWindow clip) const noexcept {
     // Bilinear support, in source-local coordinates: a tap is fetched whenever the sample
     // coordinate is strictly inside (-1, extent), so the closed box [-1, extent] bounds every

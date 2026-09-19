@@ -1,11 +1,7 @@
-#include <bloom/render/gpu_solid.hpp>
+#include "gpu_solid_private.hpp"
 
-#include "gpu_device_private.hpp"
-#include "gpu_image_private.hpp"
 #include "shaders/solid_spirv.inc"
 
-#include <array>
-#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -36,11 +32,6 @@ struct SolidPushConstants final {
 };
 static_assert(sizeof(SolidPushConstants) == 24);
 
-[[nodiscard]] GpuSolidDiagnostic makeDiagnostic(const GpuSolidDiagnosticCode code,
-                                                std::string message) {
-    return GpuSolidDiagnostic{code, std::move(message)};
-}
-
 [[nodiscard]] bool quarantineAllowed() noexcept {
     return g_quarantineCount.load() < kMaxQuarantines;
 }
@@ -52,55 +43,9 @@ void noteQuarantine() noexcept {
 
 } // namespace
 
-struct GpuSolid::Impl final {
-    Impl() = default;
-    Impl(const Impl&) = delete;
-    Impl& operator=(const Impl&) = delete;
-    ~Impl();
-
-    [[nodiscard]] bool onOwnerThread() const noexcept {
-        return control != nullptr && control->owner == std::this_thread::get_id();
-    }
-    void fail(const GpuSolidDiagnosticCode code, std::string message) {
-        jobState = GpuSolidJobState::Failure;
-        jobDiagnostic = makeDiagnostic(code, std::move(message));
-    }
-    void clearJob() {
-        jobState = GpuSolidJobState::Idle;
-        jobDiagnostic = GpuSolidDiagnostic{};
-        discardRequested.store(false);
-        residentImage.reset();
-    }
-    void releaseResident() { residentImage.reset(); }
-    [[nodiscard]] bool createPipeline();
-    // Bounded owner-thread drain. Returns true when the submission is proved
-    // retired.
-    [[nodiscard]] bool drainAndRetire() noexcept;
-
-    std::thread::id owner;
-    std::shared_ptr<DeviceAllocatorState> control;
-    GpuSolidBudgets budgets;
-    std::uint32_t expectedGeneration = 0;
-
-    vk::raii::ShaderModule shaderModule{nullptr};
-    vk::raii::DescriptorSetLayout descriptorSetLayout{nullptr};
-    vk::raii::PipelineLayout pipelineLayout{nullptr};
-    vk::raii::Pipeline pipeline{nullptr};
-    vk::raii::DescriptorPool descriptorPool{nullptr};
-    vk::raii::DescriptorSet descriptorSet{nullptr};
-    vk::raii::CommandPool commandPool{nullptr};
-    vk::raii::CommandBuffer commandBuffer{nullptr};
-    vk::raii::Fence fence{nullptr};
-
-    std::unique_ptr<GpuImage> residentImage;
-
-    GpuSolidJobState jobState = GpuSolidJobState::Idle;
-    bool queueSubmitted = false;
-    bool deviceLost = false;
-    std::atomic<bool> discardRequested{false};
-    GpuSolidDiagnostic jobDiagnostic;
-    GpuSolidDiagnostic createDiagnostic;
-};
+GpuSolidDiagnostic gpuSolidDiagnostic(const GpuSolidDiagnosticCode code, std::string message) {
+    return GpuSolidDiagnostic{code, std::move(message)};
+}
 
 GpuSolid::GpuSolid(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 GpuSolid::GpuSolid(GpuSolid&& other) noexcept = default;
@@ -170,6 +115,8 @@ bool GpuSolid::Impl::drainAndRetire() noexcept {
 GpuSolid::Impl::~Impl() {
     assert(owner == std::this_thread::get_id());
     releaseResident();
+    coveredPalette.release();
+    coveredMask.release();
 }
 
 bool GpuSolid::Impl::createPipeline() {
@@ -183,8 +130,8 @@ bool GpuSolid::Impl::createPipeline() {
     if (dispatcher->vkCreateShaderModule(
             rawDevice, reinterpret_cast<const VkShaderModuleCreateInfo*>(&shaderInfo), nullptr,
             &rawShader) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuSolidDiagnosticCode::ShaderRejected,
-                                          "the embedded SolidV1 shader module was rejected");
+        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::ShaderRejected,
+                                              "the embedded SolidV1 shader module was rejected");
         return false;
     }
     shaderModule = vk::raii::ShaderModule(control->device, rawShader);
@@ -201,8 +148,8 @@ bool GpuSolid::Impl::createPipeline() {
     if (dispatcher->vkCreateDescriptorSetLayout(
             rawDevice, reinterpret_cast<const VkDescriptorSetLayoutCreateInfo*>(&layoutInfo),
             nullptr, &rawLayout) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuSolidDiagnosticCode::ShaderRejected,
-                                          "the SolidV1 descriptor set layout was rejected");
+        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::ShaderRejected,
+                                              "the SolidV1 descriptor set layout was rejected");
         return false;
     }
     descriptorSetLayout = vk::raii::DescriptorSetLayout(control->device, rawLayout);
@@ -221,8 +168,8 @@ bool GpuSolid::Impl::createPipeline() {
     if (dispatcher->vkCreatePipelineLayout(
             rawDevice, reinterpret_cast<const VkPipelineLayoutCreateInfo*>(&pipelineLayoutInfo),
             nullptr, &rawPipelineLayout) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuSolidDiagnosticCode::ShaderRejected,
-                                          "the SolidV1 pipeline layout was rejected");
+        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::ShaderRejected,
+                                              "the SolidV1 pipeline layout was rejected");
         return false;
     }
     pipelineLayout = vk::raii::PipelineLayout(control->device, rawPipelineLayout);
@@ -237,8 +184,8 @@ bool GpuSolid::Impl::createPipeline() {
             rawDevice, VK_NULL_HANDLE, 1,
             reinterpret_cast<const VkComputePipelineCreateInfo*>(&pipelineInfo), nullptr,
             &rawPipeline) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuSolidDiagnosticCode::ShaderRejected,
-                                          "the embedded SolidV1 compute pipeline was rejected");
+        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::ShaderRejected,
+                                              "the embedded SolidV1 compute pipeline was rejected");
         return false;
     }
     pipeline = vk::raii::Pipeline(control->device, rawPipeline);
@@ -253,8 +200,8 @@ bool GpuSolid::Impl::createPipeline() {
     if (dispatcher->vkCreateDescriptorPool(
             rawDevice, reinterpret_cast<const VkDescriptorPoolCreateInfo*>(&poolInfo), nullptr,
             &rawPool) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
-                                          "the SolidV1 descriptor pool could not be created");
+        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
+                                              "the SolidV1 descriptor pool could not be created");
         return false;
     }
     descriptorPool = vk::raii::DescriptorPool(control->device, rawPool);
@@ -267,8 +214,8 @@ bool GpuSolid::Impl::createPipeline() {
     if (dispatcher->vkAllocateDescriptorSets(
             rawDevice, reinterpret_cast<const VkDescriptorSetAllocateInfo*>(&allocateInfo),
             &rawSet) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
-                                          "the SolidV1 descriptor set could not be allocated");
+        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
+                                              "the SolidV1 descriptor set could not be allocated");
         return false;
     }
     descriptorSet = vk::raii::DescriptorSet(control->device, rawSet, *descriptorPool);
@@ -280,8 +227,8 @@ bool GpuSolid::Impl::createPipeline() {
     if (dispatcher->vkCreateCommandPool(
             rawDevice, reinterpret_cast<const VkCommandPoolCreateInfo*>(&commandPoolInfo), nullptr,
             &rawCommandPool) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
-                                          "the SolidV1 command pool could not be created");
+        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
+                                              "the SolidV1 command pool could not be created");
         return false;
     }
     commandPool = vk::raii::CommandPool(control->device, rawCommandPool);
@@ -294,8 +241,8 @@ bool GpuSolid::Impl::createPipeline() {
     if (dispatcher->vkAllocateCommandBuffers(
             rawDevice, reinterpret_cast<const VkCommandBufferAllocateInfo*>(&commandBufferInfo),
             &rawCommandBuffer) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
-                                          "the SolidV1 command buffer could not be allocated");
+        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
+                                              "the SolidV1 command buffer could not be allocated");
         return false;
     }
     commandBuffer = vk::raii::CommandBuffer(control->device, rawCommandBuffer, *commandPool);
@@ -304,8 +251,8 @@ bool GpuSolid::Impl::createPipeline() {
     VkFence rawFence = VK_NULL_HANDLE;
     if (dispatcher->vkCreateFence(rawDevice, reinterpret_cast<const VkFenceCreateInfo*>(&fenceInfo),
                                   nullptr, &rawFence) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
-                                          "the SolidV1 fence could not be created");
+        createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
+                                              "the SolidV1 fence could not be created");
         return false;
     }
     fence = vk::raii::Fence(control->device, rawFence);
@@ -314,26 +261,26 @@ bool GpuSolid::Impl::createPipeline() {
 
 GpuSolidCreateResult GpuSolid::create(GpuDevice& device, const GpuSolidBudgets& budgets) {
     if (budgets.maxImageBytes == 0 || budgets.maxImageBytes > kMaxImageBytes) {
-        return {nullptr, makeDiagnostic(GpuSolidDiagnosticCode::InvalidArgument,
-                                        "the SolidV1 budget is out of range")};
+        return {nullptr, gpuSolidDiagnostic(GpuSolidDiagnosticCode::InvalidArgument,
+                                            "the SolidV1 budget is out of range")};
     }
     if (device.state() != GpuDeviceState::Ready) {
-        return {nullptr, makeDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
-                                        "the GPU device is not Ready")};
+        return {nullptr, gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
+                                            "the GPU device is not Ready")};
     }
     if (GpuRendererAccess::owner(device) != std::this_thread::get_id()) {
-        return {nullptr, makeDiagnostic(GpuSolidDiagnosticCode::WrongThread,
-                                        "the SolidV1 pipeline must be created on the device owner "
-                                        "thread")};
+        return {nullptr, gpuSolidDiagnostic(GpuSolidDiagnosticCode::WrongThread,
+                                            "the SolidV1 pipeline must be created on the device "
+                                            "owner thread")};
     }
     if (!quarantineAllowed()) {
-        return {nullptr, makeDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
-                                        "too many undrained GPU generations are quarantined")};
+        return {nullptr, gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
+                                            "too many undrained GPU generations are quarantined")};
     }
     auto control = GpuRendererAccess::state(device);
     if (control == nullptr) {
-        return {nullptr, makeDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
-                                        "the GPU device exposes no renderer state")};
+        return {nullptr, gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
+                                            "the GPU device exposes no renderer state")};
     }
     auto impl = std::make_unique<Impl>();
     impl->owner = std::this_thread::get_id();
@@ -349,45 +296,47 @@ GpuSolidCreateResult GpuSolid::create(GpuDevice& device, const GpuSolidBudgets& 
 GpuSolidDiagnostic GpuSolid::begin(const GpuSolidParameters& parameters,
                                    const std::uint64_t byteBudget) {
     if (impl_ == nullptr) {
-        return makeDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
-                              "the SolidV1 pipeline is not initialized");
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
+                                  "the SolidV1 pipeline is not initialized");
     }
     Impl& impl = *impl_;
     if (!impl.onOwnerThread()) {
-        return makeDiagnostic(GpuSolidDiagnosticCode::WrongThread,
-                              "begin must run on the device owner thread");
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::WrongThread,
+                                  "begin must run on the device owner thread");
     }
     if (impl.deviceLost) {
-        return makeDiagnostic(GpuSolidDiagnosticCode::DeviceLost,
-                              "the device was lost; this generation must not be reused");
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceLost,
+                                  "the device was lost; this generation must not be reused");
     }
     if (impl.queueSubmitted || impl.jobState == GpuSolidJobState::Pending) {
-        return makeDiagnostic(GpuSolidDiagnosticCode::Busy, "one job is already in flight");
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::Busy, "one job is already in flight");
     }
     const std::uint32_t width = parameters.dataWindow.extent().width();
     const std::uint32_t height = parameters.dataWindow.extent().height();
     if (width == 0 || height == 0) {
-        return makeDiagnostic(GpuSolidDiagnosticCode::InvalidArgument, "the data window is empty");
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::InvalidArgument,
+                                  "the data window is empty");
     }
     const std::uint64_t required = static_cast<std::uint64_t>(width) * height * sizeof(Rgba32f);
     const std::uint64_t allowed =
         byteBudget < impl.budgets.maxImageBytes ? byteBudget : impl.budgets.maxImageBytes;
     if (required > allowed) {
-        return makeDiagnostic(GpuSolidDiagnosticCode::OverBudget,
-                              "the resident image exceeds the configured or requested byte budget");
+        return gpuSolidDiagnostic(
+            GpuSolidDiagnosticCode::OverBudget,
+            "the resident image exceeds the configured or requested byte budget");
     }
     if (impl.control->generation != impl.expectedGeneration) {
         impl.deviceLost = true;
-        return makeDiagnostic(GpuSolidDiagnosticCode::DeviceLost,
-                              "the device generation changed; this pipeline must not be reused");
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceLost,
+                                  "the device generation changed; this pipeline must not be reused");
     }
     const SolidImageSupport support = querySolidImageSupport(*impl.control, width, height);
     if (!support.supported) {
-        return makeDiagnostic(GpuSolidDiagnosticCode::Unsupported, support.reason);
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::Unsupported, support.reason);
     }
     if (required > support.maxImageBytes) {
-        return makeDiagnostic(GpuSolidDiagnosticCode::OverBudget,
-                              "the resident image exceeds the device resource limit");
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::OverBudget,
+                                  "the resident image exceeds the device resource limit");
     }
 
     impl.clearJob();
@@ -398,8 +347,8 @@ GpuSolidDiagnostic GpuSolid::begin(const GpuSolidParameters& parameters,
     resident->pixelAspect = parameters.pixelAspect;
     resident->generation = impl.control->generation;
     if (!createResidentImage(*impl.control, width, height, *resident)) {
-        return makeDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
-                              "the resident image could not be allocated");
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
+                                  "the resident image could not be allocated");
     }
     GpuImageImpl* const residentRaw = resident.get();
     impl.residentImage = std::make_unique<GpuImage>(makeGpuImage(std::move(resident)));
@@ -536,6 +485,8 @@ GpuSolidPollResult GpuSolid::poll() {
     if (status == VK_ERROR_DEVICE_LOST) {
         impl.deviceLost = true;
         impl.queueSubmitted = false;
+        impl.coveredPalette.release();
+        impl.coveredMask.release();
         if (pending) {
             impl.fail(GpuSolidDiagnosticCode::DeviceLost, "the device was lost while polling");
         }
@@ -552,6 +503,10 @@ GpuSolidPollResult GpuSolid::poll() {
         return GpuSolidPollResult::Failure;
     }
     impl.queueSubmitted = false;
+    // The dispatch is proved complete, so the covered input buffers are no longer
+    // referenced by the queue.
+    impl.coveredPalette.release();
+    impl.coveredMask.release();
     if (!pending) {
         // Retired after an already-published failure; nothing to publish.
         return GpuSolidPollResult::Failure;

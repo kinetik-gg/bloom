@@ -2,13 +2,14 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <utility>
 
-// Portable CPU-unavailable stub for the SolidV1 GPU-resident operation. Carries
-// the exact same public API and includes no Vulkan header, so a build without
-// GPU dependencies still links. No image is ever resident; every operation
-// reports a typed unavailable diagnostic.
+// Portable CPU-unavailable stub for the SolidV1 / CoveredSolidV1 GPU-resident
+// operations. Carries the exact same public API and includes no Vulkan header,
+// so a build without GPU dependencies still links. No image is ever resident;
+// every operation reports a typed unavailable diagnostic.
 
 namespace bloom::render {
 
@@ -63,6 +64,10 @@ const GpuSolidDiagnostic& GpuSolid::diagnostic() const noexcept {
 }
 bool GpuSolid::isBoundTo(GpuDevice&) const noexcept { return false; }
 GpuSolidDiagnostic GpuSolid::begin(const GpuSolidParameters&, std::uint64_t) {
+    return diagnostic();
+}
+GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters&, std::span<const std::uint8_t>,
+                                          float, std::uint64_t) {
     return diagnostic();
 }
 GpuSolidPollResult GpuSolid::poll() { return GpuSolidPollResult::Failure; }

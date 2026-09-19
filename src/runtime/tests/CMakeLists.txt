@@ -278,3 +278,17 @@ bloom_add_test(
     LABELS runtime unit gpu render
     TIMEOUT 120
 )
+
+# CPU-side immutable GPU scene preparation (solid / translation-only / Normal merge / output). It
+# drives a genuine CpuCompositionEvaluator oracle and needs no loader and no device; it is a pure
+# CPU test that runs against the CPU stub too.
+add_executable(bloom_runtime_gpu_scene_preparation_test gpu_scene_preparation_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_scene_preparation_test PRIVATE bloom_runtime_evaluator bloom_render)
+bloom_enable_warnings(bloom_runtime_gpu_scene_preparation_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_scene_preparation_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_scene_preparation
+    COMMAND bloom_runtime_gpu_scene_preparation_test
+    LABELS runtime unit gpu render
+    TIMEOUT 300
+)

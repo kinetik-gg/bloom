@@ -1,0 +1,30 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "generator": "tools/gpu-shaders compile/validate/embed recipe (reused, not reimplemented)",
+  "generatorRevision": 1,
+  "operation": "CoveredSolidV1",
+  "entrypoint": "main",
+  "shader": {
+    "language": "GLSL_460",
+    "stage": "compute",
+    "sha256": "0675f8a7c1bdcafe68ffc45f21cc4b9437251d18f8e7652cc39f52bcc486947b",
+    "spirvSha256": "3d54bcb0b9394b381df9f271cdfd05af4cb2f80620ba142227fec53ba26e1a9b",
+    "localSizeX": 256,
+    "textures": 0,
+    "uniforms": 0
+  },
+  "bindings": [
+    {"set": 0, "binding": 0, "kind": "storage-image", "access": "writeonly", "format": "rgba32f", "role": "resident-premultiplied-rgba32f-output"},
+    {"set": 0, "binding": 1, "kind": "storage-buffer", "access": "readonly", "format": "vec4-256", "role": "host-built-coverage-palette"},
+    {"set": 0, "binding": 2, "kind": "storage-buffer", "access": "readonly", "format": "r8-packed-le-uint32", "role": "immutable-r8-coverage-mask"}
+  ],
+  "pushConstant": {"byteCount": 8, "fields": [
+    {"name": "width", "type": "uint32"},
+    {"name": "height", "type": "uint32"}
+  ]},
+  "contracts": {
+    "numeric": "palette-selection-bit-exact",
+    "alphaPreserved": true,
+    "note": "host precomputes palette[c] with coverageSolidRow + separate Float32 opacity; the shader only selects palette[coverage] and stores it"
+  }
+}

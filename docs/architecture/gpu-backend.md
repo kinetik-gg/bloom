@@ -247,13 +247,44 @@ pinned-replacement refusal, owner gate, and foreign-identity rejection; the CPU-
 (SPIR-V pins and CPU-derived fixtures) and the strict stub syntax of the touched APIs. No performance
 claim is made.
 
-Pending and unchanged: the GPU scene evaluator, per-layer GPU compositing selection,
-resident GPU viewer buffers, WSI/swapchain presentation,
-a whole-application benchmark, the full per-operation qualification fixtures for a future
-`ReferenceParity` profile (this operation stays `PreviewOnly`), general graph execution,
-presentation/swapchain integration, the cross-platform Linux/macOS/Windows parity spike, shader
-compilation of generated OCIO programs, and Windows/macOS GPU support. The qualified Linux prefix
-manifest remains pending, so this direction stays `working`.
+The covered-Solid primitive and the CPU-side scene preparation foundation are now implemented, still
+without an executor, service, or viewer. `GpuSolid::beginCovered` (operation `CoveredSolidV1`, the
+CPU fractional-Solid vector-coverage arm) takes the exact immutable R8 coverage the CPU
+`PathRaster::coverageRow` produced plus the layer's separate Float32 opacity, builds a 256-entry
+premultiplied RGBA32F palette on the host with the EXISTING `coverageSolidRow()` primitive and the
+exact separate-opacity multiply, and dispatches a new offline `solid_covered.comp` (pinned by
+SHA-256, manifest-bound, regeneration-checked) that only selects a stored palette entry; the resident
+readback is bit-exact to the CPU arm with no per-pixel CPU render and no GPU Float64. The ordinary
+unmasked `begin()` path is unchanged, and the actual-VMA allocation budget, retained-until-retired
+mask/palette buffers, owner-thread, cancellation, and quarantine policy are shared through one
+extracted private impl. `bloom::runtime::CpuGpuSceneBuilder` (`prepared_gpu_scene.hpp`) turns a REAL
+`CompiledCompositionPlan` plus an `EvaluationRequest` into ordered, immutable
+`GpuSceneCommand`s -- solid, unparented translation-only layer, Normal merge, composition output --
+using the evaluator's REAL six-argument preflight resolution and, for a fractional translation-only
+solid, the SAME CPU `PathRaster` R8 coverage; it allocates no full RGBA CPU image and fails closed
+`Unsupported` for every out-of-subset reachable operation. Command semantic keys carry the resolved
+operands plus the pinned render shader SPIR-V digests, including the actual `CoveredSolidV1` digest,
+and never node/layer IDs, operation indexes, or the revision; execution-order indexes are not
+identity. Time activation is the exact CPU `[inPoint, outPoint)` range test, the request pixel
+allowance bounds every command output and each unique coverage raster with overflow-safe arithmetic,
+cancellation is checked per command and per raster row, and `GpuSceneCoverageCache` is a bounded,
+transactional LRU keyed on raster geometry alone. Verified locally with a genuine uncached
+`CpuCompositionEvaluator` oracle: identity, bounds, output descriptor, and bit-exact pixels for
+fractional/integer translations, proxy and non-square PAR, animated opacity/position, multiple
+layers, time-activation range/empty/mute-solo, cache reuse, budget refusal, and the unsupported
+branches; plus the covered native coverage matrix, fractional `PathRaster` pattern, rejections,
+lifetime, and performance, and the ordinary Solid/composite, CPU image-primitive, and CPU
+composition-evaluator regressions. The user-facing application is unwired: no service or scheduler
+selects a command, so no performance claim is made.
+
+Pending and unchanged: the GPU scene executor that dispatches these prepared commands and the service
+selection that consumes them, per-layer GPU compositing selection, resident GPU viewer buffers,
+WSI/swapchain presentation, a whole-application benchmark, the full per-operation qualification
+fixtures for a future `ReferenceParity` profile (the qualified display transform remains
+`PreviewOnly`; scene operations have no runtime qualification yet), general graph
+execution, presentation/swapchain integration, the cross-platform Linux/macOS/Windows parity spike,
+shader compilation of generated OCIO programs, and Windows/macOS GPU support. The qualified Linux
+prefix manifest remains pending, so this direction stays `working`.
 
 ## Boundaries
 

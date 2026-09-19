@@ -362,6 +362,60 @@ else()
         "source_over.comp digest is still enforced.")
 endif()
 
+# --- Fixed CoveredSolidV1 resident-image shader: source pin and regeneration check ---------------
+#
+# Offline artifact from the same tools/gpu-shaders compile/validate/embed recipe (no new generator).
+# The checked-in .comp is pinned here, the manifest must bind that source digest, and, when the
+# locked glslangValidator/spirv-val are present, configure recompiles it and confirms the SPIR-V
+# digest embedded in solid_covered_spirv.inc. Runtime code never compiles or loads a shader.
+set(BLOOM_SOLID_COVERED_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/solid_covered.comp")
+set(BLOOM_SOLID_COVERED_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/solid_covered.manifest")
+set(BLOOM_SOLID_COVERED_INC "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/solid_covered_spirv.inc")
+set(BLOOM_SOLID_COVERED_COMP_SHA256
+    "0675f8a7c1bdcafe68ffc45f21cc4b9437251d18f8e7652cc39f52bcc486947b")
+set(BLOOM_SOLID_COVERED_SPV_SHA256
+    "3d54bcb0b9394b381df9f271cdfd05af4cb2f80620ba142227fec53ba26e1a9b")
+
+file(SHA256 "${BLOOM_SOLID_COVERED_COMP}" bloom_solid_covered_comp_sha256)
+if(NOT bloom_solid_covered_comp_sha256 STREQUAL BLOOM_SOLID_COVERED_COMP_SHA256)
+    message(FATAL_ERROR
+        "solid_covered.comp SHA-256 mismatch: measured ${bloom_solid_covered_comp_sha256}, pinned "
+        "${BLOOM_SOLID_COVERED_COMP_SHA256}. Regenerate only through the tools/gpu-shaders recipe and "
+        "update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_SOLID_COVERED_MANIFEST}" bloom_solid_covered_manifest_text)
+if(NOT bloom_solid_covered_manifest_text MATCHES "${BLOOM_SOLID_COVERED_COMP_SHA256}")
+    message(FATAL_ERROR "solid_covered.manifest does not bind the pinned solid_covered.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_solid_covered_generated_spv "${CMAKE_CURRENT_BINARY_DIR}/solid_covered.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_SOLID_COVERED_COMP}" -o "${bloom_solid_covered_generated_spv}"
+        RESULT_VARIABLE bloom_solid_covered_glslang_result)
+    if(NOT bloom_solid_covered_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile solid_covered.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2 "${bloom_solid_covered_generated_spv}"
+        RESULT_VARIABLE bloom_solid_covered_spirv_val_result)
+    if(NOT bloom_solid_covered_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated CoveredSolidV1 SPIR-V.")
+    endif()
+    file(SHA256 "${bloom_solid_covered_generated_spv}" bloom_solid_covered_spv_sha256)
+    if(NOT bloom_solid_covered_spv_sha256 STREQUAL BLOOM_SOLID_COVERED_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated CoveredSolidV1 SPIR-V SHA-256 ${bloom_solid_covered_spv_sha256} does not "
+            "match the embedded ${BLOOM_SOLID_COVERED_SPV_SHA256}; the checked-in .comp and "
+            "solid_covered_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: solid_covered.comp regenerated and SPIR-V-validated "
+        "(${bloom_solid_covered_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "solid_covered.comp digest is still enforced.")
+endif()
+
 set(BLOOM_RENDER_VULKAN_AVAILABLE OFF)
 if(BLOOM_RENDER_ENABLE_VULKAN AND DEFINED BLOOM_DEPENDENCY_MODE)
     if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
@@ -463,12 +517,17 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_resident_display_private.hpp
         vulkan/gpu_resident_display_resources.cpp
         vulkan/gpu_solid.cpp
+        vulkan/gpu_solid_covered.cpp
+        vulkan/gpu_solid_private.hpp
         vulkan/shaders/neutral_display.comp
         vulkan/shaders/neutral_display.manifest
         vulkan/shaders/neutral_display_spirv.inc
         vulkan/shaders/solid.comp
         vulkan/shaders/solid.manifest
         vulkan/shaders/solid_spirv.inc
+        vulkan/shaders/solid_covered.comp
+        vulkan/shaders/solid_covered.manifest
+        vulkan/shaders/solid_covered_spirv.inc
         vulkan/shaders/translation_opacity.comp
         vulkan/shaders/translation_opacity.manifest
         vulkan/shaders/translation_opacity_spirv.inc
