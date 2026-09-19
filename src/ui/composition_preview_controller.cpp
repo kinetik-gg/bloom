@@ -67,8 +67,14 @@ CompositionPreviewController::CompositionPreviewController(
     // verified layout-only edit updates the UI through snapshotChanged but must not disturb a
     // single evaluated frame. Explicit refresh, display/resolution and colour changes all reach
     // requestPreview() through evaluationChanged or their own direct calls.
+    // Non-document evaluation transitions (display qualification, colour settings, rebind) always
+    // force a fresh derivation: their snapshot revisions are unchanged but their pixels are not.
     connect(&session_, &CompositionSession::evaluationChanged, this,
             &CompositionPreviewController::requestRefresh);
+    // A document command that moved the time-indexed provenance may leave the displayed frame
+    // untouched; only the changed time interval is rebuilt.
+    connect(&session_, &CompositionSession::documentEvaluationChanged, this,
+            &CompositionPreviewController::handleDocumentEvaluationChanged);
     connect(&session_, &CompositionSession::compositionChanged, this,
             &CompositionPreviewController::handleCompositionChanged);
     // A work-area edit is render-neutral: it re-scopes which frames the shared cache retains and
@@ -179,11 +185,11 @@ PreviewFrameCache& CompositionPreviewController::frameCache() const noexcept {
 
 std::optional<PreviewFrameCacheKey>
 CompositionPreviewController::cacheKeyForTime(const core::RationalTime time) const {
-    // The retained evaluation snapshot, not the live one: this key must match the frames the
-    // committed preview actually produced, even when a layout-only edit has since moved the live
-    // document ahead. This is what lets RAM preview, background caching and the transport reuse
-    // those frames.
-    const auto& snapshot = session_.evaluationSnapshot();
+    // TEMPORAL-2B: resolve the genuine snapshot for THIS time, so a key matches the frame the
+    // committed preview actually produced at that time even after a finite clip-range edit left a
+    // different revision live elsewhere. This is what lets RAM preview, background caching and the
+    // transport reuse unaffected frames.
+    const auto& snapshot = session_.evaluationSnapshotForTime(time);
     const auto compositionId = session_.compositionId();
     if (snapshot.project().findComposition(compositionId) == nullptr) {
         return std::nullopt;
@@ -358,6 +364,49 @@ void CompositionPreviewController::handleCompositionChanged() {
     }
 }
 
+void CompositionPreviewController::handleDocumentEvaluationChanged() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    // Re-scope retention first: the changed interval's entries are dropped here, unaffected
+    // segments are kept.
+    refreshRetentionRange();
+    if (shuttingDown_)
+        return;
+    // The request the viewer is actually waiting on, in priority order: the newest queued ask, then
+    // the in-flight ask, then the session time. Inspecting state_.frame alone is wrong: the
+    // last-good displayed frame may sit at an unaffected t0 while the pending/active request is at
+    // a changed t1, and preserving on t0 would strand an invalid t1.
+    const auto targetTime = pending_.has_value()  ? pending_->desiredIdentity.time
+                            : active_.has_value() ? active_->desiredIdentity.time
+                                                  : session_.currentTime();
+    const auto acceptedRevision = session_.evaluationSnapshotForTime(targetTime).revision();
+    const auto projectId = session_.snapshot().project().id();
+    const auto stillAccepted = [&](const runtime::PreviewRequestIdentity& identity) {
+        return identity.compositionId == session_.compositionId() &&
+               identity.projectId == projectId && identity.sourceRevision == acceptedRevision;
+    };
+    if (pending_.has_value()) {
+        if (stillAccepted(pending_->desiredIdentity))
+            return; // the newest ask is still correct for its own time
+    } else if (active_.has_value()) {
+        if (stillAccepted(active_->desiredIdentity))
+            return; // the in-flight ask is still correct for its own time
+    } else if (state_.frame != nullptr && state_.frame->desiredIdentity().time == targetTime &&
+               stillAccepted(state_.frame->desiredIdentity())) {
+        return; // the displayed frame already represents the current time
+    }
+    if (session_.valueEditActive()) {
+        handleLiveValueChanged();
+        return;
+    }
+    // The target's provenance changed: drop any now-invalid in-flight/pending work and rebuild the
+    // actual target. allowCachedFrame stays true, so another retained segment may still answer it.
+    valueEditPreviewActive_ = false;
+    preparationEstimate_.reset();
+    pending_.reset();
+    cancelAndDetachActive();
+    requestPreview(false, PreviewRequestKind::Visible);
+}
+
 void CompositionPreviewController::handleWorkAreaChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
     // Re-scope the cache to the live work area: out-of-range entries are pruned here, and every
@@ -370,16 +419,33 @@ void CompositionPreviewController::refreshRetentionRange() {
     const auto* composition = session_.composition();
     if (composition == nullptr) {
         frameCache_->setRetentionRange(std::nullopt);
+        frameCache_->setRetentionSnapshots({});
         return;
     }
     // The LIVE work area, never the retained evaluation snapshot's: a range edit is not a pixel
     // edit, so the evaluation snapshot deliberately does not see it.
     const auto area = session_.workArea();
-    frameCache_->setRetentionRange(
-        PreviewFrameCache::RetentionRange{.projectId = session_.snapshot().project().id(),
-                                          .compositionId = session_.compositionId(),
-                                          .start = area.start,
-                                          .end = area.end});
+    const auto projectId = session_.snapshot().project().id();
+    const auto compositionId = session_.compositionId();
+    frameCache_->setRetentionRange(PreviewFrameCache::RetentionRange{.projectId = projectId,
+                                                                     .compositionId = compositionId,
+                                                                     .start = area.start,
+                                                                     .end = area.end});
+    // TEMPORAL-2B. Push the session's time-indexed provenance so the cache credits only frames
+    // whose own genuine snapshot revision is still accepted for their time; unaffected retained
+    // segments survive a finite edit untouched.
+    const auto ranges = session_.evaluationSnapshotRanges();
+    std::vector<PreviewFrameCache::RetentionSnapshot> snapshots;
+    snapshots.reserve(ranges.size());
+    for (const auto& range : ranges) {
+        snapshots.push_back(
+            PreviewFrameCache::RetentionSnapshot{.projectId = projectId,
+                                                 .compositionId = compositionId,
+                                                 .revision = range.snapshot.revision(),
+                                                 .start = range.start,
+                                                 .end = range.end});
+    }
+    frameCache_->setRetentionSnapshots(std::move(snapshots));
 }
 
 void CompositionPreviewController::handleCurrentTimeChanged() {
@@ -582,8 +648,11 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         const auto values = session_.valueEditOverrides();
         interactionOverride.insert(interactionOverride.end(), values.begin(), values.end());
     }
+    // TEMPORAL-2B: a committed request resolves the genuine snapshot for its exact time; an
+    // override request always uses the live snapshot its overrides were frozen against.
     const document::Snapshot snapshot =
-        interactionOverride.empty() ? session_.evaluationSnapshot() : session_.snapshot();
+        interactionOverride.empty() ? session_.evaluationSnapshotForTime(session_.currentTime())
+                                    : session_.snapshot();
     const document::CompositionId compositionId = session_.compositionId();
     PreparedPreviewFrameHandle retainedFrame = clearLastGoodFrame ? nullptr : state_.frame;
     if (retainedFrame != nullptr &&
@@ -896,14 +965,17 @@ bool CompositionPreviewController::liveSessionMatches(
     // agrees, so an old project's frame can never become current merely because its numeric
     // revision collides. isCurrent() and the stale-result rejections below are unchanged.
     const auto& live = session_.snapshot();
-    const auto& evaluation = session_.evaluationSnapshot();
     if (session_.compositionId() != desiredIdentity.compositionId)
         return false;
-    if (live.project().id() != desiredIdentity.projectId ||
-        evaluation.project().id() != desiredIdentity.projectId)
+    if (live.project().id() != desiredIdentity.projectId)
         return false;
+    // TEMPORAL-2B: a committed frame is current when its own genuine snapshot is the one the
+    // session accepts FOR ITS TIME; an interactive frame carries the live revision. An old
+    // project's frame can never become current merely because its numeric revision collides.
+    const auto& accepted = session_.evaluationSnapshotForTime(desiredIdentity.time);
     return desiredIdentity.sourceRevision == live.revision() ||
-           desiredIdentity.sourceRevision == evaluation.revision();
+           (accepted.project().id() == desiredIdentity.projectId &&
+            desiredIdentity.sourceRevision == accepted.revision());
 }
 
 } // namespace bloom::ui

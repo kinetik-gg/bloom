@@ -122,6 +122,22 @@ class PreviewFrameCache final : public QObject {
         friend bool operator==(const RetentionRange&, const RetentionRange&) = default;
     };
 
+    // TEMPORAL-2B. One accepted provenance span: while a composition's time is inside [start, end),
+    // the ONLY genuine snapshot revision a retained frame for that time may carry is `revision`.
+    // This is the session's time-indexed provenance, so multiple revisions coexist across a
+    // composition's timeline after finite edits. An empty list means "no provenance policy" and
+    // retains anything (standalone caches and tests); the shared controller cache always sets the
+    // session's full-cover list.
+    struct RetentionSnapshot final {
+        document::ProjectId projectId;
+        document::CompositionId compositionId;
+        document::Revision revision;
+        core::RationalTime start;
+        core::RationalTime end;
+
+        friend bool operator==(const RetentionSnapshot&, const RetentionSnapshot&) = default;
+    };
+
     explicit PreviewFrameCache(
         std::size_t byteBudget = defaultPreviewFrameCacheByteBudget(),
         runtime::MemoryBudgetLedger& ledger = runtime::processMemoryBudgetLedger());
@@ -165,6 +181,11 @@ class PreviewFrameCache final : public QObject {
     // Returns the number dropped. Counted as rangeDrops, never as eviction or pressure.
     std::size_t pruneToRange(const RetentionRange& range);
 
+    // TEMPORAL-2B. Installs the accepted provenance spans and prunes every entry whose time is no
+    // longer represented by its own snapshot revision. Entries in other retained segments survive.
+    // Empty clears the policy (retain anything) without pruning.
+    void setRetentionSnapshots(std::vector<RetentionSnapshot> snapshots);
+
     // What RETAINING one frame costs: its packed display buffer, and nothing else. Deliberately not
     // what holding the frame costs right now -- insertion keeps the display buffer and drops the
     // Float32 process image (see runtime::PreviewDisplayOnlyFrame).
@@ -190,9 +211,20 @@ class PreviewFrameCache final : public QObject {
     void dropStaleRevisions(const PreviewFrameCacheKey& current);
     void evictToBudget();
     void removeAt(std::size_t index);
+    // Drops every entry whose time is no longer accepted under the current work-area range or
+    // provenance spans, counting rangeDrops for a work-area exclusion and staleDrops for a
+    // provenance mismatch. Retained segments are never touched wholesale.
+    void pruneUnaccepted();
     // True when `key` belongs to the retention range's composition and its time is inside
     // [start, end); true when no range is set or the key names a different composition.
     [[nodiscard]] bool retains(const PreviewFrameCacheKey& key) const noexcept;
+    [[nodiscard]] bool workAreaAllows(const PreviewFrameCacheKey& key) const noexcept;
+    [[nodiscard]] bool provenanceAllows(const PreviewFrameCacheKey& key) const noexcept;
+    // The accepted snapshot revision for `key`'s time, when a provenance policy is installed and
+    // the time is covered. std::nullopt when no policy is installed or the time is not covered.
+    [[nodiscard]] std::optional<document::Revision>
+    acceptedRevision(const PreviewFrameCacheKey& key) const noexcept;
+    [[nodiscard]] bool hasProvenancePolicy() const noexcept { return !retentionSnapshots_.empty(); }
 
     // Most-recently-used first.
     std::vector<Entry> entries_;
@@ -201,6 +233,7 @@ class PreviewFrameCache final : public QObject {
     std::size_t residentBytes_ = 0;
     std::optional<bool> displayQualified_;
     std::optional<RetentionRange> retentionRange_;
+    std::vector<RetentionSnapshot> retentionSnapshots_;
     Statistics statistics_;
 };
 

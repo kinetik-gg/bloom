@@ -233,6 +233,11 @@ class CompositionPreviewController final : public QObject {
                           std::optional<runtime::TaskId> taskId,
                           PreparedPreviewFrameHandle retainedFrame);
     void handleCompositionChanged();
+    // TEMPORAL-2B. A document command moved the time-indexed provenance. Re-scope cache retention,
+    // then preserve the displayed frame (and any in-flight work) when its time still resolves to
+    // the same genuine snapshot; only a frame whose time was inside the changed interval is
+    // rebuilt, and it may still be answered from another retained segment's cache entry.
+    void handleDocumentEvaluationChanged();
     // WORKAREA-1: re-scope the shared cache to the live work area. Prunes out-of-range entries and
     // bounds every later insertion; it never forces a pixel refresh, because the range is
     // render-neutral for the frame already displayed.

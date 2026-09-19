@@ -82,6 +82,10 @@ class RamPreviewController final : public QObject {
     // allowed to land (and is retained only if it is still in range); otherwise the range is
     // rebased and the run continues. Never turns a range edit into a new run.
     void handleWorkAreaChanged();
+    // TEMPORAL-2B. A document edit either invalidates the whole range (a unitary live provenance:
+    // cancel and let a later run start clean) or only a time interval (adapt and rescan, submitting
+    // only the changed frames).
+    void handleDocumentEvaluationChanged();
     // Recomputed from the live work area: first frame index, total count, and the counters the
     // progress readout and budget gate use. Cached frames inside the new range are skipped.
     void rebaseRange();
@@ -93,10 +97,9 @@ class RamPreviewController final : public QObject {
     PreviewPreparationFunction preparation_;
 
     std::optional<runtime::TaskHandle<PreviewPreparationResultHandle>> active_;
-    // The document the whole range is rendered from, pinned when the run starts: every frame of one
-    // RAM preview has to be the same document, and the cache key's revision is how that is
-    // enforced.
-    std::optional<document::Snapshot> snapshot_;
+    // TEMPORAL-2B: the run no longer pins one snapshot. Each submitted time resolves the session's
+    // genuine snapshot for that time, so a finite clip-range edit can leave several retained
+    // revisions along the range without mixing provenance within any one frame.
     document::CompositionId compositionId_;
     std::uint64_t nextFrameIndex_ = 0;
     std::uint64_t firstFrameIndex_ = 0;

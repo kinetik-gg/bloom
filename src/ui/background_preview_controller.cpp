@@ -35,6 +35,10 @@ BackgroundPreviewController::BackgroundPreviewController(
     // cursor and the cached key untouched; a render-affecting edit restarts the pass.
     connect(&session_, &CompositionSession::evaluationChanged, this,
             &BackgroundPreviewController::restart);
+    // TEMPORAL-2B: a finite clip-range edit re-scopes which times are already valid; restarting
+    // rescans and the contains() check skips retained frames, so only the changed interval fills.
+    connect(&session_, &CompositionSession::documentEvaluationChanged, this,
+            &BackgroundPreviewController::restart);
     // A work-area edit re-scopes the pass. Restarting re-anchors on the playhead and rescans, so an
     // expansion or shift fills only the frames the new range adds; cached in-range frames are
     // skipped by the existing contains() check, and a fully cached shrink fills nothing.
@@ -202,11 +206,13 @@ void BackgroundPreviewController::fillNextFrame() {
         request.sourceVersion = {.documentRevision = key->sourceRevision.value(),
                                  .requestGeneration = identity.requestGeneration};
         submittedAt_ = std::chrono::steady_clock::now();
+        // TEMPORAL-2B: the snapshot is resolved for THIS frame's time, matching the identity's
+        // sourceRevision from cacheKeyForTime above.
+        const auto snapshot = session_.evaluationSnapshotForTime(key->time);
         auto submission = scheduler_.submit<PreviewPreparationResultHandle>(
-            std::move(request),
-            [snapshot = session_.evaluationSnapshot(), identity, preparation = preparation_,
-             limit = previewController_.settings().pixelStorageByteLimit](
-                runtime::TaskContext& context) mutable {
+            std::move(request), [snapshot, identity, preparation = preparation_,
+                                 limit = previewController_.settings().pixelStorageByteLimit](
+                                    runtime::TaskContext& context) mutable {
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<PreviewPreparationResultHandle>::cancelled();
                 }

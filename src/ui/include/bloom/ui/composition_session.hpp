@@ -593,10 +593,15 @@ class CompositionSession final : public QObject {
     // change which frames a range command retains and fills. Consumers read the live workArea()
     // here, never the retained evaluation snapshot's.
     void workAreaChanged();
-    // Emitted only when evaluationSnapshot() actually changes, plus the existing non-document
-    // display/colour-qualification/settings notifications that force preview work. UI surfaces keep
-    // following snapshotChanged; preview, RAM and background caching follow this one, so a
-    // layout-only edit updates the UI without invalidating a single evaluated pixel.
+    // TEMPORAL-2B. Emitted when a DOCUMENT command moved the time-indexed evaluation provenance
+    // (evaluationSnapshotForTime). Consumers decide per time whether their retained pixels are
+    // still accepted; this is the only signal a finite clip-range edit emits, so a range edit can
+    // reuse unaffected frames. It is deliberately distinct from evaluationChanged().
+    void documentEvaluationChanged();
+    // Emitted when the evaluation inputs changed for a NON-document reason that always forces a
+    // fresh derivation: the qualified display transform becoming available, a colour-settings
+    // change, and rebind. These leave every snapshot revision unchanged, so a consumer must NOT
+    // treat "same revision" as "same pixels" here. UI surfaces keep following snapshotChanged.
     void evaluationChanged();
     void compositionChanged();
     void currentTimeChanged();

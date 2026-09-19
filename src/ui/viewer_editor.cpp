@@ -2326,7 +2326,10 @@ std::optional<ViewerMapping> ViewerEditor::currentMapping() const {
     // mapping, even when its revision number collides.
     const auto& desired = frameHandle->desiredIdentity();
     const auto& live = session_.snapshot();
-    const auto& evaluation = session_.evaluationSnapshot();
+    // TEMPORAL-2B: the genuine snapshot is resolved for the frame's OWN time, so a frame retained
+    // at an older revision inside an unaffected segment still maps; an interactive frame carries
+    // live.
+    const auto& evaluation = session_.evaluationSnapshotForTime(desired.time);
     if (desired.compositionId != session_.compositionId() ||
         desired.projectId != live.project().id() ||
         desired.projectId != evaluation.project().id() ||

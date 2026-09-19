@@ -11,12 +11,13 @@ CompositionPreviewController::submitViewerAnalysis(
         return {};
 
     // Genuine provenance. An analysis identity is derived from a displayed frame, so its
-    // sourceRevision names the snapshot that frame's pixels came from: the retained evaluation
-    // snapshot for a committed frame, or the live snapshot for an override frame. The request must
+    // sourceRevision names the snapshot that frame's pixels came from: the session's genuine
+    // snapshot for THIS time (which a finite clip-range edit may have retained at an older
+    // revision) for a committed frame, or the live snapshot for an override frame. The request must
     // carry THAT snapshot -- makeCompositionPreviewPipeline rejects a request whose identity and
     // snapshot revisions disagree -- rather than always the live one.
     const auto& live = session_.snapshot();
-    const auto& evaluation = session_.evaluationSnapshot();
+    const auto& evaluation = session_.evaluationSnapshotForTime(identity.time);
     const bool liveProvenance = identity.sourceRevision == live.revision();
     const bool evaluationProvenance = identity.sourceRevision == evaluation.revision();
     if (!liveProvenance && !evaluationProvenance)

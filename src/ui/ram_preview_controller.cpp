@@ -49,6 +49,12 @@ RamPreviewController::RamPreviewController(CompositionSession& session,
     // fills only the missing frames, shrinking keeps the overlap and stops at the new end.
     connect(&session_, &CompositionSession::workAreaChanged, this,
             &RamPreviewController::handleWorkAreaChanged);
+    // TEMPORAL-2B: a finite clip-range edit re-scopes which times are already valid. The run adapts
+    // and rescans; retained frames hit, only the changed interval is submitted. A non-document
+    // evaluation transition (display qualification/colour) still cancels, because the whole cache
+    // is re-qualified.
+    connect(&session_, &CompositionSession::documentEvaluationChanged, this,
+            &RamPreviewController::handleDocumentEvaluationChanged);
     // A range must not mix factors or policies when the viewer changes resolution mid-run.
     connect(&previewController_, &CompositionPreviewController::resolutionChanged, this,
             &RamPreviewController::cancel);
@@ -70,10 +76,6 @@ void RamPreviewController::start() {
         return;
     }
 
-    // The retained evaluation snapshot: every frame of this run is cached under one real revision
-    // that stays reusable across layout-only edits, and the run is cancelled by evaluationChanged
-    // the moment a pixel-affecting edit changes it.
-    snapshot_ = session_.evaluationSnapshot();
     compositionId_ = session_.compositionId();
     caching_ = true;
     rangeDirty_ = false;
@@ -87,9 +89,12 @@ void RamPreviewController::start() {
 void RamPreviewController::rebaseRange() {
     Q_ASSERT(QThread::currentThread() == thread());
     rangeDirty_ = false;
-    if (!caching_ || !snapshot_.has_value())
+    if (!caching_)
         return;
-    const auto* composition = snapshot_->project().findComposition(compositionId_);
+    // Each frame resolves its own genuine snapshot in submitNextFrame; the run no longer pins one
+    // snapshot, because a finite edit legitimately leaves several retained revisions along the
+    // timeline.
+    const auto* composition = session_.composition();
     if (composition == nullptr) {
         finish(false);
         return;
@@ -134,6 +139,26 @@ void RamPreviewController::handleWorkAreaChanged() {
         submitNextFrame();
 }
 
+void RamPreviewController::handleDocumentEvaluationChanged() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!caching_)
+        return;
+    const auto ranges = session_.evaluationSnapshotRanges();
+    const auto* composition = session_.composition();
+    const bool wholeRangeInvalidated =
+        composition != nullptr && ranges.size() <= 1 &&
+        (ranges.empty() || (ranges.front().start == core::RationalTime{} &&
+                            ranges.front().end == composition->duration() &&
+                            ranges.front().snapshot.revision() == session_.snapshot().revision()));
+    if (wholeRangeInvalidated) {
+        // Every cached frame belongs to an evaluation the artist left behind.
+        cancel();
+        return;
+    }
+    // A finite edit: adapt and rescan. Retained frames hit, only the changed interval is submitted.
+    handleWorkAreaChanged();
+}
+
 void RamPreviewController::cancel() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!caching_) {
@@ -168,14 +193,10 @@ void RamPreviewController::beginShutdown() {
 void RamPreviewController::submitNextFrame() {
     Q_ASSERT(QThread::currentThread() == thread());
     Q_ASSERT(!active_.has_value());
-    if (!caching_ || !snapshot_.has_value()) {
+    if (!caching_) {
         return;
     }
-    // Copied once, rather than dereferenced through the optional below: a Snapshot is a revision
-    // plus a shared identity handle, and every path out of here that calls finish() clears
-    // snapshot_.
-    const document::Snapshot snapshot = *snapshot_;
-    const auto* composition = snapshot.project().findComposition(compositionId_);
+    const auto* composition = session_.composition();
     if (composition == nullptr) {
         finish(false);
         return;
@@ -195,6 +216,8 @@ void RamPreviewController::submitNextFrame() {
             finish(false);
             return;
         }
+        // TEMPORAL-2B: each submitted time resolves its own genuine snapshot.
+        const auto& snapshot = session_.evaluationSnapshotForTime(*frameTime.value());
         const PreviewFrameCacheKey key{
             .projectId = snapshot.project().id(),
             .compositionId = compositionId_,
@@ -226,6 +249,7 @@ void RamPreviewController::submitNextFrame() {
         finish(false);
         return;
     }
+    const auto& snapshot = session_.evaluationSnapshotForTime(*frameTime.value());
     const runtime::PreviewRequestIdentity desiredIdentity{
         .projectId = snapshot.project().id(),
         .compositionId = compositionId_,
@@ -327,7 +351,6 @@ void RamPreviewController::consumeReadyResult() {
 void RamPreviewController::finish(const bool completed) {
     caching_ = false;
     rangeDirty_ = false;
-    snapshot_.reset();
     nextFrameIndex_ = 0;
     // The counts are KEPT: a surface (or a test) asking what the run that just ended achieved gets
     // the truth, and isCaching() is what says whether they are still moving. start() resets them.

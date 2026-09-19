@@ -541,7 +541,10 @@ void testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(Expectations& expecta
                             "two pressure polls prevent the preview cache from refilling");
     }
 
-    // A newer revision makes every retained entry unreachable, and inserting one drops them.
+    // A standalone cache with no temporal provenance policy keeps the original conservative rule: a
+    // frame of a newer revision drops every older-revision entry of the project. (The shared
+    // preview cache installs the session's time-indexed policy instead, which retains unaffected
+    // segments.)
     cache.setByteBudget(frameBytes * 8);
     for (const auto& frame : frames) {
         cache.insert(frame);
@@ -558,7 +561,7 @@ void testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(Expectations& expecta
     if (newRevisionFrame != nullptr) {
         cache.insert(newRevisionFrame);
         expectations.expect(cache.size() == 1 && cache.statistics().staleDrops == 3,
-                            "a frame of a newer revision drops every entry of the older one");
+                            "a standalone cache drops every older-revision entry by construction");
     }
 
     finishFixture(fixture, expectations);
@@ -1171,6 +1174,54 @@ void testRamRunAdaptsToRangeEditWhileActive(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
+// TEMPORAL-2B: a RAM run over a finite clip-range edit re-derives only the changed frames, keeps
+// the retained ones, and the timeline markers span the multiple genuine revisions that result.
+void testRamRunFiniteClipRange(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM Finite Clip Range", time(7, 25)));
+    expectations.expect(animateSolidLayer(fixture.session),
+                        "the finite-range fixture is animated across its seven frames");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the foreground frame is ready");
+    const auto layerId = fixture.session.composition()->graph().layerOutputs().front().layerId;
+    fixture.frameCache->clear();
+    ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
+                                 fixture.bridge, fixture.countingPipeline());
+    ram.start();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 7,
+                        "the whole seven-frame range caches");
+    const auto afterFullFill = fixture.preparationCount.load();
+    const auto oldRevision = fixture.session.snapshot().revision();
+
+    // Trim to [0,3): frames 3..6 lose the layer; 0..2 are unchanged.
+    commands::Transaction trim("Trim", fixture.session.snapshot().revision());
+    trim.emplace<commands::SetLayerRange>(fixture.session.compositionId(), layerId,
+                                          core::RationalTime{}, time(3, 25));
+    expectations.expect(fixture.session.executeTransaction(std::move(trim)).changed(),
+                        "the trim publishes");
+    expectations.expect(fixture.session.evaluationSnapshotForTime(time(0, 25)).revision() !=
+                            fixture.session.snapshot().revision(),
+                        "the retained overlap keeps an older revision");
+    ram.start();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
+                            ram.cachedFrameCount() == 7 &&
+                            fixture.preparationCount.load() == afterFullFill + 4,
+                        "only the four invalidated frames re-prepare");
+    for (std::int64_t frame = 0; frame < 7; ++frame) {
+        const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
+        expectations.expect(key && fixture.frameCache->contains(*key),
+                            "every frame of the range is retained after the trim");
+    }
+    // Markers span both revisions: a probe from the OLD retained revision still reports the frames
+    // re-derived under the new one.
+    const auto probe = fixture.controller.cacheKeyForTime(time(0, 25));
+    expectations.expect(probe.has_value() && probe->sourceRevision == oldRevision &&
+                            fixture.frameCache->timesFor(*probe).size() == 7,
+                        "timesFor spans multiple retained revisions");
+
+    ram.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1198,6 +1249,7 @@ int main(int argc, char** argv) {
         testPixelEditCancelsTheRamRun(expectations);
         testWorkAreaRangeManagement(expectations);
         testRamRunAdaptsToRangeEditWhileActive(expectations);
+        testRamRunFiniteClipRange(expectations);
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return 1;

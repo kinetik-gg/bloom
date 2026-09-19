@@ -556,9 +556,9 @@ previous genuine snapshot, so the prepared frame, the frame-cache key and the co
 real revision instead of one per drag. Every other command, an unknown or unclassified one included,
 advances `evaluationSnapshot()` to live, so the default stays conservative. The retained snapshot is
 never a re-stamped revision: it is one the session actually read from the document, and nested-plan
-`sourceRevision` and `ProcessFrameIdentity` keep naming it. A cache entry therefore becomes
-unreachable only when the evaluation snapshot advances, and entries of an earlier evaluation are
-dropped outright when a frame of a newer one arrives. Two requests never reach the cache at all: one
+`sourceRevision` and `ProcessFrameIdentity` keep naming it. A cache entry becomes unreachable when
+the session no longer accepts its own revision for its own time, and is pruned then -- never by a
+wholesale per-project revision drop. Two requests never reach the cache at all: one
 carrying an interactive parameter override, whose pixels belong to a gesture rather than to the
 snapshot and whose identity cannot say so, and an explicit refresh, which asks for the frame to be
 re-derived precisely because something the key does not cover may have changed. CACHE-1 narrows
@@ -569,21 +569,47 @@ overridden plans, gesture frame-cache insertion, and disk-cache reads and writes
 explicit evaluation bypass (`request.bypassOperationCache`, distinct from the preview frame-cache
 refresh described here) disables even that read-only reuse.
 
-**Who follows which signal.** UI surfaces follow `snapshotChanged()`; the foreground preview, the
-RAM preview run and the background filler follow `evaluationChanged()`. A verified layout-only edit
-therefore updates node cards, the timeline and the properties rows while the prepared frame stays on
-screen, the in-flight preparation is not replaced, the RAM run keeps its one retained snapshot and
-completes with reusable frames, and the background pass keeps its cursor. The colour qualification
-becoming available, a display/colour-settings change, and rebind all publish `evaluationChanged()`
-too, so none of that work is skipped. A committed request is built on `evaluationSnapshot()`; an
-interactive request is assembled from its overrides before the snapshot is chosen and is built on
-the live snapshot, because an override names the live revision it was frozen against and is never
-re-stamped. `ViewerEditor::currentMapping()` and the controller's live-session guard accept a frame
-whose project, composition and time agree and whose revision is either the live or the retained
-evaluation revision, so a gesture still maps after a layout-only edit while an old project's frame
-can never become current merely because a numeric revision collides. An explicit refresh, a
-resolution change and a display/view change still re-derive; the retained snapshot is a cache
-identity, not a promise that a forced request will be answered from it.
+**Time-indexed provenance, and two distinct signals.** TEMPORAL-2A replaced the single retained
+snapshot with `evaluationSnapshotForTime(t)`: a sorted, full-cover list of spans, each naming the
+genuine snapshot whose pixels represent that composition time. A finite changed-time footprint (the
+clip `SetLayerRange` symmetric difference of the old and new half-open activity spans) retains the
+previous genuine snapshot OUTSIDE its changed intervals and switches only those intervals to the
+live snapshot. Every consumer therefore resolves the snapshot FOR ITS OWN TIME: the frame-cache key,
+the foreground committed request, the live-session guard, the analysis request, the viewer's gesture
+mapping, and each RAM/background submission. Nested `sourceRevision` is never rewritten, and each
+retained frame keeps the real revision and plan it came from.
+
+The signal split is what makes this user-visible rather than merely retained. `documentEvaluationChanged()`
+says a DOCUMENT command moved the time-indexed provenance: the foreground preview re-scopes cache
+retention and PRESERVES the displayed frame (and in-flight work) when that frame's time still
+resolves to the same genuine snapshot, otherwise it rebuilds only the changed interval, answering
+from another retained segment's cache entry when possible. RAM and background rescan and submit only
+frames the new provenance no longer accepts; a unitary live reset (a whole-render or unknown edit)
+cancels the RAM run as before. `evaluationChanged()` is reserved for NON-document transitions whose
+snapshot revisions are unchanged but whose pixels are not -- the qualified display transform becoming
+available, a colour-settings change, and rebind -- and still forces a fresh derivation; that is why a
+"same revision" test can never be used to keep a display-qualified frame.
+
+**Cache retention.** The cache holds an accepted-provenance policy: while a composition's time is
+inside a span, only that span's revision may be retained there. A finite edit prunes exactly the
+entries whose own revision is no longer accepted for their time (counted as `staleDrops`) while
+unaffected retained segments survive untouched; a work-area exclusion stays `rangeDrops`, never an
+eviction or pressure drop. `timesFor()` matches everything deciding pixels EXCEPT the source
+revision, so the timeline's cached markers span multiple retained revisions. The compatibility
+accessor `evaluationSnapshot()` remains, returning the uniform snapshot or the live snapshot when
+provenance is mixed. `ViewerEditor::currentMapping()` and the controller's live-session guard accept
+a frame whose project, composition and time agree and whose revision is either the live revision or
+the accepted snapshot FOR THAT TIME, so a gesture still maps after an edit while an old project's
+frame can never become current merely because a numeric revision collides. An explicit refresh, a
+resolution change and a display/view change still re-derive; a retained segment is a cache identity,
+not a promise that a forced request will be answered from it. Note that an explicit refresh is NOT a
+"current live revision" oracle: it also resolves `evaluationSnapshotForTime(t)`, so at an unaffected
+time it re-derives from the RETAINED snapshot. Only a request built from `session.snapshot()`
+carries the live revision, which is why pixel-parity tests prepare that live oracle explicitly rather
+than reusing the refresh path. A finite edit that changes the pending/active request's time must
+rebuild that target even when the displayed last-good frame sits at an unaffected earlier time; the
+handler therefore inspects the pending/active identity's own time and provenance, never the
+displayed frame alone.
 
 **The RAM Preview command** (`Ctrl+Shift+Space`, the Composition menu, and the Timeline transport's
 own button) pre-renders the composition's work-area frame range into the cache one frame at a time, in

@@ -615,6 +615,47 @@ void testBackgroundFillFollowsWorkArea(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
+// TEMPORAL-2B: background fill after a finite clip-range edit submits only the invalidated frames,
+// keeps the retained ones, and the markers span the resulting multiple genuine revisions.
+void testBackgroundFillFiniteClipRange(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Background Finite Range", time(7, 25)));
+    expectations.expect(fixture.session.addSolidLayer("Fill", core::Color4d{0.2, 0.4, 0.8, 1.0}),
+                        "the finite-range background fixture has content");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the foreground frame is ready");
+    const auto layerId = fixture.session.composition()->graph().layerOutputs().front().layerId;
+    fixture.frameCache->clear();
+    ui::BackgroundPreviewController background(fixture.session, fixture.controller,
+                                               fixture.scheduler, fixture.bridge,
+                                               fixture.countingPipeline());
+    const auto fillTo = [&](const std::size_t expected) {
+        for (int attempt = 0; attempt < 400 && fixture.frameCache->size() < expected; ++attempt) {
+            background.fillNextFrame();
+            if (!waitUntil([&] { return fixture.frameCache->size() >= expected; }))
+                break;
+        }
+        return fixture.frameCache->size() >= expected;
+    };
+    expectations.expect(fillTo(7), "the whole seven-frame range fills");
+    const auto afterFullFill = fixture.preparationCount.load();
+    const auto oldRevision = fixture.session.snapshot().revision();
+
+    commands::Transaction trim("Trim", fixture.session.snapshot().revision());
+    trim.emplace<commands::SetLayerRange>(fixture.session.compositionId(), layerId,
+                                          core::RationalTime{}, time(3, 25));
+    expectations.expect(fixture.session.executeTransaction(std::move(trim)).changed(),
+                        "the trim publishes");
+    expectations.expect(fillTo(7) && fixture.preparationCount.load() == afterFullFill + 4,
+                        "background fills only the four invalidated frames");
+    const auto probe = fixture.controller.cacheKeyForTime(time(0, 25));
+    expectations.expect(probe.has_value() && probe->sourceRevision == oldRevision &&
+                            fixture.frameCache->timesFor(*probe).size() == 7,
+                        "background markers span multiple retained revisions");
+
+    background.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -631,6 +672,7 @@ int main(int argc, char** argv) {
         testYieldsAndKeepsCancelledHandleUntilTerminal(expectations);
         testLayoutEditKeepsBackgroundOnRetainedRevision(expectations);
         testBackgroundFillFollowsWorkArea(expectations);
+        testBackgroundFillFiniteClipRange(expectations);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

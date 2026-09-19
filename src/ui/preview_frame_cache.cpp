@@ -137,10 +137,16 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
         return;
     }
     const auto key = PreviewFrameCacheKey::forIdentity(frame->desiredIdentity());
-    if (!retains(key)) {
-        // A late completion after a trim must not resurrect an out-of-range entry. The frame was
-        // already displayed/published by its caller; refusing only the retention is honest.
+    if (!workAreaAllows(key)) {
+        // A late completion after a work-area trim must not resurrect an out-of-range entry. The
+        // frame was already displayed by its caller; refusing only the retention is honest.
         ++statistics_.rangeDrops;
+        return;
+    }
+    if (!provenanceAllows(key)) {
+        // TEMPORAL-2B: the time-indexed session now accepts a different genuine snapshot for this
+        // time, so a late completion for the changed interval is refused rather than retained.
+        ++statistics_.staleDrops;
         return;
     }
     if (displayQualified_.has_value() && *displayQualified_ != frame->isOcioQualified()) {
@@ -150,7 +156,13 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
         clear();
     }
     displayQualified_ = frame->isOcioQualified();
-    dropStaleRevisions(key);
+    if (!hasProvenancePolicy()) {
+        // Standalone/no-policy fallback preserves the original conservative rule: a frame of a
+        // newer revision drops every older-revision entry of the same project, because without the
+        // session's time-indexed policy there is no way to know the two revisions are
+        // time-disjoint. The shared preview cache always installs a policy, which retains segments.
+        dropStaleRevisions(key);
+    }
 
     const auto existing =
         std::ranges::find_if(entries_, [&key](const Entry& entry) { return entry.key == key; });
@@ -204,10 +216,16 @@ bool PreviewFrameCache::contains(const PreviewFrameCacheKey& key) const {
 
 std::vector<core::RationalTime>
 PreviewFrameCache::timesFor(const PreviewFrameCacheKey& probe) const {
+    // TEMPORAL-2B: a probe names ONE revision, but after finite clip-range edits the retained
+    // timeline legitimately spans several genuine revisions. Cached markers are therefore matched
+    // on everything that decides pixels EXCEPT the source revision, so a sub-range captured at an
+    // older retained revision still paints its "cached" bar.
     std::vector<core::RationalTime> times;
     auto key = probe;
     for (const auto& entry : entries_) {
         key.time = entry.key.time;
+        if (hasProvenancePolicy())
+            key.sourceRevision = entry.key.sourceRevision;
         if (key == entry.key) {
             times.push_back(entry.key.time);
         }
@@ -227,13 +245,69 @@ void PreviewFrameCache::clear() {
     residentBytes_ = 0;
 }
 
-bool PreviewFrameCache::retains(const PreviewFrameCacheKey& key) const noexcept {
+bool PreviewFrameCache::workAreaAllows(const PreviewFrameCacheKey& key) const noexcept {
     if (!retentionRange_.has_value())
         return true;
     const auto& range = *retentionRange_;
     if (key.projectId != range.projectId || key.compositionId != range.compositionId)
         return true;
     return key.time >= range.start && key.time < range.end;
+}
+
+std::optional<document::Revision>
+PreviewFrameCache::acceptedRevision(const PreviewFrameCacheKey& key) const noexcept {
+    for (const auto& span : retentionSnapshots_) {
+        if (span.projectId == key.projectId && span.compositionId == key.compositionId &&
+            key.time >= span.start && key.time < span.end) {
+            return span.revision;
+        }
+    }
+    return std::nullopt;
+}
+
+bool PreviewFrameCache::provenanceAllows(const PreviewFrameCacheKey& key) const noexcept {
+    if (!hasProvenancePolicy())
+        return true;
+    const auto accepted = acceptedRevision(key);
+    return accepted.has_value() && key.sourceRevision == *accepted;
+}
+
+bool PreviewFrameCache::retains(const PreviewFrameCacheKey& key) const noexcept {
+    return workAreaAllows(key) && provenanceAllows(key);
+}
+
+void PreviewFrameCache::pruneUnaccepted() {
+    for (std::size_t index = entries_.size(); index > 0; --index) {
+        const auto& entry = entries_[index - 1];
+        if (!workAreaAllows(entry.key)) {
+            ++statistics_.rangeDrops;
+            removeAt(index - 1);
+            continue;
+        }
+        if (!provenanceAllows(entry.key)) {
+            ++statistics_.staleDrops;
+            removeAt(index - 1);
+        }
+    }
+}
+
+void PreviewFrameCache::dropStaleRevisions(const PreviewFrameCacheKey& current) {
+    for (std::size_t index = entries_.size(); index > 0; --index) {
+        const auto& entry = entries_[index - 1];
+        if (entry.key.projectId == current.projectId &&
+            entry.key.sourceRevision == current.sourceRevision) {
+            continue;
+        }
+        ++statistics_.staleDrops;
+        removeAt(index - 1);
+    }
+}
+
+void PreviewFrameCache::setRetentionSnapshots(std::vector<RetentionSnapshot> snapshots) {
+    if (retentionSnapshots_ == snapshots)
+        return;
+    retentionSnapshots_ = std::move(snapshots);
+    pruneUnaccepted();
 }
 
 std::size_t PreviewFrameCache::pruneToRange(const RetentionRange& range) {
@@ -259,18 +333,6 @@ void PreviewFrameCache::setRetentionRange(std::optional<RetentionRange> range) {
     retentionRange_ = std::move(range);
     if (retentionRange_.has_value())
         static_cast<void>(pruneToRange(*retentionRange_));
-}
-
-void PreviewFrameCache::dropStaleRevisions(const PreviewFrameCacheKey& current) {
-    for (std::size_t index = entries_.size(); index > 0; --index) {
-        const auto& entry = entries_[index - 1];
-        if (entry.key.projectId == current.projectId &&
-            entry.key.sourceRevision == current.sourceRevision) {
-            continue;
-        }
-        ++statistics_.staleDrops;
-        removeAt(index - 1);
-    }
 }
 
 void PreviewFrameCache::evictToBudget() {

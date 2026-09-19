@@ -471,6 +471,19 @@ bool CompositionSession::applyFiniteEvaluationFootprint(
             return false;
         }
     }
+    // Fail closed against inconsistent finite evidence: every retained segment must still name this
+    // composition at the same numeric project identity and match the LIVE duration and frame rate.
+    // A finite edit cannot change the time base today, so this only guards a future mis-classified
+    // command; normal time-base edits are whole-render and never reach here.
+    const auto liveProjectId = snapshot_.project().id();
+    const auto liveRate = current->format().frameRate();
+    for (const auto& range : evaluationRanges_) {
+        const auto* retained = range.snapshot.project().findComposition(compositionId_);
+        if (retained == nullptr || range.snapshot.project().id() != liveProjectId ||
+            retained->duration() != duration || retained->format().frameRate() != liveRate) {
+            return false;
+        }
+    }
     std::vector<core::RationalTime> points{core::RationalTime{}};
     for (const auto& range : evaluationRanges_) {
         points.push_back(range.start);
@@ -1664,8 +1677,11 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
         if (revisionAdvanced) {
             normalizeSelection();
             emit snapshotChanged();
+            // A document command moved the time-indexed provenance. This is the distinct signal a
+            // finite clip-range edit emits; evaluationChanged() is reserved for non-document
+            // transitions (display qualification, colour settings, rebind) that always force work.
             if (provenanceChanged)
-                emit evaluationChanged();
+                emit documentEvaluationChanged();
         }
         // The effective range is compared against the live snapshot before and after the edit, so a
         // mixed transaction that changed no range, or a range edit to another composition, is a
