@@ -28,6 +28,7 @@
 #include <vk_mem_alloc.h>
 
 #include <cstdint>
+#include <memory>
 #include <thread>
 
 namespace bloom::render::vulkan_detail {
@@ -75,8 +76,30 @@ struct DeviceAllocatorState final {
     vk::raii::Queue computeQueue{nullptr};
     VmaAllocator allocator = VK_NULL_HANDLE;
     std::uint32_t computeQueueFamily = 0;
+
+    // Bounded bootstrap facts recorded once so a renderer can validate a request against real
+    // device limits before touching the allocator or queue.
+    std::uint32_t generation = 0;
+    std::uint64_t maxStorageBufferRange = 0;
+    std::uint32_t maxComputeWorkGroupCountX = 0;
+    std::uint32_t maxComputeWorkGroupInvocations = 0;
+    std::uint32_t maxComputeWorkGroupSizeX = 0;
 };
 
 } // namespace bloom::render::vulkan_detail
+
+namespace bloom::render {
+
+// The only non-public bridge from a render operation to the device's Vulkan allocator and queue.
+// GpuDevice befriends this class; the CPU stub never defines or references it, so a build without
+// Vulkan dependencies links the stub API unchanged.
+class GpuRendererAccess final {
+  public:
+    [[nodiscard]] static std::shared_ptr<vulkan_detail::DeviceAllocatorState>
+    state(GpuDevice& device) noexcept;
+    [[nodiscard]] static std::thread::id owner(const GpuDevice& device) noexcept;
+};
+
+} // namespace bloom::render
 
 #endif // BLOOM_RENDER_VULKAN_GPU_DEVICE_PRIVATE_HPP

@@ -75,17 +75,38 @@ Implemented in this slice:
   until the frozen fixtures pass, and an unsupported entry is never inherited from another
   operation.
 
-Locally verified on Linux: real bootstrap/create/destroy and a tiny VMA host allocation on an
-NVIDIA GeForce RTX 5080 (driver 615.71.9.0, API 1.4); the CPU-unavailable stub on a build with no
-GPU dependency; the existing CPU render tests; and a Qt-free CPU application that links no Vulkan
-loader. Actual device/driver facts from a run are diagnostic evidence, not qualification.
+The first GPU operation is now implemented: the fixed **Bloom Neutral v1 display** compute
+operation (`bloom/render/gpu_neutral_display.hpp`, operation `OcioDisplayV1`). Its Vulkan compute
+shader is an offline artifact from `tools/gpu-shaders`; the checked-in `.comp` is pinned by SHA-256,
+the manifest must bind that same digest, the build recompiles it with the locked `glslangValidator`,
+validates the SPIR-V with the locked `spirv-val`, and the test hashes the embedded little-endian
+word array against the pinned SPIR-V digest, so the source -> SPIR-V -> embedded-array relationship
+is closed and no runtime code loads or compiles a shader. The pipeline caches the shader module,
+descriptor layout, pipeline layout, compute pipeline, command pool, and fence once per device; one
+job is outstanding at a time; `begin` copies and validates the source against device limits and the
+byte budget, `poll` is a non-blocking fence query, and `readback` unpacks only after the fence
+signals. Cancellation marks a discard without freeing in-flight resources. VMA allocations use the
+correct host-access flags for writes and readback, host->compute and compute->host buffer barriers
+are recorded, and non-coherent memory is flushed/invalidated with their `VkResult`s checked.
+Submission retirement is tracked independently of the API job state: an unknown fence status does not
+retire the submission, and owner-thread teardown drains within a bounded budget or quarantines (never
+destroys a queue-busy generation) under a process-wide fuse. Wrong-thread `begin`/`poll`/`readback`
+fail closed without mutating owned state; `state()`/`diagnostic()` are owner-thread-only reads.
 
-Pending and unchanged: the dedicated GPU service thread and all submission/fence/timeline work,
-resource retirement, cancellation, device loss and recovery, offscreen CPU/GPU transfer, shader
-and pipeline compilation including OCIO GPU programs, presentation/swapchain integration, the
-cross-platform Linux/macOS/Windows parity spike, operation kernels, and scheduler or UI
-integration. The qualified Linux prefix manifest and Windows/macOS GPU support remain pending, so
-this direction stays `working`.
+Locally verified on Linux: real bootstrap/create/destroy and a tiny VMA host allocation on an
+NVIDIA GeForce RTX 5080 (driver 615.71.9.0, API 1.4); the Neutral v1 display dispatch matching the
+independent CPU OCIO oracle within the documented one-code RGB tolerance and exact alpha across
+1 px, 257 px, special values, the full alpha-quantization boundary sweep, 1280x720, and 1920x1080;
+the CPU-unavailable stub on a build with no GPU dependency; the existing CPU render tests; and a
+Qt-free CPU application that links no Vulkan loader. Actual device/driver facts from a run are
+diagnostic evidence, not qualification.
+
+Pending and unchanged: the dedicated GPU service thread and the runtime/scheduler integration, the
+per-operation qualification fixtures and `ReferenceParity` outcome (the operation stays
+`Unavailable` until those pass), general graph execution, presentation/swapchain integration, the
+cross-platform Linux/macOS/Windows parity spike, shader compilation of generated OCIO programs, and
+Windows/macOS GPU support. The qualified Linux prefix manifest remains pending, so this direction
+stays `working`.
 
 ## Boundaries
 

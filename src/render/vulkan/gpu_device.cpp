@@ -209,17 +209,22 @@ selectPhysicalDevice(const vk::raii::Instance& instance) {
         VkPhysicalDeviceMemoryProperties2 memoryProperties2{};
         memoryProperties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
         dispatcher->vkGetPhysicalDeviceMemoryProperties2(device, &memoryProperties2);
-        std::uint64_t memoryBytes = 0;
+        std::uint64_t deviceLocalBytes = 0;
         for (std::uint32_t heap = 0; heap < memoryProperties2.memoryProperties.memoryHeapCount;
              ++heap) {
-            memoryBytes += memoryProperties2.memoryProperties.memoryHeaps[heap].size;
+            // Only DEVICE_LOCAL heaps are summed: this is a bounded device-local fact, never a VRAM
+            // or usable-budget claim (integrated GPUs share host memory, and drivers may migrate).
+            if ((memoryProperties2.memoryProperties.memoryHeaps[heap].flags &
+                 VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0U) {
+                deviceLocalBytes += memoryProperties2.memoryProperties.memoryHeaps[heap].size;
+            }
         }
 
         DeviceSelection selection;
         selection.physicalDevice = device;
         selection.queueFamily = computeFamily;
         selection.properties = properties2.properties;
-        selection.deviceMemoryBytes = memoryBytes;
+        selection.deviceMemoryBytes = deviceLocalBytes;
         selection.memoryBudgetSupported =
             deviceExtensionAvailable(instance, device, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
         selection.portabilitySubset =
@@ -427,6 +432,12 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
                                                       selection->queueFamily, 0U, &rawQueue);
     control->computeQueue = vk::raii::Queue(control->device, rawQueue);
     control->computeQueueFamily = selection->queueFamily;
+    control->generation = 1;
+    control->maxStorageBufferRange = selection->properties.limits.maxStorageBufferRange;
+    control->maxComputeWorkGroupCountX = selection->properties.limits.maxComputeWorkGroupCount[0];
+    control->maxComputeWorkGroupInvocations =
+        selection->properties.limits.maxComputeWorkGroupInvocations;
+    control->maxComputeWorkGroupSizeX = selection->properties.limits.maxComputeWorkGroupSize[0];
 
     VmaVulkanFunctions vmaFunctions{};
     vmaFunctions.vkGetInstanceProcAddr = getInstanceProcAddr;
@@ -601,5 +612,17 @@ DeviceAllocatorState::~DeviceAllocatorState() {
 }
 
 } // namespace vulkan_detail
+
+std::shared_ptr<vulkan_detail::DeviceAllocatorState>
+GpuRendererAccess::state(GpuDevice& device) noexcept {
+    if (device.impl_ == nullptr) {
+        return {};
+    }
+    return device.impl_->control;
+}
+
+std::thread::id GpuRendererAccess::owner(const GpuDevice& device) noexcept {
+    return device.impl_ != nullptr ? device.impl_->owner : std::thread::id{};
+}
 
 } // namespace bloom::render

@@ -1,0 +1,46 @@
+{
+  "schema": "bloom.gpu.display-shader.manifest.v1",
+  "generator": "tools/gpu-shaders/neutral_display_generator",
+  "generatorRevision": 1,
+  "operation": "BloomNeutralV1Display",
+  "entrypoint": "main",
+  "ocioFunction": "bloom_neutral_v1_display",
+  "ocioVersion": "2.5.2",
+  "sourceConfig": {
+    "rawSha256": "6cb2d1460218958ffede3fb747f3a7d46d355ac0d3d5e6452eb9a5a47d63373f",
+    "revisionSha256": "a6fc07c95cea14897b725992a179d35055cccce2ffaf719ca73b4a289c89eacf",
+    "revisionAlgorithm": "sha256",
+    "revisionVersion": 1,
+    "locatorKind": 1,
+    "payloadByteCount": 632
+  },
+  "processorCacheId": "9a9c93f1bcaaa90825d44353f45998ac",
+  "gpuProcessorCacheId": "GPU Processor: oFlags 263995331 ops :  <GammaOp monCurveRev r:2.4, 0.055 g:2.4, 0.055 b:2.4, 0.055 a:1, 0  >",
+  "shader": {
+    "language": "GLSL_460",
+    "stage": "compute",
+    "sha256": "63fa4699a9a6980312d34ad7c0c7f6ad5d20b7c249b0e050942a50baac367057",
+    "localSizeX": 256,
+    "textures": 0,
+    "textures3D": 0,
+    "uniforms": 0,
+    "dynamicProperties": 0
+  },
+  "bindings": [
+    {"set": 0, "binding": 0, "kind": "storage-buffer", "access": "readonly", "element": "vec4", "role": "premultiplied-rgba32f-input"},
+    {"set": 0, "binding": 1, "kind": "storage-buffer", "access": "writeonly", "element": "uint", "packing": "R|(G<<8)|(B<<16)|(A<<24)", "role": "packed-rgba8-output"},
+    {"set": 0, "binding": 2, "kind": "storage-buffer", "access": "readwrite", "element": "uint", "role": "error-flag", "bits": {"inputNonFinite": 1, "inputSubnormal": 8, "unpremultiplyNonFinite": 2, "outputNonFinite": 4}}
+  ],
+  "pushConstant": {"name": "pixelCount", "type": "uint32"},
+  "contracts": {
+    "rgbToleranceCodes": 1,
+    "rgbToleranceNote": "OCIO GPU vs CPU float rounding may differ by at most one 8-bit code per channel; alpha is exact",
+    "alphaToleranceCodes": 0,
+    "alphaRule": "floor(clamp(alpha,0,1)*255+0.5) with the exact binary64 value of the binary32 alpha; reproduced without shaderFloat64",
+    "zeroAlphaRgb": "+0",
+    "alphaPreserved": true,
+    "ocioChannels": "rgb",
+    "nonFinitePolicy": "atomicOr an error bit and write a zero placeholder; the consumer must not publish a frame while flags[0] is nonzero",
+    "subnormalPolicy": "any nonzero subnormal input lane sets the whole frame's error flag; the GPU path rejects the frame and a CPU fallback is the intended route until denormal preservation is qualified"
+  }
+}

@@ -1,0 +1,137 @@
+#version 460
+// Bloom Neutral v1 display compute shader. Offline-generated; do not edit.
+// operation: BloomNeutralV1Display
+// source-config-raw-sha256: 6cb2d1460218958ffede3fb747f3a7d46d355ac0d3d5e6452eb9a5a47d63373f
+// source-config-revision-sha256: a6fc07c95cea14897b725992a179d35055cccce2ffaf719ca73b4a289c89eacf
+// opencolorio-version: 2.5.2
+// processor-cache-id: 9a9c93f1bcaaa90825d44353f45998ac
+// ocio-function: bloom_neutral_v1_display
+layout(local_size_x = 256) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer BloomNeutralV1Input {
+    vec4 pixels[];
+} bloom_input;
+
+layout(std430, set = 0, binding = 1) writeonly buffer BloomNeutralV1Output {
+    uint words[];
+} bloom_output;
+
+layout(std430, set = 0, binding = 2) buffer BloomNeutralV1Error {
+    uint flags[];
+} bloom_error;
+
+layout(push_constant) uniform BloomNeutralV1PushConstants {
+    uint pixelCount;
+} bloom_push;
+
+// Exact replica of the CPU straight-RGBA8 rule
+//   floor(clamp(value, 0, 1) * 255.0 + 0.5)
+// evaluated with the exact binary64 value of the binary32 input. The input significand
+// has at most 24 bits and 255 is odd, so value * 255 is exactly representable in
+// binary64; frexp plus integer arithmetic reproduces the binary64 floor, half-up, without
+// requiring shaderFloat64. The only exact tie is value == 0.5 and it rounds up to 128.
+uint bloom_neutral_v1_quantize_byte(float value)
+{
+    if (!(value > 0.0)) { return 0u; }
+    if (value >= 1.0) { return 255u; }
+    if (value < 0.001) { return 0u; }
+    int exponent = 0;
+    float significand = frexp(value, exponent);
+    uint mantissa = uint(significand * 16777216.0);
+    uint scaled = mantissa * 255u;
+    int shift = 24 - exponent;
+    if (shift >= 33) { return 0u; }
+    if (shift == 32) { return (scaled >= 0x80000000u) ? 1u : 0u; }
+    uint quotient = scaled >> uint(shift);
+    uint remainder = scaled & ((1u << uint(shift)) - 1u);
+    uint roundBit = 1u << uint(shift - 1);
+    return quotient + ((remainder >= roundBit) ? 1u : 0u);
+}
+
+
+// Declaration of the OCIO shader function
+
+vec4 bloom_neutral_v1_display(vec4 inPixel)
+{
+  vec4 outColor = inPixel;
+  
+  // Add Gamma 'monCurveRev' processing
+  
+  {
+    vec4 breakPnt = vec4(0.00303993467, 0.00303993467, 0.00303993467, 1.);
+    vec4 slope = vec4(12.9232101, 12.9232101, 12.9232101, 1.);
+    vec4 scale = vec4(1.05499995, 1.05499995, 1.05499995, 1.00000095);
+    vec4 offset = vec4(0.0549999997, 0.0549999997, 0.0549999997, 9.99999997e-07);
+    vec4 gamma = vec4(0.416666657, 0.416666657, 0.416666657, 0.999998987);
+    vec4 isAboveBreak = vec4(greaterThan( outColor, breakPnt));
+    vec4 linSeg = outColor * slope;
+    vec4 powSeg = pow( max( vec4(0., 0., 0., 0.), outColor ), gamma ) * scale - offset;
+    vec4 res = isAboveBreak * powSeg + ( vec4(1., 1., 1., 1.) - isAboveBreak ) * linSeg;
+    outColor.rgb = vec3(res.x, res.y, res.z);
+    outColor.a = res.w;
+  }
+
+  return outColor;
+}
+
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= bloom_push.pixelCount) { return; }
+
+    vec4 premultiplied = bloom_input.pixels[index];
+    uint errors = 0u;
+    if (any(isnan(premultiplied)) || any(isinf(premultiplied))) {
+        errors |= 1u;
+    }
+    // Any nonzero subnormal input lane rejects the whole frame until denormal
+    // preservation is qualified; the intended route for such a frame is a CPU fallback.
+    uvec4 inputBits = floatBitsToUint(premultiplied);
+    uvec4 exponentBits = inputBits & uvec4(0x7F800000u);
+    uvec4 mantissaBits = inputBits & uvec4(0x007FFFFFu);
+    bvec4 inputIsSubnormal = bvec4(exponentBits.x == 0u && mantissaBits.x != 0u,
+                                   exponentBits.y == 0u && mantissaBits.y != 0u,
+                                   exponentBits.z == 0u && mantissaBits.z != 0u,
+                                   exponentBits.w == 0u && mantissaBits.w != 0u);
+    if (any(inputIsSubnormal)) {
+        errors |= 8u;
+    }
+    if (errors != 0u) {
+        atomicOr(bloom_error.flags[0], errors);
+        bloom_output.words[index] = 0u;
+        return;
+    }
+
+    float alpha = premultiplied.a;
+    vec3 straight = vec3(0.0);
+    if (alpha != 0.0) {
+        straight = premultiplied.rgb / alpha;
+        if (any(isnan(straight)) || any(isinf(straight))) {
+            errors |= 2u;
+        }
+    }
+    if (errors != 0u) {
+        atomicOr(bloom_error.flags[0], errors);
+        bloom_output.words[index] = 0u;
+        return;
+    }
+
+    // OCIO affects RGB only. The alpha lane fed to the transform is 1.0 and the transform's
+    // alpha result is discarded because Bloom carries the original alpha unchanged.
+    vec3 displayRgb = bloom_neutral_v1_display(vec4(straight, 1.0)).rgb;
+    if (any(isnan(displayRgb)) || any(isinf(displayRgb))) {
+        errors |= 4u;
+    }
+    if (errors != 0u) {
+        atomicOr(bloom_error.flags[0], errors);
+        bloom_output.words[index] = 0u;
+        return;
+    }
+
+    uint red = bloom_neutral_v1_quantize_byte(displayRgb.r);
+    uint green = bloom_neutral_v1_quantize_byte(displayRgb.g);
+    uint blue = bloom_neutral_v1_quantize_byte(displayRgb.b);
+    uint alphaByte = bloom_neutral_v1_quantize_byte(alpha);
+    bloom_output.words[index] = red | (green << 8) | (blue << 16) | (alphaByte << 24);
+}

@@ -116,6 +116,8 @@ struct GpuCapabilityReport final {
     bool compute_queue = false;
     bool timeline_semaphore = false;
     bool memory_budget_supported = false;
+    // Sum of DEVICE_LOCAL memory heap sizes. A bounded diagnostic fact, not a VRAM capacity or a
+    // usable allocation budget: integrated GPUs share host memory and drivers may migrate blocks.
     std::uint64_t device_memory_bytes = 0;
     std::vector<GpuOperationCapability> operations;
 };
@@ -127,6 +129,7 @@ struct GpuBufferInfo final {
 };
 
 class GpuDevice;
+class GpuRendererAccess;
 
 // Opaque, move-only ownership of one allocation. An allocation co-owns the device's allocator
 // generation, so the underlying Vulkan allocator and device handles stay alive until the last
@@ -196,6 +199,8 @@ class GpuDevice final {
     [[nodiscard]] GpuBufferAllocationResult allocateHostBuffer(std::uint64_t size_bytes);
 
   private:
+    friend class GpuRendererAccess;
+
     struct Impl;
     explicit GpuDevice(std::unique_ptr<Impl> impl) noexcept;
 

@@ -115,6 +115,82 @@ option(BLOOM_RENDER_ENABLE_VULKAN
     "Compile the Vulkan GPU device bootstrap when the locked prefix provides Vulkan headers and VMA"
     ON)
 
+# --- Fixed Bloom Neutral v1 display shader: source pin and regeneration check -------------------
+#
+# The compute shader is an offline artifact from tools/gpu-shaders. Its source text is pinned by
+# SHA-256 here, the manifest must bind that same source digest, and, when the locked glslangValidator
+# and spirv-val are present, the configure step recompiles the checked-in .comp and confirms the
+# resulting SPIR-V digest matches the digest embedded in neutral_display_spirv.inc. That closes the
+# source -> SPIR-V -> embedded-array relationship; runtime code never compiles or loads a shader.
+set(BLOOM_NEUTRAL_DISPLAY_COMP
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/neutral_display.comp")
+set(BLOOM_NEUTRAL_DISPLAY_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/neutral_display.manifest")
+set(BLOOM_NEUTRAL_DISPLAY_INC
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/neutral_display_spirv.inc")
+set(BLOOM_NEUTRAL_DISPLAY_COMP_SHA256
+    "63fa4699a9a6980312d34ad7c0c7f6ad5d20b7c249b0e050942a50baac367057")
+set(BLOOM_NEUTRAL_DISPLAY_SPV_SHA256
+    "fc0a97d36c42aafd3cfce56dcfdd7ff3c75d3ec7fd0e52a83c7f272c54feb3f9")
+
+file(SHA256 "${BLOOM_NEUTRAL_DISPLAY_COMP}" bloom_neutral_display_comp_sha256)
+if(NOT bloom_neutral_display_comp_sha256 STREQUAL BLOOM_NEUTRAL_DISPLAY_COMP_SHA256)
+    message(FATAL_ERROR
+        "neutral_display.comp SHA-256 mismatch: measured ${bloom_neutral_display_comp_sha256}, "
+        "pinned ${BLOOM_NEUTRAL_DISPLAY_COMP_SHA256}. Regenerate only through tools/gpu-shaders and "
+        "update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_NEUTRAL_DISPLAY_MANIFEST}" bloom_neutral_display_manifest_text)
+if(NOT bloom_neutral_display_manifest_text MATCHES "${BLOOM_NEUTRAL_DISPLAY_COMP_SHA256}")
+    message(FATAL_ERROR
+        "neutral_display.manifest does not bind the pinned neutral_display.comp SHA-256.")
+endif()
+
+set(BLOOM_GLSLANG_VALIDATOR "")
+set(BLOOM_SPIRV_VAL "")
+if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/bin")
+    find_program(bloom_locked_glslang_validator
+        NAMES glslangValidator
+        HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
+        NO_DEFAULT_PATH)
+    find_program(bloom_locked_spirv_val
+        NAMES spirv-val
+        HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
+        NO_DEFAULT_PATH)
+    set(BLOOM_GLSLANG_VALIDATOR "${bloom_locked_glslang_validator}")
+    set(BLOOM_SPIRV_VAL "${bloom_locked_spirv_val}")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_neutral_display_generated_spv
+        "${CMAKE_CURRENT_BINARY_DIR}/neutral_display.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_NEUTRAL_DISPLAY_COMP}" -o "${bloom_neutral_display_generated_spv}"
+        RESULT_VARIABLE bloom_neutral_display_glslang_result)
+    if(NOT bloom_neutral_display_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile neutral_display.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2
+                "${bloom_neutral_display_generated_spv}"
+        RESULT_VARIABLE bloom_neutral_display_spirv_val_result)
+    if(NOT bloom_neutral_display_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated neutral_display SPIR-V.")
+    endif()
+    file(SHA256 "${bloom_neutral_display_generated_spv}" bloom_neutral_display_spv_sha256)
+    if(NOT bloom_neutral_display_spv_sha256 STREQUAL BLOOM_NEUTRAL_DISPLAY_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated neutral_display SPIR-V SHA-256 ${bloom_neutral_display_spv_sha256} does not "
+            "match the embedded ${BLOOM_NEUTRAL_DISPLAY_SPV_SHA256}; the checked-in .comp and "
+            "neutral_display_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: neutral_display.comp regenerated and SPIR-V-validated "
+        "(${bloom_neutral_display_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "neutral_display.comp digest is still enforced.")
+endif()
+
 set(BLOOM_RENDER_VULKAN_AVAILABLE OFF)
 if(BLOOM_RENDER_ENABLE_VULKAN AND DEFINED BLOOM_DEPENDENCY_MODE)
     if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
@@ -177,6 +253,7 @@ target_sources(
             include/bloom/render/display_buffer.hpp
             include/bloom/render/embedded_fonts.hpp
             include/bloom/render/gpu_device.hpp
+            include/bloom/render/gpu_neutral_display.hpp
             include/bloom/render/image.hpp
             include/bloom/render/image_types.hpp
             include/bloom/render/text_raster.hpp
@@ -187,9 +264,18 @@ target_sources(
 # unit keeps its include requirements PRIVATE so no Vulkan header reaches bloom_render consumers or
 # the desktop application.
 if(BLOOM_RENDER_VULKAN_AVAILABLE)
-    target_sources(bloom_render PRIVATE vulkan/gpu_device.cpp vulkan/gpu_device_private.hpp)
+    target_sources(bloom_render PRIVATE
+        vulkan/gpu_device.cpp
+        vulkan/gpu_device_private.hpp
+        vulkan/gpu_neutral_display.cpp
+        vulkan/gpu_neutral_display_private.hpp
+        vulkan/gpu_neutral_display_resources.cpp
+        vulkan/shaders/neutral_display.comp
+        vulkan/shaders/neutral_display.manifest
+        vulkan/shaders/neutral_display_spirv.inc
+    )
 else()
-    target_sources(bloom_render PRIVATE gpu_device_stub.cpp)
+    target_sources(bloom_render PRIVATE gpu_device_stub.cpp gpu_neutral_display_stub.cpp)
 endif()
 
 target_compile_features(bloom_render PUBLIC cxx_std_20)
