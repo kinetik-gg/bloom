@@ -33,9 +33,11 @@ RamPreviewController::RamPreviewController(CompositionSession& session,
                                            CompositionPreviewController& previewController,
                                            runtime::TaskScheduler& scheduler,
                                            TaskUiBridge& taskUiBridge,
-                                           PreviewPreparationFunction preparation, QObject* parent)
+                                           PreviewPreparationFunction preparation, QObject* parent,
+                                           PreviewPreparationSubmitter submitter)
     : QObject(parent), session_(session), previewController_(previewController),
-      scheduler_(scheduler), taskUiBridge_(taskUiBridge), preparation_(std::move(preparation)) {
+      scheduler_(scheduler), taskUiBridge_(taskUiBridge), preparation_(std::move(preparation)),
+      submitter_(std::move(submitter)) {
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this,
             &RamPreviewController::consumeReadyResult);
     // A render-affecting edit or a composition switch makes every frame this run would still cache
@@ -278,16 +280,22 @@ void RamPreviewController::submitNextFrame() {
         .requestGeneration = desiredIdentity.requestGeneration,
     };
 
-    auto submission = scheduler_.submit<PreviewPreparationResultHandle>(
-        std::move(request),
-        [snapshot, desiredIdentity,
-         pixelStorageByteLimit = previewController_.settings().pixelStorageByteLimit,
-         preparation = preparation_](runtime::TaskContext& context) mutable {
-            if (context.isCancellationRequested()) {
-                return runtime::TaskResult<PreviewPreparationResultHandle>::cancelled();
-            }
-            return preparation(snapshot, desiredIdentity, pixelStorageByteLimit, {}, context);
-        });
+    runtime::TaskSubmission<PreviewPreparationResultHandle> submission;
+    if (submitter_) {
+        submission = submitter_(std::move(request), snapshot, desiredIdentity,
+                                previewController_.settings().pixelStorageByteLimit, {});
+    } else {
+        submission = scheduler_.submit<PreviewPreparationResultHandle>(
+            std::move(request),
+            [snapshot, desiredIdentity,
+             pixelStorageByteLimit = previewController_.settings().pixelStorageByteLimit,
+             preparation = preparation_](runtime::TaskContext& context) mutable {
+                if (context.isCancellationRequested()) {
+                    return runtime::TaskResult<PreviewPreparationResultHandle>::cancelled();
+                }
+                return preparation(snapshot, desiredIdentity, pixelStorageByteLimit, {}, context);
+            });
+    }
     if (!submission.accepted()) {
         finish(false);
         return;

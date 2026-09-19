@@ -17,9 +17,10 @@ namespace bloom::ui {
 BackgroundPreviewController::BackgroundPreviewController(
     CompositionSession& session, CompositionPreviewController& previewController,
     runtime::TaskScheduler& scheduler, TaskUiBridge& bridge, PreviewPreparationFunction preparation,
-    QObject* parent)
+    QObject* parent, PreviewPreparationSubmitter submitter)
     : QObject(parent), session_(session), previewController_(previewController),
-      scheduler_(scheduler), bridge_(bridge), preparation_(std::move(preparation)) {
+      scheduler_(scheduler), bridge_(bridge), preparation_(std::move(preparation)),
+      submitter_(std::move(submitter)) {
     qApp->installEventFilter(this);
     idleTimer_.setInterval(50);
     connect(&idleTimer_, &QTimer::timeout, this, &BackgroundPreviewController::fillNextFrame);
@@ -209,15 +210,21 @@ void BackgroundPreviewController::fillNextFrame() {
         // TEMPORAL-2B: the snapshot is resolved for THIS frame's time, matching the identity's
         // sourceRevision from cacheKeyForTime above.
         const auto snapshot = session_.evaluationSnapshotForTime(key->time);
-        auto submission = scheduler_.submit<PreviewPreparationResultHandle>(
-            std::move(request), [snapshot, identity, preparation = preparation_,
-                                 limit = previewController_.settings().pixelStorageByteLimit](
-                                    runtime::TaskContext& context) mutable {
-                if (context.isCancellationRequested()) {
-                    return runtime::TaskResult<PreviewPreparationResultHandle>::cancelled();
-                }
-                return preparation(snapshot, identity, limit, {}, context);
-            });
+        runtime::TaskSubmission<PreviewPreparationResultHandle> submission;
+        if (submitter_) {
+            submission = submitter_(std::move(request), snapshot, identity,
+                                    previewController_.settings().pixelStorageByteLimit, {});
+        } else {
+            submission = scheduler_.submit<PreviewPreparationResultHandle>(
+                std::move(request), [snapshot, identity, preparation = preparation_,
+                                     limit = previewController_.settings().pixelStorageByteLimit](
+                                        runtime::TaskContext& context) mutable {
+                    if (context.isCancellationRequested()) {
+                        return runtime::TaskResult<PreviewPreparationResultHandle>::cancelled();
+                    }
+                    return preparation(snapshot, identity, limit, {}, context);
+                });
+        }
         if (!submission.accepted()) {
             --cursor_;
             --considered_;

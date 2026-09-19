@@ -152,11 +152,30 @@ the bounded per-dispatch deadline, drains/quarantines the native pipeline on its
 disables the GPU, and takes the same-frame CPU fallback. `beginShutdown()` is non-blocking, the
 destructor drains before releasing the lease, and requests that race shutdown are rejected rather
 than turned into new work. A device-gated service test drives real provenance and pixel parity,
-the same-stage CPU fallback, the bounded-deadline retirement, and a paired service-versus-CPU
-median benchmark over one warm operation cache; a whole-application benchmark remains pending UI
-activation of the service.
+the same-stage CPU fallback, and the bounded-deadline retirement.
 
-Pending and unchanged: UI activation of the qualified service and its controller/cache wiring, the full per-operation qualification fixtures for a future
+The application now routes its preview display submissions through that service. `apps/bloom`
+constructs the service after the compiler/evaluator/qualified provider/plan and frame caches and
+before the three preview controllers, injects one submitter into the foreground, RAM, and
+background controllers, and calls the non-blocking `beginShutdown()` from the existing shutdown
+coordinator; the controllers keep their own preparation function for viewer analysis and probes.
+When a validated qualified-prefix Vulkan loader is bundled beside the executable the service is
+enabled with that app-relative loader; otherwise (macOS, Windows, CPU-stub, developer-system, or
+a missing loader) every request takes the explicit CPU path, with no GPU preference or user
+setting, and no ambient/host loader fallback. The viewer color chip reports `GPU display` only
+for a frame whose provenance is `GpuNeutral`. This milestone is display preview only: the fixed
+operation stays `PreviewOnly` (no reference-parity claim), and GPU compositing, a resident GPU
+viewer buffer, WSI/swapchain presentation, and a whole-application benchmark remain pending.
+Verified locally: the device-free controller-routing test; the real-service application pipeline
+through the foreground controller at 1080p with actual `GpuNeutral` provenance, CPU-oracle parity
+within one RGB code and exact alpha, the missing-loader CPU fallback with one evaluation per
+request, cached re-requests with zero extra preparation, and a warm-cache paired timing (about
+4.7 ms service versus 25.5 ms CPU median, no presentation claim); the affected preview, RAM,
+background, direct-manipulation, shutdown, and viewer/status tests; the bundled loader hash
+matching the prefix file with no Vulkan DT_NEEDED and no ambient loader.
+
+Pending and unchanged: GPU compositing, resident GPU viewer buffers, WSI/swapchain presentation,
+a whole-application benchmark, the full per-operation qualification fixtures for a future
 `ReferenceParity` profile (this operation stays `PreviewOnly`), general graph execution,
 presentation/swapchain integration, the cross-platform Linux/macOS/Windows parity spike, shader
 compilation of generated OCIO programs, and Windows/macOS GPU support. The qualified Linux prefix

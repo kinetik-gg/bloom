@@ -2,6 +2,7 @@
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
@@ -12,6 +13,7 @@
 #include <bloom/ui/audio_playback_session.hpp>
 #include <bloom/ui/background_preview_controller.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
+#include <bloom/ui/composition_preview_cpu_stage.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
@@ -31,6 +33,7 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDir>
 #include <QEventLoop>
 #include <QSettings>
 #include <QTimer>
@@ -169,21 +172,63 @@ int main(int argc, char* argv[]) {
     const auto previewPipeline = bloom::ui::makeCompositionPreviewPipeline(
         snapshotCompiler, cpuEvaluator, referenceDisplayPreparer, qualifiedDisplayProcessorProvider,
         compiledPlanCache);
+    // The GPU display half of the preview pipeline. It owns a dedicated service thread and never
+    // exposes a native or Vulkan handle. It is constructed here, after the compiler/evaluator/
+    // qualified provider/frame cache it depends on and before the controllers that submit through
+    // it, so every dependency outlives it and it outlives every controller that captures its
+    // submitter. When no bundled native loader was packaged, `enabled` stays false and the service
+    // never touches a device: every request takes the unchanged CPU stage + display-fallback path.
+    bloom::runtime::GpuPreviewDisplayServiceOptions gpuPreviewDisplayOptions;
+#ifdef BLOOM_BUNDLED_VULKAN_LOADER
+    gpuPreviewDisplayOptions.enabled = true;
+    gpuPreviewDisplayOptions.loaderPath =
+        std::filesystem::path(QDir(QCoreApplication::applicationDirPath())
+                                  .filePath(QStringLiteral(BLOOM_BUNDLED_VULKAN_LOADER_SUBDIR
+                                                           "/" BLOOM_BUNDLED_VULKAN_LOADER_NAME))
+                                  .toStdString());
+#endif
+    bloom::runtime::GpuPreviewDisplayService gpuPreviewDisplayService(
+        taskScheduler,
+        bloom::ui::makeCompositionPreviewCpuStage(
+            snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, compiledPlanCache),
+        bloom::ui::makeCompositionPreviewCpuDisplayFallback(referenceDisplayPreparer),
+        gpuPreviewDisplayOptions);
+    // The one submit seam: each controller hands the request it would otherwise submit to the
+    // scheduler straight to the service, which owns GPU submission and the CPU fallback. The
+    // controller's own preparation function stays live for viewer analysis and probes only.
+    bloom::ui::PreviewPreparationSubmitter gpuPreviewDisplaySubmitter =
+        [&gpuPreviewDisplayService](
+            bloom::runtime::TaskRequest request, const bloom::document::Snapshot& snapshot,
+            const bloom::runtime::PreviewRequestIdentity& identity,
+            const std::size_t pixelStorageByteLimit,
+            const std::vector<bloom::runtime::SnapshotParameterOverride>& overrides) {
+            return gpuPreviewDisplayService.submit(std::move(request), snapshot, identity,
+                                                   pixelStorageByteLimit, overrides);
+        };
     bloom::ui::CompositionPreviewController previewController(
         compositionSession, taskScheduler, taskUiBridge, previewPipeline,
         {.colorIntent = compositionSession.colorIntent(),
          .displayName = {},
          .viewName = {},
          .showLook = true},
-        previewFrameCache);
+        previewFrameCache, nullptr, gpuPreviewDisplaySubmitter);
     bloom::ui::BackgroundPreviewController backgroundPreviewController(
-        compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline);
+        compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline,
+        nullptr, gpuPreviewDisplaySubmitter);
     bloom::ui::RamPreviewController ramPreviewController(
-        compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline);
+        compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline,
+        nullptr, gpuPreviewDisplaySubmitter);
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &ramPreviewController, &bloom::ui::RamPreviewController::beginShutdown);
+    // Non-blocking: the service closes its own admission, cancels the tasks it submitted, and wakes
+    // its thread. Its destructor (which runs before the scheduler's) joins that thread and drains
+    // child/native ownership, so nothing joins the UI thread while GPU work is in flight.
+    QObject::connect(&shutdownCoordinator,
+                     &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
+                     &shutdownCoordinator,
+                     [&gpuPreviewDisplayService] { gpuPreviewDisplayService.beginShutdown(); });
     application.installEventFilter(&shutdownCoordinator);
     // Kept live even though no editor shows it (task F1, item F6 removed Jobs from the registry
     // below): this is the model a JobsEditor takes, and it is the bridge's own consumer. Dropping

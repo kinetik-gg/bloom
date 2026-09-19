@@ -57,9 +57,9 @@ FrameFreshness CompositionPreviewController::freshnessFor(
 CompositionPreviewController::CompositionPreviewController(
     CompositionSession& session, runtime::TaskScheduler& scheduler, TaskUiBridge& taskUiBridge,
     PreviewPreparationFunction preparation, const CompositionPreviewSettings& settings,
-    PreviewFrameCacheHandle frameCache, QObject* parent)
+    PreviewFrameCacheHandle frameCache, QObject* parent, PreviewPreparationSubmitter submitter)
     : QObject(parent), session_(session), scheduler_(scheduler), taskUiBridge_(taskUiBridge),
-      preparation_(std::move(preparation)), settings_(settings),
+      preparation_(std::move(preparation)), submitter_(std::move(submitter)), settings_(settings),
       frameCache_(frameCache != nullptr
                       ? std::move(frameCache)
                       : std::make_shared<PreviewFrameCache>(settings.ramPreviewByteBudget)) {
@@ -885,17 +885,23 @@ void CompositionPreviewController::submitPreview(PendingRequest pendingRequest,
     const std::size_t pixelStorageByteLimit = pendingRequest.pixelStorageByteLimit;
     const auto interactionOverride = pendingRequest.interactionOverride;
     const auto submittedAt = std::chrono::steady_clock::now();
-    auto submission = scheduler_.submit<PreviewPreparationResultHandle>(
-        std::move(request),
-        [snapshot = std::move(pendingRequest.snapshot), desiredIdentity, pixelStorageByteLimit,
-         interactionOverride,
-         preparation = std::move(preparation)](runtime::TaskContext& context) mutable {
-            if (context.isCancellationRequested()) {
-                return runtime::TaskResult<PreviewPreparationResultHandle>::cancelled();
-            }
-            return preparation(snapshot, desiredIdentity, pixelStorageByteLimit,
-                               interactionOverride, context);
-        });
+    runtime::TaskSubmission<PreviewPreparationResultHandle> submission;
+    if (submitter_) {
+        submission = submitter_(std::move(request), pendingRequest.snapshot, desiredIdentity,
+                                pixelStorageByteLimit, interactionOverride);
+    } else {
+        submission = scheduler_.submit<PreviewPreparationResultHandle>(
+            std::move(request),
+            [snapshot = std::move(pendingRequest.snapshot), desiredIdentity, pixelStorageByteLimit,
+             interactionOverride,
+             preparation = std::move(preparation)](runtime::TaskContext& context) mutable {
+                if (context.isCancellationRequested()) {
+                    return runtime::TaskResult<PreviewPreparationResultHandle>::cancelled();
+                }
+                return preparation(snapshot, desiredIdentity, pixelStorageByteLimit,
+                                   interactionOverride, context);
+            });
+    }
 
     if (!submission.accepted()) {
         if (pendingRequest.kind == PreviewRequestKind::Playback) {

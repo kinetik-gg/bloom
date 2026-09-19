@@ -40,7 +40,8 @@ class RamPreviewController final : public QObject {
     RamPreviewController(CompositionSession& session,
                          CompositionPreviewController& previewController,
                          runtime::TaskScheduler& scheduler, TaskUiBridge& taskUiBridge,
-                         PreviewPreparationFunction preparation, QObject* parent = nullptr);
+                         PreviewPreparationFunction preparation, QObject* parent = nullptr,
+                         PreviewPreparationSubmitter submitter = {});
     ~RamPreviewController() override;
 
     [[nodiscard]] bool isCaching() const noexcept { return caching_; }
@@ -95,6 +96,7 @@ class RamPreviewController final : public QObject {
     runtime::TaskScheduler& scheduler_;
     TaskUiBridge& taskUiBridge_;
     PreviewPreparationFunction preparation_;
+    PreviewPreparationSubmitter submitter_;
 
     std::optional<runtime::TaskHandle<PreviewPreparationResultHandle>> active_;
     // TEMPORAL-2B: the run no longer pins one snapshot. Each submitted time resolves the session's

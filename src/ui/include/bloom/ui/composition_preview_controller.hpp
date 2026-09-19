@@ -68,6 +68,15 @@ using PreviewPreparationFunction =
         const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
         const std::vector<runtime::SnapshotParameterOverride>&, runtime::TaskContext&)>;
 
+// An optional display-stage submitter: when provided, a controller hands the request it would
+// otherwise submit itself to this callable and receives the same TaskSubmission shape. It exists so
+// a runtime-owned service can own GPU display submission without the controller owning any GPU
+// state. When absent, the existing CPU scheduler_.submit path is used unchanged.
+using PreviewPreparationSubmitter =
+    std::function<runtime::TaskSubmission<PreviewPreparationResultHandle>(
+        runtime::TaskRequest, const document::Snapshot&, const runtime::PreviewRequestIdentity&,
+        std::size_t, const std::vector<runtime::SnapshotParameterOverride>&)>;
+
 enum class PreviewActivity : std::uint8_t {
     Rendering,
     Ready,
@@ -115,7 +124,8 @@ class CompositionPreviewController final : public QObject {
                                  TaskUiBridge& taskUiBridge, PreviewPreparationFunction preparation,
                                  const CompositionPreviewSettings& settings = {},
                                  PreviewFrameCacheHandle frameCache = nullptr,
-                                 QObject* parent = nullptr);
+                                 QObject* parent = nullptr,
+                                 PreviewPreparationSubmitter submitter = {});
     ~CompositionPreviewController() override;
 
     [[nodiscard]] const CompositionPreviewState& state() const noexcept;
@@ -273,6 +283,7 @@ class CompositionPreviewController final : public QObject {
     runtime::TaskScheduler& scheduler_;
     TaskUiBridge& taskUiBridge_;
     PreviewPreparationFunction preparation_;
+    PreviewPreparationSubmitter submitter_;
     CompositionPreviewSettings settings_;
     PreviewFrameCacheHandle frameCache_;
     CompositionPreviewState state_;

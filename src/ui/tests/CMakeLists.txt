@@ -79,6 +79,12 @@ add_executable(bloom_composition_preview_controller_test
 add_executable(bloom_composition_preview_cpu_stage_test
     composition_preview_cpu_stage_tests.cpp
 )
+add_executable(bloom_gpu_preview_submitter_test
+    gpu_preview_submitter_tests.cpp
+)
+add_executable(bloom_gpu_preview_app_test
+    gpu_preview_app_tests.cpp
+)
 add_executable(bloom_composition_session_animation_test
     composition_session_animation_tests.cpp
 )
@@ -184,6 +190,8 @@ target_link_libraries(bloom_composition_projection_test PRIVATE bloom_ui)
 target_link_libraries(bloom_properties_editor_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_preview_controller_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_preview_cpu_stage_test PRIVATE bloom_ui)
+target_link_libraries(bloom_gpu_preview_submitter_test PRIVATE bloom_ui)
+target_link_libraries(bloom_gpu_preview_app_test PRIVATE bloom_ui bloom_runtime_evaluator)
 target_link_libraries(bloom_composition_session_animation_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_session_rebind_test PRIVATE bloom_ui)
 target_link_libraries(bloom_application_shutdown_test PRIVATE bloom_ui)
@@ -241,6 +249,8 @@ bloom_enable_warnings(bloom_composition_projection_test)
 bloom_enable_warnings(bloom_properties_editor_test)
 bloom_enable_warnings(bloom_composition_preview_controller_test)
 bloom_enable_warnings(bloom_composition_preview_cpu_stage_test)
+bloom_enable_warnings(bloom_gpu_preview_submitter_test)
+bloom_enable_warnings(bloom_gpu_preview_app_test)
 bloom_enable_warnings(bloom_composition_session_animation_test)
 bloom_enable_warnings(bloom_composition_session_rebind_test)
 bloom_enable_warnings(bloom_application_shutdown_test)
@@ -479,6 +489,22 @@ bloom_add_test(
     COMMAND bloom_composition_preview_cpu_stage_test
     LABELS ui integration
     TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.gpu_preview_submitter
+    COMMAND bloom_gpu_preview_submitter_test
+    LABELS ui integration gpu
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.gpu_preview_app
+    COMMAND bloom_gpu_preview_app_test
+    LABELS ui integration gpu
+    TIMEOUT 300
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
