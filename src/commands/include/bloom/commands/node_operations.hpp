@@ -173,6 +173,9 @@ class MoveNodes final : public Operation {
           membership_(std::move(membership)) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    // Card position and frame membership are node-layout only; neither is a compiled or evaluated
+    // input, so a move or a membership change cannot change pixels.
+    [[nodiscard]] bool renderAffecting() const noexcept override { return false; }
 
   private:
     document::CompositionId compositionId_;
@@ -245,6 +248,8 @@ class SetNodeCollapsed final : public Operation {
         : compositionId_(compositionId), nodeId_(nodeId), collapsed_(collapsed) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    // Collapse is card presentation only; it is not a compiled or evaluated input.
+    [[nodiscard]] bool renderAffecting() const noexcept override { return false; }
 
   private:
     document::CompositionId compositionId_;
@@ -271,6 +276,8 @@ class SetNodeWidth final : public Operation {
         : compositionId_(compositionId), nodeId_(nodeId), width_(width) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    // Card width is node-layout presentation only; it is not a compiled or evaluated input.
+    [[nodiscard]] bool renderAffecting() const noexcept override { return false; }
 
   private:
     document::CompositionId compositionId_;

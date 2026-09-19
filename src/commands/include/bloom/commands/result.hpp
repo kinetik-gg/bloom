@@ -105,6 +105,11 @@ struct CommandResult {
     std::vector<OperationFailure> operationFailures;
     std::vector<CommandOutput> outputs;
     document::ValidationResult validation;
+    // True when the applied transaction could change rendered pixels. Conservative default: a
+    // rejected result, a no-change result, an unclassified operation, and every path that does not
+    // aggregate operation effects stay true. Only a successful transaction whose every Applied
+    // operation opted out (Operation::renderAffecting() == false) publishes false.
+    bool renderAffecting = true;
 
     [[nodiscard]] bool succeeded() const noexcept {
         return status == CommandStatus::Succeeded || status == CommandStatus::NoChange;

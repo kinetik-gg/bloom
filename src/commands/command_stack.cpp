@@ -149,6 +149,7 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
 
     document::Draft draft = document_.draft(before);
     bool changed = false;
+    bool renderAffecting = false;
     std::vector<CommandOutput> outputs;
     std::size_t operationIndex = 0;
     for (const auto& operation : transaction.operations()) {
@@ -176,6 +177,10 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
                 {operationIndex, std::string(operation->typeId()), std::move(output)});
         }
         changed = changed || operationResult.status == OperationStatus::Applied;
+        // Only an operation that actually applied can change pixels. A pixel-affecting operation
+        // that reported NoChange contributes nothing, so a layout edit beside it stays layout-only.
+        if (operationResult.status == OperationStatus::Applied && operation->renderAffecting())
+            renderAffecting = true;
         ++operationIndex;
     }
 
@@ -199,8 +204,9 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     auto result = resultForCommit(CommandAction::Execute, std::string(transaction.label()), before,
                                   std::move(commitResult));
     result.outputs = std::move(outputs);
+    result.renderAffecting = renderAffecting;
     history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(cursor_), history_.end());
-    history_.push_back({std::string(transaction.label()), before, after});
+    history_.push_back({std::string(transaction.label()), before, after, renderAffecting});
     cursor_ = history_.size();
     trackedRevision_ = after.revision();
     notify(result);
@@ -233,6 +239,7 @@ CommandResult CommandStack::undo() {
     const document::Revision restoredRevision = restoreResult.snapshot->revision();
     auto result =
         resultForCommit(CommandAction::Undo, entry.label, before, std::move(restoreResult));
+    result.renderAffecting = entry.renderAffecting;
     --cursor_;
     trackedRevision_ = restoredRevision;
     notify(result);
@@ -265,6 +272,7 @@ CommandResult CommandStack::redo() {
     const document::Revision restoredRevision = restoreResult.snapshot->revision();
     auto result =
         resultForCommit(CommandAction::Redo, entry.label, before, std::move(restoreResult));
+    result.renderAffecting = entry.renderAffecting;
     ++cursor_;
     trackedRevision_ = restoredRevision;
     notify(result);

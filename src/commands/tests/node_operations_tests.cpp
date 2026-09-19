@@ -893,6 +893,80 @@ void testNodeGroups(TestContext& test) {
     test.expect(groups().empty(), "removing a group's last node removes the group");
 }
 
+// LAYOUT-1: the three card-layout commands opt out of render effect; every other node command
+// keeps the conservative render-affecting default. The classification is declared per operation,
+// never inferred from which document field the operation writes -- SetNodeMuted writes nodeLayout
+// and layer.enabled together, and must stay render-affecting.
+void testRenderAffectingClassification(TestContext& test) {
+    {
+        Fixture fixture;
+        const auto source = addSource(fixture);
+        test.expect(!apply<MoveNodes>(fixture, std::map<NodeId, Vec2d>{{source, Vec2d{12, 34}}})
+                         .renderAffecting,
+                    "MoveNodes is layout-only");
+        test.expect(!apply<SetNodeCollapsed>(fixture, source, true).renderAffecting,
+                    "SetNodeCollapsed is layout-only");
+        test.expect(!apply<SetNodeWidth>(fixture, source, 256.0).renderAffecting,
+                    "SetNodeWidth is layout-only");
+        test.expect(apply<SetNodeMuted>(fixture, source, true).renderAffecting,
+                    "SetNodeMuted is pixel-affecting despite living in node layout");
+        test.expect(
+            apply<AddNode>(fixture, std::string(kSolidSourceNodeType), Vec2d{3, 4}).renderAffecting,
+            "an unclassified node operation defaults to render-affecting");
+
+        // A pixel-affecting operation that reports NoChange beside an applied layout edit must not
+        // make the transaction invalidating.
+        const auto before = fixture.document.snapshot();
+        Transaction noChange("Muted no-op and move", before.revision());
+        noChange.emplace<SetNodeMuted>(kCompositionId, source, true);
+        noChange.emplace<MoveNodes>(kCompositionId,
+                                    std::map<NodeId, Vec2d>{{source, Vec2d{40, 41}}});
+        const auto noChangeResult = fixture.stack.execute(std::move(noChange));
+        test.expect(noChangeResult.status == CommandStatus::Succeeded &&
+                        !noChangeResult.renderAffecting,
+                    "a pixel NoChange beside an applied layout edit stays layout-only");
+    }
+
+    // A mixed applied transaction is conservatively render-affecting in both orderings, and both
+    // undo and redo replay the impact stored with the history entry.
+    for (const bool layoutFirst : {true, false}) {
+        Fixture fixture;
+        Transaction mixed("Mixed node edit", fixture.document.snapshot().revision());
+        if (layoutFirst) {
+            mixed.emplace<MoveNodes>(kCompositionId,
+                                     std::map<NodeId, Vec2d>{{kFirstLayerNodeId, Vec2d{11, 12}}});
+            mixed.emplace<SetNodeMuted>(kCompositionId, kFirstLayerNodeId, true);
+        } else {
+            mixed.emplace<SetNodeMuted>(kCompositionId, kFirstLayerNodeId, true);
+            mixed.emplace<MoveNodes>(kCompositionId,
+                                     std::map<NodeId, Vec2d>{{kFirstLayerNodeId, Vec2d{11, 12}}});
+        }
+        const auto mixedResult = fixture.stack.execute(std::move(mixed));
+        test.expect(mixedResult.changed() && mixedResult.renderAffecting,
+                    "a mixed layout+pixel transaction is conservatively render-affecting");
+        const auto undo = fixture.stack.undo();
+        test.expect(undo.changed() && undo.renderAffecting,
+                    "undo replays the stored mixed render impact");
+        const auto redo = fixture.stack.redo();
+        test.expect(redo.changed() && redo.renderAffecting,
+                    "redo replays the stored mixed render impact");
+    }
+
+    // A layout-only transaction replays its stored layout-only impact through undo and redo.
+    {
+        Fixture fixture;
+        const auto source = addSource(fixture);
+        if (!apply<MoveNodes>(fixture, std::map<NodeId, Vec2d>{{source, Vec2d{5, 6}}}).changed())
+            throw std::logic_error("layout undo/redo fixture");
+        const auto undo = fixture.stack.undo();
+        test.expect(undo.changed() && !undo.renderAffecting,
+                    "undo replays the stored layout-only render impact");
+        const auto redo = fixture.stack.redo();
+        test.expect(redo.changed() && !redo.renderAffecting,
+                    "redo replays the stored layout-only render impact");
+    }
+}
+
 void testParentCommands(TestContext& test) {
     Fixture mixed;
     test.expect(apply<ConnectPorts>(mixed, OutputPortRef{kFirstLayerNodeId, "image"},
@@ -960,6 +1034,7 @@ int main() {
         bloom::commands::test::testDuplicationOwnershipEdges(test);
         bloom::commands::test::testParameterSocketDrivers(test);
         bloom::commands::test::testNodeGroups(test);
+        bloom::commands::test::testRenderAffectingClassification(test);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

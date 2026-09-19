@@ -1,5 +1,6 @@
 #include "command_test_support.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <optional>
 
@@ -31,6 +32,62 @@ class ExhaustNodeIds final : public Operation {
         return OperationResult::applied();
     }
 };
+
+// A deliberately unclassified operation: it leaves renderAffecting() at its default, so it proves
+// the conservative CommandStack behavior without depending on any node command class.
+class UnclassifiedRename final : public Operation {
+  public:
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.test.unclassified-rename";
+    }
+
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override {
+        draft.project().setName("Unclassified");
+        return OperationResult::applied();
+    }
+};
+
+void testRenderAffectingPublication(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    std::vector<CommandEventKind> events;
+    (void)stack.addObserver([&events](const CommandEvent& event) { events.push_back(event.kind); });
+    const auto published = [&events](const CommandEventKind kind) {
+        return std::ranges::find(events, kind) != events.end();
+    };
+
+    events.clear();
+    Transaction rejected("Rejected", document.snapshot().revision());
+    rejected.emplace<SetCompositionName>(CompositionId::fromRaw(9999), "Missing");
+    const auto rejectedResult = stack.execute(std::move(rejected));
+    test.expect(rejectedResult.status == CommandStatus::Rejected &&
+                    !published(CommandEventKind::RevisionChanged) && rejectedResult.renderAffecting,
+                "a rejected transaction publishes no RevisionChanged and keeps the conservative "
+                "render-affecting default");
+
+    events.clear();
+    Transaction rename("Rename", document.snapshot().revision());
+    rename.emplace<SetProjectName>("Renamed");
+    const auto renameResult = stack.execute(std::move(rename));
+    test.expect(renameResult.changed() && published(CommandEventKind::RevisionChanged),
+                "a successful unclassified transaction publishes RevisionChanged");
+
+    events.clear();
+    Transaction repeat("Repeat rename", document.snapshot().revision());
+    repeat.emplace<SetProjectName>("Renamed");
+    const auto repeatResult = stack.execute(std::move(repeat));
+    test.expect(repeatResult.status == CommandStatus::NoChange &&
+                    !published(CommandEventKind::RevisionChanged) && repeatResult.renderAffecting,
+                "a no-change transaction publishes no RevisionChanged and keeps the conservative "
+                "render-affecting default");
+
+    events.clear();
+    Transaction unclassified("Unclassified custom", document.snapshot().revision());
+    unclassified.emplace<UnclassifiedRename>();
+    const auto unclassifiedResult = stack.execute(std::move(unclassified));
+    test.expect(unclassifiedResult.changed() && unclassifiedResult.renderAffecting,
+                "an unclassified custom operation defaults to render-affecting");
+}
 
 void testAtomicTransactionUndoAndRedo(TestContext& test) {
     Document document(makeProject());
@@ -305,6 +362,7 @@ void testExhaustionSurvivesUndoAndRedo(TestContext& test) {
 int main() {
     bloom::commands::test::TestContext test;
     try {
+        bloom::commands::test::testRenderAffectingPublication(test);
         bloom::commands::test::testAtomicTransactionUndoAndRedo(test);
         bloom::commands::test::testRejectedAndInvalidTransactionsAreAtomic(test);
         bloom::commands::test::testKnownParameterSchemaRejectionsAreAtomic(test);

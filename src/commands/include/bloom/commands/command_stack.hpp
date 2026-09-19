@@ -60,6 +60,9 @@ class CommandStack final {
         std::string label;
         document::Snapshot before;
         document::Snapshot after;
+        // The render impact of the transaction that created this entry. Restoring the entry on
+        // undo/redo replays it, because a restore does not re-run the operations that declared it.
+        bool renderAffecting = true;
     };
 
     [[nodiscard]] std::optional<CommandResult> staleResult(CommandAction action, std::string label,
