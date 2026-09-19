@@ -344,6 +344,11 @@ GpuDeviceState GpuDevice::state() const noexcept {
     return impl_ != nullptr ? impl_->state : GpuDeviceState::Unavailable;
 }
 
+std::uint64_t GpuDevice::ownershipEpoch() const noexcept {
+    // impl_->presentationEpoch is assigned for every created device, presentation requested or not.
+    return impl_ != nullptr ? impl_->presentationEpoch : 0U;
+}
+
 bool GpuDevice::isOwnerThread() const noexcept {
     return impl_ != nullptr && impl_->owner == std::this_thread::get_id();
 }

@@ -44,6 +44,8 @@ GpuDeviceState GpuDevice::state() const noexcept {
 
 bool GpuDevice::isOwnerThread() const noexcept { return false; }
 
+std::uint64_t GpuDevice::ownershipEpoch() const noexcept { return 0U; }
+
 const GpuCapabilityReport& GpuDevice::capabilityReport() const noexcept {
     if (impl_ != nullptr) {
         return impl_->report;

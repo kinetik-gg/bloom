@@ -204,6 +204,14 @@ class GpuDevice final {
     [[nodiscard]] bool isOwnerThread() const noexcept;
     [[nodiscard]] const GpuCapabilityReport& capabilityReport() const noexcept;
 
+    // Unique ownership identity for this exact GpuDevice generation. It is minted once per created
+    // device from the same per-process monotonic counter that backs the presentation epoch, so two
+    // GpuDevice instances -- even two created from the same physical GPU -- never share it. The
+    // bootstrap capability report's generation is always 1 and cannot distinguish two instances;
+    // qualification identity must use this instead. Zero only for a null/moved-from or
+    // portable-stub device. No native handle is exposed.
+    [[nodiscard]] std::uint64_t ownershipEpoch() const noexcept;
+
     // Missing operation/precision entries are Unavailable, matching the architecture contract.
     [[nodiscard]] GpuQualification qualificationFor(GpuOperationId operation,
                                                     GpuPrecision precision) const noexcept;

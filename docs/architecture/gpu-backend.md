@@ -358,11 +358,33 @@ a 1000-round concurrent release-vs-collect stress. This is the lease layer only:
 `PreparedPreviewFrame` arm, no service/product/cache/viewer selection, and no performance or
 ReferenceParity claim.
 
+The runtime now also owns a bounded, owner-thread resident-preview qualification
+(`bloom/runtime/gpu_resident_preview_qualification.hpp`, with Vulkan-free orchestration, operation,
+fixture, and display translation units). It reuses the caller's already-created typed pipelines
+(`GpuSolid`, `GpuImageUpload`, `GpuComposite`, `GpuResidentDisplay`) and refuses any pipeline not
+bound to the exact actual device before any dispatch, so one device's results can never be labelled
+with another's report. `GpuDevice::ownershipEpoch()` -- the existing per-device presentation epoch
+for native, zero for the stub, no native handle exposed -- is the unique ownership identity because
+the bootstrap capability generation is always 1; `eligibleFor()` re-checks that epoch, the
+generation, the full identity, and the canonical Bloom Neutral v1 processor, so a second device on
+the same physical GPU and every non-default processor are rejected. The report is constructed only
+by `qualifyResidentPreview()` (private factory, no arbitrary success), is `PreviewOnly` only, makes
+no `ReferenceParity` or final-render claim, and pins the shader/SPIR-V digests,
+primitive/covered/dispatch semantics, fixture digest, processor identity, and measured timings.
+Parity compares every pixel against the existing CPU primitives and the independent OCIO oracle
+(resident display RGB within one code and alpha exact; translation/source-over within 2e-6
+absolute-or-relative; nonzero subnormal frames rejected whole-frame and never published). The
+eligible interval is measured only over the resident upload+display interval versus the same CPU OCIO
+work (cold/warm alternating, 256x144..4K); it is not a whole-graph cost or application-FPS claim.
+On cancellation, a bounded per-dispatch deadline, or any budget refusal, ownership stays with the
+caller, which must destroy or drain the failed pipeline on the owner thread before reuse. This is
+runtime qualification only: no service dispatch, product, viewer, or UI activation.
+
 Pending and unchanged: the service selection that dispatches prepared commands through the executor,
 per-layer GPU compositing selection, resident GPU viewer buffers,
 the service/viewer activation that consumes the render-side image-present path, a whole-application benchmark, the full per-operation qualification
-fixtures for a future `ReferenceParity` profile (the qualified display transform remains
-`PreviewOnly`; scene operations have no runtime qualification yet), general graph
+fixtures for a future `ReferenceParity` profile (the qualified display transform and the resident
+scene route remain `PreviewOnly`; no operation reaches `ReferenceParity`), general graph
 execution, presentation/swapchain integration, the cross-platform Linux/macOS/Windows parity spike,
 shader compilation of generated OCIO programs, and Windows/macOS GPU support. The qualified Linux
 prefix manifest remains pending, so this direction stays `working`.

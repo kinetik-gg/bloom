@@ -349,3 +349,51 @@ bloom_add_test(
     LABELS runtime unit gpu render
     TIMEOUT 120
 )
+
+# Resident-preview runtime qualification. The native proof creates a real device + typed pipelines,
+# runs qualifyResidentPreview() (all-pixel parity against the CPU primitives and OCIO oracle), and
+# exercises the ownership/foreign-device/processor/cancel/budget/wrong-thread gates. It includes the
+# embedded shader arrays directly and re-hashes them against the report pins. It is hardware-gated by
+# runtime create() availability and --require-device, so the same target runs against the CPU stub
+# with an explicit skip; --loader/--require-device come from the local supervisor for a native run.
+add_executable(
+    bloom_runtime_gpu_resident_preview_qualification_test
+    gpu_resident_preview_qualification_tests.cpp
+)
+target_include_directories(
+    bloom_runtime_gpu_resident_preview_qualification_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/vulkan"
+)
+target_link_libraries(
+    bloom_runtime_gpu_resident_preview_qualification_test
+    PRIVATE bloom_runtime_evaluator
+)
+bloom_enable_warnings(bloom_runtime_gpu_resident_preview_qualification_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_resident_preview_qualification_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_resident_preview_qualification
+    COMMAND bloom_runtime_gpu_resident_preview_qualification_test
+    LABELS runtime unit gpu color
+    TIMEOUT 600
+)
+
+# Portable stub predicate harness: the resident-preview qualification runtime sources must compile,
+# link, and run with NO Vulkan dependency. The stub render backend honestly reports no device, so this
+# exercises the CPU-only identity predicates and report vocabulary instead of a fake GPU success. The
+# actual device proof is the target above; this one is built by the Vulkan-free build/gpu-device-stub.
+add_executable(
+    bloom_runtime_gpu_resident_preview_qualification_stub_test
+    gpu_resident_preview_qualification_stub_tests.cpp
+)
+target_link_libraries(
+    bloom_runtime_gpu_resident_preview_qualification_stub_test
+    PRIVATE bloom_runtime_evaluator
+)
+bloom_enable_warnings(bloom_runtime_gpu_resident_preview_qualification_stub_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_resident_preview_qualification_stub_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_resident_preview_qualification_stub
+    COMMAND bloom_runtime_gpu_resident_preview_qualification_stub_test
+    LABELS runtime unit gpu color
+    TIMEOUT 120
+)
