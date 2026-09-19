@@ -1247,6 +1247,19 @@ void TimelineEditor::setSnappingEnabled(const bool enabled) {
         lanes_->setSnappingEnabled(enabled);
 }
 
+void TimelineEditor::applyApplicationPreferences(const ApplicationPreferences& preferences) {
+    setTimecodeFormat(preferences.timelineTimeFormat == TimelineTimeFormat::Timecode);
+    setSnappingEnabled(preferences.timelineSnapping);
+    // Keyframes and the graph editor are mutually exclusive in this panel; the Settings window
+    // enforces the same rule, so the stored value is already consistent. Apply the graph choice
+    // last so a legacy inconsistent pair resolves the way the panel's own menus would.
+    setKeyframesVisible(preferences.timelineKeyframesVisible);
+    setGraphEditorEnabled(preferences.timelineGraphEditor);
+    if (preferences.timelineLayerColumnWidth > 0) {
+        setLayerColumnWidth(preferences.timelineLayerColumnWidth, /*persist=*/false);
+    }
+}
+
 void TimelineLaneRegion::setKeyframesVisible(const bool visible) {
     if (keyframesVisible_ == visible)
         return;

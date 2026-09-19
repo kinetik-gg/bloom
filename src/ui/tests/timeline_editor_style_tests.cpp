@@ -2849,6 +2849,49 @@ void writeTimelineScreenshotIfRequested(Expectations& expectations) {
 
 } // namespace
 
+// The Settings window's committed timeline preferences must land on the panel's live state through
+// the same setters its own header menu uses.
+void testApplyApplicationPreferences(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Preferences"));
+    ui::TimelineEditor editor(fixture.session, fixture.controller);
+    editor.resize(1200, 400);
+    editor.show();
+    QCoreApplication::processEvents();
+
+    // Stay above the panel's own minimum so the width is not clamped; a separate assertion below
+    // covers the clamp itself.
+    const int requestedWidth = editor.minLayerColumnWidthForTest() + 40;
+    ui::ApplicationPreferences preferences;
+    preferences.timelineTimeFormat = ui::TimelineTimeFormat::Timecode;
+    preferences.timelineSnapping = false;
+    preferences.timelineKeyframesVisible = false;
+    preferences.timelineGraphEditor = true;
+    preferences.timelineLayerColumnWidth = requestedWidth;
+    editor.applyApplicationPreferences(preferences);
+
+    auto* snap = editor.findChild<QAction*>(QStringLiteral("timelineSnappingAction"));
+    auto* keyframes = editor.findChild<QAction*>(QStringLiteral("timelineKeyframesAction"));
+    auto* graph = editor.findChild<QAction*>(QStringLiteral("timelineGraphEditorAction"));
+    expectations.expect(snap != nullptr && !snap->isChecked(), "apply turns snapping off");
+    expectations.expect(keyframes != nullptr && !keyframes->isChecked(), "apply hides keyframes");
+    expectations.expect(graph != nullptr && graph->isChecked(), "apply enables the graph editor");
+    expectations.expect(editor.layerColumnWidthForTest() == requestedWidth,
+                        "apply sets the layer column width");
+
+    // An out-of-range width clamps to the panel's own minimum rather than producing a degenerate
+    // column.
+    preferences.timelineLayerColumnWidth = 1;
+    editor.applyApplicationPreferences(preferences);
+    expectations.expect(editor.layerColumnWidthForTest() == editor.minLayerColumnWidthForTest(),
+                        "an undersized width clamps to the panel minimum");
+
+    // The setters persist to QSettings; restore the defaults so this test cannot leak its choices
+    // into the tests that follow in the same process.
+    editor.applyApplicationPreferences(ui::defaultApplicationPreferences());
+    finishFixture(fixture);
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -2865,6 +2908,7 @@ int main(int argc, char** argv) {
         testTimelinePolishInteractions(expectations);
         testOutputMergeRows(expectations);
         testHeaderTogglesArePersistedAndLive(expectations);
+        testApplyApplicationPreferences(expectations);
         testGraphEditorReplacesTheKeyLanes(expectations);
         testRulerAndLanesShareTheLaneRegionOrigin(expectations);
         testHeaderSplitInEditorArea(expectations);

@@ -179,6 +179,25 @@ void testRestoreDefaults(Expectations& check) {
                  "Restore Defaults resets the draft to the model defaults");
 }
 
+void testTimelineKeyframesAndGraphAreMutuallyExclusive(Expectations& check) {
+    ui::SettingsWindow window(ui::defaultApplicationPreferences());
+    auto* keyframes =
+        window.findChild<QAbstractButton*>(QStringLiteral("settingsTimelineKeyframesSwitch"));
+    auto* graph =
+        window.findChild<QAbstractButton*>(QStringLiteral("settingsTimelineGraphEditorSwitch"));
+    check.expect(keyframes != nullptr && graph != nullptr, "both timeline toggles exist");
+    if (keyframes == nullptr || graph == nullptr) {
+        return;
+    }
+    graph->setChecked(true);
+    check.expect(!keyframes->isChecked(),
+                 "enabling the graph editor clears Show keyframes in the window");
+    check.expect(!window.preferences().timelineKeyframesVisible,
+                 "the draft matches the editor's exclusive rule");
+    keyframes->setChecked(true);
+    check.expect(!graph->isChecked(), "enabling keyframes clears the graph editor");
+}
+
 void testRestartBadgesAndRail(Expectations& check) {
     ui::SettingsWindow window(samplePreferences());
     const auto badges = window.findChildren<QLabel*>(QStringLiteral("settingsRestartBadge"));
@@ -245,6 +264,7 @@ int main(int argc, char** argv) {
     testApplyEmitsAndClearsDirty(check);
     testSetPreferencesRoundTripsControls(check);
     testRestoreDefaults(check);
+    testTimelineKeyframesAndGraphAreMutuallyExclusive(check);
     testRestartBadgesAndRail(check);
     testPerformancePageReportsCpuOnly(check);
     testPerformancePageUsesInjectedProvider(check);

@@ -432,6 +432,28 @@ QWidget* SettingsWindow::buildTimelinePage() {
         });
     }
 
+    // The Timeline treats Show keyframes and Graph editor as mutually exclusive (its own menus
+    // enforce it). Mirror that here so the window cannot present a pair the editor would silently
+    // resolve differently.
+    auto* keyframesSwitch =
+        content->findChild<kit::KSwitch*>(QStringLiteral("settingsTimelineKeyframesSwitch"));
+    auto* graphSwitch =
+        content->findChild<kit::KSwitch*>(QStringLiteral("settingsTimelineGraphEditorSwitch"));
+    if (keyframesSwitch != nullptr && graphSwitch != nullptr) {
+        connect(keyframesSwitch, &QAbstractButton::toggled, this,
+                [this, graphSwitch](const bool on) {
+                    if (on && draft_.timelineGraphEditor) {
+                        graphSwitch->setChecked(false);
+                    }
+                });
+        connect(graphSwitch, &QAbstractButton::toggled, this,
+                [this, keyframesSwitch](const bool on) {
+                    if (on && draft_.timelineKeyframesVisible) {
+                        keyframesSwitch->setChecked(false);
+                    }
+                });
+    }
+
     auto* width =
         addValueFieldRow(rows, content, QStringLiteral("settingsTimelineLayerColumnWidthField"),
                          tr("Layer column width"), 80.0, 600.0, 0, QStringLiteral("px"), false);
