@@ -1605,14 +1605,31 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
     OperationCacheStatistics frameStatistics;
     if (statistics)
         *statistics = {};
-    auto* cache = (request.bypassOperationCache || (plan && plan->bypassOperationCache()))
-                      ? nullptr
-                      : cache_.get();
+    // CACHE-1 separates two bypasses that used to share one pointer. `request.bypassOperationCache`
+    // is the explicit evaluation bypass: it disables DERIVED operation memoization and the
+    // still-image source memory and disk entries (an uncached re-decode). It is not the preview
+    // controller's frame-cache refresh, and it leaves the video decoded cache and colour-processor
+    // caches alone. A plan compiled for an interactive parameter override
+    // (`plan->bypassOperationCache()`) still bypasses DERIVED operation memoization, but may READ
+    // an already-verified immutable decoded still-image out of the same memory cache -- that reuse
+    // keeps an otherwise unchanged image from being re-decoded as the artist drags a transform. It
+    // never inserts a source entry on a gesture miss.
+    const bool explicitBypass = request.bypassOperationCache;
+    const bool planBypass = plan != nullptr && plan->bypassOperationCache();
+    auto* cache = (explicitBypass || planBypass) ? nullptr : cache_.get();
     // Same gate as `cache` above: an interactive/overridden request's pixels belong to a gesture,
     // not to a revision, so they are never written to or read from the disk cache either (media-
     // io.md "Disk cache": "Never cache overridden/interactive frames").
     const auto diskCacheHandle = mediaDiskCache();
     auto* const diskCache = cache != nullptr ? diskCacheHandle.get() : nullptr;
+    // The native decoded still-image memory entry is a distinct seam from derived operation
+    // memoization. Only the explicit evaluation bypass turns it off; an interactive plan gets a
+    // read-only view of it.
+    auto* const imageMemoryCache = explicitBypass ? nullptr : cache_.get();
+    const auto imageMemoryAccess =
+        explicitBypass ? detail::ImageSourceMemoryCacheAccess::Disabled
+                       : (planBypass ? detail::ImageSourceMemoryCacheAccess::ReadOnly
+                                     : detail::ImageSourceMemoryCacheAccess::ReadWrite);
     std::vector<EvaluationDiagnostic> imageWarnings;
     const auto mediaBase = assetBaseDirectory();
     try {
@@ -2254,8 +2271,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 return;
                             auto image = detail::evaluateImageSource(
                                 *selectedImage, resolved.imageDescriptor, resolved.horizontalScale,
-                                resolved.verticalScale, remainingPixelBudget(), cache, cancellation,
-                                diskCache);
+                                resolved.verticalScale, remainingPixelBudget(), imageMemoryCache,
+                                imageMemoryAccess, cancellation, diskCache);
                             if (image.cancelled) {
                                 operationCancelled = true;
                                 return;

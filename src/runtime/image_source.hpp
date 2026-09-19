@@ -35,16 +35,34 @@ struct ImageSourceSelection {
     const CompiledImageSource& source, core::RationalTime time, document::FrameRate rate,
     const std::filesystem::path& base, const CancellationToken& cancel,
     const EvaluationColorIntent& colorIntent = EvaluationColorIntent::LinearRec709Scene);
-// `cache` is the evaluator's shared memory cache; null when the request bypasses it (an
-// interactive/overridden request, or the request explicitly asked to bypass it) -- the memory
-// cache is then neither consulted nor written.
+// CACHE-1: how evaluateImageSource() may use the evaluator's shared memory cache for an
+// already-verified, immutable native decoded still-image. This governs only the source decode
+// entry; derived operation memoization is gated separately by the evaluator's own `cache` pointer.
+enum class ImageSourceMemoryCacheAccess : std::uint8_t {
+    // Explicit evaluation bypass (`request.bypassOperationCache`): the still-image memory and disk
+    // entries are neither read nor written, so the call is an uncached re-decode. This flag governs
+    // derived operation memoization and the still-image source caches only; it does not touch the
+    // video decoded cache or colour-processor caches.
+    Disabled,
+    // Interactive/overridden plan (`plan->bypassOperationCache()`): read a warmed native decoded
+    // still-image entry, but never insert one. A gesture miss decodes directly and is not stored,
+    // so gesture data cannot enter the memory cache under the source key.
+    ReadOnly,
+    // Ordinary request: memory -> disk -> decode, inserting the decoded entry on a miss.
+    ReadWrite,
+};
+// `memoryCache` is the evaluator's shared memory cache and `memoryAccess` says whether this call
+// may read it, read-and-write it, or ignore it entirely.
 // `diskCache` is the memory-cache-miss fallback (docs/architecture/media-io.md "Disk cache":
 // memory -> disk -> decode). Null disables it -- callers pass null for interactive/overridden
-// requests, which must never populate or read either cache (the same condition that already
-// bypasses `cache` governs this). A decoded disk miss is written back off the calling thread via
-// the disk cache's own background writer, so evaluation never waits on the write.
-[[nodiscard]] media::ImageResult<render::Rgba32fImage> evaluateImageSource(
-    const ImageSourceSelection& selection, render::Rgba32fImageDescriptor composition,
-    double horizontalScale, double verticalScale, std::size_t budget, OperationCache* cache,
-    const CancellationToken& cancel, media::cache::MediaDiskCache* diskCache = nullptr);
+// requests, which must never populate or read the disk cache. It is consulted and written only
+// under ReadWrite; a ReadOnly interactive miss decodes directly with no disk read or write. A
+// decoded disk miss is written back off the calling thread via the disk cache's own background
+// writer, so evaluation never waits on the write.
+[[nodiscard]] media::ImageResult<render::Rgba32fImage>
+evaluateImageSource(const ImageSourceSelection& selection,
+                    render::Rgba32fImageDescriptor composition, double horizontalScale,
+                    double verticalScale, std::size_t budget, OperationCache* memoryCache,
+                    ImageSourceMemoryCacheAccess memoryAccess, const CancellationToken& cancel,
+                    media::cache::MediaDiskCache* diskCache = nullptr);
 } // namespace bloom::runtime::detail

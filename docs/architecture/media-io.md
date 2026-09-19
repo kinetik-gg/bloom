@@ -479,9 +479,26 @@ index and directory-entry count without limit either. Both are enforced on every
 
 **Never cached.** An interactive or overridden evaluation request's pixels belong to a gesture,
 not to a revision (see `animation-and-time.md`'s "Direct Manipulation And Preview Overrides"); the
-same condition that already excludes such a request from the evaluator's memory operation cache
+same condition that already excludes such a request from the evaluator's derived operation cache
 (`request.bypassOperationCache` / `plan->bypassOperationCache()`) also passes a null disk cache
 into `evaluateImageSource()`, so an override is never read from or written to disk either.
+
+**Read-only decoded-image exception (CACHE-1).** The evaluator's memory cache now distinguishes the
+two bypasses that used to share one switch. An explicit evaluation bypass
+(`request.bypassOperationCache`) disables derived operation memoization and the decoded still-image
+memory and disk entries completely, consult-and-store alike. It is a per-evaluation control, not the
+preview controller's frame-cache refresh, and it does not touch the video decoded cache or
+colour-processor caches. A plan compiled for an interactive parameter override
+(`plan->bypassOperationCache()`) still bypasses derived operation memoization, but may READ an
+already-verified, immutable native decoded STILL-IMAGE entry under its EXISTING content-addressed
+memory source key (`selected.cacheKey`: asset digest, member/frame, interpretation, alpha, input
+processor/color-space id, OCIO identity, plus the resolved path/relink/availability that key already
+carried). It never inserts a source entry on a gesture miss, so gesture data cannot land under an
+unchanged source key, and the disk cache stays null: an interactive miss decodes directly and
+uncached. Content verification is unchanged -- the probe/hash gate still runs before either cache is
+consulted. Motion video already has its own decoded cache and is unchanged by this exception. Nested
+compositions remain conservatively fully bypassed on an override (no read-only reuse in the child)
+for this slice.
 
 **Controls.** `media/disk-cache-enabled` (default on), `media/disk-cache-budget-bytes`, and
 `media/disk-cache-directory` in QSettings; "Clear Media Cache…" in the Composition menu asks for

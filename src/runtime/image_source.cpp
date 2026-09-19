@@ -145,28 +145,34 @@ ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::
 media::ImageResult<render::Rgba32fImage>
 evaluateImageSource(const ImageSourceSelection& selected,
                     render::Rgba32fImageDescriptor composition, double horizontalScale,
-                    double verticalScale, std::size_t budget, OperationCache* cache,
-                    const CancellationToken& cancel, media::cache::MediaDiskCache* diskCache) {
+                    double verticalScale, std::size_t budget, OperationCache* memoryCache,
+                    ImageSourceMemoryCacheAccess memoryAccess, const CancellationToken& cancel,
+                    media::cache::MediaDiskCache* diskCache) {
     if (!selected.available)
         return {{}, selected.warning};
-    auto cached =
-        cache != nullptr ? cache->find(selected.cacheKey, document::Revision{}) : std::nullopt;
-    std::shared_ptr<const render::Rgba32fImage> image = cached ? cached->image : nullptr;
+    std::shared_ptr<const render::Rgba32fImage> image;
+    if (memoryAccess != ImageSourceMemoryCacheAccess::Disabled && memoryCache != nullptr) {
+        auto cached = memoryCache->find(selected.cacheKey, document::Revision{});
+        if (cached)
+            image = cached->image;
+    }
     if (!image) {
-        // Memory -> disk -> decode. A disk hit skips decodeImage() entirely; a disk miss decodes
-        // and hands the write to the disk cache's own background thread (writeAsync = true) so
-        // this call -- running on an evaluation thread -- never waits on it.
+        // Memory -> disk -> decode, but only an ordinary ReadWrite request may touch the disk
+        // cache. A ReadOnly interactive miss decodes directly (null disk cache) and stores nothing,
+        // and an explicit Disabled bypass decodes without consulting either cache.
+        auto* const decodeDiskCache =
+            memoryAccess == ImageSourceMemoryCacheAccess::ReadWrite ? diskCache : nullptr;
         auto decoded = media::cache::decodeThroughDiskCache(
             selected.path, selected.interpretation, selected.digest, selected.diskCacheKey,
-            diskCache, /*writeAsync=*/true, [&] { return cancel.isCancellationRequested(); }, {},
-            std::min(budget, media::kMaxImageStorageBytes), selected.inputProcessor);
+            decodeDiskCache, /*writeAsync=*/true, [&] { return cancel.isCancellationRequested(); },
+            {}, std::min(budget, media::kMaxImageStorageBytes), selected.inputProcessor);
         if (!decoded.value.has_value())
             return {{}, decoded.diagnostic, decoded.cancelled};
         image = std::move(*decoded.value);
-        if (cache != nullptr)
-            cache->store(selected.cacheKey, document::Revision{},
-                         {.image = image, .values = {}, .bounds = {}},
-                         OperationCacheEntryKind::DecodedMedia);
+        if (memoryAccess == ImageSourceMemoryCacheAccess::ReadWrite && memoryCache != nullptr)
+            memoryCache->store(selected.cacheKey, document::Revision{},
+                               {.image = image, .values = {}, .bounds = {}},
+                               OperationCacheEntryKind::DecodedMedia);
     }
     const auto sourceWindow = image->descriptor()->dataWindow();
     const auto width = static_cast<std::uint64_t>(

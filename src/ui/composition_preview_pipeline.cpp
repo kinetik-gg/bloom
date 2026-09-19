@@ -341,7 +341,6 @@ PreviewPreparationFunction makeCompositionPreviewPipeline(
             .quality = desiredIdentity.quality,
             .colorIntent = desiredIdentity.colorIntent,
             .pixelStorageByteLimit = pixelStorageByteLimit,
-            .bypassOperationCache = !interactionOverride.empty(),
             .roi = desiredIdentity.roi,
             .bypassLookNodes = !desiredIdentity.showLook,
         };

@@ -537,7 +537,12 @@ revision is unreachable by construction; those entries are dropped outright when
 revision arrives. Two requests never reach the cache at all: one carrying an interactive parameter
 override, whose pixels belong to a gesture rather than to the revision and whose identity cannot say
 so, and an explicit refresh, which asks for the frame to be re-derived precisely because something
-the key does not cover may have changed.
+the key does not cover may have changed. CACHE-1 narrows this for one derived input: an interactive
+override plan may still READ an already-verified, immutable native decoded still-image entry out of
+the evaluator's memory cache instead of re-decoding it, but never inserts a source entry on a miss,
+and derived operation results, overridden plans, gesture frame-cache insertion, and disk-cache reads
+and writes stay bypassed. An explicit evaluation bypass (`request.bypassOperationCache`, distinct
+from the preview frame-cache refresh described here) disables even that read-only reuse.
 
 **The RAM Preview command** (`Ctrl+Shift+Space`, the Composition menu, and the Timeline transport's
 own button) pre-renders the composition's work-area frame range into the cache one frame at a time, in
@@ -682,7 +687,10 @@ targets, a ninth override and driven sources are refused. A driver is never hidd
 
 Accepted overrides become request-local constant records read by the shared lowering functions,
 including all source operand kinds. Their dormant curves are omitted. The immutable document is
-unchanged; compiled plan and operation caches bypass overridden requests. Preview controller and
+unchanged; compiled plan and derived operation caches bypass overridden requests. The one read the
+override path may still take is a warmed, already-verified native decoded still-image memory entry
+(CACHE-1; see `media-io.md`'s "Read-only decoded-image exception"), never a derived operation
+result. Preview controller and
 pipeline carry the complete vector only on Interactive requests. The first request is immediate;
 subsequent requests retain the 16 ms cadence and one-active/one-newest admission policy. Release
 or cancellation removes the vector. Completed previews are consumed independently of the slower
@@ -760,7 +768,10 @@ Auto follows the fitted viewer scale, using the same proxy mapping as viewer man
 Completed live frames can be presented while newer input is coalesced, so continuous motion does
 not starve feedback. Committing always requests the configured resolution and reference quality.
 These request-only choices never change durable state, compiled-plan grammar, semantics versions
-or committed pixels. Override plans and frames remain excluded from revision caches.
+or committed pixels. Override plans and frames remain excluded from revision caches. The evaluator's
+memory cache admits one exception for interactive overrides: read-only reuse of an already-verified
+decoded still-image source entry (CACHE-1); an explicit evaluation bypass
+(`request.bypassOperationCache`) still turns even that off.
 
 ## Required Verification
 
