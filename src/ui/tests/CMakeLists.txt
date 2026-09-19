@@ -785,6 +785,19 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# The shared global-preferences model: defaults, round-trip, invalid-value fallback, and the
+# absolute-path/zero-budget rules the existing readers rely on.
+add_executable(bloom_application_preferences_test application_preferences_tests.cpp)
+target_link_libraries(bloom_application_preferences_test PRIVATE bloom_ui)
+target_include_directories(bloom_application_preferences_test PRIVATE ..)
+bloom_enable_warnings(bloom_application_preferences_test)
+bloom_add_test(
+    NAME bloom.ui.application-preferences
+    COMMAND bloom_application_preferences_test
+    LABELS ui unit
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 add_executable(bloom_background_preview_test background_preview_tests.cpp)
 target_link_libraries(bloom_background_preview_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_background_preview_test)

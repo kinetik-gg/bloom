@@ -353,6 +353,8 @@ target_sources(
         frame_export_controller_deliverables.cpp
         composition_export_dialog.cpp
         composition_export_dialog.hpp
+        application_preferences.cpp
+        application_preferences.hpp
         frameless_window_support.cpp
         jobs_editor.cpp
         licenses_window.cpp
