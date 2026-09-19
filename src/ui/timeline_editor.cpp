@@ -1907,6 +1907,13 @@ void TimelineEditor::persistLayerColumnWidth() {
     setLayerColumnWidth(layerColumnWidth_, /*persist=*/true);
 }
 
+void TimelineEditor::applyDefaultLayerColumnWidth() {
+    const int width = this->width() > 0
+                          ? static_cast<int>(std::lround(this->width() * kDefaultLayerColumnShare))
+                          : layerColumnWidth();
+    setLayerColumnWidth(width, /*persist=*/false);
+}
+
 // task TL-FIX2. The one place that ever assigns layerColumnWidth_, so every caller -- a live drag
 // frame, a completed drag, a reset, and the showEvent() re-clamp -- goes through the same clamp and
 // the same set of widgets, and can never leave one of them stale. The maximum (leave

@@ -9,6 +9,7 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/kit/split_handle.hpp>
@@ -53,6 +54,7 @@
 #include <numeric>
 #include <source_location>
 #include <string>
+#include <string_view>
 
 // QDesktopServices::setUrlHandler() looks its receiver's slot up by name through the meta-object
 // system, which requires a moc-processed QObject. Kept at file scope, outside the anonymous
@@ -217,15 +219,13 @@ void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expe
                                 resetAction->text() == QStringLiteral("Reset Workspace"),
                             "reset workspace: Window menu carries the Reset Workspace action");
 
-        const auto visibleTopRow = [&fixture] {
-            for (auto* splitter : fixture.window->workspaceHost()->findChildren<QSplitter*>(
-                     QStringLiteral("workspaceSplitter"))) {
-                if (splitter->isVisible() && splitter->orientation() == Qt::Horizontal &&
-                    splitter->count() == 4) {
-                    return splitter;
+        const auto visibleArea = [&fixture](const std::string_view editorId) {
+            for (auto* area : fixture.window->workspaceHost()->findChildren<EditorArea*>()) {
+                if (area->isVisible() && area->editorId() == editorId) {
+                    return area;
                 }
             }
-            return static_cast<QSplitter*>(nullptr);
+            return static_cast<EditorArea*>(nullptr);
         };
         const auto visibleTimeline = [&fixture] {
             for (auto* timeline : fixture.window->findChildren<TimelineEditor*>()) {
@@ -235,16 +235,26 @@ void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expe
             }
             return static_cast<TimelineEditor*>(nullptr);
         };
+        // The Viewer/Nodes row is the top child of the Timeline area's own (vertical) splitter.
+        const auto viewerNodesRow = [&]() -> QSplitter* {
+            auto* timelineArea = visibleArea("bloom.timeline");
+            auto* leftColumn = timelineArea != nullptr
+                                   ? qobject_cast<QSplitter*>(timelineArea->parentWidget())
+                                   : nullptr;
+            return leftColumn != nullptr ? qobject_cast<QSplitter*>(leftColumn->widget(0))
+                                         : nullptr;
+        };
 
-        auto* topRow = visibleTopRow();
+        auto* topRow = viewerNodesRow();
         auto* timeline = visibleTimeline();
-        expectations.expect(topRow != nullptr && timeline != nullptr,
-                            "reset workspace: the default top row and timeline are visible");
+        expectations.expect(
+            topRow != nullptr && timeline != nullptr,
+            "reset workspace: the default Viewer/Nodes row and timeline are visible");
         if (topRow == nullptr || timeline == nullptr || resetAction == nullptr) {
             return;
         }
 
-        topRow->setSizes({500, 250, 750, 350});
+        topRow->setSizes({500, 250});
         auto* handle = timeline->splitHandleForTest();
         expectations.expect(handle != nullptr, "reset workspace: the timeline divider exists");
         if (handle == nullptr) {
@@ -271,7 +281,7 @@ void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expe
         resetAction->trigger();
         QCoreApplication::processEvents();
         QCoreApplication::processEvents();
-        topRow = visibleTopRow();
+        topRow = viewerNodesRow();
         timeline = visibleTimeline();
         expectations.expect(topRow != nullptr && timeline != nullptr,
                             "reset workspace: reset rebuilds the visible default panels");
@@ -284,11 +294,9 @@ void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expe
             return total > 0 ? static_cast<double>(sizes[index]) / total : 0.0;
         };
         const auto sizes = topRow->sizes();
-        for (const auto [index, expected] : std::array{std::pair{0, 0.16}, std::pair{1, 0.31},
-                                                       std::pair{2, 0.32}, std::pair{3, 0.19}}) {
-            expectations.expect(std::abs(share(sizes, index) - expected) <= 0.01,
-                                "reset workspace: top-row proportions are restored");
-        }
+        expectations.expect(std::abs(share(sizes, 0) - 0.505) <= 0.01 &&
+                                std::abs(share(sizes, 1) - 0.495) <= 0.01,
+                            "reset workspace: the Viewer/Nodes proportions are restored");
         const double timelineShare =
             timeline->width() > 0
                 ? static_cast<double>(timeline->layerColumnWidthForTest()) / timeline->width()
@@ -322,17 +330,30 @@ void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expe
         const auto saved = QJsonDocument::fromJson(
             settings.value(QStringLiteral("workspace/compositing/layout")).toByteArray());
         const auto root = saved.object().value(QStringLiteral("root")).toObject();
-        const auto savedTop = root.value(QStringLiteral("children")).toArray().at(0).toObject();
         const auto savedRootWeights = root.value(QStringLiteral("weights")).toArray();
-        const auto savedTopWeights = savedTop.value(QStringLiteral("weights")).toArray();
+        const auto rootChildren = root.value(QStringLiteral("children")).toArray();
+        const auto leftColumnNode = rootChildren.at(0).toObject();
+        const auto rightColumnNode = rootChildren.at(1).toObject();
+        const auto savedLeftWeights = leftColumnNode.value(QStringLiteral("weights")).toArray();
+        const auto savedRightWeights = rightColumnNode.value(QStringLiteral("weights")).toArray();
+        const auto savedTopLeftWeights = leftColumnNode.value(QStringLiteral("children"))
+                                             .toArray()
+                                             .at(0)
+                                             .toObject()
+                                             .value(QStringLiteral("weights"))
+                                             .toArray();
         expectations.expect(savedRootWeights.size() == 2 &&
-                                std::abs(savedRootWeights.at(0).toDouble() - 0.68) <= 0.01 &&
-                                std::abs(savedRootWeights.at(1).toDouble() - 0.32) <= 0.01 &&
-                                savedTopWeights.size() == 4 &&
-                                std::abs(savedTopWeights.at(0).toDouble() - 0.16) <= 0.01 &&
-                                std::abs(savedTopWeights.at(1).toDouble() - 0.31) <= 0.01 &&
-                                std::abs(savedTopWeights.at(2).toDouble() - 0.32) <= 0.01 &&
-                                std::abs(savedTopWeights.at(3).toDouble() - 0.19) <= 0.01,
+                                std::abs(savedRootWeights.at(0).toDouble() - 0.80) <= 0.01 &&
+                                std::abs(savedRootWeights.at(1).toDouble() - 0.20) <= 0.01 &&
+                                savedLeftWeights.size() == 2 &&
+                                std::abs(savedLeftWeights.at(0).toDouble() - 0.56) <= 0.01 &&
+                                std::abs(savedLeftWeights.at(1).toDouble() - 0.44) <= 0.01 &&
+                                savedRightWeights.size() == 2 &&
+                                std::abs(savedRightWeights.at(0).toDouble() - 0.395) <= 0.01 &&
+                                std::abs(savedRightWeights.at(1).toDouble() - 0.605) <= 0.01 &&
+                                savedTopLeftWeights.size() == 2 &&
+                                std::abs(savedTopLeftWeights.at(0).toDouble() - 0.505) <= 0.01 &&
+                                std::abs(savedTopLeftWeights.at(1).toDouble() - 0.495) <= 0.01,
                             "reset workspace: persisted layout keys contain the restored weights");
         const int persistedTimelineWidth =
             settings.value(QStringLiteral("timeline/layer-column-width")).toInt();

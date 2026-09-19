@@ -115,6 +115,11 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider, public
     // re-deriving the token arithmetic.
     [[nodiscard]] int minLayerColumnWidthForTest() const noexcept { return minLayerColumnWidth(); }
     void persistLayerColumnWidth();
+    // Re-applies the ratio-based first-run default (37% of this panel's current width). The
+    // workspace calls it after building a default layout once splitter geometry has settled: a
+    // nested Timeline's show-time width can precede its splitter's final extent, so the showEvent()
+    // default alone would compute the share from a not-yet-final width.
+    void applyDefaultLayerColumnWidth();
 
   private:
     EditorChromeSpec chrome_;

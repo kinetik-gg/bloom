@@ -831,9 +831,18 @@ void MainWindow::resetCompositingLayout(const bool persist) {
         settings.remove(QLatin1StringView(timelineLayerColumnWidthKey));
     }
 
-    workspaceHost_->resetToDefaultLayout(
-        {"bloom.assets", "bloom.viewer", "bloom.nodes", "bloom.properties"}, "bloom.timeline");
+    workspaceHost_->resetToDefaultLayout("bloom.viewer", "bloom.nodes", "bloom.assets",
+                                         "bloom.timeline", "bloom.properties");
     workspaceLayoutWritable_ = true;
+
+    // The Timeline's 37% divider default is applied at show time, but the Timeline is nested inside
+    // a splitter whose weights settle on a later event turn, so its show-time width can precede its
+    // final extent. Re-apply the ratio once geometry is final, before the deferred persist below
+    // records the width.
+    QTimer::singleShot(0, workspaceHost_, [this] {
+        if (auto* timeline = workspaceHost_->findChild<TimelineEditor*>())
+            timeline->applyDefaultLayerColumnWidth();
+    });
 
     if (persist) {
         const auto persistResetState = [this] {

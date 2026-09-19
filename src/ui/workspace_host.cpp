@@ -35,11 +35,14 @@ constexpr int layoutSchema = bloom::ui::kit::Layout::WorkspaceVersion;
 constexpr int maximumLayoutDepth = 64;
 constexpr int maximumAreaCount = 64;
 constexpr int defaultSplitWeight = 1000;
-// First-run / Reset Workspace proportions in per mille of the usable splitter extent: the top
-// row is Assets 16%, Viewer 31%, Nodes 32%, Properties 19%; the bottom Timeline row is 32% below
-// the 68% top row. These are weights, never pixels, so the arrangement follows the window size.
-constexpr std::array<int, 4> defaultTopRowWeights{160, 310, 320, 190};
-constexpr std::array<int, 2> defaultWorkspaceRowWeights{680, 320};
+// First-run / Reset Workspace proportions in per mille of the usable splitter extent. The
+// arrangement is a full-height right column -- Assets over Properties -- beside a left region whose
+// top row is Viewer | Nodes and whose bottom is the Timeline. These are weights, never pixels, so
+// the arrangement follows the window size.
+constexpr std::array<int, 2> defaultRootColumnWeights{800, 200};
+constexpr std::array<int, 2> defaultLeftColumnWeights{560, 440};
+constexpr std::array<int, 2> defaultTopLeftRowWeights{505, 495};
+constexpr std::array<int, 2> defaultRightColumnWeights{395, 605};
 
 template <std::size_t count>
 void setWeightedSizes(QSplitter& splitter, const std::array<int, count>& weights) {
@@ -327,29 +330,47 @@ void WorkspaceHost::resetToSingleArea(const std::string_view editorId) {
     emit areaCountChanged(1);
 }
 
-void WorkspaceHost::resetToDefaultLayout(const std::array<std::string_view, 4>& topRowEditorIds,
-                                         const std::string_view bottomRowEditorId,
-                                         const std::size_t activeTopRowIndex) {
+void WorkspaceHost::resetToDefaultLayout(const std::string_view viewerEditorId,
+                                         const std::string_view nodesEditorId,
+                                         const std::string_view assetsEditorId,
+                                         const std::string_view timelineEditorId,
+                                         const std::string_view propertiesEditorId,
+                                         const std::size_t activeIndex) {
     restoreMaximizedArea();
 
-    auto* topRow = createSplitter(Qt::Horizontal);
-    std::array<EditorArea*, 4> topRowAreas{};
-    for (std::size_t index = 0; index < topRowEditorIds.size(); ++index) {
-        topRowAreas[index] = createArea(topRowEditorIds[index]);
-        topRow->addWidget(topRowAreas[index]);
-    }
-    setWeightedSizes(*topRow, defaultTopRowWeights);
+    // Left region, top row: Viewer | Nodes.
+    auto* topLeftRow = createSplitter(Qt::Horizontal);
+    auto* viewerArea = createArea(viewerEditorId);
+    auto* nodesArea = createArea(nodesEditorId);
+    topLeftRow->addWidget(viewerArea);
+    topLeftRow->addWidget(nodesArea);
+    setWeightedSizes(*topLeftRow, defaultTopLeftRowWeights);
 
-    auto* bottomRow = createArea(bottomRowEditorId);
-    auto* root = createSplitter(Qt::Vertical);
-    root->addWidget(topRow);
-    root->addWidget(bottomRow);
-    setWeightedSizes(*root, defaultWorkspaceRowWeights);
+    // Left region, bottom: the Timeline, spanning both top-left areas.
+    auto* timelineArea = createArea(timelineEditorId);
+    auto* leftColumn = createSplitter(Qt::Vertical);
+    leftColumn->addWidget(topLeftRow);
+    leftColumn->addWidget(timelineArea);
+    setWeightedSizes(*leftColumn, defaultLeftColumnWeights);
+
+    // Right column, full height: Assets over Properties.
+    auto* assetsArea = createArea(assetsEditorId);
+    auto* propertiesArea = createArea(propertiesEditorId);
+    auto* rightColumn = createSplitter(Qt::Vertical);
+    rightColumn->addWidget(assetsArea);
+    rightColumn->addWidget(propertiesArea);
+    setWeightedSizes(*rightColumn, defaultRightColumnWeights);
+
+    auto* root = createSplitter(Qt::Horizontal);
+    root->addWidget(leftColumn);
+    root->addWidget(rightColumn);
+    setWeightedSizes(*root, defaultRootColumnWeights);
 
     replaceRoot(root);
     activeArea_.clear();
-    const auto selectedIndex = std::min(activeTopRowIndex, topRowAreas.size() - 1);
-    setActiveArea(topRowAreas[selectedIndex]);
+    const std::array<EditorArea*, 5> areas{viewerArea, nodesArea, assetsArea, timelineArea,
+                                           propertiesArea};
+    setActiveArea(areas[std::min(activeIndex, areas.size() - 1)]);
     updateAreaControls();
     emit areaCountChanged(areaCount());
 }
