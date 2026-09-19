@@ -9,6 +9,7 @@
 // This header owns the shared step vocabulary, the small pure helpers, and the Impl definition.
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/render/gpu_image_upload.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
@@ -28,11 +29,15 @@
 namespace bloom::runtime {
 
 enum class GpuSceneExecutorStepKind : std::uint8_t {
-    Solid,         // GpuSolid::begin: a solid command, a merge transparent base, or a transparent
-                   // composition output.
-    CoveredSolid,  // GpuSolid::beginCovered: the exact R8 coverage path.
-    Translation,   // GpuComposite::beginTranslation: a translation command or a composition copy.
-    SourceOver,    // GpuComposite::beginSourceOver: one merge layer.
+    Solid,        // GpuSolid::begin: a solid command, a merge transparent base, or a transparent
+                  // composition output.
+    CoveredSolid, // GpuSolid::beginCovered: the exact R8 coverage path.
+    // GpuImageUpload::begin: one ImageSource/VideoSource leaf. The exact converted host image is
+    // uploaded once per builder semantic source key; the strong source reference is retained until
+    // the submission's fence is proven retired (or the whole job is quarantined).
+    Upload,
+    Translation, // GpuComposite::beginTranslation: a translation command or a composition copy.
+    SourceOver,  // GpuComposite::beginSourceOver: one merge layer.
 };
 
 // One native step. `command` is the scene command this step completes (kInvalid for an intermediate
@@ -58,6 +63,10 @@ struct GpuSceneExecutorStep final {
     // Covered solid (borrowed from the retained scene; the scene outlives the job).
     std::span<const std::uint8_t> coverage;
     float coveredOpacity = 1.0F;
+    // Upload source: the strong immutable CPU source the converted pixels came from. It is retained
+    // for the job lifetime so the staging copy and any unretired submission keep their source
+    // alive.
+    std::shared_ptr<const render::Rgba32fImage> uploadSource;
     // Translation output data window plus GPU-local translation and opacity.
     std::optional<render::ImageWindow> outputWindow;
     double translationX = 0.0;
@@ -136,6 +145,10 @@ makeDiagnostic(const GpuSceneExecutorDiagnosticCode code, std::string message) {
                 return windowsEqual(image.dataWindow(), item.dataWindow) &&
                        windowsEqual(image.displayWindow(), item.displayWindow) &&
                        image.pixelAspect() == item.pixelAspect;
+            } else if constexpr (std::is_same_v<T, GpuSceneUploadCommand>) {
+                return windowsEqual(image.dataWindow(), item.descriptor.dataWindow()) &&
+                       windowsEqual(image.displayWindow(), item.descriptor.displayWindow()) &&
+                       image.pixelAspect() == item.descriptor.pixelAspect();
             } else {
                 return false;
             }
@@ -181,6 +194,10 @@ expectedDescriptorOf(const PreparedGpuScene& scene, const GpuSceneCommandIndex i
                 return SceneDescriptorInfo{item.dataWindow, item.displayWindow, item.pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
                 return SceneDescriptorInfo{item.outputWindow, item.displayWindow, item.pixelAspect};
+            } else if constexpr (std::is_same_v<T, GpuSceneUploadCommand>) {
+                return SceneDescriptorInfo{item.descriptor.dataWindow(),
+                                           item.descriptor.displayWindow(),
+                                           item.descriptor.pixelAspect()};
             } else {
                 return std::nullopt;
             }
@@ -218,6 +235,27 @@ diagnosticFromComposite(const render::GpuCompositeDiagnostic& diagnostic) {
     return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DispatchRefused, diagnostic.message);
 }
 
+[[nodiscard]] inline GpuSceneExecutorDiagnostic
+diagnosticFromUpload(const render::GpuImageUploadDiagnostic& diagnostic) {
+    switch (diagnostic.code) {
+    case render::GpuImageUploadDiagnosticCode::OverBudget:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::OverBudget, diagnostic.message);
+    case render::GpuImageUploadDiagnosticCode::DeviceLost:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceLost, diagnostic.message);
+    case render::GpuImageUploadDiagnosticCode::WrongThread:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::WrongThread, diagnostic.message);
+    case render::GpuImageUploadDiagnosticCode::DeviceUnavailable:
+    case render::GpuImageUploadDiagnosticCode::AllocationFailed:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
+                              diagnostic.message);
+    case render::GpuImageUploadDiagnosticCode::Unsupported:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::Unsupported, diagnostic.message);
+    default:
+        break;
+    }
+    return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DispatchRefused, diagnostic.message);
+}
+
 enum class NativePoll : std::uint8_t { Pending, Ready, Failure, WrongThread };
 
 [[nodiscard]] inline NativePoll mapSolid(const render::GpuSolidPollResult result) noexcept {
@@ -248,6 +286,20 @@ enum class NativePoll : std::uint8_t { Pending, Ready, Failure, WrongThread };
     return NativePoll::Failure;
 }
 
+[[nodiscard]] inline NativePoll mapUpload(const render::GpuImageUploadPollResult result) noexcept {
+    switch (result) {
+    case render::GpuImageUploadPollResult::Pending:
+        return NativePoll::Pending;
+    case render::GpuImageUploadPollResult::Ready:
+        return NativePoll::Ready;
+    case render::GpuImageUploadPollResult::WrongThread:
+        return NativePoll::WrongThread;
+    case render::GpuImageUploadPollResult::Failure:
+        break;
+    }
+    return NativePoll::Failure;
+}
+
 } // namespace gpu_scene_executor_detail
 
 struct GpuSceneExecutor::Impl final {
@@ -270,6 +322,7 @@ struct GpuSceneExecutor::Impl final {
 
     std::unique_ptr<render::GpuSolid> solid;
     std::unique_ptr<render::GpuComposite> composite;
+    std::unique_ptr<render::GpuImageUpload> upload;
 
     GpuSceneExecutorJobState state = GpuSceneExecutorJobState::Idle;
     GpuSceneExecutorDiagnostic diagnostic;
@@ -290,7 +343,7 @@ struct GpuSceneExecutor::Impl final {
     // the op's own actual retained bytes to this.
     std::uint64_t liveBytesAtDispatch = 0;
 
-    enum class NativeKind : std::uint8_t { None, Solid, Composite };
+    enum class NativeKind : std::uint8_t { None, Solid, Composite, Upload };
     NativeKind nativeKind = NativeKind::None;
     bool nativeInFlight = false;
     bool cancelRequested = false;
@@ -314,8 +367,8 @@ struct GpuSceneExecutor::Impl final {
     void finishReady() noexcept;
     void advanceDrain() noexcept;
 
-    [[nodiscard]] GpuSceneExecutorDiagnostic
-    planCommand(GpuSceneCommandIndex index, std::vector<std::uint8_t>& color);
+    [[nodiscard]] GpuSceneExecutorDiagnostic planCommand(GpuSceneCommandIndex index,
+                                                         std::vector<std::uint8_t>& color);
     [[nodiscard]] GpuSceneExecutorDiagnostic startStep(const GpuSceneExecutorStep& step);
     [[nodiscard]] GpuSceneExecutorDiagnostic finishNative(render::GpuImage produced);
     [[nodiscard]] GpuSceneExecutorDiagnostic completeNative();

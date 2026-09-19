@@ -293,6 +293,61 @@ bloom_add_test(
     TIMEOUT 300
 )
 
+# Bounded prepared-upload cache: node lifetime under replacement/eviction, byte and entry ceilings,
+# zero-budget disable, and per-entry accounting. CPU-only; no loader and no device.
+add_executable(bloom_runtime_gpu_prepared_upload_cache_test gpu_prepared_upload_cache_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_prepared_upload_cache_test
+    PRIVATE bloom_runtime_evaluator bloom_render)
+bloom_enable_warnings(bloom_runtime_gpu_prepared_upload_cache_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_prepared_upload_cache_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_prepared_upload_cache
+    COMMAND bloom_runtime_gpu_prepared_upload_cache_test
+    LABELS unit gpu runtime)
+
+# The media still-image test writes REAL OpenEXR fixtures to a temporary directory and resolves them
+# through the production image pipeline, so it links OpenEXR directly exactly as
+# bloom_media_image_test does. CPU-only: no loader, no device.
+add_executable(bloom_runtime_gpu_media_scene_preparation_test
+    gpu_media_scene_preparation_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_media_scene_preparation_test
+    PRIVATE bloom_runtime_evaluator bloom_render OpenEXR::OpenEXR)
+target_include_directories(bloom_runtime_gpu_media_scene_preparation_test
+    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+bloom_enable_warnings(bloom_runtime_gpu_media_scene_preparation_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_media_scene_preparation_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_media_scene_preparation
+    COMMAND bloom_runtime_gpu_media_scene_preparation_test
+    LABELS unit gpu runtime)
+
+# The real-video test reads the generated media-worker fixtures and drives the SAME
+# VideoDecodeSession/worker the evaluator uses. It includes the private src/runtime/video_source.hpp
+# only to read the decoded-cache resident-byte counter, and it must run with a worker built from the
+# same provider archive as the host (a stale worker rejects the signed handshake). It is registered
+# only where the FFmpeg worker and its fixture generator exist (the same Linux-only condition
+# apps/bloom-media-worker uses), so a platform without an actual generated media-worker fixture never
+# registers a test that could only skip.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(bloom_runtime_gpu_media_video_scene_preparation_test
+        gpu_media_video_scene_preparation_tests.cpp)
+    target_include_directories(bloom_runtime_gpu_media_video_scene_preparation_test
+        PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime)
+    target_link_libraries(bloom_runtime_gpu_media_video_scene_preparation_test
+        PRIVATE bloom_runtime_evaluator bloom_render bloom_media_video)
+    bloom_enable_warnings(bloom_runtime_gpu_media_video_scene_preparation_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_media_video_scene_preparation_test)
+    add_dependencies(bloom_runtime_gpu_media_video_scene_preparation_test
+        bloom-media-worker bloom_media_generate_fixtures)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_media_video_scene_preparation
+        COMMAND bloom_runtime_gpu_media_video_scene_preparation_test
+                "${PROJECT_BINARY_DIR}/apps/bloom-media-worker/fixtures"
+        LABELS unit gpu runtime media)
+    set_tests_properties(bloom.runtime.gpu_media_video_scene_preparation
+        PROPERTIES FIXTURES_REQUIRED media3)
+endif()
+
 # Owner-thread non-blocking GPU scene executor. It drives real GpuSolid/CoveredSolid/GpuComposite
 # dispatches through a real device and a real GpuSceneCache; without a loader it skips unless the
 # supervisor passes --loader/--require-device. It compiles and runs against the CPU stub too, printing
@@ -327,6 +382,62 @@ if(TARGET bloom_render_gpu_scene_executor_fault)
         NAME bloom.runtime.gpu_scene_executor_fault
         COMMAND bloom_runtime_gpu_scene_executor_fault_test
         LABELS runtime unit gpu render
+        TIMEOUT 600
+    )
+endif()
+
+# Media (still/sequence) extension of the executor: a real still-image/sequence plan through the
+# CpuGpuSceneBuilder -> GpuImageUpload -> translation/source-over/output path on a real device. The
+# media builder/media source objects come from the gpu-media-scene-prep package; this target links
+# the same archives and OpenEXR/Imath the media scene preparation tests already use. Without a loader
+# or device it skips unless the supervisor passes --loader/--require-device.
+add_executable(bloom_runtime_gpu_media_executor_test
+    gpu_media_executor_tests.cpp
+    gpu_media_executor_test_support.hpp)
+target_include_directories(bloom_runtime_gpu_media_executor_test
+    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+target_link_libraries(bloom_runtime_gpu_media_executor_test
+    PRIVATE bloom_runtime_evaluator bloom_render bloom_media_image bloom_media_video
+            bloom_media_cache bloom_color bloom_color_ocio OpenEXR::OpenEXR)
+bloom_enable_warnings(bloom_runtime_gpu_media_executor_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_media_executor_test)
+# The media scene fixture/oracle header defines anonymous-namespace helpers that this TU does not
+# all use; the proof compiles this one translation unit with unused-function quieted.
+target_compile_options(bloom_runtime_gpu_media_executor_test PRIVATE -Wno-unused-function)
+bloom_add_test(
+    NAME bloom.runtime.gpu_media_executor
+    COMMAND bloom_runtime_gpu_media_executor_test
+    LABELS runtime unit gpu render media
+    TIMEOUT 600
+)
+
+# Test-only fault variant: cancellation / deadline / unproven upload retention against a real
+# submitted copy. It uses the same proof-only macro and header as the solid fault variant and links
+# the fault-instrumented native closure, which must now also include gpu_image_upload.cpp and
+# gpu_image_upload_resources.cpp so the injected upload poll hook is present.
+if(TARGET bloom_render_gpu_scene_executor_fault)
+    add_executable(bloom_runtime_gpu_media_executor_retirement_test
+        gpu_media_executor_retirement_tests.cpp
+        gpu_media_executor_test_support.hpp)
+    target_compile_definitions(bloom_runtime_gpu_media_executor_retirement_test
+        PRIVATE BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION)
+    target_include_directories(bloom_runtime_gpu_media_executor_retirement_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" ${OpenEXR_INCLUDE_DIRS}
+                ${Imath_INCLUDE_DIRS})
+    target_link_libraries(bloom_runtime_gpu_media_executor_retirement_test
+        PRIVATE bloom_render_gpu_scene_executor_fault bloom_runtime_evaluator bloom_render
+                bloom_media_image bloom_media_video bloom_media_cache bloom_color bloom_color_ocio
+                OpenEXR::OpenEXR)
+    bloom_enable_warnings(bloom_runtime_gpu_media_executor_retirement_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_media_executor_retirement_test)
+    # Same as the media executor target: the shared fixture/oracle header has helpers this TU does
+    # not use.
+    target_compile_options(bloom_runtime_gpu_media_executor_retirement_test
+        PRIVATE -Wno-unused-function)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_media_executor_retirement
+        COMMAND bloom_runtime_gpu_media_executor_retirement_test
+        LABELS runtime unit gpu render media
         TIMEOUT 600
     )
 endif()

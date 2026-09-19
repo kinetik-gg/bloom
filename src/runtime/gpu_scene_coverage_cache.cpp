@@ -49,9 +49,13 @@ void GpuSceneCoverageCache::store(std::string geometryKey,
             order_.pop_back();
             continue;
         }
+        // The map key is a string_view into the order list node, so erase the map entry FIRST,
+        // while that string is still alive; unordered_map::erase(iterator) may hash its key, so
+        // popping the list node first would let it read freed storage.
+        const auto position = entry->second.position;
         retainedBytes_ -= entry->second.bytes;
-        order_.pop_back();
         entries_.erase(entry);
+        order_.erase(position);
     }
     // Transactional insertion: the pushed order node is tracked by iterator, so a failing map
     // emplace (or a throwing push_front, which leaves the list untouched) removes ONLY the node

@@ -282,7 +282,8 @@ unmasked `begin()` path is unchanged, and the actual-VMA allocation budget, reta
 mask/palette buffers, owner-thread, cancellation, and quarantine policy are shared through one
 extracted private impl. `bloom::runtime::CpuGpuSceneBuilder` (`prepared_gpu_scene.hpp`) turns a REAL
 `CompiledCompositionPlan` plus an `EvaluationRequest` into ordered, immutable
-`GpuSceneCommand`s -- solid, unparented translation-only layer, Normal merge, composition output --
+`GpuSceneCommand`s -- solid, unparented translation-only layer, image/video upload, Normal merge,
+composition output --
 using the evaluator's REAL six-argument preflight resolution and, for a fractional translation-only
 solid, the SAME CPU `PathRaster` R8 coverage; it allocates no full RGBA CPU image and fails closed
 `Unsupported` for every out-of-subset reachable operation. Command semantic keys carry the resolved
@@ -291,7 +292,16 @@ and never node/layer IDs, operation indexes, or the revision; execution-order in
 identity. Time activation is the exact CPU `[inPoint, outPoint)` range test, the request pixel
 allowance bounds every command output and each unique coverage raster with overflow-safe arithmetic,
 cancellation is checked per command and per raster row, and `GpuSceneCoverageCache` is a bounded,
-transactional LRU keyed on raster geometry alone. Verified locally with a genuine uncached
+transactional LRU keyed on raster geometry alone. An `ImageSource`/`VideoSource` leaf resolves and
+colour-converts its source on the CPU task thread through the evaluator's own
+`selectImageSource`/`evaluateImageSource` and `selectVideoSource`/`videoToSceneLinear` entry points and
+publishes a `GpuSceneUploadCommand` carrying the frozen converted image plus a source semantic key
+that never contains a node id, plan index, frame time, or layer transform; a reachable unsupported
+layer is screened before any decode, and a `GpuPreparedUploadCache` (bounded LRU, 128 MiB / 4096
+entries default, zero disables) reuses a converted source across a transform-only change. Media
+counters are per-build on the result (or the failure diagnostic), never a shared mutable aggregate,
+and an explicit or interactive bypass never reads or writes the disk cache. Verified locally with a
+genuine uncached
 `CpuCompositionEvaluator` oracle: identity, bounds, output descriptor, and bit-exact pixels for
 fractional/integer translations, proxy and non-square PAR, animated opacity/position, multiple
 layers, time-activation range/empty/mute-solo, cache reuse, budget refusal, and the unsupported
@@ -305,7 +315,9 @@ foundation, still without service, product, viewer, or UI selection. `GpuSceneEx
 (`bloom/runtime/gpu_scene_executor.hpp`, `gpu_scene_executor.cpp` with a planner and an execution
 translation unit plus a private header) takes one immutable `PreparedGpuScene` and drives a bounded
 sequence of already-typed native operations on an existing `GpuDevice`: `GpuSolid::begin`,
-`GpuSolid::beginCovered`, `GpuComposite::beginTranslation`, and `GpuComposite::beginSourceOver`.
+`GpuSolid::beginCovered`, `GpuImageUpload::begin` (one media source leaf, uploaded once per builder
+semantic source key and reused when only the layer transform changes),
+`GpuComposite::beginTranslation`, and `GpuComposite::beginSourceOver`.
 `begin` validates the whole scene and flattens the reachable DAG, consulting `GpuSceneCache` first so a
 warm unchanged output performs zero native dispatches and a fractional covered solid's superseded
 solid command is unreachable; `poll` is non-blocking and starts at most one native dispatch per call.
@@ -313,15 +325,17 @@ The request byte budget bounds the actual LIVE unique pinned image bytes (dedupe
 inputs, and the output; the cache keeps its own separate ledger) and releases each charge at the last
 dependency, so a long sequential graph whose peak live set fits is accepted even when its cumulative
 allocation exceeds the budget. Each native op's real retained allocation comes from a new additive
-`GpuSolid`/`GpuComposite` `hasUnretiredSubmission()` / `lastJobAllocationBytes()` accessor pair (stub
-`false`/0) instead of a requested extent, and only a native result that PROVES fence retirement may
-release pins: a `DeviceUnavailable` with the submission still outstanding fails `NativeUnproven`,
-retains every pin, and refuses reuse until the owner polls the submission to retirement or destroys
-the executor. Cancellation, a per-job deadline, wrong-thread use, and device loss fail closed with no
-published image; `DeviceLost` is terminal. Destruction is owner-thread and native-first: the owned
-`GpuSolid`/`GpuComposite` pipelines are reset before the scene and executor pins, so the pipeline's
-bounded drain or whole-`Impl` quarantine strongly owns the in-flight inputs. The executor owns no
-thread, service, Qt surface, viewer, media decode, upload, or readback path, and `SourceOverV1` now
+`GpuSolid`/`GpuComposite`/`GpuImageUpload` `hasUnretiredSubmission()` / `lastJobAllocationBytes()`
+accessor pair (stub `false`/0) instead of a requested extent, and only a native result that PROVES
+fence retirement may release pins: a `DeviceUnavailable` with the submission still outstanding fails
+`NativeUnproven`, retains every pin, and refuses reuse until the owner polls the submission to
+retirement or destroys the executor. Cancellation, a per-job deadline, wrong-thread use, and device
+loss fail closed with no published image; `DeviceLost` is terminal. Destruction is owner-thread and
+native-first: the owned `GpuSolid`/`GpuComposite`/`GpuImageUpload` pipelines are reset before the
+scene and executor pins, so the pipeline's bounded drain or whole-`Impl` quarantine strongly owns the
+in-flight inputs. The executor owns no
+thread, service, Qt surface, viewer, media decode, or readback path -- it owns exactly one
+`GpuImageUpload` pipeline -- and `SourceOverV1` now
 preserves the destination pixel aspect so a non-square-PAR merge does not lose PAR. Verified locally
 with the pinned loader on a real device against a genuine uncached `CpuCompositionEvaluator` oracle
 for every output pixel and the actual returned native descriptor: merged solids, fractional +0.3/-0.3
@@ -329,9 +343,11 @@ covered coverage, integer translation, HDR signed alpha, odd/nonzero-origin wind
 non-square PAR, opacity endpoints, empty/inactive time, byte-exact covered fill, warm zero-dispatch
 cache reuse, retained lower subtrees, live-peak budgets with refusal/reuse and alias accounting,
 cancellation, wrong-thread/foreign-device and mismatched-descriptor-cache rejection, native ownership
-across teardown, and -- in a test-only fault-instrumented native build -- the stalled-deadline,
+across teardown, real still/EXR-sequence/ProRes-video uploads with every-pixel parity and a
+transform-only warm reuse of the resident source, and -- in a test-only fault-instrumented native
+build -- the stalled-deadline,
 unknown-fence, proven-cancellation, and device-loss retirement contracts. This is a tested checkpoint
-only: no service, product, presentation, viewer, media upload, or application-benchmark selection is
+only: no service, product, presentation, viewer, or application-benchmark selection is
 activated, and no `ReferenceParity` claim is made.
 
 The runtime now also owns a bounded, owner-thread GPU-resident frame lease registry

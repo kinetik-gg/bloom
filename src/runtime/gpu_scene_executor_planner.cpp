@@ -28,9 +28,8 @@ using gpu_scene_executor_detail::makeDiagnostic;
 // Validate the reachable command DAG from the terminal output and flatten it into typed native
 // steps, consulting the content cache first (a hit cuts the whole subtree). Cache hits are pinned
 // into the live ledger immediately; produced commands are only assigned at completion.
-GpuSceneExecutorDiagnostic
-GpuSceneExecutor::Impl::planCommand(const GpuSceneCommandIndex index,
-                                    std::vector<std::uint8_t>& color) {
+GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCommandIndex index,
+                                                               std::vector<std::uint8_t>& color) {
     const std::size_t count = scene->commands().size();
     if (index == kInvalidGpuSceneCommand || static_cast<std::size_t>(index) >= count) {
         return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InvalidReference,
@@ -129,6 +128,29 @@ GpuSceneExecutor::Impl::planCommand(const GpuSceneCommandIndex index,
         step.coverage =
             std::span<const std::uint8_t>(covered->coverage->data(), covered->coverage->size());
         step.coveredOpacity = covered->opacity;
+        steps.push_back(std::move(step));
+        color[index] = 2;
+        return {};
+    }
+
+    if (const auto* uploadCommand = std::get_if<GpuSceneUploadCommand>(&command)) {
+        if (uploadCommand->image == nullptr) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "an upload command has no converted source image");
+        }
+        std::uint64_t bytes = 0;
+        if (!checkedImageBytes(uploadCommand->descriptor.dataWindow(), bytes)) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "an upload command has an empty data window");
+        }
+        GpuSceneExecutorStep step;
+        step.kind = GpuSceneExecutorStepKind::Upload;
+        step.command = index;
+        step.cacheKey = uploadCommand->semanticKey;
+        step.cacheOnComplete = true;
+        step.uploadSource = uploadCommand->image;
         steps.push_back(std::move(step));
         color[index] = 2;
         return {};

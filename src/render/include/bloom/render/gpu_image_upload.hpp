@@ -91,6 +91,13 @@ class GpuImageUpload final {
     [[nodiscard]] GpuImageUploadJobState state() const noexcept;
     [[nodiscard]] const GpuImageUploadDiagnostic& diagnostic() const noexcept;
     [[nodiscard]] bool isBoundTo(GpuDevice& device) const noexcept;
+    // True while a submitted copy's fence has not been PROVEN retired. No allocation or Vulkan
+    // call; a Failure poll with this true is unproven and must be drained.
+    [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
+    // The actual VMA bytes the most recent accepted job retained during the job (resident image
+    // plus its transient staging buffer), or 0 before the first job. Real allocator sizes, never a
+    // requested extent.
+    [[nodiscard]] std::uint64_t lastJobAllocationBytes() const noexcept;
 
     // Validates the descriptor/extent/budget/device limits, copies the host pixels into an owned
     // staging buffer, creates the resident image, records one buffer-to-image copy, and submits.

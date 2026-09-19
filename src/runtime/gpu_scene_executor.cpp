@@ -39,9 +39,9 @@ GpuSceneExecutor::~GpuSceneExecutor() { releaseImpl(); }
 
 void GpuSceneExecutor::releaseImpl() noexcept { impl_.reset(); }
 
-GpuSceneExecutorCreateResult
-GpuSceneExecutor::create(render::GpuDevice& device, GpuSceneCache& cache,
-                         const GpuSceneExecutorBudgets& budgets) {
+GpuSceneExecutorCreateResult GpuSceneExecutor::create(render::GpuDevice& device,
+                                                      GpuSceneCache& cache,
+                                                      const GpuSceneExecutorBudgets& budgets) {
     if (!device.isOwnerThread()) {
         return {nullptr, makeDiagnostic(GpuSceneExecutorDiagnosticCode::WrongThread,
                                         "GpuSceneExecutor::create must run on the device owner "
@@ -62,12 +62,21 @@ GpuSceneExecutor::create(render::GpuDevice& device, GpuSceneCache& cache,
         return {nullptr, makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
                                         composite.diagnostic.message)};
     }
+    // The upload's own pipeline ceiling is the per-operation image ceiling for both the resident
+    // image and its transient staging buffer; the per-request headroom is charged at begin().
+    auto upload = render::GpuImageUpload::create(
+        device, render::GpuImageUploadBudgets{budgets.maxImageBytes, budgets.maxImageBytes});
+    if (!upload) {
+        return {nullptr, makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
+                                        upload.diagnostic.message)};
+    }
     auto impl = std::make_unique<Impl>();
     impl->device = &device;
     impl->cache = &cache;
     impl->budgets = budgets;
     impl->solid = std::move(solid.solid);
     impl->composite = std::move(composite.composite);
+    impl->upload = std::move(upload.upload);
     return {std::unique_ptr<GpuSceneExecutor>(new GpuSceneExecutor(std::move(impl))), {}};
 }
 
@@ -109,13 +118,10 @@ bool GpuSceneExecutor::ownerDrainRequired() const noexcept {
     return impl_ != nullptr && impl_->drainRequired;
 }
 
-bool GpuSceneExecutor::deviceLost() const noexcept {
-    return impl_ != nullptr && impl_->deviceLost;
-}
+bool GpuSceneExecutor::deviceLost() const noexcept { return impl_ != nullptr && impl_->deviceLost; }
 
-GpuSceneExecutorDiagnostic
-GpuSceneExecutor::begin(std::shared_ptr<const PreparedGpuScene> scene,
-                        const std::uint64_t requestByteBudget) {
+GpuSceneExecutorDiagnostic GpuSceneExecutor::begin(std::shared_ptr<const PreparedGpuScene> scene,
+                                                   const std::uint64_t requestByteBudget) {
     if (impl_ == nullptr) {
         return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
                               "the executor is not initialized");
@@ -179,8 +185,8 @@ GpuSceneExecutor::begin(std::shared_ptr<const PreparedGpuScene> scene,
     }
 
     // Conservative early guard: the peak live set can never be smaller than the largest single
-    // step's requested extent, so a budget below that cannot succeed. This is a lower bound only; it
-    // never sums the graph's cumulative allocation and it is never reported as actual VMA bytes.
+    // step's requested extent, so a budget below that cannot succeed. This is a lower bound only;
+    // it never sums the graph's cumulative allocation and it is never reported as actual VMA bytes.
     std::uint64_t maxStepRequestedBytes = 0;
     for (const auto& step : impl.steps) {
         const std::optional<render::ImageWindow> window =
@@ -266,9 +272,8 @@ GpuSceneExecutorPollResult GpuSceneExecutor::poll() {
     }
     if (impl.cursor >= impl.steps.size()) {
         impl.finishReady();
-        return impl.state == GpuSceneExecutorJobState::Ready
-                   ? GpuSceneExecutorPollResult::Ready
-                   : GpuSceneExecutorPollResult::Failure;
+        return impl.state == GpuSceneExecutorJobState::Ready ? GpuSceneExecutorPollResult::Ready
+                                                             : GpuSceneExecutorPollResult::Failure;
     }
     const auto started = impl.startStep(impl.steps[impl.cursor]);
     if (started.code != GpuSceneExecutorDiagnosticCode::None) {
@@ -316,6 +321,8 @@ void GpuSceneExecutor::cancel() noexcept {
     if (impl_->nativeInFlight && !impl_->cancelIssued) {
         if (impl_->nativeKind == Impl::NativeKind::Solid) {
             impl_->solid->cancel();
+        } else if (impl_->nativeKind == Impl::NativeKind::Upload) {
+            impl_->upload->cancel();
         } else if (impl_->nativeKind == Impl::NativeKind::Composite) {
             impl_->composite->cancel();
         }
@@ -329,7 +336,8 @@ bool GpuSceneExecutor::teardownDrainIncomplete() noexcept {
     // resolved ownership, so a merely-pending fault-injection poll before a successful native drain
     // must not be reported incomplete.
     return render::GpuSolid::teardownDrainIncomplete() ||
-           render::GpuComposite::teardownDrainIncomplete();
+           render::GpuComposite::teardownDrainIncomplete() ||
+           render::GpuImageUpload::teardownDrainIncomplete();
 }
 
 } // namespace bloom::runtime

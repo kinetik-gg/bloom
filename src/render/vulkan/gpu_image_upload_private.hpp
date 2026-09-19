@@ -107,6 +107,7 @@ struct GpuImageUpload::Impl final {
 
     GpuImageUploadJobState jobState = GpuImageUploadJobState::Idle;
     bool queueSubmitted = false;
+    std::uint64_t lastJobBytes = 0;
     bool deviceLost = false;
     std::atomic<bool> discardRequested{false};
     GpuImageUploadDiagnostic jobDiagnostic;

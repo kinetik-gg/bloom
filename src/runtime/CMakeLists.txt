@@ -80,7 +80,15 @@ target_sources(
         cpu_composition_resolution.hpp
         cpu_gpu_scene_preparation.cpp
         gpu_scene_preparation_private.hpp
+        gpu_scene_preparation_common.hpp
+        gpu_scene_coverage.cpp
+        gpu_scene_coverage.hpp
         gpu_scene_coverage_cache.cpp
+        gpu_media_preparation.cpp
+        gpu_media_preparation.hpp
+        gpu_scene_media_layer.cpp
+        gpu_scene_media_layer.hpp
+        gpu_prepared_upload_cache.cpp
         image_effect.cpp
         image_effect.hpp
         cpu_composition_evaluator_support.hpp
@@ -137,6 +145,7 @@ target_sources(
             include/bloom/runtime/gpu_resident_frame_lease.hpp
             include/bloom/runtime/gpu_scene_cache.hpp
             include/bloom/runtime/gpu_scene_coverage_cache.hpp
+            include/bloom/runtime/gpu_prepared_upload_cache.hpp
             include/bloom/runtime/gpu_scene_executor.hpp
             include/bloom/runtime/input_color_context.hpp
             include/bloom/runtime/prepared_gpu_scene.hpp

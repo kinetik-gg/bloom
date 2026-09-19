@@ -163,7 +163,7 @@ publish(CompiledCompositionPlanDefinition definition) {
 }
 
 // A solid -> translation-only layer -> Normal merge -> output plan with two layers.
-[[nodiscard]] std::shared_ptr<const CompiledCompositionPlan>
+[[maybe_unused, nodiscard]] std::shared_ptr<const CompiledCompositionPlan>
 twoLayerPlan(const CompositionFormat compositionFormat, const LayerValues a, const LayerValues b,
              const double solidWidth, const double solidHeight, const std::uint64_t idBase) {
     const LayerIds idsA{bloom::document::ParameterId::fromRaw(idBase + 0),
@@ -324,6 +324,12 @@ twoLayerPlan(const CompositionFormat compositionFormat, const LayerValues a, con
                 }
             }
             images[coverage->index] = freeze(*builder.value());
+            continue;
+        }
+        if (const auto* upload = std::get_if<bloom::runtime::GpuSceneUploadCommand>(&command)) {
+            // The upload command already carries the frozen converted source, so replay is an
+            // alias: this is exactly the immutability the native upload would rely on.
+            images[upload->index] = upload->image;
             continue;
         }
         if (const auto* merge = std::get_if<bloom::runtime::GpuSceneMergeCommand>(&command)) {

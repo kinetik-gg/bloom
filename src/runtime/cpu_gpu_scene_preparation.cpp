@@ -1,5 +1,8 @@
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
+#include "gpu_media_preparation.hpp"
+#include "gpu_scene_coverage.hpp"
+#include "gpu_scene_media_layer.hpp"
 #include "gpu_scene_preparation_private.hpp"
 
 #include "operation_key.hpp"
@@ -24,12 +27,15 @@ namespace bloom::runtime {
 namespace {
 
 [[nodiscard]] PreparedGpuSceneBuildResult failed(const PreparedGpuSceneDiagnosticCode code,
-                                                 std::string message) {
-    return {nullptr, PreparedGpuSceneDiagnostic{code, std::move(message)}};
+                                                 std::string message,
+                                                 GpuSceneMediaStatistics statistics = {}) {
+    return {nullptr, PreparedGpuSceneDiagnostic{code, std::move(message), std::move(statistics)}};
 }
 
 [[nodiscard]] bool isSubsetOperation(const CompiledOperation& operation) noexcept {
     return std::holds_alternative<CompiledSolid>(operation) ||
+           std::holds_alternative<CompiledImageSource>(operation) ||
+           std::holds_alternative<CompiledVideoSource>(operation) ||
            std::holds_alternative<CompiledLayerOutput>(operation) ||
            std::holds_alternative<CompiledMerge>(operation) ||
            std::holds_alternative<CompiledCompositionOutput>(operation);
@@ -166,6 +172,20 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     const double authorWidth = static_cast<double>(plan->format().width());
     const double authorHeight = static_cast<double>(plan->format().height());
 
+    // Screen every reachable layer for an unsupported blend or transform BEFORE any media leaf is
+    // resolved or decoded, so a graph containing an unsupported layer never prepares -- and never
+    // decodes -- its media. An inactive layer, exactly as in the CPU evaluator, publishes nothing
+    // and is therefore not screened.
+    if (const auto error =
+            detail::screenUnsupportedLayers(*plan, request, resolved, cancellation)) {
+        return failed(error->code, error->message);
+    }
+
+    // This build's own CPU work counters. They are local to the call -- never shared across
+    // concurrent preparation jobs -- and are published either on the prepared scene or, for a
+    // failed build, on the returned diagnostic.
+    GpuSceneMediaStatistics mediaStatistics;
+
     std::vector<GpuSceneCommand> commands;
     std::vector<GpuSceneCommandIndex> commandForOperation(operationCount, kInvalidGpuSceneCommand);
     std::vector<EvaluatedOperationBounds> bounds(operationCount);
@@ -188,20 +208,20 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     std::unordered_set<const void*> countedCoverage;
     const auto charge =
         [&](const std::uint64_t width, const std::uint64_t height,
-            const std::uint64_t bytesPerPixel) -> std::optional<PreparedGpuSceneDiagnostic> {
+            const std::uint64_t bytesPerPixel) -> std::optional<detail::GpuSceneLeafFailure> {
         if (width == 0 || height == 0) {
-            return PreparedGpuSceneDiagnostic{PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                                              "Prepared command has an empty window"};
+            return detail::GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                                               "Prepared command has an empty window"};
         }
         const std::array<std::uint64_t, 3> factors{width, height, bytesPerPixel};
         const auto bytes = detail::checkedProduct(factors);
         if (!bytes.has_value()) {
-            return PreparedGpuSceneDiagnostic{
+            return detail::GpuSceneLeafFailure{
                 PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
                 "Prepared command size overflows"};
         }
         if (chargedBytes > allowance || *bytes > allowance - chargedBytes) {
-            return PreparedGpuSceneDiagnostic{
+            return detail::GpuSceneLeafFailure{
                 PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
                 "Prepared scene exceeds the request pixel allowance"};
         }
@@ -211,7 +231,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     const auto chargeCoverage =
         [&](const std::shared_ptr<const std::vector<std::uint8_t>>& coverage,
             const std::uint64_t width,
-            const std::uint64_t height) -> std::optional<PreparedGpuSceneDiagnostic> {
+            const std::uint64_t height) -> std::optional<detail::GpuSceneLeafFailure> {
         if (coverage == nullptr || !countedCoverage.insert(coverage.get()).second) {
             return std::nullopt;
         }
@@ -303,6 +323,46 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             continue;
         }
 
+        if (const auto* image = std::get_if<CompiledImageSource>(&operation)) {
+            const auto remainingBudget = allowance > chargedBytes ? allowance - chargedBytes : 0;
+            detail::GpuSceneUploadLeafResult leaf;
+            const auto error = detail::buildImageUploadLeaf(
+                *image, request, *plan, resolved, mediaContext_, remainingBudget, hScale, vScale,
+                charge, cancellation, mediaStatistics, leaf);
+            if (error) {
+                return failed(error->code, error->message, mediaStatistics);
+            }
+            bounds[index] = leaf.bounds;
+            outputWindowOf[index] = leaf.outputWindow;
+            keyOf[index] = leaf.semanticKey;
+            GpuSceneUploadCommand command{.sourceOperation = operationIndex,
+                                          .image = std::move(leaf.image),
+                                          .descriptor = *leaf.descriptor,
+                                          .semanticKey = leaf.semanticKey};
+            commandForOperation[index] = emit(std::move(command));
+            continue;
+        }
+
+        if (const auto* video = std::get_if<CompiledVideoSource>(&operation)) {
+            const auto remainingBudget = allowance > chargedBytes ? allowance - chargedBytes : 0;
+            detail::GpuSceneUploadLeafResult leaf;
+            const auto error = detail::buildVideoUploadLeaf(
+                *video, request, *plan, resolved, mediaContext_, remainingBudget, hScale, vScale,
+                charge, cancellation, mediaStatistics, leaf);
+            if (error) {
+                return failed(error->code, error->message, mediaStatistics);
+            }
+            bounds[index] = leaf.bounds;
+            outputWindowOf[index] = leaf.outputWindow;
+            keyOf[index] = leaf.semanticKey;
+            GpuSceneUploadCommand command{.sourceOperation = operationIndex,
+                                          .image = std::move(leaf.image),
+                                          .descriptor = *leaf.descriptor,
+                                          .semanticKey = leaf.semanticKey};
+            commandForOperation[index] = emit(std::move(command));
+            continue;
+        }
+
         if (const auto* layer = std::get_if<CompiledLayerOutput>(&operation)) {
             // The CPU Layer Output stage publishes no image and no bounds outside its active range.
             if (request.time < layer->inPoint ||
@@ -323,14 +383,17 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 return failed(PreparedGpuSceneDiagnosticCode::UnsupportedBlend,
                               "Only Normal blending is prepared");
             }
-            // Only a direct solid input is in this subset. A layer fed by another layer (or a
-            // merge) would build a nested vector chain, which is deliberately NOT approximated
-            // here.
-            const auto* solidInput =
-                std::get_if<CompiledSolid>(&plan->operations()[layer->input.value()]);
-            if (solidInput == nullptr) {
+            // Only a direct solid or media source is in this subset. A layer fed by another layer
+            // (or a merge) would build a nested vector chain, which is deliberately NOT
+            // approximated here. A solid takes the vector-coverage path; media always takes the
+            // raster translation path, exactly as the CPU evaluator does.
+            const auto& inputOperation = plan->operations()[layer->input.value()];
+            const auto* solidInput = std::get_if<CompiledSolid>(&inputOperation);
+            const bool mediaInput = std::holds_alternative<CompiledImageSource>(inputOperation) ||
+                                    std::holds_alternative<CompiledVideoSource>(inputOperation);
+            if (solidInput == nullptr && !mediaInput) {
                 return failed(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
-                              "A layer fed by a non-solid input is not prepared");
+                              "A layer fed by a non-source input is not prepared");
             }
             const auto inputIndex = commandForOperation[layer->input.value()];
             if (inputIndex == kInvalidGpuSceneCommand || !outputWindowOf[layer->input.value()]) {
@@ -419,7 +482,11 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                                     matrix.x * hScale == std::floor(matrix.x * hScale) &&
                                     matrix.y * vScale == std::floor(matrix.y * vScale);
 
-            if (nativeGrid) {
+            // Media has no vector chain, so the CPU evaluator always resamples it with the raster
+            // (bilinear) path regardless of whether the device translation is on the integer grid;
+            // the translation command reproduces that path exactly. Solids keep the coverage path
+            // whenever the grid is fractional.
+            if (nativeGrid || mediaInput) {
                 const auto device = transformValue.translationOnlyDeviceTranslation();
                 if (!device.has_value()) {
                     return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
@@ -461,103 +528,38 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             }
 
             // Fractional device grid: the CPU composes this layer through its vector-coverage path.
-            const auto width = detail::resolveParameter(solidInput->width, *plan, resolved);
-            const auto height = detail::resolveParameter(solidInput->height, *plan, resolved);
-            const auto color = detail::resolveParameter(solidInput->color, *plan, resolved);
-            if (!width || !height || !color) {
-                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                              "Solid parameters are not evaluable");
-            }
-            const auto pixel = render::solidPixelFromStraightLinearRec709Scene(color->value);
-            if (!pixel) {
-                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                              "Solid colour is not evaluable");
-            }
-
-            detail::OperationKey geometryKey;
-            geometryKey.add(std::string{"gpu-coverage-solid-v1"});
-            geometryKey.add(matrix.a);
-            geometryKey.add(matrix.b);
-            geometryKey.add(matrix.c);
-            geometryKey.add(matrix.d);
-            geometryKey.add(matrix.x);
-            geometryKey.add(matrix.y);
-            geometryKey.add(hScale);
-            geometryKey.add(vScale);
-            geometryKey.add(width->value);
-            geometryKey.add(height->value);
-            addWindow(geometryKey, *layerWindow);
-            addPixelAspect(geometryKey, fullPixelAspect);
-            const std::string geometryKeyDigest = keyDigest(geometryKey);
-
-            const auto windowWidth = layerWindow->extent().width();
-            const auto windowHeight = layerWindow->extent().height();
-            std::shared_ptr<const std::vector<std::uint8_t>> coverage;
-            if (coverageCache_ != nullptr) {
-                coverage = coverageCache_->find(geometryKeyDigest);
-            }
-            if (coverage == nullptr) {
-                const std::array<render::Path, 1> paths{
-                    render::rectanglePath(width->value, height->value)};
-                const auto cancel = [&cancellation]() {
-                    return cancellation.isCancellationRequested();
-                };
-                const auto matrixPath =
-                    render::PathMatrix{matrix.a, matrix.b, matrix.c, matrix.d, matrix.x, matrix.y};
-                auto raster = render::PathRaster::transformed(paths, {}, matrixPath, hScale, vScale,
-                                                              cancel, std::nullopt);
-                if (!raster) {
-                    return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                                  "Coverage geometry is invalid");
-                }
-                auto bytes = std::make_shared<std::vector<std::uint8_t>>(
-                    static_cast<std::size_t>(windowWidth) * windowHeight, 0);
-                for (std::int64_t y = layerWindow->originY(); y < layerWindow->maxYExclusive();
-                     ++y) {
-                    const auto offset =
-                        static_cast<std::size_t>(y - layerWindow->originY()) * windowWidth;
-                    if (!raster.value()->coverageRow(
-                            layerWindow->originX(), y,
-                            std::span<std::uint8_t>(bytes->data() + offset, windowWidth),
-                            render::PathFillRule::NonZero, false, cancel)) {
-                        return failed(PreparedGpuSceneDiagnosticCode::Cancelled,
-                                      "Coverage rasterization was cancelled");
-                    }
-                }
-                coverage = std::move(bytes);
-                if (coverageCache_ != nullptr) {
-                    coverageCache_->store(geometryKeyDigest, coverage);
-                }
-            }
-
-            if (const auto error = charge(windowWidth, windowHeight, sizeof(render::Rgba32f))) {
+            GpuSceneCoverageSolidCommand coverageCommand{
+                .index = kInvalidGpuSceneCommand,
+                .sourceOperation = operationIndex,
+                .pixel = render::Rgba32f::transparent(),
+                .opacity = 1.0F,
+                .coverage = nullptr,
+                .outputWindow = *layerWindow,
+                .displayWindow = fullDisplayWindow,
+                .pixelAspect = fullPixelAspect,
+                .geometryKey = {},
+                .semanticKey = {},
+            };
+            const auto chargeResidentBytes = [&](const std::uint64_t width,
+                                                 const std::uint64_t height,
+                                                 const std::uint64_t bytesPerPixel)
+                -> std::optional<detail::GpuSceneLeafFailure> {
+                return charge(width, height, bytesPerPixel);
+            };
+            if (const auto error = detail::buildCoverageSolidLeaf(
+                    *solidInput, *plan, resolved, matrix, *layerWindow, fullDisplayWindow,
+                    fullPixelAspect, hScale, vScale, opacity->value, coverageCache_,
+                    chargeResidentBytes, cancellation, coverageCommand)) {
                 return failed(error->code, error->message);
             }
-            if (const auto error = chargeCoverage(coverage, windowWidth, windowHeight)) {
+            if (const auto error =
+                    chargeCoverage(coverageCommand.coverage, layerWindow->extent().width(),
+                                   layerWindow->extent().height())) {
                 return failed(error->code, error->message);
             }
-            detail::OperationKey pixelKey;
-            pixelKey.add(geometryKeyDigest);
-            pixelKey.add(std::bit_cast<std::uint32_t>(pixel.value()->red()));
-            pixelKey.add(std::bit_cast<std::uint32_t>(pixel.value()->green()));
-            pixelKey.add(std::bit_cast<std::uint32_t>(pixel.value()->blue()));
-            pixelKey.add(std::bit_cast<std::uint32_t>(pixel.value()->alpha()));
-            pixelKey.add(std::bit_cast<std::uint32_t>(static_cast<float>(opacity->value)));
-            // The actual CoveredSolidV1 SPIR-V digest the native render operation embeds, so a
-            // kernel change can never serve a stale resident image.
-            pixelKey.add(std::string{detail::kGpuCoveredSolidSpirvSha256});
-            keyOf[index] = keyDigest(pixelKey);
-
-            GpuSceneCoverageSolidCommand command{.sourceOperation = operationIndex,
-                                                 .pixel = *pixel.value(),
-                                                 .opacity = static_cast<float>(opacity->value),
-                                                 .coverage = coverage,
-                                                 .outputWindow = *layerWindow,
-                                                 .displayWindow = fullDisplayWindow,
-                                                 .pixelAspect = fullPixelAspect,
-                                                 .geometryKey = geometryKeyDigest,
-                                                 .semanticKey = keyOf[index]};
-            commandForOperation[index] = emit(std::move(command));
+            keyOf[index] = coverageCommand.semanticKey;
+            coverageCommand.sourceOperation = operationIndex;
+            commandForOperation[index] = emit(std::move(coverageCommand));
             continue;
         }
 
@@ -680,9 +682,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         .bypassLookNodes = request.bypassLookNodes,
     };
     const GpuSceneCommandIndex outputCommand = commandForOperation[request.output.value()];
-    auto scene = std::shared_ptr<const PreparedGpuScene>(
-        new PreparedGpuScene(std::move(commands), std::move(commandForOperation), outputCommand,
-                             std::move(identity), std::move(bounds), resolved.imageDescriptor));
+    auto scene = std::shared_ptr<const PreparedGpuScene>(new PreparedGpuScene(
+        std::move(commands), std::move(commandForOperation), outputCommand, std::move(identity),
+        std::move(bounds), resolved.imageDescriptor, std::move(mediaStatistics)));
     return {std::move(scene), PreparedGpuSceneDiagnostic{}};
 }
 

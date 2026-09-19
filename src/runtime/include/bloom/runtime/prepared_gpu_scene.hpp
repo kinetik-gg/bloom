@@ -33,11 +33,28 @@
 #include <bloom/runtime/evaluation.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
 
+namespace bloom::render {
+class Rgba32fImage;
+} // namespace bloom::render
+
+namespace bloom::media::cache {
+class MediaDiskCache;
+} // namespace bloom::media::cache
+
 namespace bloom::runtime {
+
+class OperationCache;
+class CpuCompositionEvaluator;
+class GpuPreparedUploadCache;
+
+namespace detail {
+class VideoSourceContext;
+} // namespace detail
 
 // Execution-order handle. Never an identity input.
 using GpuSceneCommandIndex = std::uint32_t;
@@ -51,6 +68,7 @@ enum class PreparedGpuSceneDiagnosticCode : std::uint8_t {
     UnsupportedTransform,
     UnsupportedBlend,
     UnsupportedRequest,
+    MediaUnavailable,
     PixelStorageBudgetExceeded,
     AllocationFailure,
     Cancelled,
@@ -58,9 +76,28 @@ enum class PreparedGpuSceneDiagnosticCode : std::uint8_t {
     InternalInvariant,
 };
 
+// Per-build CPU work counters. They record decode/conversion/key work only: there is deliberately
+// no GPU upload count because the native executor does not exist yet. A build owns exactly one of
+// these; it is never shared or mutated concurrently, so an overlapping background build cannot race
+// another. A failed build reports its partial counters on the diagnostic below, which is how the
+// unsupported-no-decode screen is proven to have touched no media.
+struct GpuSceneMediaStatistics final {
+    std::uint64_t imageSources = 0;
+    std::uint64_t videoSources = 0;
+    std::uint64_t imageConversions = 0;
+    std::uint64_t videoConversions = 0;
+    std::uint64_t uploadCacheHits = 0;
+    std::uint64_t uploadCacheMisses = 0;
+    std::uint64_t uploadKeyConstructions = 0;
+    friend bool operator==(const GpuSceneMediaStatistics&,
+                           const GpuSceneMediaStatistics&) = default;
+};
+
 struct PreparedGpuSceneDiagnostic final {
     PreparedGpuSceneDiagnosticCode code = PreparedGpuSceneDiagnosticCode::None;
     std::string message;
+    // CPU work performed before the failure. Zero for every screen that precedes media resolution.
+    GpuSceneMediaStatistics mediaStatistics;
 
     friend bool operator==(const PreparedGpuSceneDiagnostic&,
                            const PreparedGpuSceneDiagnostic&) = default;
@@ -135,9 +172,55 @@ struct GpuSceneCoverageSolidCommand final {
     std::string semanticKey;
 };
 
+// An ImageSource or VideoSource leaf: the exact converted, immutable lin_rec709_scene source image
+// the CPU evaluator would hand to the next stage, together with the descriptor it was published
+// with. Decoding, colour conversion and hashing happen entirely in the CPU task that builds the
+// scene; the command only carries the frozen result so a future native executor can upload it once
+// per semantic source. Preparation never uploads anything itself.
+struct GpuSceneUploadCommand final {
+    GpuSceneCommandIndex index = kInvalidGpuSceneCommand;
+    // Tracing only; NOT part of semanticKey.
+    OperationIndex sourceOperation = OperationIndex::fromRaw(0);
+    std::shared_ptr<const render::Rgba32fImage> image;
+    render::Rgba32fImageDescriptor descriptor;
+    // Source identity: validated asset/sequence/frame identity, interpretation and input/working
+    // colour space, config/processor revision, and the proxy/composition descriptor the converted
+    // image was produced for. It never contains a node ID, plan index, or frame time.
+    std::string semanticKey;
+};
+
 using GpuSceneCommand =
     std::variant<GpuSceneSolidCommand, GpuSceneTranslationCommand, GpuSceneCoverageSolidCommand,
-                 GpuSceneMergeCommand, GpuSceneCompositionOutputCommand>;
+                 GpuSceneUploadCommand, GpuSceneMergeCommand, GpuSceneCompositionOutputCommand>;
+
+// Shared, bounded CPU-side store of already converted and frozen source uploads. It keys ONLY on
+// the source semantic key -- validated source identity, interpretation/colour configuration, and
+// the proxy/composition descriptor -- so an unchanged source is never decoded or converted twice
+// while a changed source, frame, colour interpretation or proxy is a miss. The evaluator's own
+// media caches retain the DECODED native image, not the converted/premultiplied one, which is why
+// this narrow store exists. A null store means every build converts its own source.
+class GpuPreparedUploadCache;
+
+// The evaluator-owned media context the builder needs to resolve and convert
+// ImageSource/VideoSource leaves. Construction from an evaluator shares its operation cache, video
+// decode context, asset base directory and disk cache; the prepared-upload cache is owned here. A
+// default context has no caches and an empty base directory, so a scene containing media fails
+// closed rather than decoding with different semantics.
+//
+// Counters are deliberately NOT shared here: a build keeps its own local GpuSceneMediaStatistics
+// and publishes it on the result (or the failure diagnostic). That keeps overlapping preparation
+// jobs race-free without a shared mutable aggregate; a caller that wants a running total must sum
+// the per-result values itself or observe the evaluator's own real media caches.
+struct GpuSceneMediaContext final {
+    std::shared_ptr<OperationCache> operationCache;
+    std::shared_ptr<detail::VideoSourceContext> videoContext;
+    std::filesystem::path assetBaseDirectory;
+    std::shared_ptr<media::cache::MediaDiskCache> mediaDiskCache;
+    std::shared_ptr<GpuPreparedUploadCache> preparedUploadCache;
+
+    [[nodiscard]] static GpuSceneMediaContext
+    fromEvaluator(const CpuCompositionEvaluator& evaluator);
+};
 
 class PreparedGpuScene final {
   public:
@@ -166,6 +249,9 @@ class PreparedGpuScene final {
         return outputDescriptor_;
     }
     [[nodiscard]] const render::Rgba32fImageDescriptor& outputDescriptor() const&& = delete;
+    [[nodiscard]] const GpuSceneMediaStatistics& mediaStatistics() const noexcept {
+        return mediaStatistics_;
+    }
 
   private:
     friend class CpuGpuSceneBuilder;
@@ -174,10 +260,12 @@ class PreparedGpuScene final {
                      std::vector<GpuSceneCommandIndex> commandForOperation,
                      GpuSceneCommandIndex outputCommand, ProcessFrameIdentity processIdentity,
                      std::vector<EvaluatedOperationBounds> bounds,
-                     render::Rgba32fImageDescriptor outputDescriptor) noexcept
+                     render::Rgba32fImageDescriptor outputDescriptor,
+                     GpuSceneMediaStatistics mediaStatistics) noexcept
         : commands_(std::move(commands)), commandForOperation_(std::move(commandForOperation)),
           outputCommand_(outputCommand), processIdentity_(std::move(processIdentity)),
-          bounds_(std::move(bounds)), outputDescriptor_(outputDescriptor) {}
+          bounds_(std::move(bounds)), outputDescriptor_(outputDescriptor),
+          mediaStatistics_(mediaStatistics) {}
 
     std::vector<GpuSceneCommand> commands_;
     std::vector<GpuSceneCommandIndex> commandForOperation_;
@@ -185,6 +273,7 @@ class PreparedGpuScene final {
     ProcessFrameIdentity processIdentity_;
     std::vector<EvaluatedOperationBounds> bounds_;
     render::Rgba32fImageDescriptor outputDescriptor_;
+    GpuSceneMediaStatistics mediaStatistics_;
 };
 
 struct PreparedGpuSceneBuildResult final {
@@ -204,8 +293,14 @@ class CpuGpuSceneBuilder final {
   public:
     // An optional coverage cache avoids re-rasterizing an unchanged geometry subtree. Null means no
     // cache: every fractional solid rasterizes once per build.
-    explicit CpuGpuSceneBuilder(std::shared_ptr<GpuSceneCoverageCache> coverageCache = nullptr)
-        : coverageCache_(std::move(coverageCache)) {}
+    //
+    // The optional media context supplies the evaluator-owned operation/video/disk caches, the
+    // asset base directory and the prepared-upload cache used by ImageSource/VideoSource leaves.
+    // The default empty context keeps the non-media constructor callers working: a media scene then
+    // fails closed with MediaUnavailable instead of decoding with different semantics.
+    explicit CpuGpuSceneBuilder(std::shared_ptr<GpuSceneCoverageCache> coverageCache = nullptr,
+                                GpuSceneMediaContext mediaContext = {})
+        : coverageCache_(std::move(coverageCache)), mediaContext_(std::move(mediaContext)) {}
 
     [[nodiscard]] PreparedGpuSceneBuildResult
     build(const std::shared_ptr<const CompiledCompositionPlan>& plan,
@@ -217,6 +312,7 @@ class CpuGpuSceneBuilder final {
               const EvaluationRequest& request, const CancellationToken& cancellation) const;
 
     std::shared_ptr<GpuSceneCoverageCache> coverageCache_;
+    GpuSceneMediaContext mediaContext_;
 };
 
 } // namespace bloom::runtime

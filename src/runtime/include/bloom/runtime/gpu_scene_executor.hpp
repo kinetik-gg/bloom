@@ -3,15 +3,18 @@
 // Owner-thread, non-blocking executor for a PreparedGpuScene.
 //
 // The CPU scene builder produces an ordered, immutable command list
-// (`bloom/runtime/prepared_gpu_scene.hpp`) whose semantic keys already encode the resolved operands,
-// geometry and pinned shader digests. This executor turns the commands reachable from the terminal
-// CompositionOutput into one bounded sequence of already-typed native operations
-// (GpuSolid / GpuSolid::beginCovered / GpuComposite translation / GpuComposite source-over), one
-// outstanding native dispatch at a time, on the GpuDevice owner thread.
+// (`bloom/runtime/prepared_gpu_scene.hpp`) whose semantic keys already encode the resolved
+// operands, geometry and pinned shader digests. This executor turns the commands reachable from the
+// terminal CompositionOutput into one bounded sequence of already-typed native operations (GpuSolid
+// / GpuSolid::beginCovered / GpuImageUpload / GpuComposite translation / GpuComposite source-over),
+// one outstanding native dispatch at a time, on the GpuDevice owner thread.
 //
-// It owns NO thread, service, Qt surface, viewer, media decode or upload path. The caller (the
-// existing GPU preview service) drives it with non-blocking poll() calls. The content cache
-// (GpuSceneCache) is supplied by the caller and keeps its own retained-byte budget.
+// It owns NO thread, service, Qt surface, viewer, or media decode path. It DOES own one
+// GpuImageUpload pipeline: an ImageSource/VideoSource leaf command carries the already-decoded,
+// colour-converted host image the CPU builder produced, and the executor uploads it once per
+// builder semantic source key. The caller (the existing GPU preview service) drives it with
+// non-blocking poll() calls. The content cache (GpuSceneCache) is supplied by the caller and keeps
+// its own retained-byte budget.
 //
 // Design rules that this header is the contract for:
 //  * begin() validates the whole scene (references, cycles, command count, descriptors, coverage
@@ -22,11 +25,11 @@
 //    A composition output crops/pads with an exact zero-offset translation.
 //  * Inputs are never mutated; origins and pixel aspect are preserved.
 //  * The request byte budget bounds the actual LIVE unique pinned bytes (produced intermediates not
-//    yet released, cached inputs pinned for this request, and the output), with aliases charged once
-//    and the charge released at the last dependency. The content cache's own retained bytes are a
-//    separate ledger. A conservative per-step headroom comes from the live ledger; the native op
-//    then enforces its own actual VMA output/transient/ metadata. A long sequential graph whose peak
-//    live set fits is accepted even if its cumulative allocation exceeds the budget.
+//    yet released, cached inputs pinned for this request, and the output), with aliases charged
+//    once and the charge released at the last dependency. The content cache's own retained bytes
+//    are a separate ledger. A conservative per-step headroom comes from the live ledger; the native
+//    op then enforces its own actual VMA output/transient/ metadata. A long sequential graph whose
+//    peak live set fits is accepted even if its cumulative allocation exceeds the budget.
 //  * Cancellation, a per-native-job deadline, wrong-thread use and device failure all fail closed;
 //    no image is ever published after a cancel. A native failure that does not PROVE fence
 //    retirement poisons the request into owner-drain-required and refuses reuse until the owner
@@ -70,7 +73,8 @@ enum class GpuSceneExecutorDiagnosticCode : std::uint8_t {
     OverBudget,
     WrongThread,
     DeviceUnavailable,
-    // The device generation was lost while polling; this executor is terminal and must be destroyed.
+    // The device generation was lost while polling; this executor is terminal and must be
+    // destroyed.
     DeviceLost,
     // A previous job has not been retired/taken yet.
     Busy,
@@ -100,9 +104,10 @@ struct GpuSceneExecutorDiagnostic final {
                            const GpuSceneExecutorDiagnostic&) = default;
 };
 
-// Honest execution counters. `uploads` and `readbacks` stay zero for this slice: the executor never
-// uploads media and never reads back outside tests. Cache counters are the observed GpuSceneCache
-// results for this executor, not the cache's own lifetime counters.
+// Honest execution counters. `uploads` counts native GpuImageUpload begin() calls (one per cold
+// source; a warm source is a content-cache hit and runs no upload). `readbacks` stays zero: the
+// executor never reads back the output in the normal path. Cache counters are the observed
+// GpuSceneCache results for this executor, not the cache's own lifetime counters.
 struct GpuSceneExecutorCounters final {
     std::uint64_t sceneBegins = 0;
     std::uint64_t scenesCompleted = 0;
@@ -175,8 +180,8 @@ struct GpuSceneExecutorBudgets final {
 struct GpuSceneExecutorCreateResult;
 
 // Move-only, owner-thread executor. It binds to one GpuDevice ownership generation and one
-// GpuSceneCache; both must outlive it. The owned GpuSolid/GpuComposite pipelines are created once at
-// create().
+// GpuSceneCache; both must outlive it. The owned GpuSolid/GpuComposite pipelines are created once
+// at create().
 class GpuSceneExecutor final {
   public:
     GpuSceneExecutor(const GpuSceneExecutor&) = delete;
@@ -197,9 +202,10 @@ class GpuSceneExecutor final {
     [[nodiscard]] GpuSceneExecutorProgress progress() const noexcept;
 
     // True while a previous native failure/deadline left a submission whose fence retirement is NOT
-    // proven. The logical request has already failed and no image will be published; the caller must
-    // keep polling on the owner thread (non-blocking) until this is false, or destroy the executor,
-    // before reusing it or releasing GPU admission. begin() returns OwnerDrainRequired meanwhile.
+    // proven. The logical request has already failed and no image will be published; the caller
+    // must keep polling on the owner thread (non-blocking) until this is false, or destroy the
+    // executor, before reusing it or releasing GPU admission. begin() returns OwnerDrainRequired
+    // meanwhile.
     [[nodiscard]] bool ownerDrainRequired() const noexcept;
 
     // True once a device generation loss was observed. This executor is terminal and unusable; it
@@ -208,8 +214,8 @@ class GpuSceneExecutor final {
 
     // Validates + plans the scene and returns None when accepted. The scene is retained for the job
     // lifetime. A refusal (OverBudget / InvalidScene / InvalidReference / CycleDetected / ...)
-    // leaves the executor usable. The request byte budget bounds the actual LIVE unique pinned image
-    // bytes for the whole request (deduped aliases), not the sum of every intermediate ever
+    // leaves the executor usable. The request byte budget bounds the actual LIVE unique pinned
+    // image bytes for the whole request (deduped aliases), not the sum of every intermediate ever
     // allocated, so a long sequential graph whose peak live set fits is accepted even when its
     // cumulative allocation exceeds the budget.
     [[nodiscard]] GpuSceneExecutorDiagnostic begin(std::shared_ptr<const PreparedGpuScene> scene,

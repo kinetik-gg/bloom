@@ -66,6 +66,10 @@ const GpuImageUploadDiagnostic& GpuImageUpload::diagnostic() const noexcept {
 
 bool GpuImageUpload::isBoundTo(GpuDevice&) const noexcept { return false; }
 
+bool GpuImageUpload::hasUnretiredSubmission() const noexcept { return false; }
+
+std::uint64_t GpuImageUpload::lastJobAllocationBytes() const noexcept { return 0; }
+
 GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters&, std::uint64_t) {
     return unavailable("GPU image upload is not available in this build");
 }

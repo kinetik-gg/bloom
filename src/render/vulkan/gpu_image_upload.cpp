@@ -10,6 +10,10 @@
 #include <string>
 #include <utility>
 
+#ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+#include "gpu_scene_executor_fault_injection.hpp"
+#endif
+
 namespace bloom::render {
 namespace {
 
@@ -75,6 +79,14 @@ bool GpuImageUpload::isBoundTo(GpuDevice& device) const noexcept {
     }
     const auto deviceState = GpuRendererAccess::state(device);
     return deviceState != nullptr && deviceState == impl_->control;
+}
+
+bool GpuImageUpload::hasUnretiredSubmission() const noexcept {
+    return impl_ != nullptr && impl_->queueSubmitted;
+}
+
+std::uint64_t GpuImageUpload::lastJobAllocationBytes() const noexcept {
+    return impl_ != nullptr ? impl_->lastJobBytes : 0;
 }
 
 bool GpuImageUpload::Impl::createResources() {
@@ -275,6 +287,8 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
                       "actual VMA allocation sizes exceed the configured or requested byte budget");
             return impl.jobDiagnostic;
         }
+        // Peak retained by this job while the staging buffer is still referenced.
+        impl.lastJobBytes = actualImage + actualStaging;
 
         impl.residentImage = std::make_unique<GpuImage>(makeGpuImage(std::move(resident)));
 
@@ -411,6 +425,41 @@ GpuImageUploadPollResult GpuImageUpload::poll() {
     if (!impl.onOwnerThread()) {
         return GpuImageUploadPollResult::WrongThread;
     }
+#ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+    // TEST-ONLY fault hook, inert in every production build. It lets the executor retirement tests
+    // observe a real submitted upload as stalled, device-lost or unproven against the real fence.
+    if (const auto injected = gpu_scene_executor_fault::take();
+        injected != gpu_scene_executor_fault::PollFault::None) {
+        if (injected == gpu_scene_executor_fault::PollFault::StallPending) {
+            return GpuImageUploadPollResult::Pending;
+        }
+        if (injected == gpu_scene_executor_fault::PollFault::DeviceLost) {
+            // Bounded wait proves the REAL submission retired before pretending loss. Only
+            // VK_SUCCESS may clear the submission or release the staging buffer; a timeout or an
+            // unknown wait result must preserve them and fail safe, because the fence is not proven
+            // signalled and the queue may still reference the staging bytes.
+            const VkFence faultFence = static_cast<VkFence>(*impl.fence);
+            const VkResult faultWait = impl.control->device.getDispatcher()->vkWaitForFences(
+                static_cast<VkDevice>(*impl.control->device), 1, &faultFence, VK_TRUE,
+                1'000'000'000ULL);
+            if (faultWait == VK_SUCCESS) {
+                impl.deviceLost = true;
+                impl.queueSubmitted = false;
+                impl.staging.release();
+                impl.fail(GpuImageUploadDiagnosticCode::DeviceLost,
+                          "injected device loss after proven retirement");
+            } else {
+                impl.fail(GpuImageUploadDiagnosticCode::DeviceUnavailable,
+                          "injected device loss could not prove fence retirement; the submission "
+                          "is retained");
+            }
+            return GpuImageUploadPollResult::Failure;
+        }
+        impl.fail(GpuImageUploadDiagnosticCode::DeviceUnavailable,
+                  "injected unknown fence status; the submission is not retired");
+        return GpuImageUploadPollResult::Failure;
+    }
+#endif
     if (impl.jobState == GpuImageUploadJobState::Ready) {
         return GpuImageUploadPollResult::Ready;
     }

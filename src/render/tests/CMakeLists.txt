@@ -214,8 +214,8 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
 endif()
 
 # Test-only fault-instrumented copy of the executor's native GPU operation closure (VMA, device,
-# image, solid + covered, composite). It reuses the exact production private headers, sources, and
-# strict compile profile, and is compiled only under the executor fault macro with the proof-only
+# image, solid + covered, composite, upload). It reuses the exact production private headers, sources,
+# and strict compile profile, and is compiled only under the executor fault macro with the proof-only
 # gpu_scene_executor_fault_injection.hpp on the include path. Because these objects define the same
 # symbols first, the normal bloom_render native archive members are never pulled into the fault test,
 # exactly as the external proof closure did; the installed production API and the default rebuild are
@@ -229,6 +229,8 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid_covered.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite_resources.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_upload.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_upload_resources.cpp"
     )
     target_include_directories(bloom_render_gpu_scene_executor_fault PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/../include"

@@ -18,9 +18,11 @@ namespace {
 using gpu_scene_executor_detail::descriptorMatches;
 using gpu_scene_executor_detail::diagnosticFromComposite;
 using gpu_scene_executor_detail::diagnosticFromSolid;
+using gpu_scene_executor_detail::diagnosticFromUpload;
 using gpu_scene_executor_detail::makeDiagnostic;
 using gpu_scene_executor_detail::mapComposite;
 using gpu_scene_executor_detail::mapSolid;
+using gpu_scene_executor_detail::mapUpload;
 using gpu_scene_executor_detail::NativePoll;
 
 [[nodiscard]] bool solidDeviceLost(const render::GpuSolidDiagnostic& diagnostic) noexcept {
@@ -35,9 +37,15 @@ using gpu_scene_executor_detail::NativePoll;
 [[nodiscard]] bool compositeCancelled(const render::GpuCompositeDiagnostic& diagnostic) noexcept {
     return diagnostic.code == render::GpuCompositeDiagnosticCode::Cancelled;
 }
-[[nodiscard]] bool compositeStatusRejected(
-    const render::GpuCompositeDiagnostic& diagnostic) noexcept {
+[[nodiscard]] bool
+compositeStatusRejected(const render::GpuCompositeDiagnostic& diagnostic) noexcept {
     return diagnostic.code == render::GpuCompositeDiagnosticCode::StatusFlagRejected;
+}
+[[nodiscard]] bool uploadDeviceLost(const render::GpuImageUploadDiagnostic& diagnostic) noexcept {
+    return diagnostic.code == render::GpuImageUploadDiagnosticCode::DeviceLost;
+}
+[[nodiscard]] bool uploadCancelled(const render::GpuImageUploadDiagnostic& diagnostic) noexcept {
+    return diagnostic.code == render::GpuImageUploadDiagnosticCode::Cancelled;
 }
 
 } // namespace
@@ -68,7 +76,8 @@ void GpuSceneExecutor::Impl::clearJob() noexcept {
 bool GpuSceneExecutor::Impl::hasUnretiredNative() const noexcept {
     const bool solidUnretired = solid != nullptr && solid->hasUnretiredSubmission();
     const bool compositeUnretired = composite != nullptr && composite->hasUnretiredSubmission();
-    return solidUnretired || compositeUnretired;
+    const bool uploadUnretired = upload != nullptr && upload->hasUnretiredSubmission();
+    return solidUnretired || compositeUnretired || uploadUnretired;
 }
 
 std::uint64_t GpuSceneExecutor::Impl::remainingBudget() const noexcept {
@@ -163,7 +172,8 @@ void GpuSceneExecutor::Impl::fail(const GpuSceneExecutorDiagnosticCode code, std
 
 void GpuSceneExecutor::Impl::finishReady() noexcept {
     if (scene == nullptr || images.empty() || images[scene->outputCommand()] == nullptr) {
-        fail(GpuSceneExecutorDiagnosticCode::InternalInvariant, "the output image is missing", false);
+        fail(GpuSceneExecutorDiagnosticCode::InternalInvariant, "the output image is missing",
+             false);
         return;
     }
     state = GpuSceneExecutorJobState::Ready;
@@ -181,6 +191,8 @@ void GpuSceneExecutor::Impl::advanceDrain() noexcept {
         static_cast<void>(solid->poll());
     } else if (nativeKind == NativeKind::Composite && composite != nullptr) {
         static_cast<void>(composite->poll());
+    } else if (nativeKind == NativeKind::Upload && upload != nullptr) {
+        static_cast<void>(upload->poll());
     }
     if (!hasUnretiredNative()) {
         nativeInFlight = false;
@@ -191,8 +203,7 @@ void GpuSceneExecutor::Impl::advanceDrain() noexcept {
     }
 }
 
-GpuSceneExecutorDiagnostic
-GpuSceneExecutor::Impl::startStep(const GpuSceneExecutorStep& step) {
+GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecutorStep& step) {
     const std::uint64_t remaining = remainingBudget();
     liveBytesAtDispatch = liveBytes;
     const auto solidParameters = [&step]() -> std::optional<render::GpuSolidParameters> {
@@ -200,7 +211,7 @@ GpuSceneExecutor::Impl::startStep(const GpuSceneExecutorStep& step) {
             return std::nullopt;
         }
         return render::GpuSolidParameters{step.solidPixel, *step.solidDataWindow,
-                                           *step.solidDisplayWindow, step.solidPixelAspect};
+                                          *step.solidDisplayWindow, step.solidPixelAspect};
     };
     switch (step.kind) {
     case GpuSceneExecutorStepKind::Solid: {
@@ -228,6 +239,19 @@ GpuSceneExecutor::Impl::startStep(const GpuSceneExecutorStep& step) {
             return diagnosticFromSolid(native);
         }
         ++counters.coveredSolidDispatches;
+        break;
+    }
+    case GpuSceneExecutorStepKind::Upload: {
+        if (step.uploadSource == nullptr) {
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                  "an upload step has no converted source before dispatch");
+        }
+        const auto native =
+            upload->begin(render::GpuImageUploadParameters{step.uploadSource}, remaining);
+        if (native.code != render::GpuImageUploadDiagnosticCode::None) {
+            return diagnosticFromUpload(native);
+        }
+        ++counters.uploads;
         break;
     }
     case GpuSceneExecutorStepKind::Translation: {
@@ -275,10 +299,14 @@ GpuSceneExecutor::Impl::startStep(const GpuSceneExecutorStep& step) {
     }
     }
     ++counters.dispatches;
-    nativeKind = step.kind == GpuSceneExecutorStepKind::Solid ||
-                         step.kind == GpuSceneExecutorStepKind::CoveredSolid
-                     ? NativeKind::Solid
-                     : NativeKind::Composite;
+    if (step.kind == GpuSceneExecutorStepKind::Solid ||
+        step.kind == GpuSceneExecutorStepKind::CoveredSolid) {
+        nativeKind = NativeKind::Solid;
+    } else if (step.kind == GpuSceneExecutorStepKind::Upload) {
+        nativeKind = NativeKind::Upload;
+    } else {
+        nativeKind = NativeKind::Composite;
+    }
     nativeInFlight = true;
     cancelIssued = false;
     timeoutRequested = false;
@@ -286,13 +314,13 @@ GpuSceneExecutor::Impl::startStep(const GpuSceneExecutorStep& step) {
     return {};
 }
 
-GpuSceneExecutorDiagnostic
-GpuSceneExecutor::Impl::finishNative(render::GpuImage produced) {
+GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::finishNative(render::GpuImage produced) {
     // The op's own actual retained bytes (image plus its native metadata). The true during-op live
     // peak is the pins at dispatch plus this, so the request budget bounds the temporary peak too.
-    const std::uint64_t opPeakBytes = nativeKind == NativeKind::Solid
-                                          ? solid->lastJobAllocationBytes()
-                                          : composite->lastJobAllocationBytes();
+    const std::uint64_t opPeakBytes =
+        nativeKind == NativeKind::Solid    ? solid->lastJobAllocationBytes()
+        : nativeKind == NativeKind::Upload ? upload->lastJobAllocationBytes()
+                                           : composite->lastJobAllocationBytes();
     nativeKind = NativeKind::None;
     nativeInFlight = false;
     if (!produced.isValid()) {
@@ -313,8 +341,8 @@ GpuSceneExecutor::Impl::finishNative(render::GpuImage produced) {
                                   std::to_string(step.command));
     }
     const std::uint64_t actual = produced.allocationBytes();
-    if (actual > std::numeric_limits<std::uint64_t>::max() -
-                     counters.cumulativeProducedImageBytes) {
+    if (actual >
+        std::numeric_limits<std::uint64_t>::max() - counters.cumulativeProducedImageBytes) {
         return makeDiagnostic(GpuSceneExecutorDiagnosticCode::OverBudget,
                               "produced image byte accounting overflowed");
     }
@@ -353,6 +381,9 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::completeNative() {
     if (nativeKind == NativeKind::Solid) {
         return finishNative(solid->takeImage());
     }
+    if (nativeKind == NativeKind::Upload) {
+        return finishNative(upload->takeImage());
+    }
     return finishNative(composite->takeImage());
 }
 
@@ -360,6 +391,8 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
     NativePoll status = NativePoll::Failure;
     if (nativeKind == NativeKind::Solid) {
         status = mapSolid(solid->poll());
+    } else if (nativeKind == NativeKind::Upload) {
+        status = mapUpload(upload->poll());
     } else {
         status = mapComposite(composite->poll());
     }
@@ -375,6 +408,8 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
             ++counters.nativeJobTimeouts;
             if (nativeKind == NativeKind::Solid) {
                 solid->cancel();
+            } else if (nativeKind == NativeKind::Upload) {
+                upload->cancel();
             } else {
                 composite->cancel();
             }
@@ -388,8 +423,13 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
     }
     if (status == NativePoll::Ready) {
         if (cancelRequested) {
-            static_cast<void>(nativeKind == NativeKind::Solid ? solid->takeImage()
-                                                              : composite->takeImage());
+            if (nativeKind == NativeKind::Solid) {
+                static_cast<void>(solid->takeImage());
+            } else if (nativeKind == NativeKind::Upload) {
+                static_cast<void>(upload->takeImage());
+            } else {
+                static_cast<void>(composite->takeImage());
+            }
             nativeKind = NativeKind::None;
             nativeInFlight = false;
             ++counters.nativeJobCancellations;
@@ -413,8 +453,9 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
     // Failure: only a PROVEN fence retirement may release resources. A device loss is proven (the
     // native sets its submission not-outstanding); otherwise the native accessor decides.
     const bool deviceLostNow =
-        nativeKind == NativeKind::Solid ? solidDeviceLost(solid->diagnostic())
-                                        : compositeDeviceLost(composite->diagnostic());
+        nativeKind == NativeKind::Solid    ? solidDeviceLost(solid->diagnostic())
+        : nativeKind == NativeKind::Upload ? uploadDeviceLost(upload->diagnostic())
+                                           : compositeDeviceLost(composite->diagnostic());
     if (deviceLostNow) {
         deviceLost = true;
         nativeInFlight = false;
@@ -426,8 +467,9 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
     }
     if (!hasUnretiredNative()) {
         const bool wasCancelled =
-            nativeKind == NativeKind::Solid ? solidCancelled(solid->diagnostic())
-                                            : compositeCancelled(composite->diagnostic());
+            nativeKind == NativeKind::Solid    ? solidCancelled(solid->diagnostic())
+            : nativeKind == NativeKind::Upload ? uploadCancelled(upload->diagnostic())
+                                               : compositeCancelled(composite->diagnostic());
         const bool statusRejected = nativeKind == NativeKind::Composite
                                         ? compositeStatusRejected(composite->diagnostic())
                                         : false;
@@ -464,6 +506,7 @@ GpuSceneExecutor::Impl::~Impl() {
     // resources for as long as the submission may reference them. Only after the pipelines are gone
     // does ordinary member destruction release the executor's own metadata and pins. No separate
     // global registry, leak list, or allocation from this noexcept destructor is used.
+    upload.reset();
     solid.reset();
     composite.reset();
 }
