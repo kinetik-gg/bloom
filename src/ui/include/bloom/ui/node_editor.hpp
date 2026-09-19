@@ -7,6 +7,7 @@
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/preferences_aware.hpp>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -272,7 +273,7 @@ class NodeGraphicsView final : public QGraphicsView {
 // same terms EditorArea already gives ViewerEditor for the footer alone -- each interface is taken
 // at most once, the moment EditorArea creates this widget, and either can legitimately be absent
 // (a test that constructs a NodeGraphEditor directly, outside an EditorArea, never calls either).
-class NodeGraphEditor final : public QWidget, public EditorChromeProvider {
+class NodeGraphEditor final : public QWidget, public EditorChromeProvider, public PreferencesAware {
     Q_OBJECT
 
   public:
@@ -282,6 +283,10 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider {
 
     [[nodiscard]] NodeGraphicsScene* graphScene() const noexcept;
     [[nodiscard]] NodeGraphicsView* graphView() const noexcept;
+
+    // Applies the Settings window's committed node-graph preferences through the scene's own
+    // setters.
+    void applyApplicationPreferences(const ApplicationPreferences& preferences) override;
 
     // Test/diagnostic surface only: the exact menu a right-click builds, parented to this widget
     // and never shown. Lets a test enumerate what the canvas offers -- and, just as importantly,

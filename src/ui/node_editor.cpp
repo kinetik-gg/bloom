@@ -462,6 +462,18 @@ NodeGraphEditor::~NodeGraphEditor() { scene_->blockSignals(true); }
 
 NodeGraphicsScene* NodeGraphEditor::graphScene() const noexcept { return scene_; }
 
+void NodeGraphEditor::applyApplicationPreferences(const ApplicationPreferences& preferences) {
+    if (scene_ == nullptr) {
+        return;
+    }
+    // Reuse the same string mapping the constructor and the View menu use, so a preference applied
+    // here and one chosen from the menu can never disagree.
+    scene_->setLinkStyle(
+        linkStyleFromSettingsValue(QLatin1String(nodeLinkStyleValue(preferences.nodeLinkStyle))));
+    scene_->setGridSnapEnabled(preferences.nodeSnap);
+    scene_->setGridSize(preferences.nodeGridSize);
+}
+
 NodeGraphicsView* NodeGraphEditor::graphView() const noexcept { return view_; }
 
 void NodeGraphEditor::rebuild() {
