@@ -2017,6 +2017,56 @@ void ViewerEditor::setBackground(const ViewerBackground background) {
     update();
 }
 
+void ViewerEditor::applyApplicationPreferences(const ApplicationPreferences& preferences) {
+    // Drive the panel's own controls rather than reaching past them, so their existing
+    // persistence and the preview controller's resolution update stay the one code path. An index
+    // equal to the current one emits nothing, which is what makes this idempotent.
+    const auto resolutionIndex = [&preferences] {
+        switch (preferences.viewerResolution) {
+        case ViewerResolutionPreference::Full:
+            return 1;
+        case ViewerResolutionPreference::Half:
+            return 2;
+        case ViewerResolutionPreference::Quarter:
+            return 3;
+        case ViewerResolutionPreference::Auto:
+            break;
+        }
+        return 0;
+    }();
+    if (resolutionDropdown_ != nullptr && resolutionDropdown_->currentIndex() != resolutionIndex) {
+        resolutionDropdown_->setCurrentIndex(resolutionIndex);
+    }
+
+    const auto backgroundIndex = [&preferences] {
+        switch (preferences.viewerBackground) {
+        case ViewerBackgroundPreference::Checkerboard:
+            return 1;
+        case ViewerBackgroundPreference::Black:
+            return 2;
+        case ViewerBackgroundPreference::White:
+            return 3;
+        case ViewerBackgroundPreference::Solid:
+            break;
+        }
+        return 0;
+    }();
+    if (backgroundDropdown_ != nullptr && backgroundDropdown_->currentIndex() != backgroundIndex) {
+        backgroundDropdown_->setCurrentIndex(backgroundIndex);
+    }
+
+    const auto syncAction = [](QAction* action, const bool desired) {
+        if (action != nullptr && action->isChecked() != desired) {
+            action->setChecked(desired);
+        }
+    };
+    syncAction(safeAreasAction_, preferences.viewerSafeAreas);
+    syncAction(centreCrossAction_, preferences.viewerCentreCross);
+    syncAction(thirdsAction_, preferences.viewerThirds);
+    syncAction(rulersAction_, preferences.viewerRulers);
+    syncAction(pixelGridAction_, preferences.viewerPixelGrid);
+}
+
 ViewTransform ViewerEditor::viewTransformForTest() const noexcept { return transform_; }
 
 QString ViewerEditor::statusBarReadoutTextForTest() const {

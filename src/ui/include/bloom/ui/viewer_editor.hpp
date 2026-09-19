@@ -4,6 +4,7 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/playback_controller.hpp>
+#include <bloom/ui/preferences_aware.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/viewer_editor_probe.hpp>
 #include <bloom/ui/viewer_overlays.hpp>
@@ -167,11 +168,15 @@ struct ViewTransform final {
 // unaffected by this amendment.
 struct ViewerTextEdit;
 
-class ViewerEditor final : public QWidget, public EditorChromeProvider {
+class ViewerEditor final : public QWidget, public EditorChromeProvider, public PreferencesAware {
     Q_OBJECT
 
   public:
     [[nodiscard]] EditorChromeSpec& editorChrome() override { return chrome_; }
+    // Applies the Settings window's committed viewer preferences by driving this panel's own
+    // controls, so their existing persistence and preview-controller updates stay the single code
+    // path.
+    void applyApplicationPreferences(const ApplicationPreferences& preferences) override;
     // `ramPreview` is the RAM Preview command (task PERF1, item 3), shared with the Composition
     // menu so both entry points call one method. Null leaves the footer's RAM Preview button
     // present and disabled -- an affordance that is visibly unavailable rather than one that
