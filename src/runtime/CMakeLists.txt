@@ -105,6 +105,7 @@ target_sources(
         gpu_resident_preview_qualification_display.cpp
         gpu_resident_preview_qualification_internal.hpp
         gpu_preview_display_product.cpp
+        gpu_resident_preview_product.cpp
         gpu_resident_frame_lease.cpp
         gpu_presentation_coordinator.cpp
         gpu_presentation_coordinator_pump.cpp
@@ -140,6 +141,7 @@ target_sources(
             include/bloom/runtime/gpu_neutral_display_qualification.hpp
             include/bloom/runtime/gpu_resident_preview_qualification.hpp
             include/bloom/runtime/gpu_preview_display_product.hpp
+            include/bloom/runtime/gpu_resident_preview_product.hpp
             include/bloom/runtime/gpu_preview_display_service.hpp
             include/bloom/runtime/gpu_presentation_coordinator.hpp
             include/bloom/runtime/gpu_resident_frame_lease.hpp
@@ -151,6 +153,7 @@ target_sources(
             include/bloom/runtime/prepared_gpu_scene.hpp
             include/bloom/runtime/prepared_preview_frame.hpp
             include/bloom/runtime/preview_cpu_stage.hpp
+            include/bloom/runtime/preview_gpu_scene_stage.hpp
             include/bloom/runtime/qualified_display_preparation.hpp
             include/bloom/runtime/qualified_display_processor_provider.hpp
             include/bloom/runtime/reference_display_preparation.hpp

@@ -198,13 +198,22 @@ class PreviewFrameCache final : public QObject {
     void byteBudgetChanged();
 
   private:
+    struct Entry;
     void scheduleNotification();
+    // A resident entry is live exactly while its lease is; a CPU entry is always live. An
+    // invalidated resident lease is never a hit and is never listed by contains()/timesFor().
+    [[nodiscard]] static bool entryIsLive(const Entry& entry) noexcept;
     QTimer notificationTimer_;
     struct Entry final {
         PreviewFrameCacheKey key;
-        // Display-only: the packed buffer plus its identity, never the process image it was mapped
-        // from. A hit is wrapped back into a PreparedPreviewFrame envelope on the way out.
+        // Display-only CPU product: the packed buffer plus its identity, never the process image it
+        // was mapped from. A hit is wrapped back into a PreparedPreviewFrame envelope on the way
+        // out. Exactly one of `frame`/`resident` is set.
         std::shared_ptr<const runtime::PreviewDisplayOnlyFrame> frame;
+        // Fourth arm: the opaque owner-bound lease plus its identity, never a CPU pixel. Retained
+        // by pointer only -- no copy -- and restamped cheaply on the way out. A resident entry is
+        // live only while its lease is; an invalidated lease is never a hit and never listed.
+        std::shared_ptr<const runtime::PreviewResidentDisplayFrame> resident;
         std::size_t bytes = 0;
     };
 

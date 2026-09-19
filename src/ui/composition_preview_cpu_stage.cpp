@@ -1,5 +1,7 @@
 #include <bloom/ui/composition_preview_cpu_stage.hpp>
 
+#include "composition_preview_stage_shared.hpp"
+
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
@@ -21,81 +23,13 @@
 // The CPU half of the composition preview pipeline. The private helpers and the two halves below
 // are the single implementation; makeCompositionPreviewPipeline() in
 // composition_preview_pipeline.cpp is a thin composition of the factories exported here.
+//
+// The compile/validate/request-build/processor-selection half both this stage and the GPU-scene
+// stage share lives in composition_preview_stage_shared.cpp; the display-specific progress and
+// diagnostic mapping stays here, next to the fallback that uses it.
 namespace {
 
 using bloom::runtime::TaskDiagnostic;
-
-void appendSubjectId(std::string& detail, const char* label, const auto& id) {
-    if (!id.has_value()) {
-        return;
-    }
-    if (!detail.empty()) {
-        detail += ' ';
-    }
-    detail += label;
-    detail += '=';
-    detail += std::to_string(id->value());
-}
-
-std::string compileSubjectDetail(const bloom::runtime::CompileDiagnostic& diagnostic) {
-    std::string detail = diagnostic.detail;
-    appendSubjectId(detail, "node", diagnostic.subject.nodeId);
-    appendSubjectId(detail, "edge", diagnostic.subject.edgeId);
-    appendSubjectId(detail, "parameter", diagnostic.subject.parameterId);
-    appendSubjectId(detail, "layer", diagnostic.subject.layerId);
-    appendSubjectId(detail, "slot", diagnostic.subject.layerSlotId);
-    if (!diagnostic.subject.field.empty()) {
-        if (!detail.empty()) {
-            detail += ' ';
-        }
-        detail += "field=";
-        detail += diagnostic.subject.field;
-    }
-    return detail;
-}
-
-std::string evaluationSubjectDetail(const bloom::runtime::EvaluationDiagnostic& diagnostic) {
-    std::string detail = diagnostic.detail;
-    appendSubjectId(detail, "operation", diagnostic.subject.operation);
-    appendSubjectId(detail, "node", diagnostic.subject.nodeId);
-    appendSubjectId(detail, "layer", diagnostic.subject.layerId);
-    if (!diagnostic.subject.field.empty()) {
-        if (!detail.empty()) {
-            detail += ' ';
-        }
-        detail += "field=";
-        detail += diagnostic.subject.field;
-    }
-    return detail;
-}
-
-std::vector<TaskDiagnostic> taskDiagnostics(const bloom::runtime::SnapshotCompileResult& result) {
-    std::vector<TaskDiagnostic> diagnostics;
-    diagnostics.reserve(result.diagnostics.size());
-    for (const auto& diagnostic : result.diagnostics) {
-        diagnostics.push_back(
-            {.code = std::string(bloom::runtime::compileDiagnosticCodeId(diagnostic.code)),
-             .severity = diagnostic.severity,
-             .summary = diagnostic.summary,
-             .detail = compileSubjectDetail(diagnostic),
-             .suggestedAction = "Inspect the referenced composition objects and node schemas."});
-    }
-    return diagnostics;
-}
-
-std::vector<TaskDiagnostic> taskDiagnostics(const bloom::runtime::EvaluationResult& result) {
-    std::vector<TaskDiagnostic> diagnostics;
-    diagnostics.reserve(result.diagnostics().size());
-    for (const auto& diagnostic : result.diagnostics()) {
-        diagnostics.push_back(
-            {.code = std::string(bloom::runtime::evaluationDiagnosticCodeId(diagnostic.code)),
-             .severity = diagnostic.severity,
-             .summary = diagnostic.summary,
-             .detail = evaluationSubjectDetail(diagnostic),
-             .suggestedAction = "Review the affected operation and preview memory settings."});
-    }
-    return diagnostics;
-}
 
 std::vector<TaskDiagnostic>
 taskDiagnostics(const bloom::runtime::ReferenceDisplayPreparationResult& result) {
@@ -125,14 +59,6 @@ taskDiagnostics(const bloom::runtime::QualifiedDisplayPreparationResult& result)
              .suggestedAction = "Review the preview display intent and memory settings."});
     }
     return diagnostics;
-}
-
-TaskDiagnostic missingResultDiagnostic(std::string summary) {
-    return {.code = "bloom.preview.pipeline.invalid-result",
-            .severity = bloom::runtime::DiagnosticSeverity::Error,
-            .summary = std::move(summary),
-            .detail = {},
-            .suggestedAction = "Report this internal error and retry the preview."};
 }
 
 void reportEvaluationProgress(bloom::runtime::TaskContext& context,
@@ -178,81 +104,18 @@ void reportQualifiedDisplayProgress(bloom::runtime::TaskContext& context,
                             .total = progress.total});
 }
 
-[[nodiscard]] bool isNeutralIntent(const bloom::runtime::EvaluationColorIntent& intent) noexcept {
-    return intent.workingColorSpaceId == bloom::runtime::kLinearRec709SceneColorSpaceId &&
-           (intent.ocioConfigRevision == bloom::core::Sha256Digest{} ||
-            intent.ocioConfigRevision == bloom::color::kBloomNeutralV1ConfigDigest);
-}
-
-[[nodiscard]] std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle>
-buildSelectedDisplayProcessor(const bloom::runtime::EvaluationColorIntent& intent) noexcept {
-    try {
-        const auto expectedRevision = intent.ocioConfigRevision == bloom::core::Sha256Digest{}
-                                          ? bloom::color::kBloomNeutralV1ConfigDigest
-                                          : intent.ocioConfigRevision;
-        const auto locator = isNeutralIntent(intent) ? bloom::color::kBloomNeutralV1ConfigUri
-                                                     : bloom::color::kAcesCgV1ConfigUri;
-        auto resolution =
-            bloom::color::resolveOcioBuiltIn(bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
-                                             locator, expectedRevision, intent.workingColorSpaceId);
-        if (!resolution.ready()) {
-            return {};
-        }
-        auto resolved = std::move(resolution).takeResolved();
-        if (!resolved.has_value()) {
-            return {};
-        }
-        auto built = bloom::color::buildBloomNeutralCpuDisplayProcessor(*resolved);
-        auto handle = std::move(built).takeHandle();
-        if (!handle.has_value()) {
-            return {};
-        }
-        return std::make_shared<const bloom::color::PreparedCpuDisplayProcessorHandle>(
-            std::move(*handle));
-    } catch (...) {
-        return {};
-    }
-}
-
-[[nodiscard]] std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle>
-buildSelectedDisplayProcessor(const bloom::runtime::EvaluationColorIntent& intent,
-                              const std::string_view displayName,
-                              const std::string_view viewName) noexcept {
-    if (displayName.empty() || viewName.empty()) {
-        return buildSelectedDisplayProcessor(intent);
-    }
-    try {
-        const auto expectedRevision = intent.ocioConfigRevision == bloom::core::Sha256Digest{}
-                                          ? bloom::color::kBloomNeutralV1ConfigDigest
-                                          : intent.ocioConfigRevision;
-        const auto locator = isNeutralIntent(intent) ? bloom::color::kBloomNeutralV1ConfigUri
-                                                     : bloom::color::kAcesCgV1ConfigUri;
-        auto resolution =
-            bloom::color::resolveOcioBuiltIn(bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
-                                             locator, expectedRevision, intent.workingColorSpaceId);
-        if (!resolution.ready()) {
-            return {};
-        }
-        auto resolved = std::move(resolution).takeResolved();
-        if (!resolved.has_value()) {
-            return {};
-        }
-        auto built =
-            bloom::color::buildBloomNeutralCpuDisplayProcessor(*resolved, displayName, viewName);
-        auto handle = std::move(built).takeHandle();
-        if (!handle.has_value()) {
-            return {};
-        }
-        return std::make_shared<const bloom::color::PreparedCpuDisplayProcessorHandle>(
-            std::move(*handle));
-    } catch (...) {
-        return {};
-    }
-}
-
 } // namespace
 
 namespace bloom::ui {
+
+using detail::compilePreviewPlan;
+using detail::compileTaskDiagnostics;
+using detail::evaluationRequestFor;
+using detail::evaluationTaskDiagnostics;
+using detail::isNeutralIntent;
+using detail::missingResultDiagnostic;
+using detail::selectDisplayProcessor;
+using detail::validateStageRequest;
 
 runtime::PreviewCpuStageFunction makeCompositionPreviewCpuStage(
     const runtime::SnapshotCompiler& compiler, const runtime::CpuCompositionEvaluator& evaluator,
@@ -277,24 +140,19 @@ runtime::PreviewCpuStageFunction makeCompositionPreviewCpuStage(
             isNeutralIntent(desiredIdentity.colorIntent)) {
             return StageResult::failed(qualifiedSnapshot.failureDiagnostic);
         }
-        if (desiredIdentity.projectId != snapshot.project().id() ||
-            snapshot.project().findComposition(desiredIdentity.compositionId) == nullptr ||
-            desiredIdentity.sourceRevision != snapshot.revision() ||
-            desiredIdentity.requestGeneration == 0 || pixelStorageByteLimit == 0) {
-            return StageResult::failed(
-                missingResultDiagnostic("The preview pipeline received mismatched request data"));
+        if (const auto invalid =
+                validateStageRequest(snapshot, desiredIdentity, pixelStorageByteLimit);
+            invalid.has_value()) {
+            return StageResult::failed(*invalid);
         }
 
         context.reportProgress({.phase = "Rendering composition preview",
                                 .subphase = "Compiling the reachable composition graph",
                                 .completed = 0,
                                 .total = std::nullopt});
-        auto compileResult = planCache->compile(compiler,
-                                                {.snapshot = snapshot,
-                                                 .compositionId = desiredIdentity.compositionId,
-                                                 .parameterOverrides = interactionOverride},
-                                                context.cancellation());
-        auto diagnostics = taskDiagnostics(compileResult);
+        auto compileResult = compilePreviewPlan(compiler, planCache, snapshot, desiredIdentity,
+                                                interactionOverride, context.cancellation());
+        auto diagnostics = compileTaskDiagnostics(compileResult);
 
         switch (compileResult.status) {
         case runtime::SnapshotCompileStatus::Unsupported:
@@ -321,23 +179,15 @@ runtime::PreviewCpuStageFunction makeCompositionPreviewCpuStage(
             return StageResult::failed(std::move(diagnostics));
         }
 
-        const runtime::EvaluationRequest evaluationRequest{
-            .time = desiredIdentity.time,
-            .output = compileResult.plan->output(),
-            .resolution = desiredIdentity.resolution,
-            .quality = desiredIdentity.quality,
-            .colorIntent = desiredIdentity.colorIntent,
-            .pixelStorageByteLimit = pixelStorageByteLimit,
-            .roi = desiredIdentity.roi,
-            .bypassLookNodes = !desiredIdentity.showLook,
-        };
+        const auto evaluationRequest =
+            evaluationRequestFor(desiredIdentity, *compileResult.plan, pixelStorageByteLimit);
         auto evaluationResult = evaluator.evaluate(
             compileResult.plan, evaluationRequest, context.cancellation(),
             [&context](const runtime::EvaluationProgress& progress) {
                 reportEvaluationProgress(context, progress);
             },
             context.rowBandExecutor());
-        auto evaluationDiagnostics = taskDiagnostics(evaluationResult);
+        auto evaluationDiagnostics = evaluationTaskDiagnostics(evaluationResult);
         diagnostics.insert(diagnostics.end(),
                            std::make_move_iterator(evaluationDiagnostics.begin()),
                            std::make_move_iterator(evaluationDiagnostics.end()));
@@ -360,24 +210,16 @@ runtime::PreviewCpuStageFunction makeCompositionPreviewCpuStage(
             return StageResult::failed(std::move(diagnostics));
         }
 
-        std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> selectedHandle;
-        if (isNeutralIntent(desiredIdentity.colorIntent) && desiredIdentity.displayName.empty()) {
-            selectedHandle = qualifiedSnapshot.handle;
-        } else if (isNeutralIntent(desiredIdentity.colorIntent) &&
-                   qualifiedSnapshot.readiness ==
-                       runtime::QualifiedDisplayProcessorReadiness::Pending) {
-            selectedHandle = nullptr;
-        } else {
-            selectedHandle = buildSelectedDisplayProcessor(
-                desiredIdentity.colorIntent, desiredIdentity.displayName, desiredIdentity.viewName);
-        }
-        if (!isNeutralIntent(desiredIdentity.colorIntent) && selectedHandle == nullptr) {
+        auto selection =
+            selectDisplayProcessor(desiredIdentity.colorIntent, qualifiedSnapshot,
+                                   desiredIdentity.displayName, desiredIdentity.viewName);
+        if (selection.failed) {
             return StageResult::failed(missingResultDiagnostic(
                 "The selected OCIO working space could not prepare a qualified display transform"));
         }
 
         auto stage = std::make_shared<const runtime::PreviewCpuStage>(
-            desiredIdentity, evaluationResult.frame(), std::move(selectedHandle),
+            desiredIdentity, evaluationResult.frame(), std::move(selection.handle),
             pixelStorageByteLimit, std::move(diagnostics));
         return StageResult::succeeded(std::make_shared<const runtime::PreviewCpuStageOutcome>(
             runtime::PreviewCpuStageOutcome{.status = runtime::PreviewCpuStageStatus::Evaluated,

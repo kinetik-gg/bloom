@@ -336,6 +336,9 @@ target_sources(
         composition_plan_cache.cpp
         composition_preview_controller.cpp
         composition_preview_cpu_stage.cpp
+        composition_preview_stage_shared.cpp
+        composition_preview_stage_shared.hpp
+        composition_preview_gpu_scene_stage.cpp
         composition_preview_pipeline.cpp
         composition_preview_playback.cpp
         composition_preview_result.cpp
@@ -435,6 +438,7 @@ target_sources(
             include/bloom/ui/composition_preview_controller.hpp
             include/bloom/ui/audio_playback_session.hpp
             include/bloom/ui/composition_preview_cpu_stage.hpp
+            include/bloom/ui/composition_preview_gpu_scene_stage.hpp
             include/bloom/ui/composition_preview_pipeline.hpp
             include/bloom/ui/composition_session.hpp
             include/bloom/ui/editor_area.hpp

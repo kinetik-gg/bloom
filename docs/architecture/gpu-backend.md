@@ -370,9 +370,9 @@ budget is authoritative. `invalidateAll()` is the explicit lease-loss path, and 
 its registry reports invalid. Verified locally with the pinned loader on a real device: the SolidV1
 -> `GpuResidentDisplay` chain feeding the lease, the UI-thread last-token release with owner
 collection, the pinned-tombstone charge, foreign-device/registry and stale/wrong-thread refusals, and
-a 1000-round concurrent release-vs-collect stress. This is the lease layer only: no
-`PreparedPreviewFrame` arm, no service/product/cache/viewer selection, and no performance or
-ReferenceParity claim.
+a 1000-round concurrent release-vs-collect stress. The lease layer itself activates no
+service/product/cache/viewer selection and makes no performance or ReferenceParity claim; the
+resident display product arm below consumes it.
 
 The runtime now also owns a bounded, owner-thread resident-preview qualification
 (`bloom/runtime/gpu_resident_preview_qualification.hpp`, with Vulkan-free orchestration, operation,
@@ -395,6 +395,66 @@ work (cold/warm alternating, 256x144..4K); it is not a whole-graph cost or appli
 On cancellation, a bounded per-dispatch deadline, or any budget refusal, ownership stays with the
 caller, which must destroy or drain the failed pipeline on the owner thread before reuse. This is
 runtime qualification only: no service dispatch, product, viewer, or UI activation.
+
+The closed `PreparedPreviewFrame` display variant now has a fourth, GPU-resident arm:
+`PreviewResidentDisplayFrame`, built only by the validating owner-thread factory in
+`bloom/runtime/gpu_resident_preview_product.hpp` / `gpu_resident_preview_product.cpp`. Its only
+pixel storage is the opaque, owner-bound `GpuResidentFrameLease`; it retains no CPU pixel vector, no
+native object, no Vulkan handle, and performs no readback. Alongside the lease it retains the genuine
+immutable `GpuResidentPreviewQualificationReport` from the real `qualifyResidentPreview()` run, the
+request and process identity, the evaluated bounds, and an explicit process-origin provenance
+(`EvaluationProvider::GpuResident` for a GPU-evaluated scene, `CpuReference` for a CPU-evaluated one,
+never inferred from the other). `retainedByteCost()` is the actual native allocation the lease
+charges plus geometry/metadata, and `createResident()` re-stamps a retained frame by sharing the same
+lease with no pixel or allocation copy. The factory validates the report's `eligible()`/`eligibleFor()`
+against the exact device ownership epoch and processor, the registry binding and owner thread, the
+canonical processor identity, the request/process identity and plan, the trusted expected descriptor
+the request carries (the actual immutable prepared-scene output descriptor on the GPU path or the
+actual CPU process image descriptor), the native display dimensions/data/display window/pixel aspect
+against that trusted descriptor, the measured eligible interval, and the actual native allocation plus
+geometry inside the request budget before publishing the lease; the registry publish is the proof the
+token belongs to it. A reduced resolution (explicit proxy, Half, or Quarter) is validated against the
+actual reduced descriptor and is never silently forced back to the full composition format, geometry
+is never inferred from the returned image, and a full-format-but-wrong-proxy or one-pixel mismatch is
+rejected. On the UI side, `PreviewFrameCache` retains the arm by shared pointer, charges
+`retainedByteCost()`, re-stamps cheaply, and refuses an invalidated lease in
+`take`/`contains`/`timesFor`/`insert`; `composition_preview_result.cpp` accepts a resident frame as a
+Ready product through `isDisplayValid()`, branching on the honest provenance rather than the
+resident-only accessor. Verified locally with the pinned loader on a real device: the real
+qualification plus a real Solid -> `GpuResidentDisplay` -> owner-registry lease, accepted
+full/proxy/half/quarter/PAR/ROI geometry inside the measured interval, and the rejection gates
+(foreign registry/device/report, full-format descriptor under a proxy request, one-pixel mismatch,
+wrong plan/identity, over-budget, null descriptor, unqualified processor, invalidated lease) with no
+skipped gates; the cache's retained cost, shared-lease re-stamp, and invalidated-lease
+miss/hide/refusal; and the existing preview-frame-cache, lease, and CPU-stage regressions. This arm
+is consumable but deliberately not activated: no service, controller, viewer, or application route
+paints it, no whole-image readback happens on the product path, and no final-render or
+`ReferenceParity` claim is made.
+
+The composition preview's CPU preparation half now also has a GPU-scene analogue.
+`bloom::runtime::PreviewGpuSceneStage` / `PreviewGpuSceneStageFunction`
+(`src/runtime/include/bloom/runtime/preview_gpu_scene_stage.hpp`) take the same immutable snapshot,
+request identity, byte allowance, parameter overrides, and task context as `PreviewCpuStageFunction`,
+but run the stateless `CpuGpuSceneBuilder::build()` to produce an immutable `PreparedGpuScene` of
+resolved operands and geometry and select the CPU display processor, instead of evaluating a full
+CPU `ProcessFrame`; it never allocates a full CPU scene image for a supported solid graph and never
+fabricates an empty frame. The UI factory lives in
+`bloom/ui/composition_preview_gpu_scene_stage.hpp` / `composition_preview_gpu_scene_stage.cpp`
+because the compiled-plan cache is UI-owned, and the compile/validate/request-build/processor-selection
+half is shared with the CPU stage through the private `composition_preview_stage_shared.*` so the two
+cannot drift (same `CompiledPlanCache` reuse and one-gesture override rule, same `EvaluationRequest`,
+same Pending window, same ACES/named-view/view-adjust selection). A semantic compile rejection is the
+distinct `Unsupported`, while a composition that compiles but is outside the prepared GPU subset
+(including a future media-unavailable code) is `UnsupportedGpuSubset`, a succeeded outcome the caller
+turns into the full original CPU path; cancellation and genuine builder failures stay terminal
+`TaskResult` states. The builder is constructed by the caller and injected, so a media-capable builder
+supplies its decoder/context through its own constructor and no alternative decoder is invented.
+Verified through the real compiler, builder, provider, and scheduler against a genuine
+`CpuCompositionEvaluator` oracle: prepared identity, per-operation bounds and layer IDs, and
+bit-identical output pixels via CPU replay of the prepared commands, plus text/rotation subset
+fallback, the Pending reference window, a failed provider failing closed, the override plan-cache
+rule, and pre-cancellation; the existing CPU-stage test object also re-links against the shared
+helper and passes unchanged. This seam activates no service, device, product, viewer, or controller.
 
 The runtime now also owns a bounded owner-thread presentation coordinator and the runtime already owns
 the lease and native present path, but nothing in the running application selects them yet.

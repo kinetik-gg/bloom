@@ -79,6 +79,9 @@ add_executable(bloom_composition_preview_controller_test
 add_executable(bloom_composition_preview_cpu_stage_test
     composition_preview_cpu_stage_tests.cpp
 )
+add_executable(bloom_composition_preview_gpu_scene_stage_test
+    composition_preview_gpu_scene_stage_tests.cpp
+)
 add_executable(bloom_gpu_preview_submitter_test
     gpu_preview_submitter_tests.cpp
 )
@@ -201,6 +204,9 @@ target_link_libraries(bloom_composition_projection_test PRIVATE bloom_ui)
 target_link_libraries(bloom_properties_editor_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_preview_controller_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_preview_cpu_stage_test PRIVATE bloom_ui)
+target_link_libraries(bloom_composition_preview_gpu_scene_stage_test PRIVATE bloom_ui)
+target_include_directories(bloom_composition_preview_gpu_scene_stage_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/tests")
 target_link_libraries(bloom_gpu_preview_submitter_test PRIVATE bloom_ui)
 target_link_libraries(bloom_gpu_preview_app_test PRIVATE bloom_ui bloom_runtime_evaluator)
 target_link_libraries(bloom_ui_gpu_presentation_target_test PRIVATE bloom_ui bloom_render)
@@ -315,6 +321,10 @@ bloom_enable_warnings(bloom_composition_projection_test)
 bloom_enable_warnings(bloom_properties_editor_test)
 bloom_enable_warnings(bloom_composition_preview_controller_test)
 bloom_enable_warnings(bloom_composition_preview_cpu_stage_test)
+bloom_enable_warnings(bloom_composition_preview_gpu_scene_stage_test)
+# The frozen replay oracle header defines anonymous-namespace helpers this TU does not all use; the
+# other consumer uses them all, so only this translation unit quiets unused-function.
+target_compile_options(bloom_composition_preview_gpu_scene_stage_test PRIVATE -Wno-unused-function)
 bloom_enable_warnings(bloom_gpu_preview_submitter_test)
 bloom_enable_warnings(bloom_gpu_preview_app_test)
 bloom_enable_warnings(bloom_ui_gpu_presentation_target_test)
@@ -557,6 +567,17 @@ bloom_add_test(
     COMMAND bloom_composition_preview_cpu_stage_test
     LABELS ui integration
     TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+# GPU-scene preview preparation stage: the CPU-only analogue of the CPU stage. It runs through the
+# real SnapshotCompiler, CpuGpuSceneBuilder, QualifiedDisplayProcessorProvider and TaskScheduler and
+# checks the prepared scene against a genuine CpuCompositionEvaluator oracle; no device or loader.
+bloom_add_test(
+    NAME bloom.ui.composition_preview_gpu_scene_stage
+    COMMAND bloom_composition_preview_gpu_scene_stage_test
+    LABELS ui integration
+    TIMEOUT 120
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
@@ -1118,3 +1139,18 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         ENVIRONMENT "QT_QPA_PLATFORM=wayland"
     )
 endif()
+
+# GPU-resident preview product: the RAM preview cache's fourth-arm retention and invalidation
+# contract. The fixture produces a genuine Solid -> resident-display -> owner-registry lease with
+# the real product factory on a device; without one the test skips cleanly. The supervisor supplies
+# --loader/--require-device for a native run.
+add_executable(bloom_ui_preview_frame_cache_resident_test preview_frame_cache_resident_tests.cpp)
+target_link_libraries(bloom_ui_preview_frame_cache_resident_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_preview_frame_cache_resident_test)
+bloom_add_test(
+    NAME bloom.ui.preview-frame-cache-resident
+    COMMAND bloom_ui_preview_frame_cache_resident_test
+    LABELS ui unit gpu cache render
+    TIMEOUT 300
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)

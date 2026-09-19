@@ -99,7 +99,15 @@ void PreviewFrameCache::scheduleNotification() {
 }
 
 std::size_t PreviewFrameCache::frameByteCost(const runtime::PreparedPreviewFrame& frame) noexcept {
-    // What RETAINING this frame costs, which is not what holding it costs right now: insertion
+    // The resident arm is identified by its honest provenance, not by residentFrame(): that
+    // accessor is a precondition-guarded resident-only view, and calling it on a CPU frame would
+    // read a variant member that is not active. The resident retention cost is the ACTUAL native
+    // allocation the lease charges plus its retained geometry/metadata -- never a host copy.
+    if (frame.provenance().provider == runtime::PreviewDisplayProvider::GpuResident) {
+        const auto resident = frame.residentFrame();
+        return resident != nullptr ? resident->retainedByteCost() : 0;
+    }
+    // What RETAINING a CPU frame costs, which is not what holding it costs right now: insertion
     // keeps packed display pixels and evaluated geometry while dropping the Float32 process image.
     const auto view = frame.displayBufferView();
     const auto geometryBytes = frame.evaluatedBounds().size_bytes();
@@ -114,11 +122,25 @@ PreviewFrameCache::take(const runtime::PreviewRequestIdentity& identity) {
     const auto key = PreviewFrameCacheKey::forIdentity(identity);
     const auto position =
         std::ranges::find_if(entries_, [&key](const Entry& entry) { return entry.key == key; });
-    if (position == entries_.end()) {
+    if (position == entries_.end() || !entryIsLive(*position)) {
+        // A dead resident entry (invalidated lease) is a miss, never a hit: it can never be served.
+        if (position != entries_.end()) {
+            removeAt(static_cast<std::size_t>(position - entries_.begin()));
+        }
         ++statistics_.misses;
         return nullptr;
     }
-    auto frame = restamp(position->frame, identity.requestGeneration);
+    PreparedPreviewFrameHandle frame;
+    if (position->resident != nullptr) {
+        // Resident re-stamp: share the same opaque lease, copy no pixels and no native allocation.
+        auto rebuilt = runtime::PreparedPreviewFrame::createResident(identity.requestGeneration,
+                                                                     position->resident);
+        if (rebuilt.has_value()) {
+            frame = std::make_shared<const runtime::PreparedPreviewFrame>(std::move(*rebuilt));
+        }
+    } else {
+        frame = restamp(position->frame, identity.requestGeneration);
+    }
     if (frame == nullptr || frame->desiredIdentity() != identity) {
         // The key matched but the rebuilt envelope does not answer this request exactly. Nothing
         // here can be served honestly, so the entry is dropped rather than published under an
@@ -133,7 +155,20 @@ PreviewFrameCache::take(const runtime::PreviewRequestIdentity& identity) {
 }
 
 void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
-    if (frame == nullptr || !frame->displayBufferView().has_value()) {
+    if (frame == nullptr) {
+        return;
+    }
+    // Identify the resident arm by its honest provenance; residentFrame() is resident-only and
+    // would read an inactive variant member on a CPU frame.
+    const bool resident =
+        frame->provenance().provider == runtime::PreviewDisplayProvider::GpuResident;
+    if (resident) {
+        // Only a live lease is retainable; an invalidated one must never enter the cache.
+        if (!frame->isDisplayValid()) {
+            ++statistics_.rejections;
+            return;
+        }
+    } else if (!frame->displayBufferView().has_value()) {
         return;
     }
     const auto key = PreviewFrameCacheKey::forIdentity(frame->desiredIdentity());
@@ -182,13 +217,24 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
     // the caller is about to publish is unaffected, so a failed insert is counted and dropped
     // rather than propagated into the render path.
     try {
-        auto retained = retainable(*frame);
-        if (retained == nullptr) {
-            ++statistics_.rejections;
-            return;
+        if (resident) {
+            // The resident arm is retained by shared pointer only: no pixel copy, no native
+            // allocation, and no process image to strip.
+            entries_.insert(entries_.begin(), Entry{.key = key,
+                                                    .frame = nullptr,
+                                                    .resident = frame->residentFrame(),
+                                                    .bytes = bytes});
+        } else {
+            auto retained = retainable(*frame);
+            if (retained == nullptr) {
+                ++statistics_.rejections;
+                return;
+            }
+            entries_.insert(entries_.begin(), Entry{.key = key,
+                                                    .frame = std::move(retained),
+                                                    .resident = nullptr,
+                                                    .bytes = bytes});
         }
-        entries_.insert(entries_.begin(),
-                        Entry{.key = key, .frame = std::move(retained), .bytes = bytes});
     } catch (const std::bad_alloc&) {
         ++statistics_.allocationFailures;
         return;
@@ -210,8 +256,13 @@ void PreviewFrameCache::trimToBytes(const std::size_t bytes) {
     }
 }
 
+bool PreviewFrameCache::entryIsLive(const Entry& entry) noexcept {
+    return entry.resident == nullptr || entry.resident->isDisplayValid();
+}
+
 bool PreviewFrameCache::contains(const PreviewFrameCacheKey& key) const {
-    return std::ranges::any_of(entries_, [&key](const Entry& entry) { return entry.key == key; });
+    return std::ranges::any_of(
+        entries_, [&key](const Entry& entry) { return entry.key == key && entryIsLive(entry); });
 }
 
 std::vector<core::RationalTime>
@@ -223,6 +274,9 @@ PreviewFrameCache::timesFor(const PreviewFrameCacheKey& probe) const {
     std::vector<core::RationalTime> times;
     auto key = probe;
     for (const auto& entry : entries_) {
+        if (!entryIsLive(entry)) {
+            continue;
+        }
         key.time = entry.key.time;
         if (hasProvenancePolicy())
             key.sourceRevision = entry.key.sourceRevision;

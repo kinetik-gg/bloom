@@ -1,6 +1,9 @@
 #include <bloom/runtime/prepared_preview_frame.hpp>
 
+#include <bloom/runtime/gpu_resident_preview_qualification.hpp>
+
 #include <exception>
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -99,7 +102,7 @@ PreviewDisplayOnlyFrame::create(const PreparedPreviewFrame& source,
     if (!descriptor) {
         return std::nullopt;
     }
-    // The two display products are both packed straight RGBA8 over the same window, so one storage
+    // The CPU display products are both packed straight RGBA8 over the same window, so one storage
     // type holds either -- but that is an invariant worth checking rather than assuming, because a
     // mismatch here would mean copying pixels into a shape that does not describe them.
     if (descriptor.value()->layout() != view->layout) {
@@ -142,6 +145,61 @@ std::size_t PreviewDisplayOnlyFrame::displayByteCost() const noexcept {
     return buffer_.pixels().size_bytes() + std::span(bounds_).size_bytes();
 }
 
+// --- Resident arm ------------------------------------------------------------------------------
+
+PreviewResidentDisplayFrame::PreviewResidentDisplayFrame(
+    PreviewRequestIdentity desiredIdentity, ProcessFrameIdentity processIdentity,
+    GpuResidentFrameLease lease,
+    std::shared_ptr<const GpuResidentPreviewQualificationReport> qualification,
+    std::vector<EvaluatedOperationBounds> bounds) noexcept
+    : desiredIdentity_(std::move(desiredIdentity)), processIdentity_(std::move(processIdentity)),
+      lease_(std::move(lease)), qualification_(std::move(qualification)),
+      bounds_(std::move(bounds)) {}
+
+std::size_t PreviewResidentDisplayFrame::retainedByteCost() const noexcept {
+    // The ACTUAL native allocation the lease charges is the dominant and honest term. The retained
+    // metadata is the evaluated geometry plus the identity strings and the small fixed frame/report
+    // control state; it is included rather than ignored so the cache budget is not understated.
+    constexpr std::size_t kFixedMetadataBytes =
+        sizeof(PreviewResidentDisplayFrame) + 2 * sizeof(std::shared_ptr<const void>);
+    const std::size_t identityBytes =
+        desiredIdentity_.displayName.size() + desiredIdentity_.viewName.size();
+    const std::size_t boundsBytes = std::span(bounds_).size_bytes();
+    const std::size_t allocationBytes = static_cast<std::size_t>(lease_.allocationBytes());
+
+    std::size_t total = allocationBytes;
+    const auto add = [&total](const std::size_t amount) {
+        if (amount > std::numeric_limits<std::size_t>::max() - total) {
+            total = std::numeric_limits<std::size_t>::max();
+            return;
+        }
+        total += amount;
+    };
+    add(boundsBytes);
+    add(identityBytes);
+    add(kFixedMetadataBytes);
+    return total;
+}
+
+std::optional<PreparedPreviewFrame> PreparedPreviewFrame::createResident(
+    const std::uint64_t requestGeneration,
+    std::shared_ptr<const PreviewResidentDisplayFrame> displayFrame) noexcept {
+    if (requestGeneration == 0 || displayFrame == nullptr || !displayFrame->isDisplayValid()) {
+        // An invalidated lease must never be restamped into a servable envelope.
+        return std::nullopt;
+    }
+    // Re-stamping copies the identity (including its display/view name strings) and the envelope's
+    // own state; a bad_alloc there must be a clean rejection, not a terminate at this noexcept
+    // boundary. No pixel is touched and the lease is shared, not copied.
+    try {
+        PreviewRequestIdentity desiredIdentity = displayFrame->desiredIdentity();
+        desiredIdentity.requestGeneration = requestGeneration;
+        return PreparedPreviewFrame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
 std::optional<PreparedPreviewFrame> PreparedPreviewFrame::createDisplayOnly(
     const std::uint64_t requestGeneration,
     std::shared_ptr<const PreviewDisplayOnlyFrame> displayFrame) noexcept {
@@ -166,7 +224,7 @@ PreparedPreviewFrame::PreparedPreviewFrame(PreviewRequestIdentity desiredIdentit
     : desiredIdentity_(std::move(desiredIdentity)), displayFrame_(std::move(displayFrame)) {}
 
 // std::visit/std::get both have a (never-actually-reachable-here, since displayFrame_ is only ever
-// constructed by create()/createQualified() and never reassigned) valueless_by_exception exception
+// constructed by the create*() factories and never reassigned) valueless_by_exception exception
 // path that clang-tidy's bugprone-exception-escape correctly flags inside a noexcept function.
 // Every accessor below instead uses the non-throwing std::get_if, matching this file's existing
 // precondition style (a caller violating a documented precondition, such as calling a
@@ -175,10 +233,14 @@ PreparedPreviewFrame::PreparedPreviewFrame(PreviewRequestIdentity desiredIdentit
 using ReferencePtr = std::shared_ptr<const ReferenceDisplayFrame>;
 using QualifiedPtr = std::shared_ptr<const QualifiedDisplayFrame>;
 using DisplayOnlyPtr = std::shared_ptr<const PreviewDisplayOnlyFrame>;
+using ResidentPtr = std::shared_ptr<const PreviewResidentDisplayFrame>;
 
 bool PreparedPreviewFrame::isOcioQualified() const noexcept {
     if (const auto* displayOnly = std::get_if<DisplayOnlyPtr>(&displayFrame_)) {
         return (*displayOnly)->isOcioQualified();
+    }
+    if (const auto* resident = std::get_if<ResidentPtr>(&displayFrame_)) {
+        return (*resident)->isOcioQualified();
     }
     return std::holds_alternative<QualifiedPtr>(displayFrame_);
 }
@@ -190,17 +252,27 @@ PreviewDisplayProvenance PreparedPreviewFrame::provenance() const noexcept {
     if (const auto* displayOnly = std::get_if<DisplayOnlyPtr>(&displayFrame_)) {
         return (*displayOnly)->provenance();
     }
+    if (std::holds_alternative<ResidentPtr>(displayFrame_)) {
+        // The resident arm has no GpuNeutral packed-readback report; its own immutable resident
+        // report lives on residentFrame(). Reporting GpuResident here is the honest label and never
+        // claims the CPU or the packed-readback path.
+        return PreviewDisplayProvenance{.provider = PreviewDisplayProvider::GpuResident,
+                                        .gpuQualification = nullptr};
+    }
     return PreviewDisplayProvenance{.provider = PreviewDisplayProvider::CpuOcio,
                                     .gpuQualification = nullptr};
 }
 
 bool PreparedPreviewFrame::hasProcessFrame() const noexcept {
-    return !std::holds_alternative<DisplayOnlyPtr>(displayFrame_);
+    return !std::holds_alternative<DisplayOnlyPtr>(displayFrame_) &&
+           !std::holds_alternative<ResidentPtr>(displayFrame_);
 }
 
 std::span<const EvaluatedOperationBounds> PreparedPreviewFrame::evaluatedBounds() const noexcept {
     if (const auto* displayOnly = std::get_if<DisplayOnlyPtr>(&displayFrame_))
         return (*displayOnly)->evaluatedBounds();
+    if (const auto* resident = std::get_if<ResidentPtr>(&displayFrame_))
+        return (*resident)->evaluatedBounds();
     return processFrame()->evaluatedBounds();
 }
 
@@ -211,6 +283,9 @@ const ProcessFrameIdentity& PreparedPreviewFrame::processIdentity() const& noexc
     if (const auto* displayOnly = std::get_if<DisplayOnlyPtr>(&displayFrame_)) {
         return (*displayOnly)->processIdentity();
     }
+    if (const auto* resident = std::get_if<ResidentPtr>(&displayFrame_)) {
+        return (*resident)->processIdentity();
+    }
     return std::get_if<QualifiedPtr>(&displayFrame_)->get()->identity().processFrame;
 }
 
@@ -218,10 +293,11 @@ const std::shared_ptr<const ProcessFrame>& PreparedPreviewFrame::processFrame() 
     if (const auto* reference = std::get_if<ReferencePtr>(&displayFrame_)) {
         return (*reference)->processFrame();
     }
-    if (std::holds_alternative<DisplayOnlyPtr>(displayFrame_)) {
-        // A display-only frame answers this honestly rather than refusing: it kept no process
-        // frame, and hasProcessFrame() says so in advance. The handle is a function-local static so
-        // a reference to it stays valid, and it is const so nothing can ever fill it in.
+    if (std::holds_alternative<DisplayOnlyPtr>(displayFrame_) ||
+        std::holds_alternative<ResidentPtr>(displayFrame_)) {
+        // A display-only or resident frame answers this honestly rather than refusing: it kept no
+        // process frame, and hasProcessFrame() says so in advance. The handle is a function-local
+        // static so a reference to it stays valid, and it is const so nothing can ever fill it in.
         static const std::shared_ptr<const ProcessFrame> none;
         return none;
     }
@@ -229,6 +305,13 @@ const std::shared_ptr<const ProcessFrame>& PreparedPreviewFrame::processFrame() 
 }
 
 std::optional<PreviewDisplayBufferView> PreparedPreviewFrame::displayBufferView() const noexcept {
+    if (const auto* resident = std::get_if<ResidentPtr>(&displayFrame_)) {
+        // The resident arm has no host pixels: the whole point is that they never crossed the
+        // boundary. Geometry and identity remain available; a consumer must not treat this nullopt
+        // as "invalid" (isDisplayValid() is the validity test).
+        static_cast<void>(resident);
+        return std::nullopt;
+    }
     if (const auto* displayOnly = std::get_if<DisplayOnlyPtr>(&displayFrame_)) {
         return (*displayOnly)->displayBufferView();
     }
@@ -274,6 +357,13 @@ std::optional<PreviewDisplayBufferView> PreparedPreviewFrame::displayBufferView(
     };
 }
 
+bool PreparedPreviewFrame::isDisplayValid() const noexcept {
+    if (const auto* resident = std::get_if<ResidentPtr>(&displayFrame_)) {
+        return (*resident)->isDisplayValid();
+    }
+    return displayBufferView().has_value();
+}
+
 const std::shared_ptr<const ReferenceDisplayFrame>&
 PreparedPreviewFrame::displayFrame() const& noexcept {
     return *std::get_if<ReferencePtr>(&displayFrame_);
@@ -308,6 +398,11 @@ PreparedPreviewFrame::qualifiedDisplayIdentity() const& noexcept {
 const std::shared_ptr<const PreviewDisplayOnlyFrame>&
 PreparedPreviewFrame::displayOnlyFrame() const& noexcept {
     return *std::get_if<DisplayOnlyPtr>(&displayFrame_);
+}
+
+const std::shared_ptr<const PreviewResidentDisplayFrame>&
+PreparedPreviewFrame::residentFrame() const& noexcept {
+    return *std::get_if<ResidentPtr>(&displayFrame_);
 }
 
 std::optional<PreviewPreparationResult>

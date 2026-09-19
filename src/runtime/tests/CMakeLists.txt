@@ -461,6 +461,27 @@ bloom_add_test(
     TIMEOUT 120
 )
 
+# GPU-resident preview product: the fourth, closed PreparedPreviewFrame arm. On a real device it
+# produces a real Solid -> resident-display -> owner-registry lease with a genuine
+# qualifyResidentPreview() report, then validates the product factory and its rejection/invalidation
+# gates. Without a device it skips cleanly; --loader/--require-device are supplied by the supervisor.
+add_executable(
+    bloom_runtime_gpu_resident_preview_product_test
+    gpu_resident_preview_product_tests.cpp
+)
+target_link_libraries(
+    bloom_runtime_gpu_resident_preview_product_test
+    PRIVATE bloom_runtime_evaluator
+)
+bloom_enable_warnings(bloom_runtime_gpu_resident_preview_product_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_resident_preview_product_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_resident_preview_product
+    COMMAND bloom_runtime_gpu_resident_preview_product_test
+    LABELS runtime unit gpu color render
+    TIMEOUT 300
+)
+
 # Resident-preview runtime qualification. The native proof creates a real device + typed pipelines,
 # runs qualifyResidentPreview() (all-pixel parity against the CPU primitives and OCIO oracle), and
 # exercises the ownership/foreign-device/processor/cancel/budget/wrong-thread gates. It includes the
