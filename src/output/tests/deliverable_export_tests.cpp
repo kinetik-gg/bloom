@@ -247,7 +247,8 @@ unsigned sample16(const media::provider::Bytes& bytes, std::size_t offset) {
     // checkout or CI runner without it still runs the deterministic EXR oracle above but cannot
     // exercise the H.264 review encode.
     const auto openh264Runtime =
-        OpenH264Runtime(std::filesystem::path(BLOOM_COLOR5_OPENH264_RUNTIME)).verify();
+        media::provider::OpenH264Runtime(std::filesystem::path(BLOOM_COLOR5_OPENH264_RUNTIME))
+            .verify();
     if (openh264Runtime.installed) {
         using namespace media::provider;
         EncodeSessionOptionsV1 worker;
