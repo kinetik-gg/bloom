@@ -147,6 +147,27 @@ const CompositionPreviewState& CompositionPreviewController::state() const noexc
 }
 
 std::vector<runtime::EvaluatedOperationBounds>
+CompositionPreviewController::currentLayerBounds() const {
+    std::vector<runtime::EvaluatedOperationBounds> result;
+    if (!state_.frame || state_.frame->desiredIdentity().compositionId != session_.compositionId())
+        return result;
+    const auto& frame = *state_.frame;
+    const auto identity = frame.desiredIdentity();
+    const auto time = identity.time;
+    const auto allBounds = frame.evaluatedBounds();
+    result.reserve(allBounds.size());
+    for (const auto& bounds : allBounds) {
+        if (!bounds.layerId.isValid() || bounds.output.empty())
+            continue;
+        auto translated = bounds;
+        translated.layerId = session_.currentLayerForRetained(
+            identity.sourceRevision, identity.projectId, time, bounds.layerId);
+        result.push_back(std::move(translated));
+    }
+    return result;
+}
+
+std::vector<runtime::EvaluatedOperationBounds>
 CompositionPreviewController::selectedLayerBounds() const {
     std::vector<runtime::EvaluatedOperationBounds> result;
     if (!state_.frame || state_.frame->desiredIdentity().compositionId != session_.compositionId())
@@ -156,6 +177,8 @@ CompositionPreviewController::selectedLayerBounds() const {
     const auto layer = primary ? std::optional(*primary) : selection.contextualLayer;
     const auto& nodes = session_.selectedNodes();
     const auto& frame = *state_.frame;
+    const auto identity = frame.desiredIdentity();
+    const auto time = identity.time;
     const auto operations = frame.processIdentity().plan->operations();
     const auto allBounds = frame.evaluatedBounds();
     for (std::size_t index = 0; index < allBounds.size(); ++index) {
@@ -163,10 +186,18 @@ CompositionPreviewController::selectedLayerBounds() const {
         const auto* boundary = std::get_if<runtime::CompiledLayerOutput>(&operations[index]);
         if (!boundary || !bounds.layerId.isValid() || bounds.output.empty())
             continue;
-        const bool selected =
-            (layer && bounds.layerId == *layer) || nodes.contains(boundary->sourceNodeId);
-        if (selected)
-            result.push_back(bounds);
+        // Translate to the current graph before matching the LIVE selection/node set. The frame's
+        // own provenance gates the mapping, so a live override frame is never remapped.
+        const auto currentLayer = session_.currentLayerForRetained(
+            identity.sourceRevision, identity.projectId, time, bounds.layerId);
+        const auto currentNode = session_.currentNodeForRetained(
+            identity.sourceRevision, identity.projectId, time, boundary->sourceNodeId);
+        const bool selected = (layer && currentLayer == *layer) || nodes.contains(currentNode);
+        if (!selected)
+            continue;
+        auto translated = bounds;
+        translated.layerId = currentLayer;
+        result.push_back(std::move(translated));
     }
     return result;
 }
@@ -384,14 +415,27 @@ void CompositionPreviewController::handleDocumentEvaluationChanged() {
         return identity.compositionId == session_.compositionId() &&
                identity.projectId == projectId && identity.sourceRevision == acceptedRevision;
     };
+    // A retained frame whose pixels are still accepted does NOT imply its exposed geometry is
+    // unchanged: an equivalent split keeps the pixels but changes the current layer/node
+    // identities. Publish state so viewer paint/selection re-read currentLayerBounds, without
+    // preparing pixels.
+    const auto publishGeometryOnly = [this] {
+        if (state_.frame != nullptr)
+            emit stateChanged();
+    };
     if (pending_.has_value()) {
-        if (stillAccepted(pending_->desiredIdentity))
+        if (stillAccepted(pending_->desiredIdentity)) {
+            publishGeometryOnly();
             return; // the newest ask is still correct for its own time
+        }
     } else if (active_.has_value()) {
-        if (stillAccepted(active_->desiredIdentity))
+        if (stillAccepted(active_->desiredIdentity)) {
+            publishGeometryOnly();
             return; // the in-flight ask is still correct for its own time
+        }
     } else if (state_.frame != nullptr && state_.frame->desiredIdentity().time == targetTime &&
                stillAccepted(state_.frame->desiredIdentity())) {
+        publishGeometryOnly();
         return; // the displayed frame already represents the current time
     }
     if (session_.valueEditActive()) {

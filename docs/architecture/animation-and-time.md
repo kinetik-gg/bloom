@@ -590,6 +590,23 @@ snapshot revisions are unchanged but whose pixels are not -- the qualified displ
 available, a colour-settings change, and rebind -- and still forces a fresh derivation; that is why a
 "same revision" test can never be used to keep a display-qualified frame.
 
+**Split reuse (SPLIT-2).** An output-equivalent `SplitLayerAtTime` publishes a deliberately EMPTY
+finite pixel footprint plus ordered `LayerIdentityRemap`s (original->tail over `[split, originalOut)`).
+The session composes those remaps onto the time-indexed segments instead of resetting whole-live:
+segments are subdivided at each remap boundary, a segment coalesces only when it has the same actual
+snapshot owner AND identical mapping state, and a mapping composes onto existing mapping VALUES so a
+repeated split of a tail collapses original->intermediate->final rather than naming an intermediate
+ID absent from the retained snapshot. A finite pixel-interval replacement switches only the changed
+intervals to live (clearing their mappings); unaffected segments keep their snapshot and mappings.
+Undo publishes the already-inverted list, so `before` is validated against the PREVIOUS live graph
+and `after` against the new one. Whole/cap/rebind/switch fall back to whole-live with no mappings.
+`CompositionPreviewController::currentLayerBounds()` is the one place viewer paint, hit-test, text
+editing and selection read geometry: it translates each retained bound's layer/node ID to the current
+graph for the frame's own time, so a cached tail frame hit-selects and drags the NEW tail while the
+head is untouched. This is metadata only -- no pixel copy and no reevaluation; the retained frame
+keeps its genuine snapshot, revision and process identity. Non-merge/parent/driver cases stay
+conservative (whole-render, no remaps).
+
 **Deletion.** TEMPORAL-DELETE classifies `RemoveNodes` from the graph BEFORE erasing. When every
 removed node is an ordinary layer boundary whose output feeds only the Merge stack, no surviving
 child is parented to a removed boundary, no surviving parameter is driver-bound to a removed node,

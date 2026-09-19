@@ -445,17 +445,60 @@ bool CompositionSession::resetEvaluationRangesToLive() {
     std::vector<EvaluationSnapshotRange> next;
     const auto* current = composition();
     const auto duration = current == nullptr ? core::RationalTime{} : current->duration();
-    next.push_back({core::RationalTime{}, duration, snapshot_});
+    next.push_back({core::RationalTime{}, duration, snapshot_, {}});
     const bool changed = evaluationRanges_.size() != next.size() || evaluationRanges_.empty() ||
                          !(evaluationRanges_.front().start == next.front().start &&
                            evaluationRanges_.front().end == next.front().end &&
-                           sameSnapshotOwner(evaluationRanges_.front().snapshot, snapshot_));
+                           sameSnapshotOwner(evaluationRanges_.front().snapshot, snapshot_) &&
+                           evaluationRanges_.front().mappings.empty());
     evaluationRanges_ = std::move(next);
     return changed;
 }
 
+namespace {
+// A segment's mappings are a set of ID pairs, not a range: the segment itself owns the time span,
+// so a mapping's start/end are redundant. Canonicalize to a deterministic, identity-free set keyed
+// on the before identity, and stamp the owning segment's range for readability.
+void canonicalizeMappings(std::vector<commands::LayerIdentityRemap>& mappings,
+                          const document::CompositionId compositionId,
+                          const core::RationalTime start, const core::RationalTime end) {
+    std::erase_if(mappings, [](const commands::LayerIdentityRemap& mapping) {
+        return mapping.beforeLayerId == mapping.afterLayerId &&
+               mapping.beforeNodeId == mapping.afterNodeId;
+    });
+    std::ranges::sort(mappings, [](const commands::LayerIdentityRemap& left,
+                                   const commands::LayerIdentityRemap& right) {
+        if (left.beforeLayerId != right.beforeLayerId)
+            return left.beforeLayerId < right.beforeLayerId;
+        return left.beforeNodeId < right.beforeNodeId;
+    });
+    for (auto& mapping : mappings) {
+        mapping.compositionId = compositionId;
+        mapping.start = start;
+        mapping.end = end;
+    }
+}
+
+// Semantic equality: same ID pairs in the same canonical order, ignoring the (segment-owned) range.
+[[nodiscard]] bool sameMappings(const std::vector<commands::LayerIdentityRemap>& left,
+                                const std::vector<commands::LayerIdentityRemap>& right) noexcept {
+    if (left.size() != right.size())
+        return false;
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        if (left[index].beforeLayerId != right[index].beforeLayerId ||
+            left[index].afterLayerId != right[index].afterLayerId ||
+            left[index].beforeNodeId != right[index].beforeNodeId ||
+            left[index].afterNodeId != right[index].afterNodeId)
+            return false;
+    }
+    return true;
+}
+} // namespace
+
 bool CompositionSession::applyFiniteEvaluationFootprint(
-    const commands::AffectedTimeFootprint& footprint, bool& trustworthy) {
+    const commands::AffectedTimeFootprint& footprint,
+    const std::vector<commands::LayerIdentityRemap>* remaps,
+    const document::Snapshot& previousSnapshot, bool& trustworthy) {
     trustworthy = false;
     const auto* current = composition();
     if (current == nullptr || !evaluationTimeBaseUsable() ||
@@ -473,8 +516,6 @@ bool CompositionSession::applyFiniteEvaluationFootprint(
     }
     // Fail closed against inconsistent finite evidence: every retained segment must still name this
     // composition at the same numeric project identity and match the LIVE duration and frame rate.
-    // A finite edit cannot change the time base today, so this only guards a future mis-classified
-    // command; normal time-base edits are whole-render and never reach here.
     const auto liveProjectId = snapshot_.project().id();
     const auto liveRate = current->format().frameRate();
     for (const auto& range : evaluationRanges_) {
@@ -484,6 +525,8 @@ bool CompositionSession::applyFiniteEvaluationFootprint(
             return false;
         }
     }
+    // 1. Replace the changed pixel intervals with the live snapshot, clearing their mappings;
+    //    unaffected segments keep their snapshot AND their mappings.
     std::vector<core::RationalTime> points{core::RationalTime{}};
     for (const auto& range : evaluationRanges_) {
         points.push_back(range.start);
@@ -495,12 +538,12 @@ bool CompositionSession::applyFiniteEvaluationFootprint(
     }
     std::ranges::sort(points);
     points.erase(std::unique(points.begin(), points.end()), points.end());
-    const auto snapshotAt = [this](const core::RationalTime time) -> const document::Snapshot& {
+    const auto segmentAt = [this](const core::RationalTime time) -> const EvaluationSnapshotRange* {
         for (const auto& range : evaluationRanges_) {
             if (time >= range.start && time < range.end)
-                return range.snapshot;
+                return &range;
         }
-        return snapshot_;
+        return nullptr;
     };
     std::vector<EvaluationSnapshotRange> next;
     for (std::size_t index = 0; index + 1 < points.size(); ++index) {
@@ -512,29 +555,191 @@ bool CompositionSession::applyFiniteEvaluationFootprint(
             footprint.intervals, [&](const commands::AffectedTimeRange& interval) {
                 return interval.start <= start && start < interval.end;
             });
-        const auto& source = affected ? snapshot_ : snapshotAt(start);
+        const auto* prior = segmentAt(start);
+        const auto& source = affected ? snapshot_ : (prior ? prior->snapshot : snapshot_);
+        const auto& mappings =
+            affected ? std::vector<commands::LayerIdentityRemap>{}
+                     : (prior ? prior->mappings : std::vector<commands::LayerIdentityRemap>{});
         if (!next.empty() && next.back().end == start &&
-            sameSnapshotOwner(next.back().snapshot, source)) {
+            sameSnapshotOwner(next.back().snapshot, source) &&
+            sameMappings(next.back().mappings, mappings)) {
             next.back().end = end;
             continue;
         }
-        next.push_back({start, end, source});
+        next.push_back({start, end, source, mappings});
         if (next.size() > kMaxEvaluationSnapshotRanges) {
-            // Conservative full-live reset at the cap.
             return false;
         }
     }
-    trustworthy = true;
-    const bool changed =
-        next.size() != evaluationRanges_.size() ||
-        !std::ranges::equal(
-            next, evaluationRanges_,
-            [](const EvaluationSnapshotRange& left, const EvaluationSnapshotRange& right) {
-                return left.start == right.start && left.end == right.end &&
-                       sameSnapshotOwner(left.snapshot, right.snapshot);
-            });
     evaluationRanges_ = std::move(next);
-    return changed;
+    // 2. Compose the incoming command's remaps onto segments whose snapshot still names the before
+    //    identity. Undo already inverted/reversed its list, so this composes the current direction.
+    if (remaps != nullptr && !remaps->empty()) {
+        if (!applyLayerIdentityRemaps(*remaps, previousSnapshot))
+            return false;
+    }
+    trustworthy = true;
+    return true;
+}
+
+bool CompositionSession::applyLayerIdentityRemaps(
+    const std::vector<commands::LayerIdentityRemap>& remaps,
+    const document::Snapshot& previousSnapshot) {
+    const auto* current = composition();
+    const auto* previousComposition = previousSnapshot.project().findComposition(compositionId_);
+    if (current == nullptr || previousComposition == nullptr ||
+        previousSnapshot.project().id() != snapshot_.project().id() ||
+        remaps.size() > commands::kMaxLayerIdentityRemaps)
+        return false;
+    const auto duration = current->duration();
+    for (const auto& remap : remaps) {
+        if (remap.compositionId != compositionId_ || remap.start < core::RationalTime{} ||
+            remap.start >= remap.end || remap.end > duration)
+            return false;
+        // `before` must be the boundary in the PREVIOUS live graph, `after` the boundary in the new
+        // one, and the layer/node pair must actually correspond in its own graph. Undo's
+        // before-tail identity is intentionally absent from the after graph, so requiring both in
+        // the current graph would reject every undo.
+        const auto* beforeBoundary = previousComposition->graph().findLayer(remap.beforeLayerId);
+        const auto* afterBoundary = current->graph().findLayer(remap.afterLayerId);
+        if (beforeBoundary == nullptr || beforeBoundary->nodeId != remap.beforeNodeId ||
+            afterBoundary == nullptr || afterBoundary->nodeId != remap.afterNodeId)
+            return false;
+    }
+    // Subdivide at every remap boundary so a segment is either wholly inside or outside each remap.
+    std::vector<core::RationalTime> points;
+    for (const auto& range : evaluationRanges_) {
+        points.push_back(range.start);
+        points.push_back(range.end);
+    }
+    for (const auto& remap : remaps) {
+        points.push_back(remap.start);
+        points.push_back(remap.end);
+    }
+    std::ranges::sort(points);
+    points.erase(std::unique(points.begin(), points.end()), points.end());
+    const auto segmentAt = [this](const core::RationalTime time) -> const EvaluationSnapshotRange* {
+        for (const auto& range : evaluationRanges_) {
+            if (time >= range.start && time < range.end)
+                return &range;
+        }
+        return nullptr;
+    };
+    std::vector<EvaluationSnapshotRange> next;
+    for (std::size_t index = 0; index + 1 < points.size(); ++index) {
+        const auto start = points[index];
+        const auto end = points[index + 1];
+        if (start >= end)
+            continue;
+        const auto* prior = segmentAt(start);
+        if (prior == nullptr)
+            return false;
+        auto mappings = prior->mappings;
+        // A segment already carrying the NEW LIVE snapshot contains the after identities directly,
+        // so it must stay mapping-free: composing the incoming remap onto it would both add a
+        // spurious before->after pair and suppress a later legitimate fresh mapping.
+        if (sameSnapshotOwner(prior->snapshot, snapshot_)) {
+            mappings.clear();
+            if (!next.empty() && next.back().end == start &&
+                sameSnapshotOwner(next.back().snapshot, prior->snapshot) &&
+                sameMappings(next.back().mappings, mappings)) {
+                next.back().end = end;
+                continue;
+            }
+            next.push_back({start, end, prior->snapshot, std::move(mappings)});
+            if (next.size() > kMaxEvaluationSnapshotRanges)
+                return false;
+            continue;
+        }
+        const auto* snapshotComposition = prior->snapshot.project().findComposition(compositionId_);
+        if (snapshotComposition == nullptr)
+            return false;
+        for (const auto& remap : remaps) {
+            if (remap.start <= start && start < remap.end) {
+                // Compose onto existing VALUES: an existing mapping whose after is this remap's
+                // before becomes the remap's after. Repeated splits of a tail therefore collapse
+                // original->intermediate->final into original->final; undo's inverse collapses back
+                // to an identity pair, which canonicalizeMappings drops.
+                bool matched = false;
+                for (auto& mapping : mappings) {
+                    if (mapping.afterLayerId == remap.beforeLayerId &&
+                        mapping.afterNodeId == remap.beforeNodeId) {
+                        mapping.afterLayerId = remap.afterLayerId;
+                        mapping.afterNodeId = remap.afterNodeId;
+                        matched = true;
+                    }
+                }
+                // The retained snapshot may itself name the before identity (a segment captured
+                // after an earlier split), in which case a fresh mapping is needed.
+                if (!matched &&
+                    snapshotComposition->graph().findLayer(remap.beforeLayerId) != nullptr) {
+                    mappings.push_back(
+                        commands::LayerIdentityRemap{.compositionId = compositionId_,
+                                                     .start = start,
+                                                     .end = end,
+                                                     .beforeLayerId = remap.beforeLayerId,
+                                                     .afterLayerId = remap.afterLayerId,
+                                                     .beforeNodeId = remap.beforeNodeId,
+                                                     .afterNodeId = remap.afterNodeId});
+                }
+            }
+        }
+        canonicalizeMappings(mappings, compositionId_, start, end);
+        if (mappings.size() > commands::kMaxLayerIdentityRemaps)
+            return false;
+        if (!next.empty() && next.back().end == start &&
+            sameSnapshotOwner(next.back().snapshot, prior->snapshot) &&
+            sameMappings(next.back().mappings, mappings)) {
+            next.back().end = end;
+            continue;
+        }
+        next.push_back({start, end, prior->snapshot, std::move(mappings)});
+        if (next.size() > kMaxEvaluationSnapshotRanges)
+            return false;
+    }
+    evaluationRanges_ = std::move(next);
+    return true;
+}
+
+document::LayerId CompositionSession::currentLayerForRetained(
+    const document::Revision frameRevision, const document::ProjectId frameProjectId,
+    const core::RationalTime time, const document::LayerId layer) const noexcept {
+    for (const auto& range : evaluationRanges_) {
+        if (time < range.start || time >= range.end)
+            continue;
+        // Provenance gate: mappings apply only when the frame's own snapshot matches this segment's
+        // retained snapshot (revision, project and composition). A live override frame -- or any
+        // frame whose revision/owner differs -- passes through unchanged, so a live head ID is
+        // never remapped to the tail. A rebind clears the frame cache and resets every range, so a
+        // colliding numeric revision from a different document cannot reach here.
+        if (frameRevision != range.snapshot.revision() ||
+            frameProjectId != range.snapshot.project().id())
+            return layer;
+        for (const auto& mapping : range.mappings) {
+            if (mapping.beforeLayerId == layer)
+                return mapping.afterLayerId;
+        }
+        return layer;
+    }
+    return layer;
+}
+
+document::NodeId CompositionSession::currentNodeForRetained(
+    const document::Revision frameRevision, const document::ProjectId frameProjectId,
+    const core::RationalTime time, const document::NodeId node) const noexcept {
+    for (const auto& range : evaluationRanges_) {
+        if (time < range.start || time >= range.end)
+            continue;
+        if (frameRevision != range.snapshot.revision() ||
+            frameProjectId != range.snapshot.project().id())
+            return node;
+        for (const auto& mapping : range.mappings) {
+            if (mapping.beforeNodeId == node)
+                return mapping.afterNodeId;
+        }
+        return node;
+    }
+    return node;
 }
 
 const document::Snapshot&
@@ -1642,6 +1847,9 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
     if (event.kind == commands::CommandEventKind::RevisionChanged) {
         const auto previousRevision = snapshot_.revision();
         const auto previousWorkArea = workArea();
+        // SPLIT-2: capture the PRE-command live snapshot before it is replaced. Undo's before-tail
+        // identity exists in this graph, not the new one.
+        const auto previousSnapshot = snapshot_;
         snapshot_ = document_->snapshot();
         const bool rangeChanged = workArea() != previousWorkArea;
         const bool revisionAdvanced = snapshot_.revision() != previousRevision;
@@ -1661,22 +1869,37 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
             } else if (!event.result.renderAffecting) {
                 // Neutral: preserve every retained span exactly.
             } else if (event.result.affectedTimes.has_value()) {
-                // SPLIT-1 safety guard: a proven split publishes a deliberately empty pixel
-                // footprint plus geometry remaps, but the consumers that translate retained
-                // geometry to the current layer/node identities do not exist until SPLIT-2.
-                // Retaining pixels without that translation would expose stale layer IDs, so the
-                // session resets to whole-live whenever applicable remaps are present. SPLIT-2
-                // replaces this with actual remap consumption.
-                const bool hasRemaps = event.result.layerIdentityRemaps.has_value() &&
-                                       !event.result.layerIdentityRemaps->empty();
-                if (hasRemaps) {
-                    provenanceChanged = resetEvaluationRangesToLive();
-                } else {
-                    bool trustworthy = false;
-                    const bool changed =
-                        applyFiniteEvaluationFootprint(*event.result.affectedTimes, trustworthy);
-                    provenanceChanged = trustworthy ? changed : resetEvaluationRangesToLive();
+                // SPLIT-2: a finite footprint replaces the changed pixel intervals with live (which
+                // clears their mappings) and composes any geometry remaps onto the unaffected
+                // segments, so an equivalent split keeps BOTH halves' cached pixels while their
+                // exposed geometry targets the current graph.
+                const bool hadRanges = !evaluationRanges_.empty();
+                const auto beforeRanges = evaluationRanges_;
+                bool trustworthy = false;
+                const auto* remaps = event.result.layerIdentityRemaps.has_value()
+                                         ? &*event.result.layerIdentityRemaps
+                                         : nullptr;
+                static_cast<void>(applyFiniteEvaluationFootprint(
+                    *event.result.affectedTimes, remaps, previousSnapshot, trustworthy));
+                if (!trustworthy) {
+                    // The finite step may already have mutated ranges before failing, so
+                    // resetEvaluationRangesToLive()'s own "did it change" answer cannot be trusted:
+                    // compare the FINAL ranges against the ORIGINAL snapshot of them.
+                    static_cast<void>(resetEvaluationRangesToLive());
                 }
+                // Compute provenance change from beforeRanges vs the final ranges in every path, so
+                // a fail-closed reset after a partial finite mutation still emits
+                // documentEvaluationChanged.
+                provenanceChanged =
+                    !hadRanges || !std::ranges::equal(
+                                      beforeRanges, evaluationRanges_,
+                                      [](const EvaluationSnapshotRange& left,
+                                         const EvaluationSnapshotRange& right) {
+                                          return left.start == right.start &&
+                                                 left.end == right.end &&
+                                                 sameSnapshotOwner(left.snapshot, right.snapshot) &&
+                                                 sameMappings(left.mappings, right.mappings);
+                                      });
             } else {
                 // Whole/unknown/mixed: conservative full-live reset.
                 provenanceChanged = resetEvaluationRangesToLive();

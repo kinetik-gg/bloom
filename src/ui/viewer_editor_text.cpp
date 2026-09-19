@@ -65,21 +65,24 @@ bool ViewerEditor::beginTextEditing(std::optional<QPointF> point, const bool sel
     edit->world.rotate(textValue(session_, document::kRotationParameterRole, 0.0));
     edit->world.scale(scale.x, scale.y);
     edit->world.translate(-anchor.x, -anchor.y);
-    if (const auto& frame = previewController_.state().frame) {
+    // SPLIT-2: geometry translated to the CURRENT live graph, so a retained frame after an
+    // equivalent split addresses the live tail/head identity rather than a stale one.
+    if (previewController_.state().frame) {
+        const auto bounds = previewController_.currentLayerBounds();
         if (const auto parent = session_.parentOf(*layer)) {
-            for (const auto& bounds : frame->evaluatedBounds())
-                if (bounds.layerId == *parent)
-                    if (const auto world = textWorld(bounds))
+            for (const auto& candidate : bounds)
+                if (candidate.layerId == *parent)
+                    if (const auto world = textWorld(candidate))
                         edit->world *= *world;
         }
-        for (const auto& bounds : frame->evaluatedBounds())
-            if (bounds.layerId == *layer)
-                if (const auto world = textWorld(bounds))
+        for (const auto& candidate : bounds)
+            if (candidate.layerId == *layer)
+                if (const auto world = textWorld(candidate))
                     edit->world = *world;
     }
     edit->emptyWorld = edit->world;
-    if (const auto& frame = previewController_.state().frame) {
-        for (const auto& bounds : frame->evaluatedBounds()) {
+    if (previewController_.state().frame) {
+        for (const auto& bounds : previewController_.currentLayerBounds()) {
             if (bounds.layerId != *layer || bounds.local.empty())
                 continue;
             const auto& w = edit->world;

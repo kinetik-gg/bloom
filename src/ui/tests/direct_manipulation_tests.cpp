@@ -1074,6 +1074,87 @@ void testGestureAfterLayoutEditUsesLiveRevision(Expectations& expectations) {
                         "the layout-edit gesture fixture reaches scheduler quiescence");
 }
 
+// SPLIT-2: after an output-equivalent split, a real Qt pointer drag on the retained tail frame
+// targets the NEW tail layer (hit-select) and commits an edit to the tail, not the head.
+void testPointerDragAfterSplitTargetsNewTail(Expectations& expectations) {
+    using namespace bloom;
+    GestureFixture fixture(makeTestProject("Split Drag"));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the initial frame is ready");
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.3, 0.4, 0.5, 1.0}),
+        "the split-drag fixture has a layer");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the post-add frame is ready");
+    const auto boundary = fixture.session.composition()->graph().layerOutputs().back();
+    const auto* position = fixture.session.parameterForSelection(document::kPositionParameterRole);
+    expectations.expect(position != nullptr, "the layer exposes a position parameter");
+    if (position == nullptr)
+        return;
+    const auto headBase = fixture.session.constantVec2Value(position->id);
+    expectations.expect(headBase.has_value(), "the head position is a resolvable constant");
+    if (!headBase.has_value())
+        return;
+    // Warm the tail time, then split at t=2 so the displayed frame is retained at the OLD revision.
+    expectations.expect(fixture.session.setCurrentTime(core::RationalTime::fromInteger(4)) &&
+                            waitUntil([&] { return isReady(fixture.controller); }),
+                        "the tail time is warmed");
+    commands::Transaction split("Split", fixture.session.snapshot().revision());
+    split.emplace<commands::SplitLayerAtTime>(fixture.session.compositionId(), boundary.layerId,
+                                              core::RationalTime::fromInteger(2));
+    const auto splitResult = fixture.session.executeTransaction(std::move(split));
+    const auto tail = splitResult.outputId<document::LayerId>("layer");
+    expectations.expect(splitResult.changed() && tail.has_value(),
+                        "the split publishes a tail layer");
+    if (!tail.has_value())
+        return;
+    // The displayed time 4 still shows the pre-split pixels; hit-select must resolve the live tail.
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the retained tail frame is displayed");
+    const auto revisionBeforeDrag = fixture.session.snapshot().revision();
+    const auto displayRect = expectedDisplayRect(fixture.viewer, fixture.controller);
+    expectations.expect(!displayRect.isEmpty(), "the display rectangle is non-empty");
+    const QPointF press(200.0, 150.0);
+    const QPointF release(240.0, 130.0);
+    sendPress(fixture.viewer, press);
+    expectations.expect(fixture.session.transformInteractionActive(),
+                        "a press on the retained tail frame begins an interaction");
+    const auto* tailPosition = [&]() -> const document::ParameterRecord* {
+        const auto* boundaryRecord = fixture.session.composition()->graph().findLayer(*tail);
+        if (boundaryRecord == nullptr)
+            return nullptr;
+        const auto* node = fixture.session.composition()->graph().findNode(boundaryRecord->nodeId);
+        if (node == nullptr)
+            return nullptr;
+        for (const auto& binding : node->parameters)
+            if (binding.role == document::kPositionParameterRole)
+                return fixture.session.composition()->parameters().find(binding.parameterId);
+        return nullptr;
+    }();
+    expectations.expect(tailPosition != nullptr, "the tail exposes its own position parameter");
+    if (tailPosition == nullptr)
+        return;
+    const auto tailBase = fixture.session.constantVec2Value(tailPosition->id);
+    expectations.expect(tailBase.has_value(), "the tail position is a resolvable constant");
+    sendMove(fixture.viewer, release);
+    sendRelease(fixture.viewer, release);
+    expectations.expect(!fixture.session.transformInteractionActive(), "release ends the gesture");
+    expectations.expect(fixture.session.snapshot().revision().value() ==
+                            revisionBeforeDrag.value() + 1,
+                        "release commits exactly one transaction");
+    // The tail moved; the head's value is unchanged.
+    expectations.expect(tailBase.has_value() &&
+                            fixture.session.constantVec2Value(tailPosition->id) != tailBase,
+                        "the drag edited the new tail's position");
+    expectations.expect(fixture.session.constantVec2Value(position->id) == headBase,
+                        "the head's position is unchanged by a tail drag");
+
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+                        "the split-drag fixture reaches scheduler quiescence");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1092,5 +1173,6 @@ int main(int argc, char** argv) {
     testMidDragResizeCancelsWithNoCommitAndNoOverrideLeft(expectations);
     testEscapeCancelsMidDrag(expectations);
     testGestureAfterLayoutEditUsesLiveRevision(expectations);
+    testPointerDragAfterSplitTargetsNewTail(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

@@ -1004,6 +1004,50 @@ void testCompiledPlanCacheBindsSnapshotIdentity(Expectations& expectations) {
                         "the second document's own snapshot hits");
 }
 
+// SPLIT-2: an output-equivalent split retains the whole RAM-cached range under ONE provenance; a
+// subsequent RAM run of the split composition prepares nothing.
+void testRamRunReusesBothHalvesAfterSplit(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM Split Reuse", time(7, 25)));
+    expectations.expect(animateSolidLayer(fixture.session),
+                        "the split-reuse fixture is animated across its seven frames");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the foreground frame is ready");
+    const auto boundary = fixture.session.composition()->graph().layerOutputs().front();
+    fixture.frameCache->clear();
+    ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
+                                 fixture.bridge, fixture.countingPipeline());
+    ram.start();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 7,
+                        "the whole range caches");
+    const auto afterFullFill = fixture.preparationCount.load();
+    const auto retainedRevision = fixture.session.evaluationSnapshot().revision();
+
+    // Split at frame 3: [0,3) head, [3,7/25) tail.
+    commands::Transaction split("Split", fixture.session.snapshot().revision());
+    split.emplace<commands::SplitLayerAtTime>(fixture.session.compositionId(), boundary.layerId,
+                                              time(3, 25));
+    const auto splitResult = fixture.session.executeTransaction(std::move(split));
+    expectations.expect(splitResult.changed() && splitResult.affectedTimes.has_value() &&
+                            splitResult.affectedTimes->intervals.empty(),
+                        "the split publishes an empty pixel footprint");
+    expectations.expect(fixture.session.evaluationSnapshotForTime(time(0, 25)).revision() ==
+                            retainedRevision,
+                        "both halves keep the retained provenance");
+    ram.start();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
+                            ram.cachedFrameCount() == 7 &&
+                            fixture.preparationCount.load() == afterFullFill,
+                        "a RAM run after the split prepares nothing");
+    for (std::int64_t frame = 0; frame < 7; ++frame) {
+        const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
+        expectations.expect(key && fixture.frameCache->contains(*key),
+                            "every frame of both halves is retained");
+    }
+
+    ram.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
 // WORKAREA-1: a range edit is render-neutral, so it must not advance the evaluation snapshot or
 // recompile. Expansion/shift fill only the entering frames; a fully cached shrink evaluates
 // nothing; out-of-range entries are released as rangeDrops (never eviction/pressure).
@@ -1250,6 +1294,7 @@ int main(int argc, char** argv) {
         testWorkAreaRangeManagement(expectations);
         testRamRunAdaptsToRangeEditWhileActive(expectations);
         testRamRunFiniteClipRange(expectations);
+        testRamRunReusesBothHalvesAfterSplit(expectations);
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return 1;

@@ -2394,7 +2394,10 @@ ViewerHit ViewerEditor::hitAt(const ViewerMapping& mapping, const QPointF point)
     const auto& frame = previewController_.state().frame;
     if (!frame)
         return {};
-    const auto bounds = frame->evaluatedBounds();
+    // SPLIT-2: read geometry translated to the CURRENT live graph, then order by the live Merge
+    // entries. The raw frame bounds carry the retained snapshot's layer IDs, which after an
+    // equivalent split name the head.
+    const auto bounds = previewController_.currentLayerBounds();
     if (const auto* stack = session_.timelineMerge()) {
         for (const auto& entry : stack->entries()) {
             const auto found = std::ranges::find(bounds, entry.layerId,

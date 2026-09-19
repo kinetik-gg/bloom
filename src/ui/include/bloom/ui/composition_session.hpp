@@ -560,10 +560,16 @@ class CompositionSession final : public QObject {
     // represented by one genuine document snapshot. Every span names a real snapshot the session
     // read from this document; no revision is ever rewritten. Spans are sorted, non-overlapping,
     // and together cover the composition's [0, duration).
+    //
+    // SPLIT-2 adds `mappings`: source-snapshot layer/node IDs -> current-live layer/node IDs, so a
+    // retained frame's evaluated geometry can be translated to the CURRENT graph. Every entry spans
+    // this whole range (segments are subdivided at remap boundaries), and a live segment carries
+    // none. The mapping never relabels a plan or a sourceRevision.
     struct EvaluationSnapshotRange final {
         core::RationalTime start;
         core::RationalTime end;
         document::Snapshot snapshot;
+        std::vector<commands::LayerIdentityRemap> mappings;
     };
 
     // The cap past which split-span bookkeeping stops being worth it: a transaction whose finite
@@ -579,6 +585,20 @@ class CompositionSession final : public QObject {
 
     // The whole time-indexed provenance, for the next slice's frame-cache retention. Read-only.
     [[nodiscard]] std::vector<EvaluationSnapshotRange> evaluationSnapshotRanges() const;
+
+    // Translates a retained frame's evaluated layer/node identity to the CURRENT live graph. The
+    // frame's own revision and project are a provenance gate: a mapping applies only when they
+    // match the covering segment's retained snapshot, so a live override frame passes through
+    // unchanged. Returns `layer`/`node` unchanged when the time has no mapping or the frame is not
+    // retained.
+    [[nodiscard]] document::LayerId currentLayerForRetained(document::Revision frameRevision,
+                                                            document::ProjectId frameProjectId,
+                                                            core::RationalTime time,
+                                                            document::LayerId layer) const noexcept;
+    [[nodiscard]] document::NodeId currentNodeForRetained(document::Revision frameRevision,
+                                                          document::ProjectId frameProjectId,
+                                                          core::RationalTime time,
+                                                          document::NodeId node) const noexcept;
 
   signals:
     // Fired by rebind() AFTER the new live and evaluation snapshots are installed but BEFORE every
@@ -725,7 +745,15 @@ class CompositionSession final : public QObject {
     // fall back to resetEvaluationRangesToLive().
     [[nodiscard]] bool
     applyFiniteEvaluationFootprint(const commands::AffectedTimeFootprint& footprint,
-                                   bool& trustworthy);
+                                   const std::vector<commands::LayerIdentityRemap>* remaps,
+                                   const document::Snapshot& previousSnapshot, bool& trustworthy);
+    // SPLIT-2. Composes an incoming command's before->after remaps onto every segment whose
+    // snapshot still names the before identity, subdividing segments at the remap range boundaries.
+    // Returns false (caller resets whole-live) when a descriptor is inconsistent with the previous
+    // or new live graph, the composition/project is wrong, or a bound is exceeded.
+    [[nodiscard]] bool
+    applyLayerIdentityRemaps(const std::vector<commands::LayerIdentityRemap>& remaps,
+                             const document::Snapshot& previousSnapshot);
     // The composition's frame mapping is usable for time-indexed provenance: a real composition
     // with a positive duration and a constructible frame-time mapping.
     [[nodiscard]] bool evaluationTimeBaseUsable() const noexcept;

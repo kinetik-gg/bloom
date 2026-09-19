@@ -122,6 +122,11 @@ class CompositionPreviewController final : public QObject {
     // Geometry belongs to the delivered immutable process frame, including its sampled time.
     // No layout, evaluation, or image walk takes place on the UI thread.
     [[nodiscard]] std::vector<runtime::EvaluatedOperationBounds> selectedLayerBounds() const;
+    // SPLIT-2. The displayed frame's evaluated geometry, translated from its retained snapshot's
+    // layer/node identities to the CURRENT live graph. This is the one place viewer paint/hit/text
+    // consumers read geometry, so a retained frame after an equivalent split targets the live tail.
+    // Metadata only: no pixel copy and no reevaluation.
+    [[nodiscard]] std::vector<runtime::EvaluatedOperationBounds> currentLayerBounds() const;
     [[nodiscard]] bool isShuttingDown() const noexcept;
     [[nodiscard]] bool backgroundWorkAllowed() const noexcept;
     [[nodiscard]] PreviewFrameCache& frameCache() const noexcept;
