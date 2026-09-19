@@ -12,11 +12,11 @@ class MediaDiskCache;
 } // namespace bloom::media::cache
 
 // Settings and lifecycle for the media disk cache (docs/architecture/media-io.md "Disk cache").
-// This app has no Preferences dialog today -- the RAM preview and operation-cache byte budgets
-// (preview_frame_cache.hpp's
-// ramPreviewByteBudgetFromSettings()/operationCacheByteBudgetFromSettings()) are QSettings-only in
-// exactly the same way, so these follow that established precedent rather than inventing a first
-// settings surface for one feature.
+// These keys are edited by the Settings window (Edit | Settings... -> Memory & Caches, docs/
+// user-guide/settings.md), which reads and writes them through bloom::ui::ApplicationPreferences;
+// this header remains the reader that owns their parsing and the clear command. They are read once
+// at startup, so a change takes effect after restart, exactly like the RAM preview and
+// operation-cache byte budgets.
 namespace bloom::ui {
 
 // "media/disk-cache-enabled", default true.

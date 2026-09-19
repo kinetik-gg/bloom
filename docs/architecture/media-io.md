@@ -438,13 +438,13 @@ thumbnail cache). It is the same store both consult: `decodeThroughDiskCache()`
 
 **Location.** The platform cache directory (`bloom::platform::userCacheDirectory()`, Linux
 `$XDG_CACHE_HOME/bloom` or `$HOME/.cache/bloom`) plus a `media` leaf, or a `media/disk-cache-directory`
-QSettings override (an absolute path; anything else falls back to the platform default). No
-in-app settings dialog exists yet for the RAM preview or operation-cache byte budgets either
-(`preview_frame_cache.hpp`'s own `ramPreviewByteBudgetFromSettings()`/
-`operationCacheByteBudgetFromSettings()`); the disk cache's `media/disk-cache-enabled`,
-`media/disk-cache-budget-bytes` and `media/disk-cache-directory` keys follow that same
-QSettings-only precedent (`bloom::ui::media_disk_cache_settings`) rather than adding a first
-Preferences surface for one feature.
+QSettings override (an absolute path; anything else falls back to the platform default). The
+enable flag, directory, and byte budget are edited under **Edit → Settings… → Memory & Caches**
+(the disk cache also has **Composition → Clear Media Cache…**); the operation-cache and RAM-preview
+budgets share that page. These values are read once at startup, so a change takes effect after
+restart. The owning reader is `bloom::ui::media_disk_cache_settings` for the disk cache and
+`preview_frame_cache.hpp`'s `ramPreviewByteBudgetFromSettings()`/`operationCacheByteBudgetFromSettings()`
+for the two memory ceilings.
 
 **Cache key.** Content-addressed and restart-stable, deliberately narrower than the evaluator's
 in-process operation-cache key: asset content digest, member/frame, legacy interpretation, resolved
