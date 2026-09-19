@@ -380,6 +380,53 @@ On cancellation, a bounded per-dispatch deadline, or any budget refusal, ownersh
 caller, which must destroy or drain the failed pipeline on the owner thread before reuse. This is
 runtime qualification only: no service dispatch, product, viewer, or UI activation.
 
+The runtime now also owns a bounded owner-thread presentation coordinator and the runtime already owns
+the lease and native present path, but nothing in the running application selects them yet.
+`bloom::runtime::GpuPresentationCoordinator`
+(`bloom/runtime/gpu_presentation_coordinator.hpp`, with `gpu_presentation_coordinator.cpp`, a pump
+translation unit, private transport/state headers, and `gpu_presentation_client.cpp`) is a coordinator,
+not a thread, service, device, or message bus: it is constructed with the existing `GpuDevice` and
+`GpuResidentFrameLeaseRegistry` on the existing service owner thread, owns no second thread, and does
+no work until its `pump()` is called. The client (`GpuPresentationClient`) is Qt-free and Vulkan-free
+and carries only typed requests and statuses plus an opaque borrowed-instance view/epoch; a
+UI-created surface crosses as integer handle bits, and every native check and driver call stays on
+the owner thread. It reuses the native `GpuPresentationTarget` acquire/present/retire path and the
+strong-lease-pin contract, publishes `Retired` only after presentation-engine proof, publishes
+`surfaceSafeToDestroy == false` for every refused or unproven retirement, and bounds retained records
+with `maxRetainedTargets`, an explicit `forget()` terminal acknowledgement, and a fixed process
+quarantine reservation store taken before native creation. Capacity pressure on that store refuses a
+new attach temporarily and recovers when a healthy reservation is released; only an actual unproven
+retention or allocation failure latches the process-wide fuse. The test-only quarantine reset refuses
+to drop a committed generation that still owns a real target or lease alias.
+
+The UI adapter is prepared but inert. `bloom::ui::ViewerGpuPresenter`
+(`viewer_gpu_presenter.hpp`, with the private `viewer_gpu_presenter_port` seam and the
+`viewer_gpu_presenter_input` translation helper) adopts the coordinator client's borrowed instance
+through `QVulkanInstance`, creates one `QWindow`/`createWindowContainer` on the UI thread, forwards
+actual Qt input, and presents only through the existing opaque lease/params/overlay port. It creates
+no device, pipeline, queue, service, or thread, and it performs no native work on the UI thread. On
+the measured Qt 6 Wayland hazard (a reparent silently recreates the `VkSurfaceKHR` with no
+`SurfaceAboutToBeDestroyed`, and container destruction frees the surface immediately) it never
+reparents, hides, or destroys the container while a target is live: the host must call
+`prepareForMutation()` and wait for `SafeToMutate` before mutating the widget tree. The destructor
+requires a proven terminal; a contract-violating destruction with a live target is not made safe and
+emits a truthful release diagnostic instead of faking a handoff. The adapter reclaims proven-terminal
+records through the runtime `forget()` after preserving the terminal diagnostic, and never forgets a
+live, unproven, or duplicate-surface target. In a Vulkan-free UI build the same adapter source
+compiles a truthful `Unsupported` fallback, so a portable desktop build needs no `<vulkan/vulkan.h>`
+and the runtime presentation types stay Qt-free and Vulkan-free.
+
+This lane is verified on the current native closure with real Wayland fixtures: the runtime CPU-only
+port/bounds/forget gates; the real coordinator attach/present/overlay/coalesce/cancel/resize with two
+distinct surfaces, duplicate-surface refusal, retire, and reattach; and the adapter's real embedded
+`QWindow` attach, present, resize, gated retire, reparent-after-`SafeToMutate`, reattach, two viewers
+sharing one lease, real `QTest` input, and repeated retire/reattach beyond `maxRetainedTargets` with
+`forget()`, plus a CPU-only fake-port refusal/forget test. It is deliberately not activated: no
+`ViewerEditor`, `MainWindow`, application controller, product, or service route consumes it, no live
+application resident-present path exists, and there is no application-FPS or `ReferenceParity` claim.
+Host-integration gating of the widget-tree mutations and application shutdown remains a separate,
+later slice.
+
 Pending and unchanged: the service selection that dispatches prepared commands through the executor,
 per-layer GPU compositing selection, resident GPU viewer buffers,
 the service/viewer activation that consumes the render-side image-present path, a whole-application benchmark, the full per-operation qualification

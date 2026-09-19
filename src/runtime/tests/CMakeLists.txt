@@ -397,3 +397,35 @@ bloom_add_test(
     LABELS runtime unit gpu color
     TIMEOUT 120
 )
+
+# Presentation coordinator: a CPU-only port validation (shared mailbox, typed admission, coalescing,
+# stale sequence, duplicate-surface ownership, fail-closed teardown) and a CPU-only
+# ownership/bounds/forget gate (fixed process quarantine reservations, capacity recovery without a
+# permanent fuse, terminal forget, thousands of attach/retire/forget cycles). Both are Qt-free and
+# Vulkan-free and need no device or owner thread; the real Wayland lifecycle proof is
+# src/ui/tests/gpu_presentation_coordinator_tests.cpp.
+add_executable(bloom_runtime_gpu_presentation_coordinator_port_test
+               gpu_presentation_coordinator_port_tests.cpp)
+target_include_directories(bloom_runtime_gpu_presentation_coordinator_port_test PRIVATE ..)
+target_link_libraries(bloom_runtime_gpu_presentation_coordinator_port_test
+                      PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_gpu_presentation_coordinator_port_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_presentation_coordinator_port
+    COMMAND bloom_runtime_gpu_presentation_coordinator_port_test
+    LABELS runtime unit gpu presentation
+    TIMEOUT 60
+)
+
+add_executable(bloom_runtime_gpu_presentation_coordinator_bounds_test
+               gpu_presentation_coordinator_bounds_tests.cpp)
+target_include_directories(bloom_runtime_gpu_presentation_coordinator_bounds_test PRIVATE ..)
+target_link_libraries(bloom_runtime_gpu_presentation_coordinator_bounds_test
+                      PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_gpu_presentation_coordinator_bounds_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_presentation_coordinator_bounds
+    COMMAND bloom_runtime_gpu_presentation_coordinator_bounds_test
+    LABELS runtime unit gpu presentation
+    TIMEOUT 60
+)

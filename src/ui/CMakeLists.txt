@@ -415,6 +415,11 @@ target_sources(
         viewer_editor_text.cpp
         viewer_editor_text_input.cpp
         viewer_editor_text_layout.cpp
+        viewer_gpu_presenter.cpp
+        viewer_gpu_presenter_input.cpp
+        viewer_gpu_presenter_input.hpp
+        viewer_gpu_presenter_port.cpp
+        viewer_gpu_presenter_port.hpp
         window_status_bar.cpp
         workspace_host.cpp
         "${BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP}"
@@ -462,6 +467,7 @@ target_sources(
             include/bloom/ui/viewer_overlays.hpp
             include/bloom/ui/viewer_editor.hpp
             include/bloom/ui/viewer_editor_probe.hpp
+            include/bloom/ui/viewer_gpu_presenter.hpp
             include/bloom/ui/window_status_bar.hpp
             include/bloom/ui/workspace_host.hpp
 )
@@ -491,6 +497,28 @@ target_link_libraries(
 )
 target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image bloom_media_cache)
 bloom_enable_warnings(bloom_ui)
+
+# ViewerGpuPresenter is the only src/ui translation unit that adopts the borrowed VkInstance through
+# Qt's public QVulkanInstance (whose header includes <vulkan/vulkan.h>) and creates a
+# QWindow/VkSurfaceKHR. Compile it with Vulkan headers only when this build actually has them;
+# otherwise the same source compiles its truthful Unsupported fallback, so a Vulkan-free desktop/UI
+# build still links with no <vulkan/vulkan.h> requirement. The runtime presentation coordinator stays
+# entirely Vulkan-free and Qt-free.
+set(BLOOM_UI_VULKAN_AVAILABLE OFF)
+if(BLOOM_RENDER_ENABLE_VULKAN AND DEFINED BLOOM_DEPENDENCY_MODE)
+    if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
+        find_package(VulkanHeaders QUIET CONFIG
+            PATHS "${BLOOM_DEPENDENCY_PREFIX}" NO_DEFAULT_PATH)
+    elseif(BLOOM_DEPENDENCY_MODE STREQUAL "developer-system")
+        find_package(VulkanHeaders QUIET CONFIG)
+    endif()
+    if(TARGET Vulkan::Headers)
+        bloom_find_dependency(VulkanHeaders)
+        set(BLOOM_UI_VULKAN_AVAILABLE ON)
+        target_link_libraries(bloom_ui PRIVATE Vulkan::Headers)
+        target_compile_definitions(bloom_ui PRIVATE BLOOM_UI_HAS_VULKAN=1)
+    endif()
+endif()
 
 if(BLOOM_BUILD_PYTHON)
     target_sources(bloom_ui PRIVATE script_panel_runtime.cpp script_panel_runtime.hpp)

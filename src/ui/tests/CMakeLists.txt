@@ -1066,3 +1066,55 @@ if(BLOOM_BUILD_PYTHON)
         LABELS ui scripting python integration TIMEOUT 120
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 endif()
+
+# Presentation coordinator (real Wayland lifecycle) and ViewerGpuPresenter adapter tests. All three
+# translation units adopt the borrowed VkInstance through Qt's public QVulkanInstance and therefore
+# need Vulkan headers; they are registered only when this build has them. The runtime coordinator's
+# Vulkan-free port/bounds gates live in src/runtime/tests. Without a pinned loader argument the
+# fixtures skip cleanly; the supervisor passes --loader (and --require-device for the native runs).
+if(BLOOM_UI_VULKAN_AVAILABLE)
+    add_executable(bloom_ui_gpu_presentation_coordinator_test
+        gpu_presentation_coordinator_tests.cpp)
+    target_link_libraries(bloom_ui_gpu_presentation_coordinator_test
+        PRIVATE bloom_ui Vulkan::Headers)
+    bloom_enable_warnings(bloom_ui_gpu_presentation_coordinator_test)
+
+    add_executable(bloom_ui_viewer_gpu_presenter_test
+        viewer_gpu_presenter_fake_port_tests.cpp)
+    target_include_directories(bloom_ui_viewer_gpu_presenter_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/ui")
+    target_link_libraries(bloom_ui_viewer_gpu_presenter_test
+        PRIVATE bloom_ui Vulkan::Headers Qt6::Test)
+    bloom_enable_warnings(bloom_ui_viewer_gpu_presenter_test)
+
+    add_executable(bloom_ui_viewer_gpu_presenter_native_test
+        viewer_gpu_presenter_native_tests.cpp)
+    target_link_libraries(bloom_ui_viewer_gpu_presenter_native_test
+        PRIVATE bloom_ui Vulkan::Headers Qt6::Test)
+    bloom_enable_warnings(bloom_ui_viewer_gpu_presenter_native_test)
+
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/lib/libvulkan.so.1")
+        set(bloom_ui_vulkan_loader_args
+            --loader "${BLOOM_DEPENDENCY_PREFIX}/lib/libvulkan.so.1")
+    else()
+        set(bloom_ui_vulkan_loader_args)
+    endif()
+    bloom_add_test(
+        NAME bloom.ui.gpu_presentation_coordinator
+        COMMAND bloom_ui_gpu_presentation_coordinator_test ${bloom_ui_vulkan_loader_args}
+        LABELS ui integration gpu presentation TIMEOUT 300
+        ENVIRONMENT "QT_QPA_PLATFORM=wayland"
+    )
+    bloom_add_test(
+        NAME bloom.ui.viewer_gpu_presenter
+        COMMAND bloom_ui_viewer_gpu_presenter_test ${bloom_ui_vulkan_loader_args}
+        LABELS ui integration gpu presentation TIMEOUT 180
+        ENVIRONMENT "QT_QPA_PLATFORM=wayland"
+    )
+    bloom_add_test(
+        NAME bloom.ui.viewer_gpu_presenter_native
+        COMMAND bloom_ui_viewer_gpu_presenter_native_test ${bloom_ui_vulkan_loader_args}
+        LABELS ui integration gpu presentation TIMEOUT 300
+        ENVIRONMENT "QT_QPA_PLATFORM=wayland"
+    )
+endif()
