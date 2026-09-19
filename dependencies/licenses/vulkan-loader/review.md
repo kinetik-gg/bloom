@@ -18,23 +18,23 @@ Reviewed: 2026-09-19
 
 ## Feature Minimization
 
-The recipe (`dependencies/superbuild/projects/vulkan-loader.cmake`) builds a compute-only loader
-and installs it into the shared prefix:
+The recipe (`dependencies/superbuild/projects/vulkan-loader.cmake`) builds the loader with only the
+Wayland surface extension enabled, matching the actual Linux desktop (Hyprland / `QT_QPA_PLATFORM=
+wayland`) and installing into the shared prefix:
 
 | CMake option | Value | Contract justification |
 | --- | --- | --- |
 | `BUILD_TESTS` | `OFF` | The test tree is not part of the shipped or consumed surface. |
 | `LOADER_CODEGEN` | `OFF` | Uses the checked-in generated loader sources; no Python code generation. |
 | `UPDATE_DEPS` | `OFF` | The loader's own dependency fetcher is never run; no implicit fetching. |
-| `BUILD_WSI_XCB_SUPPORT` | `OFF` (Linux/BSD only) | Compute-only probe: avoids the XCB pkg-config dependency and window-system surface. |
+| `BUILD_WSI_WAYLAND_SUPPORT` | `ON` (Linux/BSD only) | Presentation for the actual Wayland desktop. On this loader version the Wayland branch only defines `VK_USE_PLATFORM_WAYLAND_KHR` and calls no `pkg_check_modules`, so no new build dependency or `DT_NEEDED` entry is introduced. |
+| `BUILD_WSI_XCB_SUPPORT` | `OFF` (Linux/BSD only) | XCB/Xlib/Xrandr WSI would require host `xcb`/`x11`/`xrandr` pkg-config packages that are not pinned in the qualified profile; the XCB QPA fallback uses the CPU path until a separate intake lands. |
 | `BUILD_WSI_XLIB_SUPPORT` | `OFF` (Linux/BSD only) | As above, for Xlib. |
 | `BUILD_WSI_XLIB_XRANDR_SUPPORT` | `OFF` (Linux/BSD only) | As above, for Xrandr. |
-| `BUILD_WSI_WAYLAND_SUPPORT` | `OFF` (Linux/BSD only) | As above, for Wayland. |
 | `BUILD_WSI_DIRECTFB_SUPPORT` | `OFF` (Linux/BSD only) | Upstream default; disabled explicitly. |
 
 The WSI flags are passed only under the loader's own Linux/BSD platform branch. On Windows the
 loader's `platform_wsi` defines `VK_USE_PLATFORM_WIN32_KHR` unconditionally, and on Apple it defines
 the Metal/MacOS portability surfaces; this recipe neither overrides nor pretends to make those
-platforms headless. This loader is a **compute-only bootstrap probe** for the current Linux slice,
-not a presentation-ready loader for a future swapchain; enabling WSI is deferred to the presentation
-work.
+platforms headless. The loader is a Wayland-presentation bootstrap for the GPU-resident viewer;
+enabling XCB/Xlib/Xrandr is deferred to a reviewed dependency intake.

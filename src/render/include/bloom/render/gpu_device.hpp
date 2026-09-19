@@ -10,6 +10,8 @@
 // device records that thread and fails closed when an exposed operation is called from another
 // thread. This slice does not integrate with the runtime, UI, or task system.
 
+#include <bloom/render/gpu_presentation_types.hpp>
+
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -119,6 +121,9 @@ struct GpuCapabilityReport final {
     // Sum of DEVICE_LOCAL memory heap sizes. A bounded diagnostic fact, not a VRAM capacity or a
     // usable allocation budget: integrated GPUs share host memory and drivers may migrate blocks.
     std::uint64_t device_memory_bytes = 0;
+    // Presentation bootstrap facts for this generation. NotRequested unless create() was asked for
+    // presentation; Ready only when every required capability was actually enabled.
+    GpuPresentationStatus presentation;
     std::vector<GpuOperationCapability> operations;
 };
 
@@ -169,6 +174,12 @@ struct GpuBufferAllocationResult final {
 // empty and receive the platform loader name; no workspace or build path is ever hardcoded.
 struct GpuDeviceCreationOptions final {
     std::filesystem::path loader_path;
+    // Optional presentation bootstrap. The default (false / None) reproduces the compute-only
+    // device exactly as before. When requested, only actually-supported surface extensions are
+    // enabled; a missing capability leaves the compute path intact and reports a typed Unavailable
+    // status.
+    bool request_presentation = false;
+    GpuPresentationPlatform presentation_platform = GpuPresentationPlatform::None;
 };
 
 struct GpuDeviceCreationResult;
@@ -193,6 +204,25 @@ class GpuDevice final {
     // Missing operation/precision entries are Unavailable, matching the architecture contract.
     [[nodiscard]] GpuQualification qualificationFor(GpuOperationId operation,
                                                     GpuPrecision precision) const noexcept;
+
+    // Presentation bootstrap facts for this device generation. Ready means the requested platform's
+    // surface extension, VK_KHR_surface, VK_KHR_swapchain, and a present-capable queue were all
+    // actually enabled; it never claims support for any specific surface.
+    [[nodiscard]] GpuPresentationStatus presentationStatus() const noexcept;
+
+    // Non-owning borrowed view of the live instance for a UI-side QVulkanInstance::setVkInstance().
+    // The returned fields are immutable after create(), so this is safe to call from the UI thread.
+    // `valid` is false unless presentationStatus() is Ready. The caller must keep this GpuDevice
+    // alive on its owner thread until every borrowed surface is retired and acknowledged; this view
+    // never owns or destroys the instance.
+    [[nodiscard]] GpuBorrowedInstanceView borrowedInstanceView() const noexcept;
+
+    // Owner-thread validation of a surface the UI created against the borrowed instance. Device
+    // state, presentation epoch, and calling thread are checked BEFORE any driver call; a stale
+    // epoch or a non-owner thread is rejected without touching the driver. Only then is
+    // vkGetPhysicalDeviceSurfaceSupportKHR queried on the preselected present queue family.
+    [[nodiscard]] GpuSurfaceSupportResult
+    validateBorrowedSurface(const GpuBorrowedSurface& surface) const;
 
     // Bounded host-visible buffer allocation. Exposed here as the minimal owned resource that
     // proves the allocator is initialized with explicit dynamic functions.

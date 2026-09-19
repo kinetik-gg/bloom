@@ -48,7 +48,7 @@
     "modified": false,
     "reviewRecord": {
       "path": "dependencies/licenses/vulkan-loader/review.md",
-      "sha256": "sha256:f8becc6465781250253c7edb2dad6e1d2e78ed203bbd80a5e4291058fd3a8222"
+      "sha256": "sha256:4840bc70469b73675b16a49bb3768109b868cf2d2df2cb30bbc953e84a91f88e"
     },
     "reviewedAt": "2026-09-19"
   },
@@ -74,7 +74,7 @@
         },
         {
           "name": "BUILD_WSI_WAYLAND_SUPPORT",
-          "value": "OFF"
+          "value": "ON"
         },
         {
           "name": "BUILD_WSI_XCB_SUPPORT",

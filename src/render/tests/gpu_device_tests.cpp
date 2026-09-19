@@ -13,6 +13,8 @@
 
 namespace {
 
+using bloom::render::GpuBorrowedInstanceView;
+using bloom::render::GpuBorrowedSurface;
 using bloom::render::GpuBufferAllocation;
 using bloom::render::GpuDevice;
 using bloom::render::GpuDeviceCreationOptions;
@@ -20,7 +22,10 @@ using bloom::render::GpuDeviceState;
 using bloom::render::GpuDiagnosticCode;
 using bloom::render::GpuOperationId;
 using bloom::render::GpuPrecision;
+using bloom::render::GpuPresentationAvailability;
+using bloom::render::GpuPresentationPlatform;
 using bloom::render::GpuQualification;
+using bloom::render::GpuSurfaceSupport;
 
 static_assert(!std::is_copy_constructible_v<GpuDevice>);
 static_assert(!std::is_copy_assignable_v<GpuDevice>);
@@ -96,6 +101,16 @@ void testForcedLoaderUnavailable(ExpectationContext& expectations) {
 #endif
     expectations.expect(!result.diagnostic.message.empty(),
                         "the unavailable diagnostic is actionable");
+
+    GpuDeviceCreationOptions presentationOptions;
+    presentationOptions.loader_path = "/nonexistent/bloom-missing-vulkan-loader";
+    presentationOptions.request_presentation = true;
+    presentationOptions.presentation_platform = GpuPresentationPlatform::Wayland;
+    const auto presentationResult = GpuDevice::create(presentationOptions);
+    expectations.expect(!presentationResult,
+                        "a missing loader yields no device even when presentation is requested");
+    expectations.expect(presentationResult.diagnostic.code != GpuDiagnosticCode::None,
+                        "the presentation request preserves the typed loader diagnostic");
 }
 
 // Exposed operations fail closed on a non-owner thread. The worker only calls allocateHostBuffer;
@@ -155,6 +170,11 @@ void testRealDeviceIfAvailable(ExpectationContext& expectations, const TestOptio
                         "operations stay Unavailable until the frozen fixture gate passes");
     expectations.expect(report.operations.empty(),
                         "the bootstrap report invents no operation qualification entries");
+    expectations.expect(device.presentationStatus().availability ==
+                            GpuPresentationAvailability::NotRequested,
+                        "the default create() requests no presentation");
+    expectations.expect(!device.borrowedInstanceView().valid,
+                        "a compute-only device borrows no instance view");
 
     const auto oversized = device.allocateHostBuffer(bloom::render::kMaxGpuHostBufferBytes + 1U);
     expectations.expect(!oversized &&
@@ -183,6 +203,108 @@ void testRealDeviceIfAvailable(ExpectationContext& expectations, const TestOptio
     testWrongThreadFailsClosed(expectations, device);
 }
 
+// The optional presentation request must never weaken the compute path. With a compute-only loader
+// (the current pinned prefix) the Wayland surface extension is absent, so this yields a typed
+// Unavailable presentation status and a fully functional compute device; with a Wayland-WSI loader
+// it yields a Ready status whose borrowed view is the only thing the UI may adopt. No surface is
+// fabricated: true surface support is answered by the driver and belongs to the Qt presentation
+// slice, so only pre-driver epoch/thread/empty-handle rejections are exercised here.
+void testPresentationRequest(ExpectationContext& expectations, const TestOptions& options) {
+    GpuDeviceCreationOptions createOptions;
+    createOptions.loader_path = options.loader_path;
+    createOptions.request_presentation = true;
+    createOptions.presentation_platform = GpuPresentationPlatform::Wayland;
+    auto result = GpuDevice::create(createOptions);
+    if (!result) {
+        if (options.require_device) {
+            expectations.expect(false,
+                                "a device was required but the presentation probe was Unavailable");
+        } else {
+            std::cout << "SKIP: no compatible Vulkan device for the presentation probe\n";
+        }
+        expectations.expect(
+            result.diagnostic.code != GpuDiagnosticCode::None,
+            "an unavailable presentation device is explained by a typed diagnostic");
+        return;
+    }
+    GpuDevice& device = *result.device;
+    expectations.expect(device.state() == GpuDeviceState::Ready &&
+                            device.capabilityReport().compute_queue,
+                        "requesting presentation preserves the functional compute path");
+    const auto status = device.presentationStatus();
+    const auto view = device.borrowedInstanceView();
+    expectations.expect(status.platform == GpuPresentationPlatform::Wayland,
+                        "the presentation status names the requested platform");
+    expectations.expect(view.valid == (status.availability == GpuPresentationAvailability::Ready),
+                        "the borrowed instance view is valid exactly when presentation is Ready");
+    if (status.availability == GpuPresentationAvailability::Ready) {
+        expectations.expect(
+            status.surface_extension && status.platform_surface_extension &&
+                status.swapchain_extension && status.present_queue,
+            "Ready presentation means every required capability is actually enabled");
+        expectations.expect(
+            view.instance_bits != 0 && view.epoch.value != 0 &&
+                view.present_queue_family != UINT32_MAX,
+            "a Ready borrowed view carries the instance, epoch, and present family");
+        const auto owner = device.validateBorrowedSurface(
+            GpuBorrowedSurface{.surface_bits = 0, .epoch = view.epoch});
+        expectations.expect(owner.status == GpuSurfaceSupport::InvalidArgument,
+                            "the owner thread with a real epoch and an empty surface is rejected "
+                            "before the driver");
+        const auto stale = device.validateBorrowedSurface(
+            GpuBorrowedSurface{.surface_bits = 0, .epoch = {.value = view.epoch.value + 1U}});
+        expectations.expect(stale.status == GpuSurfaceSupport::WrongEpoch,
+                            "a stale epoch is rejected before the driver");
+        auto observed = GpuSurfaceSupport::InvalidArgument;
+        std::thread worker([&device, &observed, epoch = view.epoch]() {
+            observed =
+                device
+                    .validateBorrowedSurface(GpuBorrowedSurface{.surface_bits = 0, .epoch = epoch})
+                    .status;
+        });
+        worker.join();
+        expectations.expect(
+            observed == GpuSurfaceSupport::WrongThread,
+            "surface validation from a non-owner thread fails closed before the driver");
+    } else {
+        expectations.expect(!view.valid && view.instance_bits == 0,
+                            "an Unavailable presentation status borrows no instance view");
+        expectations.expect(!status.detail.empty(),
+                            "an Unavailable presentation status carries a bounded reason");
+        auto allocation = device.allocateHostBuffer(64U);
+        expectations.expect(allocation && allocation.allocation.isValid(),
+                            "the compute path still allocates when presentation is unavailable");
+        std::cout << "presentation Unavailable (compute intact): " << status.detail << '\n';
+    }
+}
+
+// This slice enables Wayland only; an explicit XCB request must stay Unavailable with the compute
+// path intact, even on a loader that has no presentation support at all.
+void testPresentationPlatformNotEnabled(ExpectationContext& expectations,
+                                        const TestOptions& options) {
+    GpuDeviceCreationOptions createOptions;
+    createOptions.loader_path = options.loader_path;
+    createOptions.request_presentation = true;
+    createOptions.presentation_platform = GpuPresentationPlatform::Xcb;
+    auto result = GpuDevice::create(createOptions);
+    if (!result) {
+        if (!options.require_device) {
+            std::cout << "SKIP: no compatible Vulkan device for the XCB-unavailable probe\n";
+        }
+        return;
+    }
+    GpuDevice& device = *result.device;
+    const auto status = device.presentationStatus();
+    expectations.expect(status.availability == GpuPresentationAvailability::Unavailable,
+                        "an XCB presentation request is explicitly Unavailable in this slice");
+    expectations.expect(status.platform == GpuPresentationPlatform::Xcb && !status.detail.empty(),
+                        "the platform-unavailable status is typed and explained");
+    expectations.expect(!device.borrowedInstanceView().valid,
+                        "no instance view is borrowed for an unavailable platform");
+    expectations.expect(device.capabilityReport().compute_queue,
+                        "the compute path survives an unsupported presentation platform");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -194,6 +316,8 @@ int main(int argc, char** argv) {
         ExpectationContext expectations;
         testForcedLoaderUnavailable(expectations);
         testRealDeviceIfAvailable(expectations, options);
+        testPresentationRequest(expectations, options);
+        testPresentationPlatformNotEnabled(expectations, options);
         return expectations.ok() ? 0 : 1;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

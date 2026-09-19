@@ -85,6 +85,9 @@ add_executable(bloom_gpu_preview_submitter_test
 add_executable(bloom_gpu_preview_app_test
     gpu_preview_app_tests.cpp
 )
+add_executable(bloom_ui_gpu_presentation_target_test
+    gpu_presentation_target_tests.cpp
+)
 add_executable(bloom_composition_session_animation_test
     composition_session_animation_tests.cpp
 )
@@ -192,6 +195,38 @@ target_link_libraries(bloom_composition_preview_controller_test PRIVATE bloom_ui
 target_link_libraries(bloom_composition_preview_cpu_stage_test PRIVATE bloom_ui)
 target_link_libraries(bloom_gpu_preview_submitter_test PRIVATE bloom_ui)
 target_link_libraries(bloom_gpu_preview_app_test PRIVATE bloom_ui bloom_runtime_evaluator)
+target_link_libraries(bloom_ui_gpu_presentation_target_test PRIVATE bloom_ui bloom_render)
+# QVulkanInstance's public class requires <vulkan/vulkan.h> on the application include path; the
+# pinned dependency prefix supplies it. Only the test needs this; the UI and render modules stay
+# Vulkan-header-free in their public interfaces.
+if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/include/vulkan")
+    target_include_directories(bloom_ui_gpu_presentation_target_test
+        SYSTEM PRIVATE "${BLOOM_DEPENDENCY_PREFIX}/include")
+endif()
+# The injected-construction-fault seam lives in bloom_render's private Vulkan sources. A sibling
+# directory's BLOOM_RENDER_VULKAN_AVAILABLE is not visible here, so repeat the same mode-aware probe
+# before compiling the private-header fault case and adding the private include root.
+set(BLOOM_UI_PRESENTATION_TARGET_PRIVATE_SEAM OFF)
+if(BLOOM_RENDER_ENABLE_VULKAN AND DEFINED BLOOM_DEPENDENCY_MODE)
+    if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
+        find_package(VulkanHeaders QUIET CONFIG
+            PATHS "${BLOOM_DEPENDENCY_PREFIX}" NO_DEFAULT_PATH)
+        find_package(VulkanMemoryAllocator QUIET CONFIG
+            PATHS "${BLOOM_DEPENDENCY_PREFIX}" NO_DEFAULT_PATH)
+    elseif(BLOOM_DEPENDENCY_MODE STREQUAL "developer-system")
+        find_package(VulkanHeaders QUIET CONFIG)
+        find_package(VulkanMemoryAllocator QUIET CONFIG)
+    endif()
+    if(TARGET Vulkan::Headers AND TARGET GPUOpen::VulkanMemoryAllocator)
+        set(BLOOM_UI_PRESENTATION_TARGET_PRIVATE_SEAM ON)
+    endif()
+endif()
+if(BLOOM_UI_PRESENTATION_TARGET_PRIVATE_SEAM)
+    target_compile_definitions(bloom_ui_gpu_presentation_target_test
+        PRIVATE BLOOM_UI_GPU_PRESENTATION_TARGET_PRIVATE_SEAM=1)
+    target_include_directories(bloom_ui_gpu_presentation_target_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/render/vulkan")
+endif()
 target_link_libraries(bloom_composition_session_animation_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_session_rebind_test PRIVATE bloom_ui)
 target_link_libraries(bloom_application_shutdown_test PRIVATE bloom_ui)
@@ -251,6 +286,7 @@ bloom_enable_warnings(bloom_composition_preview_controller_test)
 bloom_enable_warnings(bloom_composition_preview_cpu_stage_test)
 bloom_enable_warnings(bloom_gpu_preview_submitter_test)
 bloom_enable_warnings(bloom_gpu_preview_app_test)
+bloom_enable_warnings(bloom_ui_gpu_presentation_target_test)
 bloom_enable_warnings(bloom_composition_session_animation_test)
 bloom_enable_warnings(bloom_composition_session_rebind_test)
 bloom_enable_warnings(bloom_application_shutdown_test)
@@ -505,6 +541,14 @@ bloom_add_test(
     COMMAND bloom_gpu_preview_app_test
     LABELS ui integration gpu
     TIMEOUT 300
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.gpu_presentation_target
+    COMMAND bloom_ui_gpu_presentation_target_test
+    LABELS ui integration gpu
+    TIMEOUT 120
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 

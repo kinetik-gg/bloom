@@ -23,6 +23,8 @@
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #endif
 
+#include <bloom/render/gpu_presentation_types.hpp>
+
 #include <vulkan/vulkan_raii.hpp>
 
 #include <vk_mem_alloc.h>
@@ -74,8 +76,24 @@ struct DeviceAllocatorState final {
     vk::raii::PhysicalDevice physicalDevice{nullptr};
     vk::raii::Device device{nullptr};
     vk::raii::Queue computeQueue{nullptr};
+    // Non-owning aliases of the same VkDevice queues (vk::raii::Queue has no destroy). presentQueue
+    // is only a distinct queue when the presentation family differs from the compute family.
+    vk::raii::Queue presentQueue{nullptr};
     VmaAllocator allocator = VK_NULL_HANDLE;
     std::uint32_t computeQueueFamily = 0;
+    std::uint32_t presentQueueFamily = 0;
+
+    // Presentation bootstrap facts. All are set once during create() on the owner thread and are
+    // immutable afterwards, so borrowedInstanceView() can read them from the UI thread.
+    bool presentationRequested = false;
+    bool presentationReady = false;
+    bool surfaceExtensionEnabled = false;
+    bool platformSurfaceExtensionEnabled = false;
+    bool swapchainExtensionEnabled = false;
+    bool presentFencesEnabled = false;
+    bool presentWaitEnabled = false;
+    std::uint64_t presentationEpoch = 0;
+    std::uint64_t borrowedInstanceBits = 0;
 
     // Bounded bootstrap facts recorded once so a renderer can validate a request against real
     // device limits before touching the allocator or queue.

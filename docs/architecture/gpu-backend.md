@@ -191,6 +191,32 @@ strict flags. These are rendering primitives only: no scene evaluator selects th
 wired into `GpuPreviewDisplayService`, not composed per layer, and not presented through a viewer, so
 no performance claim is made here.
 
+The presentation lane now has a governed Wayland bootstrap and a swapchain lifecycle, still without
+any viewer/service wiring. The qualified Linux loader is rebuilt with `BUILD_WSI_WAYLAND_SUPPORT=ON`
+alone (XCB/Xlib/Xrandr and DirectFB stay `OFF`; the Wayland branch adds no pkg-config or `DT_NEEDED`
+entry), so the loader exports exactly `vkCreateWaylandSurfaceKHR` and
+`vkGetPhysicalDeviceWaylandPresentationSupportKHR` over the previous `libm`/`libc` dependencies. The
+device bootstrap (`gpu_device.hpp`/`gpu_presentation_types.hpp`) adds an opt-in presentation request
+that enables `VK_KHR_surface`/`VK_KHR_wayland_surface` and `VK_KHR_swapchain` only when actually
+advertised, records whether the accepted `VK_EXT/KHR_swapchain_maintenance1` present fence or
+`VK_KHR_present_wait` retirement mechanism is genuinely enabled, and borrows the instance to a
+caller-minted surface through integer handle bits plus a per-device epoch; presentation prefers one
+combined graphics+compute queue so resident images stay exclusive, and reports `Unavailable` (CPU
+fallback) when the compute family cannot present. The target (`gpu_presentation_target.hpp`) owns the
+swapchain, per-image semaphores/fences, and the clear-and-present command, with the clear offered only
+for encoded BGRA/RGBA `SRGB_NONLINEAR` formats whose surface advertises the requested usage flags; it
+never uses `vkQueueWaitIdle`/`vkDeviceWaitIdle`, treats an unproven or failed present conservatively
+(retaining the image until the presentation-engine signal actually proves retirement), propagates
+device loss, and guards destruction/move: a foreign-thread or unproven teardown quarantines the whole
+native generation under a bounded process fuse (`teardownDrainIncomplete`) instead of destroying it in
+flight. Verified locally on the real Wayland session (Qt 6.11.2, `QT_VULKAN_LIB` set to the bundled
+loader before the first `QVulkanInstance`): a real surface is acquired, cleared, presented, recreated
+at a new positive extent, and closed with an acquired-but-unpresented image; stale-epoch and
+wrong-owner calls are rejected; the default compute device and the existing GPU display application
+are unchanged. This is bootstrap and lifecycle only: no service/viewer/image-present wiring, no
+checkerboard/channel/overlay present, no performance or reference-parity claim, and XCB/Xlib/Xrandr
+presentation remains deferred to a reviewed intake.
+
 Pending and unchanged: the GPU scene evaluator and content cache, per-layer GPU compositing,
 resident GPU viewer buffers, WSI/swapchain presentation,
 a whole-application benchmark, the full per-operation qualification fixtures for a future

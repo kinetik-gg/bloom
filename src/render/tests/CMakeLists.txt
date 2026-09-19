@@ -110,3 +110,23 @@ bloom_add_test(
     COMMAND bloom_render_gpu_image_upload_test
     LABELS unit gpu render
 )
+
+# Device-free presentation-target unit tests (format refusal table and wait-result
+# classification). Only meaningful where the private Vulkan header is available.
+if(BLOOM_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_render_gpu_presentation_target_test gpu_presentation_target_tests.cpp)
+    target_link_libraries(bloom_render_gpu_presentation_target_test PRIVATE bloom_render)
+    target_include_directories(bloom_render_gpu_presentation_target_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/include/vulkan")
+        target_include_directories(bloom_render_gpu_presentation_target_test
+            SYSTEM PRIVATE "${BLOOM_DEPENDENCY_PREFIX}/include")
+    endif()
+    bloom_enable_warnings(bloom_render_gpu_presentation_target_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_presentation_target_test)
+    bloom_add_test(
+        NAME bloom.render.gpu_presentation_target
+        COMMAND bloom_render_gpu_presentation_target_test
+        LABELS unit gpu render
+    )
+endif()

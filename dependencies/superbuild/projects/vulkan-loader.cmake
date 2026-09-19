@@ -2,13 +2,20 @@
 # dependencies/licenses/vulkan-loader/). It builds the shared, end-user runtime library
 # libvulkan.so.1 and depends on the accepted locked Vulkan-Headers component for its build.
 #
-# Compute-only minimum for the current offscreen slice. On the loader's own Linux/BSD branch the
-# WSI options default ON and pull xcb/x11/xrandr/wayland pkg-config dependencies; they are forced
-# OFF here so the build needs no window-system libraries and exposes no presentation surface. On
-# Windows the loader defines VK_USE_PLATFORM_WIN32_KHR unconditionally and on Apple it defines the
-# Metal/MacOS portability surfaces; this recipe deliberately does not override or mask those
-# platform branches and does not claim a headless loader for them. Re-enable WSI when
-# presentation/swapchain work lands.
+# Wayland presentation loader for the GPU-resident viewer slice. The running desktop is Hyprland
+# (WAYLAND_DISPLAY=wayland-1, QT_QPA_PLATFORM=wayland; the live Bloom process loads
+# Qt6WaylandClient 6.11.2), so the smallest WSI configuration consistent with the actual platform is
+# VK_KHR_wayland_surface alone: on this loader version the Linux/BSD Wayland branch only defines
+# VK_USE_PLATFORM_WAYLAND_KHR and calls no pkg-config, so the build gains no xcb/x11/xrandr or
+# wayland-client dependency and the installed libvulkan.so.1 gains no window-system DT_NEEDED
+# (verified: the current compute-only loader's only NEEDED entries are libm/libc).
+#
+# XCB/Xlib/Xrandr WSI stay explicitly OFF. They are functional on this host (pkg-config xcb 1.17.0,
+# x11 1.8.13, xrandr 1.5.5) but those host dev packages are not pinned in the qualified profile, so
+# an XCB QPA (XWayland fallback) presents no GPU surface and uses the CPU QImage path until a
+# separate xcb/x11/xrandr dependency intake lands. On Windows the loader defines
+# VK_USE_PLATFORM_WIN32_KHR unconditionally and on Apple it defines the Metal/MacOS portability
+# surfaces; this recipe deliberately does not override or mask those platform branches.
 #
 # BUILD_TESTS=OFF keeps the test tree and its MIT-Khronos-old sources unreached; LOADER_CODEGEN=OFF
 # uses the checked-in generated sources and needs no Python code generation; UPDATE_DEPS=OFF
@@ -27,7 +34,7 @@ if(CMAKE_SYSTEM_NAME MATCHES "Linux|BSD|DragonFly|GNU|CYGWIN")
         -DBUILD_WSI_XCB_SUPPORT:BOOL=OFF
         -DBUILD_WSI_XLIB_SUPPORT:BOOL=OFF
         -DBUILD_WSI_XLIB_XRANDR_SUPPORT:BOOL=OFF
-        -DBUILD_WSI_WAYLAND_SUPPORT:BOOL=OFF
+        -DBUILD_WSI_WAYLAND_SUPPORT:BOOL=ON
         -DBUILD_WSI_DIRECTFB_SUPPORT:BOOL=OFF)
 endif()
 

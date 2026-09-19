@@ -309,6 +309,8 @@ target_sources(
             include/bloom/render/gpu_image.hpp
             include/bloom/render/gpu_image_upload.hpp
             include/bloom/render/gpu_neutral_display.hpp
+            include/bloom/render/gpu_presentation_target.hpp
+            include/bloom/render/gpu_presentation_types.hpp
             include/bloom/render/gpu_resident_display.hpp
             include/bloom/render/gpu_solid.hpp
             include/bloom/render/image.hpp
@@ -332,6 +334,9 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_neutral_display.cpp
         vulkan/gpu_neutral_display_private.hpp
         vulkan/gpu_neutral_display_resources.cpp
+        vulkan/gpu_presentation_target.cpp
+        vulkan/gpu_presentation_target_private.hpp
+        vulkan/gpu_presentation_target_resources.cpp
         vulkan/gpu_resident_display.cpp
         vulkan/gpu_resident_display_private.hpp
         vulkan/gpu_resident_display_resources.cpp
@@ -345,7 +350,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     )
 else()
     target_sources(bloom_render PRIVATE gpu_device_stub.cpp gpu_image_upload_stub.cpp
-                                     gpu_neutral_display_stub.cpp
+                                     gpu_neutral_display_stub.cpp gpu_presentation_target_stub.cpp
                                      gpu_resident_display_stub.cpp gpu_solid_stub.cpp)
 endif()
 

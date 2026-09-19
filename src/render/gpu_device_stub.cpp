@@ -62,6 +62,20 @@ GpuQualification GpuDevice::qualificationFor(const GpuOperationId operation,
     return GpuQualification::Unavailable;
 }
 
+GpuPresentationStatus GpuDevice::presentationStatus() const noexcept {
+    if (impl_ != nullptr) {
+        return impl_->report.presentation;
+    }
+    return {};
+}
+
+GpuBorrowedInstanceView GpuDevice::borrowedInstanceView() const noexcept { return {}; }
+
+GpuSurfaceSupportResult GpuDevice::validateBorrowedSurface(const GpuBorrowedSurface&) const {
+    return {GpuSurfaceSupport::PresentationUnavailable,
+            "Bloom was built without Vulkan dependencies; presentation is unavailable"};
+}
+
 GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions&) {
     return {nullptr,
             {GpuDiagnosticCode::BackendNotBuilt,
