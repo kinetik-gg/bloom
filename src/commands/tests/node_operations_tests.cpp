@@ -247,6 +247,147 @@ void testLayerToggles(TestContext& test) {
     (void)exercise<SetLayerLocked>(test, fixture, kFirstLayerId, false);
 }
 
+// TEMPORAL-1: SetLayerRange is the only operation that opts into a finite changed-time footprint.
+// Its footprint is the symmetric difference of the old and new half-open activity spans, snapped to
+// composition frames. Trimming yields one interval, extending yields one, a shifted equal-length
+// move yields two, and a no-op yields noChange (hence no footprint).
+void testLayerRangeTimeFootprint(TestContext& test) {
+    using document::CompositionId;
+    Fixture fixture;
+    const auto setRange = [&fixture](const core::RationalTime in, const core::RationalTime out) {
+        return apply<SetLayerRange>(fixture, kFirstLayerId, in, out);
+    };
+    const auto expectSpans =
+        [&test](const std::optional<AffectedTimeFootprint>& footprint,
+                const std::vector<std::pair<core::RationalTime, core::RationalTime>>& spans,
+                const std::string_view message) {
+            test.expect(footprint.has_value() && footprint->compositionId == kCompositionId &&
+                            footprint->intervals.size() == spans.size(),
+                        message);
+            if (!footprint.has_value() || footprint->intervals.size() != spans.size())
+                return;
+            for (std::size_t index = 0; index < spans.size(); ++index) {
+                test.expect(footprint->intervals[index].start == spans[index].first &&
+                                footprint->intervals[index].end == spans[index].second,
+                            message);
+            }
+        };
+
+    // The fixture layer starts active for the whole [0,10) composition.
+    // Trim the right edge to [0,4): the departing [4,10) is the only change.
+    expectSpans(setRange(core::RationalTime::fromInteger(0), core::RationalTime::fromInteger(4))
+                    .affectedTimes,
+                {{core::RationalTime::fromInteger(4), core::RationalTime::fromInteger(10)}},
+                "trim right has one changed interval");
+
+    // Extend the right edge back to [0,7): the entering [4,7) is the only change.
+    expectSpans(setRange(core::RationalTime::fromInteger(0), core::RationalTime::fromInteger(7))
+                    .affectedTimes,
+                {{core::RationalTime::fromInteger(4), core::RationalTime::fromInteger(7)}},
+                "extend right has one changed interval");
+
+    // Trim the left edge to [2,7): the departing [0,2) is the only change.
+    expectSpans(setRange(core::RationalTime::fromInteger(2), core::RationalTime::fromInteger(7))
+                    .affectedTimes,
+                {{core::RationalTime::fromInteger(0), core::RationalTime::fromInteger(2)}},
+                "trim left has one changed interval");
+
+    // Shift equal length [2,7) -> [4,9): both [2,4) and [7,9) change.
+    expectSpans(setRange(core::RationalTime::fromInteger(4), core::RationalTime::fromInteger(9))
+                    .affectedTimes,
+                {{core::RationalTime::fromInteger(2), core::RationalTime::fromInteger(4)},
+                 {core::RationalTime::fromInteger(7), core::RationalTime::fromInteger(9)}},
+                "an equal-length shift has two changed intervals");
+
+    // Disjoint move [4,9) -> [1,2): old span and new span do not overlap.
+    expectSpans(setRange(core::RationalTime::fromInteger(1), core::RationalTime::fromInteger(2))
+                    .affectedTimes,
+                {{core::RationalTime::fromInteger(1), core::RationalTime::fromInteger(2)},
+                 {core::RationalTime::fromInteger(4), core::RationalTime::fromInteger(9)}},
+                "a disjoint move reports both spans normalized");
+
+    // A full-duration layer with an explicit outPoint equal to duration is the same as absent: from
+    // [1,2) to [0,10) changes [0,1) and [2,10).
+    const auto full = setRange(core::RationalTime{}, core::RationalTime::fromInteger(10));
+    expectSpans(full.affectedTimes,
+                {{core::RationalTime::fromInteger(0), core::RationalTime::fromInteger(1)},
+                 {core::RationalTime::fromInteger(2), core::RationalTime::fromInteger(10)}},
+                "restoring full duration reports the whole changed span");
+    const auto fullAgain = setRange(core::RationalTime{}, core::RationalTime::fromInteger(10));
+    test.expect(fullAgain.status == CommandStatus::NoChange && !fullAgain.affectedTimes.has_value(),
+                "a no-op range edit advertises no footprint");
+
+    // An unknown pixel operation alongside a finite footprint dominates to whole render (no
+    // footprint); a NoChange pixel operation leaves the finite footprint intact.
+    {
+        const auto before = fixture.document.snapshot();
+        Transaction mixed("Range plus unknown pixel", before.revision());
+        mixed.emplace<SetLayerRange>(kCompositionId, kFirstLayerId,
+                                     core::RationalTime::fromInteger(1),
+                                     core::RationalTime::fromInteger(2));
+        mixed.emplace<SetParameterSource>(kCompositionId, kOpacityId,
+                                          document::ParameterSource{ConstantValueSource{0.5}});
+        const auto mixedResult = fixture.stack.execute(std::move(mixed));
+        test.expect(mixedResult.changed() && mixedResult.renderAffecting &&
+                        !mixedResult.affectedTimes.has_value(),
+                    "a finite footprint beside an unknown pixel op falls back to whole render");
+    }
+    {
+        // Set the range to [1,2) first, then a transaction whose pixel op is a NoChange.
+        (void)setRange(core::RationalTime::fromInteger(1), core::RationalTime::fromInteger(2));
+        const auto before = fixture.document.snapshot();
+        Transaction mixed("Range plus pixel no-change", before.revision());
+        mixed.emplace<SetParameterSource>(kCompositionId, kOpacityId,
+                                          document::ParameterSource{ConstantValueSource{0.5}});
+        mixed.emplace<SetLayerRange>(kCompositionId, kFirstLayerId,
+                                     core::RationalTime::fromInteger(1),
+                                     core::RationalTime::fromInteger(3));
+        const auto mixedResult = fixture.stack.execute(std::move(mixed));
+        test.expect(mixedResult.changed() && mixedResult.renderAffecting &&
+                        mixedResult.affectedTimes.has_value() &&
+                        mixedResult.affectedTimes->intervals.size() == 1 &&
+                        mixedResult.affectedTimes->intervals.front().start ==
+                            core::RationalTime::fromInteger(2) &&
+                        mixedResult.affectedTimes->intervals.front().end ==
+                            core::RationalTime::fromInteger(3),
+                    "a NoChange pixel op leaves the finite range footprint intact");
+    }
+
+    // A render-neutral range edit (work area) beside a finite layer range: work area contributes
+    // nothing, so the footprint stays finite.
+    {
+        const auto before = fixture.document.snapshot();
+        // The layer is at [1,3) here; trim to [1,2) so the change is exactly [2,3).
+        Transaction mixed("Range plus work area", before.revision());
+        mixed.emplace<SetLayerRange>(kCompositionId, kFirstLayerId,
+                                     core::RationalTime::fromInteger(1),
+                                     core::RationalTime::fromInteger(2));
+        mixed.emplace<SetWorkArea>(kCompositionId, core::RationalTime::fromInteger(1),
+                                   core::RationalTime::fromInteger(5));
+        const auto mixedResult = fixture.stack.execute(std::move(mixed));
+        test.expect(mixedResult.changed() && mixedResult.renderAffecting &&
+                        mixedResult.affectedTimes.has_value() &&
+                        mixedResult.affectedTimes->intervals.size() == 1 &&
+                        mixedResult.affectedTimes->intervals.front().start ==
+                            core::RationalTime::fromInteger(2) &&
+                        mixedResult.affectedTimes->intervals.front().end ==
+                            core::RationalTime::fromInteger(3),
+                    "a neutral work-area edit does not widen the finite range footprint");
+    }
+
+    // Undo/redo replay the stored symmetric footprint.
+    {
+        const auto undo = fixture.stack.undo();
+        test.expect(undo.changed() && undo.affectedTimes.has_value() &&
+                        undo.affectedTimes->intervals.size() == 1,
+                    "undo replays the stored finite footprint");
+        const auto redo = fixture.stack.redo();
+        test.expect(redo.changed() && redo.affectedTimes.has_value() &&
+                        redo.affectedTimes->intervals.size() == 1,
+                    "redo replays the stored finite footprint");
+    }
+}
+
 void testLayerRanges(TestContext& test) {
     Fixture fixture;
     (void)exercise<CreateAnimationForParameter>(test, fixture, kFirstPositionId,
@@ -1057,6 +1198,7 @@ int main() {
         bloom::commands::test::testParameterSocketDrivers(test);
         bloom::commands::test::testNodeGroups(test);
         bloom::commands::test::testRenderAffectingClassification(test);
+        bloom::commands::test::testLayerRangeTimeFootprint(test);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

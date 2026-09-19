@@ -47,6 +47,138 @@ class UnclassifiedRename final : public Operation {
     }
 };
 
+// TEMPORAL-1: an operation that proves a finite footprint but does not change the document (so it
+// can be layered many times in one transaction) without depending on a real layer command.
+class FootprintOp final : public Operation {
+  public:
+    FootprintOp(AffectedTimeFootprint footprint, bool renderAffecting = true)
+        : footprint_(std::move(footprint)), renderAffecting_(renderAffecting) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override {
+        return "bloom.test.footprint";
+    }
+    [[nodiscard]] OperationResult apply(document::Draft&) const override {
+        auto result = OperationResult::applied();
+        result.affectedTimes = footprint_;
+        return result;
+    }
+    [[nodiscard]] bool renderAffecting() const noexcept override { return renderAffecting_; }
+
+  private:
+    AffectedTimeFootprint footprint_;
+    bool renderAffecting_;
+};
+
+// A render-neutral operation (renderAffecting false) that also carries no footprint.
+class NeutralOp final : public Operation {
+  public:
+    [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.test.neutral"; }
+    [[nodiscard]] OperationResult apply(document::Draft&) const override {
+        return OperationResult::applied();
+    }
+    [[nodiscard]] bool renderAffecting() const noexcept override { return false; }
+};
+
+[[nodiscard]] AffectedTimeFootprint
+footprint(const std::vector<std::pair<core::RationalTime, core::RationalTime>>& spans) {
+    AffectedTimeFootprint result;
+    result.compositionId = kCompositionId;
+    for (const auto& [start, end] : spans)
+        result.intervals.push_back({start, end});
+    return result;
+}
+
+void testFiniteTimeFootprintAggregation(TestContext& test) {
+    const auto t = [](const std::int64_t value) { return core::RationalTime::fromInteger(value); };
+
+    // normalize: overlapping and exactly-adjacent intervals merge deterministically.
+    {
+        const auto normalized =
+            normalizeAffectedTimeFootprint(footprint({{t(5), t(7)}, {t(1), t(3)}, {t(3), t(5)}}));
+        test.expect(normalized.has_value() && normalized->intervals.size() == 1 &&
+                        normalized->intervals.front().start == t(1) &&
+                        normalized->intervals.front().end == t(7),
+                    "overlapping/adjacent intervals normalize to one");
+    }
+    // An empty footprint is deliberate and stays empty.
+    {
+        const auto normalized = normalizeAffectedTimeFootprint(footprint({}));
+        test.expect(normalized.has_value() && normalized->intervals.empty(),
+                    "an explicitly empty footprint stays empty");
+    }
+    // An inverted interval is not provable and falls back to whole render.
+    {
+        test.expect(!normalizeAffectedTimeFootprint(footprint({{t(4), t(2)}})).has_value(),
+                    "an inverted interval is not provable");
+    }
+    // A different composition fails the merge closed.
+    {
+        auto other = footprint({{t(1), t(2)}});
+        other.compositionId = CompositionId::fromRaw(999);
+        test.expect(!mergeAffectedTimeFootprints(footprint({{t(0), t(1)}}), other).has_value(),
+                    "a mixed-composition union is not provable");
+    }
+    // Too many disjoint intervals exceed the cap and fall back to whole render.
+    {
+        std::vector<std::pair<core::RationalTime, core::RationalTime>> many;
+        for (std::int64_t index = 0; index < 10; ++index)
+            many.emplace_back(t(index * 4), t(index * 4 + 1));
+        test.expect(!normalizeAffectedTimeFootprint(footprint(many)).has_value(),
+                    "pathological interval growth falls back to whole render");
+    }
+
+    // CommandStack aggregation: two finite ops union and normalize; an unclassified op dominates.
+    Document document(makeProject());
+    CommandStack stack(document);
+    {
+        Transaction transaction("Two finite ops", document.snapshot().revision());
+        transaction.emplace<FootprintOp>(footprint({{t(4), t(10)}}));
+        transaction.emplace<FootprintOp>(footprint({{t(2), t(4)}}));
+        const auto result = stack.execute(std::move(transaction));
+        test.expect(result.changed() && result.renderAffecting &&
+                        result.affectedTimes.has_value() &&
+                        result.affectedTimes->intervals.size() == 1 &&
+                        result.affectedTimes->intervals.front().start == t(2) &&
+                        result.affectedTimes->intervals.front().end == t(10),
+                    "two finite ops union into one normalized interval");
+        const auto undo = stack.undo();
+        test.expect(undo.changed() && undo.affectedTimes.has_value() &&
+                        undo.affectedTimes->intervals.front().start == t(2) &&
+                        undo.affectedTimes->intervals.front().end == t(10),
+                    "undo replays the aggregated finite footprint");
+        const auto redo = stack.redo();
+        test.expect(redo.changed() && redo.affectedTimes.has_value() &&
+                        redo.affectedTimes->intervals.size() == 1,
+                    "redo replays the aggregated finite footprint");
+    }
+    {
+        Transaction transaction("Finite plus unclassified", document.snapshot().revision());
+        transaction.emplace<FootprintOp>(footprint({{t(1), t(2)}}));
+        transaction.emplace<SetProjectName>("Whole render");
+        const auto result = stack.execute(std::move(transaction));
+        test.expect(result.changed() && result.renderAffecting && !result.affectedTimes.has_value(),
+                    "a finite footprint beside an unclassified op falls back to whole render");
+    }
+    {
+        Transaction transaction("Finite plus neutral", document.snapshot().revision());
+        transaction.emplace<FootprintOp>(footprint({{t(1), t(2)}}));
+        transaction.emplace<NeutralOp>();
+        const auto result = stack.execute(std::move(transaction));
+        test.expect(result.changed() && result.renderAffecting &&
+                        result.affectedTimes.has_value() &&
+                        result.affectedTimes->intervals.size() == 1,
+                    "a neutral op does not widen a finite footprint");
+    }
+    {
+        // A rejected transaction never advertises reuse evidence.
+        Transaction transaction("Rejected finite", document.snapshot().revision());
+        transaction.emplace<FootprintOp>(footprint({{t(1), t(2)}}));
+        transaction.emplace<SetCompositionName>(CompositionId::fromRaw(9999), "Missing");
+        const auto result = stack.execute(std::move(transaction));
+        test.expect(result.status == CommandStatus::Rejected && !result.affectedTimes.has_value(),
+                    "a rejected transaction advertises no footprint");
+    }
+}
+
 void testRenderAffectingPublication(TestContext& test) {
     Document document(makeProject());
     CommandStack stack(document);
@@ -362,6 +494,7 @@ void testExhaustionSurvivesUndoAndRedo(TestContext& test) {
 int main() {
     bloom::commands::test::TestContext test;
     try {
+        bloom::commands::test::testFiniteTimeFootprintAggregation(test);
         bloom::commands::test::testRenderAffectingPublication(test);
         bloom::commands::test::testAtomicTransactionUndoAndRedo(test);
         bloom::commands::test::testRejectedAndInvalidTransactionsAreAtomic(test);

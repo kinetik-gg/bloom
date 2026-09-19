@@ -22,6 +22,8 @@ CommandResult makeResult(CommandAction action, CommandStatus status,
         .operationFailures = {},
         .outputs = {},
         .validation = {},
+        .renderAffecting = true,
+        .affectedTimes = std::nullopt,
     };
 }
 
@@ -150,6 +152,10 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     document::Draft draft = document_.draft(before);
     bool changed = false;
     bool renderAffecting = false;
+    // True as soon as an applied render-affecting operation did NOT prove a finite footprint, which
+    // makes the transaction's affected time the conservative whole render.
+    bool wholeRender = false;
+    std::optional<AffectedTimeFootprint> affectedTimes;
     std::vector<CommandOutput> outputs;
     std::size_t operationIndex = 0;
     for (const auto& operation : transaction.operations()) {
@@ -179,8 +185,22 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
         changed = changed || operationResult.status == OperationStatus::Applied;
         // Only an operation that actually applied can change pixels. A pixel-affecting operation
         // that reported NoChange contributes nothing, so a layout edit beside it stays layout-only.
-        if (operationResult.status == OperationStatus::Applied && operation->renderAffecting())
+        if (operationResult.status == OperationStatus::Applied && operation->renderAffecting()) {
             renderAffecting = true;
+            // A proven finite footprint narrows the affected time; an operation that proved none
+            // (the default) dominates to the whole render. A mixed-composition union also fails
+            // closed to whole render.
+            if (operationResult.affectedTimes.has_value()) {
+                const auto merged =
+                    mergeAffectedTimeFootprints(affectedTimes, *operationResult.affectedTimes);
+                if (!merged.has_value())
+                    wholeRender = true;
+                else
+                    affectedTimes = merged;
+            } else {
+                wholeRender = true;
+            }
+        }
         ++operationIndex;
     }
 
@@ -205,8 +225,15 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
                                   std::move(commitResult));
     result.outputs = std::move(outputs);
     result.renderAffecting = renderAffecting;
+    // A finite footprint is published only when the whole transaction's render effect is confined
+    // to it. A layout-only transaction (renderAffecting false) publishes none, matching its
+    // render-neutral semantics.
+    if (renderAffecting && !wholeRender && affectedTimes.has_value())
+        result.affectedTimes = affectedTimes;
+    const auto storedAffectedTimes = result.affectedTimes;
     history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(cursor_), history_.end());
-    history_.push_back({std::string(transaction.label()), before, after, renderAffecting});
+    history_.push_back(
+        {std::string(transaction.label()), before, after, renderAffecting, storedAffectedTimes});
     cursor_ = history_.size();
     trackedRevision_ = after.revision();
     notify(result);
@@ -240,6 +267,7 @@ CommandResult CommandStack::undo() {
     auto result =
         resultForCommit(CommandAction::Undo, entry.label, before, std::move(restoreResult));
     result.renderAffecting = entry.renderAffecting;
+    result.affectedTimes = entry.affectedTimes;
     --cursor_;
     trackedRevision_ = restoredRevision;
     notify(result);
@@ -273,6 +301,7 @@ CommandResult CommandStack::redo() {
     auto result =
         resultForCommit(CommandAction::Redo, entry.label, before, std::move(restoreResult));
     result.renderAffecting = entry.renderAffecting;
+    result.affectedTimes = entry.affectedTimes;
     ++cursor_;
     trackedRevision_ = restoredRevision;
     notify(result);

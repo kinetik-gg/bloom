@@ -1,4 +1,5 @@
 #include "node_operation_support.hpp"
+#include <algorithm>
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
@@ -72,11 +73,37 @@ OperationResult SetLayerRange::apply(document::Draft& draft) const {
     const auto in = snap(in_, *composition), out = snap(out_, *composition);
     if (!in || !out || *in >= *out || *out > composition->duration())
         return invalidRange();
-    if (layer->inPoint == *in && layer->endPoint(composition->duration()) == *out)
+    const auto duration = composition->duration();
+    if (layer->inPoint == *in && layer->endPoint(duration) == *out)
         return OperationResult::noChange();
+    // A trim/extension moves only WHEN this layer is active; it never slips the source, because the
+    // media/curve sampling is absolute composition time. So the rendered-output change is confined
+    // to the symmetric difference of the old and new activity spans, half-open. A consumer of this
+    // layer elsewhere in the graph sees exactly the same predicate change, so that difference is
+    // the honest bound for the whole composition.
+    const AffectedTimeRange oldSpan{layer->inPoint, layer->endPoint(duration)};
+    const AffectedTimeRange newSpan{*in, *out};
     layer->inPoint = *in;
     layer->outPoint = *out;
-    return OperationResult::applied();
+    // A\B and B\A, each at most one interval for two single spans.
+    std::vector<AffectedTimeRange> changed;
+    const auto difference = [&changed](const AffectedTimeRange& a, const AffectedTimeRange& b) {
+        if (a.end <= b.start || b.end <= a.start) {
+            changed.push_back(a);
+            return;
+        }
+        if (a.start < b.start)
+            changed.push_back({a.start, std::min(a.end, b.start)});
+        if (b.end < a.end)
+            changed.push_back({std::max(a.start, b.end), a.end});
+    };
+    difference(oldSpan, newSpan);
+    difference(newSpan, oldSpan);
+    auto result = OperationResult::applied();
+    result.affectedTimes = normalizeAffectedTimeFootprint({composition_, std::move(changed)});
+    // normalize can only fail if the difference produced no interval, which cannot happen for two
+    // valid non-identical spans; a nullopt here would conservatively mean whole-render.
+    return result;
 }
 std::string_view SplitLayerAtTime::typeId() const noexcept { return "bloom.layer.split-at-time"; }
 OperationResult SplitLayerAtTime::apply(document::Draft& draft) const {
