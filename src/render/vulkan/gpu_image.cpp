@@ -172,6 +172,15 @@ std::uint32_t GpuImage::generation() const noexcept {
     return impl_ != nullptr ? impl_->generation : 0;
 }
 
+std::uint64_t GpuImage::allocationBytes() const noexcept {
+    if (impl_ == nullptr || impl_->allocation == VK_NULL_HANDLE || impl_->state == nullptr) {
+        return 0;
+    }
+    VmaAllocationInfo info{};
+    vmaGetAllocationInfo(impl_->state->allocator, impl_->allocation, &info);
+    return static_cast<std::uint64_t>(info.size);
+}
+
 bool GpuImage::isBoundTo(GpuDevice& device) const noexcept {
     if (impl_ == nullptr || !impl_->onOwnerThread()) {
         return false;

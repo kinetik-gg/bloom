@@ -44,6 +44,9 @@ class GpuImage final {
     [[nodiscard]] std::optional<ImageWindow> displayWindow() const noexcept;
     [[nodiscard]] core::PixelAspectRatio pixelAspect() const noexcept;
     [[nodiscard]] std::uint32_t generation() const noexcept;
+    // Actual VMA allocation size in bytes (0 for an invalid image). This is the resource
+    // accounting number, not a requested extent: it includes allocator rounding.
+    [[nodiscard]] std::uint64_t allocationBytes() const noexcept;
 
     // True only for the exact GpuDevice generation this image was created from,
     // on that device's owner thread; false for a moved-from image, a different

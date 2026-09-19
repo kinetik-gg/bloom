@@ -1,0 +1,153 @@
+#version 460
+// Bloom TranslationOpacityBilinearV1 compute shader. Offline-generated/embedded; do not edit at
+// runtime. Operation: TranslationOpacityBilinearV1.
+//
+// Mirrors render::translateOpacityBilinearRow() (src/render/cpu_image_primitives.cpp) for the
+// RGBA32F reference-parity profile. The CPU primitive is the oracle; this shader must stay within
+// the documented per-component 2e-6 absolute-or-relative gate (docs/architecture/gpu-backend.md),
+// never bit-exact by claim. RGB is premultiplied lin_rec709_scene and is never clamped.
+//
+// SAMPLE POINT PRECISION. The CPU computes the sample coordinate in Float64:
+//   sampleLocal = double(outputLocal) - translation          (translation is Float64 authored)
+//   base  = (int64)floor(sampleLocal)
+//   factor = (float)(sampleLocal - double(base))
+// Computing that subtraction in the shader in Float32 would lose precision at large output
+// coordinates (e.g. outputLocal 4000 with translation 0.3 loses ~1e-4 in the factor, far outside
+// 2e-6). So the host performs the EXACT CPU double subtraction/floor/factor for every output column
+// and row and uploads two bounded O(outputWidth + outputHeight) axis arrays. The kernel only
+// gathers the prepared base/factor; it never re-derives the sample point and needs no float64.
+//
+// Axis entry: { int base; float factor; }. base == INT_MIN is the out-of-range sentinel (the CPU's
+// `sampleLocal <= -1.0 || sampleLocal >= sourceExtent` branch), which yields exact transparent
+// black for that row/column. base+1 taps outside the source data window are transparent too.
+//
+// Arithmetic policy: the CPU interpolates with std::fma(factor, end, (1 - factor) * start); the
+// shader evaluates the same expression with GLSL fma(). Tap selection, the sample point, floor,
+// factor, opacity multiply, and the transparent-border rule are exact.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D bloom_translate_input;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D bloom_translate_output;
+struct BloomAxisSample { int base; float factor; };
+layout(set = 0, binding = 2, std430) readonly buffer BloomTranslateAxisX {
+    BloomAxisSample samples[];
+} bloom_axis_x;
+layout(set = 0, binding = 3, std430) readonly buffer BloomTranslateAxisY {
+    BloomAxisSample samples[];
+} bloom_axis_y;
+// flags[0] bit0 non-finite input, bit1 non-finite result, bit2 any nonzero subnormal input lane.
+layout(set = 0, binding = 4) buffer BloomTranslateError { uint flags[]; } bloom_error;
+
+layout(push_constant) uniform BloomTranslatePushConstants {
+    uint outputWidth;    // output data-window width/height
+    uint outputHeight;
+    uint sourceWidth;    // source data-window width/height
+    uint sourceHeight;
+    float opacity;       // float32 opacity, already rounded once on the host
+} bloom_translate_push;
+
+const int kSentinelBase = -2147483648;
+const uint kErrorInputNonFinite = 1u;
+const uint kErrorResultNonFinite = 2u;
+const uint kErrorInputSubnormal = 4u;
+
+bool bloom_is_subnormal(float value)
+{
+    uint bits = floatBitsToUint(value) & 0x7FFFFFFFu;
+    return bits != 0u && bits < 0x00800000u;
+}
+
+uint bloom_lane_errors(vec4 value)
+{
+    uint errors = 0u;
+    if (any(isnan(value)) || any(isinf(value))) { errors |= kErrorInputNonFinite; }
+    if (bloom_is_subnormal(value.x) || bloom_is_subnormal(value.y) ||
+        bloom_is_subnormal(value.z) || bloom_is_subnormal(value.w)) {
+        errors |= kErrorInputSubnormal;
+    }
+    return errors;
+}
+
+vec4 bloom_fetch(int x, int y)
+{
+    if (x < 0 || y < 0 || x >= int(bloom_translate_push.sourceWidth) ||
+        y >= int(bloom_translate_push.sourceHeight)) {
+        return vec4(0.0);
+    }
+    return imageLoad(bloom_translate_input, ivec2(x, y));
+}
+
+float bloom_lerp(float start, float end, float factor)
+{
+    if (factor == 0.0) { return start; }
+    if (factor == 1.0) { return end; }
+    return fma(factor, end, (1.0 - factor) * start);
+}
+
+vec4 bloom_bilerp(vec4 topLeft, vec4 topRight, vec4 bottomLeft, vec4 bottomRight,
+                  float fx, float fy)
+{
+    vec4 top = vec4(bloom_lerp(topLeft.x, topRight.x, fx),
+                    bloom_lerp(topLeft.y, topRight.y, fx),
+                    bloom_lerp(topLeft.z, topRight.z, fx),
+                    bloom_lerp(topLeft.w, topRight.w, fx));
+    vec4 bottom = vec4(bloom_lerp(bottomLeft.x, bottomRight.x, fx),
+                       bloom_lerp(bottomLeft.y, bottomRight.y, fx),
+                       bloom_lerp(bottomLeft.z, bottomRight.z, fx),
+                       bloom_lerp(bottomLeft.w, bottomRight.w, fx));
+    return vec4(bloom_lerp(top.x, bottom.x, fy),
+                bloom_lerp(top.y, bottom.y, fy),
+                bloom_lerp(top.z, bottom.z, fy),
+                bloom_lerp(top.w, bottom.w, fy));
+}
+
+void main()
+{
+    uvec2 index = gl_GlobalInvocationID.xy;
+    if (index.x >= bloom_translate_push.outputWidth ||
+        index.y >= bloom_translate_push.outputHeight) {
+        return;
+    }
+    ivec2 outputLocal = ivec2(index);
+    vec4 transparent = vec4(0.0);
+
+    if (bloom_translate_push.opacity == 0.0) {
+        imageStore(bloom_translate_output, outputLocal, transparent);
+        return;
+    }
+
+    BloomAxisSample axisX = bloom_axis_x.samples[index.x];
+    BloomAxisSample axisY = bloom_axis_y.samples[index.y];
+    if (axisX.base == kSentinelBase || axisY.base == kSentinelBase) {
+        imageStore(bloom_translate_output, outputLocal, transparent);
+        return;
+    }
+
+    vec4 topLeft = bloom_fetch(axisX.base, axisY.base);
+    vec4 topRight = bloom_fetch(axisX.base + 1, axisY.base);
+    vec4 bottomLeft = bloom_fetch(axisX.base, axisY.base + 1);
+    vec4 bottomRight = bloom_fetch(axisX.base + 1, axisY.base + 1);
+
+    vec4 taps[4] = vec4[4](topLeft, topRight, bottomLeft, bottomRight);
+    uint errors = 0u;
+    for (int tap = 0; tap < 4; ++tap) {
+        errors |= bloom_lane_errors(taps[tap]);
+    }
+    if (errors != 0u) {
+        atomicOr(bloom_error.flags[0], errors);
+        imageStore(bloom_translate_output, outputLocal, transparent);
+        return;
+    }
+
+    vec4 sampled = bloom_bilerp(topLeft, topRight, bottomLeft, bottomRight,
+                                axisX.factor, axisY.factor);
+    if (bloom_translate_push.opacity != 1.0) {
+        sampled *= bloom_translate_push.opacity;
+    }
+    if (any(isnan(sampled)) || any(isinf(sampled))) {
+        atomicOr(bloom_error.flags[0], kErrorResultNonFinite);
+        imageStore(bloom_translate_output, outputLocal, transparent);
+        return;
+    }
+    imageStore(bloom_translate_output, outputLocal, sampled);
+}

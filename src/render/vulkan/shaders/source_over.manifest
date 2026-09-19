@@ -1,0 +1,99 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "generator": "tools/gpu-shaders compile/validate/embed recipe (reused, not reimplemented)",
+  "generatorRevision": 1,
+  "operation": "SourceOverV1",
+  "entrypoint": "main",
+  "shader": {
+    "language": "GLSL_460",
+    "stage": "compute",
+    "sha256": "217423fab13d2fae83bc61f00ed37803cc23e7284df17bebee1a8cdf7e2e017f",
+    "spirvSha256": "2aea19b4e3620e9e99f09f7f0e22f97822119ea798b44a1077179c4fc58194ee",
+    "localSizeX": 256,
+    "localSizeY": 1,
+    "localSizeZ": 1
+  },
+  "bindings": [
+    {
+      "set": 0,
+      "binding": 0,
+      "kind": "storage-image",
+      "access": "readonly",
+      "format": "rgba32f",
+      "role": "premultiplied-lin_rec709_scene-foreground"
+    },
+    {
+      "set": 0,
+      "binding": 1,
+      "kind": "storage-image",
+      "access": "readonly",
+      "format": "rgba32f",
+      "role": "premultiplied-lin_rec709_scene-backdrop"
+    },
+    {
+      "set": 0,
+      "binding": 2,
+      "kind": "storage-image",
+      "access": "writeonly",
+      "format": "rgba32f",
+      "role": "premultiplied-lin_rec709_scene-output"
+    },
+    {
+      "set": 0,
+      "binding": 3,
+      "kind": "storage-buffer",
+      "access": "readwrite",
+      "element": "uint",
+      "role": "error-flag",
+      "bits": {
+        "inputNonFinite": 1,
+        "resultNonFinite": 2,
+        "inputSubnormal": 4
+      }
+    }
+  ],
+  "pushConstant": {
+    "byteCount": 24,
+    "fields": [
+      {
+        "name": "destWidth",
+        "type": "uint32"
+      },
+      {
+        "name": "destHeight",
+        "type": "uint32"
+      },
+      {
+        "name": "sourceWidth",
+        "type": "uint32"
+      },
+      {
+        "name": "sourceHeight",
+        "type": "uint32"
+      },
+      {
+        "name": "sourceOffsetX",
+        "type": "int32"
+      },
+      {
+        "name": "sourceOffsetY",
+        "type": "int32"
+      }
+    ]
+  },
+  "hostDerivation": {
+    "order": "source is the foreground composited OVER the in-place destination, matching sourceOverLinearRec709SceneRow(source, destination)",
+    "offsets": "sourceOffset = sourceDataWindow.origin - destinationDataWindow.origin (componentwise); sourceLocal = destLocal - sourceOffset",
+    "windows": "destWidth/Height and sourceWidth/Height are data-window extents",
+    "checked": "dispatch ceil(destWidth*destHeight/256); host preflights the same overflow/budget the CPU primitive checks"
+  },
+  "contracts": {
+    "numeric": "per-finite-component abs-or-rel 2e-6 against render::sourceOverLinearRec709SceneRow; never bit-exact by claim",
+    "arithmetic": "CPU uses std::fma(1-as,destination,source) with both alphas interior; shader uses fma() for the same expression; endpoints are exact",
+    "order": "fixed source-over-backdrop; the destination is read-only and a separate output image is written, so the caller's destination is never mutated",
+    "outOfBounds": "a source tap outside the source data window is transparent black, which leaves the destination unchanged -- the CPU oracle's transparent aligned pixel",
+    "nonFinitePolicy": "non-finite input sets bit0, nonzero subnormal input sets bit2, a non-finite result sets bit1; on any error the destination pixel is left unchanged and the consumer must not publish while flags[0] != 0",
+    "cpuFallback": "non-finite/subnormal domains and any precision the shader cannot match stay on the CPU reference path; no silent substitution",
+    "offsets": "sourceOffset = destinationDataWindow.origin - sourceDataWindow.origin; sourceLocal = destLocal + sourceOffset (the exact CPU oracle mapping sourceX = destX - sourceOrigin)"
+  }
+}

@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-09-19
+Updated: 2026-09-20
 
 ## Purpose
 
@@ -217,7 +217,37 @@ are unchanged. This is bootstrap and lifecycle only: no service/viewer/image-pre
 checkerboard/channel/overlay present, no performance or reference-parity claim, and XCB/Xlib/Xrandr
 presentation remains deferred to a reviewed intake.
 
-Pending and unchanged: the GPU scene evaluator and content cache, per-layer GPU compositing,
+The render layer now owns the two GPU compositing operations and the runtime owns a bounded
+owner-thread content cache, still without any scene evaluator, service, or viewer wiring.
+`GpuComposite` (`gpu_composite.hpp`, with a portable CPU-unavailable stub) runs
+`TranslationOpacityBilinearV1` and `SourceOverV1`, each writing a new resident RGBA32F `GpuImage`;
+both inputs are `shared_ptr<const GpuImage>` retained for the job and never mutated, source-over reads
+its destination as a read-only backdrop, and the translation output preserves the source display
+window and pixel aspect while `outputWindow` is the data window only. The sample point is prepared on
+the host in Float64 (`prepareTranslationAxis`, O(width+height) axis buffers) so the kernel needs no
+`shaderFloat64`; dispatch is one invocation per pixel. The two shaders are offline artifacts pinned by
+SHA-256 with manifest source binding and a configure-time glslangValidator/spirv-val regeneration
+check against the embedded SPIR-V digest, so the source -> SPIR-V -> embedded-array relationship is
+closed. Budgets are enforced on the ACTUAL VMA allocation sizes (allocator rounding included) plus the
+per-call transient staging peak, with overflow-safe arithmetic; each input's `impl->state` is compared
+to this device generation before any driver resource is created or bound, so a real image from a second
+device is rejected `InvalidArgument` with no job started. `GpuSceneCache`
+(`bloom/runtime/gpu_scene_cache.hpp`) maps an already-computed semantic digest to an already-computed
+resident image, charged by `GpuImage::allocationBytes()`, runs only on the device owner thread, rejects
+a foreign-device image by ownership identity, and never replaces or evicts an image still pinned by an
+external `shared_ptr` (a pinned replacement is refused and the original entry preserved). Two minimal
+seams support the cache: `GpuDevice::isOwnerThread()` (native owner compare; stub false) and
+`GpuImage::allocationBytes()` (VMA size; stub 0). Verified locally on a real device with the pinned
+loader: the Solid -> Translation -> SourceOver resident chain with 4K fractional translations
+(3840-wide), nonzero/differing origins, odd extents, opacity and alpha endpoints, HDR/negative RGB,
+and 4:3 pixel aspect, each within the documented per-finite-component 2e-6 absolute-or-relative gate
+against the retained CPU primitives; immutable-input readback; actual foreign-input rejection followed
+by a valid same-device job; the actual-allocation peak refusal; the cache's semantic-digest hits,
+pinned-replacement refusal, owner gate, and foreign-identity rejection; the CPU-only kernel test
+(SPIR-V pins and CPU-derived fixtures) and the strict stub syntax of the touched APIs. No performance
+claim is made.
+
+Pending and unchanged: the GPU scene evaluator, per-layer GPU compositing selection,
 resident GPU viewer buffers, WSI/swapchain presentation,
 a whole-application benchmark, the full per-operation qualification fixtures for a future
 `ReferenceParity` profile (this operation stays `PreviewOnly`), general graph execution,

@@ -111,6 +111,53 @@ bloom_add_test(
     LABELS unit gpu render
 )
 
+# CPU-only kernel-prep test for TranslationOpacityBilinearV1 and SourceOverV1: hashes the embedded
+# SPIR-V arrays against their pinned digests and derives every fixture expectation from the REAL CPU
+# primitives. It never dispatches a GPU and registers unconditionally, so it also runs in a
+# CPU-stub build.
+add_executable(bloom_render_gpu_composite_kernel_test gpu_composite_kernel_tests.cpp)
+target_link_libraries(bloom_render_gpu_composite_kernel_test PRIVATE bloom_render)
+target_include_directories(bloom_render_gpu_composite_kernel_test
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+target_compile_definitions(bloom_render_gpu_composite_kernel_test
+    PRIVATE
+        "BLOOM_TRANSLATION_OPACITY_SPV_SHA256=\"0049b132bf98214375023a82472f2839a0e8f30e1b1209a0f214ef283b97c3b8\""
+        "BLOOM_SOURCE_OVER_SPV_SHA256=\"2aea19b4e3620e9e99f09f7f0e22f97822119ea798b44a1077179c4fc58194ee\"")
+bloom_enable_warnings(bloom_render_gpu_composite_kernel_test)
+bloom_enable_strict_floating_point(bloom_render_gpu_composite_kernel_test)
+bloom_add_test(
+    NAME bloom.render.gpu_composite_kernel
+    COMMAND bloom_render_gpu_composite_kernel_test
+    LABELS unit gpu render
+)
+
+# Real-device native chain test (Solid -> TranslationOpacityBilinearV1 -> SourceOverV1) with the CPU
+# primitives as oracle. It compiles the private Vulkan header via the composite support header, so
+# the target exists only where the Vulkan backend is built; it skips cleanly without a device and
+# --require-device fails closed. The same strict flags as the solid/resident tests apply.
+if(BLOOM_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_render_gpu_composite_test gpu_composite_native_tests.cpp)
+    target_link_libraries(bloom_render_gpu_composite_test PRIVATE bloom_render)
+    target_include_directories(bloom_render_gpu_composite_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan" "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/include/vulkan")
+        target_include_directories(bloom_render_gpu_composite_test
+            SYSTEM PRIVATE "${BLOOM_DEPENDENCY_PREFIX}/include")
+    endif()
+    target_compile_definitions(bloom_render_gpu_composite_test
+        PRIVATE
+            "BLOOM_TRANSLATION_OPACITY_SPV_SHA256=\"0049b132bf98214375023a82472f2839a0e8f30e1b1209a0f214ef283b97c3b8\""
+            "BLOOM_SOURCE_OVER_SPV_SHA256=\"2aea19b4e3620e9e99f09f7f0e22f97822119ea798b44a1077179c4fc58194ee\""
+            BLOOM_RENDER_TEST_VULKAN_BACKEND=1)
+    bloom_enable_warnings(bloom_render_gpu_composite_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_composite_test)
+    bloom_add_test(
+        NAME bloom.render.gpu_composite
+        COMMAND bloom_render_gpu_composite_test
+        LABELS unit gpu render
+    )
+endif()
+
 # Device-free presentation-target unit tests (format refusal table and wait-result
 # classification). Only meaningful where the private Vulkan header is available.
 if(BLOOM_RENDER_VULKAN_AVAILABLE)

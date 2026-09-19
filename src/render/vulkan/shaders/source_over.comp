@@ -1,0 +1,113 @@
+#version 460
+// Bloom SourceOverV1 compute shader. Offline-generated/embedded; do not edit at runtime.
+// Operation: SourceOverV1.
+//
+// Mirrors render::sourceOverLinearRec709SceneRow() (src/render/cpu_image_primitives.cpp): the
+// foreground SOURCE is composited OVER the BACKDROP (the destination image) in premultiplied
+// lin_rec709_scene RGBA32F process space, RGB never clamped. Order is fixed: source over backdrop,
+// never the reverse.
+//
+// The CPU primitive mutates an aligned destination row in place. This kernel instead reads the
+// destination as a read-only BACKDROP and writes a separate OUTPUT storage image, so the caller's
+// destination image is never mutated and the operation returns its own resident result. The window
+// mapping is the only generalization: the destination data window is the output, and the source is
+// sampled at destLocal + sourceOffset, where sourceOffset = destinationDataWindow.origin -
+// sourceDataWindow.origin (the exact CPU oracle mapping sourceX = destX - sourceOrigin). A source tap outside the source data window is exact transparent
+// black, which leaves the destination pixel unchanged -- the CPU oracle's transparent aligned
+// source pixel. That is how source-out-of-bounds and empty-overlap reduce to the retained CPU rule.
+//
+// Arithmetic policy: the CPU kernel uses std::fma(1 - as, destination, source) once both alphas are
+// interior. The shader uses GLSL fma() for the same expression and relies on the documented
+// per-component 2e-6 absolute-or-relative gate rather than claiming bit parity. The endpoint
+// shortcuts (source alpha 0, source alpha 1, destination alpha 0) are exact, as on CPU.
+//
+// Unsupported-domain policy (explicit): a non-finite input or result sets a typed error bit; on any
+// error nothing is written to the output for that pixel, so the frame must not be published and the
+// caller uses the CPU reference path. Any nonzero subnormal input lane is likewise rejected
+// whole-pixel. The consumer must not publish a frame while flags[0] is nonzero.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D bloom_source_over_source;
+layout(set = 0, binding = 1, rgba32f) uniform readonly image2D bloom_source_over_backdrop;
+layout(set = 0, binding = 2, rgba32f) uniform writeonly image2D bloom_source_over_output;
+// flags[0] bit0 non-finite input, bit1 non-finite result, bit2 any nonzero subnormal input lane.
+layout(set = 0, binding = 3) buffer BloomSourceOverError { uint flags[]; } bloom_error;
+
+layout(push_constant) uniform BloomSourceOverPushConstants {
+    uint destWidth;        // destination data-window width/height
+    uint destHeight;
+    uint sourceWidth;      // source data-window width/height
+    uint sourceHeight;
+    int sourceOffsetX;     // sourceLocal = destLocal + sourceOffset
+    int sourceOffsetY;
+} bloom_source_over_push;
+
+const uint kErrorInputNonFinite = 1u;
+const uint kErrorResultNonFinite = 2u;
+const uint kErrorInputSubnormal = 4u;
+
+bool bloom_is_subnormal(float value)
+{
+    uint bits = floatBitsToUint(value) & 0x7FFFFFFFu;
+    return bits != 0u && bits < 0x00800000u;
+}
+
+uint bloom_lane_errors(vec4 value)
+{
+    uint errors = 0u;
+    if (any(isnan(value)) || any(isinf(value))) { errors |= kErrorInputNonFinite; }
+    if (bloom_is_subnormal(value.x) || bloom_is_subnormal(value.y) ||
+        bloom_is_subnormal(value.z) || bloom_is_subnormal(value.w)) {
+        errors |= kErrorInputSubnormal;
+    }
+    return errors;
+}
+
+void main()
+{
+    uvec2 index = gl_GlobalInvocationID.xy;
+    if (index.x >= bloom_source_over_push.destWidth ||
+        index.y >= bloom_source_over_push.destHeight) {
+        return;
+    }
+    ivec2 destLocal = ivec2(index);
+    ivec2 sourceLocal = destLocal + ivec2(bloom_source_over_push.sourceOffsetX,
+                                          bloom_source_over_push.sourceOffsetY);
+
+    vec4 destination = imageLoad(bloom_source_over_backdrop, destLocal);
+    bool sourceInside = sourceLocal.x >= 0 && sourceLocal.y >= 0 &&
+                        sourceLocal.x < int(bloom_source_over_push.sourceWidth) &&
+                        sourceLocal.y < int(bloom_source_over_push.sourceHeight);
+    vec4 source = sourceInside ? imageLoad(bloom_source_over_source, sourceLocal) : vec4(0.0);
+
+    uint errors = bloom_lane_errors(destination);
+    if (sourceInside) { errors |= bloom_lane_errors(source); }
+    if (errors != 0u) {
+        atomicOr(bloom_error.flags[0], errors);
+        imageStore(bloom_source_over_output, destLocal, destination);
+        return;
+    }
+
+    // CPU endpoints, exact: a transparent source leaves the destination untouched; an opaque source,
+    // or an empty destination, writes the source through unchanged.
+    if (source.a == 0.0) {
+        imageStore(bloom_source_over_output, destLocal, destination);
+        return;
+    }
+    if (source.a == 1.0 || destination.a == 0.0) {
+        imageStore(bloom_source_over_output, destLocal, source);
+        return;
+    }
+
+    float inverseSourceAlpha = 1.0 - source.a;
+    vec4 composited = vec4(fma(inverseSourceAlpha, destination.x, source.x),
+                           fma(inverseSourceAlpha, destination.y, source.y),
+                           fma(inverseSourceAlpha, destination.z, source.z),
+                           fma(inverseSourceAlpha, destination.w, source.w));
+    if (any(isnan(composited)) || any(isinf(composited))) {
+        atomicOr(bloom_error.flags[0], kErrorResultNonFinite);
+        imageStore(bloom_source_over_output, destLocal, destination);
+        return;
+    }
+    imageStore(bloom_source_over_output, destLocal, composited);
+}

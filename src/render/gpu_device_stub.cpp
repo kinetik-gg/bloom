@@ -42,6 +42,8 @@ GpuDeviceState GpuDevice::state() const noexcept {
     return impl_ != nullptr ? impl_->state : GpuDeviceState::Unavailable;
 }
 
+bool GpuDevice::isOwnerThread() const noexcept { return false; }
+
 const GpuCapabilityReport& GpuDevice::capabilityReport() const noexcept {
     if (impl_ != nullptr) {
         return impl_->report;

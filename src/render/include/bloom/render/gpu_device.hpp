@@ -199,6 +199,9 @@ class GpuDevice final {
     create(const GpuDeviceCreationOptions& options = {});
 
     [[nodiscard]] GpuDeviceState state() const noexcept;
+    // True only on the thread that created this device generation. False for a null/moved-from or
+    // portable-stub device. No allocation or native call is involved.
+    [[nodiscard]] bool isOwnerThread() const noexcept;
     [[nodiscard]] const GpuCapabilityReport& capabilityReport() const noexcept;
 
     // Missing operation/precision entries are Unavailable, matching the architecture contract.

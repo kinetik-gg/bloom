@@ -244,6 +244,124 @@ else()
         "solid.comp digest is still enforced.")
 endif()
 
+# --- Fixed TranslationOpacityBilinearV1 shader: source pin and regeneration check ----------------
+#
+# Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe. The checked-in
+# .comp is pinned here, the manifest must bind that source digest, and, when the locked
+# glslangValidator/spirv-val are present, configure recompiles it and confirms the SPIR-V digest
+# embedded in translation_opacity_spirv.inc. Runtime code never compiles or loads a shader.
+set(BLOOM_COMPOSITE_TRANSLATION_COMP
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/translation_opacity.comp")
+set(BLOOM_COMPOSITE_TRANSLATION_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/translation_opacity.manifest")
+set(BLOOM_COMPOSITE_TRANSLATION_INC
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/translation_opacity_spirv.inc")
+set(BLOOM_COMPOSITE_TRANSLATION_COMP_SHA256
+    "b92912217b61368c8b65cfda59620d9aad1a4fec5d6d9a31ce843982ee057650")
+set(BLOOM_COMPOSITE_TRANSLATION_SPV_SHA256
+    "0049b132bf98214375023a82472f2839a0e8f30e1b1209a0f214ef283b97c3b8")
+
+file(SHA256 "${BLOOM_COMPOSITE_TRANSLATION_COMP}" bloom_composite_translation_comp_sha256)
+if(NOT bloom_composite_translation_comp_sha256 STREQUAL BLOOM_COMPOSITE_TRANSLATION_COMP_SHA256)
+    message(FATAL_ERROR
+        "translation_opacity.comp SHA-256 mismatch: measured "
+        "${bloom_composite_translation_comp_sha256}, pinned "
+        "${BLOOM_COMPOSITE_TRANSLATION_COMP_SHA256}. Regenerate only through the tools/gpu-shaders "
+        "recipe and update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_COMPOSITE_TRANSLATION_MANIFEST}" bloom_composite_translation_manifest_text)
+if(NOT bloom_composite_translation_manifest_text MATCHES "${BLOOM_COMPOSITE_TRANSLATION_COMP_SHA256}")
+    message(FATAL_ERROR
+        "translation_opacity.manifest does not bind the pinned translation_opacity.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_composite_translation_generated_spv
+        "${CMAKE_CURRENT_BINARY_DIR}/translation_opacity.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_COMPOSITE_TRANSLATION_COMP}" -o "${bloom_composite_translation_generated_spv}"
+        RESULT_VARIABLE bloom_composite_translation_glslang_result)
+    if(NOT bloom_composite_translation_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile translation_opacity.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2
+                "${bloom_composite_translation_generated_spv}"
+        RESULT_VARIABLE bloom_composite_translation_spirv_val_result)
+    if(NOT bloom_composite_translation_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated TranslationOpacityBilinearV1 SPIR-V.")
+    endif()
+    file(SHA256 "${bloom_composite_translation_generated_spv}"
+         bloom_composite_translation_spv_sha256)
+    if(NOT bloom_composite_translation_spv_sha256 STREQUAL BLOOM_COMPOSITE_TRANSLATION_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated TranslationOpacityBilinearV1 SPIR-V SHA-256 "
+            "${bloom_composite_translation_spv_sha256} does not match the embedded "
+            "${BLOOM_COMPOSITE_TRANSLATION_SPV_SHA256}; the checked-in .comp and "
+            "translation_opacity_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: translation_opacity.comp regenerated and SPIR-V-validated "
+        "(${bloom_composite_translation_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "translation_opacity.comp digest is still enforced.")
+endif()
+
+# --- Fixed SourceOverV1 shader: source pin and regeneration check --------------------------------
+set(BLOOM_COMPOSITE_SOURCE_OVER_COMP
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/source_over.comp")
+set(BLOOM_COMPOSITE_SOURCE_OVER_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/source_over.manifest")
+set(BLOOM_COMPOSITE_SOURCE_OVER_INC
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/source_over_spirv.inc")
+set(BLOOM_COMPOSITE_SOURCE_OVER_COMP_SHA256
+    "217423fab13d2fae83bc61f00ed37803cc23e7284df17bebee1a8cdf7e2e017f")
+set(BLOOM_COMPOSITE_SOURCE_OVER_SPV_SHA256
+    "2aea19b4e3620e9e99f09f7f0e22f97822119ea798b44a1077179c4fc58194ee")
+
+file(SHA256 "${BLOOM_COMPOSITE_SOURCE_OVER_COMP}" bloom_composite_source_over_comp_sha256)
+if(NOT bloom_composite_source_over_comp_sha256 STREQUAL BLOOM_COMPOSITE_SOURCE_OVER_COMP_SHA256)
+    message(FATAL_ERROR
+        "source_over.comp SHA-256 mismatch: measured ${bloom_composite_source_over_comp_sha256}, "
+        "pinned ${BLOOM_COMPOSITE_SOURCE_OVER_COMP_SHA256}. Regenerate only through the "
+        "tools/gpu-shaders recipe and update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_COMPOSITE_SOURCE_OVER_MANIFEST}" bloom_composite_source_over_manifest_text)
+if(NOT bloom_composite_source_over_manifest_text MATCHES "${BLOOM_COMPOSITE_SOURCE_OVER_COMP_SHA256}")
+    message(FATAL_ERROR "source_over.manifest does not bind the pinned source_over.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_composite_source_over_generated_spv
+        "${CMAKE_CURRENT_BINARY_DIR}/source_over.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_COMPOSITE_SOURCE_OVER_COMP}" -o "${bloom_composite_source_over_generated_spv}"
+        RESULT_VARIABLE bloom_composite_source_over_glslang_result)
+    if(NOT bloom_composite_source_over_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile source_over.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2
+                "${bloom_composite_source_over_generated_spv}"
+        RESULT_VARIABLE bloom_composite_source_over_spirv_val_result)
+    if(NOT bloom_composite_source_over_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated SourceOverV1 SPIR-V.")
+    endif()
+    file(SHA256 "${bloom_composite_source_over_generated_spv}"
+         bloom_composite_source_over_spv_sha256)
+    if(NOT bloom_composite_source_over_spv_sha256 STREQUAL BLOOM_COMPOSITE_SOURCE_OVER_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated SourceOverV1 SPIR-V SHA-256 ${bloom_composite_source_over_spv_sha256} "
+            "does not match the embedded ${BLOOM_COMPOSITE_SOURCE_OVER_SPV_SHA256}; the checked-in "
+            ".comp and source_over_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: source_over.comp regenerated and SPIR-V-validated "
+        "(${bloom_composite_source_over_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "source_over.comp digest is still enforced.")
+endif()
+
 set(BLOOM_RENDER_VULKAN_AVAILABLE OFF)
 if(BLOOM_RENDER_ENABLE_VULKAN AND DEFINED BLOOM_DEPENDENCY_MODE)
     if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
@@ -305,6 +423,7 @@ target_sources(
             include/bloom/render/cpu_image_primitives.hpp
             include/bloom/render/display_buffer.hpp
             include/bloom/render/embedded_fonts.hpp
+            include/bloom/render/gpu_composite.hpp
             include/bloom/render/gpu_device.hpp
             include/bloom/render/gpu_image.hpp
             include/bloom/render/gpu_image_upload.hpp
@@ -324,6 +443,9 @@ target_sources(
 # the desktop application.
 if(BLOOM_RENDER_VULKAN_AVAILABLE)
     target_sources(bloom_render PRIVATE
+        vulkan/gpu_composite.cpp
+        vulkan/gpu_composite_private.hpp
+        vulkan/gpu_composite_resources.cpp
         vulkan/gpu_device.cpp
         vulkan/gpu_device_private.hpp
         vulkan/gpu_image.cpp
@@ -347,11 +469,18 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/shaders/solid.comp
         vulkan/shaders/solid.manifest
         vulkan/shaders/solid_spirv.inc
+        vulkan/shaders/translation_opacity.comp
+        vulkan/shaders/translation_opacity.manifest
+        vulkan/shaders/translation_opacity_spirv.inc
+        vulkan/shaders/source_over.comp
+        vulkan/shaders/source_over.manifest
+        vulkan/shaders/source_over_spirv.inc
     )
 else()
-    target_sources(bloom_render PRIVATE gpu_device_stub.cpp gpu_image_upload_stub.cpp
-                                     gpu_neutral_display_stub.cpp gpu_presentation_target_stub.cpp
-                                     gpu_resident_display_stub.cpp gpu_solid_stub.cpp)
+    target_sources(bloom_render PRIVATE gpu_composite_stub.cpp gpu_device_stub.cpp
+                                     gpu_image_upload_stub.cpp gpu_neutral_display_stub.cpp
+                                     gpu_presentation_target_stub.cpp gpu_resident_display_stub.cpp
+                                     gpu_solid_stub.cpp)
 endif()
 
 target_compile_features(bloom_render PUBLIC cxx_std_20)

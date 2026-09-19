@@ -264,3 +264,17 @@ bloom_add_test(
     LABELS runtime unit gpu color
     TIMEOUT 300
 )
+
+# Bounded owner-thread GPU scene content cache. It drives real resident images produced by SolidV1,
+# so it depends only on runtime create() availability and runs against the CPU stub with an explicit
+# skip; --loader/--require-device are supplied by the local supervisor for a native run.
+add_executable(bloom_runtime_gpu_scene_cache_test gpu_scene_cache_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_scene_cache_test PRIVATE bloom_runtime_evaluator bloom_render)
+bloom_enable_warnings(bloom_runtime_gpu_scene_cache_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_scene_cache_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_scene_cache
+    COMMAND bloom_runtime_gpu_scene_cache_test
+    LABELS runtime unit gpu render
+    TIMEOUT 120
+)

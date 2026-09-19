@@ -1,0 +1,104 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "generator": "tools/gpu-shaders compile/validate/embed recipe (reused, not reimplemented)",
+  "generatorRevision": 1,
+  "operation": "TranslationOpacityBilinearV1",
+  "entrypoint": "main",
+  "shader": {
+    "language": "GLSL_460",
+    "stage": "compute",
+    "sha256": "b92912217b61368c8b65cfda59620d9aad1a4fec5d6d9a31ce843982ee057650",
+    "spirvSha256": "0049b132bf98214375023a82472f2839a0e8f30e1b1209a0f214ef283b97c3b8",
+    "localSizeX": 256,
+    "localSizeY": 1,
+    "localSizeZ": 1
+  },
+  "bindings": [
+    {
+      "set": 0,
+      "binding": 0,
+      "kind": "storage-image",
+      "access": "readonly",
+      "format": "rgba32f",
+      "role": "premultiplied-lin_rec709_scene-source"
+    },
+    {
+      "set": 0,
+      "binding": 1,
+      "kind": "storage-image",
+      "access": "writeonly",
+      "format": "rgba32f",
+      "role": "premultiplied-lin_rec709_scene-output"
+    },
+    {
+      "set": 0,
+      "binding": 2,
+      "kind": "storage-buffer",
+      "access": "readonly",
+      "element": "BloomAxisSample",
+      "role": "host-prepared-x-axis-base-factor"
+    },
+    {
+      "set": 0,
+      "binding": 3,
+      "kind": "storage-buffer",
+      "access": "readonly",
+      "element": "BloomAxisSample",
+      "role": "host-prepared-y-axis-base-factor"
+    },
+    {
+      "set": 0,
+      "binding": 4,
+      "kind": "storage-buffer",
+      "access": "readwrite",
+      "element": "uint",
+      "role": "error-flag",
+      "bits": {
+        "inputNonFinite": 1,
+        "resultNonFinite": 2,
+        "inputSubnormal": 4
+      }
+    }
+  ],
+  "pushConstant": {
+    "byteCount": 20,
+    "fields": [
+      {
+        "name": "outputWidth",
+        "type": "uint32"
+      },
+      {
+        "name": "outputHeight",
+        "type": "uint32"
+      },
+      {
+        "name": "sourceWidth",
+        "type": "uint32"
+      },
+      {
+        "name": "sourceHeight",
+        "type": "uint32"
+      },
+      {
+        "name": "opacity",
+        "type": "float32"
+      }
+    ]
+  },
+  "hostDerivation": {
+    "axisX": "prepareTranslationAxis(outputWidth, sourceWidth, translationX): exact Float64 sampleLocal=local-translation, sentinel when sampleLocal<=-1.0 or >= sourceExtent, else base=(int64)floor and factor=(float)(sampleLocal-base)",
+    "axisY": "prepareTranslationAxis(outputHeight, sourceHeight, translationY)",
+    "sentinel": "base==INT_MIN means transparent for that row/column; base+1 taps outside the source data window are transparent",
+    "opacity": "TranslationOpacity::opacity() is the float32 binding",
+    "checked": "dispatch ceil(outputWidth*outputHeight/256); host preflights the image + metadata budget and device limits"
+  },
+  "contracts": {
+    "numeric": "per-finite-component abs-or-rel 2e-6 against render::translateOpacityBilinearRow; never bit-exact by claim",
+    "arithmetic": "CPU uses std::fma(factor,end,(1-factor)*start); shader uses fma() for the same lerp; SPIR-V relaxed contraction is covered by the 2e-6 gate",
+    "sampleConvention": "kernel gathers the host-prepared base/factor; it never re-derives the sample point and needs no float64. This removes the Float32 subtraction precision loss at large output coordinates.",
+    "opacity": "opacity==0 writes transparent; opacity==1 skips the multiply; otherwise sampled *= opacity",
+    "nonFinitePolicy": "any non-finite tap sets bit0, any nonzero subnormal tap sets bit2, a non-finite result sets bit1; on any error the output pixel is transparent and the consumer must not publish while flags[0] != 0",
+    "cpuFallback": "non-finite/subnormal domains and any precision the shader cannot match stay on the CPU reference path; no silent substitution",
+    "metadataBudget": "axis arrays are O(outputWidth+outputHeight) BloomAxisSample (8 bytes each), charged against maxMetadataBytes and the per-call byteBudget"
+  }
+}
