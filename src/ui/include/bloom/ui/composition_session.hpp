@@ -545,8 +545,29 @@ class CompositionSession final : public QObject {
     void rebind(document::Document& document, commands::CommandStack& commandStack,
                 document::CompositionId compositionId);
 
+    // The retained evaluation snapshot: the genuine document snapshot whose render-relevant
+    // content the prepared frames, compiled plans and cache keys represent. It is normally the live
+    // snapshot, but verified contiguous layout-only commands leave it on the previous genuine
+    // snapshot, so committed preview work, compiled-plan and frame-cache keys, and RAM/background
+    // captures keep ONE real revision instead of one per card drag. It is never a re-stamped
+    // revision: every snapshot this returns is one the session actually read from the document, and
+    // it advances to live on any render-affecting command, rebind, or unknown transition (see
+    // evaluationChanged). "Represents" here means the pixels a request built on it would produce;
+    // this accessor does not claim a preparation has already run for it.
+    [[nodiscard]] const document::Snapshot& evaluationSnapshot() const noexcept;
+
   signals:
+    // Fired by rebind() AFTER the new live and evaluation snapshots are installed but BEFORE every
+    // other signal, so a consumer can drop state that belongs to the old document -- most
+    // importantly cached frames and plans whose numeric (project, composition, revision) tuples
+    // collide with the new document's -- before the ordinary refresh signals build new requests.
+    void documentRebound();
     void snapshotChanged();
+    // Emitted only when evaluationSnapshot() actually changes, plus the existing non-document
+    // display/colour-qualification/settings notifications that force preview work. UI surfaces keep
+    // following snapshotChanged; preview, RAM and background caching follow this one, so a
+    // layout-only edit updates the UI without invalidating a single evaluated pixel.
+    void evaluationChanged();
     void compositionChanged();
     void currentTimeChanged();
     void selectionChanged();
@@ -695,6 +716,9 @@ class CompositionSession final : public QObject {
     commands::CommandObserverId commandObserverId_ = 0;
     std::shared_ptr<CommandObserverState> commandObserverState_;
     document::Snapshot snapshot_;
+    // Retained alongside the live snapshot; see evaluationSnapshot(). Declared after snapshot_ so
+    // the constructor can seed it from the same initial document read.
+    document::Snapshot evaluationSnapshot_;
     document::CompositionId compositionId_;
     core::RationalTime currentTime_ = core::RationalTime::fromInteger(0);
     CompositionSelection selection_;

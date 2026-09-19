@@ -31,7 +31,9 @@ BackgroundPreviewController::BackgroundPreviewController(
             &BackgroundPreviewController::setPlaying);
     connect(&previewController_, &CompositionPreviewController::resolutionChanged, this,
             &BackgroundPreviewController::restart);
-    connect(&session_, &CompositionSession::snapshotChanged, this,
+    // Pixel work follows the retained evaluation snapshot. A layout-only edit leaves the fill
+    // cursor and the cached key untouched; a render-affecting edit restarts the pass.
+    connect(&session_, &CompositionSession::evaluationChanged, this,
             &BackgroundPreviewController::restart);
     connect(&session_, &CompositionSession::compositionChanged, this,
             &BackgroundPreviewController::restart);
@@ -197,7 +199,7 @@ void BackgroundPreviewController::fillNextFrame() {
         submittedAt_ = std::chrono::steady_clock::now();
         auto submission = scheduler_.submit<PreviewPreparationResultHandle>(
             std::move(request),
-            [snapshot = session_.snapshot(), identity, preparation = preparation_,
+            [snapshot = session_.evaluationSnapshot(), identity, preparation = preparation_,
              limit = previewController_.settings().pixelStorageByteLimit](
                 runtime::TaskContext& context) mutable {
                 if (context.isCancellationRequested()) {

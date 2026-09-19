@@ -2317,12 +2317,22 @@ std::optional<ViewerMapping> ViewerEditor::currentMapping() const {
     if (frameHandle == nullptr) {
         return std::nullopt;
     }
-    // A stale frame from another composition -- or an older revision of this one -- is never a
+    // A stale frame from another composition, another project, or an older evaluation is never a
     // mapping source (docs/architecture/animation-and-time.md, "Direct Manipulation And Preview
-    // Overrides").
-    if (frameHandle->desiredIdentity().compositionId != session_.compositionId() ||
-        frameHandle->desiredIdentity().sourceRevision != session_.snapshot().revision() ||
-        frameHandle->desiredIdentity().time != session_.currentTime()) {
+    // Overrides"). A committed frame honestly carries the retained evaluation snapshot's revision,
+    // which a verified layout-only edit may have left behind the live revision; an interactive
+    // frame carries the live revision. Both name THIS live document, so requiring the project id to
+    // agree -- not just the numeric revision -- is what keeps an old project's frame from ever
+    // mapping, even when its revision number collides.
+    const auto& desired = frameHandle->desiredIdentity();
+    const auto& live = session_.snapshot();
+    const auto& evaluation = session_.evaluationSnapshot();
+    if (desired.compositionId != session_.compositionId() ||
+        desired.projectId != live.project().id() ||
+        desired.projectId != evaluation.project().id() ||
+        (desired.sourceRevision != live.revision() &&
+         desired.sourceRevision != evaluation.revision()) ||
+        desired.time != session_.currentTime()) {
         return std::nullopt;
     }
     const auto* composition = session_.composition();

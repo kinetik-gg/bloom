@@ -1,4 +1,5 @@
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
@@ -40,6 +41,7 @@
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -521,6 +523,48 @@ void testBackgroundFillsAheadWhilePlaying(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
+// LAYOUT-2: a layout-only edit does not restart the background pass, and it keeps filling under
+// the retained evaluation revision, so the key it fills and the snapshot it captured cannot
+// disagree. (Deliberate foreground priority still yields through the existing event filter.)
+void testLayoutEditKeepsBackgroundOnRetainedRevision(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Background Layout Retain", time(7, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the foreground preview settles before background fills");
+    fixture.frameCache->clear();
+    const auto evalRevision = fixture.session.evaluationSnapshot().revision();
+    const auto nodeId = fixture.session.composition()->graph().nodes().front().id;
+
+    ui::BackgroundPreviewController background(fixture.session, fixture.controller,
+                                               fixture.scheduler, fixture.bridge,
+                                               fixture.countingPipeline());
+    background.fillNextFrame();
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 1; }),
+                        "the background pass fills its first frame");
+
+    commands::Transaction move("Move Nodes", fixture.session.snapshot().revision());
+    move.emplace<commands::MoveNodes>(
+        fixture.session.compositionId(),
+        std::map<document::NodeId, document::Vec2d>{{nodeId, {6.0, 7.0}}});
+    expectations.expect(fixture.session.executeNodeTransaction(std::move(move)).changed() &&
+                            fixture.session.evaluationSnapshot().revision() == evalRevision &&
+                            fixture.session.snapshot().revision() != evalRevision,
+                        "the layout edit retains the evaluation revision");
+
+    background.fillNextFrame();
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() >= 2; }),
+                        "the background pass keeps filling after the layout edit");
+    for (std::int64_t frame = 0; frame < 7; ++frame) {
+        const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
+        if (key.has_value() && fixture.frameCache->contains(*key)) {
+            expectations.expect(key->sourceRevision == evalRevision,
+                                "a background frame is cached under the retained revision");
+        }
+    }
+
+    background.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -535,6 +579,7 @@ int main(int argc, char** argv) {
         testWorkAreaBoundsBackground(expectations);
         testOutwardOrderBudgetAndRestart(expectations);
         testYieldsAndKeepsCancelledHandleUntilTerminal(expectations);
+        testLayoutEditKeepsBackgroundOnRetainedRevision(expectations);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

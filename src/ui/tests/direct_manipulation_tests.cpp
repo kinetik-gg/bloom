@@ -9,6 +9,7 @@
 // and timeline_ruler_tests.cpp's synthesized-mouse-event idiom.
 
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
@@ -47,6 +48,7 @@
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <source_location>
@@ -1009,6 +1011,69 @@ void testEscapeCancelsMidDrag(Expectations& expectations) {
                         "the escape-cancel fixture reaches asynchronous scheduler quiescence");
 }
 
+// LAYOUT-2: a gesture begun after a layout-only edit still maps and previews correctly. The
+// displayed frame honestly carries the retained evaluation revision (older than live), yet
+// currentMapping() accepts it, and the interaction's overrides name the LIVE revision so the
+// compiler can accept them. The commit advances evaluation to live and undoes cleanly.
+void testGestureAfterLayoutEditUsesLiveRevision(Expectations& expectations) {
+    using namespace bloom;
+    GestureFixture fixture(makeTestProject("Viewer Layout Edit Gesture"));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the initial frame becomes ready");
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
+        "the fixture layer is added and selected");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the post-add frame becomes ready");
+    const auto* position = fixture.session.parameterForSelection(document::kPositionParameterRole);
+    expectations.expect(position != nullptr, "the solid layer exposes a position parameter");
+    if (position == nullptr)
+        return;
+    const auto positionId = position->id;
+    const auto base = fixture.session.constantVec2Value(positionId);
+    expectations.expect(base.has_value(), "the position starts as a resolvable constant");
+    if (!base.has_value())
+        return;
+
+    const auto evalRevisionBefore = fixture.session.evaluationSnapshot().revision();
+    const auto nodeId = fixture.session.composition()->graph().nodes().front().id;
+    commands::Transaction move("Move Nodes", fixture.session.snapshot().revision());
+    move.emplace<commands::MoveNodes>(
+        fixture.session.compositionId(),
+        std::map<document::NodeId, document::Vec2d>{{nodeId, {12.0, 13.0}}});
+    expectations.expect(fixture.session.executeNodeTransaction(std::move(move)).changed() &&
+                            fixture.session.evaluationSnapshot().revision() == evalRevisionBefore &&
+                            fixture.session.snapshot().revision() != evalRevisionBefore,
+                        "the layout edit retains the evaluation snapshot");
+    const auto liveRevision = fixture.session.snapshot().revision();
+    sendPress(fixture.viewer, QPointF(200.0, 150.0));
+    // ViewerEditor::currentMapping() is private; a begun interaction IS the proof it accepted the
+    // retained evaluation-provenance frame -- it refuses to begin when the frame does not map.
+    expectations.expect(fixture.session.transformInteractionActive(),
+                        "the gesture begins, so the retained frame still maps");
+    const auto overrides = fixture.session.transformInteractionOverrides();
+    expectations.expect(!overrides.empty() && overrides.front().sourceRevision == liveRevision,
+                        "gesture overrides name the live revision, never the retained one");
+    sendMove(fixture.viewer, QPointF(260.0, 110.0));
+    sendRelease(fixture.viewer, QPointF(260.0, 110.0));
+    expectations.expect(!fixture.session.transformInteractionActive(), "release ends the gesture");
+    expectations.expect(fixture.session.snapshot().revision().value() == liveRevision.value() + 1,
+                        "release commits exactly one document transaction");
+    expectations.expect(fixture.session.constantVec2Value(positionId) != base,
+                        "the committed position moved");
+    expectations.expect(fixture.session.evaluationSnapshot().revision() ==
+                            fixture.session.snapshot().revision(),
+                        "the commit advanced the evaluation snapshot to live");
+    expectations.expect(fixture.session.undo() &&
+                            fixture.session.constantVec2Value(positionId) == base,
+                        "undo restores the exact pre-gesture position");
+
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+                        "the layout-edit gesture fixture reaches scheduler quiescence");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1026,5 +1091,6 @@ int main(int argc, char** argv) {
     testDragOnEmptyOrUnselectedDoesNothing(expectations);
     testMidDragResizeCancelsWithNoCommitAndNoOverrideLeft(expectations);
     testEscapeCancelsMidDrag(expectations);
+    testGestureAfterLayoutEditUsesLiveRevision(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

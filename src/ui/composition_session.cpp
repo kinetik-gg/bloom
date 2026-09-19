@@ -122,6 +122,9 @@ kit::KColorConverter CompositionSession::colorConverter(const std::string_view s
             if (!ready)
                 reportUnavailable(tr("Colour conversion unavailable"));
             Q_EMIT snapshotChanged();
+            // The qualified display transform landing changes pixels without changing the document
+            // revision, so it is an evaluation transition rather than a live-document edit.
+            Q_EMIT evaluationChanged();
         });
         timer->start();
     }
@@ -181,6 +184,7 @@ void CompositionSession::setColorSettings(document::ColorSettings settings) {
     colorSettings_ = std::move(settings);
     emit colorSettingsChanged();
     emit snapshotChanged();
+    emit evaluationChanged();
 }
 
 bool CompositionSession::setWorkingColorSpaceOverride(std::optional<std::string> colorSpaceId) {
@@ -325,7 +329,7 @@ CompositionSession::CompositionSession(document::Document& document,
     : QObject(parent),
       colorSettings_(document::makeBloomNeutralColorSettingsV1(color::kBloomNeutralV1ConfigDigest)),
       document_(&document), commandStack_(&commandStack), snapshot_(document.snapshot()),
-      compositionId_(compositionId) {
+      evaluationSnapshot_(snapshot_), compositionId_(compositionId) {
     attachCommandObserver();
     if (composition() == nullptr && !snapshot_.project().compositions().empty()) {
         compositionId_ = lowestCompositionId(snapshot_.project());
@@ -369,6 +373,9 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
     commandObserverId_ = 0;
     attachCommandObserver();
     snapshot_ = document_->snapshot();
+    // Reset the retained evaluation snapshot to the newly bound document BEFORE any signal is
+    // published, so no observer can ever pair a new document with the old document's eval state.
+    evaluationSnapshot_ = snapshot_;
     compositionId_ = compositionId;
     currentTime_ = core::RationalTime::fromInteger(0);
     selection_ = {};
@@ -381,9 +388,12 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
 
     // One coherent transition (docs/architecture/project-session.md, "Session Publication"):
     // observers must never see a new document paired with stale selection/time/history, so every
-    // existing changed signal fires here, unconditionally, in this order.
+    // existing changed signal fires here, unconditionally, in this order. documentRebound() is
+    // first, so caches keyed by colliding numeric ids are dropped before any refresh is built.
+    emit documentRebound();
     emit liveValueChanged();
     emit snapshotChanged();
+    emit evaluationChanged();
     emit compositionChanged();
     emit currentTimeChanged();
     emit selectionChanged();
@@ -391,6 +401,10 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
 }
 
 const document::Snapshot& CompositionSession::snapshot() const noexcept { return snapshot_; }
+
+const document::Snapshot& CompositionSession::evaluationSnapshot() const noexcept {
+    return evaluationSnapshot_;
+}
 
 document::CompositionId CompositionSession::compositionId() const noexcept {
     return compositionId_;
@@ -1474,13 +1488,33 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
     if (event.kind == commands::CommandEventKind::RevisionChanged) {
         const auto previousRevision = snapshot_.revision();
         snapshot_ = document_->snapshot();
+        const bool revisionAdvanced = snapshot_.revision() != previousRevision;
+        // Retain the last genuine evaluation snapshot only when this command proved, from its own
+        // published metadata, that it changed no rendered pixel and sat exactly on the live
+        // revision chain of the same project. Every other case -- an unclassified or
+        // render-affecting command, a stale/external revision, a different project -- advances the
+        // evaluation snapshot to live, which is the conservative choice.
+        const bool retainEvaluationSnapshot =
+            revisionAdvanced && !event.result.renderAffecting && event.result.succeeded() &&
+            event.result.beforeRevision == previousRevision &&
+            event.result.afterRevision == snapshot_.revision() &&
+            evaluationSnapshot_.project().id() == snapshot_.project().id();
+        // Adopt the new evaluation snapshot BEFORE invalidating interactions or cancelling value
+        // edits: both emit signals whose handlers build a preview request, and a request built
+        // during that window must already see the revision it is allowed to evaluate. This is the
+        // same reason rebind() resets it before publishing.
+        if (revisionAdvanced && !retainEvaluationSnapshot) {
+            evaluationSnapshot_ = snapshot_;
+        }
         invalidateTransformInteractionOnStaleRevision();
         if (valueEdit_ && valueEdit_->revision != snapshot_.revision()) {
             cancelValueEdit();
         }
-        if (snapshot_.revision() != previousRevision) {
+        if (revisionAdvanced) {
             normalizeSelection();
             emit snapshotChanged();
+            if (!retainEvaluationSnapshot)
+                emit evaluationChanged();
         }
         return;
     }

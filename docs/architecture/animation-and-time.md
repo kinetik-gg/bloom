@@ -428,9 +428,22 @@ ENTRIES still fold in order, bottom to top -- only the rows within one entry ban
 Progress brackets a row pass (`completed` 0, then the total) instead of counting rows, because a band
 runs on a thread the progress callback does not belong to.
 
-A compiled plan is cached per document revision for the same reason a sequence export compiles once:
-the compiler is time-independent, so two requests that differ only in time compile to the same plan.
-A request carrying an interactive parameter override is compiled directly and never retained.
+A compiled plan is cached for the same reason a sequence export compiles once: the compiler is
+time-independent, so two requests that differ only in time compile to the same plan. The cache entry
+retains the immutable input snapshot it was built from, and a request matches only when it carries
+the exact same retained project-state object plus the same composition and revision -- not merely the
+same numeric `(ProjectId, CompositionId, Revision)` tuple, because every New/Open document
+deliberately reuses those numbers. Copies of one snapshot, which is what every request carries, still
+hit; a different document with colliding numbers recompiles. A request carrying an interactive
+parameter override is compiled directly and never retained.
+
+A rebind to a different document (`documentRebound()`) is fired after the new live and evaluation
+snapshots are installed but before the ordinary refresh signals. The foreground preview cancels and
+detaches its active handle, clears any pending request and the frame cache, and resets its displayed
+and request state there, so an old document's queued completion can never publish or cache pixels
+under a colliding numeric key; the normal evaluation/composition signals then build the new
+document's request. RAM preview and background caching already cancel on those signals and discard
+their old completions the same way.
 
 ### Sequence Export
 
@@ -532,17 +545,45 @@ about 8 MB a frame, a 2 GiB preview budget holds roughly 250 frames of a 1920x10
 ten seconds at 24 fps -- and a RAM preview whose range does not fit stops at the first eviction and
 keeps the prefix that does.
 
-**Invalidation is the key.** A document edit advances the revision, so every entry of an earlier
-revision is unreachable by construction; those entries are dropped outright when a frame of a newer
-revision arrives. Two requests never reach the cache at all: one carrying an interactive parameter
-override, whose pixels belong to a gesture rather than to the revision and whose identity cannot say
-so, and an explicit refresh, which asks for the frame to be re-derived precisely because something
-the key does not cover may have changed. CACHE-1 narrows this for one derived input: an interactive
-override plan may still READ an already-verified, immutable native decoded still-image entry out of
-the evaluator's memory cache instead of re-decoding it, but never inserts a source entry on a miss,
-and derived operation results, overridden plans, gesture frame-cache insertion, and disk-cache reads
-and writes stay bypassed. An explicit evaluation bypass (`request.bypassOperationCache`, distinct
-from the preview frame-cache refresh described here) disables even that read-only reuse.
+**Invalidation is the key, and the key is the retained evaluation snapshot, not the live document
+revision.** `CompositionSession::snapshot()` and `snapshotChanged()` remain the live document and UI
+truth: every applied command advances them. Beside them the session retains
+`evaluationSnapshot()`, the newest genuine snapshot whose render-relevant content the preview has
+evaluated, and publishes `evaluationChanged()` only when it actually moves. A command whose own
+result metadata proves it changed no rendered pixel -- the three card-layout commands, `MoveNodes`,
+`SetNodeCollapsed` and `SetNodeWidth`, and only those -- leaves `evaluationSnapshot()` on the
+previous genuine snapshot, so the prepared frame, the frame-cache key and the compiled plan keep one
+real revision instead of one per drag. Every other command, an unknown or unclassified one included,
+advances `evaluationSnapshot()` to live, so the default stays conservative. The retained snapshot is
+never a re-stamped revision: it is one the session actually read from the document, and nested-plan
+`sourceRevision` and `ProcessFrameIdentity` keep naming it. A cache entry therefore becomes
+unreachable only when the evaluation snapshot advances, and entries of an earlier evaluation are
+dropped outright when a frame of a newer one arrives. Two requests never reach the cache at all: one
+carrying an interactive parameter override, whose pixels belong to a gesture rather than to the
+snapshot and whose identity cannot say so, and an explicit refresh, which asks for the frame to be
+re-derived precisely because something the key does not cover may have changed. CACHE-1 narrows
+this for one derived input: an interactive override plan may still READ an already-verified,
+immutable native decoded still-image entry out of the evaluator's memory cache instead of
+re-decoding it, but never inserts a source entry on a miss, and derived operation results,
+overridden plans, gesture frame-cache insertion, and disk-cache reads and writes stay bypassed. An
+explicit evaluation bypass (`request.bypassOperationCache`, distinct from the preview frame-cache
+refresh described here) disables even that read-only reuse.
+
+**Who follows which signal.** UI surfaces follow `snapshotChanged()`; the foreground preview, the
+RAM preview run and the background filler follow `evaluationChanged()`. A verified layout-only edit
+therefore updates node cards, the timeline and the properties rows while the prepared frame stays on
+screen, the in-flight preparation is not replaced, the RAM run keeps its one retained snapshot and
+completes with reusable frames, and the background pass keeps its cursor. The colour qualification
+becoming available, a display/colour-settings change, and rebind all publish `evaluationChanged()`
+too, so none of that work is skipped. A committed request is built on `evaluationSnapshot()`; an
+interactive request is assembled from its overrides before the snapshot is chosen and is built on
+the live snapshot, because an override names the live revision it was frozen against and is never
+re-stamped. `ViewerEditor::currentMapping()` and the controller's live-session guard accept a frame
+whose project, composition and time agree and whose revision is either the live or the retained
+evaluation revision, so a gesture still maps after a layout-only edit while an old project's frame
+can never become current merely because a numeric revision collides. An explicit refresh, a
+resolution change and a display/view change still re-derive; the retained snapshot is a cache
+identity, not a promise that a forced request will be answered from it.
 
 **The RAM Preview command** (`Ctrl+Shift+Space`, the Composition menu, and the Timeline transport's
 own button) pre-renders the composition's work-area frame range into the cache one frame at a time, in
@@ -570,8 +611,9 @@ and shutdown handling. It never changes session time or publishes Viewer pixels.
 
 Each pass visits at most the nearest set of frames that fits the cache's byte budget. Cached entries
 in that set are reused and protected by the cache's LRU order. The pass then stops, avoiding an endless
-cycle that evicts its own frames. A revision, resolution, playhead, or memory-budget change restarts
-selection. Old revision entries evict through the existing cache policy. Background caching visits
+cycle that evicts its own frames. An evaluation-snapshot, resolution, playhead, or memory-budget
+change restarts selection; a layout-only edit moves none of those and leaves the pass running. Old
+evaluation-snapshot entries evict through the existing cache policy. Background caching visits
 only frame times inside the session's resolved work area, including when choosing nearby frames
 around an out-of-range playhead. Cache budgets, cancellation and shutdown behavior are unchanged.
 

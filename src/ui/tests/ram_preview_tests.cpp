@@ -5,6 +5,7 @@
 // measuring speed. What is pinned is not how fast a frame is but WHETHER a frame was rendered at
 // all: a cache that works shows up as an invocation count that stops moving.
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
@@ -45,6 +46,7 @@
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -856,6 +858,149 @@ void testOperationCacheUnderRamPreview(Expectations& expectations) {
                         "saved budget is honored");
 }
 
+// LAYOUT-2: a RAM preview run keeps ONE retained evaluation snapshot across a layout-only edit,
+// so the frames it caches stay reusable rather than being re-keyed out from under the run. A pixel
+// edit changes the evaluation snapshot and cancels the run.
+void testLayoutEditRetainsTheRamRun(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM Layout Retain", time(24, 25)));
+    expectations.expect(animateSolidLayer(fixture.session),
+                        "the fixture composition is animated across its range");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the animated composition renders its first frame");
+
+    const auto evalRevision = fixture.session.evaluationSnapshot().revision();
+    const auto nodeId = fixture.session.composition()->graph().nodes().front().id;
+
+    // Pause the run on its first uncached frame so the layout edit lands mid-run.
+    fixture.gateAtCall = fixture.preparationCount.load();
+    ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
+                                 fixture.bridge, fixture.countingPipeline());
+    ram.start();
+    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
+                        "the RAM run reaches a frame on the worker");
+
+    commands::Transaction move("Move Nodes", fixture.session.snapshot().revision());
+    move.emplace<commands::MoveNodes>(
+        fixture.session.compositionId(),
+        std::map<document::NodeId, document::Vec2d>{{nodeId, {4.0, 5.0}}});
+    expectations.expect(fixture.session.executeNodeTransaction(std::move(move)).changed(),
+                        "the layout edit publishes while the run is in flight");
+    expectations.expect(fixture.session.snapshot().revision() != evalRevision &&
+                            fixture.session.evaluationSnapshot().revision() == evalRevision &&
+                            ram.isCaching(),
+                        "the layout edit retains the evaluation snapshot and the run");
+
+    fixture.gate.release();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
+                            ram.cachedFrameCount() == ram.totalFrameCount(),
+                        "the run completes under one retained evaluation revision");
+    for (std::uint64_t frame = 0; frame < ram.totalFrameCount(); ++frame) {
+        const auto key =
+            fixture.controller.cacheKeyForTime(time(static_cast<std::int64_t>(frame), 25));
+        expectations.expect(key.has_value() && key->sourceRevision == evalRevision &&
+                                fixture.frameCache->contains(*key),
+                            "every cached frame is reusable under the retained revision");
+    }
+
+    ram.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
+// LAYOUT-2: a pixel edit advances the evaluation snapshot, which cancels a RAM run in flight
+// because its cached frames would belong to an evaluation the artist has left behind.
+void testPixelEditCancelsTheRamRun(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM Pixel Cancel", time(24, 25)));
+    expectations.expect(animateSolidLayer(fixture.session),
+                        "the fixture composition is animated across its range");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the animated composition renders its first frame");
+    const auto nodeId = fixture.session.composition()->graph().nodes().front().id;
+
+    fixture.gateAtCall = fixture.preparationCount.load();
+    ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
+                                 fixture.bridge, fixture.countingPipeline());
+    ram.start();
+    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }) && ram.isCaching(),
+                        "the RAM run is in flight on the worker");
+
+    commands::Transaction mute("Mute Node", fixture.session.snapshot().revision());
+    mute.emplace<commands::SetNodeMuted>(fixture.session.compositionId(), nodeId, true);
+    expectations.expect(fixture.session.executeNodeTransaction(std::move(mute)).changed() &&
+                            !ram.isCaching() &&
+                            fixture.session.evaluationSnapshot().revision() ==
+                                fixture.session.snapshot().revision(),
+                        "a pixel edit advances evaluation and cancels the run");
+
+    fixture.gate.release();
+    ram.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
+// PROVENANCE-1: the compiled-plan cache binds to the real retained snapshot, not to the numeric
+// (project, composition, revision) tuple every New/Open document deliberately reuses. Copies of one
+// snapshot hit; a different document with colliding numbers must recompile.
+void testCompiledPlanCacheBindsSnapshotIdentity(Expectations& expectations) {
+    auto firstProject = makeTestProject("Plan Provenance First", time(1));
+    const auto compositionId = firstProject.initialCompositionId;
+    document::Document firstDocument(std::move(firstProject.project));
+    commands::CommandStack firstCommands(firstDocument);
+    commands::Transaction firstAdd("Add Solid", firstDocument.snapshot().revision());
+    firstAdd.emplace<commands::AddSolidLayer>(compositionId, std::string("Solid"),
+                                              core::Color4d{1.0, 0.0, 0.0, 1.0});
+    expectations.expect(firstCommands.execute(std::move(firstAdd)).changed(),
+                        "the first document gets a red solid");
+
+    auto secondProject = makeTestProject("Plan Provenance Second", time(1));
+    const auto secondCompositionId = secondProject.initialCompositionId;
+    document::Document secondDocument(std::move(secondProject.project));
+    commands::CommandStack secondCommands(secondDocument);
+    commands::Transaction secondAdd("Add Solid", secondDocument.snapshot().revision());
+    secondAdd.emplace<commands::AddSolidLayer>(secondCompositionId, std::string("Solid"),
+                                               core::Color4d{0.0, 0.0, 1.0, 1.0});
+    expectations.expect(secondCommands.execute(std::move(secondAdd)).changed(),
+                        "the second document gets a blue solid");
+    expectations.expect(
+        firstDocument.snapshot().revision() == secondDocument.snapshot().revision() &&
+            firstDocument.snapshot().project().id() == secondDocument.snapshot().project().id() &&
+            compositionId == secondCompositionId,
+        "the two documents deliberately collide in project/composition/revision");
+
+    runtime::NodeDefinitionRegistry definitions;
+    expectations.expect(runtime::registerBuiltInNodeDefinitions(definitions),
+                        "the plan-provenance fixture registers node definitions");
+    definitions.freeze();
+    const runtime::SnapshotCompiler compiler(definitions);
+    ui::CompiledPlanCache cache;
+
+    const auto firstSnapshot = firstDocument.snapshot();
+    const auto first =
+        cache.compile(compiler, {.snapshot = firstSnapshot, .compositionId = compositionId}, {});
+    const auto repeated =
+        cache.compile(compiler, {.snapshot = firstSnapshot, .compositionId = compositionId}, {});
+    expectations.expect(first.plan != nullptr && repeated.plan == first.plan &&
+                            cache.statistics() ==
+                                ui::CompiledPlanCache::Statistics{.compiles = 1, .hits = 1},
+                        "a repeated request of the same snapshot hits");
+
+    const auto copied = cache.compile(
+        compiler, {.snapshot = firstDocument.snapshot(), .compositionId = compositionId}, {});
+    expectations.expect(copied.plan == first.plan && cache.statistics().hits == 2 &&
+                            cache.statistics().compiles == 1,
+                        "a copied snapshot of the same document state still hits");
+
+    const auto second = cache.compile(
+        compiler, {.snapshot = secondDocument.snapshot(), .compositionId = secondCompositionId},
+        {});
+    expectations.expect(second.plan != nullptr && second.plan != first.plan &&
+                            cache.statistics().compiles == 2 && cache.size() == 2,
+                        "a colliding document recompiles instead of reusing the wrong plan");
+    const auto secondAgain = cache.compile(
+        compiler, {.snapshot = secondDocument.snapshot(), .compositionId = secondCompositionId},
+        {});
+    expectations.expect(secondAgain.plan == second.plan && cache.statistics().hits == 3,
+                        "the second document's own snapshot hits");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -871,6 +1016,7 @@ int main(int argc, char** argv) {
         testRamPreviewSharesResolutionAndCachesByPolicy(expectations);
         testResolutionChangeCancelsAnActiveRamPreview(expectations);
         testCompiledPlanCacheCompilesOncePerRevision(expectations);
+        testCompiledPlanCacheBindsSnapshotIdentity(expectations);
         testCacheHitPublishesWithoutEvaluating(expectations);
         testCachingReleasesTheProcessImage(expectations);
         testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(expectations);
@@ -878,6 +1024,8 @@ int main(int argc, char** argv) {
         testRamPreviewCachesTheRangeThenPlaysEveryFrame(expectations);
         testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(expectations);
         testRamPreviewCancellationKeepsWhatItCached(expectations);
+        testLayoutEditRetainsTheRamRun(expectations);
+        testPixelEditCancelsTheRamRun(expectations);
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return 1;

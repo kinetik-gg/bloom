@@ -63,10 +63,31 @@ CompositionPreviewController::CompositionPreviewController(
       frameCache_(frameCache != nullptr
                       ? std::move(frameCache)
                       : std::make_shared<PreviewFrameCache>(settings.ramPreviewByteBudget)) {
-    connect(&session_, &CompositionSession::snapshotChanged, this,
+    // Pixel work follows the retained evaluation snapshot, never the live document revision: a
+    // verified layout-only edit updates the UI through snapshotChanged but must not disturb a
+    // single evaluated frame. Explicit refresh, display/resolution and colour changes all reach
+    // requestPreview() through evaluationChanged or their own direct calls.
+    connect(&session_, &CompositionSession::evaluationChanged, this,
             &CompositionPreviewController::requestRefresh);
     connect(&session_, &CompositionSession::compositionChanged, this,
             &CompositionPreviewController::handleCompositionChanged);
+    // A rebind installs a different document whose numeric project/composition/revision can collide
+    // with the previous one. Drop every trace of the old document before any refresh is built:
+    // cancel and detach the active handle, clear pending/cadence and the frame cache, and reset the
+    // displayed/request state, so a queued old completion cannot populate a colliding cache key.
+    connect(&session_, &CompositionSession::documentRebound, this, [this] {
+        Q_ASSERT(QThread::currentThread() == thread());
+        interactiveCadenceTimer_.stop();
+        interactiveSubmissionClock_.invalidate();
+        interactiveTimeChangeArmed_ = false;
+        valueEditPreviewActive_ = false;
+        preparationEstimate_.reset();
+        pending_.reset();
+        cancelAndDetachActive();
+        frameCache_->clear();
+        state_ = CompositionPreviewState{};
+        emit stateChanged();
+    });
     connect(&session_, &CompositionSession::currentTimeChanged, this,
             &CompositionPreviewController::handleCurrentTimeChanged);
     connect(&session_, &CompositionSession::transformInteractionChanged, this,
@@ -79,7 +100,8 @@ CompositionPreviewController::CompositionPreviewController(
             return;
         }
         settings_.colorIntent = intent;
-        requestRefresh();
+        // No request here: setColorSettings() also publishes evaluationChanged(), which is the one
+        // refresh trigger for this transition -- requesting from both would double the work.
     });
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this,
             &CompositionPreviewController::consumeReadyResult);
@@ -151,7 +173,11 @@ PreviewFrameCache& CompositionPreviewController::frameCache() const noexcept {
 
 std::optional<PreviewFrameCacheKey>
 CompositionPreviewController::cacheKeyForTime(const core::RationalTime time) const {
-    const auto& snapshot = session_.snapshot();
+    // The retained evaluation snapshot, not the live one: this key must match the frames the
+    // committed preview actually produced, even when a layout-only edit has since moved the live
+    // document ahead. This is what lets RAM preview, background caching and the transport reuse
+    // those frames.
+    const auto& snapshot = session_.evaluationSnapshot();
     const auto compositionId = session_.compositionId();
     if (snapshot.project().findComposition(compositionId) == nullptr) {
         return std::nullopt;
@@ -510,7 +536,21 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         active_->handle.cancel();
         noteDroppedFrame();
     }
-    const document::Snapshot snapshot = session_.snapshot();
+    // Overrides ride ONLY Interactive requests from an active gesture (docs/architecture/
+    // animation-and-time.md), and are read fresh here -- never cached across requests. They are
+    // assembled BEFORE the snapshot is selected because an override names the live document
+    // revision it was frozen against; the request carrying it must therefore be built on the live
+    // snapshot, while a committed request is built on the retained evaluation snapshot. Assembling
+    // first means we never re-stamp an override's sourceRevision or hand it a snapshot that
+    // disagrees with it.
+    std::vector<runtime::SnapshotParameterOverride> interactionOverride;
+    if (kind == PreviewRequestKind::Interactive) {
+        interactionOverride = session_.transformInteractionOverrides();
+        const auto values = session_.valueEditOverrides();
+        interactionOverride.insert(interactionOverride.end(), values.begin(), values.end());
+    }
+    const document::Snapshot snapshot =
+        interactionOverride.empty() ? session_.evaluationSnapshot() : session_.snapshot();
     const document::CompositionId compositionId = session_.compositionId();
     PreparedPreviewFrameHandle retainedFrame = clearLastGoodFrame ? nullptr : state_.frame;
     if (retainedFrame != nullptr &&
@@ -590,15 +630,6 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         publishTerminal(PreviewActivity::Failed,
                         tr("The composition preview memory budget is invalid"));
         return;
-    }
-
-    // Overrides ride ONLY Interactive requests from an active gesture (docs/architecture/
-    // animation-and-time.md), and are read fresh here -- never cached across requests.
-    std::vector<runtime::SnapshotParameterOverride> interactionOverride;
-    if (kind == PreviewRequestKind::Interactive) {
-        interactionOverride = session_.transformInteractionOverrides();
-        const auto values = session_.valueEditOverrides();
-        interactionOverride.insert(interactionOverride.end(), values.begin(), values.end());
     }
 
     // The RAM preview cache (docs/architecture/animation-and-time.md, "RAM preview"). A request
@@ -826,10 +857,20 @@ bool CompositionPreviewController::isCurrent(const ActiveRequest& request) const
 
 bool CompositionPreviewController::liveSessionMatches(
     const runtime::PreviewRequestIdentity& desiredIdentity) const noexcept {
-    const auto& snapshot = session_.snapshot();
-    return session_.compositionId() == desiredIdentity.compositionId &&
-           snapshot.revision() == desiredIdentity.sourceRevision &&
-           snapshot.project().id() == desiredIdentity.projectId;
+    // A committed frame honestly carries the retained evaluation snapshot's revision, which a
+    // layout-only edit may have left behind the live one; an interactive frame carries live. Both
+    // are the live session's own document, so both match -- but only when the project identity
+    // agrees, so an old project's frame can never become current merely because its numeric
+    // revision collides. isCurrent() and the stale-result rejections below are unchanged.
+    const auto& live = session_.snapshot();
+    const auto& evaluation = session_.evaluationSnapshot();
+    if (session_.compositionId() != desiredIdentity.compositionId)
+        return false;
+    if (live.project().id() != desiredIdentity.projectId ||
+        evaluation.project().id() != desiredIdentity.projectId)
+        return false;
+    return desiredIdentity.sourceRevision == live.revision() ||
+           desiredIdentity.sourceRevision == evaluation.revision();
 }
 
 } // namespace bloom::ui

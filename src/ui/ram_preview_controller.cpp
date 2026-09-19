@@ -38,10 +38,11 @@ RamPreviewController::RamPreviewController(CompositionSession& session,
       scheduler_(scheduler), taskUiBridge_(taskUiBridge), preparation_(std::move(preparation)) {
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this,
             &RamPreviewController::consumeReadyResult);
-    // A document edit or a composition switch makes every frame this run would still cache belong
-    // to a document that is no longer live, so the run ends rather than caching frames of a
-    // revision the artist has already left behind.
-    connect(&session_, &CompositionSession::snapshotChanged, this, &RamPreviewController::cancel);
+    // A render-affecting edit or a composition switch makes every frame this run would still cache
+    // belong to an evaluation the artist has left behind, so the run ends rather than mixing
+    // revisions. A verified layout-only edit publishes no evaluationChanged, so the run keeps its
+    // ONE retained evaluation snapshot and completes with reusable frames.
+    connect(&session_, &CompositionSession::evaluationChanged, this, &RamPreviewController::cancel);
     connect(&session_, &CompositionSession::compositionChanged, this,
             &RamPreviewController::cancel);
     // A range must not mix factors or policies when the viewer changes resolution mid-run.
@@ -65,7 +66,10 @@ void RamPreviewController::start() {
         return;
     }
 
-    snapshot_ = session_.snapshot();
+    // The retained evaluation snapshot: every frame of this run is cached under one real revision
+    // that stays reusable across layout-only edits, and the run is cancelled by evaluationChanged
+    // the moment a pixel-affecting edit changes it.
+    snapshot_ = session_.evaluationSnapshot();
     compositionId_ = session_.compositionId();
     const auto range = session_.workArea();
     const auto rate = composition->format().frameRate();

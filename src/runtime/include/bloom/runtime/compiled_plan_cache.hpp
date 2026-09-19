@@ -19,7 +19,18 @@ inline constexpr std::size_t kDefaultCompiledPlanCacheCapacity = 4;
 // index the evaluator samples at the request time, so two requests that differ only in time compile
 // to the same plan -- the same reason docs/architecture/animation-and-time.md gives for compiling a
 // sequence export's range once. The key is therefore the document identity the plan was built from
-// (project, composition, revision) and nothing about the request.
+// and nothing about the request.
+//
+// That identity is the RETAINED snapshot itself, not the numeric (project, composition, revision)
+// tuple: every New/Open document deliberately reuses ProjectId 1, CompositionId 1 and the same
+// revision numbers, so those numbers are not document-instance provenance. Each entry keeps the
+// immutable Snapshot it was compiled from, and a request matches only when it carries the exact
+// same retained project-state object (the address of `Snapshot::project()`, stable while the
+// snapshot is retained) plus the same composition and revision. Copies of one snapshot -- the
+// normal case, since every request copies the session's snapshot -- still share that state object
+// and hit; a different Document with colliding numbers cannot. Holding the Snapshot also prevents a
+// freed state object's address from being reused by a later document. Conservative misses are
+// acceptable.
 //
 // A request carrying an interactive parameter override does NOT come through here: the override is
 // lowered into the plan as a constant for that one request, so its plan is not the revision's plan.
@@ -59,7 +70,10 @@ class CompiledPlanCache final {
 
   private:
     struct Entry final {
-        document::ProjectId projectId;
+        // The real immutable input, retained as the provenance owner. `project()` lives inside the
+        // snapshot's shared document state, so its address identifies that exact state while this
+        // entry holds it and cannot be recycled by a later document.
+        document::Snapshot snapshot;
         document::CompositionId compositionId;
         document::Revision revision;
         SnapshotCompileResult result;
