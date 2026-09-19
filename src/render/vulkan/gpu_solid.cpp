@@ -339,8 +339,9 @@ GpuSolidDiagnostic GpuSolid::begin(const GpuSolidParameters& parameters,
     }
     if (impl.control->generation != impl.expectedGeneration) {
         impl.deviceLost = true;
-        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceLost,
-                                  "the device generation changed; this pipeline must not be reused");
+        return gpuSolidDiagnostic(
+            GpuSolidDiagnosticCode::DeviceLost,
+            "the device generation changed; this pipeline must not be reused");
     }
     const SolidImageSupport support = querySolidImageSupport(*impl.control, width, height);
     if (!support.supported) {

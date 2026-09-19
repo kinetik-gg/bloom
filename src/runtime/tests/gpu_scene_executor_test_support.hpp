@@ -100,8 +100,7 @@ format(const std::uint32_t width, const std::uint32_t height,
 
 [[nodiscard]] inline CompiledLayerOutput layerOutput(const bloom::document::NodeId nodeId,
                                                      const bloom::document::LayerId layerId,
-                                                     const OperationIndex input,
-                                                     const LayerIds ids,
+                                                     const OperationIndex input, const LayerIds ids,
                                                      const LayerValues values) {
     return CompiledLayerOutput{nodeId,
                                layerId,
@@ -158,22 +157,20 @@ twoSolidPlan(const CompositionFormat compositionFormat, const Color4d colorA,
     const auto layerNodeA = bloom::document::NodeId::fromRaw(idBase + 13);
     const auto layerNodeB = bloom::document::NodeId::fromRaw(idBase + 44);
     std::vector<CompiledOperation> operations;
-    operations.emplace_back(CompiledSolid{
-        solidNodeA,
-        {bloom::document::ParameterId::fromRaw(idBase + 20), colorA},
-        {bloom::document::ParameterId::fromRaw(idBase + 21), solidWidth},
-        {bloom::document::ParameterId::fromRaw(idBase + 22), solidHeight}});
     operations.emplace_back(
-        layerOutput(layerNodeA, bloom::document::LayerId::fromRaw(idBase + 30),
-                    OperationIndex::fromRaw(0), idsA, valuesA));
-    operations.emplace_back(CompiledSolid{
-        solidNodeB,
-        {bloom::document::ParameterId::fromRaw(idBase + 41), colorB},
-        {bloom::document::ParameterId::fromRaw(idBase + 42), solidWidth},
-        {bloom::document::ParameterId::fromRaw(idBase + 43), solidHeight}});
+        CompiledSolid{solidNodeA,
+                      {bloom::document::ParameterId::fromRaw(idBase + 20), colorA},
+                      {bloom::document::ParameterId::fromRaw(idBase + 21), solidWidth},
+                      {bloom::document::ParameterId::fromRaw(idBase + 22), solidHeight}});
+    operations.emplace_back(layerOutput(layerNodeA, bloom::document::LayerId::fromRaw(idBase + 30),
+                                        OperationIndex::fromRaw(0), idsA, valuesA));
     operations.emplace_back(
-        layerOutput(layerNodeB, bloom::document::LayerId::fromRaw(idBase + 45),
-                    OperationIndex::fromRaw(2), idsB, valuesB));
+        CompiledSolid{solidNodeB,
+                      {bloom::document::ParameterId::fromRaw(idBase + 41), colorB},
+                      {bloom::document::ParameterId::fromRaw(idBase + 42), solidWidth},
+                      {bloom::document::ParameterId::fromRaw(idBase + 43), solidHeight}});
+    operations.emplace_back(layerOutput(layerNodeB, bloom::document::LayerId::fromRaw(idBase + 45),
+                                        OperationIndex::fromRaw(2), idsB, valuesB));
     const CompiledMergeInput first{bloom::document::LayerSlotId::fromRaw(idBase + 50),
                                    bloom::document::LayerId::fromRaw(idBase + 30),
                                    OperationIndex::fromRaw(1)};

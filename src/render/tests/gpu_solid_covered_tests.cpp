@@ -103,8 +103,7 @@ struct Options final {
 // coverageSolidRow() over the row, then the separate Float32 opacity multiply.
 void cpuCoverageReference(const Rgba32f pixel, const float opacity,
                           const std::span<const std::uint8_t> coverage, const std::uint32_t width,
-                          const std::uint32_t height,
-                          const std::span<Rgba32f> output) noexcept {
+                          const std::uint32_t height, const std::span<Rgba32f> output) noexcept {
     for (std::uint32_t y = 0; y < height; ++y) {
         const auto offset = static_cast<std::size_t>(y) * width;
         const auto rowCoverage = coverage.subspan(offset, width);
@@ -114,9 +113,9 @@ void cpuCoverageReference(const Rgba32f pixel, const float opacity,
             std::abort();
         }
         for (auto& value : rowOutput) {
-            const auto faded = Rgba32f::fromPremultiplied(
-                value.red() * opacity, value.green() * opacity, value.blue() * opacity,
-                value.alpha() * opacity);
+            const auto faded =
+                Rgba32f::fromPremultiplied(value.red() * opacity, value.green() * opacity,
+                                           value.blue() * opacity, value.alpha() * opacity);
             value = *faded.value();
         }
     }
@@ -165,8 +164,7 @@ void cpuCoverageReference(const Rgba32f pixel, const float opacity,
 void expectMatchesCpu(Expectations& expectations, GpuSolid& solid, const Rgba32f pixel,
                       const ImageWindow dataWindow, const ImageWindow displayWindow,
                       const PixelAspectRatio pixelAspect, const float opacity,
-                      const std::span<const std::uint8_t> coverage,
-                      const std::string_view label) {
+                      const std::span<const std::uint8_t> coverage, const std::string_view label) {
     const std::uint32_t width = dataWindow.extent().width();
     const std::uint32_t height = dataWindow.extent().height();
     std::vector<Rgba32f> reference(static_cast<std::size_t>(width) * height,
@@ -223,9 +221,9 @@ void expectMatchesCpu(Expectations& expectations, GpuSolid& solid, const Rgba32f
     std::vector<std::uint8_t> bytes(static_cast<std::size_t>(width) * height, 0);
     for (std::int64_t y = window.originY(); y < window.maxYExclusive(); ++y) {
         const auto offset = static_cast<std::size_t>(y - window.originY()) * width;
-        if (!raster.value()->coverageRow(
-                window.originX(), y, std::span<std::uint8_t>(bytes.data() + offset, width),
-                PathFillRule::NonZero, false)) {
+        if (!raster.value()->coverageRow(window.originX(), y,
+                                         std::span<std::uint8_t>(bytes.data() + offset, width),
+                                         PathFillRule::NonZero, false)) {
             return std::nullopt;
         }
     }
@@ -250,10 +248,9 @@ void testEmbeddedSpirvDigest(Expectations& expectations) {
     const std::string_view measured(hex.data(), hex.size());
     expectations.expect(measured == BLOOM_SOLID_COVERED_SPV_SHA256,
                         "the embedded CoveredSolidV1 SPIR-V array hashes to the pinned digest");
-    expectations.expect(
-        std::string_view(bloom::render::vulkan_detail::kSolidCoveredSpirvDigest) ==
-            BLOOM_SOLID_COVERED_SPV_SHA256,
-        "the .inc digest comment matches the pinned covered SPIR-V digest");
+    expectations.expect(std::string_view(bloom::render::vulkan_detail::kSolidCoveredSpirvDigest) ==
+                            BLOOM_SOLID_COVERED_SPV_SHA256,
+                        "the .inc digest comment matches the pinned covered SPIR-V digest");
 }
 
 void testCoverageMatrix(Expectations& expectations, GpuSolid& solid) {
@@ -282,8 +279,7 @@ void testCoverageMatrix(Expectations& expectations, GpuSolid& solid) {
     }
 
     const auto solidPixels = std::array<Color4d, 5>{
-        Color4d{0.25, 0.5, 0.75, 1.0}, Color4d{1.0, 0.0, 0.5, 0.0},
-        Color4d{-0.25, 4.0, 0.125, 0.5},
+        Color4d{0.25, 0.5, 0.75, 1.0}, Color4d{1.0, 0.0, 0.5, 0.0}, Color4d{-0.25, 4.0, 0.125, 0.5},
         Color4d{static_cast<double>(std::numeric_limits<float>::denorm_min()), 0.0, 0.0, 1.0},
         Color4d{0.1, -2.0, 8.0, 0.75}};
     const auto opacities = std::array<float, 3>{0.0F, 0.3F, 1.0F};
@@ -318,8 +314,8 @@ void testPathRasterPattern(Expectations& expectations, GpuSolid& solid) {
     if (!coverage.has_value()) {
         return;
     }
-    const auto pixel = bloom::render::solidPixelFromStraightLinearRec709Scene(
-        Color4d{0.2, 0.6, 0.9, 1.0});
+    const auto pixel =
+        bloom::render::solidPixelFromStraightLinearRec709Scene(Color4d{0.2, 0.6, 0.9, 1.0});
     expectations.expect(static_cast<bool>(pixel), "the path coverage pixel builds");
     if (!pixel) {
         return;
@@ -339,8 +335,8 @@ void testRejectionsAndGuards(Expectations& expectations, GpuSolid& solid, GpuDev
     if (!window) {
         return;
     }
-    const auto pixel = bloom::render::solidPixelFromStraightLinearRec709Scene(
-        Color4d{0.5, 0.5, 0.5, 1.0});
+    const auto pixel =
+        bloom::render::solidPixelFromStraightLinearRec709Scene(Color4d{0.5, 0.5, 0.5, 1.0});
     const GpuSolidParameters base{*pixel.value(), *window.value(), *window.value(),
                                   PixelAspectRatio::square()};
     const std::vector<std::uint8_t> coverage(static_cast<std::size_t>(8) * 4, 128);
@@ -401,8 +397,8 @@ void testLifetime(Expectations& expectations, GpuDevice& device) {
     if (!window) {
         return;
     }
-    const auto pixel = bloom::render::solidPixelFromStraightLinearRec709Scene(
-        Color4d{0.5, 0.25, 0.125, 1.0});
+    const auto pixel =
+        bloom::render::solidPixelFromStraightLinearRec709Scene(Color4d{0.5, 0.25, 0.125, 1.0});
     const std::vector<std::uint8_t> coverage(static_cast<std::size_t>(5) * 3, 200);
     auto created = GpuSolid::create(device);
     expectations.expect(created.hasValue(), "the lifetime covered pipeline is created");
@@ -410,9 +406,9 @@ void testLifetime(Expectations& expectations, GpuDevice& device) {
         return;
     }
     std::vector<Rgba32f> measured;
-    expectations.expect(runCovered(*created.solid, GpuSolidParameters{*pixel.value(), *window.value(),
-                                                                      *window.value(),
-                                                                      PixelAspectRatio::square()},
+    expectations.expect(runCovered(*created.solid,
+                                   GpuSolidParameters{*pixel.value(), *window.value(),
+                                                      *window.value(), PixelAspectRatio::square()},
                                    coverage, 0.75F, measured),
                         "the lifetime covered job runs");
     GpuImage taken = created.solid->takeImage();

@@ -599,6 +599,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_composite_private.hpp
         vulkan/gpu_composite_resources.cpp
         vulkan/gpu_device.cpp
+        vulkan/gpu_device_bootstrap.cpp
         vulkan/gpu_device_private.hpp
         vulkan/gpu_image.cpp
         vulkan/gpu_image_private.hpp

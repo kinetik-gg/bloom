@@ -14,8 +14,9 @@ EditorNativeSurface* editorNativeSurface(QWidget* editorWidget) noexcept {
 }
 
 NativeSurfaceRetirementGate::~NativeSurfaceRetirementGate() {
-    // Lifetime first: any completion still holding a weak_ptr must be able to prove the gate is gone
-    // and return without dereferencing `this`. A generation counter alone cannot express lifetime.
+    // Lifetime first: any completion still holding a weak_ptr must be able to prove the gate is
+    // gone and return without dereferencing `this`. A generation counter alone cannot express
+    // lifetime.
     if (lifetime_) {
         lifetime_->alive = false;
         lifetime_.reset();
@@ -122,15 +123,14 @@ NativeSurfaceRetirementGate::begin(std::vector<EditorNativeSurface*> targets, Co
         }
         ++outstanding_;
         const auto outcome = entry.surface->prepareNativeSurfaceMutation(
-            generation,
-            [weakLifetime, this, generation, index](
-                std::uint64_t callbackGeneration,
-                const EditorNativeSurface::PrepareResult& result) {
+            generation, [weakLifetime, this, generation,
+                         index](std::uint64_t callbackGeneration,
+                                const EditorNativeSurface::PrepareResult& result) {
                 if (callbackGeneration != generation) {
                     return;
                 }
-                // Prove the gate is still alive BEFORE dereferencing `this`; a late completion after
-                // gate destruction is a no-op.
+                // Prove the gate is still alive BEFORE dereferencing `this`; a late completion
+                // after gate destruction is a no-op.
                 const auto lifetime = weakLifetime.lock();
                 if (!lifetime || !lifetime->alive) {
                     return;
@@ -150,9 +150,8 @@ NativeSurfaceRetirementGate::begin(std::vector<EditorNativeSurface*> targets, Co
     return StartStatus::Retiring;
 }
 
-void NativeSurfaceRetirementGate::onPrepare(
-    std::uint64_t generation, std::size_t index,
-    const EditorNativeSurface::PrepareResult& result) {
+void NativeSurfaceRetirementGate::onPrepare(std::uint64_t generation, std::size_t index,
+                                            const EditorNativeSurface::PrepareResult& result) {
     if (!pending_ || generation != generation_ || index >= entries_.size()) {
         return; // stale generation or duplicate completion
     }
@@ -173,9 +172,9 @@ void NativeSurfaceRetirementGate::onPrepare(
     } else {
         failed_ = true;
         if (failureDiagnostic_.empty()) {
-            failureDiagnostic_ =
-                result.diagnostic.empty() ? std::string("native surface retained (unproven)")
-                                          : result.diagnostic;
+            failureDiagnostic_ = result.diagnostic.empty()
+                                     ? std::string("native surface retained (unproven)")
+                                     : result.diagnostic;
         }
     }
     if (outstanding_ > 0) {
@@ -189,8 +188,8 @@ void NativeSurfaceRetirementGate::maybeComplete() {
         return;
     }
     pending_ = false;
-    // `completing_` forbids a reentrant begin() from the commit/resume/finish callbacks, which would
-    // otherwise clear entries_ mid-iteration.
+    // `completing_` forbids a reentrant begin() from the commit/resume/finish callbacks, which
+    // would otherwise clear entries_ mid-iteration.
     completing_ = true;
 
     if (failed_) {

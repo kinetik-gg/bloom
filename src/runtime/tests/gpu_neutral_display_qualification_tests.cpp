@@ -364,7 +364,7 @@ void testDefaultQualification(Expectations& expectations, GpuDevice& device,
         expectations.expect(interval->min_pixels == timings[lowest].pixel_count &&
                                 interval->max_pixels == timings.back().pixel_count,
                             "the eligible interval matches the measured faster suffix");
-        std::cout << "QUALIFY eligible min_pixels=" << interval->min_pixels
+        std::cout << "ELIGIBLE interval min_pixels=" << interval->min_pixels
                   << " max_pixels=" << interval->max_pixels << '\n';
     } else {
         expectations.expect(
@@ -372,7 +372,7 @@ void testDefaultQualification(Expectations& expectations, GpuDevice& device,
                 report.diagnostic().code ==
                     GpuNeutralDisplayQualificationDiagnosticCode::TimingNotImproved,
             "a CPU-only outcome is explained by the largest size or TimingNotImproved");
-        std::cout << "QUALIFY CPU-only\n";
+        std::cout << "CPU-ONLY outcome\n";
     }
     for (const auto& sample : timings) {
         std::cout << "TIMING " << sample.width << 'x' << sample.height

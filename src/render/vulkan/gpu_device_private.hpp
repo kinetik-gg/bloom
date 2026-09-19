@@ -23,6 +23,7 @@
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #endif
 
+#include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_presentation_types.hpp>
 
 #include <vulkan/vulkan_raii.hpp>
@@ -31,7 +32,9 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <thread>
+#include <utility>
 
 namespace bloom::render::vulkan_detail {
 
@@ -107,6 +110,39 @@ struct DeviceAllocatorState final {
 } // namespace bloom::render::vulkan_detail
 
 namespace bloom::render {
+
+// Native handles cross the public boundary as integer bits only; no Vk* type is ever public.
+// Defined here so the bootstrap and resource translation units share one conversion without a new
+// header.
+template <typename Handle>
+[[nodiscard]] inline std::uint64_t handleBits(const Handle handle) noexcept {
+    return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(handle));
+}
+
+template <typename Handle>
+[[nodiscard]] inline Handle handleFromBits(const std::uint64_t bits) noexcept {
+    return reinterpret_cast<Handle>(static_cast<std::uintptr_t>(bits));
+}
+
+[[nodiscard]] inline GpuDiagnostic diagnostic(const GpuDiagnosticCode code, std::string message) {
+    return GpuDiagnostic{code, std::move(message)};
+}
+
+// The single device-generation state behind GpuDevice. Defined here so the bootstrap translation
+// unit can construct it during create() while the resource translation unit implements the
+// remaining members, with no second definition of the pimpl.
+struct GpuDevice::Impl final {
+    std::thread::id owner;
+    GpuDeviceState state = GpuDeviceState::Unavailable;
+    GpuCapabilityReport report;
+    std::shared_ptr<vulkan_detail::DeviceAllocatorState> control;
+
+    // Immutable after create(): safe for borrowedInstanceView() reads from the UI thread.
+    bool presentationReady = false;
+    std::uint64_t presentationEpoch = 0;
+    std::uint32_t presentQueueFamily = 0;
+    std::uint64_t borrowedInstanceBits = 0;
+};
 
 // The only non-public bridge from a render operation to the device's Vulkan allocator and queue.
 // GpuDevice befriends this class; the CPU stub never defines or references it, so a build without

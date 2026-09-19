@@ -49,27 +49,9 @@ bloom_add_test(
     LABELS unit gpu
 )
 
-# The neutral display test links bloom_color_ocio only for the independent CPU oracle. The render
-# module itself knows nothing about OCIO; the GPU operation and the oracle are compared through the
-# shared Bloom image types. It also includes the private SPIR-V array directly to prove the checked-in
-# words hash to the pinned SPIR-V digest, so a changed array word fails even if comments are intact.
-add_executable(bloom_render_gpu_neutral_display_test gpu_neutral_display_tests.cpp)
-target_link_libraries(bloom_render_gpu_neutral_display_test PRIVATE bloom_render bloom_color_ocio)
-target_include_directories(bloom_render_gpu_neutral_display_test
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
-target_compile_definitions(bloom_render_gpu_neutral_display_test
-    PRIVATE "BLOOM_NEUTRAL_DISPLAY_SPV_SHA256=\"fc0a97d36c42aafd3cfce56dcfdd7ff3c75d3ec7fd0e52a83c7f272c54feb3f9\"")
-if(BLOOM_RENDER_VULKAN_AVAILABLE)
-    target_compile_definitions(bloom_render_gpu_neutral_display_test
-        PRIVATE BLOOM_RENDER_TEST_VULKAN_BACKEND=1)
-endif()
-bloom_enable_warnings(bloom_render_gpu_neutral_display_test)
-bloom_enable_strict_floating_point(bloom_render_gpu_neutral_display_test)
-bloom_add_test(
-    NAME bloom.render.gpu_neutral_display
-    COMMAND bloom_render_gpu_neutral_display_test
-    LABELS unit gpu color
-)
+# The GPU Neutral V1 display and GPU-resident Neutral V1 display tests use the independent OCIO CPU
+# oracle, which lives in src/color, so their sources are owned by src/runtime/tests (runtime may
+# depend on both render and color). Their registered test names and labels are unchanged.
 
 # SolidV1 resident-image test. Compiles unconditionally and depends only on runtime create()
 # availability, so the same target runs against the CPU stub. It hashes the embedded SPIR-V array
@@ -103,18 +85,6 @@ bloom_add_test(
     NAME bloom.render.gpu_solid_covered
     COMMAND bloom_render_gpu_solid_covered_test
     LABELS unit gpu render
-)
-
-# GPU-resident Neutral V1 display test. It links bloom_color_ocio only for the independent CPU
-# oracle; the render module itself stays OCIO-free.
-add_executable(bloom_render_gpu_resident_display_test gpu_resident_display_tests.cpp)
-target_link_libraries(bloom_render_gpu_resident_display_test PRIVATE bloom_render bloom_color_ocio)
-bloom_enable_warnings(bloom_render_gpu_resident_display_test)
-bloom_enable_strict_floating_point(bloom_render_gpu_resident_display_test)
-bloom_add_test(
-    NAME bloom.render.gpu_resident_display
-    COMMAND bloom_render_gpu_resident_display_test
-    LABELS unit gpu color
 )
 
 # Host RGBA32F -> resident GpuImage upload test (staged host copy; no shader).
@@ -224,6 +194,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     add_library(bloom_render_gpu_scene_executor_fault OBJECT
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/vma.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_device.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_device_bootstrap.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid_covered.cpp"

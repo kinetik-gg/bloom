@@ -74,9 +74,9 @@ static_assert(sizeof(CoveredPushConstants) == 8);
         return status;
     }
     for (auto& value : palette) {
-        const auto faded = Rgba32f::fromPremultiplied(
-            value.red() * opacity, value.green() * opacity, value.blue() * opacity,
-            value.alpha() * opacity);
+        const auto faded =
+            Rgba32f::fromPremultiplied(value.red() * opacity, value.green() * opacity,
+                                       value.blue() * opacity, value.alpha() * opacity);
         if (!faded) {
             return ImageError::codeOnly(ImageErrorCode::InvalidPixel);
         }
@@ -93,11 +93,10 @@ void packCoverageLittleEndian(const std::span<const std::uint8_t> coverage,
     std::fill(packed.begin(), packed.end(), std::uint8_t{0});
     const std::size_t wholeWords = coverage.size() / 4;
     for (std::size_t word = 0; word < wholeWords; ++word) {
-        const std::uint32_t value =
-            static_cast<std::uint32_t>(coverage[word * 4 + 0]) |
-            (static_cast<std::uint32_t>(coverage[word * 4 + 1]) << 8) |
-            (static_cast<std::uint32_t>(coverage[word * 4 + 2]) << 16) |
-            (static_cast<std::uint32_t>(coverage[word * 4 + 3]) << 24);
+        const std::uint32_t value = static_cast<std::uint32_t>(coverage[word * 4 + 0]) |
+                                    (static_cast<std::uint32_t>(coverage[word * 4 + 1]) << 8) |
+                                    (static_cast<std::uint32_t>(coverage[word * 4 + 2]) << 16) |
+                                    (static_cast<std::uint32_t>(coverage[word * 4 + 3]) << 24);
         packed[word * 4 + 0] = static_cast<std::uint8_t>(value & 0xFFu);
         packed[word * 4 + 1] = static_cast<std::uint8_t>((value >> 8) & 0xFFu);
         packed[word * 4 + 2] = static_cast<std::uint8_t>((value >> 16) & 0xFFu);
@@ -245,7 +244,8 @@ bool GpuSolid::Impl::createCoveredPipeline() {
         covered.reason = "the CoveredSolidV1 descriptor set could not be allocated";
         return false;
     }
-    covered.descriptorSet = vk::raii::DescriptorSet(control->device, rawSet, *covered.descriptorPool);
+    covered.descriptorSet =
+        vk::raii::DescriptorSet(control->device, rawSet, *covered.descriptorPool);
     covered.ready = true;
     return true;
 }
@@ -310,8 +310,9 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
     }
     if (impl.control->generation != impl.expectedGeneration) {
         impl.deviceLost = true;
-        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceLost,
-                                  "the device generation changed; this pipeline must not be reused");
+        return gpuSolidDiagnostic(
+            GpuSolidDiagnosticCode::DeviceLost,
+            "the device generation changed; this pipeline must not be reused");
     }
     const SolidImageSupport support = querySolidImageSupport(*impl.control, width, height);
     if (!support.supported) {
@@ -387,8 +388,8 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
                                           static_cast<std::size_t>(maskBytes)));
     if (vmaFlushAllocation(impl.control->allocator, impl.coveredPalette.allocation, 0,
                            VK_WHOLE_SIZE) != VK_SUCCESS ||
-        vmaFlushAllocation(impl.control->allocator, impl.coveredMask.allocation, 0, VK_WHOLE_SIZE) !=
-            VK_SUCCESS) {
+        vmaFlushAllocation(impl.control->allocator, impl.coveredMask.allocation, 0,
+                           VK_WHOLE_SIZE) != VK_SUCCESS) {
         impl.coveredPalette.release();
         impl.coveredMask.release();
         impl.releaseResident();
@@ -397,8 +398,7 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
     }
 
     // Authoritative budget against ACTUAL VMA allocation sizes (allocator rounding).
-    const std::uint64_t actualImage =
-        actualAllocationBytes(*impl.control, residentRaw->allocation);
+    const std::uint64_t actualImage = actualAllocationBytes(*impl.control, residentRaw->allocation);
     const std::uint64_t actualPalette =
         actualAllocationBytes(*impl.control, impl.coveredPalette.allocation);
     const std::uint64_t actualMask =
@@ -456,9 +456,9 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
     writes[2].descriptorCount = 1;
     writes[2].descriptorType = vk::DescriptorType::eStorageBuffer;
     writes[2].pBufferInfo = &maskDescriptor;
-    dispatcher->vkUpdateDescriptorSets(
-        rawDevice, static_cast<std::uint32_t>(writes.size()),
-        reinterpret_cast<const VkWriteDescriptorSet*>(writes.data()), 0, nullptr);
+    dispatcher->vkUpdateDescriptorSets(rawDevice, static_cast<std::uint32_t>(writes.size()),
+                                       reinterpret_cast<const VkWriteDescriptorSet*>(writes.data()),
+                                       0, nullptr);
 
     vk::CommandBufferBeginInfo beginInfo{};
     beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
@@ -511,9 +511,9 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
     CoveredPushConstants push{};
     push.width = width;
     push.height = height;
-    impl.commandBuffer.pushConstants(*impl.covered.pipelineLayout,
-                                     vk::ShaderStageFlagBits::eCompute, 0,
-                                     static_cast<std::uint32_t>(sizeof(CoveredPushConstants)), &push);
+    impl.commandBuffer.pushConstants(
+        *impl.covered.pipelineLayout, vk::ShaderStageFlagBits::eCompute, 0,
+        static_cast<std::uint32_t>(sizeof(CoveredPushConstants)), &push);
     const std::uint64_t groupCount =
         (static_cast<std::uint64_t>(width) + kWorkgroupSizeX - 1U) / kWorkgroupSizeX;
     impl.commandBuffer.dispatch(static_cast<std::uint32_t>(groupCount), height, 1);

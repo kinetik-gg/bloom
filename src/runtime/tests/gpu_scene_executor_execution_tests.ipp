@@ -1,0 +1,362 @@
+// GPU scene executor execution tests: cancellation, request/command/structural budgets, foreign
+// device and thread refusal, and the live-unique-pin budget accounting (including aliased inputs).
+// Included by gpu_scene_executor_tests.cpp inside its anonymous namespace.
+
+void testCancellation(Expectations& expectations, GpuDevice& device) {
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    expectations.expect(cache.hasValue(), "cancel: cache created");
+    if (!cache) {
+        return;
+    }
+    auto executor = GpuSceneExecutor::create(device, *cache.cache);
+    expectations.expect(executor.hasValue(), "cancel: executor created");
+    if (!executor) {
+        return;
+    }
+    {
+        const auto plan = basicPlan();
+        const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+        expectations.expect(prepared.hasValue(), "cancel: the scene prepares");
+        if (!prepared) {
+            return;
+        }
+        const auto begun = executor.executor->begin(prepared.scene, kSceneBudget);
+        expectations.expect(begun.code == GpuSceneExecutorDiagnosticCode::None,
+                            "cancel: begin accepts");
+        executor.executor->cancel();
+        const auto result = executor.executor->poll();
+        expectations.expect(result == GpuSceneExecutorPollResult::Failure,
+                            "cancel: a cancelled job fails closed");
+        expectations.expect(executor.executor->diagnostic().code ==
+                                GpuSceneExecutorDiagnosticCode::Cancelled,
+                            "cancel: the diagnostic is Cancelled");
+        expectations.expect(executor.executor->takeImage() == nullptr,
+                            "cancel: no image is published after cancel");
+        expectations.expect(executor.executor->counters().dispatches == 0,
+                            "cancel: cancelling before the first poll never dispatches");
+    }
+    {
+        const auto plan = fractionalPlan();
+        const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+        expectations.expect(prepared.hasValue(), "cancel-live: the scene prepares");
+        if (!prepared) {
+            return;
+        }
+        const auto begun = executor.executor->begin(prepared.scene, kSceneBudget);
+        expectations.expect(begun.code == GpuSceneExecutorDiagnosticCode::None,
+                            "cancel-live: begin accepts");
+        const auto firstPoll = executor.executor->poll();
+        expectations.expect(firstPoll == GpuSceneExecutorPollResult::Pending,
+                            "cancel-live: the first poll submits and stays pending");
+        executor.executor->cancel();
+        GpuSceneExecutorPollResult final = GpuSceneExecutorPollResult::Pending;
+        for (std::uint64_t iteration = 0; iteration < kMaxPollIterations; ++iteration) {
+            final = executor.executor->poll();
+            if (final != GpuSceneExecutorPollResult::Pending) {
+                break;
+            }
+            std::this_thread::yield();
+        }
+        expectations.expect(final == GpuSceneExecutorPollResult::Failure,
+                            "cancel-live: the cancelled job fails closed");
+        expectations.expect(executor.executor->diagnostic().code ==
+                                GpuSceneExecutorDiagnosticCode::Cancelled,
+                            "cancel-live: the diagnostic is Cancelled");
+        expectations.expect(executor.executor->takeImage() == nullptr,
+                            "cancel-live: no image is published");
+        expectations.expect(!executor.executor->ownerDrainRequired() &&
+                                !executor.executor->deviceLost(),
+                            "cancel-live: a proven cancellation needs no owner drain");
+    }
+    const auto plan = basicPlan();
+    const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+    const auto recovered = runScene(*executor.executor, prepared.scene, kSceneBudget);
+    expectations.expect(recovered.ready, "cancel: the executor is usable after cancellation");
+}
+
+void testTinyBudget(Expectations& expectations, GpuDevice& device) {
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    expectations.expect(cache.hasValue(), "budget: cache created");
+    if (!cache) {
+        return;
+    }
+    auto executor = GpuSceneExecutor::create(device, *cache.cache);
+    expectations.expect(executor.hasValue(), "budget: executor created");
+    if (!executor) {
+        return;
+    }
+    const auto plan = basicPlan();
+    const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+    expectations.expect(prepared.hasValue(), "budget: the scene prepares");
+    if (!prepared) {
+        return;
+    }
+    const auto refused = executor.executor->begin(prepared.scene, 1);
+    expectations.expect(refused.code == GpuSceneExecutorDiagnosticCode::OverBudget,
+                        "budget: a tiny request budget is refused before Vulkan");
+    expectations.expect(executor.executor->state() == GpuSceneExecutorJobState::Idle,
+                        "budget: a refusal leaves the executor idle");
+    expectations.expect(executor.executor->counters().budgetRefusals >= 1,
+                        "budget: the refusal is counted");
+    const auto retried = runScene(*executor.executor, prepared.scene, kSceneBudget);
+    expectations.expect(retried.ready, "budget: the executor remains usable with a real budget");
+}
+
+void testStructureRefusal(Expectations& expectations, GpuDevice& device) {
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    expectations.expect(cache.hasValue(), "structure: cache created");
+    if (!cache) {
+        return;
+    }
+    auto executor = GpuSceneExecutor::create(device, *cache.cache);
+    expectations.expect(executor.hasValue(), "structure: executor created");
+    if (!executor) {
+        return;
+    }
+    const auto nullResult = executor.executor->begin(nullptr, kSceneBudget);
+    expectations.expect(nullResult.code == GpuSceneExecutorDiagnosticCode::InvalidArgument,
+                        "structure: a null scene is refused");
+
+    const auto plan = basicPlan();
+    const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+    expectations.expect(prepared.hasValue(), "structure: the scene prepares");
+    if (!prepared) {
+        return;
+    }
+    GpuSceneExecutorBudgets tight;
+    tight.maxCommands = 1;
+    auto limitedCache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    expectations.expect(limitedCache.hasValue(), "structure: the limited cache is created");
+    if (!limitedCache) {
+        return;
+    }
+    auto limited = GpuSceneExecutor::create(device, *limitedCache.cache, tight);
+    expectations.expect(limited.hasValue(), "structure: the limited executor is created");
+    if (limited) {
+        const auto refused = limited.executor->begin(prepared.scene, kSceneBudget);
+        expectations.expect(refused.code == GpuSceneExecutorDiagnosticCode::TooManyCommands,
+                            "structure: the command ceiling is enforced before Vulkan");
+    }
+}
+
+void testForeignDeviceAndThread(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
+                                GpuDevice* foreignDevice) {
+    auto created = GpuSceneExecutor::create(device, cache);
+    expectations.expect(created.hasValue(), "foreign: the owner thread creates an executor");
+    if (!created) {
+        return;
+    }
+    if (foreignDevice != nullptr) {
+        expectations.expect(!created.executor->isBoundTo(*foreignDevice),
+                            "foreign: a different device generation is not bound");
+        auto foreignCache =
+            GpuSceneCache::create(*foreignDevice, GpuSceneCacheBudgets{kCacheBudget});
+        expectations.expect(foreignCache.hasValue(), "foreign: a foreign cache is created");
+        if (foreignCache) {
+            auto mismatched = GpuSceneExecutor::create(*foreignDevice, cache);
+            expectations.expect(mismatched.diagnostic.code ==
+                                    GpuSceneExecutorDiagnosticCode::InvalidArgument,
+                                "foreign: a cache from another device is refused");
+        }
+    }
+
+    const auto plan = basicPlan();
+    const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+    expectations.expect(prepared.hasValue(), "foreign: the scene prepares");
+    if (!prepared) {
+        return;
+    }
+    std::atomic<int> observed{static_cast<int>(GpuSceneExecutorDiagnosticCode::None)};
+    std::thread worker([&]() {
+        const auto result = created.executor->begin(prepared.scene, kSceneBudget);
+        observed.store(static_cast<int>(result.code));
+    });
+    worker.join();
+    expectations.expect(static_cast<GpuSceneExecutorDiagnosticCode>(observed.load()) ==
+                            GpuSceneExecutorDiagnosticCode::WrongThread,
+                        "foreign: a foreign-thread begin is WrongThread");
+}
+
+// ---- live-budget accounting -------------------------------------------------------------------
+
+[[nodiscard]] std::optional<std::string> firstSolidKey(const PreparedGpuScene& scene) {
+    for (const auto& command : scene.commands()) {
+        if (const auto* solid = std::get_if<GpuSceneSolidCommand>(&command)) {
+            return solid->semanticKey;
+        }
+    }
+    return std::nullopt;
+}
+
+// A long sequential graph with a tiny cache: cumulative allocation exceeds the budget but the live
+// peak fits, so it must be accepted. A one-byte budget is refused and leaves the executor usable.
+void testLiveBudgetLongGraph(Expectations& expectations, GpuDevice& device) {
+    const auto plan = basicPlan();
+    const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+    expectations.expect(prepared.hasValue(), "live: the scene prepares");
+    if (!prepared) {
+        return;
+    }
+    auto measureCache = GpuSceneCache::create(device, GpuSceneCacheBudgets{1});
+    auto measureExec = GpuSceneExecutor::create(device, *measureCache.cache);
+    expectations.expect(measureCache.hasValue() && measureExec.hasValue(), "live: harness created");
+    if (!measureCache || !measureExec) {
+        return;
+    }
+    const auto measured = runScene(*measureExec.executor, prepared.scene, kSceneBudget);
+    expectations.expect(measured.ready, "live: the measuring run completes");
+    if (!measured.ready) {
+        return;
+    }
+    const auto peak = measured.countersAtReady.peakLiveImageBytes;
+    const auto cumulative = measured.countersAtReady.cumulativeProducedImageBytes;
+    expectations.expect(peak > 0, "live: the live peak is non-zero");
+    expectations.expect(cumulative > peak, "live: cumulative allocation exceeds the live peak");
+    expectations.expect(measureCache.cache->entryCount() == 0,
+                        "live: the tiny cache retained nothing");
+
+    auto tightCache = GpuSceneCache::create(device, GpuSceneCacheBudgets{1});
+    auto tightExec = GpuSceneExecutor::create(device, *tightCache.cache);
+    expectations.expect(tightCache.hasValue() && tightExec.hasValue(),
+                        "live: tight harness created");
+    if (!tightCache || !tightExec) {
+        return;
+    }
+    const auto tight = runScene(*tightExec.executor, prepared.scene, peak);
+    expectations.expect(tight.ready, "live: a graph whose live peak fits is accepted");
+    expectations.expect(tight.countersAtReady.cumulativeProducedImageBytes > peak,
+                        "live: the accepted run allocated cumulatively beyond the budget");
+    expectations.expect(tight.countersAtReady.peakLiveImageBytes <= peak,
+                        "live: the accepted run's live peak stayed within the budget");
+
+    const auto refused = tightExec.executor->begin(prepared.scene, 1);
+    expectations.expect(refused.code == GpuSceneExecutorDiagnosticCode::OverBudget,
+                        "live: a one-byte budget is refused before Vulkan");
+    expectations.expect(tightExec.executor->counters().budgetRefusals >= 1,
+                        "live: the refusal is counted");
+    const auto recovered = runScene(*tightExec.executor, prepared.scene, peak);
+    expectations.expect(recovered.ready, "live: the executor is usable after the refusal");
+}
+
+// A tight budget must refuse when a cached input pinned for this request already exceeds it, before
+// any native work.
+void testTightBudgetWithCachedInputs(Expectations& expectations, GpuDevice& device) {
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    auto exec = GpuSceneExecutor::create(device, *cache.cache);
+    expectations.expect(cache.hasValue() && exec.hasValue(), "cached-budget: harness created");
+    if (!cache || !exec) {
+        return;
+    }
+    const auto firstPlan = basicPlan();
+    const auto firstPrepared = CpuGpuSceneBuilder{}.build(firstPlan, requestFor(*firstPlan));
+    expectations.expect(firstPrepared.hasValue(), "cached-budget: the warming scene prepares");
+    if (!firstPrepared) {
+        return;
+    }
+    const auto firstRun = runScene(*exec.executor, firstPrepared.scene, kSceneBudget);
+    expectations.expect(firstRun.ready, "cached-budget: the warming scene completes");
+    if (!firstRun.ready) {
+        return;
+    }
+    // The warmed output is now a cached pin this request would hold: a one-byte budget must refuse
+    // it at begin, before any Vulkan work.
+    const auto cachedRefused = exec.executor->begin(firstPrepared.scene, 1);
+    expectations.expect(
+        cachedRefused.code == GpuSceneExecutorDiagnosticCode::OverBudget,
+        "cached-budget: a cached output pin over a one-byte budget is refused at begin");
+    expectations.expect(exec.executor->state() == GpuSceneExecutorJobState::Idle,
+                        "cached-budget: the cached refusal leaves the executor idle");
+
+    // Move the top layer so the output misses while the bottom layer is a cached input.
+    const auto movedPlan =
+        twoLayerPlan(format(16, 12), LayerValues{.position = {13.0, 9.5}, .opacity = 1.0},
+                     LayerValues{.position = {11.5, 8.2}, .opacity = 0.75}, 6.0, 5.0, 1000);
+    const auto moved = CpuGpuSceneBuilder{}.build(movedPlan, requestFor(*movedPlan));
+    expectations.expect(moved.hasValue(), "cached-budget: the moved scene prepares");
+    if (!moved) {
+        return;
+    }
+    const auto refused = exec.executor->begin(moved.scene, 1);
+    expectations.expect(
+        refused.code == GpuSceneExecutorDiagnosticCode::OverBudget,
+        "cached-budget: a cached input under a one-byte budget is refused at begin");
+    expectations.expect(exec.executor->state() == GpuSceneExecutorJobState::Idle,
+                        "cached-budget: the refusal leaves the executor idle");
+    const auto recovered = runScene(*exec.executor, moved.scene, kSceneBudget);
+    expectations.expect(recovered.ready,
+                        "cached-budget: the executor is usable with a real budget");
+}
+
+// Two identical solids share one semantic key and resolve to the same cached image: the alias is
+// pinned under two command indexes but charged once, and the alias bytes are reported.
+void testAliasedInputChargedOnce(Expectations& expectations, GpuDevice& device) {
+    const Color4d aliasedColor{0.4, 0.6, 0.2, 0.5};
+    const auto warmPlan =
+        twoSolidPlan(format(16, 12), aliasedColor, LayerValues{.position = {4.0, 3.5}},
+                     aliasedColor, LayerValues{.position = {9.0, 7.5}}, 6.0, 5.0, 31000);
+    const auto runPlan =
+        twoSolidPlan(format(16, 12), aliasedColor, LayerValues{.position = {5.0, 3.5}},
+                     aliasedColor, LayerValues{.position = {9.0, 6.5}}, 6.0, 5.0, 31000);
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    auto exec = GpuSceneExecutor::create(device, *cache.cache);
+    expectations.expect(cache.hasValue() && exec.hasValue(), "alias: harness created");
+    if (!cache || !exec) {
+        return;
+    }
+    const auto warmPrepared = CpuGpuSceneBuilder{}.build(warmPlan, requestFor(*warmPlan));
+    const auto runPrepared = CpuGpuSceneBuilder{}.build(runPlan, requestFor(*runPlan));
+    expectations.expect(warmPrepared.hasValue() && runPrepared.hasValue(),
+                        "alias: both plans prepare");
+    if (!warmPrepared || !runPrepared) {
+        return;
+    }
+    std::size_t translationCommands = 0;
+    for (const auto& command : runPrepared.scene->commands()) {
+        if (std::holds_alternative<GpuSceneTranslationCommand>(command)) {
+            ++translationCommands;
+        }
+    }
+    const bool runUsesSolids = translationCommands >= 2;
+    const auto warm = runScene(*exec.executor, warmPrepared.scene, kSceneBudget);
+    expectations.expect(warm.ready, "alias: the warming run completes");
+    if (!warm.ready) {
+        return;
+    }
+    const auto key = firstSolidKey(*runPrepared.scene);
+    expectations.expect(key.has_value(), "alias: a solid key is present");
+    const auto solidImage = key.has_value() ? cache.cache->find(*key) : nullptr;
+    expectations.expect(solidImage != nullptr, "alias: the shared solid image is cached");
+    const std::uint64_t solidBytes = solidImage != nullptr ? solidImage->allocationBytes() : 0;
+    expectations.expect(runUsesSolids && solidBytes > 0,
+                        "alias: the identical solids are reachable and cached");
+
+    const auto aliased = runScene(*exec.executor, runPrepared.scene, kSceneBudget);
+    expectations.expect(aliased.ready, "alias: the aliased run completes");
+    expectations.expect(aliased.countersAtReady.aliasedImagePinBytes >= solidBytes,
+                        "alias: the shared image was charged once and the duplicate recorded");
+    const auto aliasedPeak = aliased.countersAtReady.peakLiveImageBytes;
+    const auto rerun = runScene(*exec.executor, runPrepared.scene, aliasedPeak);
+    expectations.expect(rerun.ready, "alias: the aliased scene fits its single-count live peak");
+
+    // Control: two distinct solids never alias.
+    const auto distinctWarm = twoSolidPlan(
+        format(16, 12), Color4d{0.5, 0.25, 0.125, 1.0}, LayerValues{.position = {4.0, 3.5}},
+        Color4d{0.125, 0.375, 0.75, 0.5}, LayerValues{.position = {9.0, 7.5}}, 6.0, 5.0, 32000);
+    const auto distinctRun = twoSolidPlan(
+        format(16, 12), Color4d{0.5, 0.25, 0.125, 1.0}, LayerValues{.position = {5.0, 3.5}},
+        Color4d{0.125, 0.375, 0.75, 0.5}, LayerValues{.position = {9.0, 6.5}}, 6.0, 5.0, 32000);
+    auto cache2 = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    auto exec2 = GpuSceneExecutor::create(device, *cache2.cache);
+    if (cache2 && exec2) {
+        const auto warm2 = CpuGpuSceneBuilder{}.build(distinctWarm, requestFor(*distinctWarm));
+        const auto run2 = CpuGpuSceneBuilder{}.build(distinctRun, requestFor(*distinctRun));
+        if (warm2 && run2) {
+            expectations.expect(runScene(*exec2.executor, warm2.scene, kSceneBudget).ready,
+                                "alias: the distinct warming run completes");
+            const auto distinct = runScene(*exec2.executor, run2.scene, kSceneBudget);
+            expectations.expect(distinct.ready, "alias: the distinct run completes");
+            expectations.expect(distinct.countersAtReady.aliasedImagePinBytes == 0,
+                                "alias: distinct inputs are never counted as an alias");
+        }
+    }
+}

@@ -146,7 +146,7 @@ class GpuPresentationTarget final {
     recreate(const GpuPresentationTargetDescription& description);
 
     // Begins retirement and returns the current state. Retired means the caller may destroy the
-    // QWindow/native surface; RetirePending (including an unknown driver result) means it must not.
+    // native window/surface; RetirePending (including an unknown driver result) means it must not.
     // DeviceLost is terminal and never reports Retired.
     [[nodiscard]] GpuPresentationTargetCode beginRetire();
 

@@ -129,8 +129,8 @@ void refusalLeavesTreeAndResumesAlreadySafe() {
     std::string diagnostic;
     const auto status = gate.begin(
         {&safe, &refuse}, [&commits] { ++commits; },
-        [&finished, &committed, &diagnostic](
-            const bloom::ui::NativeSurfaceRetirementGate::Result& result) {
+        [&finished, &committed,
+         &diagnostic](const bloom::ui::NativeSurfaceRetirementGate::Result& result) {
             finished = true;
             committed = result.committed;
             diagnostic = result.diagnostic;
@@ -151,8 +151,8 @@ void duplicateRejectedWhilePending() {
     const auto first = gate.begin({&surface}, [] {}, [](const auto&) {});
     check(first == bloom::ui::NativeSurfaceRetirementGate::StartStatus::Retiring, "first accepted");
     int secondCommits = 0;
-    const auto second = gate.begin(
-        {&surface}, [&secondCommits] { ++secondCommits; }, [](const auto&) {});
+    const auto second =
+        gate.begin({&surface}, [&secondCommits] { ++secondCommits; }, [](const auto&) {});
     check(second == bloom::ui::NativeSurfaceRetirementGate::StartStatus::Refused,
           "duplicate rejected while pending");
     check(secondCommits == 0, "duplicate changed nothing");
@@ -166,8 +166,7 @@ void staleGenerationIgnored() {
     int commits = 0;
     bool finished = false;
     (void)gate.begin(
-        {&surface}, [&commits] { ++commits; },
-        [&finished](const auto&) { finished = true; });
+        {&surface}, [&commits] { ++commits; }, [&finished](const auto&) { finished = true; });
     auto lateAck = state->ack;
     check(static_cast<bool>(lateAck), "ack captured for stale test");
     gate.abandon(false);
@@ -187,8 +186,8 @@ void destroyedReceiverNotResumed() {
     std::string diagnostic;
     (void)gate.begin(
         {surface.get()}, [&commits] { ++commits; },
-        [&finished, &committed, &diagnostic](
-            const bloom::ui::NativeSurfaceRetirementGate::Result& result) {
+        [&finished, &committed,
+         &diagnostic](const bloom::ui::NativeSurfaceRetirementGate::Result& result) {
             finished = true;
             committed = result.committed;
             diagnostic = result.diagnostic;
@@ -234,7 +233,8 @@ void reentrantBeginDuringCommitRefused() {
         bloom::ui::NativeSurfaceRetirementGate::StartStatus::CompletedSynchronously;
     int commits = 0;
     (void)gate.begin(
-        {&surface}, [&] {
+        {&surface},
+        [&] {
             ++commits;
             reentrant = gate.begin({&surface}, [] {}, [](const auto&) {});
         },

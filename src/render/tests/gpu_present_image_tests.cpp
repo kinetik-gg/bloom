@@ -3,13 +3,13 @@
 // mapping, channel remap per texel BEFORE the filter, premultiplied bilinear filtering of the
 // straight RGBA8 source, premultiplied overlay) is reproduced on the CPU and checked against
 // hand-computed pixels, and the embedded SPIR-V is hashed against the pinned manifest digests. The
-// independent QPainter SmoothPixmapTransform oracle lives in the test-only UI file
-// (gpu_present_image_qpainter_oracle_tests.cpp) because only Qt can produce it.
+// independent UI-toolkit resample oracle lives in the test-only UI file
+// (gpu_present_image_qpainter_oracle_tests.cpp) because only that toolkit can produce it.
 
 #include <bloom/core/sha256.hpp>
 #include <bloom/render/gpu_present_image.hpp>
 
-#include "../vulkan/shaders/viewer_present_spirv.inc"
+#include "shaders/viewer_present_spirv.inc"
 
 #include <array>
 #include <cmath>
@@ -87,7 +87,7 @@ struct SourceImage final {
 }
 
 // Straight tap -> premultiplied, after remap. Filtering happens in premultiplied space, matching
-// QPainter's SmoothPixmapTransform on a straight RGBA8888 image.
+// the UI toolkit's SmoothPixmapTransform on a straight RGBA8888 image.
 [[nodiscard]] Pixel premultiplied(const Pixel tap) {
     return Pixel{tap.r * tap.a, tap.g * tap.a, tap.b * tap.a, tap.a};
 }
@@ -198,7 +198,7 @@ void shaderPins(Expectations& expectations) {
 
 // Opaque red next to fully transparent blue at a fractional sample position: the premultiplied
 // filter yields a half-alpha red (no blue halo), which the straight-RGB-then-multiply bug would
-// instead mix toward purple. This is the exact case the independent QPainter oracle pins too.
+// instead mix toward purple. This is the exact case the independent UI-toolkit oracle pins too.
 void premultipliedEdge(Expectations& expectations) {
     GpuPresentImageParams params;
     params.destination = GpuPresentRect{0.0F, 0.0F, 2.0F, 2.0F};

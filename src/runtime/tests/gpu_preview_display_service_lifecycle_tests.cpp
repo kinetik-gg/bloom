@@ -3,7 +3,7 @@
 // device/pipeline/qualification path for the bounded native-dispatch-deadline scenario and the
 // paired benchmark. It fabricates no eligibility report.
 
-#include "../gpu_preview_display_service_private.hpp"
+#include "gpu_preview_display_service_private.hpp"
 
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>

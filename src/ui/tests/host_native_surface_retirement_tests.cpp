@@ -76,17 +76,16 @@ class FakeNativeEditor final : public QWidget, public bloom::ui::EditorNativeSur
 
 void registerEditors(bloom::ui::EditorRegistry& registry, const std::shared_ptr<FakeState>& state) {
     (void)registry.registerEditor(
-        {.id = "cpu",
-         .displayName = QStringLiteral("CPU"),
-         .create = [](QWidget* parent) { return new QLabel(QStringLiteral("cpu"), parent); }});
-    (void)registry.registerEditor(
-        {.id = "native",
-         .displayName = QStringLiteral("Native"),
-         .create = [state](QWidget* parent) {
-             auto* editor = new FakeNativeEditor(state, parent);
-             state->created = editor;
-             return editor;
+        {.id = "cpu", .displayName = QStringLiteral("CPU"), .create = [](QWidget* parent) {
+             return new QLabel(QStringLiteral("cpu"), parent);
          }});
+    (void)registry.registerEditor({.id = "native",
+                                   .displayName = QStringLiteral("Native"),
+                                   .create = [state](QWidget* parent) {
+                                       auto* editor = new FakeNativeEditor(state, parent);
+                                       state->created = editor;
+                                       return editor;
+                                   }});
 }
 
 void editorAreaReplacementIsDeferred() {

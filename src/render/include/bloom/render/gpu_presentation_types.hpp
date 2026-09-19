@@ -58,7 +58,8 @@ struct GpuPresentationStatus final {
     friend bool operator==(const GpuPresentationStatus&, const GpuPresentationStatus&) = default;
 };
 
-// Non-owning borrowed view of the live instance, for a UI-side QVulkanInstance::setVkInstance().
+// Non-owning borrowed view of the live instance, for handing the native Vulkan instance to the UI
+// layer.
 // `instance_bits` is the VkInstance reinterpreted as an integer and `present_queue_family` is the
 // queue family a swapchain must be created on. Immutable after create(), so it is safe to read from
 // the UI thread. The view owns nothing: the caller must keep the GpuDevice alive (on its owner

@@ -23,13 +23,9 @@ inline std::atomic<std::uint8_t>& cell() noexcept {
     return value;
 }
 
-inline void set(const PollFault fault) noexcept {
-    cell().store(static_cast<std::uint8_t>(fault));
-}
+inline void set(const PollFault fault) noexcept { cell().store(static_cast<std::uint8_t>(fault)); }
 
-[[nodiscard]] inline PollFault peek() noexcept {
-    return static_cast<PollFault>(cell().load());
-}
+[[nodiscard]] inline PollFault peek() noexcept { return static_cast<PollFault>(cell().load()); }
 
 // One-shot for DeviceLost/UnknownFence; StallPending persists until clear().
 [[nodiscard]] inline PollFault take() noexcept {

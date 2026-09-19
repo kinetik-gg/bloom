@@ -2,7 +2,7 @@
 // Non-device cases run the real compiler/evaluator/qualified-processor fixture through the
 // service's CPU path. Device-gated cases drive full submit -> native -> product and are SKIPPED
 // (never fabricated) when no device is available. The benchmark records nothing as truth.
-#include "../gpu_preview_display_service_private.hpp"
+#include "gpu_preview_display_service_private.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>

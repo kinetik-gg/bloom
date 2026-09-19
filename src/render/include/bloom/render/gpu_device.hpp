@@ -221,7 +221,8 @@ class GpuDevice final {
     // actually enabled; it never claims support for any specific surface.
     [[nodiscard]] GpuPresentationStatus presentationStatus() const noexcept;
 
-    // Non-owning borrowed view of the live instance for a UI-side QVulkanInstance::setVkInstance().
+    // Non-owning borrowed view of the live instance, for handing the native Vulkan instance to the
+    // UI layer.
     // The returned fields are immutable after create(), so this is safe to call from the UI thread.
     // `valid` is false unless presentationStatus() is Ready. The caller must keep this GpuDevice
     // alive on its owner thread until every borrowed surface is retired and acknowledged; this view

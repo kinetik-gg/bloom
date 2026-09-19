@@ -398,8 +398,8 @@ EditorArea* WorkspaceHost::splitArea(EditorArea& area, Qt::Orientation orientati
     auto createdArea = std::make_shared<EditorArea*>(nullptr);
     const QPointer<EditorArea> areaGuard(&area);
     (void)beginWorkspaceMutation(
-        [this, areaGuard, orientation, initialEditorId = std::move(initialEditorId), newAreaFraction,
-         createdArea] {
+        [this, areaGuard, orientation, initialEditorId = std::move(initialEditorId),
+         newAreaFraction, createdArea] {
             EditorArea* target = areaGuard.data();
             if (target == nullptr) {
                 return;
@@ -589,8 +589,8 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutState(const QByteArray&
     // restored layout before the tree actually changed.
     auto result =
         std::make_shared<WorkspaceLayoutRestoreResult>(WorkspaceLayoutRestoreResult::Invalid);
-    (void)beginWorkspaceMutation(
-        [this, state, result] { *result = restoreLayoutStateNow(state); }, {});
+    (void)beginWorkspaceMutation([this, state, result] { *result = restoreLayoutStateNow(state); },
+                                 {});
     if (surfaceRetirementGate_.isPending()) {
         // The commit has not run yet: report the honest pending result, never "Restored".
         return WorkspaceLayoutRestoreResult::Deferred;
@@ -859,8 +859,7 @@ WorkspaceHost::beginWorkspaceMutation(NativeSurfaceRetirementGate::Commit commit
         options);
 }
 
-void WorkspaceHost::onWorkspaceMutationFinished(
-    const NativeSurfaceRetirementGate::Result& result) {
+void WorkspaceHost::onWorkspaceMutationFinished(const NativeSurfaceRetirementGate::Result& result) {
     if (!result.committed) {
         lastNativeSurfaceDiagnostic_ = result.diagnostic;
     }

@@ -577,8 +577,8 @@ GpuCompositePollResult GpuComposite::poll() {
         }
         if (injected == gpu_scene_executor_fault::PollFault::DeviceLost) {
             // Bounded wait proves the REAL submission retired before pretending loss. Only
-            // VK_SUCCESS may clear the submission; a timeout or an unknown wait result must preserve
-            // it and fail safe, because the fence is not proven signalled.
+            // VK_SUCCESS may clear the submission; a timeout or an unknown wait result must
+            // preserve it and fail safe, because the fence is not proven signalled.
             const VkFence faultFence = static_cast<VkFence>(*impl.fence);
             const VkResult faultWait = impl.control->device.getDispatcher()->vkWaitForFences(
                 static_cast<VkDevice>(*impl.control->device), 1, &faultFence, VK_TRUE,

@@ -9,8 +9,9 @@
 //     tree is left untouched.
 //
 // It is a plain class (not a QObject): callers pass std::function callbacks, so no moc is involved
-// and no new signals/slots are added to the Q_OBJECT host classes. Duplicate surfaces are collapsed,
-// destroyed receivers are detected with QPointer, and a generation counter discards stale callbacks.
+// and no new signals/slots are added to the Q_OBJECT host classes. Duplicate surfaces are
+// collapsed, destroyed receivers are detected with QPointer, and a generation counter discards
+// stale callbacks.
 //
 // Lifetime: every prepare completion holds a std::weak_ptr to a small per-gate control block. The
 // callback must lock it BEFORE it dereferences the gate; destruction invalidates and releases the
@@ -83,9 +84,9 @@ class NativeSurfaceRetirementGate final {
                       NativeSurfaceRetirementOptions options = {},
                       Result* synchronousResult = nullptr);
 
-    // Abandons a pending request without committing and without invoking finish. Any target that had
-    // already retired and is still alive is resumed only when `resumeRetired` is true. Intended for
-    // host teardown/overwrite; late callbacks from the abandoned generation are ignored.
+    // Abandons a pending request without committing and without invoking finish. Any target that
+    // had already retired and is still alive is resumed only when `resumeRetired` is true. Intended
+    // for host teardown/overwrite; late callbacks from the abandoned generation are ignored.
     void abandon(bool resumeRetired = true);
 
   private:
@@ -97,7 +98,8 @@ class NativeSurfaceRetirementGate final {
     };
 
     // Per-gate lifetime control block. Callbacks hold weak_ptr; the destructor flips `alive` and
-    // drops the strong reference so a late completion can prove the gate is gone before touching it.
+    // drops the strong reference so a late completion can prove the gate is gone before touching
+    // it.
     struct Lifetime final {
         bool alive = true;
     };

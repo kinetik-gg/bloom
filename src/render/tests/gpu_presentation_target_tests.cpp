@@ -4,7 +4,7 @@
 
 #include <bloom/render/gpu_presentation_target.hpp>
 
-#include "../vulkan/gpu_presentation_target_private.hpp"
+#include "gpu_presentation_target_private.hpp"
 
 #include <iostream>
 #include <source_location>

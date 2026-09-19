@@ -89,10 +89,12 @@ class WorkspaceHost final : public QFrame {
     void updateAreaControls();
     void restoreMaximizedArea();
 
-    // Retires every live native surface in the current tree before running `commit`, all-or-nothing.
-    // CPU-only trees commit synchronously. A pending gate rejects further mutations.
-    NativeSurfaceRetirementGate::StartStatus beginWorkspaceMutation(
-        NativeSurfaceRetirementGate::Commit commit, NativeSurfaceRetirementGate::Finish finish);
+    // Retires every live native surface in the current tree before running `commit`,
+    // all-or-nothing. CPU-only trees commit synchronously. A pending gate rejects further
+    // mutations.
+    NativeSurfaceRetirementGate::StartStatus
+    beginWorkspaceMutation(NativeSurfaceRetirementGate::Commit commit,
+                           NativeSurfaceRetirementGate::Finish finish);
     [[nodiscard]] std::vector<EditorNativeSurface*> collectNativeSurfaces() const;
     void onWorkspaceMutationFinished(const NativeSurfaceRetirementGate::Result& result);
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreLayoutStateNow(const QByteArray& state);
