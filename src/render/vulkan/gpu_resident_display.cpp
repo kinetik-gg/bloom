@@ -652,7 +652,12 @@ const GpuDisplayImage* GpuResidentDisplay::image() const noexcept {
     return impl_->residentImage.get();
 }
 GpuDisplayImage GpuResidentDisplay::takeImage() noexcept {
-    if (impl_ == nullptr || impl_->residentImage == nullptr) {
+    // Only a Ready job may be taken. While a job is Pending, its resident image and its input/
+    // output/status buffers are still referenced by an unretired submission; refusing here leaves
+    // the job, its queue submission and its retirement state untouched (mirrors
+    // GpuComposite::takeImage).
+    if (impl_ == nullptr || impl_->residentImage == nullptr ||
+        impl_->jobState != GpuResidentDisplayJobState::Ready) {
         return GpuDisplayImage{};
     }
     GpuDisplayImage taken = std::move(*impl_->residentImage);

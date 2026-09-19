@@ -583,7 +583,12 @@ const GpuImage* GpuSolid::image() const noexcept {
 }
 
 GpuImage GpuSolid::takeImage() noexcept {
-    if (impl_ == nullptr || impl_->residentImage == nullptr) {
+    // Only a Ready job may be taken. While a job is Pending, its resident image and (for the
+    // covered variant) its mask/palette buffers are still referenced by an unretired submission;
+    // refusing here leaves the job, its queue submission and its retirement state untouched
+    // (mirrors GpuComposite::takeImage).
+    if (impl_ == nullptr || impl_->residentImage == nullptr ||
+        impl_->jobState != GpuSolidJobState::Ready) {
         return GpuImage{};
     }
     GpuImage taken = std::move(*impl_->residentImage);

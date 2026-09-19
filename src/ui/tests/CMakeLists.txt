@@ -1247,3 +1247,18 @@ bloom_add_test(
     TIMEOUT 300
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
+
+# CPU-only edge cases for the RAM preview cache: same-key live reuse (no double charge, generation
+# re-stamp) and other-project retention under a standalone no-policy cache, while same-project older
+# revisions are still dropped. It builds genuine CPU reference frames and never creates a GPU device,
+# so it registers unconditionally and always runs.
+add_executable(bloom_ui_preview_frame_cache_cpu_edge_test preview_frame_cache_cpu_edge_tests.cpp)
+target_link_libraries(bloom_ui_preview_frame_cache_cpu_edge_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_preview_frame_cache_cpu_edge_test)
+bloom_add_test(
+    NAME bloom.ui.preview-frame-cache-cpu-edge
+    COMMAND bloom_ui_preview_frame_cache_cpu_edge_test
+    LABELS ui unit cache
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)

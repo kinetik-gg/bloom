@@ -202,8 +202,15 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
     const auto existing =
         std::ranges::find_if(entries_, [&key](const Entry& entry) { return entry.key == key; });
     if (existing != entries_.end()) {
-        std::rotate(entries_.begin(), existing, existing + 1);
-        return;
+        if (entryIsLive(*existing)) {
+            // A live entry with this key already holds the best answer; reuse it in place.
+            std::rotate(entries_.begin(), existing, existing + 1);
+            return;
+        }
+        // CACHEFIX-2. A dead resident entry (an invalidated lease) can never be served, so it must
+        // not shadow the live frame being published now. Drop it first -- which releases its byte
+        // charge and its budget/LRU slot -- and fall through to retain the incoming frame.
+        removeAt(static_cast<std::size_t>(existing - entries_.begin()));
     }
 
     const auto bytes = frameByteCost(*frame);
@@ -348,8 +355,12 @@ void PreviewFrameCache::pruneUnaccepted() {
 void PreviewFrameCache::dropStaleRevisions(const PreviewFrameCacheKey& current) {
     for (std::size_t index = entries_.size(); index > 0; --index) {
         const auto& entry = entries_[index - 1];
-        if (entry.key.projectId == current.projectId &&
-            entry.key.sourceRevision == current.sourceRevision) {
+        if (entry.key.projectId != current.projectId) {
+            // CACHEFIX-3. A different project is not this revision's concern; its entries stay
+            // retained (the cache key and the retention policy both carry project identity).
+            continue;
+        }
+        if (entry.key.sourceRevision == current.sourceRevision) {
             continue;
         }
         ++statistics_.staleDrops;

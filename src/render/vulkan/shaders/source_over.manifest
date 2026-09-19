@@ -83,7 +83,7 @@
   },
   "hostDerivation": {
     "order": "source is the foreground composited OVER the in-place destination, matching sourceOverLinearRec709SceneRow(source, destination)",
-    "offsets": "sourceOffset = sourceDataWindow.origin - destinationDataWindow.origin (componentwise); sourceLocal = destLocal - sourceOffset",
+    "offsets": "sourceOffset = destinationDataWindow.origin - sourceDataWindow.origin (componentwise); sourceLocal = destLocal + sourceOffset",
     "windows": "destWidth/Height and sourceWidth/Height are data-window extents",
     "checked": "dispatch ceil(destWidth*destHeight/256); host preflights the same overflow/budget the CPU primitive checks"
   },

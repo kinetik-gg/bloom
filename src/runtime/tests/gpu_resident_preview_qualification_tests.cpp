@@ -75,7 +75,13 @@ class Expectations final {
 
 struct Options final {
     std::filesystem::path loader_path;
+    // --require-device asserts only that a compatible device exists.
     bool require_device = false;
+    // Strict local performance gate. Device presence is not acceleration: this additionally
+    // requires a measured faster resident interval. Default CI must stay valid on a correct GPU
+    // that is slower than the CPU oracle, so this is opt-in only and is never implied by
+    // --require-device.
+    bool require_acceleration = false;
     bool valid = true;
 };
 
@@ -91,6 +97,8 @@ struct Options final {
             options.loader_path = argv[++index];
         } else if (argument == "--require-device") {
             options.require_device = true;
+        } else if (argument == "--require-acceleration") {
+            options.require_acceleration = true;
         } else {
             options.valid = false;
             return options;
@@ -255,7 +263,7 @@ int main(int argc, char** argv) {
     try {
         const Options options = parseOptions(argc, argv);
         if (!options.valid) {
-            std::cerr << "usage: --loader <path> [--require-device]\n";
+            std::cerr << "usage: --loader <path> [--require-device] [--require-acceleration]\n";
             return 2;
         }
         Expectations expectations;
@@ -265,7 +273,7 @@ int main(int argc, char** argv) {
         createOptions.loader_path = options.loader_path;
         auto device = GpuDevice::create(createOptions);
         if (!device) {
-            if (options.require_device) {
+            if (options.require_device || options.require_acceleration) {
                 std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message
                           << '\n';
                 return 1;
@@ -291,13 +299,64 @@ int main(int argc, char** argv) {
         printReport(report);
         expectations.expect(report.outcome() == GpuResidentPreviewOutcome::PreviewOnly,
                             "the aggregate resident profile passed parity");
-        expectations.expect(report.eligible(), "a faster resident interval was measured");
         expectations.expect(report.deviceGeneration() == 1 && report.ownershipEpoch() != 0,
                             "the report pins the actual generation and ownership epoch");
         expectations.expect(report.subnormalFrameRejected(),
                             "a nonzero subnormal resident frame was rejected whole-frame");
-        expectations.expect(report.eligibleFor(*device.device, *processor),
-                            "the report qualifies the actual device and processor");
+
+        // The eligible interval and the measured timings must be mutually consistent. A correct GPU
+        // that is slower than the CPU oracle stays PreviewOnly (all-pixel parity held) but measures
+        // no faster interval: that is a truthful CPU fallback, not a test failure. Only the opt-in
+        // --require-acceleration gate turns "no faster interval" into a failure.
+        const auto& timings = report.timings();
+        const auto interval = report.eligibleInterval();
+        if (timings.empty()) {
+            // A truthful report always measures at least one interval. Guard the size()-1/back()
+            // derivation below so an empty report fails clearly instead of reading out of bounds;
+            // expect() records and does not abort, so keep every later access behind this check.
+            expectations.expect(false, "the report measured the resident interval");
+        } else {
+            expectations.expect(report.eligible() == interval.has_value(),
+                                "eligibility is consistent with the measured eligible interval");
+            if (interval.has_value()) {
+                // Derive the expected contiguous faster suffix from the actual timings, exactly as
+                // the qualification does, and require the report to match it.
+                std::size_t lowest = timings.size() - 1;
+                while (lowest > 0 && timings[lowest - 1].native_improved) {
+                    --lowest;
+                }
+                expectations.expect(
+                    timings.back().native_improved,
+                    "an eligible interval requires the largest measured size to improve");
+                expectations.expect(interval->min_pixels == timings[lowest].pixel_count &&
+                                        interval->max_pixels == timings.back().pixel_count,
+                                    "the eligible interval matches the measured faster suffix");
+                expectations.expect(report.diagnostic().code ==
+                                        GpuResidentPreviewDiagnosticCode::None,
+                                    "an eligible report carries no timing diagnostic");
+                expectations.expect(report.eligibleFor(*device.device, *processor),
+                                    "an eligible report qualifies the actual device and processor");
+                std::cout << "ELIGIBLE interval min_pixels=" << interval->min_pixels
+                          << " max_pixels=" << interval->max_pixels << '\n';
+            } else {
+                expectations.expect(
+                    !timings.back().native_improved,
+                    "a CPU-only outcome requires the largest measured size not to improve");
+                expectations.expect(
+                    report.diagnostic().code == GpuResidentPreviewDiagnosticCode::TimingNotImproved,
+                    "a CPU-only parity-preserving outcome reports TimingNotImproved");
+                expectations.expect(!report.eligibleFor(*device.device, *processor),
+                                    "an ineligible report grants no device/processor eligibility");
+                std::cout << "CPU-ONLY outcome: parity held but no faster resident interval\n";
+            }
+        }
+        if (options.require_acceleration) {
+            expectations.expect(report.eligible() && interval.has_value(),
+                                "--require-acceleration: a faster resident interval was measured");
+            expectations.expect(
+                report.eligibleFor(*device.device, *processor),
+                "--require-acceleration: the report qualifies this device/processor");
+        }
 
         // A second device on the same physical GPU must NOT be qualified by this report, even
         // though its capability-report generation is also 1.

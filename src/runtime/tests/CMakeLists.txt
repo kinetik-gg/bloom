@@ -445,6 +445,23 @@ bloom_add_test(
     TIMEOUT 600
 )
 
+# Focused real-device live-pin ref-count regression for the executor (audit F1) plus the
+# upload-cancel branch consistency fix (audit F2). It runs its own 24-level distinct-index merge DAG
+# under a budget of a known live-image count times the probe-measured actual per-image allocation,
+# independent of the buggy whole-graph retained peak; the unchanged executor suite above keeps its
+# own coverage. Same loader/--require-device contract.
+add_executable(bloom_runtime_gpu_live_pin_focus_test gpu_live_pin_focus_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_live_pin_focus_test
+    PRIVATE bloom_runtime_evaluator bloom_render)
+bloom_enable_warnings(bloom_runtime_gpu_live_pin_focus_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_live_pin_focus_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_live_pin_focus
+    COMMAND bloom_runtime_gpu_live_pin_focus_test
+    LABELS runtime unit gpu render
+    TIMEOUT 600
+)
+
 # Test-only fault variant: the same tests compiled with the executor fault hook and linked against
 # the fault-instrumented native render closure (defined in src/render/tests). Only this variant runs
 # the native retirement vector (stalled deadline / unknown fence / device loss); the default target

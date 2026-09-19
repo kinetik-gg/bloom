@@ -98,6 +98,21 @@ bloom_add_test(
     LABELS unit gpu render
 )
 
+# takeImage()-before-Ready guard regression for the three resident producers (upload, solid/covered,
+# resident display), mirroring GpuComposite's readiness guard. It uses only the public render API, so
+# it compiles and registers unconditionally against both the Vulkan bootstrap and the CPU stub; a
+# hardware-free build prints an explicit device skip (and --require-device fails closed), while the
+# invariant itself is exercised only on a real device.
+add_executable(bloom_render_gpu_take_image_guard_test gpu_take_image_guard_tests.cpp)
+target_link_libraries(bloom_render_gpu_take_image_guard_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_gpu_take_image_guard_test)
+bloom_enable_strict_floating_point(bloom_render_gpu_take_image_guard_test)
+bloom_add_test(
+    NAME bloom.render.gpu_take_image_guard
+    COMMAND bloom_render_gpu_take_image_guard_test
+    LABELS unit gpu render
+)
+
 # CPU-only kernel-prep test for TranslationOpacityBilinearV1 and SourceOverV1: hashes the embedded
 # SPIR-V arrays against their pinned digests and derives every fixture expectation from the REAL CPU
 # primitives. It never dispatches a GPU and registers unconditionally, so it also runs in a

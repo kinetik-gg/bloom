@@ -520,7 +520,11 @@ const GpuImage* GpuImageUpload::image() const noexcept {
 }
 
 GpuImage GpuImageUpload::takeImage() noexcept {
-    if (impl_ == nullptr || impl_->residentImage == nullptr) {
+    // Only a Ready job may be taken. While a job is Pending, its resident image and staging buffer
+    // are still referenced by an unretired submission; refusing here leaves the job, its queue
+    // submission and its retirement state untouched (mirrors GpuComposite::takeImage).
+    if (impl_ == nullptr || impl_->residentImage == nullptr ||
+        impl_->jobState != GpuImageUploadJobState::Ready) {
         return GpuImage{};
     }
     GpuImage taken = std::move(*impl_->residentImage);

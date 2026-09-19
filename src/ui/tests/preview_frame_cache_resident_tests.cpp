@@ -161,7 +161,8 @@ constexpr auto kSlot = bloom::document::LayerSlotId::fromRaw(30);
 }
 
 [[nodiscard]] std::shared_ptr<const CompiledCompositionPlan>
-oneSolidPlan(const bloom::document::CompositionFormat compositionFormat) {
+oneSolidPlan(const bloom::document::CompositionFormat compositionFormat,
+             const bloom::document::ProjectId projectId = kProjectId) {
     std::vector<CompiledOperation> operations;
     operations.emplace_back(
         CompiledSolid{kSolidNode,
@@ -186,7 +187,7 @@ oneSolidPlan(const bloom::document::CompositionFormat compositionFormat) {
         CompiledMerge{kStackNode, {CompiledMergeInput{kSlot, kLayer, OperationIndex::fromRaw(1)}}});
     operations.emplace_back(CompiledCompositionOutput{kOutputNode, OperationIndex::fromRaw(2)});
     return std::make_shared<const CompiledCompositionPlan>(CompiledCompositionPlanDefinition{
-        bloom::document::Revision::fromRaw(7), kProjectId, kCompositionId, compositionFormat,
+        bloom::document::Revision::fromRaw(7), projectId, kCompositionId, compositionFormat,
         std::move(operations), OperationIndex::fromRaw(3)});
 }
 
@@ -438,6 +439,52 @@ int main(int argc, char** argv) {
         expectations.expect(cache.timesFor(key).size() == 1,
                             "timesFor() lists the live resident entry");
 
+        // CACHEFIX-3 (other-project retention). A standalone cache with no provenance policy must
+        // not evict another project's entries when a frame for a different project arrives. The
+        // pre-fix dropStaleRevisions() dropped every entry whose projectId differed.
+        const auto planB = oneSolidPlan(format(size->first, size->second),
+                                        bloom::document::ProjectId::fromRaw(999));
+        auto identityB = identity;
+        identityB.projectId = planB->projectId();
+        identityB.sourceRevision = planB->sourceRevision();
+        auto processIdentityB = processIdentity;
+        processIdentityB.plan = planB;
+        auto requestB = request;
+        requestB.identity = identityB;
+        requestB.processIdentity = processIdentityB;
+        auto displayImageB =
+            produceResidentDisplay(*device.device, *pipelines.solid, *pipelines.display,
+                                   size->first, size->second, kBudget);
+        expectations.expect(displayImageB != nullptr,
+                            "the second project display image is produced");
+        if (displayImageB == nullptr) {
+            return 1;
+        }
+        requestB.display = displayImageB;
+        auto productB = bloom::runtime::makeGpuResidentDisplayPreview(
+            *device.device, *registry, *sharedProcessor, reportHandle, requestB);
+        expectations.expect(productB.has_value(), "the second project product is published");
+        if (!productB.has_value() || productB->residentFrame() == nullptr) {
+            return 1;
+        }
+        auto productBHandle = std::make_shared<const PreparedPreviewFrame>(std::move(*productB));
+        PreviewFrameCache projectCache(kBudget);
+        projectCache.insert(productHandle);
+        projectCache.insert(productBHandle);
+        expectations.expect(projectCache.size() == 2,
+                            "both projects' resident frames are retained together");
+        expectations.expect(projectCache.contains(key),
+                            "CACHEFIX-3: a second project's insert preserves the first project");
+        expectations.expect(projectCache.timesFor(key).size() == 1,
+                            "CACHEFIX-3: timesFor() still lists the first project's entry");
+
+        // CACHEFIX-2 setup: retain the live frame, then invalidate its lease so the entry is dead
+        // while it is still in the cache. A later live frame with the same key must replace it.
+        PreviewFrameCache recoveryCache(kBudget);
+        recoveryCache.insert(productHandle);
+        expectations.expect(recoveryCache.contains(key),
+                            "the recovery cache starts with a live resident entry");
+
         // Invalidation: a dead lease must never be a hit, never listed, never inserted.
         registry->invalidateAll();
         expectations.expect(!residentHandle->isDisplayValid(), "the lease is now invalid");
@@ -450,6 +497,50 @@ int main(int argc, char** argv) {
         cache.insert(productHandle);
         expectations.expect(cache.size() == 0 && cache.statistics().rejections == 1,
                             "inserting an invalidated resident frame is refused");
+
+        // CACHEFIX-2 (dead resident entry replacement). The recovery cache still holds the now-dead
+        // entry under `key`. Publish a genuinely new live lease for the SAME identity and insert
+        // it: the dead entry must be replaced, not shadow it. Pre-fix, insert() found the dead
+        // entry by key and returned, so the live frame was discarded, contains() stayed false, and
+        // the dead byte charge was never released.
+        expectations.expect(!recoveryCache.contains(key),
+                            "CACHEFIX-2: the invalidated resident entry is hidden before recovery");
+        const auto deadCharge = recoveryCache.residentBytes();
+        auto recoveryDisplay =
+            produceResidentDisplay(*device.device, *pipelines.solid, *pipelines.display,
+                                   size->first, size->second, kBudget);
+        expectations.expect(recoveryDisplay != nullptr, "the recovery display image is produced");
+        if (recoveryDisplay == nullptr) {
+            return 1;
+        }
+        auto recoveryRequest = request;
+        recoveryRequest.display = recoveryDisplay;
+        auto recoveryProduct = bloom::runtime::makeGpuResidentDisplayPreview(
+            *device.device, *registry, *sharedProcessor, reportHandle, recoveryRequest);
+        expectations.expect(recoveryProduct.has_value() &&
+                                recoveryProduct->residentFrame() != nullptr,
+                            "the recovery product is published with a live lease");
+        if (!recoveryProduct.has_value() || recoveryProduct->residentFrame() == nullptr) {
+            return 1;
+        }
+        const auto recoveryLeaseId = recoveryProduct->residentFrame()->lease().id();
+        auto recoveryHandle =
+            std::make_shared<const PreparedPreviewFrame>(std::move(*recoveryProduct));
+        const auto recoveryCharge = PreviewFrameCache::frameByteCost(*recoveryHandle);
+        recoveryCache.insert(recoveryHandle);
+        expectations.expect(recoveryCache.contains(key),
+                            "CACHEFIX-2: the live same-key frame replaces the dead entry");
+        expectations.expect(recoveryCache.size() == 1,
+                            "CACHEFIX-2: replacement keeps exactly one entry");
+        expectations.expect(recoveryCache.residentBytes() == recoveryCharge,
+                            "CACHEFIX-2: replacement does not double-charge bytes");
+        expectations.expect(recoveryCache.residentBytes() != deadCharge ||
+                                recoveryCharge == deadCharge,
+                            "CACHEFIX-2: the dead entry's charge was released");
+        auto recovered = recoveryCache.take(restamped);
+        expectations.expect(recovered != nullptr && recovered->residentFrame() != nullptr &&
+                                recovered->residentFrame()->lease().id() == recoveryLeaseId,
+                            "CACHEFIX-2: take() serves the replacement's live lease");
 
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " cache resident expectation(s) failed\n";

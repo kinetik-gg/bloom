@@ -184,6 +184,25 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::begin(std::shared_ptr<const Prepare
         return planned;
     }
 
+    // Count, per ACTUALLY emitted step, how many times each command's image is consumed. Only steps
+    // generated after the cache cut exist here, so an edge to an unreachable or cache-hit subtree
+    // is never counted and never holds a pin. A repeated or shared input is counted once per
+    // consuming step, and an explicit destination is counted like an input. The current merge
+    // accumulator and the terminal output are deliberately absent: the accumulator is replaced in
+    // place by assignImage(), and the output is retained until takeImage(). The last consumer
+    // therefore releases an intermediate only after the native operation that consumed it has
+    // completed.
+    for (const auto& step : impl.steps) {
+        if (step.input != kInvalidGpuSceneCommand &&
+            static_cast<std::size_t>(step.input) < impl.remainingUses.size()) {
+            ++impl.remainingUses[step.input];
+        }
+        if (step.destination != kInvalidGpuSceneCommand &&
+            static_cast<std::size_t>(step.destination) < impl.remainingUses.size()) {
+            ++impl.remainingUses[step.destination];
+        }
+    }
+
     // Conservative early guard: the peak live set can never be smaller than the largest single
     // step's requested extent, so a budget below that cannot succeed. This is a lower bound only;
     // it never sums the graph's cumulative allocation and it is never reported as actual VMA bytes.
@@ -258,6 +277,8 @@ GpuSceneExecutorPollResult GpuSceneExecutor::poll() {
         if (impl.cancelRequested && !impl.cancelIssued) {
             if (impl.nativeKind == Impl::NativeKind::Solid) {
                 impl.solid->cancel();
+            } else if (impl.nativeKind == Impl::NativeKind::Upload) {
+                impl.upload->cancel();
             } else {
                 impl.composite->cancel();
             }
