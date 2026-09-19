@@ -75,13 +75,33 @@ jobs:
           cmake --build "${{ runner.temp }}/bloom-superbuild"
 
       - name: Configure Clang and clang-tidy
-        run: cmake --preset ci-linux-native -DBLOOM_BUILD_PYTHON=ON
+        run: |
+          tidy=()
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            tidy=(-DBLOOM_ENABLE_CLANG_TIDY=OFF -DBLOOM_ENABLE_TEST_CLANG_TIDY=OFF)
+          fi
+          cmake --preset ci-linux-native -DBLOOM_BUILD_PYTHON=ON "${tidy[@]}"
 
       - name: Check repository quality
         run: cmake --build --preset ci-linux-native --target bloom-quality-check --parallel
 
-      - name: Build with clang-tidy
+      - name: Build
         run: cmake --build --preset ci-linux-native --parallel
+
+      # Pull requests analyze only the translation units they change; the full sweep runs when the
+      # change lands on main. clang-tidy during compilation is disabled above for pull requests.
+      - name: Tidy changed translation units
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --quiet --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+          checks=$(grep -m1 '^BLOOM_CLANG_TIDY_CHECKS:' build/ci-linux-native/CMakeCache.txt | cut -d= -f2-)
+          tools/quality/tidy_changed_files \
+            --compile-database build/ci-linux-native/compile_commands.json \
+            --checks "$checks" \
+            --header-filter "^$GITHUB_WORKSPACE/(apps|src|tests|tools)/" \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --clang-tidy clang-tidy-22 \
+            --jobs "$(nproc)"
 
       - name: Test Clang build
         run: ctest --preset ci-linux-native --output-on-failure
@@ -185,13 +205,31 @@ jobs:
 
       - name: Configure desktop build
         run: |
-          cmake --preset ci-linux-desktop -DBLOOM_BUILD_PYTHON=ON \
+          tidy=()
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            tidy=(-DBLOOM_ENABLE_CLANG_TIDY=OFF)
+          fi
+          cmake --preset ci-linux-desktop -DBLOOM_BUILD_PYTHON=ON "${tidy[@]}" \
             -DCMAKE_PREFIX_PATH="${{ runner.temp }}/qt/6.8.3/gcc_64" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build desktop
         run: cmake --build --preset ci-linux-desktop --parallel
+
+      # Covers the desktop-only units the native job's database does not contain.
+      - name: Tidy changed translation units
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --quiet --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+          checks=$(grep -m1 '^BLOOM_CLANG_TIDY_CHECKS:' build/ci-linux-desktop/CMakeCache.txt | cut -d= -f2-)
+          tools/quality/tidy_changed_files \
+            --compile-database build/ci-linux-desktop/compile_commands.json \
+            --checks "$checks" \
+            --header-filter "^$GITHUB_WORKSPACE/(apps|src|tests|tools)/" \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --clang-tidy clang-tidy-22 \
+            --jobs "$(nproc)"
 
       - name: Test desktop build
         run: ctest --preset ci-linux-desktop --output-on-failure
