@@ -191,6 +191,59 @@ else()
         "neutral_display.comp digest is still enforced.")
 endif()
 
+# --- Fixed SolidV1 resident-image shader: source pin and regeneration check -----------------------
+#
+# Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe (no new
+# generator). The checked-in .comp is pinned here, the manifest must bind that source digest, and,
+# when the locked glslangValidator/spirv-val are present, configure recompiles it and confirms the
+# SPIR-V digest embedded in solid_spirv.inc. Runtime code never compiles or loads a shader.
+set(BLOOM_SOLID_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/solid.comp")
+set(BLOOM_SOLID_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/solid.manifest")
+set(BLOOM_SOLID_INC "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/solid_spirv.inc")
+set(BLOOM_SOLID_COMP_SHA256
+    "ac0d5f31bc8b23e2c3744f3edd1ceb2308566d853cb36aea1bffbe5f009a110c")
+set(BLOOM_SOLID_SPV_SHA256
+    "2fae4aef67267e98a53034448639bfb00a69568ec3be1d8ed1a1bc60b31a0318")
+
+file(SHA256 "${BLOOM_SOLID_COMP}" bloom_solid_comp_sha256)
+if(NOT bloom_solid_comp_sha256 STREQUAL BLOOM_SOLID_COMP_SHA256)
+    message(FATAL_ERROR
+        "solid.comp SHA-256 mismatch: measured ${bloom_solid_comp_sha256}, pinned "
+        "${BLOOM_SOLID_COMP_SHA256}. Regenerate only through the tools/gpu-shaders recipe and update "
+        "the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_SOLID_MANIFEST}" bloom_solid_manifest_text)
+if(NOT bloom_solid_manifest_text MATCHES "${BLOOM_SOLID_COMP_SHA256}")
+    message(FATAL_ERROR "solid.manifest does not bind the pinned solid.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_solid_generated_spv "${CMAKE_CURRENT_BINARY_DIR}/solid.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_SOLID_COMP}" -o "${bloom_solid_generated_spv}"
+        RESULT_VARIABLE bloom_solid_glslang_result)
+    if(NOT bloom_solid_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile solid.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2 "${bloom_solid_generated_spv}"
+        RESULT_VARIABLE bloom_solid_spirv_val_result)
+    if(NOT bloom_solid_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated SolidV1 SPIR-V.")
+    endif()
+    file(SHA256 "${bloom_solid_generated_spv}" bloom_solid_spv_sha256)
+    if(NOT bloom_solid_spv_sha256 STREQUAL BLOOM_SOLID_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated SolidV1 SPIR-V SHA-256 ${bloom_solid_spv_sha256} does not match the "
+            "embedded ${BLOOM_SOLID_SPV_SHA256}; the checked-in .comp and solid_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: solid.comp regenerated and SPIR-V-validated "
+        "(${bloom_solid_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "solid.comp digest is still enforced.")
+endif()
+
 set(BLOOM_RENDER_VULKAN_AVAILABLE OFF)
 if(BLOOM_RENDER_ENABLE_VULKAN AND DEFINED BLOOM_DEPENDENCY_MODE)
     if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
@@ -253,7 +306,11 @@ target_sources(
             include/bloom/render/display_buffer.hpp
             include/bloom/render/embedded_fonts.hpp
             include/bloom/render/gpu_device.hpp
+            include/bloom/render/gpu_image.hpp
+            include/bloom/render/gpu_image_upload.hpp
             include/bloom/render/gpu_neutral_display.hpp
+            include/bloom/render/gpu_resident_display.hpp
+            include/bloom/render/gpu_solid.hpp
             include/bloom/render/image.hpp
             include/bloom/render/image_types.hpp
             include/bloom/render/text_raster.hpp
@@ -267,15 +324,29 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     target_sources(bloom_render PRIVATE
         vulkan/gpu_device.cpp
         vulkan/gpu_device_private.hpp
+        vulkan/gpu_image.cpp
+        vulkan/gpu_image_private.hpp
+        vulkan/gpu_image_upload.cpp
+        vulkan/gpu_image_upload_private.hpp
+        vulkan/gpu_image_upload_resources.cpp
         vulkan/gpu_neutral_display.cpp
         vulkan/gpu_neutral_display_private.hpp
         vulkan/gpu_neutral_display_resources.cpp
+        vulkan/gpu_resident_display.cpp
+        vulkan/gpu_resident_display_private.hpp
+        vulkan/gpu_resident_display_resources.cpp
+        vulkan/gpu_solid.cpp
         vulkan/shaders/neutral_display.comp
         vulkan/shaders/neutral_display.manifest
         vulkan/shaders/neutral_display_spirv.inc
+        vulkan/shaders/solid.comp
+        vulkan/shaders/solid.manifest
+        vulkan/shaders/solid_spirv.inc
     )
 else()
-    target_sources(bloom_render PRIVATE gpu_device_stub.cpp gpu_neutral_display_stub.cpp)
+    target_sources(bloom_render PRIVATE gpu_device_stub.cpp gpu_image_upload_stub.cpp
+                                     gpu_neutral_display_stub.cpp
+                                     gpu_resident_display_stub.cpp gpu_solid_stub.cpp)
 endif()
 
 target_compile_features(bloom_render PUBLIC cxx_std_20)

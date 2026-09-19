@@ -174,7 +174,25 @@ request, cached re-requests with zero extra preparation, and a warm-cache paired
 background, direct-manipulation, shutdown, and viewer/status tests; the bundled loader hash
 matching the prefix file with no Vulkan DT_NEEDED and no ambient loader.
 
-Pending and unchanged: GPU compositing, resident GPU viewer buffers, WSI/swapchain presentation,
+The render layer now also owns the first GPU-resident compositing primitives. Their public headers are
+Qt-free and Vulkan-free, with portable CPU-unavailable stubs: `GpuImage` (opaque move-only
+device-resident RGBA32F ownership), `GpuSolid` (the SolidV1 compute operation producing a resident
+image), `GpuImageUpload` (one already-decoded host `Rgba32fImage` staged into a resident `GpuImage`,
+with no media decode on the GPU thread), and `GpuResidentDisplay` (resident RGBA32F copied
+device-to-device through the accepted embedded Neutral V1 shader into a resident packed RGBA8 image,
+with only the 4-byte status word read back on the normal path). They follow the existing bounded
+policy: owner-thread operations, explicit byte budgets checked against actual allocator sizes and the
+peak temporary/retained use, cancellation, device-binding checks, and a bounded teardown that
+quarantines an unproved submission rather than destroying it in flight. Verified locally on a real
+device with the pinned loader: the SolidV1 CPU-oracle parity and the embedded-SPIR-V digest pin, the
+resident Neutral display parity (RGB within one code, alpha exact) with subnormal-status rejection
+and budget refusal, and bit-exact host-upload readback; the CPU stubs compile clean under the same
+strict flags. These are rendering primitives only: no scene evaluator selects them yet, they are not
+wired into `GpuPreviewDisplayService`, not composed per layer, and not presented through a viewer, so
+no performance claim is made here.
+
+Pending and unchanged: the GPU scene evaluator and content cache, per-layer GPU compositing,
+resident GPU viewer buffers, WSI/swapchain presentation,
 a whole-application benchmark, the full per-operation qualification fixtures for a future
 `ReferenceParity` profile (this operation stays `PreviewOnly`), general graph execution,
 presentation/swapchain integration, the cross-platform Linux/macOS/Windows parity spike, shader

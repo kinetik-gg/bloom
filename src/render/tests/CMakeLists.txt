@@ -70,3 +70,43 @@ bloom_add_test(
     COMMAND bloom_render_gpu_neutral_display_test
     LABELS unit gpu color
 )
+
+# SolidV1 resident-image test. Compiles unconditionally and depends only on runtime create()
+# availability, so the same target runs against the CPU stub. It hashes the embedded SPIR-V array
+# against the pinned digest, so a changed array word fails even if comments are intact.
+add_executable(bloom_render_gpu_solid_test gpu_solid_tests.cpp)
+target_link_libraries(bloom_render_gpu_solid_test PRIVATE bloom_render)
+target_include_directories(bloom_render_gpu_solid_test
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+target_compile_definitions(bloom_render_gpu_solid_test
+    PRIVATE "BLOOM_SOLID_SPV_SHA256=\"2fae4aef67267e98a53034448639bfb00a69568ec3be1d8ed1a1bc60b31a0318\"")
+bloom_enable_warnings(bloom_render_gpu_solid_test)
+bloom_enable_strict_floating_point(bloom_render_gpu_solid_test)
+bloom_add_test(
+    NAME bloom.render.gpu_solid
+    COMMAND bloom_render_gpu_solid_test
+    LABELS unit gpu render
+)
+
+# GPU-resident Neutral V1 display test. It links bloom_color_ocio only for the independent CPU
+# oracle; the render module itself stays OCIO-free.
+add_executable(bloom_render_gpu_resident_display_test gpu_resident_display_tests.cpp)
+target_link_libraries(bloom_render_gpu_resident_display_test PRIVATE bloom_render bloom_color_ocio)
+bloom_enable_warnings(bloom_render_gpu_resident_display_test)
+bloom_enable_strict_floating_point(bloom_render_gpu_resident_display_test)
+bloom_add_test(
+    NAME bloom.render.gpu_resident_display
+    COMMAND bloom_render_gpu_resident_display_test
+    LABELS unit gpu color
+)
+
+# Host RGBA32F -> resident GpuImage upload test (staged host copy; no shader).
+add_executable(bloom_render_gpu_image_upload_test gpu_image_upload_tests.cpp)
+target_link_libraries(bloom_render_gpu_image_upload_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_gpu_image_upload_test)
+bloom_enable_strict_floating_point(bloom_render_gpu_image_upload_test)
+bloom_add_test(
+    NAME bloom.render.gpu_image_upload
+    COMMAND bloom_render_gpu_image_upload_test
+    LABELS unit gpu render
+)

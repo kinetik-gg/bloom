@@ -1,0 +1,23 @@
+#version 460
+// Bloom SolidV1 compute shader. Offline-generated/embedded; do not edit at runtime.
+// Operation: SolidV1. Writes one premultiplied lin_rec709_scene RGBA32F pixel to every texel of a
+// GPU-resident storage image. The pixel is already validated/premultiplied on the host by
+// solidPixelFromStraightLinearRec709Scene; the shader performs no arithmetic beyond the store.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform image2D bloom_solid_output;
+
+layout(push_constant) uniform BloomSolidPushConstants {
+    vec4 pixel;   // premultiplied linear Rec.709 scene
+    uint width;   // data-window width in pixels
+    uint height;  // data-window height in pixels
+} bloom_solid_push;
+
+void main()
+{
+    const uvec2 index = gl_GlobalInvocationID.xy;
+    if (index.x >= bloom_solid_push.width || index.y >= bloom_solid_push.height) {
+        return;
+    }
+    imageStore(bloom_solid_output, ivec2(index), bloom_solid_push.pixel);
+}
