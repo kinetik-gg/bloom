@@ -1487,7 +1487,9 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
     }
     if (event.kind == commands::CommandEventKind::RevisionChanged) {
         const auto previousRevision = snapshot_.revision();
+        const auto previousWorkArea = workArea();
         snapshot_ = document_->snapshot();
+        const bool rangeChanged = workArea() != previousWorkArea;
         const bool revisionAdvanced = snapshot_.revision() != previousRevision;
         // Retain the last genuine evaluation snapshot only when this command proved, from its own
         // published metadata, that it changed no rendered pixel and sat exactly on the live
@@ -1516,6 +1518,11 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
             if (!retainEvaluationSnapshot)
                 emit evaluationChanged();
         }
+        // The effective range is compared against the live snapshot before and after the edit, so a
+        // mixed transaction that changed no range, or a range edit to another composition, is a
+        // no-op here. A range edit never advances evaluation, so this is the only signal it emits.
+        if (rangeChanged)
+            emit workAreaChanged();
         return;
     }
     emit historyChanged();

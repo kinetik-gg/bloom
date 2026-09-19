@@ -563,6 +563,12 @@ class CompositionSession final : public QObject {
     // collide with the new document's -- before the ordinary refresh signals build new requests.
     void documentRebound();
     void snapshotChanged();
+    // Fired when the composition's EFFECTIVE work area changes -- Set/ClearWorkArea, and the
+    // undo/redo of either. It is deliberately separate from snapshotChanged: a range edit is
+    // render-neutral, so it must not refresh pixels or advance the evaluation snapshot, but it does
+    // change which frames a range command retains and fills. Consumers read the live workArea()
+    // here, never the retained evaluation snapshot's.
+    void workAreaChanged();
     // Emitted only when evaluationSnapshot() actually changes, plus the existing non-document
     // display/colour-qualification/settings notifications that force preview work. UI surfaces keep
     // following snapshotChanged; preview, RAM and background caching follow this one, so a

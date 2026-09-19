@@ -592,7 +592,23 @@ asks the transport to play it. Frames already cached are counted without being r
 second RAM preview of an unedited range is immediate. The range is the persisted half-open work
 area when set, otherwise `[0, duration)`, read through `CompositionSession::workArea()`. Playback
 starts inside and loops over those same frame indices. The start frame is included and the end
-frame excluded; a range edit cancels an active cache run through the ordinary revision path.
+frame excluded.
+
+A work-area edit (`SetWorkArea`/`ClearWorkArea`) is render-neutral: it scopes which frames a range
+command caches, not what a pixel looks like, so it is declared layout-like in the command layer and
+never advances the evaluation snapshot or recompiles a plan. It publishes its own
+`workAreaChanged()` -- based on the effective half-open range actually changing, not on every
+document edit -- and the shared preview cache re-scopes to the live range: entries outside it are
+released as `rangeDrops` (never as eviction or memory-pressure, so a trim cannot abort a run as
+though the budget were exceeded), every later insertion is refused if it is out of range so a late
+completion after a trim cannot resurrect a pruned entry, and the already-displayed frame is
+untouched. A frame outside the work area can still be displayed; it is simply not retained. An
+active RAM run adapts rather than cancels: the in-flight frame is allowed to land (retained only if
+still in range), the run rebases onto the new range, and only missing frames are submitted, so an
+expansion or shift fills just the entering interval and a fully cached shrink evaluates nothing.
+Background fill follows the same rule through `workAreaChanged()`; the automatic pass, its budget,
+priority and yielding behavior are otherwise unchanged, and a range edit never turns itself into an
+explicit RAM command.
 
 ### Background caching
 
@@ -611,9 +627,11 @@ and shutdown handling. It never changes session time or publishes Viewer pixels.
 
 Each pass visits at most the nearest set of frames that fits the cache's byte budget. Cached entries
 in that set are reused and protected by the cache's LRU order. The pass then stops, avoiding an endless
-cycle that evicts its own frames. An evaluation-snapshot, resolution, playhead, or memory-budget
-change restarts selection; a layout-only edit moves none of those and leaves the pass running. Old
-evaluation-snapshot entries evict through the existing cache policy. Background caching visits
+cycle that evicts its own frames. An evaluation-snapshot, work-area, resolution, playhead, or
+memory-budget change restarts selection; a layout-only edit moves none of those and leaves the pass
+running. A work-area edit re-anchors on the playhead and skips cached in-range frames, so it fills
+only what the new range adds. Old evaluation-snapshot entries evict through the existing cache
+policy. Background caching visits
 only frame times inside the session's resolved work area, including when choosing nearby frames
 around an out-of-range playhead. Cache budgets, cancellation and shutdown behavior are unchanged.
 

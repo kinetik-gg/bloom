@@ -137,6 +137,12 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
         return;
     }
     const auto key = PreviewFrameCacheKey::forIdentity(frame->desiredIdentity());
+    if (!retains(key)) {
+        // A late completion after a trim must not resurrect an out-of-range entry. The frame was
+        // already displayed/published by its caller; refusing only the retention is honest.
+        ++statistics_.rangeDrops;
+        return;
+    }
     if (displayQualified_.has_value() && *displayQualified_ != frame->isOcioQualified()) {
         // The display transform itself changed (the qualified processor became available). Every
         // retained frame was produced by the other one, so none of them is this composition any
@@ -219,6 +225,40 @@ void PreviewFrameCache::clear() {
     }
     entries_.clear();
     residentBytes_ = 0;
+}
+
+bool PreviewFrameCache::retains(const PreviewFrameCacheKey& key) const noexcept {
+    if (!retentionRange_.has_value())
+        return true;
+    const auto& range = *retentionRange_;
+    if (key.projectId != range.projectId || key.compositionId != range.compositionId)
+        return true;
+    return key.time >= range.start && key.time < range.end;
+}
+
+std::size_t PreviewFrameCache::pruneToRange(const RetentionRange& range) {
+    std::size_t dropped = 0;
+    for (std::size_t index = entries_.size(); index > 0; --index) {
+        const auto& entry = entries_[index - 1];
+        if (entry.key.projectId != range.projectId ||
+            entry.key.compositionId != range.compositionId) {
+            continue;
+        }
+        if (entry.key.time >= range.start && entry.key.time < range.end)
+            continue;
+        ++statistics_.rangeDrops;
+        removeAt(index - 1);
+        ++dropped;
+    }
+    return dropped;
+}
+
+void PreviewFrameCache::setRetentionRange(std::optional<RetentionRange> range) {
+    if (retentionRange_ == range)
+        return;
+    retentionRange_ = std::move(range);
+    if (retentionRange_.has_value())
+        static_cast<void>(pruneToRange(*retentionRange_));
 }
 
 void PreviewFrameCache::dropStaleRevisions(const PreviewFrameCacheKey& current) {

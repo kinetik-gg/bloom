@@ -71,6 +71,10 @@ CompositionPreviewController::CompositionPreviewController(
             &CompositionPreviewController::requestRefresh);
     connect(&session_, &CompositionSession::compositionChanged, this,
             &CompositionPreviewController::handleCompositionChanged);
+    // A work-area edit is render-neutral: it re-scopes which frames the shared cache retains and
+    // fills, but it must not refresh the displayed frame or the compiled plan.
+    connect(&session_, &CompositionSession::workAreaChanged, this,
+            &CompositionPreviewController::handleWorkAreaChanged);
     // A rebind installs a different document whose numeric project/composition/revision can collide
     // with the previous one. Drop every trace of the old document before any refresh is built:
     // cancel and detach the active handle, clear pending/cadence and the frame cache, and reset the
@@ -85,6 +89,7 @@ CompositionPreviewController::CompositionPreviewController(
         pending_.reset();
         cancelAndDetachActive();
         frameCache_->clear();
+        refreshRetentionRange();
         state_ = CompositionPreviewState{};
         emit stateChanged();
     });
@@ -115,6 +120,7 @@ CompositionPreviewController::CompositionPreviewController(
     completionPollTimer_.setTimerType(Qt::PreciseTimer);
     connect(&completionPollTimer_, &QTimer::timeout, this,
             &CompositionPreviewController::consumeReadyResult);
+    refreshRetentionRange();
     requestPreview(true, PreviewRequestKind::Visible);
 }
 
@@ -343,10 +349,37 @@ void CompositionPreviewController::requestRefresh() {
 
 void CompositionPreviewController::handleCompositionChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
+    // A different composition has its own work area, so re-scope retention before the new request
+    // is built.
+    refreshRetentionRange();
     if (!shuttingDown_) {
         preparationEstimate_.reset();
         requestPreview(true, PreviewRequestKind::Visible);
     }
+}
+
+void CompositionPreviewController::handleWorkAreaChanged() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    // Re-scope the cache to the live work area: out-of-range entries are pruned here, and every
+    // later insertion is bounded by the same range. No request is issued -- the range is
+    // render-neutral, and the displayed frame may legitimately sit outside it.
+    refreshRetentionRange();
+}
+
+void CompositionPreviewController::refreshRetentionRange() {
+    const auto* composition = session_.composition();
+    if (composition == nullptr) {
+        frameCache_->setRetentionRange(std::nullopt);
+        return;
+    }
+    // The LIVE work area, never the retained evaluation snapshot's: a range edit is not a pixel
+    // edit, so the evaluation snapshot deliberately does not see it.
+    const auto area = session_.workArea();
+    frameCache_->setRetentionRange(
+        PreviewFrameCache::RetentionRange{.projectId = session_.snapshot().project().id(),
+                                          .compositionId = session_.compositionId(),
+                                          .start = area.start,
+                                          .end = area.end});
 }
 
 void CompositionPreviewController::handleCurrentTimeChanged() {

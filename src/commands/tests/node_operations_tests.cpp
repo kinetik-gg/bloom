@@ -192,11 +192,33 @@ void testMergeSlotSharesContentAndAudioRoles(TestContext& test) {
 
 void testLayerToggles(TestContext& test) {
     Fixture fixture;
-    (void)exercise<SetWorkArea>(test, fixture, core::RationalTime::fromInteger(1),
-                                core::RationalTime::fromInteger(3));
+    // WORKAREA-1: a work-area edit is render-neutral -- it scopes which frames a range command
+    // caches, not what a pixel looks like -- so both range commands opt out of render effect.
+    const auto setArea = exercise<SetWorkArea>(test, fixture, core::RationalTime::fromInteger(1),
+                                               core::RationalTime::fromInteger(3));
+    test.expect(!setArea.renderAffecting, "SetWorkArea is render-neutral");
     refuse<SetWorkArea>(test, fixture, OperationIssueCode::InvalidValue,
                         core::RationalTime::fromInteger(3), core::RationalTime::fromInteger(1));
-    (void)exercise<ClearWorkArea>(test, fixture);
+    const auto clearArea = exercise<ClearWorkArea>(test, fixture);
+    test.expect(!clearArea.renderAffecting, "ClearWorkArea is render-neutral");
+    // A mixed range+pixel transaction still aggregates to render-affecting.
+    {
+        const auto before = fixture.document.snapshot();
+        Transaction mixed("Range and opacity", before.revision());
+        mixed.emplace<SetWorkArea>(kCompositionId, core::RationalTime::fromInteger(2),
+                                   core::RationalTime::fromInteger(4));
+        mixed.emplace<SetParameterSource>(kCompositionId, kOpacityId,
+                                          document::ParameterSource{ConstantValueSource{0.5}});
+        const auto mixedResult = fixture.stack.execute(std::move(mixed));
+        test.expect(mixedResult.changed() && mixedResult.renderAffecting,
+                    "a mixed range+pixel transaction stays render-affecting");
+        const auto mixedUndo = fixture.stack.undo();
+        test.expect(mixedUndo.changed() && mixedUndo.renderAffecting,
+                    "undo replays the stored mixed range impact");
+        const auto mixedRedo = fixture.stack.redo();
+        test.expect(mixedRedo.changed() && mixedRedo.renderAffecting,
+                    "redo replays the stored mixed range impact");
+    }
     (void)exercise<SetLayerLabelColor>(test, fixture, kFirstLayerId,
                                        std::array<std::uint8_t, 3>{12, 34, 56});
     (void)exercise<SetLayerLabelColor>(test, fixture, kFirstLayerId, std::nullopt);

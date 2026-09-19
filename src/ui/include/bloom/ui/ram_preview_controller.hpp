@@ -78,6 +78,13 @@ class RamPreviewController final : public QObject {
     void finish(bool completed);
     void cancelAndDetachActive() noexcept;
     void publishProgress();
+    // WORKAREA-1: adapt a run in progress to the live work area. If a frame is in flight it is
+    // allowed to land (and is retained only if it is still in range); otherwise the range is
+    // rebased and the run continues. Never turns a range edit into a new run.
+    void handleWorkAreaChanged();
+    // Recomputed from the live work area: first frame index, total count, and the counters the
+    // progress readout and budget gate use. Cached frames inside the new range are skipped.
+    void rebaseRange();
 
     CompositionSession& session_;
     CompositionPreviewController& previewController_;
@@ -101,6 +108,9 @@ class RamPreviewController final : public QObject {
     std::uint64_t evictionsAtStart_ = 0;
     bool caching_ = false;
     bool shuttingDown_ = false;
+    // Set by a work-area edit while a frame is in flight; the completion rebases before continuing
+    // so the old range's index bookkeeping cannot skip or duplicate a frame of the new range.
+    bool rangeDirty_ = false;
 };
 
 } // namespace bloom::ui

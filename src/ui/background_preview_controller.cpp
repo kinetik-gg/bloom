@@ -35,6 +35,11 @@ BackgroundPreviewController::BackgroundPreviewController(
     // cursor and the cached key untouched; a render-affecting edit restarts the pass.
     connect(&session_, &CompositionSession::evaluationChanged, this,
             &BackgroundPreviewController::restart);
+    // A work-area edit re-scopes the pass. Restarting re-anchors on the playhead and rescans, so an
+    // expansion or shift fills only the frames the new range adds; cached in-range frames are
+    // skipped by the existing contains() check, and a fully cached shrink fills nothing.
+    connect(&session_, &CompositionSession::workAreaChanged, this,
+            &BackgroundPreviewController::restart);
     connect(&session_, &CompositionSession::compositionChanged, this,
             &BackgroundPreviewController::restart);
     connect(&session_, &CompositionSession::currentTimeChanged, this, [this] {

@@ -233,6 +233,11 @@ class CompositionPreviewController final : public QObject {
                           std::optional<runtime::TaskId> taskId,
                           PreparedPreviewFrameHandle retainedFrame);
     void handleCompositionChanged();
+    // WORKAREA-1: re-scope the shared cache to the live work area. Prunes out-of-range entries and
+    // bounds every later insertion; it never forces a pixel refresh, because the range is
+    // render-neutral for the frame already displayed.
+    void handleWorkAreaChanged();
+    void refreshRetentionRange();
     void handleCurrentTimeChanged();
     void handleTransformInteractionChanged();
     void handleLiveValueChanged();

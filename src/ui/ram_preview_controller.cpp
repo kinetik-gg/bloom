@@ -45,6 +45,10 @@ RamPreviewController::RamPreviewController(CompositionSession& session,
     connect(&session_, &CompositionSession::evaluationChanged, this, &RamPreviewController::cancel);
     connect(&session_, &CompositionSession::compositionChanged, this,
             &RamPreviewController::cancel);
+    // A render-neutral work-area edit adapts the run instead of ending it: expanding or shifting
+    // fills only the missing frames, shrinking keeps the overlap and stops at the new end.
+    connect(&session_, &CompositionSession::workAreaChanged, this,
+            &RamPreviewController::handleWorkAreaChanged);
     // A range must not mix factors or policies when the viewer changes resolution mid-run.
     connect(&previewController_, &CompositionPreviewController::resolutionChanged, this,
             &RamPreviewController::cancel);
@@ -71,21 +75,63 @@ void RamPreviewController::start() {
     // the moment a pixel-affecting edit changes it.
     snapshot_ = session_.evaluationSnapshot();
     compositionId_ = session_.compositionId();
+    caching_ = true;
+    rangeDirty_ = false;
+    rebaseRange();
+    if (!caching_)
+        return;
+    evictionsAtStart_ = previewController_.frameCache().statistics().evictions;
+    submitNextFrame();
+}
+
+void RamPreviewController::rebaseRange() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    rangeDirty_ = false;
+    if (!caching_ || !snapshot_.has_value())
+        return;
+    const auto* composition = snapshot_->project().findComposition(compositionId_);
+    if (composition == nullptr) {
+        finish(false);
+        return;
+    }
+    const auto mapping = mappingForComposition(*composition);
+    if (!mapping.has_value()) {
+        finish(false);
+        return;
+    }
     const auto range = session_.workArea();
     const auto rate = composition->format().frameRate();
     const auto endMapping =
         core::FrameTimeMapping::create(range.end, rate.numerator(), rate.denominator());
-    if (!endMapping)
+    if (!endMapping) {
+        finish(false);
         return;
+    }
     firstFrameIndex_ = mapping->nearestFrameIndex(range.start);
     totalFrameCount_ = endMapping.value()->maximumFrameIndex() - firstFrameIndex_ + 1;
     nextFrameIndex_ = 0;
     cachedFrameCount_ = 0;
+    // A range edit rebases the budget baseline too: the run's own range management must never look
+    // like the eviction that ends a run.
     evictionsAtStart_ = previewController_.frameCache().statistics().evictions;
-    caching_ = true;
     previewController_.beginRamPreviewProgress(totalFrameCount_);
     emit stateChanged();
-    submitNextFrame();
+}
+
+void RamPreviewController::handleWorkAreaChanged() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!caching_)
+        return;
+    if (active_.has_value()) {
+        // A frame is in flight for the old range. Let it land -- the cache refuses it if the new
+        // range excludes it -- and rebase when it does, so no frame of the new range is skipped or
+        // submitted twice.
+        rangeDirty_ = true;
+        return;
+    }
+    rebaseRange();
+    if (caching_)
+        submitNextFrame();
 }
 
 void RamPreviewController::cancel() {
@@ -254,7 +300,17 @@ void RamPreviewController::consumeReadyResult() {
         finish(false);
         return;
     }
+    // The cache refuses an out-of-range frame, so a completion for the old range can neither
+    // resurrect a pruned entry nor corrupt the new range's progress: the rebase below rescans from
+    // the new first frame and skips whatever survived.
     previewController_.frameCache().insert((*value)->frame());
+    if (rangeDirty_) {
+        rebaseRange();
+        if (!caching_)
+            return;
+        submitNextFrame();
+        return;
+    }
     ++nextFrameIndex_;
     ++cachedFrameCount_;
     publishProgress();
@@ -270,6 +326,7 @@ void RamPreviewController::consumeReadyResult() {
 
 void RamPreviewController::finish(const bool completed) {
     caching_ = false;
+    rangeDirty_ = false;
     snapshot_.reset();
     nextFrameIndex_ = 0;
     // The counts are KEPT: a surface (or a test) asking what the run that just ended achieved gets

@@ -565,6 +565,56 @@ void testLayoutEditKeepsBackgroundOnRetainedRevision(Expectations& expectations)
     finishFixture(fixture, expectations);
 }
 
+// WORKAREA-1: background fill follows a range edit. Expanding submits only missing frames (cached
+// in-range frames are skipped), and a fully cached shrink submits nothing.
+void testBackgroundFillFollowsWorkArea(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Background Work Area", time(7, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the foreground preview settles");
+    const auto setRange = [&](const core::RationalTime start, const core::RationalTime end) {
+        commands::Transaction range("Set Work Area", fixture.session.snapshot().revision());
+        range.emplace<commands::SetWorkArea>(fixture.session.compositionId(), start, end);
+        return fixture.session.executeTransaction(std::move(range));
+    };
+    expectations.expect(setRange(time(0, 25), time(3, 25)).changed(), "the initial range is set");
+    fixture.frameCache->clear();
+    ui::BackgroundPreviewController background(fixture.session, fixture.controller,
+                                               fixture.scheduler, fixture.bridge,
+                                               fixture.countingPipeline());
+    background.fillNextFrame();
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 3; }),
+                        "the initial range fills");
+    const auto afterInitial = fixture.preparationCount.load();
+
+    // Expand to [0,5): only frames 3 and 4 are missing.
+    expectations.expect(setRange(time(0, 25), time(5, 25)).changed(), "the range expands");
+    background.fillNextFrame();
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 5; }),
+                        "the expanded range fills");
+    expectations.expect(fixture.preparationCount.load() == afterInitial + 2,
+                        "expansion evaluates only the two entering frames");
+
+    // Shrink to [1,3): frames 0 and 4 are pruned, 1 and 2 survive, and no fill is submitted.
+    const auto beforeShrink = fixture.preparationCount.load();
+    expectations.expect(setRange(time(1, 25), time(3, 25)).changed(), "the range shrinks");
+    const auto key0 = fixture.controller.cacheKeyForTime(time(0, 25));
+    const auto key1 = fixture.controller.cacheKeyForTime(time(1, 25));
+    const auto key2 = fixture.controller.cacheKeyForTime(time(2, 25));
+    const auto key4 = fixture.controller.cacheKeyForTime(time(4, 25));
+    expectations.expect(key0 && key1 && key2 && key4 && !fixture.frameCache->contains(*key0) &&
+                            !fixture.frameCache->contains(*key4) &&
+                            fixture.frameCache->contains(*key1) &&
+                            fixture.frameCache->contains(*key2) && fixture.frameCache->size() == 2,
+                        "a shrink retains the overlap and prunes the departing frames");
+    background.fillNextFrame();
+    expectations.expect(fixture.preparationCount.load() == beforeShrink &&
+                            fixture.frameCache->size() == 2,
+                        "a fully cached shrink submits no new fill");
+
+    background.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -580,6 +630,7 @@ int main(int argc, char** argv) {
         testOutwardOrderBudgetAndRestart(expectations);
         testYieldsAndKeepsCancelledHandleUntilTerminal(expectations);
         testLayoutEditKeepsBackgroundOnRetainedRevision(expectations);
+        testBackgroundFillFollowsWorkArea(expectations);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

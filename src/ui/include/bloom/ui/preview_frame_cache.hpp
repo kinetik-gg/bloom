@@ -100,8 +100,26 @@ class PreviewFrameCache final : public QObject {
         std::uint64_t allocationFailures = 0;
         // Frames dropped by a memory-pressure trim, as opposed to ordinary budget eviction.
         std::uint64_t pressureDrops = 0;
+        // Frames dropped (or refused on insertion) because a work-area edit put them outside the
+        // retained range. Counted apart from evictions and pressure so an explicit range trim never
+        // reads as, or behaves as, memory pressure.
+        std::uint64_t rangeDrops = 0;
 
         friend bool operator==(const Statistics&, const Statistics&) = default;
+    };
+
+    // The half-open time range [start, end) this cache is scoped to for one composition, taken from
+    // the LIVE work area. A frame whose project/composition matches and whose time falls outside is
+    // not retained (it may still be displayed), and setting a narrower range prunes what is already
+    // held. std::nullopt means "retain anything", which is the default and what a standalone cache
+    // uses; the shared cache of `CompositionPreviewController` always sets it from the session.
+    struct RetentionRange final {
+        document::ProjectId projectId;
+        document::CompositionId compositionId;
+        core::RationalTime start;
+        core::RationalTime end;
+
+        friend bool operator==(const RetentionRange&, const RetentionRange&) = default;
     };
 
     explicit PreviewFrameCache(
@@ -138,6 +156,15 @@ class PreviewFrameCache final : public QObject {
     [[nodiscard]] Statistics statistics() const noexcept { return statistics_; }
     void clear();
 
+    // WORKAREA-1: scope retention to one composition's half-open [start, end) time range, pruning
+    // any entry it excludes immediately. std::nullopt restores "retain anything" without pruning.
+    // This is range management, not invalidation: it neither advances the revision nor touches a
+    // displayed frame, and the frames it removes are counted as rangeDrops.
+    void setRetentionRange(std::optional<RetentionRange> range);
+    // Drops every retained entry for the range's project/composition whose time is outside it.
+    // Returns the number dropped. Counted as rangeDrops, never as eviction or pressure.
+    std::size_t pruneToRange(const RetentionRange& range);
+
     // What RETAINING one frame costs: its packed display buffer, and nothing else. Deliberately not
     // what holding the frame costs right now -- insertion keeps the display buffer and drops the
     // Float32 process image (see runtime::PreviewDisplayOnlyFrame).
@@ -163,6 +190,9 @@ class PreviewFrameCache final : public QObject {
     void dropStaleRevisions(const PreviewFrameCacheKey& current);
     void evictToBudget();
     void removeAt(std::size_t index);
+    // True when `key` belongs to the retention range's composition and its time is inside
+    // [start, end); true when no range is set or the key names a different composition.
+    [[nodiscard]] bool retains(const PreviewFrameCacheKey& key) const noexcept;
 
     // Most-recently-used first.
     std::vector<Entry> entries_;
@@ -170,6 +200,7 @@ class PreviewFrameCache final : public QObject {
     std::size_t byteBudget_ = defaultPreviewFrameCacheByteBudget();
     std::size_t residentBytes_ = 0;
     std::optional<bool> displayQualified_;
+    std::optional<RetentionRange> retentionRange_;
     Statistics statistics_;
 };
 

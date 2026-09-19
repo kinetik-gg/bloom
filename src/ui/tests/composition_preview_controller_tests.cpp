@@ -1688,6 +1688,82 @@ void testRebindInFlightFrameCannotPublishOldPixels(Expectations& expectations) {
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
 
+// WORKAREA-1: a range edit is render-neutral. It prunes out-of-range cache entries and bounds
+// later insertions, but it neither refreshes the displayed frame nor advances evaluation, and a
+// frame outside the range can still be displayed. A late in-flight completion after a trim cannot
+// resurrect an out-of-range entry.
+void testWorkAreaEditDoesNotRefreshOrResurrect(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Work Area Foreground Test");
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    PipelineFixture fixture;
+    WorkerGate gate;
+    std::atomic<int> invocationCount = 0;
+    std::atomic<bool> blockNext{false};
+    ui::CompositionPreviewController controller(
+        session, scheduler, bridge,
+        [&gate, &invocationCount, &blockNext, pipeline = fixture.pipeline](
+            const document::Snapshot& snapshot,
+            const runtime::PreviewRequestIdentity& desiredIdentity,
+            const std::size_t pixelStorageByteLimit,
+            const std::vector<runtime::SnapshotParameterOverride>& interactionOverride,
+            runtime::TaskContext& context) mutable {
+            ++invocationCount;
+            if (blockNext.exchange(false))
+                gate.enterAndWait();
+            return pipeline(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride,
+                            context);
+        });
+
+    expectations.expect(
+        session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
+        "the work-area foreground fixture has content");
+    expectations.expect(waitUntil([&] { return isReady(controller); }), "initial frame ready");
+    const auto evalRevision = session.evaluationSnapshot().revision();
+    const auto frameBefore = controller.state().frame;
+
+    // Set a range that excludes the current time (0). No refresh and no evaluation advance.
+    const auto invocationsBefore = invocationCount.load();
+    commands::Transaction range("Set Work Area", session.snapshot().revision());
+    range.emplace<commands::SetWorkArea>(compositionId, core::RationalTime::create(2, 25).value(),
+                                         core::RationalTime::create(5, 25).value());
+    expectations.expect(session.executeTransaction(std::move(range)).changed(),
+                        "the range edit publishes");
+    expectations.expect(invocationCount.load() == invocationsBefore &&
+                            session.evaluationSnapshot().revision() == evalRevision &&
+                            controller.state().frame == frameBefore &&
+                            controller.state().freshness == ui::FrameFreshness::Current,
+                        "a range edit does not refresh, re-evaluate, or stale the display");
+    const auto time0Key = controller.cacheKeyForTime(session.currentTime());
+    expectations.expect(time0Key && !controller.frameCache().contains(*time0Key),
+                        "the out-of-range frame was pruned from the cache");
+    expectations.expect(controller.state().frame != nullptr,
+                        "a frame outside the work area can still be displayed");
+
+    // A late in-flight completion for the out-of-range time cannot reinsert it.
+    blockNext.store(true);
+    controller.requestRefresh();
+    expectations.expect(waitUntil([&] { return gate.entered(); }),
+                        "the forced refresh is in flight");
+    const auto rangeDropsBefore = controller.frameCache().statistics().rangeDrops;
+    gate.release();
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "the in-flight frame completes");
+    expectations.expect(time0Key && !controller.frameCache().contains(*time0Key) &&
+                            controller.frameCache().statistics().rangeDrops > rangeDropsBefore,
+                        "a late completion cannot resurrect an out-of-range cache entry");
+    expectations.expect(controller.state().frame != nullptr &&
+                            controller.state().freshness == ui::FrameFreshness::Current,
+                        "the late completion still displays even though it is not retained");
+
+    reachQuiescence(controller, bridge, scheduler, expectations);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1713,6 +1789,7 @@ int main(int argc, char** argv) {
         testViewerAnalysisUsesRetainedProvenance(expectations);
         testRebindWithCollidingIdentitiesRendersNewPixels(expectations);
         testRebindInFlightFrameCannotPublishOldPixels(expectations);
+        testWorkAreaEditDoesNotRefreshOrResurrect(expectations);
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return 1;
