@@ -56,6 +56,98 @@ constexpr int kPropertyIndentStep = kit::px(kit::Spacing::M);
         seeds.push_back(*source);
     return seeds;
 }
+
+// GitHub #197. The timeline's colour adapter used to show and commit the raw stored reference
+// numbers, so an in-range colour read as e.g. 0.2 here while Properties (and the chip beside it)
+// read the normalized display number. This is the same boundary properties::refreshColor() applies,
+// factored for the timeline's one-field-per-component rows: an in-range colour presents display RGB
+// plus the unchanged reference alpha; a signed or HDR RGB channel -- or unavailable conversion --
+// switches the whole colour to exact reference numbers. The decision is per colour, not per field,
+// so every component row of one parameter agrees.
+struct ColorPresentation final {
+    std::array<double, 4> channels{};
+    bool reference = false;
+};
+
+[[nodiscard]] ColorPresentation colorPresentation(CompositionSession& session,
+                                                  const std::string_view schemaKey,
+                                                  const core::Color4d& value) {
+    const auto converter = session.colorConverter(schemaKey);
+    const auto reference =
+        kit::KColor::fromRgba(static_cast<float>(value.red), static_cast<float>(value.green),
+                              static_cast<float>(value.blue), static_cast<float>(value.alpha),
+                              kit::ColorSpace::Reference);
+    const auto display = reference.converted(kit::ColorSpace::Display, converter);
+    const bool extended = value.red > 1 || value.green > 1 || value.blue > 1 || value.red < 0 ||
+                          value.green < 0 || value.blue < 0 || !display;
+    if (extended)
+        return {.channels = {value.red, value.green, value.blue, value.alpha}, .reference = true};
+    return {.channels = {static_cast<double>(display->red), static_cast<double>(display->green),
+                         static_cast<double>(display->blue), value.alpha},
+            .reference = false};
+}
+
+// The display number an artist typed in one component field maps back through the same full-colour
+// display-to-reference transform Properties uses. A signed or HDR typed number, and every alpha
+// edit, authors the reference number directly -- exactly properties::colorFromFields(). Untouched
+// reference channels never pass through this transform, so they stay bit-exact. A display number
+// whose inverse conversion is refused returns nullopt so the caller authors nothing: a displayed
+// number is never silently reinterpreted as a stored reference number.
+[[nodiscard]] std::optional<double>
+referenceComponentValue(CompositionSession& session, const std::string_view schemaKey,
+                        const core::Color4d& current, const document::AnimationComponent component,
+                        const double typed) {
+    if (component == document::AnimationComponent::Alpha || typed < 0.0 || typed > 1.0)
+        return typed;
+    const auto presentation = colorPresentation(session, schemaKey, current);
+    if (presentation.reference)
+        return typed;
+    const auto channel = static_cast<std::size_t>(component) -
+                         static_cast<std::size_t>(document::AnimationComponent::Red);
+    if (channel < presentation.channels.size() && presentation.channels[channel] == typed) {
+        switch (component) {
+        case document::AnimationComponent::Red:
+            return current.red;
+        case document::AnimationComponent::Green:
+            return current.green;
+        case document::AnimationComponent::Blue:
+            return current.blue;
+        default:
+            return typed;
+        }
+    }
+    auto display = kit::KColor::fromRgba(
+        static_cast<float>(presentation.channels[0]), static_cast<float>(presentation.channels[1]),
+        static_cast<float>(presentation.channels[2]), static_cast<float>(presentation.channels[3]),
+        kit::ColorSpace::Display);
+    switch (component) {
+    case document::AnimationComponent::Red:
+        display.red = static_cast<float>(typed);
+        break;
+    case document::AnimationComponent::Green:
+        display.green = static_cast<float>(typed);
+        break;
+    case document::AnimationComponent::Blue:
+        display.blue = static_cast<float>(typed);
+        break;
+    default:
+        break;
+    }
+    const auto converted =
+        display.converted(kit::ColorSpace::Reference, session.colorConverter(schemaKey));
+    if (!converted)
+        return std::nullopt;
+    switch (component) {
+    case document::AnimationComponent::Red:
+        return static_cast<double>(converted->red);
+    case document::AnimationComponent::Green:
+        return static_cast<double>(converted->green);
+    case document::AnimationComponent::Blue:
+        return static_cast<double>(converted->blue);
+    default:
+        return std::nullopt;
+    }
+}
 } // namespace
 
 QString upstreamGroupKey(const document::NodeId nodeId) {
@@ -515,8 +607,13 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
             values = {vector3->x, vector3->y, vector3->z, 0.0};
         if (scalar)
             values[0] = *scalar * (opacity ? 100 : 1);
+        std::optional<ColorPresentation> colorValues;
+        if (color && record)
+            colorValues = colorPresentation(session_, record->schemaKey, *color);
         if (color)
-            values = {color->red, color->green, color->blue, color->alpha};
+            values = colorValues ? colorValues->channels
+                                 : std::array<double, 4>{color->red, color->green, color->blue,
+                                                         color->alpha};
         if (componentRow) {
             const auto component = entry.component.value();
             const auto index =
@@ -548,6 +645,10 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
             // three numbers, and inventing "px" for one would be a claim nothing supports.
             if (vector3)
                 field->setUnit(QString{});
+            // GitHub #197: a signed/HDR colour (or unavailable conversion) presents exact
+            // reference numbers under the same "reference" suffix Properties uses.
+            if (colorValues && colorValues->reference)
+                field->setUnit(QStringLiteral("reference"));
             field->setValue(values[static_cast<std::size_t>(i)]);
             field->show();
         }
@@ -607,9 +708,22 @@ void TimelinePropertyRow::commitValues(const std::size_t index) {
     const auto role = std::string_view(entry.role);
     const double x = fields_[0]->value(), y = fields_[1]->value(), z = fields_[2]->value();
     if (entry.component) {
-        (void)session_.setParameterComponentValue(
-            entry.parameterId, *entry.component,
-            x / (role == document::kScaleParameterRole ? 100 : 1));
+        double value = x / (role == document::kScaleParameterRole ? 100 : 1);
+        const auto* record = session_.composition()
+                                 ? session_.composition()->parameters().find(entry.parameterId)
+                                 : nullptr;
+        if (record && document::isColor4AnimatableSchemaKey(record->schemaKey)) {
+            const auto current = session_.effectiveColorValue(entry.parameterId);
+            const auto converted = current ? referenceComponentValue(session_, record->schemaKey,
+                                                                     *current, *entry.component, x)
+                                           : std::optional<double>{};
+            if (!converted)
+                return;
+            (void)session_.setParameterComponentValue(entry.parameterId, *entry.component,
+                                                      *converted);
+            return;
+        }
+        (void)session_.setParameterComponentValue(entry.parameterId, *entry.component, value);
         return;
     }
     const bool color = session_.effectiveColorValue(entry.parameterId).has_value();
@@ -620,9 +734,24 @@ void TimelinePropertyRow::commitValues(const std::size_t index) {
         const std::array colors{
             document::AnimationComponent::Red, document::AnimationComponent::Green,
             document::AnimationComponent::Blue, document::AnimationComponent::Alpha};
-        (void)session_.setParameterComponentValue(
-            entry.parameterId, color ? colors[index] : vectors[index],
-            fields_[index]->value() / (role == document::kScaleParameterRole ? 100 : 1));
+        double value = fields_[index]->value() / (role == document::kScaleParameterRole ? 100 : 1);
+        if (color) {
+            const auto* record = session_.composition()
+                                     ? session_.composition()->parameters().find(entry.parameterId)
+                                     : nullptr;
+            if (record && document::isColor4AnimatableSchemaKey(record->schemaKey)) {
+                const auto current = session_.effectiveColorValue(entry.parameterId);
+                const auto converted =
+                    current ? referenceComponentValue(session_, record->schemaKey, *current,
+                                                      colors[index], fields_[index]->value())
+                            : std::optional<double>{};
+                if (!converted)
+                    return;
+                value = *converted;
+            }
+        }
+        (void)session_.setParameterComponentValue(entry.parameterId,
+                                                  color ? colors[index] : vectors[index], value);
         return;
     }
     session_.selectLayer(entry.layerId);

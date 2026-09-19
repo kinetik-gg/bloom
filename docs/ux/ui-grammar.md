@@ -470,7 +470,9 @@ the chip continues to show the clamped display colour. Entering an RGB number ou
 authors that component in reference space. Editing one field preserves every untouched reference
 channel exactly. Pending or unavailable conversion disables the reference chip and labels numeric
 values as reference. Existing document numbers are preserved; this is a presentation boundary,
-not a data migration. The legacy timeline colour-row adapter remains pending this conversion.
+not a data migration. The timeline colour rows use the same boundary: an in-range colour shows
+normalized display numbers in its expanded R/G/B/A rows, and a signed or HDR RGB switches the whole
+row to exact reference numbers with the `reference` suffix.
 
 ## Image Assets And Source Cards
 
