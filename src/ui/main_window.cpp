@@ -210,6 +210,14 @@ WorkspaceLayoutRestoreResult MainWindow::restoreApplicationState(QSettings& sett
     }
 
     const auto result = workspaceHost_->restorePersistedLayout(settings, workspaceLayoutKey);
+    if (result == WorkspaceLayoutRestoreResult::Deferred) {
+        // A live native surface must retire before the restored tree may replace the current one.
+        // Nothing was replaced and no version migration is claimed; the restore completes
+        // asynchronously through WorkspaceHost. Report the honest pending result.
+        workspaceLayoutWritable_ = true;
+        updateWorkspaceActions();
+        return result;
+    }
     // Version 1 predates the required Assets sidebar and full-height right column.
     // Migrate only a validated legacy layout; future versions remain untouched.
     const int version = QJsonDocument::fromJson(settings.value(workspaceLayoutKey).toByteArray())

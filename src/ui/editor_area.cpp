@@ -20,6 +20,7 @@
 #include <QPainterPath>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QSize>
 #include <QSizePolicy>
 #include <QString>
@@ -219,7 +220,7 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     // content only so far), but whether it is ever populated is entirely rebuildEditor()'s call --
 
     connect(editorPicker_, &kit::KPanelSwitcher::currentIndexChanged, this,
-            [this](int index) { rebuildEditor(index); });
+            &EditorArea::requestEditorChange);
     connect(maximizeButton_, &QToolButton::clicked, this, [this] { emit maximizeRequested(this); });
 
     if (initialEditorId.empty()) {
@@ -264,6 +265,77 @@ bool EditorArea::setEditorId(std::string_view editorId) {
 
     editorPicker_->setCurrentIndex(index);
     return true;
+}
+
+bool EditorArea::isEditorChangePending() const noexcept {
+    return surfaceRetirementGate_.isPending();
+}
+
+EditorNativeSurface* EditorArea::nativeSurface() const noexcept {
+    return editorNativeSurface(editorWidget_);
+}
+
+const std::string& EditorArea::lastNativeSurfaceDiagnostic() const noexcept {
+    return lastNativeSurfaceDiagnostic_;
+}
+
+void EditorArea::requestEditorChange(int editorIndex) {
+    if (editorIndex < 0 || editorIndex == appliedEditorIndex_) {
+        return;
+    }
+    if (surfaceRetirementGate_.isPending()) {
+        // Reject duplicates while pending: put the picker back on the still-materialized editor.
+        revertPickerToAppliedIndex();
+        return;
+    }
+
+    EditorNativeSurface* surface = nativeSurface();
+    if (surface == nullptr || !surface->hasLiveNativeTarget()) {
+        // CPU-only path: byte-for-byte the existing synchronous rebuild.
+        rebuildEditor(editorIndex);
+        return;
+    }
+
+    // A live target exists: nothing may change until it genuinely retires. Revert the visible
+    // selection immediately so no editor-selection truth is claimed before the mutation.
+    revertPickerToAppliedIndex();
+    lastNativeSurfaceDiagnostic_.clear();
+    NativeSurfaceRetirementGate::Result synchronous;
+    const auto status = surfaceRetirementGate_.begin(
+        {surface}, [this, editorIndex] { applyEditorChange(editorIndex); },
+        [this](const NativeSurfaceRetirementGate::Result& result) {
+            onEditorChangeRetired(result);
+        },
+        {}, &synchronous);
+    if (status == NativeSurfaceRetirementGate::StartStatus::Refused) {
+        lastNativeSurfaceDiagnostic_ = synchronous.diagnostic;
+        revertPickerToAppliedIndex();
+    }
+}
+
+void EditorArea::applyEditorChange(int editorIndex) {
+    {
+        const QSignalBlocker blocker(editorPicker_);
+        editorPicker_->setCurrentIndex(editorIndex);
+    }
+    rebuildEditor(editorIndex);
+}
+
+void EditorArea::revertPickerToAppliedIndex() {
+    if (appliedEditorIndex_ < 0 || editorPicker_ == nullptr) {
+        return;
+    }
+    const QSignalBlocker blocker(editorPicker_);
+    editorPicker_->setCurrentIndex(appliedEditorIndex_);
+}
+
+void EditorArea::onEditorChangeRetired(const NativeSurfaceRetirementGate::Result& result) {
+    if (!result.committed) {
+        // All-or-nothing abort: the passed index was accepted but never applied. Only a refusal
+        // leaves a fresh diagnostic to surface.
+        lastNativeSurfaceDiagnostic_ = result.diagnostic;
+        revertPickerToAppliedIndex();
+    }
 }
 
 void EditorArea::setAreaActive(bool active) {
@@ -507,6 +579,10 @@ void EditorArea::rebuildEditor(int editorIndex) {
 
     if (frameOverlay_ != nullptr)
         frameOverlay_->raise();
+
+    // The materialized editor now matches this picker index; setEditorId()'s pending/revert logic
+    // uses this as the last-committed selection truth.
+    appliedEditorIndex_ = editorIndex;
 }
 
 int EditorArea::addUnavailableEditor(std::string_view editorId) {

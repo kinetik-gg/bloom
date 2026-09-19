@@ -423,6 +423,7 @@ target_sources(
         viewer_gpu_presenter_input.hpp
         viewer_gpu_presenter_port.cpp
         viewer_gpu_presenter_port.hpp
+        native_surface_retirement.cpp
         window_status_bar.cpp
         workspace_host.cpp
         "${BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP}"
@@ -443,6 +444,8 @@ target_sources(
             include/bloom/ui/composition_session.hpp
             include/bloom/ui/editor_area.hpp
             include/bloom/ui/editor_registry.hpp
+            include/bloom/ui/editor_native_surface.hpp
+            include/bloom/ui/native_surface_retirement.hpp
             include/bloom/ui/frame_export_controller.hpp
             include/bloom/ui/frameless_window_support.hpp
             include/bloom/ui/jobs_editor.hpp

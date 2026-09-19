@@ -25,6 +25,7 @@
 #include <array>
 #include <cmath>
 #include <functional>
+#include <memory>
 #include <numeric>
 #include <utility>
 
@@ -318,40 +319,56 @@ void WorkspaceHost::setActiveArea(EditorArea* area) {
 }
 
 void WorkspaceHost::resetToSingleArea(const std::string_view editorId) {
+    if (surfaceRetirementGate_.isPending()) {
+        return;
+    }
     restoreMaximizedArea();
-    auto* area = createArea(editorId);
-    replaceRoot(area);
-    activeArea_.clear();
-    setActiveArea(area);
-    updateAreaControls();
-    emit areaCountChanged(1);
+    // The whole rebuild (including constructing the replacement area) runs inside the commit so a
+    // refusal leaves no detached half-built tree behind.
+    (void)beginWorkspaceMutation(
+        [this, id = std::string(editorId)] {
+            auto* area = createArea(id);
+            replaceRoot(area);
+            activeArea_.clear();
+            setActiveArea(area);
+            updateAreaControls();
+            emit areaCountChanged(1);
+        },
+        {});
 }
 
 void WorkspaceHost::resetToDefaultLayout(const std::array<std::string_view, 4>& topRowEditorIds,
                                          const std::string_view bottomRowEditorId,
                                          const std::size_t activeTopRowIndex) {
+    if (surfaceRetirementGate_.isPending()) {
+        return;
+    }
     restoreMaximizedArea();
 
-    auto* topRow = createSplitter(Qt::Horizontal);
-    std::array<EditorArea*, 4> topRowAreas{};
-    for (std::size_t index = 0; index < topRowEditorIds.size(); ++index) {
-        topRowAreas[index] = createArea(topRowEditorIds[index]);
-        topRow->addWidget(topRowAreas[index]);
-    }
-    setWeightedSizes(*topRow, defaultTopRowWeights);
+    (void)beginWorkspaceMutation(
+        [this, topRowEditorIds, bottomRowEditorId, activeTopRowIndex] {
+            auto* topRow = createSplitter(Qt::Horizontal);
+            std::array<EditorArea*, 4> topRowAreas{};
+            for (std::size_t index = 0; index < topRowEditorIds.size(); ++index) {
+                topRowAreas[index] = createArea(topRowEditorIds[index]);
+                topRow->addWidget(topRowAreas[index]);
+            }
+            setWeightedSizes(*topRow, defaultTopRowWeights);
 
-    auto* bottomRow = createArea(bottomRowEditorId);
-    auto* root = createSplitter(Qt::Vertical);
-    root->addWidget(topRow);
-    root->addWidget(bottomRow);
-    setWeightedSizes(*root, defaultWorkspaceRowWeights);
+            auto* bottomRow = createArea(bottomRowEditorId);
+            auto* root = createSplitter(Qt::Vertical);
+            root->addWidget(topRow);
+            root->addWidget(bottomRow);
+            setWeightedSizes(*root, defaultWorkspaceRowWeights);
 
-    replaceRoot(root);
-    activeArea_.clear();
-    const auto selectedIndex = std::min(activeTopRowIndex, topRowAreas.size() - 1);
-    setActiveArea(topRowAreas[selectedIndex]);
-    updateAreaControls();
-    emit areaCountChanged(areaCount());
+            replaceRoot(root);
+            activeArea_.clear();
+            const auto selectedIndex = std::min(activeTopRowIndex, topRowAreas.size() - 1);
+            setActiveArea(topRowAreas[selectedIndex]);
+            updateAreaControls();
+            emit areaCountChanged(areaCount());
+        },
+        {});
 }
 
 EditorArea* WorkspaceHost::splitActiveArea(Qt::Orientation orientation) {
@@ -366,52 +383,72 @@ EditorArea* WorkspaceHost::splitArea(EditorArea& area, Qt::Orientation orientati
     if (isAreaMaximized() || areaCount() >= maximumAreaCount || !containsArea(rootWidget_, &area)) {
         return nullptr;
     }
+    if (surfaceRetirementGate_.isPending()) {
+        // A mutation is already retiring a surface; reject the duplicate rather than queueing.
+        return nullptr;
+    }
 
     if (initialEditorId.empty()) {
         initialEditorId = area.editorId();
     }
     newAreaFraction = std::clamp(newAreaFraction, 0.1, 0.9);
 
-    auto* newArea = createArea(std::move(initialEditorId));
-    auto* parentSplitter = qobject_cast<QSplitter*>(area.parentWidget());
-    auto* newSplitter = createSplitter(orientation);
-    QList<int> parentSizes;
-    int parentIndex = -1;
+    // The new area is created inside the commit; `createdArea` carries it back for the synchronous
+    // path and stays empty (nullptr) for a deferred split, which never claims a pointer early.
+    auto createdArea = std::make_shared<EditorArea*>(nullptr);
+    const QPointer<EditorArea> areaGuard(&area);
+    (void)beginWorkspaceMutation(
+        [this, areaGuard, orientation, initialEditorId = std::move(initialEditorId), newAreaFraction,
+         createdArea] {
+            EditorArea* target = areaGuard.data();
+            if (target == nullptr) {
+                return;
+            }
+            auto* newArea = createArea(initialEditorId);
+            auto* parentSplitter = qobject_cast<QSplitter*>(target->parentWidget());
+            auto* newSplitter = createSplitter(orientation);
+            QList<int> parentSizes;
+            int parentIndex = -1;
 
-    if (parentSplitter != nullptr) {
-        parentSizes = usableSizes(*parentSplitter);
-        parentIndex = parentSplitter->indexOf(&area);
-        parentSplitter->insertWidget(parentIndex, newSplitter);
-        area.hide();
-        area.setParent(nullptr);
-        parentSplitter->setSizes(parentSizes);
-    } else {
-        rootLayout_->removeWidget(&area);
-        area.hide();
-        area.setParent(nullptr);
-        rootWidget_ = newSplitter;
-        rootLayout_->addWidget(rootWidget_);
-    }
+            if (parentSplitter != nullptr) {
+                parentSizes = usableSizes(*parentSplitter);
+                parentIndex = parentSplitter->indexOf(target);
+                parentSplitter->insertWidget(parentIndex, newSplitter);
+                target->hide();
+                target->setParent(nullptr);
+                parentSplitter->setSizes(parentSizes);
+            } else {
+                rootLayout_->removeWidget(target);
+                target->hide();
+                target->setParent(nullptr);
+                rootWidget_ = newSplitter;
+                rootLayout_->addWidget(rootWidget_);
+            }
 
-    newSplitter->addWidget(&area);
-    newSplitter->addWidget(newArea);
-    area.show();
-    const int newSize = static_cast<int>(std::lround(defaultSplitWeight * newAreaFraction));
-    newSplitter->setSizes({defaultSplitWeight - newSize, newSize});
-    // The complete tree must have its window extent before minima can be applied.
-    // Otherwise constructing a sidebar in an unshown 640px shell clamps it to half the window.
-    QTimer::singleShot(0, newSplitter, [newSplitter, newAreaFraction] {
-        const int extent = newSplitter->orientation() == Qt::Horizontal ? newSplitter->width()
-                                                                        : newSplitter->height();
-        const int available = std::max(0, extent - newSplitter->handleWidth());
-        const int trailing = static_cast<int>(std::lround(available * newAreaFraction));
-        newSplitter->setSizes({available - trailing, trailing});
-    });
+            newSplitter->addWidget(target);
+            newSplitter->addWidget(newArea);
+            target->show();
+            const int newSize = static_cast<int>(std::lround(defaultSplitWeight * newAreaFraction));
+            newSplitter->setSizes({defaultSplitWeight - newSize, newSize});
+            // The complete tree must have its window extent before minima can be applied.
+            // Otherwise constructing a sidebar in an unshown 640px shell clamps it to half the
+            // window.
+            QTimer::singleShot(0, newSplitter, [newSplitter, newAreaFraction] {
+                const int extent = newSplitter->orientation() == Qt::Horizontal
+                                       ? newSplitter->width()
+                                       : newSplitter->height();
+                const int available = std::max(0, extent - newSplitter->handleWidth());
+                const int trailing = static_cast<int>(std::lround(available * newAreaFraction));
+                newSplitter->setSizes({available - trailing, trailing});
+            });
 
-    setActiveArea(newArea);
-    updateAreaControls();
-    emit areaCountChanged(areaCount());
-    return newArea;
+            setActiveArea(newArea);
+            updateAreaControls();
+            emit areaCountChanged(areaCount());
+            *createdArea = newArea;
+        },
+        {});
+    return *createdArea;
 }
 
 bool WorkspaceHost::closeActiveArea() {
@@ -425,74 +462,94 @@ bool WorkspaceHost::closeArea(EditorArea& area) {
     if (isAreaMaximized() || areaCount() <= 1 || !containsArea(rootWidget_, &area)) {
         return false;
     }
+    if (surfaceRetirementGate_.isPending()) {
+        return false;
+    }
     auto* parentSplitter = qobject_cast<QSplitter*>(area.parentWidget());
     if (parentSplitter == nullptr || parentSplitter->count() < 2) {
         return false;
     }
 
-    const int areaIndex = parentSplitter->indexOf(&area);
-    const int neighborIndex =
-        areaIndex + 1 < parentSplitter->count() ? areaIndex + 1 : areaIndex - 1;
-    auto* nextActiveArea = firstArea(parentSplitter->widget(neighborIndex));
-    if (nextActiveArea == nullptr) {
-        return false;
-    }
-
-    if (activeArea_ == &area) {
-        activeArea_->setAreaActive(false);
-        activeArea_.clear();
-    }
-
-    if (parentSplitter->count() > 2) {
-        const auto parentSizes = usableSizes(*parentSplitter);
-        area.hide();
-        area.setParent(nullptr);
-        QList<int> remainingSizes;
-        remainingSizes.reserve(parentSizes.size() - 1);
-        for (int index = 0; index < parentSizes.size(); ++index) {
-            if (index != areaIndex) {
-                remainingSizes.push_back(parentSizes[index]);
+    const QPointer<EditorArea> areaGuard(&area);
+    auto committed = std::make_shared<bool>(false);
+    (void)beginWorkspaceMutation(
+        [this, areaGuard, committed] {
+            EditorArea* target = areaGuard.data();
+            if (target == nullptr) {
+                return;
             }
-        }
-        parentSplitter->setSizes(remainingSizes);
-        area.deleteLater();
-        setActiveArea(nextActiveArea);
-        updateAreaControls();
-        emit areaCountChanged(areaCount());
-        return true;
-    }
+            auto* splitter = qobject_cast<QSplitter*>(target->parentWidget());
+            if (splitter == nullptr || splitter->count() < 2) {
+                return;
+            }
+            const int areaIndex = splitter->indexOf(target);
+            const int neighborIndex =
+                areaIndex + 1 < splitter->count() ? areaIndex + 1 : areaIndex - 1;
+            auto* nextActiveArea = firstArea(splitter->widget(neighborIndex));
+            if (nextActiveArea == nullptr) {
+                return;
+            }
 
-    auto* survivor = parentSplitter->widget(1 - areaIndex);
-    auto* grandparentSplitter = qobject_cast<QSplitter*>(parentSplitter->parentWidget());
+            // Selection truth changes only now, inside the approved commit.
+            if (activeArea_ == target) {
+                activeArea_->setAreaActive(false);
+                activeArea_.clear();
+            }
 
-    area.hide();
-    area.setParent(nullptr);
-    survivor->hide();
-    survivor->setParent(nullptr);
+            if (splitter->count() > 2) {
+                const auto parentSizes = usableSizes(*splitter);
+                target->hide();
+                target->setParent(nullptr);
+                QList<int> remainingSizes;
+                remainingSizes.reserve(parentSizes.size() - 1);
+                for (int index = 0; index < parentSizes.size(); ++index) {
+                    if (index != areaIndex) {
+                        remainingSizes.push_back(parentSizes[index]);
+                    }
+                }
+                splitter->setSizes(remainingSizes);
+                target->deleteLater();
+                setActiveArea(nextActiveArea);
+                updateAreaControls();
+                emit areaCountChanged(areaCount());
+                *committed = true;
+                return;
+            }
 
-    if (grandparentSplitter != nullptr) {
-        const int parentIndex = grandparentSplitter->indexOf(parentSplitter);
-        const auto grandparentSizes = usableSizes(*grandparentSplitter);
-        grandparentSplitter->insertWidget(parentIndex, survivor);
-        parentSplitter->hide();
-        parentSplitter->setParent(nullptr);
-        grandparentSplitter->setSizes(grandparentSizes);
-    } else {
-        rootLayout_->removeWidget(parentSplitter);
-        parentSplitter->hide();
-        parentSplitter->setParent(nullptr);
-        rootWidget_ = survivor;
-        rootLayout_->addWidget(rootWidget_);
-    }
+            auto* survivor = splitter->widget(1 - areaIndex);
+            auto* grandparentSplitter = qobject_cast<QSplitter*>(splitter->parentWidget());
 
-    survivor->show();
-    parentSplitter->deleteLater();
-    area.deleteLater();
+            target->hide();
+            target->setParent(nullptr);
+            survivor->hide();
+            survivor->setParent(nullptr);
 
-    setActiveArea(nextActiveArea);
-    updateAreaControls();
-    emit areaCountChanged(areaCount());
-    return true;
+            if (grandparentSplitter != nullptr) {
+                const int parentIndex = grandparentSplitter->indexOf(splitter);
+                const auto grandparentSizes = usableSizes(*grandparentSplitter);
+                grandparentSplitter->insertWidget(parentIndex, survivor);
+                splitter->hide();
+                splitter->setParent(nullptr);
+                grandparentSplitter->setSizes(grandparentSizes);
+            } else {
+                rootLayout_->removeWidget(splitter);
+                splitter->hide();
+                splitter->setParent(nullptr);
+                rootWidget_ = survivor;
+                rootLayout_->addWidget(rootWidget_);
+            }
+
+            survivor->show();
+            splitter->deleteLater();
+            target->deleteLater();
+
+            setActiveArea(nextActiveArea);
+            updateAreaControls();
+            emit areaCountChanged(areaCount());
+            *committed = true;
+        },
+        {});
+    return *committed;
 }
 
 bool WorkspaceHost::isAreaMaximized() const noexcept { return maximizedArea_ != nullptr; }
@@ -524,6 +581,24 @@ QByteArray WorkspaceHost::saveLayoutState() const {
 }
 
 WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutState(const QByteArray& state) {
+    if (surfaceRetirementGate_.isPending()) {
+        return WorkspaceLayoutRestoreResult::Deferred;
+    }
+    // `result` is filled by the commit, which runs inline when the tree is CPU-only and later when
+    // a live native surface must retire first. A deferred call returns Deferred and never claims a
+    // restored layout before the tree actually changed.
+    auto result =
+        std::make_shared<WorkspaceLayoutRestoreResult>(WorkspaceLayoutRestoreResult::Invalid);
+    (void)beginWorkspaceMutation(
+        [this, state, result] { *result = restoreLayoutStateNow(state); }, {});
+    if (surfaceRetirementGate_.isPending()) {
+        // The commit has not run yet: report the honest pending result, never "Restored".
+        return WorkspaceLayoutRestoreResult::Deferred;
+    }
+    return *result;
+}
+
+WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutStateNow(const QByteArray& state) {
     QJsonParseError parseError;
     const auto document = QJsonDocument::fromJson(state, &parseError);
     if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
@@ -720,6 +795,75 @@ QSplitter* WorkspaceHost::createSplitter(Qt::Orientation orientation) const {
     splitter->setHandleWidth(kit::px(kit::Spacing::Gutter));
     splitter->setOpaqueResize(true);
     return splitter;
+}
+
+bool WorkspaceHost::isNativeSurfaceMutationPending() const noexcept {
+    return surfaceRetirementGate_.isPending();
+}
+
+const std::string& WorkspaceHost::lastNativeSurfaceDiagnostic() const noexcept {
+    return lastNativeSurfaceDiagnostic_;
+}
+
+std::vector<EditorNativeSurface*> WorkspaceHost::collectNativeSurfaces() const {
+    QList<EditorArea*> areas;
+    collectAreas(rootWidget_, areas);
+    std::vector<EditorNativeSurface*> surfaces;
+    surfaces.reserve(static_cast<std::size_t>(areas.size()));
+    for (auto* area : areas) {
+        if (area == nullptr) {
+            continue;
+        }
+        if (auto* surface = area->nativeSurface()) {
+            surfaces.push_back(surface);
+        }
+    }
+    return surfaces;
+}
+
+std::vector<EditorNativeSurface*> WorkspaceHost::liveNativeSurfaces() const {
+    // The gate filters to genuinely-live targets, so exposing every concrete surface here keeps a
+    // single probe and lets the gate own the liveness decision.
+    return collectNativeSurfaces();
+}
+
+NativeSurfaceRetirementGate::StartStatus
+WorkspaceHost::beginWorkspaceMutation(NativeSurfaceRetirementGate::Commit commit,
+                                      NativeSurfaceRetirementGate::Finish finish) {
+    lastNativeSurfaceDiagnostic_.clear();
+    NativeSurfaceRetirementOptions options;
+    // Only resume a retired target that the commit actually left attached to the live root. A
+    // close/replace path detaches the outgoing subtree with setParent(nullptr) + deleteLater, so
+    // its editors are correctly never resumed, while a reparented survivor (split/close survivor)
+    // is.
+    options.shouldResume = [this](EditorNativeSurface* surface) {
+        auto* object = dynamic_cast<QObject*>(surface);
+        if (object == nullptr || rootWidget_ == nullptr) {
+            return false;
+        }
+        for (QObject* parent = object; parent != nullptr; parent = parent->parent()) {
+            if (parent == rootWidget_) {
+                return true;
+            }
+        }
+        return false;
+    };
+    return surfaceRetirementGate_.begin(
+        collectNativeSurfaces(), std::move(commit),
+        [this, finish = std::move(finish)](const NativeSurfaceRetirementGate::Result& result) {
+            onWorkspaceMutationFinished(result);
+            if (finish) {
+                finish(result);
+            }
+        },
+        options);
+}
+
+void WorkspaceHost::onWorkspaceMutationFinished(
+    const NativeSurfaceRetirementGate::Result& result) {
+    if (!result.committed) {
+        lastNativeSurfaceDiagnostic_ = result.diagnostic;
+    }
 }
 
 void WorkspaceHost::replaceRoot(QWidget* newRoot) {

@@ -1140,6 +1140,32 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     )
 endif()
 
+# Host retire-before-mutation gate. The first target is a CPU-only, archive-free test of the
+# asynchronous gate (including the late-callback-after-gate-destruction lifetime path). The second
+# is a focused Qt host fixture that drives the real EditorArea/WorkspaceHost gates with a delayed
+# fake native-surface editor; it links the host TUs and therefore exercises the actual integration.
+add_executable(bloom_ui_editor_native_surface_gate_test
+    editor_native_surface_gate_tests.cpp)
+target_link_libraries(bloom_ui_editor_native_surface_gate_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_editor_native_surface_gate_test)
+bloom_add_test(
+    NAME bloom.ui.editor_native_surface_gate
+    COMMAND bloom_ui_editor_native_surface_gate_test
+    LABELS ui TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+add_executable(bloom_ui_host_native_surface_retirement_test
+    host_native_surface_retirement_tests.cpp)
+target_link_libraries(bloom_ui_host_native_surface_retirement_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_host_native_surface_retirement_test)
+bloom_add_test(
+    NAME bloom.ui.host_native_surface_retirement
+    COMMAND bloom_ui_host_native_surface_retirement_test
+    LABELS ui TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 # GPU-resident preview product: the RAM preview cache's fourth-arm retention and invalidation
 # contract. The fixture produces a genuine Solid -> resident-display -> owner-registry lease with
 # the real product factory on a device; without one the test skips cleanly. The supervisor supplies

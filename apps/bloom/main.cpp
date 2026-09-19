@@ -30,6 +30,7 @@
 #include <bloom/ui/task_monitor_model.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/window_status_bar.hpp>
+#include <bloom/ui/workspace_host.hpp>
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -225,8 +226,15 @@ int main(int argc, char* argv[]) {
     // Non-blocking: the service closes its own admission, cancels the tasks it submitted, and wakes
     // its thread. Its destructor (which runs before the scheduler's) joins that thread and drains
     // child/native ownership, so nothing joins the UI thread while GPU work is in flight.
+    //
+    // HOST-RETIREMENT: this is intentionally connected to shutdownQuiescent (both task quiescence
+    // AND native-surface retirement), not shutdownStarted. Beginning service shutdown while a
+    // presenter's native target is still live would cancel the very work whose retirement proof the
+    // shutdown gate waits for; the service must keep pumping until every surface is genuinely
+    // retired. If a future service API exposes a separate "stop admitting, keep pumping" call, add
+    // it on shutdownStarted and keep the destruction hook here.
     QObject::connect(&shutdownCoordinator,
-                     &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
+                     &bloom::ui::ApplicationShutdownCoordinator::shutdownQuiescent,
                      &shutdownCoordinator,
                      [&gpuPreviewDisplayService] { gpuPreviewDisplayService.beginShutdown(); });
     application.installEventFilter(&shutdownCoordinator);
@@ -313,6 +321,11 @@ int main(int argc, char* argv[]) {
                                  nullptr, &playback, cpuEvaluator.operationCache().get(),
                                  mediaDiskCache.get());
     playback.installWindowShortcut(window);
+    // The shutdown contract's second half: the workspace enumerates every live editor native
+    // surface so the coordinator can require genuine retirement before Qt teardown. A CPU-only
+    // workspace yields no surfaces and shutdown behavior is exactly as before.
+    shutdownCoordinator.setNativeSurfaceSource(
+        [&window] { return window.workspaceHost()->liveNativeSurfaces(); });
     QObject::connect(&ramPreviewController, &bloom::ui::RamPreviewController::stateChanged,
                      &playback, [&] {
                          if (ramPreviewController.isCaching()) {

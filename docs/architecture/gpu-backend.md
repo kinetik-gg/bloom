@@ -500,8 +500,27 @@ sharing one lease, real `QTest` input, and repeated retire/reattach beyond `maxR
 `forget()`, plus a CPU-only fake-port refusal/forget test. It is deliberately not activated: no
 `ViewerEditor`, `MainWindow`, application controller, product, or service route consumes it, no live
 application resident-present path exists, and there is no application-FPS or `ReferenceParity` claim.
-Host-integration gating of the widget-tree mutations and application shutdown remains a separate,
-later slice.
+
+Host-integration gating of the widget-tree mutations and application shutdown is now implemented
+without activating any viewer. A typed optional `EditorNativeSurface` lifecycle interface (probed
+with one `dynamic_cast`, exactly like `EditorChromeProvider`) lets a host ask an editor's presenter to
+retire a live native target and wait for a genuine `SafeToMutate`. `NativeSurfaceRetirementGate` makes
+every affected mutation all-or-nothing: a CPU-only subtree commits synchronously and unchanged, every
+live target must report safe before the commit runs exactly once, a refusal runs no mutation and
+resumes already-retired survivors, duplicate/inline/reentrant completions are rejected, and a required
+receiver destroyed mid-retirement refuses rather than claiming the mutation succeeded. Every
+completion holds a `weak_ptr` lifetime token and proves the gate is still alive before dereferencing
+it, so a completion that arrives after gate destruction is inert instead of a use-after-free.
+`EditorArea` defers a picker replacement of a live-native editor and reverts the picker until the
+rebuild actually applies; `WorkspaceHost` retires the whole (conservative) tree before
+split/close/collapse/root-replace/restore, reports `WorkspaceLayoutRestoreResult::Deferred` instead of
+a premature `Restored`, and resumes only targets still attached to the live root so a `deleteLater`'d
+outgoing subtree is never reattached. `ApplicationShutdownCoordinator` emits `shutdownQuiescent` only
+once BOTH task quiescence and native-surface retirement are observed, and the application begins
+`GpuPreviewDisplayService` shutdown on `shutdownQuiescent` (not `shutdownStarted`) so the service
+keeps pumping until the surfaces it owns are genuinely retired. No `ViewerEditor`, application
+viewer/controller, product, or service route implements or consumes the interface yet; CPU-only
+platforms never see it and their synchronous behavior is unchanged.
 
 Pending and unchanged: the service selection that dispatches prepared commands through the executor,
 per-layer GPU compositing selection, resident GPU viewer buffers,

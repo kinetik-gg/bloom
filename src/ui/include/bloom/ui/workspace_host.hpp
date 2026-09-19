@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/ui/native_surface_retirement.hpp>
+
 #include <QByteArray>
 #include <QFrame>
 #include <QHash>
@@ -10,6 +12,7 @@
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <vector>
 
 class QSettings;
 class QSplitter;
@@ -26,6 +29,9 @@ enum class WorkspaceLayoutRestoreResult {
     Missing,
     Invalid,
     UnsupportedVersion,
+    // A live native surface must retire before the restored tree may replace the current one. No
+    // widget-tree state or selection truth has changed; the restore completes asynchronously.
+    Deferred,
 };
 
 class WorkspaceHost final : public QFrame {
@@ -59,6 +65,18 @@ class WorkspaceHost final : public QFrame {
     [[nodiscard]] WorkspaceLayoutRestoreResult restorePersistedLayout(QSettings& settings,
                                                                       const QString& key);
 
+    // True while a workspace mutation is waiting for one or more live native surfaces to retire.
+    // Until this clears, the split tree, widget parents, area count, and active area are unchanged.
+    [[nodiscard]] bool isNativeSurfaceMutationPending() const noexcept;
+    // Honest diagnostic from the last refused mutation (empty when none).
+    [[nodiscard]] const std::string& lastNativeSurfaceDiagnostic() const noexcept;
+
+    // Every live editor native surface in the current tree, for the shutdown retirement gate. The
+    // ApplicationShutdownCoordinator consumes this through a plain std::function seam, so
+    // WorkspaceHost does not gain a second QObject base (which would desynchronize the frozen
+    // moc-generated vtable).
+    [[nodiscard]] std::vector<EditorNativeSurface*> liveNativeSurfaces() const;
+
   signals:
     void activeAreaChanged(EditorArea* area);
     void areaCountChanged(int count);
@@ -71,12 +89,22 @@ class WorkspaceHost final : public QFrame {
     void updateAreaControls();
     void restoreMaximizedArea();
 
+    // Retires every live native surface in the current tree before running `commit`, all-or-nothing.
+    // CPU-only trees commit synchronously. A pending gate rejects further mutations.
+    NativeSurfaceRetirementGate::StartStatus beginWorkspaceMutation(
+        NativeSurfaceRetirementGate::Commit commit, NativeSurfaceRetirementGate::Finish finish);
+    [[nodiscard]] std::vector<EditorNativeSurface*> collectNativeSurfaces() const;
+    void onWorkspaceMutationFinished(const NativeSurfaceRetirementGate::Result& result);
+    [[nodiscard]] WorkspaceLayoutRestoreResult restoreLayoutStateNow(const QByteArray& state);
+
     const EditorRegistry& editorRegistry_;
     QVBoxLayout* rootLayout_ = nullptr;
     QWidget* rootWidget_ = nullptr;
     QPointer<EditorArea> activeArea_;
     QPointer<EditorArea> maximizedArea_;
     QHash<QSplitter*, QList<int>> preMaximizeSizes_;
+    NativeSurfaceRetirementGate surfaceRetirementGate_;
+    std::string lastNativeSurfaceDiagnostic_;
 };
 
 } // namespace bloom::ui
