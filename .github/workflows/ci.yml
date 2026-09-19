@@ -68,12 +68,16 @@ jobs:
           path: ${{ runner.temp }}/bloom-dependency-downloads
           key: bloom-dependency-archives-82571923722fa396b5d40449e487c86b8ab421e66581f34a0de828b9e13eb9e8
 
-      - name: Cache dependency prefix
+      - name: Cache dependency build
         id: cache-dependency-prefix
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: build/dependency-prefix
-          key: bloom-dependency-prefix-${{ runner.os }}-${{ hashFiles('dependencies/dependencies.lock.json') }}
+          # The qualified prefix's OpenH264 link stub names the private OpenH264 install by
+          # absolute path, so the superbuild tree that holds it must restore alongside the prefix.
+          path: |
+            ${{ runner.temp }}/bloom-superbuild
+            build/dependency-prefix
+          key: bloom-dependency-build-${{ runner.os }}-${{ hashFiles('dependencies/dependencies.lock.json') }}
 
       - name: Cache ccache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -215,12 +219,16 @@ jobs:
           path: ${{ runner.temp }}/bloom-dependency-downloads
           key: bloom-dependency-archives-82571923722fa396b5d40449e487c86b8ab421e66581f34a0de828b9e13eb9e8
 
-      - name: Cache dependency prefix
+      - name: Cache dependency build
         id: cache-dependency-prefix
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: build/dependency-prefix
-          key: bloom-dependency-prefix-${{ runner.os }}-${{ hashFiles('dependencies/dependencies.lock.json') }}
+          # The qualified prefix's OpenH264 link stub names the private OpenH264 install by
+          # absolute path, so the superbuild tree that holds it must restore alongside the prefix.
+          path: |
+            ${{ runner.temp }}/bloom-superbuild
+            build/dependency-prefix
+          key: bloom-dependency-build-${{ runner.os }}-${{ hashFiles('dependencies/dependencies.lock.json') }}
 
       - name: Build dependency superbuild prefix
         if: steps.cache-dependency-prefix.outputs.cache-hit != 'true'
