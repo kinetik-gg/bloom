@@ -90,7 +90,7 @@ std::optional<BundledFontStatus>& memo() {
             continue;
         }
         const QString expected = QString(expectedFamily);
-        const QString base = baseFamilyFor(expected);
+    QString base = baseFamilyFor(expected);
         const bool acceptedAsExpected = families.contains(expected);
         const bool acceptedAsNormalised = base != expected && families.contains(base);
         if (!acceptedAsExpected && !acceptedAsNormalised) {

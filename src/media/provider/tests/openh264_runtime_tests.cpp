@@ -98,6 +98,7 @@ void licenseTextMatchesCiscoFixture() {
 // Every other behaviour in this file is only reachable where the Cisco OpenH264 runtime is
 // supported (Linux x86_64). Elsewhere the declared contract is a typed UnsupportedPlatform result
 // that never launches a downloader -- asserted here instead of skipped, so the fallback is tested.
+#if !defined(__linux__) || !defined(__x86_64__)
 void unsupportedPlatformIsTyped() {
     const auto directory = root() / "unsupported";
     clear(directory);
@@ -115,6 +116,7 @@ void unsupportedPlatformIsTyped() {
                 "install reports the unsupported platform");
     test::check(!launched, "the unsupported platform never launches a downloader");
 }
+#endif // !Linux x86_64 only: the typed unsupported-platform fallback
 } // namespace
 
 int main() {
