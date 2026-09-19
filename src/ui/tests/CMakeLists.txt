@@ -911,6 +911,45 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# PERF-RAM-2: the bounded two-deep RAM preview pipeline. Its own executable because the overlap
+# proof needs a deterministic two-worker barrier (preparation 2 must start before preparation 1
+# finishes) and a controllable hold/release rendezvous for the mid-run range/provenance edits;
+# neither belongs in the existing counting fixture. Links bloom_ui alone, exactly as
+# bloom_ram_preview_test does, because the submit seam and the service are in that interface.
+add_executable(bloom_ram_preview_pipeline_test ram_preview_pipeline_tests.cpp)
+target_link_libraries(bloom_ram_preview_pipeline_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ram_preview_pipeline_test)
+bloom_add_test(
+    NAME bloom.ui.ram-preview-pipeline
+    COMMAND bloom_ram_preview_pipeline_test
+    LABELS ui integration animation
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+# PERF-RAM-2: the real GpuPreviewDisplayService admission seam the two-deep pipeline submits
+# through. Kept apart from the behavior suite so that one can be read as controller behavior and
+# this one as service admission. With no loader it asserts the honest CPU-fallback/Unavailable
+# path; when a pinned loader is present it also drives the enabled service and proves genuine
+# two-stage overlap under the real admission (a two-worker barrier), reporting the gate as pending
+# rather than failing when no device is actually available.
+add_executable(bloom_ram_preview_service_pipeline_test ram_preview_service_pipeline_tests.cpp)
+target_link_libraries(bloom_ram_preview_service_pipeline_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ram_preview_service_pipeline_test)
+if(DEFINED BLOOM_DEPENDENCY_PREFIX AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/lib/libvulkan.so.1")
+    set(bloom_ram_preview_vulkan_loader_args
+        --loader "${BLOOM_DEPENDENCY_PREFIX}/lib/libvulkan.so.1")
+else()
+    set(bloom_ram_preview_vulkan_loader_args)
+endif()
+bloom_add_test(
+    NAME bloom.ui.ram-preview-service-pipeline
+    COMMAND bloom_ram_preview_service_pipeline_test ${bloom_ram_preview_vulkan_loader_args}
+    LABELS ui integration animation
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 # Task CACHEFIX-1: the byte accounting every cache in the process owes, exercised at the scale of
 # the 38 GB incident (200 synthetic 4K RGBA32F frames) and checked against the process's own RSS.
 # Links bloom_ui for Qt and the media/runtime cache libraries it pulls in; deliberately not the

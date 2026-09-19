@@ -383,6 +383,7 @@ target_sources(
         preview_frame_cache.cpp
         project_host.cpp
         ram_preview_controller.cpp
+        ram_preview_pipeline.cpp
         properties_editor.cpp
         properties_editor_sections.cpp
         properties_editor_sources.cpp

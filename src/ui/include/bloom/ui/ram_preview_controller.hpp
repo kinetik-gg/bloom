@@ -1,8 +1,10 @@
 #pragma once
 
+#include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
+#include <bloom/ui/ram_preview_pipeline.hpp>
 
 #include <QObject>
 
@@ -21,13 +23,18 @@ class TaskUiBridge;
 // scope it to -- the timeline's work-area strip is honestly the whole duration, with no in/out
 // points in the document model -- so there is nothing narrower to offer yet.
 //
-// One frame is cached at a time, as its own Foreground task, and the next is submitted when the
-// last one lands. That is deliberate: the row-band pool already spends every core on the frame in
-// flight, so running two frames at once would not cache the range faster, and a queue of frames
-// would make cancellation and progress both harder to state truthfully.
+// TWO frames are prepared at a time, and that is the whole point of this controller's shape. The
+// previous one-frame version was correct but throughput-bound: the row-band pool finishes one frame
+// and then the next frame starts, so the CPU never overlaps with the previous frame's display
+// stage. Keeping the next frame's CPU preparation in flight while the previous one is still being
+// displayed is what a RAM preview is for. RamPreviewPipeline owns the bound (never more than two)
+// and the identity of each in-flight frame; this controller owns the range cursor, the per-time
+// snapshot resolution, and the out-of-order result validation.
 //
 // Frames already in the cache are counted as cached without being rendered again, so asking for a
-// RAM preview twice is immediate the second time.
+// RAM preview twice is immediate the second time. A range or provenance edit never starts a new
+// run: the in-flight frames are allowed to land (retained only if the new per-time evaluation still
+// accepts them), then the range is rebased and only the still-missing frames are prepared.
 //
 // This controller never starts playback itself: the transport belongs to the Timeline editor, which
 // connects to cachingFinished() and plays when the range is complete. A RAM preview with no
@@ -51,6 +58,11 @@ class RamPreviewController final : public QObject {
     [[nodiscard]] std::uint64_t cachedFrameCount() const noexcept { return cachedFrameCount_; }
     [[nodiscard]] std::uint64_t totalFrameCount() const noexcept { return totalFrameCount_; }
     [[nodiscard]] bool isShuttingDown() const noexcept { return shuttingDown_; }
+    // The high-water mark of frames ever preparing at once for this controller (across its runs).
+    // Never exceeds kMaxInFlight; exposed so a test can pin the bound without racing the workers.
+    [[nodiscard]] std::uint32_t peakInFlightFrames() const noexcept {
+        return pipeline_.peakInFlight();
+    }
 
   public slots:
     // Caches the composition's frame range, then asks the transport to play it. A no-op while
@@ -74,14 +86,28 @@ class RamPreviewController final : public QObject {
     void cachingFinished(bool completed);
 
   private:
-    void submitNextFrame();
+    // The fill engine. Lands every ready result, honours a pending range/provenance rebase once no
+    // frame is still preparing, submits until the pipeline is full, and finishes exactly when the
+    // whole range has landed. Safe to call from a signal handler and from start().
+    void advance();
+    // Fills the pipeline up to kMaxInFlight, counting already-cached frames and skipping a frame
+    // that is somehow already in flight. Never starts a new run.
+    void requestFrames();
+    // Moves every landed result out of the pipeline and validates it against the CURRENT per-time
+    // evaluation snapshot and frame key before it is retained or counted. Returns false when it
+    // ended the run (cancel/failure/budget), true otherwise.
+    [[nodiscard]] bool drainResults();
+    [[nodiscard]] bool resultIsCurrent(const PreviewFrameCacheKey& identityKey,
+                                       const runtime::PreviewRequestIdentity& identity) const;
+    [[nodiscard]] runtime::PreviewRequestIdentity identityFor(core::RationalTime time,
+                                                              const document::Snapshot& snapshot);
     void consumeReadyResult();
     void finish(bool completed);
     void cancelAndDetachActive() noexcept;
     void publishProgress();
-    // WORKAREA-1: adapt a run in progress to the live work area. If a frame is in flight it is
-    // allowed to land (and is retained only if it is still in range); otherwise the range is
-    // rebased and the run continues. Never turns a range edit into a new run.
+    // WORKAREA-1: adapt a run in progress to the live work area. A frame in flight is allowed to
+    // land (and is retained only if it is still in range); the range is rebased only once no frame
+    // is still preparing, then the run continues. Never turns a range edit into a new run.
     void handleWorkAreaChanged();
     // TEMPORAL-2B. A document edit either invalidates the whole range (a unitary live provenance:
     // cancel and let a later run start clean) or only a time interval (adapt and rescan, submitting
@@ -98,7 +124,8 @@ class RamPreviewController final : public QObject {
     PreviewPreparationFunction preparation_;
     PreviewPreparationSubmitter submitter_;
 
-    std::optional<runtime::TaskHandle<PreviewPreparationResultHandle>> active_;
+    // At most TWO frames preparing at once; the bound and cancellation live in the helper.
+    RamPreviewPipeline pipeline_;
     // TEMPORAL-2B: the run no longer pins one snapshot. Each submitted time resolves the session's
     // genuine snapshot for that time, so a finite clip-range edit can leave several retained
     // revisions along the range without mixing provenance within any one frame.
@@ -113,8 +140,9 @@ class RamPreviewController final : public QObject {
     std::uint64_t evictionsAtStart_ = 0;
     bool caching_ = false;
     bool shuttingDown_ = false;
-    // Set by a work-area edit while a frame is in flight; the completion rebases before continuing
-    // so the old range's index bookkeeping cannot skip or duplicate a frame of the new range.
+    // Set by a range/provenance edit while at least one frame is in flight; the run lands what it
+    // has, rebases once the pipeline is empty, and then resubmits only the still-missing frames, so
+    // no frame of the new range is skipped or submitted twice.
     bool rangeDirty_ = false;
 };
 

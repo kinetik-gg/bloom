@@ -174,6 +174,27 @@ request, cached re-requests with zero extra preparation, and a warm-cache paired
 background, direct-manipulation, shutdown, and viewer/status tests; the bundled loader hash
 matching the prefix file with no Vulkan DT_NEEDED and no ambient loader.
 
+The RAM preview controller now fills its range with a bounded **two-deep** pipeline
+(`bloom/ui/ram_preview_pipeline.hpp`), so the next frame's CPU preparation overlaps the previous
+frame's display stage instead of running strictly after it. The helper owns exactly the bound
+(never more than two frames in flight), the pixels-identity duplicate guard that stops a range
+rebase resubmitting a frame, the out-of-order collection of landed results, and cancel-all; the
+controller keeps the range cursor, the per-time evaluation snapshot resolution, and the
+out-of-order validation against the *current* per-time frame key. No coalescing key is carried, so
+the scheduler can never cancel one in-flight frame of the run on account of another. Both in-flight
+frames are detached by `cancel()`, `beginShutdown()`, every composition/display/resolution change,
+and the bounded budget stop; the run finishes only once every valid result has landed, and a
+memory-budget stop keeps the prefix that fits without churning its own beginning. This sits on the
+existing `PreviewPreparationSubmitter` seam, so on an enabled device the RAM submissions go through
+the same `GpuPreviewDisplayService` the foreground preview uses, and on the CPU path the legacy
+scheduler submission is unchanged. Verified locally: the focused pipeline suite (two-worker barrier
+proving preparation 2 starts before preparation 1 finishes, out-of-order completion, cancel/shutdown
+of both slots, mid-run work-area shrink/expand, finite-edit rescan, and the bounded budget stop) and
+the real-service suite, which with the pinned loader reaches `Ready` and proves two CPU stages
+overlap under the service's own admission (peak two, qualified processor selected on every admitted
+stage) while reporting the gate as pending rather than failing when no device is present. No
+whole-application throughput claim is made from the concurrency fixture alone.
+
 The render layer now also owns the first GPU-resident compositing primitives. Their public headers are
 Qt-free and Vulkan-free, with portable CPU-unavailable stubs: `GpuImage` (opaque move-only
 device-resident RGBA32F ownership), `GpuSolid` (the SolidV1 compute operation producing a resident
