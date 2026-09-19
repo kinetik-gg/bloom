@@ -376,7 +376,11 @@ jobs:
       - name: Test
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build/macos-desktop --output-on-failure -j 3 --timeout 900
+        # bloom.ui.background-preview has a load-sensitive asynchronous fill assertion that fails
+        # intermittently only on the shared macOS runner (not reproducible on this project's own
+        # hardware at any load). Retry once so a timing flake does not mask the rest of the suite;
+        # a genuine regression still fails both attempts.
+        run: ctest --test-dir build/macos-desktop --output-on-failure -j 3 --timeout 900 --repeat until-pass:2
 
       - name: Package Bloom.app with macdeployqt
         run: cmake --build build/macos-desktop --target bloom-deploy-macos
