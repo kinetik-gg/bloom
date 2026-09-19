@@ -524,12 +524,27 @@ bloom_enable_warnings(bloom_ui)
 
 # ViewerGpuPresenter is the only src/ui translation unit that adopts the borrowed VkInstance through
 # Qt's public QVulkanInstance (whose header includes <vulkan/vulkan.h>) and creates a
-# QWindow/VkSurfaceKHR. Compile it with Vulkan headers only when this build actually has them;
-# otherwise the same source compiles its truthful Unsupported fallback, so a Vulkan-free desktop/UI
-# build still links with no <vulkan/vulkan.h> requirement. The runtime presentation coordinator stays
-# entirely Vulkan-free and Qt-free.
+# QWindow/VkSurfaceKHR. Compile it only when this build has BOTH the pinned Vulkan headers and a Qt
+# build that actually shipped QVulkanInstance; otherwise the same source compiles its truthful
+# Unsupported fallback, so a Vulkan-free desktop/UI build still links with no <vulkan/vulkan.h>
+# requirement. The runtime presentation coordinator stays entirely Vulkan-free and Qt-free.
+#
+# Qt's capability is read from the imported Qt6::Gui target that Qt6GuiTargets.cmake exports:
+# QT_ENABLED_PUBLIC_FEATURES is the list of public features this Qt build compiled in. The official
+# Qt 6.8.3 macOS packages are built without Vulkan, so "vulkan" is absent there (it appears in
+# QT_DISABLED_PUBLIC_FEATURES instead) and <QtGui/QVulkanInstance> is not installed. A missing or
+# not-found property fails closed, leaving BLOOM_QT_VULKAN_AVAILABLE OFF.
+set(BLOOM_QT_VULKAN_AVAILABLE OFF)
+if(TARGET Qt6::Gui)
+    get_target_property(_bloom_qt6_gui_public_features Qt6::Gui QT_ENABLED_PUBLIC_FEATURES)
+    if("vulkan" IN_LIST _bloom_qt6_gui_public_features)
+        set(BLOOM_QT_VULKAN_AVAILABLE ON)
+    endif()
+    unset(_bloom_qt6_gui_public_features)
+endif()
+
 set(BLOOM_UI_VULKAN_AVAILABLE OFF)
-if(BLOOM_RENDER_ENABLE_VULKAN AND DEFINED BLOOM_DEPENDENCY_MODE)
+if(BLOOM_RENDER_ENABLE_VULKAN AND BLOOM_QT_VULKAN_AVAILABLE AND DEFINED BLOOM_DEPENDENCY_MODE)
     if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
         find_package(VulkanHeaders QUIET CONFIG
             PATHS "${BLOOM_DEPENDENCY_PREFIX}" NO_DEFAULT_PATH)

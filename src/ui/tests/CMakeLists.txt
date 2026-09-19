@@ -88,9 +88,9 @@ add_executable(bloom_gpu_preview_submitter_test
 add_executable(bloom_gpu_preview_app_test
     gpu_preview_app_tests.cpp
 )
-add_executable(bloom_ui_gpu_presentation_target_test
-    gpu_presentation_target_tests.cpp
-)
+# bloom_ui_gpu_presentation_target_test adopts the borrowed VkInstance through Qt's public
+# QVulkanInstance, so it is created in the capability-gated block below (BLOOM_UI_VULKAN_AVAILABLE
+# is the conjunction of the pinned Vulkan headers and a Qt build with the Vulkan feature).
 # Independent QPainter oracle for the present-image shader's filtering/channel rules. Qt-only, links
 # Qt6::Gui (the app supplies Qt6::Widgets); it never mirrors the shader algebra.
 add_executable(bloom_ui_gpu_present_image_qpainter_oracle_test
@@ -209,22 +209,35 @@ target_include_directories(bloom_composition_preview_gpu_scene_stage_test
     PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/tests")
 target_link_libraries(bloom_gpu_preview_submitter_test PRIVATE bloom_ui)
 target_link_libraries(bloom_gpu_preview_app_test PRIVATE bloom_ui bloom_runtime_evaluator)
-target_link_libraries(bloom_ui_gpu_presentation_target_test PRIVATE bloom_ui bloom_render)
+# bloom_ui_gpu_presentation_target_test adopts the borrowed VkInstance through Qt's public
+# QVulkanInstance, so it exists only where this build has both the pinned Vulkan headers and a Qt
+# build that shipped the Vulkan feature (BLOOM_UI_VULKAN_AVAILABLE, src/ui/CMakeLists.txt). On a Qt
+# without that feature -- the official Qt 6.8 macOS packages -- the target is not created and the
+# Vulkan-free UI tests still build and run.
+if(BLOOM_UI_VULKAN_AVAILABLE)
+    add_executable(bloom_ui_gpu_presentation_target_test
+        gpu_presentation_target_tests.cpp
+    )
+    target_link_libraries(bloom_ui_gpu_presentation_target_test
+        PRIVATE bloom_ui bloom_render Vulkan::Headers)
+    # QVulkanInstance's public class requires <vulkan/vulkan.h> on the application include path; the
+    # pinned dependency prefix supplies it. Only the tests need this; the UI and render modules stay
+    # Vulkan-header-free in their public interfaces.
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/include/vulkan")
+        target_include_directories(bloom_ui_gpu_presentation_target_test
+            SYSTEM PRIVATE "${BLOOM_DEPENDENCY_PREFIX}/include")
+    endif()
+    bloom_enable_warnings(bloom_ui_gpu_presentation_target_test)
+endif()
 # The QPainter oracle is Qt-only (Qt6::Gui); it never links render. It uses std::source_location,
 # so it needs the project's C++20 level explicitly (Qt's default here is C++17).
 target_link_libraries(bloom_ui_gpu_present_image_qpainter_oracle_test PRIVATE Qt6::Gui)
 target_compile_features(bloom_ui_gpu_present_image_qpainter_oracle_test PRIVATE cxx_std_20)
-# QVulkanInstance's public class requires <vulkan/vulkan.h> on the application include path; the
-# pinned dependency prefix supplies it. Only the tests need this; the UI and render modules stay
-# Vulkan-header-free in their public interfaces. The offscreen native proof also needs the prefix's
-# Vulkan-Hpp/VMA headers because it compiles against the render module's private Vulkan headers.
-if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/include/vulkan")
-    target_include_directories(bloom_ui_gpu_presentation_target_test
-        SYSTEM PRIVATE "${BLOOM_DEPENDENCY_PREFIX}/include")
-endif()
 # The injected-construction-fault seam lives in bloom_render's private Vulkan sources. A sibling
 # directory's BLOOM_RENDER_VULKAN_AVAILABLE is not visible here, so repeat the same mode-aware probe
-# before compiling the private-header fault case and adding the private include root.
+# before compiling the private-header fault case and adding the private include root. This seam is
+# independent of Qt's Vulkan feature: the offscreen proof below drives the render module directly
+# and never includes QVulkanInstance, so it stays available wherever the render Vulkan backend is.
 set(BLOOM_UI_PRESENTATION_TARGET_PRIVATE_SEAM OFF)
 if(BLOOM_RENDER_ENABLE_VULKAN AND DEFINED BLOOM_DEPENDENCY_MODE)
     if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
@@ -241,10 +254,12 @@ if(BLOOM_RENDER_ENABLE_VULKAN AND DEFINED BLOOM_DEPENDENCY_MODE)
     endif()
 endif()
 if(BLOOM_UI_PRESENTATION_TARGET_PRIVATE_SEAM)
-    target_compile_definitions(bloom_ui_gpu_presentation_target_test
-        PRIVATE BLOOM_UI_GPU_PRESENTATION_TARGET_PRIVATE_SEAM=1)
-    target_include_directories(bloom_ui_gpu_presentation_target_test
-        PRIVATE "${PROJECT_SOURCE_DIR}/src/render/vulkan")
+    if(TARGET bloom_ui_gpu_presentation_target_test)
+        target_compile_definitions(bloom_ui_gpu_presentation_target_test
+            PRIVATE BLOOM_UI_GPU_PRESENTATION_TARGET_PRIVATE_SEAM=1)
+        target_include_directories(bloom_ui_gpu_presentation_target_test
+            PRIVATE "${PROJECT_SOURCE_DIR}/src/render/vulkan")
+    endif()
     # The offscreen native proof includes the render module's private Vulkan headers and needs the
     # same prefix-provided Vulkan-Hpp/VMA headers. It links bloom_render + bloom_color_ocio (the
     # latter only for the independent CPU OCIO oracle) and Qt6::Gui (the QPainter oracle).
@@ -327,7 +342,6 @@ bloom_enable_warnings(bloom_composition_preview_gpu_scene_stage_test)
 target_compile_options(bloom_composition_preview_gpu_scene_stage_test PRIVATE -Wno-unused-function)
 bloom_enable_warnings(bloom_gpu_preview_submitter_test)
 bloom_enable_warnings(bloom_gpu_preview_app_test)
-bloom_enable_warnings(bloom_ui_gpu_presentation_target_test)
 bloom_enable_warnings(bloom_ui_gpu_present_image_qpainter_oracle_test)
 bloom_enable_warnings(bloom_composition_session_animation_test)
 bloom_enable_warnings(bloom_composition_session_rebind_test)
@@ -597,13 +611,15 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
-bloom_add_test(
-    NAME bloom.ui.gpu_presentation_target
-    COMMAND bloom_ui_gpu_presentation_target_test
-    LABELS ui integration gpu
-    TIMEOUT 120
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-)
+if(TARGET bloom_ui_gpu_presentation_target_test)
+    bloom_add_test(
+        NAME bloom.ui.gpu_presentation_target
+        COMMAND bloom_ui_gpu_presentation_target_test
+        LABELS ui integration gpu
+        TIMEOUT 120
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
+endif()
 
 bloom_add_test(
     NAME bloom.ui.gpu_present_image_qpainter_oracle
@@ -1167,7 +1183,8 @@ endif()
 
 # Presentation coordinator (real Wayland lifecycle) and ViewerGpuPresenter adapter tests. All three
 # translation units adopt the borrowed VkInstance through Qt's public QVulkanInstance and therefore
-# need Vulkan headers; they are registered only when this build has them. The runtime coordinator's
+# need both the pinned Vulkan headers and Qt's Vulkan feature; they are registered only when this
+# build has them (BLOOM_UI_VULKAN_AVAILABLE, src/ui/CMakeLists.txt). The runtime coordinator's
 # Vulkan-free port/bounds gates live in src/runtime/tests. Without a pinned loader argument the
 # fixtures skip cleanly; the supervisor passes --loader (and --require-device for the native runs).
 if(BLOOM_UI_VULKAN_AVAILABLE)
@@ -1373,8 +1390,9 @@ bloom_add_test(
 
 # GPU end-to-end vertical acceptance over a genuine media document. The two service-chain targets
 # adopt the borrowed VkInstance through Qt's public QVulkanInstance and write real OpenEXR fixtures,
-# so they need Vulkan headers and the dependency prefix's OpenEXR/Imath and register only when this
-# build has them. Normal CTest runs use QT_QPA_PLATFORM=offscreen; the supervisor passes
+# so they need both the pinned Vulkan headers and Qt's Vulkan feature plus the dependency prefix's
+# OpenEXR/Imath, and register only when this build has them. Normal CTest runs use
+# QT_QPA_PLATFORM=offscreen; the supervisor passes
 # --loader/--require-device for the real native gate, and --require-device fails closed.
 if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_find_dependency(OpenEXR)
