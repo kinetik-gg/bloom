@@ -35,6 +35,12 @@ constexpr int layoutSchema = bloom::ui::kit::Layout::WorkspaceVersion;
 constexpr int maximumLayoutDepth = 64;
 constexpr int maximumAreaCount = 64;
 constexpr int defaultSplitWeight = 1000;
+// The visible Background band between two panels is the splitter handle. Because each panel also
+// draws its own 1px border INSIDE its rect, a between-panel boundary shows two border strokes while
+// the window edge shows one. Subtracting one border from the handle makes the border-to-border span
+// equal the window's edge-to-border padding, so the gutter reads the same on every side at any DPR.
+constexpr int panelGutterHandleWidth = bloom::ui::kit::px(bloom::ui::kit::Spacing::Gutter) -
+                                       bloom::ui::kit::px(bloom::ui::kit::Size::Hairline);
 // First-run / Reset Workspace proportions in per mille of the usable splitter extent. The
 // arrangement is a full-height right column -- Assets over Properties -- beside a left region whose
 // top row is Viewer | Nodes and whose bottom is the Timeline. These are weights, never pixels, so
@@ -735,10 +741,11 @@ QSplitter* WorkspaceHost::createSplitter(Qt::Orientation orientation) const {
     auto* splitter = new QSplitter(orientation);
     splitter->setObjectName("workspaceSplitter");
     splitter->setChildrenCollapsible(false);
-    // The gutter (task U1, issue #117): panels are separated by a visible Background gap of
-    // Spacing::Gutter, not by a hairline seam. The handle's own fill comes from the theme's
-    // QSplitter::handle rule; this is the width that makes the gap real and grabbable.
-    splitter->setHandleWidth(kit::px(kit::Spacing::Gutter));
+    // The gutter (task U1, issue #117): panels are separated by a visible Background gap, not by a
+    // hairline seam. The handle's own fill comes from the theme's QSplitter::handle rule; its width
+    // is the window padding less one panel border, so the border-to-border separation between two
+    // panels matches the edge-to-border window padding exactly.
+    splitter->setHandleWidth(panelGutterHandleWidth);
     splitter->setOpaqueResize(true);
     return splitter;
 }

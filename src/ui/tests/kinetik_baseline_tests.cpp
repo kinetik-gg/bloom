@@ -172,11 +172,13 @@ void testPanelsAreSeparatedByARealGutter(Expectations& expectations) {
 
     const auto splitters = host.findChildren<QSplitter*>(QStringLiteral("workspaceSplitter"));
     expectations.expect(!splitters.isEmpty(), "splitting produces a workspace splitter");
+    // Each panel draws its own 1px border inside its rect, so a between-panel boundary has two
+    // border strokes while the window edge has one. The handle is the window padding less one
+    // border, which makes the border-to-border span equal the edge-to-border padding.
+    const int expectedHandle = kit::px(kit::Spacing::Gutter) - kit::px(kit::Size::Hairline);
     for (const auto* splitter : splitters) {
-        // The gutter is a visible Background gap between panels, not a hairline seam: the handle
-        // width is what makes that gap real and grabbable.
-        expectations.expect(splitter->handleWidth() == kit::px(kit::Spacing::Gutter),
-                            "every workspace splitter's handle is the gutter token wide");
+        expectations.expect(splitter->handleWidth() == expectedHandle,
+                            "every splitter's handle is the gutter less one panel border");
     }
     expectations.expect(kit::px(kit::Spacing::Gutter) == 6, "and the gutter token is 6");
 }

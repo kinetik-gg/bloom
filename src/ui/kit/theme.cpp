@@ -217,7 +217,7 @@ QFrame#editorArea {
     border-radius: {radius.Panel}px;
 }
 QFrame#editorArea[active="true"] {
-    border-color: {color.BorderActive};
+    border-color: {color.Accent};
 }
 QWidget#editorHeader {
     background: {color.Surface};
