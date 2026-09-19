@@ -29,7 +29,7 @@ namespace {
 [[nodiscard]] PreparedGpuSceneBuildResult failed(const PreparedGpuSceneDiagnosticCode code,
                                                  std::string message,
                                                  GpuSceneMediaStatistics statistics = {}) {
-    return {nullptr, PreparedGpuSceneDiagnostic{code, std::move(message), std::move(statistics)}};
+    return {nullptr, PreparedGpuSceneDiagnostic{code, std::move(message), statistics}};
 }
 
 [[nodiscard]] bool isSubsetOperation(const CompiledOperation& operation) noexcept {
@@ -335,6 +335,10 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             bounds[index] = leaf.bounds;
             outputWindowOf[index] = leaf.outputWindow;
             keyOf[index] = leaf.semanticKey;
+            if (!leaf.descriptor.has_value()) {
+                return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                              "the upload leaf produced no image descriptor");
+            }
             GpuSceneUploadCommand command{.sourceOperation = operationIndex,
                                           .image = std::move(leaf.image),
                                           .descriptor = *leaf.descriptor,
@@ -355,6 +359,10 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             bounds[index] = leaf.bounds;
             outputWindowOf[index] = leaf.outputWindow;
             keyOf[index] = leaf.semanticKey;
+            if (!leaf.descriptor.has_value()) {
+                return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                              "the upload leaf produced no image descriptor");
+            }
             GpuSceneUploadCommand command{.sourceOperation = operationIndex,
                                           .image = std::move(leaf.image),
                                           .descriptor = *leaf.descriptor,
@@ -396,10 +404,11 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                               "A layer fed by a non-source input is not prepared");
             }
             const auto inputIndex = commandForOperation[layer->input.value()];
-            if (inputIndex == kInvalidGpuSceneCommand || !outputWindowOf[layer->input.value()]) {
+            const auto& inputWindow = outputWindowOf[layer->input.value()];
+            if (inputIndex == kInvalidGpuSceneCommand || !inputWindow) {
                 continue;
             }
-            const auto sourceWindow = *outputWindowOf[layer->input.value()];
+            const auto sourceWindow = *inputWindow;
             render::LayerTransform::Authored authored{
                 .anchorX = anchor->value.x,
                 .anchorY = anchor->value.y,
@@ -568,10 +577,10 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             for (const auto& entry : stack->entries) {
                 bounds[index].local =
                     detail::unionBounds(bounds[index].local, bounds[entry.input.value()].output);
-                if (outputWindowOf[entry.input.value()]) {
-                    storage = detail::unionBounds(
-                        storage,
-                        detail::boundsForWindow(*outputWindowOf[entry.input.value()], 1.0, 1.0));
+                const auto& entryWindow = outputWindowOf[entry.input.value()];
+                if (entryWindow) {
+                    storage = detail::unionBounds(storage,
+                                                  detail::boundsForWindow(*entryWindow, 1.0, 1.0));
                 }
             }
             bounds[index].output = bounds[index].local;
@@ -684,7 +693,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     const GpuSceneCommandIndex outputCommand = commandForOperation[request.output.value()];
     auto scene = std::shared_ptr<const PreparedGpuScene>(new PreparedGpuScene(
         std::move(commands), std::move(commandForOperation), outputCommand, std::move(identity),
-        std::move(bounds), resolved.imageDescriptor, std::move(mediaStatistics)));
+        std::move(bounds), resolved.imageDescriptor, mediaStatistics));
     return {std::move(scene), PreparedGpuSceneDiagnostic{}};
 }
 

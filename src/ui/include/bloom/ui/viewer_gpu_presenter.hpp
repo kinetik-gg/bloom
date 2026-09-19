@@ -192,6 +192,19 @@ class ViewerGpuPresenter final : public QObject {
     [[nodiscard]] render::GpuBorrowedInstanceView borrowedInstanceView() const;
     [[nodiscard]] std::uint64_t surfaceBits() const noexcept;
 
+    // Truthful owner-observed presentation progress for this target, updated from the published
+    // snapshot. A mailbox admission from present() is NOT a native present; a caller that needs a
+    // genuine first-present acknowledgement waits until presentCount() advances past the value
+    // observed when it enqueued, or appliedSequence() reaches its enqueued sequence.
+    [[nodiscard]] std::uint64_t lastEnqueuedSequence() const noexcept;
+    [[nodiscard]] std::uint64_t appliedSequence() const noexcept;
+    [[nodiscard]] std::uint64_t presentCount() const noexcept;
+
+    // Must be called before initialize(). The presenter parents its container to `parent` at
+    // creation, before the window is exposed and the surface attached, so the host never has to
+    // reparent a live surface.
+    void setContainerParent(QWidget* parent) noexcept;
+
     void setReadyCallback(ReadyCallback callback);
     void setInputCallback(InputCallback callback);
 

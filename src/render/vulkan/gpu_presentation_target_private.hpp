@@ -37,7 +37,7 @@ struct PresentImagePipeline;
 namespace bloom::render::presentation_detail {
 
 [[nodiscard]] inline VkSurfaceKHR toSurfaceHandle(const std::uint64_t bits) noexcept {
-    return reinterpret_cast<VkSurfaceKHR>(static_cast<std::uintptr_t>(bits));
+    return handleFromBits<VkSurfaceKHR>(bits);
 }
 
 // One swapchain generation and every resource that references it. It is created in full by its
@@ -158,11 +158,13 @@ namespace bloom::render::present_image_detail {
 // against the currently acquired image. Defined by the native present-image translation unit or by
 // its CPU-unavailable stub; the public GpuPresentationTarget::presentImage member only
 // orchestrates.
-[[nodiscard]] GpuPresentationTargetCode renderResidentIntoAcquired(
-    presentation_detail::SwapchainResources& resources,
-    const std::shared_ptr<vulkan_detail::DeviceAllocatorState>& control,
-    std::shared_ptr<PresentImagePipeline>& presenter, std::shared_ptr<const GpuDisplayImage> input,
-    const GpuPresentImageParams& params, const GpuPresentOverlay& overlay, std::string& message);
+[[nodiscard]] GpuPresentationTargetCode
+renderResidentIntoAcquired(presentation_detail::SwapchainResources& resources,
+                           const std::shared_ptr<vulkan_detail::DeviceAllocatorState>& control,
+                           std::shared_ptr<PresentImagePipeline>& presenter,
+                           const std::shared_ptr<const GpuDisplayImage>& input,
+                           const GpuPresentImageParams& params, const GpuPresentOverlay& overlay,
+                           std::string& message);
 
 } // namespace bloom::render::present_image_detail
 

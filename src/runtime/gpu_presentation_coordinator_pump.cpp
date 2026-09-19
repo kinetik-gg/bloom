@@ -128,12 +128,12 @@ void quarantineCommit(QuarantineReservation reservation,
     store.fuse.store(true, std::memory_order_release);
     if (reservation >= store.capacity || store.slots == nullptr) {
         // No slot: leak the raw generation rather than destroying a possibly-referenced surface.
-        static_cast<void>(target.release());
+        static_cast<void>(target.release()); // NOLINT(bugprone-unused-return-value)
         return;
     }
     QuarantineSlot& slot = store.slots[reservation];
     if (slot.state != QuarantineSlot::State::Reserved) {
-        static_cast<void>(target.release());
+        static_cast<void>(target.release()); // NOLINT(bugprone-unused-return-value)
         return;
     }
     slot.target = target.release();

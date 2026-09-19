@@ -176,8 +176,8 @@ void testStillImageParity(Expectations& expectations, GpuSceneExecutor& executor
     const auto extent = bloom::render::ImageExtent::create(5, 4);
     expectations.expect(static_cast<bool>(extent), "the proxy extent builds");
     if (extent) {
-        const auto proxyPlan = mediaPlan(format(9, 6, *bloom::core::PixelAspectRatio::create(4, 3)),
-                                         fixture.asset, LayerValues{.position = {4.5, 3.0}}, 1300);
+        const auto proxyPlan = mediaPlan(format(9, 6, pixelAspect(4, 3)), fixture.asset,
+                                         LayerValues{.position = {4.5, 3.0}}, 1300);
         auto proxyRequest = requestFor(*proxyPlan);
         proxyRequest.resolution = bloom::runtime::ProxyResolution{*extent.value()};
         expectMediaParity(expectations, executor, evaluator, builder, proxyPlan, proxyRequest,
@@ -339,7 +339,7 @@ void testChangedSourceInvalidates(Expectations& expectations, GpuDevice& device,
     const auto frameZero =
         builder.build(sequencePlan, requestFor(*sequencePlan, RationalTime::fromInteger(0)));
     const auto frameOne =
-        builder.build(sequencePlan, requestFor(*sequencePlan, *RationalTime::create(1, 24)));
+        builder.build(sequencePlan, requestFor(*sequencePlan, rationalTime(1, 24)));
     expectations.expect(frameZero.hasValue() && frameOne.hasValue(), "invalidate: sequence builds");
     if (frameZero && frameOne) {
         const auto* uploadZero = firstUpload(*frameZero.scene);
@@ -350,7 +350,7 @@ void testChangedSourceInvalidates(Expectations& expectations, GpuDevice& device,
     }
     expectations.expect(expectMediaParity(expectations, *executor.executor, evaluator, builder,
                                           sequencePlan,
-                                          requestFor(*sequencePlan, *RationalTime::create(1, 24)),
+                                          requestFor(*sequencePlan, rationalTime(1, 24)),
                                           "invalidate: sequence frame 1"),
                         "invalidate: sequence frame parity");
     expectations.expect(executor.executor->counters().uploads > uploadsAfterChanged,
@@ -509,13 +509,12 @@ void testRealVideo(Expectations& expectations, GpuSceneExecutor& executor,
                       requestFor(*plan, RationalTime::fromInteger(0)), "video: frame 0");
     const auto uploadsBefore = executor.counters().uploads;
     expectMediaParity(expectations, executor, evaluator, builder, plan,
-                      requestFor(*plan, *RationalTime::create(1, 24)),
-                      "video: changed source frame");
+                      requestFor(*plan, rationalTime(1, 24)), "video: changed source frame");
     expectations.expect(executor.counters().uploads > uploadsBefore,
                         "video: a changed source frame uploads again");
 
     const auto zeroRebuilt = builder.build(plan, requestFor(*plan, RationalTime::fromInteger(0)));
-    const auto oneRebuilt = builder.build(plan, requestFor(*plan, *RationalTime::create(1, 24)));
+    const auto oneRebuilt = builder.build(plan, requestFor(*plan, rationalTime(1, 24)));
     const auto* uploadZero = firstUpload(*zeroRebuilt.scene);
     const auto* uploadOne = firstUpload(*oneRebuilt.scene);
     expectations.expect(uploadZero != nullptr && uploadOne != nullptr &&
@@ -526,52 +525,59 @@ void testRealVideo(Expectations& expectations, GpuSceneExecutor& executor,
 } // namespace
 
 int main(const int argc, char** argv) {
-    const Options options = parseOptions(argc, argv);
-    if (!options.valid) {
-        return 2;
-    }
-    Expectations expectations;
-    CpuCompositionEvaluator evaluator;
-    const auto fixture = makeFixture();
-    evaluator.setAssetBaseDirectory(fixture.directory);
+    try {
+        const Options options = parseOptions(argc, argv);
+        if (!options.valid) {
+            return 2;
+        }
+        Expectations expectations;
+        CpuCompositionEvaluator evaluator;
+        const auto fixture = makeFixture();
+        evaluator.setAssetBaseDirectory(fixture.directory);
 
-    GpuDeviceCreationOptions createOptions;
-    createOptions.loader_path = options.loader_path;
-    auto device = GpuDevice::create(createOptions);
-    if (!device) {
-        if (options.require_device) {
-            std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message << '\n';
+        GpuDeviceCreationOptions createOptions;
+        createOptions.loader_path = options.loader_path;
+        auto device = GpuDevice::create(createOptions);
+        if (!device) {
+            if (options.require_device) {
+                std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message
+                          << '\n';
+                return 1;
+            }
+            std::cout << "SKIP: no compatible Vulkan device available: "
+                      << device.diagnostic.message << '\n';
+            return expectations.ok() ? 0 : 1;
+        }
+
+        auto parityCache =
+            GpuSceneCache::create(*device.device, GpuSceneCacheBudgets{kCacheBudget});
+        expectations.expect(parityCache.hasValue(), "the parity cache is created");
+        if (!parityCache) {
+            std::cerr << "FAIL: the parity cache could not be created\n";
             return 1;
         }
-        std::cout << "SKIP: no compatible Vulkan device available: " << device.diagnostic.message
-                  << '\n';
-        return expectations.ok() ? 0 : 1;
-    }
+        auto parityExecutor = GpuSceneExecutor::create(*device.device, *parityCache.cache);
+        expectations.expect(parityExecutor.hasValue(), "the parity executor is created");
+        if (!parityExecutor) {
+            std::cerr << "FAIL: the parity executor could not be created\n";
+            return 1;
+        }
 
-    auto parityCache = GpuSceneCache::create(*device.device, GpuSceneCacheBudgets{kCacheBudget});
-    expectations.expect(parityCache.hasValue(), "the parity cache is created");
-    if (!parityCache) {
-        std::cerr << "FAIL: the parity cache could not be created\n";
+        testStillImageParity(expectations, *parityExecutor.executor, evaluator, fixture);
+        testChangedTransformReusesUpload(expectations, *device.device, evaluator, fixture);
+        testChangedSourceInvalidates(expectations, *device.device, evaluator, fixture);
+        testWarmOutputZeroDispatch(expectations, *device.device, evaluator, fixture);
+        testCachedInputBudget(expectations, *device.device, evaluator, fixture);
+        testRealVideo(expectations, *parityExecutor.executor, evaluator, options.fixtures);
+
+        if (!expectations.ok()) {
+            std::cerr << "FAIL: GPU media executor expectations failed\n";
+            return 1;
+        }
+        std::cout << "PASS: GPU media executor\n";
+        return 0;
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
         return 1;
     }
-    auto parityExecutor = GpuSceneExecutor::create(*device.device, *parityCache.cache);
-    expectations.expect(parityExecutor.hasValue(), "the parity executor is created");
-    if (!parityExecutor) {
-        std::cerr << "FAIL: the parity executor could not be created\n";
-        return 1;
-    }
-
-    testStillImageParity(expectations, *parityExecutor.executor, evaluator, fixture);
-    testChangedTransformReusesUpload(expectations, *device.device, evaluator, fixture);
-    testChangedSourceInvalidates(expectations, *device.device, evaluator, fixture);
-    testWarmOutputZeroDispatch(expectations, *device.device, evaluator, fixture);
-    testCachedInputBudget(expectations, *device.device, evaluator, fixture);
-    testRealVideo(expectations, *parityExecutor.executor, evaluator, options.fixtures);
-
-    if (!expectations.ok()) {
-        std::cerr << "FAIL: GPU media executor expectations failed\n";
-        return 1;
-    }
-    std::cout << "PASS: GPU media executor\n";
-    return 0;
 }

@@ -25,12 +25,11 @@ namespace present_image_detail {
 
 struct PresentImagePipeline;
 
-GpuPresentationTargetCode
-renderResidentIntoAcquired(presentation_detail::SwapchainResources&,
-                           const std::shared_ptr<vulkan_detail::DeviceAllocatorState>&,
-                           std::shared_ptr<PresentImagePipeline>&,
-                           std::shared_ptr<const GpuDisplayImage>, const GpuPresentImageParams&,
-                           const GpuPresentOverlay&, std::string& message) {
+GpuPresentationTargetCode renderResidentIntoAcquired(
+    presentation_detail::SwapchainResources&,
+    const std::shared_ptr<vulkan_detail::DeviceAllocatorState>&,
+    std::shared_ptr<PresentImagePipeline>&, const std::shared_ptr<const GpuDisplayImage>&,
+    const GpuPresentImageParams&, const GpuPresentOverlay&, std::string& message) {
     message = "Bloom was built without Vulkan dependencies; the CPU display path remains active";
     return GpuPresentationTargetCode::PresentationUnavailable;
 }

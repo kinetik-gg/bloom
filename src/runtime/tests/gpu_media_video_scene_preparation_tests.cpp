@@ -111,14 +111,13 @@ void testAllFixturesDistinctFrames(Expectations& expectations,
         checkVideoParity(expectations, evaluator, plan,
                          requestFor(*plan, RationalTime::fromInteger(0)),
                          std::string{spec.file} + " frame 0");
-        checkVideoParity(expectations, evaluator, plan,
-                         requestFor(*plan, *RationalTime::create(1, 2)),
+        checkVideoParity(expectations, evaluator, plan, requestFor(*plan, rationalTime(1, 2)),
                          std::string{spec.file} + " frame 12");
 
         auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
         const CpuGpuSceneBuilder builder(nullptr, context);
         const auto zero = builder.build(plan, requestFor(*plan, RationalTime::fromInteger(0)));
-        const auto twelve = builder.build(plan, requestFor(*plan, *RationalTime::create(1, 2)));
+        const auto twelve = builder.build(plan, requestFor(*plan, rationalTime(1, 2)));
         expectations.expect(zero.hasValue() && twelve.hasValue(),
                             std::string{spec.file} + " distinct-frame builds prepare");
         if (!zero || !twelve) {
@@ -148,7 +147,7 @@ void testProxyNonSquareParAndFractional(Expectations& expectations,
         return;
     }
     const auto asset = videoAsset(path, 20000);
-    const auto plan = videoPlan(format(48, 32, *bloom::core::PixelAspectRatio::create(4, 3)), asset,
+    const auto plan = videoPlan(format(48, 32, pixelAspect(4, 3)), asset,
                                 LayerValues{.position = {24.3, 15.7}, .opacity = 0.7}, 20000);
     const auto extent = bloom::render::ImageExtent::create(24, 16);
     expectations.expect(static_cast<bool>(extent), "the video proxy extent builds");
@@ -246,7 +245,7 @@ void testVideoBypassMatrix(Expectations& expectations, const CpuCompositionEvalu
                         "an interactive plan reads the warm converted entry");
 
     // An interactive gesture MISS is decoded and converted but never inserted.
-    const auto frameTwelve = *RationalTime::create(1, 2);
+    const auto frameTwelve = rationalTime(1, 2);
     const auto gestureMiss = builder.build(interactive, requestFor(*interactive, frameTwelve));
     const auto gestureMissAgain = builder.build(interactive, requestFor(*interactive, frameTwelve));
     expectations.expect(gestureMiss.hasValue() && gestureMissAgain.hasValue() &&
@@ -320,33 +319,38 @@ void testVideoBudgetRefusal(Expectations& expectations, const std::filesystem::p
 } // namespace
 
 int main(int argc, char** argv) {
-    std::filesystem::path fixtures;
-    if (argc >= 2) {
-        fixtures = argv[1];
-    } else if (const char* const environment = std::getenv("BLOOM_MEDIA_VIDEO_FIXTURES")) {
-        fixtures = environment;
-    }
-    if (fixtures.empty() || !std::filesystem::is_directory(fixtures)) {
-        std::cerr << "FAIL: a real media fixture directory is required (argv[1] or "
-                     "BLOOM_MEDIA_VIDEO_FIXTURES); this test never skips as a pass\n";
+    try {
+        std::filesystem::path fixtures;
+        if (argc >= 2) {
+            fixtures = argv[1];
+        } else if (const char* const environment = std::getenv("BLOOM_MEDIA_VIDEO_FIXTURES")) {
+            fixtures = environment;
+        }
+        if (fixtures.empty() || !std::filesystem::is_directory(fixtures)) {
+            std::cerr << "FAIL: a real media fixture directory is required (argv[1] or "
+                         "BLOOM_MEDIA_VIDEO_FIXTURES); this test never skips as a pass\n";
+            return 1;
+        }
+
+        Expectations expectations;
+        const CpuCompositionEvaluator evaluator;
+        evaluator.setAssetBaseDirectory(fixtures);
+        evaluator.setVideoCacheByteBudget(std::size_t{64} << 20U);
+
+        testAllFixturesDistinctFrames(expectations, evaluator, fixtures);
+        testProxyNonSquareParAndFractional(expectations, evaluator, fixtures);
+        testVideoWarmReuse(expectations, evaluator, fixtures);
+        testVideoBypassMatrix(expectations, evaluator, fixtures);
+        testUnsupportedVideoGraphScreensBeforeDecode(expectations, evaluator, fixtures);
+        testVideoBudgetRefusal(expectations, fixtures);
+        if (!expectations.ok()) {
+            std::cerr << "FAIL: GPU media video scene preparation expectations failed\n";
+            return 1;
+        }
+        std::cout << "PASS: CPU GPU media video scene preparation\n";
+        return 0;
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
         return 1;
     }
-
-    Expectations expectations;
-    const CpuCompositionEvaluator evaluator;
-    evaluator.setAssetBaseDirectory(fixtures);
-    evaluator.setVideoCacheByteBudget(std::size_t{64} << 20U);
-
-    testAllFixturesDistinctFrames(expectations, evaluator, fixtures);
-    testProxyNonSquareParAndFractional(expectations, evaluator, fixtures);
-    testVideoWarmReuse(expectations, evaluator, fixtures);
-    testVideoBypassMatrix(expectations, evaluator, fixtures);
-    testUnsupportedVideoGraphScreensBeforeDecode(expectations, evaluator, fixtures);
-    testVideoBudgetRefusal(expectations, fixtures);
-    if (!expectations.ok()) {
-        std::cerr << "FAIL: GPU media video scene preparation expectations failed\n";
-        return 1;
-    }
-    std::cout << "PASS: CPU GPU media video scene preparation\n";
-    return 0;
 }

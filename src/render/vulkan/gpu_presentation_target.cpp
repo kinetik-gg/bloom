@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -116,7 +117,9 @@ planSwapchain(GpuDevice& device, const GpuPresentationTargetDescription& descrip
         return false;
     }
 
-    VkSurfaceCapabilitiesKHR capabilities{};
+    VkSurfaceCapabilitiesKHR capabilities;
+    std::memset(&capabilities, 0, sizeof(capabilities));
+    capabilities.currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     if (dispatcher->vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical, surface, &capabilities) !=
         VK_SUCCESS) {
         code = GpuPresentationTargetCode::DriverUnavailable;
@@ -555,11 +558,14 @@ GpuPresentationTargetCode GpuPresentationTarget::lastCode() const noexcept {
 
 const std::string& GpuPresentationTarget::lastMessage() const noexcept {
     static const std::string kEmpty;
-    return impl_ != nullptr ? impl_->lastMessage : kEmpty;
+    if (impl_ == nullptr) {
+        return kEmpty;
+    }
+    return impl_->lastMessage;
 }
 
 GpuPresentationTargetCode
-GpuPresentationTarget::presentImage(std::shared_ptr<const GpuDisplayImage> input,
+GpuPresentationTarget::presentImage(const std::shared_ptr<const GpuDisplayImage>& input,
                                     const GpuPresentImageParams& params,
                                     const GpuPresentOverlay& overlay) {
     if (impl_ == nullptr) {
@@ -577,8 +583,7 @@ GpuPresentationTarget::presentImage(std::shared_ptr<const GpuDisplayImage> input
     }
     std::string message;
     const GpuPresentationTargetCode rendered = present_image_detail::renderResidentIntoAcquired(
-        *impl_->resources, impl_->control, impl_->presenter, std::move(input), params, overlay,
-        message);
+        *impl_->resources, impl_->control, impl_->presenter, input, params, overlay, message);
     if (rendered != GpuPresentationTargetCode::Ok &&
         rendered != GpuPresentationTargetCode::Suboptimal) {
         impl_->lastCode = rendered;

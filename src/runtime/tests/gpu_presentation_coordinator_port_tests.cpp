@@ -121,19 +121,19 @@ int run() {
 
     // Malformed overlays are rejected by checked dimension/stride/budget validation.
     expectations.expect(
-        GpuPresentationOverlay::create(std::vector<std::uint8_t>(16U * 16U * 4U, 0U), 16U, 16U, 0U,
-                                       1U, 1ULL << 20) != nullptr,
+        GpuPresentationOverlay::create(std::vector<std::uint8_t>(std::size_t{16U} * 16U * 4U, 0U),
+                                       16U, 16U, 0U, 1U, 1ULL << 20) != nullptr,
         "a valid overlay builds");
     expectations.expect(GpuPresentationOverlay::create(std::vector<std::uint8_t>(16U, 0U), 16U, 16U,
                                                        0U, 1U, 1ULL << 20) == nullptr,
                         "an overlay with too few bytes is rejected");
     expectations.expect(
-        GpuPresentationOverlay::create(std::vector<std::uint8_t>(16U * 16U * 4U, 0U), 16U, 16U, 4U,
-                                       1U, 1ULL << 20) == nullptr,
+        GpuPresentationOverlay::create(std::vector<std::uint8_t>(std::size_t{16U} * 16U * 4U, 0U),
+                                       16U, 16U, 4U, 1U, 1ULL << 20) == nullptr,
         "an overlay with an under-sized stride is rejected");
     expectations.expect(
-        GpuPresentationOverlay::create(std::vector<std::uint8_t>(16U * 16U * 4U, 0U), 16U, 16U, 0U,
-                                       1U, 8U) == nullptr,
+        GpuPresentationOverlay::create(std::vector<std::uint8_t>(std::size_t{16U} * 16U * 4U, 0U),
+                                       16U, 16U, 0U, 1U, 8U) == nullptr,
         "an overlay over the byte budget is rejected");
 
     // Retire closes admission for the target.

@@ -1,6 +1,7 @@
 #include <bloom/ui/viewer_editor.hpp>
 
 #include <bloom/ui/composition_preview_controller.hpp>
+#include <bloom/ui/viewer_gpu_resident.hpp>
 
 #include <QTimer>
 
@@ -34,6 +35,27 @@ bool containsPixel(const render::ImageWindow window, QPoint pixel) {
     return pixel.x() >= window.originX() && pixel.x() < window.maxXExclusive() &&
            pixel.y() >= window.originY() && pixel.y() < window.maxYExclusive();
 }
+
+// The packed display sample from a frame that actually has CPU pixels; nullopt for the resident arm
+// (its sample arrives asynchronously from the 1x1 CPU analysis fallback, never a GPU readback).
+std::optional<render::Rgba8> displayPixel(const runtime::PreparedPreviewFrame& frame,
+                                          QPoint pixel) {
+    const auto buffer = frame.displayBufferView();
+    if (!buffer.has_value()) {
+        return std::nullopt;
+    }
+    const auto window = buffer->displayWindow;
+    if (!containsPixel(window, pixel)) {
+        return std::nullopt;
+    }
+    const auto offset =
+        static_cast<std::size_t>(pixel.y() - window.originY()) * window.extent().width() +
+        static_cast<std::size_t>(pixel.x() - window.originX());
+    if (offset >= buffer->pixels.size()) {
+        return std::nullopt;
+    }
+    return buffer->pixels[offset];
+}
 } // namespace
 
 void ViewerEditor::clearProbe() {
@@ -59,31 +81,42 @@ void ViewerEditor::refreshProbe(QPointF position) {
         clearProbe();
         return;
     }
-    const auto buffer = shown->displayBufferView();
-    if (!buffer) {
-        clearProbe();
-        return;
-    }
     const auto coordinate = mapping->toComposition(position);
-    const auto window = buffer->displayWindow;
-    const auto x = static_cast<int>(
-        std::floor(coordinate.x * window.extent().width() / mapping->compositionFormat.width()));
-    const auto y = static_cast<int>(
-        std::floor(coordinate.y * window.extent().height() / mapping->compositionFormat.height()));
-    const QPoint pixel(x, y);
-    if (!containsPixel(window, pixel)) {
+    // Geometry comes from the frame's own storage-independent display window: the packed CPU buffer
+    // when the arm has one, otherwise the resident lease metadata. It is never inferred from an
+    // absent CPU span.
+    std::optional<render::ImageWindow> window;
+    if (const auto buffer = shown->displayBufferView(); buffer.has_value()) {
+        window = buffer->displayWindow;
+    } else if (const auto resident = residentFrameGeometry(*shown); resident.has_value()) {
+        window = resident->displayWindow;
+    }
+    if (!window.has_value()) {
         clearProbe();
         return;
     }
-    const auto offset = static_cast<std::size_t>(y - window.originY()) * window.extent().width() +
-                        static_cast<std::size_t>(x - window.originX());
-    const auto display = buffer->pixels[offset];
+    const auto x = static_cast<int>(
+        std::floor(coordinate.x * window->extent().width() / mapping->compositionFormat.width()));
+    const auto y = static_cast<int>(
+        std::floor(coordinate.y * window->extent().height() / mapping->compositionFormat.height()));
+    const QPoint pixel(x, y);
+    if (!containsPixel(*window, pixel)) {
+        clearProbe();
+        return;
+    }
+    std::optional<render::Rgba8> display = displayPixel(*shown, pixel);
+    if (!display.has_value() && probeCacheFrame_ == shown && probeCachePixel_ == pixel) {
+        display = probeCacheDisplay_;
+    }
     ProbeReadout readout{.valid = true,
                          .coordinate = coordinate,
-                         .display = display,
-                         .displayEncoded = display,
-                         .normalized = {display.red / 255.0, display.green / 255.0,
-                                        display.blue / 255.0, display.alpha / 255.0}};
+                         .display = display.value_or(render::Rgba8{}),
+                         .displayEncoded = display.value_or(render::Rgba8{}),
+                         .normalized =
+                             display.has_value()
+                                 ? core::Color4d{display->red / 255.0, display->green / 255.0,
+                                                 display->blue / 255.0, display->alpha / 255.0}
+                                 : core::Color4d{}};
     readout.workingColorSpaceId =
         QString::fromStdString(std::string(session_.colorIntent().workingColorSpaceId));
     readout.displayName = base->desiredIdentity().displayName.empty()
@@ -149,6 +182,7 @@ void ViewerEditor::consumeProbe() {
         (*value)->frame()->desiredIdentity() == probeIdentity_) {
         probeCacheReference_ = referencePixel(*(*value)->frame(), probeTaskPixel_);
         probeCacheDisplayLinear_ = (*value)->frame()->displayLinearProbe();
+        probeCacheDisplay_ = displayPixel(*(*value)->frame(), probeTaskPixel_);
         probeCacheFrame_ = probeTaskFrame_;
         probeCachePixel_ = probeTaskPixel_;
         probeFailure_.clear();

@@ -313,11 +313,15 @@ NativeDeadlineScenarioResult runNativeDeadlineScenario(const std::filesystem::pa
 
     static constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 4> kSizes{
         {{1920, 1080}, {1280, 720}, {960, 540}, {256, 144}}};
+    const auto eligibleInterval = report->eligibleInterval();
+    if (!eligibleInterval.has_value()) {
+        result.message = "qualification interval unavailable";
+        return result;
+    }
     std::optional<std::pair<std::uint32_t, std::uint32_t>> size;
     for (const auto& candidate : kSizes) {
         const auto pixels = static_cast<std::uint64_t>(candidate.first) * candidate.second;
-        if (pixels >= report->eligibleInterval()->min_pixels &&
-            pixels <= report->eligibleInterval()->max_pixels) {
+        if (pixels >= eligibleInterval->min_pixels && pixels <= eligibleInterval->max_pixels) {
             size = candidate;
             break;
         }

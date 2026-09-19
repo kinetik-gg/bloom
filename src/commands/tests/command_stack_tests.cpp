@@ -135,6 +135,7 @@ void testLayerIdentityRemapAggregation(TestContext& test) {
     }
     {
         std::vector<LayerIdentityRemap> many;
+        many.reserve(10);
         for (std::uint64_t index = 0; index < 10; ++index)
             many.push_back(remap(30 + index * 2, 31 + index * 2));
         test.expect(!normalizeLayerIdentityRemaps(many).has_value(),
@@ -284,6 +285,7 @@ void testFiniteTimeFootprintAggregation(TestContext& test) {
     // Too many disjoint intervals exceed the cap and fall back to whole render.
     {
         std::vector<std::pair<core::RationalTime, core::RationalTime>> many;
+        many.reserve(10);
         for (std::int64_t index = 0; index < 10; ++index)
             many.emplace_back(t(index * 4), t(index * 4 + 1));
         test.expect(!normalizeAffectedTimeFootprint(footprint(many)).has_value(),

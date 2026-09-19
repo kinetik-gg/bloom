@@ -74,7 +74,7 @@ invertLayerIdentityRemaps(const std::optional<std::vector<LayerIdentityRemap>>& 
         auto copy = *remap;
         std::swap(copy.beforeLayerId, copy.afterLayerId);
         std::swap(copy.beforeNodeId, copy.afterNodeId);
-        inverted.push_back(std::move(copy));
+        inverted.push_back(copy);
     }
     return inverted;
 }

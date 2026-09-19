@@ -52,7 +52,7 @@ restamp(const std::shared_ptr<const runtime::PreviewDisplayOnlyFrame>& frame,
 } // namespace
 
 PreviewFrameCacheKey
-PreviewFrameCacheKey::forIdentity(const runtime::PreviewRequestIdentity& identity) noexcept {
+PreviewFrameCacheKey::forIdentity(const runtime::PreviewRequestIdentity& identity) {
     return {.projectId = identity.projectId,
             .compositionId = identity.compositionId,
             .sourceRevision = identity.sourceRevision,
@@ -104,7 +104,7 @@ std::size_t PreviewFrameCache::frameByteCost(const runtime::PreparedPreviewFrame
     // read a variant member that is not active. The resident retention cost is the ACTUAL native
     // allocation the lease charges plus its retained geometry/metadata -- never a host copy.
     if (frame.provenance().provider == runtime::PreviewDisplayProvider::GpuResident) {
-        const auto resident = frame.residentFrame();
+        const auto& resident = frame.residentFrame();
         return resident != nullptr ? resident->retainedByteCost() : 0;
     }
     // What RETAINING a CPU frame costs, which is not what holding it costs right now: insertion
@@ -247,9 +247,18 @@ void PreviewFrameCache::insert(const PreparedPreviewFrameHandle& frame) {
         return;
     }
     residentBytes_ += bytes;
+    if (resident) {
+        gpuResidentBytes_ += bytes;
+        ++gpuResidentEntries_;
+    }
     ++statistics_.insertions;
     scheduleNotification();
     evictToBudget();
+    // The additive resident sublimits are enforced after the overall budget, so the GPU set is
+    // bounded independently of how large the CPU cache budget is.
+    if (resident) {
+        evictGpuResidentToLimits();
+    }
 }
 
 void PreviewFrameCache::trimToBytes(const std::size_t bytes) {
@@ -304,6 +313,8 @@ void PreviewFrameCache::clear() {
     }
     entries_.clear();
     residentBytes_ = 0;
+    gpuResidentBytes_ = 0;
+    gpuResidentEntries_ = 0;
 }
 
 bool PreviewFrameCache::workAreaAllows(const PreviewFrameCacheKey& key) const noexcept {
@@ -395,7 +406,7 @@ std::size_t PreviewFrameCache::pruneToRange(const RetentionRange& range) {
 void PreviewFrameCache::setRetentionRange(std::optional<RetentionRange> range) {
     if (retentionRange_ == range)
         return;
-    retentionRange_ = std::move(range);
+    retentionRange_ = range;
     if (retentionRange_.has_value())
         static_cast<void>(pruneToRange(*retentionRange_));
 }
@@ -409,8 +420,48 @@ void PreviewFrameCache::evictToBudget() {
 
 void PreviewFrameCache::removeAt(const std::size_t index) {
     scheduleNotification();
-    residentBytes_ -= entries_[index].bytes;
+    const Entry& entry = entries_[index];
+    residentBytes_ -= entry.bytes;
+    if (entry.resident != nullptr) {
+        gpuResidentBytes_ -= entry.bytes;
+        --gpuResidentEntries_;
+    }
     entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(index));
+}
+
+void PreviewFrameCache::setGpuResidentLimits(const std::size_t maxBytes,
+                                             const std::size_t maxEntries) {
+    gpuResidentByteLimit_ = maxBytes;
+    gpuResidentEntryLimit_ = maxEntries;
+    evictGpuResidentToLimits();
+}
+
+void PreviewFrameCache::evictGpuResidentToLimits() {
+    // The resident set is bounded independently of the overall cache budget so it can never outgrow
+    // the service's lease registry. Entries are MRU-first, so the last resident entry is the least
+    // recently used GPU frame. Dropping it releases only the cache's reference: the opaque lease
+    // stays valid for the viewer and for any native pin that still holds it.
+    while ((gpuResidentEntries_ > gpuResidentEntryLimit_ ||
+            gpuResidentBytes_ > gpuResidentByteLimit_) &&
+           gpuResidentEntries_ > 0) {
+        std::size_t victim = entries_.size();
+        for (std::size_t index = entries_.size(); index > 0; --index) {
+            if (entries_[index - 1].resident != nullptr) {
+                victim = index - 1;
+                break;
+            }
+        }
+        if (victim == entries_.size()) {
+            break;
+        }
+        // The same boundary event is both a GPU-resident eviction and, for the RAM preview
+        // controller, a budget eviction: the controller only watches `evictions` to stop a run that
+        // has outgrown memory, so a GPU sublimit hit must advance that signal or the run would keep
+        // churning every frame against the cap instead of stopping at the prefix that fits.
+        ++statistics_.gpuResidentEvictions;
+        ++statistics_.evictions;
+        removeAt(victim);
+    }
 }
 
 std::size_t physicalMemoryBytes() noexcept { return runtime::physicalMemoryBytes(); }

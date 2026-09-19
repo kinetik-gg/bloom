@@ -74,7 +74,7 @@ ProbeResult verifyResidentDisplayParity(ProbeContext& context) noexcept {
         const auto shared = std::move(residentResult);
         std::vector<Rgba8> measured;
         std::string reason;
-        const auto ran = runDisplayReadback(context, shared, measured, reason);
+        auto ran = runDisplayReadback(context, shared, measured, reason);
         if (ran.code != GpuResidentPreviewDiagnosticCode::None) {
             return ran;
         }
@@ -171,14 +171,13 @@ ProbeResult verifySubnormalRejection(ProbeContext& context, bool& subnormalRejec
     auto recoverySource = std::make_shared<const Rgba32fImage>(std::move(*recoveryImage));
     std::shared_ptr<const GpuImage> recoveryResident;
     std::string recoveryReason;
-    const auto recoveryUpload =
+    auto recoveryUpload =
         uploadToResident(context, std::move(recoverySource), recoveryResident, recoveryReason);
     if (recoveryUpload.code != GpuResidentPreviewDiagnosticCode::None) {
         return recoveryUpload;
     }
     std::vector<Rgba8> recovered;
-    const auto recovery =
-        runDisplayReadback(context, std::move(recoveryResident), recovered, recoveryReason);
+    const auto recovery = runDisplayReadback(context, recoveryResident, recovered, recoveryReason);
     if (recovery.code != GpuResidentPreviewDiagnosticCode::None) {
         return fail(GpuResidentPreviewDiagnosticCode::NativeFailure,
                     "the resident display did not recover after a subnormal rejection: " +

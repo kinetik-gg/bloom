@@ -30,6 +30,7 @@
 #include <memory>
 #include <optional>
 #include <source_location>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -110,16 +111,24 @@ struct Options final {
     return options;
 }
 
-[[nodiscard]] inline std::optional<ImageWindow>
-window(const std::int64_t x, const std::int64_t y, const std::uint64_t w, const std::uint64_t h) {
+// Checked constructors for the canonical fixture values. Failing fast here keeps every call site
+// free of an unchecked optional dereference while preserving the test's honest failure on an
+// invalid fixture.
+[[nodiscard]] inline ImageWindow window(const std::int64_t x, const std::int64_t y,
+                                        const std::uint64_t w, const std::uint64_t h) {
     const auto result = ImageWindow::create(x, y, w, h);
-    return result ? std::optional(*result.value()) : std::nullopt;
+    if (!result) {
+        throw std::logic_error("test image window fixture must be valid");
+    }
+    return *result.value();
 }
 
-[[nodiscard]] inline std::optional<Rgba32f> pixel(const float r, const float g, const float b,
-                                                  const float a) {
+[[nodiscard]] inline Rgba32f pixel(const float r, const float g, const float b, const float a) {
     const auto result = Rgba32f::fromPremultiplied(r, g, b, a);
-    return result ? std::optional(*result.value()) : std::nullopt;
+    if (!result) {
+        throw std::logic_error("test pixel fixture must be valid");
+    }
+    return *result.value();
 }
 
 [[nodiscard]] inline std::optional<Rgba32fImage> makeImage(const ImageWindow imageWindow,
@@ -201,7 +210,8 @@ inline void destroyTarget(DeviceAllocatorState& control, ReadbackTarget& target)
 [[nodiscard]] inline bool createTarget(DeviceAllocatorState& control, const VkFormat format,
                                        const std::uint32_t width, const std::uint32_t height,
                                        ReadbackTarget& target) {
-    VkImageCreateInfo imageInfo{};
+    VkImageCreateInfo imageInfo;
+    std::memset(&imageInfo, 0, sizeof(imageInfo));
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
     imageInfo.format = format;
@@ -232,7 +242,7 @@ struct OffscreenResult final {
 renderOffscreenWith(const std::shared_ptr<DeviceAllocatorState>& control,
                     const std::shared_ptr<PresentImagePipeline>& presenter, const VkFormat format,
                     const std::uint32_t width, const std::uint32_t height,
-                    std::shared_ptr<const GpuDisplayImage> input,
+                    const std::shared_ptr<const GpuDisplayImage>& input,
                     const GpuPresentImageParams& params, const GpuPresentOverlay& overlay) {
     OffscreenResult result;
     ReadbackTarget target;
@@ -250,8 +260,8 @@ renderOffscreenWith(const std::shared_ptr<DeviceAllocatorState>& control,
         return result;
     }
     std::shared_ptr<PresentImagePipeline> localPresenter = presenter;
-    result.code = renderResidentIntoAcquired(resources, control, localPresenter, std::move(input),
-                                             params, overlay, result.message);
+    result.code = renderResidentIntoAcquired(resources, control, localPresenter, input, params,
+                                             overlay, result.message);
     if (result.code != GpuPresentationTargetCode::Ok) {
         destroyTarget(*control, target);
         return result;
@@ -419,24 +429,23 @@ renderOffscreenWith(const std::shared_ptr<DeviceAllocatorState>& control,
 [[nodiscard]] inline OffscreenResult
 renderOffscreen(const std::shared_ptr<DeviceAllocatorState>& control, const VkFormat format,
                 const std::uint32_t width, const std::uint32_t height,
-                std::shared_ptr<const GpuDisplayImage> input, const GpuPresentImageParams& params,
-                const GpuPresentOverlay& overlay) {
+                const std::shared_ptr<const GpuDisplayImage>& input,
+                const GpuPresentImageParams& params, const GpuPresentOverlay& overlay) {
     auto presenter = std::make_shared<PresentImagePipeline>();
-    return renderOffscreenWith(control, presenter, format, width, height, std::move(input), params,
-                               overlay);
+    return renderOffscreenWith(control, presenter, format, width, height, input, params, overlay);
 }
 
 [[nodiscard]] inline std::vector<Rgba32f> sentinelPixels() {
-    return {*pixel(1.0F, 0.0F, 0.0F, 1.0F), *pixel(0.0F, 1.0F, 0.0F, 1.0F),
-            *pixel(0.0F, 0.0F, 1.0F, 1.0F), *pixel(1.0F, 1.0F, 1.0F, 1.0F)};
+    return {pixel(1.0F, 0.0F, 0.0F, 1.0F), pixel(0.0F, 1.0F, 0.0F, 1.0F),
+            pixel(0.0F, 0.0F, 1.0F, 1.0F), pixel(1.0F, 1.0F, 1.0F, 1.0F)};
 }
 
 // Premultiplied 2x2 with alpha variation: opaque red, opaque black, opaque blue, and a
 // half-alpha white (premultiplied 0.5,0.5,0.5,0.5 -> straight white 1.0, alpha 0.5). The alpha
 // variation is what makes a straight-vs-premultiplied filter divergence observable.
 [[nodiscard]] inline std::vector<Rgba32f> premultipliedPixels() {
-    return {*pixel(1.0F, 0.0F, 0.0F, 1.0F), *pixel(0.0F, 0.0F, 0.0F, 1.0F),
-            *pixel(0.0F, 0.0F, 1.0F, 1.0F), *pixel(0.5F, 0.5F, 0.5F, 0.5F)};
+    return {pixel(1.0F, 0.0F, 0.0F, 1.0F), pixel(0.0F, 0.0F, 0.0F, 1.0F),
+            pixel(0.0F, 0.0F, 1.0F, 1.0F), pixel(0.5F, 0.5F, 0.5F, 0.5F)};
 }
 
 [[nodiscard]] inline GpuPresentImageParams identityParams(const std::uint32_t width,

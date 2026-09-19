@@ -39,6 +39,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -490,7 +491,7 @@ void testPreCancellationStaysCancelled(Expectations& expectations) {
 
 } // namespace
 
-int main(int argc, char** argv) {
+int runTests(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     Expectations expectations;
@@ -508,4 +509,13 @@ int main(int argc, char** argv) {
     }
     std::cout << "GPU-scene-stage: all expectations passed\n";
     return 0;
+}
+
+int main(int argc, char** argv) {
+    try {
+        return runTests(argc, argv);
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
+        return 1;
+    }
 }

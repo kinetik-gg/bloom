@@ -514,38 +514,43 @@ void runBenchmark(Expectations& expectations, const std::string& loader, const b
 
 } // namespace
 int main(const int argc, char** argv) {
-    std::string loader;
-    bool requireDevice = false;
-    bool benchmark = false;
-    for (int index = 1; index < argc; ++index) {
-        const std::string argument = argv[index] == nullptr ? std::string{} : argv[index];
-        if (argument == "--loader" && index + 1 < argc && argv[index + 1] != nullptr) {
-            loader = argv[++index];
-        } else if (argument == "--require-device") {
-            requireDevice = true;
-        } else if (argument == "--benchmark") {
-            benchmark = true;
+    try {
+        std::string loader;
+        bool requireDevice = false;
+        bool benchmark = false;
+        for (int index = 1; index < argc; ++index) {
+            const std::string argument = argv[index] == nullptr ? std::string{} : argv[index];
+            if (argument == "--loader" && index + 1 < argc && argv[index + 1] != nullptr) {
+                loader = argv[++index];
+            } else if (argument == "--require-device") {
+                requireDevice = true;
+            } else if (argument == "--benchmark") {
+                benchmark = true;
+            }
         }
-    }
-    Expectations expectations;
-    testCpuPaths(expectations);
-    testSubmitAfterShutdownRejects(expectations);
-    testShutdownBeforeStartupDispatch(expectations);
-    testManyOrdinaryRootsRetainOwnership(expectations);
-    testUnrelatedTasksPreserved(expectations);
-    testGpuProvenanceAndParity(expectations, loader, requireDevice);
-    testLateFallbackSameFrame(expectations, loader, requireDevice);
-    testWorkerFreedWhilePending(expectations, loader, requireDevice);
-    testHeldStageCancellation(expectations, loader, requireDevice);
-    testNativeDeadlineRetirement(expectations, loader, requireDevice);
-    if (benchmark) {
-        runBenchmark(expectations, loader, requireDevice);
-    }
-    if (expectations.failures() != 0) {
-        std::cerr << expectations.failures()
-                  << " gpu_preview_display_service expectation(s) failed\n";
+        Expectations expectations;
+        testCpuPaths(expectations);
+        testSubmitAfterShutdownRejects(expectations);
+        testShutdownBeforeStartupDispatch(expectations);
+        testManyOrdinaryRootsRetainOwnership(expectations);
+        testUnrelatedTasksPreserved(expectations);
+        testGpuProvenanceAndParity(expectations, loader, requireDevice);
+        testLateFallbackSameFrame(expectations, loader, requireDevice);
+        testWorkerFreedWhilePending(expectations, loader, requireDevice);
+        testHeldStageCancellation(expectations, loader, requireDevice);
+        testNativeDeadlineRetirement(expectations, loader, requireDevice);
+        if (benchmark) {
+            runBenchmark(expectations, loader, requireDevice);
+        }
+        if (expectations.failures() != 0) {
+            std::cerr << expectations.failures()
+                      << " gpu_preview_display_service expectation(s) failed\n";
+            return 1;
+        }
+        std::cout << "gpu_preview_display_service_tests: all expectations passed\n";
+        return 0;
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
         return 1;
     }
-    std::cout << "gpu_preview_display_service_tests: all expectations passed\n";
-    return 0;
 }

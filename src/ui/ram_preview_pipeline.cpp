@@ -4,7 +4,7 @@
 
 namespace bloom::ui {
 
-bool RamPreviewPipeline::isInFlight(const PreviewFrameCacheKey& key) const noexcept {
+bool RamPreviewPipeline::isInFlight(const PreviewFrameCacheKey& key) const {
     for (const auto& slot : slots_) {
         if (PreviewFrameCacheKey::forIdentity(slot.identity) == key) {
             return true;

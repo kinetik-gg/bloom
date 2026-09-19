@@ -26,7 +26,7 @@ NativeSurfaceRetirementGate::~NativeSurfaceRetirementGate() {
 }
 
 NativeSurfaceRetirementGate::StartStatus
-NativeSurfaceRetirementGate::begin(std::vector<EditorNativeSurface*> targets, Commit commit,
+NativeSurfaceRetirementGate::begin(const std::vector<EditorNativeSurface*>& targets, Commit commit,
                                    Finish finish, NativeSurfaceRetirementOptions options,
                                    Result* synchronousResult) {
     if (pending_ || completing_) {
@@ -39,7 +39,7 @@ NativeSurfaceRetirementGate::begin(std::vector<EditorNativeSurface*> targets, Co
     entries_.clear();
     commit_ = std::move(commit);
     finish_ = std::move(finish);
-    options_ = options;
+    options_ = std::move(options);
     outstanding_ = 0;
     failed_ = false;
     failureDiagnostic_.clear();

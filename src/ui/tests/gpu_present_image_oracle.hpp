@@ -47,7 +47,7 @@ struct OracleImage final {
                                       const QImage::Format format) noexcept {
     const auto* bytes = reinterpret_cast<const uchar*>(pixels.data());
     const QImage view(bytes, static_cast<int>(width), static_cast<int>(height),
-                      static_cast<int>(width) * 4, format);
+                      static_cast<qsizetype>(width) * 4, format);
     return view.copy();
 }
 

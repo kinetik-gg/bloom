@@ -96,7 +96,7 @@ pickReadyStage(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
 
 void handleStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                             const std::shared_ptr<PreviewDisplayStageRecord>& stage,
-                            TaskResult<PreviewCpuStageOutcomeHandle> result) {
+                            const TaskResult<PreviewCpuStageOutcomeHandle>& result) {
     using Result = TaskResult<PreviewPreparationResultHandle>;
     switch (result.state()) {
     case TaskState::Cancelled:
@@ -500,13 +500,13 @@ void processPreviewStages(const std::shared_ptr<PreviewDisplayServiceCore>& core
         try {
             if (stage->phase == StagePhase::AwaitingStage && stage->gpuStageChild.isValid()) {
                 if (auto result = stage->gpuStageChild.tryTakeResult()) {
-                    handleGpuStageChildResult(core, stage, std::move(*result));
+                    handleGpuStageChildResult(core, stage, *result);
                 }
             }
 
             if (stage->phase == StagePhase::AwaitingStage && stage->stageChild.isValid()) {
                 if (auto result = stage->stageChild.tryTakeResult()) {
-                    handleStageChildResult(core, stage, std::move(*result));
+                    handleStageChildResult(core, stage, *result);
                 }
             }
 

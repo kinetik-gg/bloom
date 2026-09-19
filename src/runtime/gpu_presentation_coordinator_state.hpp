@@ -228,7 +228,7 @@ struct CoordinatorState {
                 // destroyed while it may reference a UI surface. Leak the raw target deliberately
                 // (never destroyed) and keep the process fuse latched so no further native state
                 // accrues anywhere. Any presenter-retained alias owns the pin independently.
-                static_cast<void>(target.release());
+                static_cast<void>(target.release()); // NOLINT(bugprone-unused-return-value)
             }
         } else if (entry.reservation != kNoQuarantineReservation) {
             quarantineRelease(entry.reservation);

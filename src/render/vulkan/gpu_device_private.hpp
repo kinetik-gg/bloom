@@ -121,6 +121,9 @@ template <typename Handle>
 
 template <typename Handle>
 [[nodiscard]] inline Handle handleFromBits(const std::uint64_t bits) noexcept {
+    // The public contract carries native handles as opaque integer bits only. Reconstructing the
+    // typed handle is the single necessary int-to-pointer boundary and has no safer equivalent.
+    // NOLINTNEXTLINE(performance-no-int-to-ptr): documented native-handle reconstruction boundary.
     return reinterpret_cast<Handle>(static_cast<std::uintptr_t>(bits));
 }
 

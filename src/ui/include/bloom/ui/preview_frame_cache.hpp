@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -48,7 +49,7 @@ struct PreviewFrameCacheKey final {
     runtime::PreviewResolutionPolicy resolutionPolicy = runtime::PreviewResolutionPolicy::Auto;
 
     [[nodiscard]] static PreviewFrameCacheKey
-    forIdentity(const runtime::PreviewRequestIdentity& identity) noexcept;
+    forIdentity(const runtime::PreviewRequestIdentity& identity);
 
     std::optional<render::ImageWindow> roi = std::nullopt;
     runtime::ViewAdjust viewAdjust{};
@@ -104,6 +105,10 @@ class PreviewFrameCache final : public QObject {
         // retained range. Counted apart from evictions and pressure so an explicit range trim never
         // reads as, or behaves as, memory pressure.
         std::uint64_t rangeDrops = 0;
+        // GPU-resident entries evicted to stay inside the additive GPU-resident sublimits below.
+        // Counted apart from the overall-budget evictions because the two mean different things:
+        // this one says the bounded resident set is the limit, the other says the whole cache is.
+        std::uint64_t gpuResidentEvictions = 0;
 
         friend bool operator==(const Statistics&, const Statistics&) = default;
     };
@@ -172,6 +177,26 @@ class PreviewFrameCache final : public QObject {
     [[nodiscard]] Statistics statistics() const noexcept { return statistics_; }
     void clear();
 
+    // Additive GPU-resident sublimits INSIDE the overall byte budget. The default is unlimited, so
+    // a standalone cache -- and every pre-existing test -- is unchanged, and the overall CPU cache
+    // budget is never rewritten. The shared application cache sets these from the aligned resident
+    // budget plan so its retained resident set cannot outgrow the service's lease registry: when
+    // either limit is exceeded, least-recently-used RESIDENT entries are evicted. Eviction drops
+    // only the cache's reference; a live lease stays valid for the viewer and for the native pins
+    // that still hold it, so no live lease is invalidated. CPU entries are never touched by these
+    // limits.
+    void setGpuResidentLimits(std::size_t maxBytes, std::size_t maxEntries);
+    // Actual resident bytes and resident entry count retained right now. Deliberately distinct from
+    // residentBytes()/size(), which count EVERY entry (CPU and resident).
+    [[nodiscard]] std::size_t gpuResidentBytes() const noexcept { return gpuResidentBytes_; }
+    [[nodiscard]] std::size_t gpuResidentEntryCount() const noexcept { return gpuResidentEntries_; }
+    [[nodiscard]] std::size_t gpuResidentByteLimit() const noexcept {
+        return gpuResidentByteLimit_;
+    }
+    [[nodiscard]] std::size_t gpuResidentEntryLimit() const noexcept {
+        return gpuResidentEntryLimit_;
+    }
+
     // WORKAREA-1: scope retention to one composition's half-open [start, end) time range, pruning
     // any entry it excludes immediately. std::nullopt restores "retain anything" without pruning.
     // This is range management, not invalidation: it neither advances the revision nor touches a
@@ -219,6 +244,10 @@ class PreviewFrameCache final : public QObject {
 
     void dropStaleRevisions(const PreviewFrameCacheKey& current);
     void evictToBudget();
+    // Evicts the least-recently-used RESIDENT entry (entries_ is MRU-first) while either additive
+    // GPU-resident limit is exceeded. It only drops the cache's reference; it never invalidates a
+    // lease and never removes a CPU entry.
+    void evictGpuResidentToLimits();
     void removeAt(std::size_t index);
     // Drops every entry whose time is no longer accepted under the current work-area range or
     // provenance spans, counting rangeDrops for a work-area exclusion and staleDrops for a
@@ -240,6 +269,11 @@ class PreviewFrameCache final : public QObject {
     runtime::MemoryBudgetLedger& ledger_;
     std::size_t byteBudget_ = defaultPreviewFrameCacheByteBudget();
     std::size_t residentBytes_ = 0;
+    // GPU-resident accounting, distinct from the all-entry totals above.
+    std::size_t gpuResidentBytes_ = 0;
+    std::size_t gpuResidentEntries_ = 0;
+    std::size_t gpuResidentByteLimit_ = std::numeric_limits<std::size_t>::max();
+    std::size_t gpuResidentEntryLimit_ = std::numeric_limits<std::size_t>::max();
     std::optional<bool> displayQualified_;
     std::optional<RetentionRange> retentionRange_;
     std::vector<RetentionSnapshot> retentionSnapshots_;

@@ -61,7 +61,7 @@ void retireNativeOnOwner(const std::shared_ptr<detail::PreviewDisplayServiceCore
         // holds raw native targets that reference this device, so the device is deliberately
         // retained rather than destroyed out from under them. This is an explicit, reported
         // retention (never a fabricated safe ack) and the host must not tear down its Qt surfaces.
-        static_cast<void>(core->device.release());
+        static_cast<void>(core->device.release()); // NOLINT(bugprone-unused-return-value)
     } else {
         core->device.reset();
     }
@@ -163,8 +163,9 @@ void runServiceLoop(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
                 // outstanding, so native acquire/present/retire progresses and the shutdown
                 // snapshot stays current.
                 detail::pumpServicePresentation(core);
-            } catch (...) {
-                // A single iteration fault must not terminate the service thread.
+            } catch (...) { // NOLINT(bugprone-empty-catch)
+                // A single iteration fault must not terminate the service thread; there is no
+                // reporting channel on this owner loop, so the fault is deliberately contained.
             }
             waitForWake(core, observed, /*wakeOnStopping=*/true);
         }

@@ -26,6 +26,8 @@
 #include <bloom/runtime/gpu_presentation_coordinator.hpp>
 #include <bloom/runtime/gpu_resident_frame_lease.hpp>
 
+#include "gpu_borrowed_instance.hpp"
+
 #include <QGuiApplication>
 #include <QTimer>
 #include <QVulkanInstance>
@@ -35,6 +37,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -230,125 +233,7 @@ produceDisplay(GpuSolid& solid, GpuResidentDisplay& display, Expectations& expec
     return image->isValid() ? image : nullptr;
 }
 
-void ownerMain(Shared& shared, const TestOptions options, Expectations& expectations) {
-    GpuDeviceCreationOptions creation;
-    creation.loader_path = options.loader_path;
-    creation.request_presentation = true;
-    creation.presentation_platform = GpuPresentationPlatform::Wayland;
-    auto created = GpuDevice::create(creation);
-    if (!created) {
-        std::lock_guard lock(shared.mutex);
-        shared.reason = "no presentable device: " + created.diagnostic.message;
-        shared.initDone = true;
-        shared.cv.notify_all();
-        return;
-    }
-    auto device = std::move(created.device);
-    if (device->presentationStatus().availability !=
-        bloom::render::GpuPresentationAvailability::Ready) {
-        std::lock_guard lock(shared.mutex);
-        shared.reason = "presentation not ready: " + device->presentationStatus().detail;
-        shared.initDone = true;
-        shared.cv.notify_all();
-        return;
-    }
-    auto solidResult = GpuSolid::create(*device);
-    auto displayResult = GpuResidentDisplay::create(*device);
-    auto registry = GpuResidentFrameLeaseRegistry::create(*device);
-    auto foreignRegistry = GpuResidentFrameLeaseRegistry::create(*device);
-    if (!solidResult || !displayResult || !registry || !foreignRegistry) {
-        std::lock_guard lock(shared.mutex);
-        shared.reason = "the native pipelines or lease registries could not be created";
-        shared.initDone = true;
-        shared.cv.notify_all();
-        return;
-    }
-    std::unique_ptr<GpuSolid> solid = std::move(solidResult.solid);
-    std::unique_ptr<GpuResidentDisplay> display = std::move(displayResult.display);
-    GpuPresentationCoordinatorOptions coordinatorOptions;
-    coordinatorOptions.maxTargets = 3U;
-    auto coordinator =
-        std::make_unique<GpuPresentationCoordinator>(*device, *registry, coordinatorOptions);
-    {
-        std::lock_guard lock(shared.mutex);
-        shared.client = coordinator->client();
-        shared.ran = shared.client != nullptr;
-        shared.initDone = true;
-        shared.cv.notify_all();
-    }
-
-    const auto publishLease = [&](GpuResidentFrameLeaseRegistry& targetRegistry) {
-        auto image = produceDisplay(*solid, *display, expectations);
-        if (image == nullptr) {
-            return GpuResidentFrameLease{};
-        }
-        auto published = targetRegistry.publish(std::move(image));
-        expectations.expect(published.hasValue(), "the resident image is published as a lease");
-        return published.lease;
-    };
-
-    bool gated = false;
-    for (;;) {
-        Cmd command = Cmd::None;
-        bool gateValue = false;
-        {
-            std::unique_lock lock(shared.mutex);
-            shared.cv.wait_for(lock, std::chrono::milliseconds(2),
-                               [&] { return shared.stop || shared.cmd != Cmd::None; });
-            if (shared.stop) {
-                break;
-            }
-            command = shared.cmd;
-            gateValue = shared.gateValue;
-            shared.cmd = Cmd::None;
-        }
-        bool acknowledged = false;
-        switch (command) {
-        case Cmd::SetGate:
-            gated = gateValue;
-            acknowledged = true;
-            break;
-        case Cmd::Barrier:
-            acknowledged = true;
-            break;
-        case Cmd::ProduceLease: {
-            auto leaseValue = publishLease(*registry);
-            std::lock_guard lock(shared.mutex);
-            shared.lease = leaseValue;
-            acknowledged = true;
-            break;
-        }
-        case Cmd::ProduceForeignLease: {
-            auto leaseValue = publishLease(*foreignRegistry);
-            std::lock_guard lock(shared.mutex);
-            shared.foreignLease = leaseValue;
-            acknowledged = true;
-            break;
-        }
-        case Cmd::None:
-            break;
-        }
-        if (acknowledged) {
-            std::lock_guard lock(shared.mutex);
-            shared.cmdDone = true;
-            shared.cv.notify_all();
-        }
-        if (!gated) {
-            coordinator->pump();
-        }
-    }
-
-    coordinator->beginShutdown();
-    for (int attempt = 0; attempt < 600 && !coordinator->shutdownStatus().drained; ++attempt) {
-        coordinator->pump();
-    }
-    const auto drain = coordinator->shutdownStatus();
-    expectations.expect(drain.drained, "the owner shutdown drained every target");
-    std::lock_guard lock(shared.mutex);
-    shared.reason = drain.message;
-}
-
-[[nodiscard]] int skipOrFail(const TestOptions& options) { return options.require_device ? 1 : 0; }
+#include "gpu_presentation_coordinator_owner.ipp"
 
 } // namespace
 
@@ -418,8 +303,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     QVulkanInstance instance;
-    instance.setVkInstance(
-        reinterpret_cast<VkInstance>(static_cast<std::uintptr_t>(view.instance_bits)));
+    instance.setVkInstance(bloom::ui::test::borrowedInstance(view.instance_bits));
     if (!instance.create() || !instance.isValid()) {
         owner.join();
         std::cout << "SKIP: QVulkanInstance could not adopt the borrowed instance\n";
@@ -516,7 +400,7 @@ int main(int argc, char** argv) {
                         "exactly one present completed");
 
     // Repeated overlay updates.
-    const auto overlayBytes = std::vector<std::uint8_t>(4U * 4U * 4U, 128U);
+    const auto overlayBytes = std::vector<std::uint8_t>(std::size_t{4} * 4U * 4U, 128U);
     const auto overlayOne = GpuPresentationOverlay::create(overlayBytes, 4U, 4U, 0U, 1U, kBudget);
     const auto overlayTwo = GpuPresentationOverlay::create(overlayBytes, 4U, 4U, 0U, 2U, kBudget);
     expectations.expect(overlayOne != nullptr && overlayTwo != nullptr, "the overlays build");

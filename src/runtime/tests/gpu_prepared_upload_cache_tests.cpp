@@ -196,18 +196,23 @@ void testCoverageCacheEviction(Expectations& expectations) {
 } // namespace
 
 int main() {
-    Expectations expectations;
-    testHitMissAndZeroDisabled(expectations);
-    testByteAndEntryCapsEvict(expectations);
-    testReplacementGrowthEvictsOthers(expectations);
-    testOversizedStoreRefusedKeepsExisting(expectations);
-    testAliasedAllocationIsChargedPerEntry(expectations);
-    testRepeatedReplacementAndFindStaysConsistent(expectations);
-    testCoverageCacheEviction(expectations);
-    if (!expectations.ok()) {
-        std::cerr << "FAIL: GPU prepared upload cache expectations failed\n";
+    try {
+        Expectations expectations;
+        testHitMissAndZeroDisabled(expectations);
+        testByteAndEntryCapsEvict(expectations);
+        testReplacementGrowthEvictsOthers(expectations);
+        testOversizedStoreRefusedKeepsExisting(expectations);
+        testAliasedAllocationIsChargedPerEntry(expectations);
+        testRepeatedReplacementAndFindStaysConsistent(expectations);
+        testCoverageCacheEviction(expectations);
+        if (!expectations.ok()) {
+            std::cerr << "FAIL: GPU prepared upload cache expectations failed\n";
+            return 1;
+        }
+        std::cout << "PASS: GPU prepared upload cache\n";
+        return 0;
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
         return 1;
     }
-    std::cout << "PASS: GPU prepared upload cache\n";
-    return 0;
 }

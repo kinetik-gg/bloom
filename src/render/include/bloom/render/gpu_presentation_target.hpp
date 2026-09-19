@@ -131,8 +131,8 @@ class GpuPresentationTarget final {
     // fence is known complete (or the target is quarantined), so the caller may release its own
     // reference once this returns.
     [[nodiscard]] GpuPresentationTargetCode
-    presentImage(std::shared_ptr<const GpuDisplayImage> input, const GpuPresentImageParams& params,
-                 const GpuPresentOverlay& overlay);
+    presentImage(const std::shared_ptr<const GpuDisplayImage>& input,
+                 const GpuPresentImageParams& params, const GpuPresentOverlay& overlay);
 
     // Non-blocking retirement progress. Never blocks and never waits idle. Returns Retired only
     // when every present is proven complete by the presentation engine and every render submit has

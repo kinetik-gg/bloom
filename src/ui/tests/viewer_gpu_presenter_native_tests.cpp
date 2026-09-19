@@ -226,7 +226,7 @@ produceDisplay(GpuSolid& solid, GpuResidentDisplay& display, Expectations& expec
     return image->isValid() ? image : nullptr;
 }
 
-void ownerMain(Shared& shared, const TestOptions options, Expectations& expectations) {
+void ownerMain(Shared& shared, const TestOptions& options, Expectations& expectations) {
     GpuDeviceCreationOptions creation;
     creation.loader_path = options.loader_path;
     creation.request_presentation = true;

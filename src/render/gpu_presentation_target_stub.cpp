@@ -36,7 +36,7 @@ GpuPresentationTargetCode GpuPresentationTarget::present(GpuClearColor) {
 }
 
 GpuPresentationTargetCode
-GpuPresentationTarget::presentImage(std::shared_ptr<const GpuDisplayImage>,
+GpuPresentationTarget::presentImage(const std::shared_ptr<const GpuDisplayImage>&,
                                     const GpuPresentImageParams&, const GpuPresentOverlay&) {
     return GpuPresentationTargetCode::PresentationUnavailable;
 }
@@ -55,6 +55,11 @@ GpuPresentationTargetCode GpuPresentationTarget::beginRetire() {
 
 GpuPresentationTargetCode GpuPresentationTarget::retireState() const noexcept {
     return GpuPresentationTargetCode::PresentationUnavailable;
+}
+
+bool GpuPresentationTarget::teardownDrainIncomplete() noexcept {
+    // This build has no native presentation target, so no submission can be left unretired.
+    return false;
 }
 
 GpuPresentationTargetInfo GpuPresentationTarget::info() const noexcept { return {}; }

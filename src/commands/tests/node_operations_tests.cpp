@@ -425,6 +425,8 @@ void testSplitEquivalenceEvidence(TestContext& test) {
         const auto copy = split.outputId<LayerId>("layer");
         test.expect(split.changed() && split.renderAffecting && copy.has_value(),
                     "an ordinary split publishes");
+        if (!copy.has_value())
+            throw std::logic_error("split equivalence fixture");
         test.expect(split.affectedTimes.has_value() && split.affectedTimes->intervals.empty(),
                     "an equivalent split publishes a deliberately empty pixel footprint");
         test.expect(split.layerIdentityRemaps.has_value() &&

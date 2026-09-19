@@ -35,6 +35,8 @@
 #include <QVulkanInstance>
 #include <QWindow>
 
+#include "gpu_borrowed_instance.hpp"
+
 // Test-only access to the private construction-fault seam. The Qt include above already defines
 // VK_NO_PROTOTYPES before pulling in vulkan.h, so the render module's private header is consistent
 // here. The definition is supplied by CMake only when bloom_render was built with its Vulkan
@@ -262,8 +264,7 @@ int main(int argc, char** argv) {
     }
 
     QVulkanInstance instance;
-    instance.setVkInstance(
-        reinterpret_cast<VkInstance>(static_cast<std::uintptr_t>(view.instance_bits)));
+    instance.setVkInstance(bloom::ui::test::borrowedInstance(view.instance_bits));
     if (!instance.create() || !instance.isValid()) {
         std::cout << "SKIP: QVulkanInstance could not adopt the borrowed instance\n";
         return skipOrFail(options);

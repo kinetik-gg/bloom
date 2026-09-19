@@ -176,7 +176,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::begin(std::shared_ptr<const Prepare
     impl.remainingUses.assign(commands.size(), 0);
 
     std::vector<std::uint8_t> color(commands.size(), 0);
-    const auto planned = impl.planCommand(output, color);
+    auto planned = impl.planCommand(output, color);
     if (planned.code != GpuSceneExecutorDiagnosticCode::None) {
         impl.clearJob();
         impl.diagnostic = planned;

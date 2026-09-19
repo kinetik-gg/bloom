@@ -236,7 +236,12 @@ void testTokenReleaseAndCollect(Expectations& expectations, DisplayHost& host) {
     }
     expectations.expect(published.lease.width() == 16 && published.lease.height() == 8,
                         "the token carries the image extent");
-    expectations.expect(published.lease.pixelAspect() == PixelAspectRatio::create(4, 3).value(),
+    const auto expectedAspect = PixelAspectRatio::create(4, 3);
+    expectations.expect(expectedAspect.has_value(), "the 4:3 test pixel aspect is valid");
+    if (!expectedAspect.has_value()) {
+        return;
+    }
+    expectations.expect(published.lease.pixelAspect() == *expectedAspect,
                         "the token carries the pixel aspect");
     expectations.expect(published.lease.displayWindow().has_value() &&
                             published.lease.displayWindow()->originX() == -2 &&

@@ -87,6 +87,7 @@ using bloom::runtime::ProxyResolution;
 using bloom::runtime::executor_test::Expectations;
 using bloom::runtime::executor_test::format;
 using bloom::runtime::executor_test::LayerValues;
+using bloom::runtime::executor_test::pixelAspect;
 using bloom::runtime::executor_test::publish;
 using bloom::runtime::executor_test::requestFor;
 using bloom::runtime::executor_test::twoLayerPlan;
@@ -323,7 +324,7 @@ void testFixtures(Expectations& expectations, GpuSceneExecutor& executor,
     expectParity(expectations, executor, oracle, oddPlan, requestFor(*oddPlan),
                  "odd nonzero-origin windows", false, true);
 
-    const auto proxyFormat = format(9, 6, *PixelAspectRatio::create(4, 3));
+    const auto proxyFormat = format(9, 6, pixelAspect(4, 3));
     const auto proxyPlan = twoLayerPlan(
         proxyFormat, LayerValues{.position = {4.5, 3.0}, .opacity = 1.0},
         LayerValues{.position = {2.7, 4.9}, .anchor = {1.0, -0.5}, .opacity = 0.5}, 4.0, 3.0, 2000);
@@ -377,71 +378,77 @@ void testCoveredByteExact(Expectations& expectations, GpuSceneExecutor& executor
 } // namespace
 
 int main(const int argc, char** argv) {
-    const Options options = parseOptions(argc, argv);
-    if (!options.valid) {
-        return 2;
-    }
-    Expectations expectations;
-    const CpuCompositionEvaluator oracle;
+    try {
+        const Options options = parseOptions(argc, argv);
+        if (!options.valid) {
+            return 2;
+        }
+        Expectations expectations;
+        const CpuCompositionEvaluator oracle;
 
-    GpuDeviceCreationOptions createOptions;
-    createOptions.loader_path = options.loader_path;
-    auto device = GpuDevice::create(createOptions);
-    if (!device) {
-        if (options.require_device) {
-            std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message << '\n';
+        GpuDeviceCreationOptions createOptions;
+        createOptions.loader_path = options.loader_path;
+        auto device = GpuDevice::create(createOptions);
+        if (!device) {
+            if (options.require_device) {
+                std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message
+                          << '\n';
+                return 1;
+            }
+            std::cout << "SKIP: no compatible Vulkan device available: "
+                      << device.diagnostic.message << '\n';
+            return expectations.ok() ? 0 : 1;
+        }
+        auto foreignDevice = GpuDevice::create(createOptions);
+
+        if (options.benchmark) {
+            runBenchmark(expectations, *device.device);
+            if (!expectations.ok()) {
+                std::cerr << "FAIL: GPU scene executor benchmark expectations failed\n";
+                return 1;
+            }
+            return 0;
+        }
+
+        auto cache = GpuSceneCache::create(*device.device, GpuSceneCacheBudgets{kCacheBudget});
+        expectations.expect(cache.hasValue(), "the parity cache is created");
+        if (!cache) {
+            std::cerr << "FAIL: the parity cache could not be created\n";
             return 1;
         }
-        std::cout << "SKIP: no compatible Vulkan device available: " << device.diagnostic.message
-                  << '\n';
-        return expectations.ok() ? 0 : 1;
-    }
-    auto foreignDevice = GpuDevice::create(createOptions);
+        auto executor = GpuSceneExecutor::create(*device.device, *cache.cache);
+        expectations.expect(executor.hasValue(), "the parity executor is created");
+        if (!executor) {
+            std::cerr << "FAIL: the parity executor could not be created\n";
+            return 1;
+        }
 
-    if (options.benchmark) {
-        runBenchmark(expectations, *device.device);
+        testFixtures(expectations, *executor.executor, oracle);
+        testEmptyInactive(expectations, *executor.executor, oracle);
+        testCoveredByteExact(expectations, *executor.executor, oracle);
+        testWarmCache(expectations, *device.device);
+        testChangedTopRetainsLower(expectations, *device.device);
+        testSameContentDifferentIdentities(expectations, *device.device);
+        testCancellation(expectations, *device.device);
+        testTinyBudget(expectations, *device.device);
+        testStructureRefusal(expectations, *device.device);
+        testForeignDeviceAndThread(expectations, *device.device, *cache.cache,
+                                   foreignDevice ? foreignDevice.device.get() : nullptr);
+        testOutputCacheHitDescriptorValidation(expectations, *device.device);
+        testLiveBudgetLongGraph(expectations, *device.device);
+        testTightBudgetWithCachedInputs(expectations, *device.device);
+        testAliasedInputChargedOnce(expectations, *device.device);
+        testNativeOwnershipDuringTeardown(expectations, *device.device);
+        testNativeRetirementContracts(expectations, *device.device);
+
         if (!expectations.ok()) {
-            std::cerr << "FAIL: GPU scene executor benchmark expectations failed\n";
+            std::cerr << "FAIL: GPU scene executor expectations failed\n";
             return 1;
         }
+        std::cout << "PASS: GPU scene executor\n";
         return 0;
-    }
-
-    auto cache = GpuSceneCache::create(*device.device, GpuSceneCacheBudgets{kCacheBudget});
-    expectations.expect(cache.hasValue(), "the parity cache is created");
-    if (!cache) {
-        std::cerr << "FAIL: the parity cache could not be created\n";
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
         return 1;
     }
-    auto executor = GpuSceneExecutor::create(*device.device, *cache.cache);
-    expectations.expect(executor.hasValue(), "the parity executor is created");
-    if (!executor) {
-        std::cerr << "FAIL: the parity executor could not be created\n";
-        return 1;
-    }
-
-    testFixtures(expectations, *executor.executor, oracle);
-    testEmptyInactive(expectations, *executor.executor, oracle);
-    testCoveredByteExact(expectations, *executor.executor, oracle);
-    testWarmCache(expectations, *device.device);
-    testChangedTopRetainsLower(expectations, *device.device);
-    testSameContentDifferentIdentities(expectations, *device.device);
-    testCancellation(expectations, *device.device);
-    testTinyBudget(expectations, *device.device);
-    testStructureRefusal(expectations, *device.device);
-    testForeignDeviceAndThread(expectations, *device.device, *cache.cache,
-                               foreignDevice ? foreignDevice.device.get() : nullptr);
-    testOutputCacheHitDescriptorValidation(expectations, *device.device);
-    testLiveBudgetLongGraph(expectations, *device.device);
-    testTightBudgetWithCachedInputs(expectations, *device.device);
-    testAliasedInputChargedOnce(expectations, *device.device);
-    testNativeOwnershipDuringTeardown(expectations, *device.device);
-    testNativeRetirementContracts(expectations, *device.device);
-
-    if (!expectations.ok()) {
-        std::cerr << "FAIL: GPU scene executor expectations failed\n";
-        return 1;
-    }
-    std::cout << "PASS: GPU scene executor\n";
-    return 0;
 }

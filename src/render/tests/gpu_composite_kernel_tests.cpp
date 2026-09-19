@@ -38,6 +38,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <iostream>
 #include <optional>
 #include <source_location>
@@ -260,17 +261,17 @@ void testAxisPreparationMatchesCpuExactly(Expectations& expectations) {
 // the second composite is order-correct.
 void testChainedSourceOverDerivesFromCpu(Expectations& expectations) {
     namespace fixture = bloom::render::composite_fixture;
-    const auto firstWindow = *fixture::window(0, 0, 2, 2);
-    const auto firstDescriptor = *fixture::descriptor(firstWindow, firstWindow);
+    const auto firstWindow = fixture::window(0, 0, 2, 2);
+    const auto firstDescriptor = fixture::descriptor(firstWindow, firstWindow);
     const auto sourceA = std::vector<Rgba32f>{
-        *fixture::pixel(0.5F, 0.0F, 0.0F, 0.5F), *fixture::pixel(0.0F, 0.5F, 0.0F, 0.5F),
-        Rgba32f::transparent(), *fixture::pixel(-2.0F, 4.0F, 0.5F, 0.5F)};
+        fixture::pixel(0.5F, 0.0F, 0.0F, 0.5F), fixture::pixel(0.0F, 0.5F, 0.0F, 0.5F),
+        Rgba32f::transparent(), fixture::pixel(-2.0F, 4.0F, 0.5F, 0.5F)};
     const auto sourceB = std::vector<Rgba32f>{
-        *fixture::pixel(0.0F, 0.0F, 0.5F, 0.5F), Rgba32f::transparent(),
-        *fixture::pixel(1.0F, 1.0F, 1.0F, 0.25F), *fixture::pixel(0.25F, 0.25F, 0.25F, 1.0F)};
+        fixture::pixel(0.0F, 0.0F, 0.5F, 0.5F), Rgba32f::transparent(),
+        fixture::pixel(1.0F, 1.0F, 1.0F, 0.25F), fixture::pixel(0.25F, 0.25F, 0.25F, 1.0F)};
     const auto destination = std::vector<Rgba32f>{
-        *fixture::pixel(0.0F, 0.0F, 0.5F, 0.5F), *fixture::pixel(1.0F, 2.0F, 3.0F, 0.25F),
-        *fixture::pixel(8.0F, 8.0F, 8.0F, 0.5F), *fixture::pixel(4.0F, -2.0F, 1.0F, 0.5F)};
+        fixture::pixel(0.0F, 0.0F, 0.5F, 0.5F), fixture::pixel(1.0F, 2.0F, 3.0F, 0.25F),
+        fixture::pixel(8.0F, 8.0F, 8.0F, 0.5F), fixture::pixel(4.0F, -2.0F, 1.0F, 0.5F)};
 
     const SourceOverCase first{std::string("chain-first"), firstDescriptor, sourceA,
                                firstDescriptor, destination};
@@ -317,18 +318,24 @@ void testNativeComparisonStaged(Expectations& expectations) {
 int main(int argc, char** argv) {
     static_cast<void>(argc);
     static_cast<void>(argv);
-    Expectations expectations;
-    testEmbeddedSpirvPins(expectations);
-    testAxisPreparationMatchesCpuExactly(expectations);
-    testTranslationFixturesDeriveFromCpu(expectations);
-    testSourceOverFixturesDeriveFromCpu(expectations);
-    testChainedSourceOverDerivesFromCpu(expectations);
-    testNativeComparisonStaged(expectations);
+    try {
+        Expectations expectations;
+        testEmbeddedSpirvPins(expectations);
+        testAxisPreparationMatchesCpuExactly(expectations);
+        testTranslationFixturesDeriveFromCpu(expectations);
+        testSourceOverFixturesDeriveFromCpu(expectations);
+        testChainedSourceOverDerivesFromCpu(expectations);
+        testNativeComparisonStaged(expectations);
 
-    if (expectations.failures() != 0) {
-        std::cerr << expectations.failures() << " composite kernel-prep expectation(s) failed\n";
+        if (expectations.failures() != 0) {
+            std::cerr << expectations.failures()
+                      << " composite kernel-prep expectation(s) failed\n";
+            return 1;
+        }
+        std::cout << "composite kernel prep: CPU-oracle fixtures and SPIR-V pins verified\n";
+        return 0;
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
         return 1;
     }
-    std::cout << "composite kernel prep: CPU-oracle fixtures and SPIR-V pins verified\n";
-    return 0;
 }

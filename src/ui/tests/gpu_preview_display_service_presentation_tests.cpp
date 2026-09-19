@@ -10,6 +10,8 @@
 
 #include "gpu_preview_display_service_private.hpp"
 
+#include "gpu_borrowed_instance.hpp"
+
 #include <bloom/core/color.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/project.hpp>
@@ -26,6 +28,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -250,13 +253,13 @@ struct UiSurface final {
         return false;
     }
     const auto result = awaitResult(submission.handle);
-    const bool finished = result.has_value() && result->state() == TaskState::Succeeded &&
-                          result->value().has_value();
+    const auto* carried =
+        result.has_value() && result->state() == TaskState::Succeeded ? &result->value() : nullptr;
+    const bool finished = carried != nullptr && carried->has_value();
     expectations.expect(finished, "the ordinary preview request completed on the CPU path");
-    if (finished) {
+    if (carried != nullptr && carried->has_value()) {
         expectations.expect(
-            result->value().value()->status() ==
-                bloom::runtime::PreviewPreparationStatus::Unsupported,
+            (**carried)->status() == bloom::runtime::PreviewPreparationStatus::Unsupported,
             "the non-neutral ordinary request made no GPU/presentation activation claim");
     }
     return finished;
@@ -290,7 +293,7 @@ struct UiSurface final {
 
 } // namespace
 
-int main(int argc, char** argv) {
+int runTests(int argc, char** argv) {
     const TestOptions options = parseOptions(argc, argv);
     if (!options.valid) {
         return 2;
@@ -356,8 +359,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     QVulkanInstance instance;
-    instance.setVkInstance(
-        reinterpret_cast<VkInstance>(static_cast<std::uintptr_t>(view.instance_bits)));
+    instance.setVkInstance(bloom::ui::test::borrowedInstance(view.instance_bits));
     if (!instance.create() || !instance.isValid()) {
         std::cout << "SKIP: QVulkanInstance could not adopt the borrowed instance\n";
         return options.require_device ? 1 : 0;
@@ -526,4 +528,13 @@ int main(int argc, char** argv) {
                      "ordinary preview request, foreign-lease rejection, and bounded shutdown\n";
     }
     return expectations.failures() == 0 ? 0 : 1;
+}
+
+int main(int argc, char** argv) {
+    try {
+        return runTests(argc, argv);
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
+        return 1;
+    }
 }

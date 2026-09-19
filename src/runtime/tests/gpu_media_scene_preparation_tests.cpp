@@ -125,8 +125,8 @@ void testStillImageParity(Expectations& expectations, const CpuCompositionEvalua
 
 void testProxyNonSquarePar(Expectations& expectations, const CpuCompositionEvaluator& evaluator,
                            const MediaFixture& fixture) {
-    const auto plan = mediaPlan(format(9, 6, *bloom::core::PixelAspectRatio::create(4, 3)),
-                                fixture.asset, LayerValues{.position = {4.5, 3.0}}, 1300);
+    const auto plan = mediaPlan(format(9, 6, pixelAspect(4, 3)), fixture.asset,
+                                LayerValues{.position = {4.5, 3.0}}, 1300);
     const auto extent = bloom::render::ImageExtent::create(5, 4);
     expectations.expect(static_cast<bool>(extent), "the proxy extent builds");
     if (!extent) {
@@ -160,7 +160,7 @@ void testSequenceFrames(Expectations& expectations, const CpuCompositionEvaluato
         mediaPlan(format(8, 8), asset, LayerValues{.position = {4.3, 3.1}, .opacity = 0.75}, 1400);
     checkMediaParity(expectations, evaluator, plan, requestFor(*plan, RationalTime::fromInteger(0)),
                      "sequence frame 0");
-    checkMediaParity(expectations, evaluator, plan, requestFor(*plan, *RationalTime::create(1, 24)),
+    checkMediaParity(expectations, evaluator, plan, requestFor(*plan, rationalTime(1, 24)),
                      "sequence frame 1");
 }
 
@@ -220,7 +220,7 @@ void testChangedFrameAndBypass(Expectations& expectations, const CpuCompositionE
     auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto frameZero = builder.build(plan, requestFor(*plan, RationalTime::fromInteger(0)));
-    const auto frameOne = builder.build(plan, requestFor(*plan, *RationalTime::create(1, 24)));
+    const auto frameOne = builder.build(plan, requestFor(*plan, rationalTime(1, 24)));
     expectations.expect(frameZero.hasValue() && frameOne.hasValue(),
                         "both sequence frames prepare");
     if (!frameZero || !frameOne) {
@@ -625,59 +625,65 @@ void testCancellationDuringPreparation(Expectations& expectations) {
 } // namespace
 
 int main() {
-    Expectations expectations;
-    const CpuCompositionEvaluator evaluator;
-    const auto fixture = makeFixture();
-    evaluator.setAssetBaseDirectory(fixture.directory);
+    try {
+        Expectations expectations;
+        const CpuCompositionEvaluator evaluator;
+        const auto fixture = makeFixture();
+        evaluator.setAssetBaseDirectory(fixture.directory);
 
-    testStillImageParity(expectations, evaluator, fixture);
-    testProxyNonSquarePar(expectations, evaluator, fixture);
-    testSequenceFrames(expectations, evaluator, fixture);
-    testWarmReuseAndChangedSource(expectations, evaluator, fixture);
-    testChangedFrameAndBypass(expectations, evaluator, fixture);
-    testChangedColourInterpretation(expectations, evaluator, fixture);
-    testSourceKeyExcludesIdsAndRevision(expectations, evaluator, fixture);
-    testPerRequestStatisticsAreLocal(expectations, evaluator, fixture);
-    testGestureCacheNeverTouchesDisk(expectations, evaluator, fixture);
-    testUnsupportedMediaGraph(expectations, fixture);
-    testBudgetRefusal(expectations, fixture);
+        testStillImageParity(expectations, evaluator, fixture);
+        testProxyNonSquarePar(expectations, evaluator, fixture);
+        testSequenceFrames(expectations, evaluator, fixture);
+        testWarmReuseAndChangedSource(expectations, evaluator, fixture);
+        testChangedFrameAndBypass(expectations, evaluator, fixture);
+        testChangedColourInterpretation(expectations, evaluator, fixture);
+        testSourceKeyExcludesIdsAndRevision(expectations, evaluator, fixture);
+        testPerRequestStatisticsAreLocal(expectations, evaluator, fixture);
+        testGestureCacheNeverTouchesDisk(expectations, evaluator, fixture);
+        testUnsupportedMediaGraph(expectations, fixture);
+        testBudgetRefusal(expectations, fixture);
 
-    {
-        const auto cancelPlan =
-            mediaPlan(format(8, 8), fixture.asset, LayerValues{.position = {4.3, 3.1}}, 3400);
-        testPreCancelledPreparationPublishesNothing(expectations, cancelPlan);
-    }
-    testCancellationDuringPreparation(expectations);
-    if (!expectations.ok()) {
-        std::cerr << "FAIL: GPU media scene preparation expectations failed\n";
+        {
+            const auto cancelPlan =
+                mediaPlan(format(8, 8), fixture.asset, LayerValues{.position = {4.3, 3.1}}, 3400);
+            testPreCancelledPreparationPublishesNothing(expectations, cancelPlan);
+        }
+        testCancellationDuringPreparation(expectations);
+        if (!expectations.ok()) {
+            std::cerr << "FAIL: GPU media scene preparation expectations failed\n";
+            return 1;
+        }
+        if (std::getenv("BLOOM_GPU_MEDIA_PROOF") != nullptr) {
+            // Recorded CPU work for the proof log: source-specific key construction and
+            // decode/conversion counters. There is deliberately no GPU upload count -- the native
+            // executor does not exist.
+            const auto cold = GpuSceneMediaContext::fromEvaluator(evaluator);
+            const CpuGpuSceneBuilder builder(nullptr, cold);
+            const auto plan =
+                mediaPlan(format(8, 8), fixture.asset, LayerValues{.position = {4.3, 3.1}}, 9900);
+            const auto first = builder.build(plan, requestFor(*plan));
+            const auto second = builder.build(plan, requestFor(*plan));
+            if (first && second) {
+                std::cerr << "PROOF counters: first imageSources="
+                          << first.scene->mediaStatistics().imageSources
+                          << " conversions=" << first.scene->mediaStatistics().imageConversions
+                          << " keyConstructions="
+                          << first.scene->mediaStatistics().uploadKeyConstructions
+                          << " hits=" << first.scene->mediaStatistics().uploadCacheHits
+                          << " misses=" << first.scene->mediaStatistics().uploadCacheMisses
+                          << "; warm imageSources=" << second.scene->mediaStatistics().imageSources
+                          << " conversions=" << second.scene->mediaStatistics().imageConversions
+                          << " keyConstructions="
+                          << second.scene->mediaStatistics().uploadKeyConstructions
+                          << " hits=" << second.scene->mediaStatistics().uploadCacheHits
+                          << " misses=" << second.scene->mediaStatistics().uploadCacheMisses
+                          << "\n";
+            }
+        }
+        std::cout << "PASS: CPU GPU media scene preparation\n";
+        return 0;
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
         return 1;
     }
-    if (std::getenv("BLOOM_GPU_MEDIA_PROOF") != nullptr) {
-        // Recorded CPU work for the proof log: source-specific key construction and
-        // decode/conversion counters. There is deliberately no GPU upload count -- the native
-        // executor does not exist.
-        const auto cold = GpuSceneMediaContext::fromEvaluator(evaluator);
-        const CpuGpuSceneBuilder builder(nullptr, cold);
-        const auto plan =
-            mediaPlan(format(8, 8), fixture.asset, LayerValues{.position = {4.3, 3.1}}, 9900);
-        const auto first = builder.build(plan, requestFor(*plan));
-        const auto second = builder.build(plan, requestFor(*plan));
-        if (first && second) {
-            std::cerr << "PROOF counters: first imageSources="
-                      << first.scene->mediaStatistics().imageSources
-                      << " conversions=" << first.scene->mediaStatistics().imageConversions
-                      << " keyConstructions="
-                      << first.scene->mediaStatistics().uploadKeyConstructions
-                      << " hits=" << first.scene->mediaStatistics().uploadCacheHits
-                      << " misses=" << first.scene->mediaStatistics().uploadCacheMisses
-                      << "; warm imageSources=" << second.scene->mediaStatistics().imageSources
-                      << " conversions=" << second.scene->mediaStatistics().imageConversions
-                      << " keyConstructions="
-                      << second.scene->mediaStatistics().uploadKeyConstructions
-                      << " hits=" << second.scene->mediaStatistics().uploadCacheHits
-                      << " misses=" << second.scene->mediaStatistics().uploadCacheMisses << "\n";
-        }
-    }
-    std::cout << "PASS: CPU GPU media scene preparation\n";
-    return 0;
 }

@@ -36,7 +36,7 @@ using bloom::render::present_oracle::renderOracle;
 
 void testIdentity(Expectations& expectations, GpuDevice& device, GpuImageUpload& uploader,
                   GpuResidentDisplay& display) {
-    auto image = makeImage(*window(0, 0, 2, 2), sentinelPixels());
+    auto image = makeImage(window(0, 0, 2, 2), sentinelPixels());
     if (!image) {
         expectations.expect(false, "2x2 sentinel input builds");
         return;
@@ -93,7 +93,7 @@ struct DisplayBundle final {
                                                              const std::vector<Rgba32f>& pixels,
                                                              const std::uint32_t width,
                                                              const std::uint32_t height) {
-    auto image = makeImage(*window(0, 0, width, height), pixels);
+    auto image = makeImage(window(0, 0, width, height), pixels);
     if (!image) {
         return std::nullopt;
     }
@@ -180,7 +180,11 @@ void testOracleZoomCrop(Expectations& expectations,
     // Premultiplied-alpha filtering at fractional zoom: the display carries alpha endpoints and a
     // half-alpha texel, so a straight-alpha filter would produce a different result.
     {
-        auto image = makeImage(*window(0, 0, 2, 2), premultipliedPixels());
+        auto image = makeImage(window(0, 0, 2, 2), premultipliedPixels());
+        if (!image) {
+            expectations.expect(false, "premultiplied input builds");
+            return;
+        }
         auto resident = upload(uploader, std::make_shared<const Rgba32fImage>(std::move(*image)));
         if (!resident) {
             expectations.expect(false, "premultiplied input uploads");
@@ -348,7 +352,7 @@ void testRejectionsAndBudgets(Expectations& expectations, GpuDevice& device,
             auto secondUploader = GpuImageUpload::create(*second.device);
             auto secondDisplay = GpuResidentDisplay::create(*second.device);
             if (secondUploader && secondDisplay) {
-                auto image = makeImage(*window(0, 0, 2, 2), sentinelPixels());
+                auto image = makeImage(window(0, 0, 2, 2), sentinelPixels());
                 auto resident =
                     image ? upload(*secondUploader.upload,
                                    std::make_shared<const Rgba32fImage>(std::move(*image)))
@@ -473,6 +477,8 @@ void testParamValidation(Expectations& expectations,
     expectRejected(infiniteColor, "an infinite background color");
 
     auto badChannel = identityParams(2, 2);
+    // A deliberate out-of-range channel mode is the invalid-input fixture.
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange): intentional invalid input.
     badChannel.channel = static_cast<GpuPresentChannel>(99);
     expectRejected(badChannel, "an out-of-range channel mode");
 
@@ -553,7 +559,7 @@ void testResidentDisplayNonUniform(
     };
     const Case cases[] = {{257, 19, false}, {257, 19, true}, {1280, 720, false}, {1280, 720, true}};
     for (const Case& testCase : cases) {
-        const auto imageWindow = *window(0, 0, testCase.width, testCase.height);
+        const auto imageWindow = window(0, 0, testCase.width, testCase.height);
         const auto pixels = patternPixels(testCase.width, testCase.height, testCase.secondPattern);
         expectations.expect(pixels.size() ==
                                 static_cast<std::size_t>(testCase.width) * testCase.height,

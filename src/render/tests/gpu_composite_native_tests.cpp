@@ -23,9 +23,9 @@ using namespace bloom::render::composite_proof;
 void runTranslation(Expectations& expectations, GpuComposite& composite, GpuImageUpload& uploader,
                     const TranslationCase& testCase) {
     const auto sourceWindow =
-        *window(testCase.sourceOriginX, testCase.sourceOriginY, testCase.width, testCase.height);
+        window(testCase.sourceOriginX, testCase.sourceOriginY, testCase.width, testCase.height);
     const auto outputWindow =
-        *window(testCase.outputOriginX, testCase.outputOriginY, testCase.width, testCase.height);
+        window(testCase.outputOriginX, testCase.outputOriginY, testCase.width, testCase.height);
     const auto sourcePixels = checker(testCase.width, testCase.height);
     auto sourceImage =
         makeImage(sourceWindow, sourceWindow, PixelAspectRatio::square(), sourcePixels);
@@ -78,7 +78,15 @@ void runTranslation(Expectations& expectations, GpuComposite& composite, GpuImag
     // enter its sample math), over the output window.
     const auto oracleImage =
         makeImage(sourceWindow, sourceWindow, PixelAspectRatio::square(), sourcePixels);
-    const auto view = oracleImage.value().view();
+    if (!oracleImage) {
+        expectations.expect(false, testCase.name + ": oracle source image builds");
+        return;
+    }
+    const auto view = oracleImage->view();
+    if (!view) {
+        expectations.expect(false, testCase.name + ": oracle source view builds");
+        return;
+    }
     std::vector<Rgba32f> expected(static_cast<std::size_t>(testCase.width) * testCase.height,
                                   Rgba32f::transparent());
     for (std::uint32_t y = 0; y < testCase.height; ++y) {
@@ -127,14 +135,18 @@ void testTranslation(Expectations& expectations, GpuDevice& device) {
 void runSourceOver(Expectations& expectations, GpuComposite& composite, GpuImageUpload& uploader,
                    GpuSolid& solidOp, const SourceOverCase& testCase) {
     const auto destWindow =
-        *window(testCase.destOriginX, testCase.destOriginY, testCase.width, testCase.height);
+        window(testCase.destOriginX, testCase.destOriginY, testCase.width, testCase.height);
     const auto sourceWindow =
-        *window(testCase.sourceOriginX, testCase.sourceOriginY, testCase.width, testCase.height);
+        window(testCase.sourceOriginX, testCase.sourceOriginY, testCase.width, testCase.height);
     const auto foregroundPixels = testCase.semantic
                                       ? semanticPixels(testCase.width, testCase.height)
                                       : checker(testCase.width, testCase.height);
     auto foregroundImage =
         makeImage(sourceWindow, sourceWindow, PixelAspectRatio::square(), foregroundPixels);
+    if (!foregroundImage) {
+        expectations.expect(false, testCase.name + ": foreground image builds");
+        return;
+    }
     auto foregroundResident =
         upload(uploader, std::make_shared<const Rgba32fImage>(std::move(*foregroundImage)));
     expectations.expect(foregroundResident.has_value(), testCase.name + ": foreground uploads");
@@ -242,7 +254,7 @@ void testRejections(Expectations& expectations, GpuDevice& device) {
         expectations.expect(false, "rejection hosts created");
         return;
     }
-    const auto window4 = *window(0, 0, 4, 4);
+    const auto window4 = window(0, 0, 4, 4);
     expectations.expect(
         composite.composite->beginTranslation({nullptr, window4, 0.0, 0.0, 1.0F}, kBudget).code ==
             GpuCompositeDiagnosticCode::InvalidArgument,
@@ -252,6 +264,10 @@ void testRejections(Expectations& expectations, GpuDevice& device) {
                         "null source-over inputs are rejected");
 
     auto image = makeImage(window4, window4, PixelAspectRatio::square(), checker(4, 4));
+    if (!image) {
+        expectations.expect(false, "rejection source image builds");
+        return;
+    }
     auto resident =
         upload(*uploader.upload, std::make_shared<const Rgba32fImage>(std::move(*image)));
     if (!resident) {
@@ -295,6 +311,10 @@ void testRejections(Expectations& expectations, GpuDevice& device) {
     // Foreign-thread destruction must not make a Vulkan call. Retain the result of an operation and
     // destroy it from another thread; a crash here would mean a foreign Vulkan destroy.
     auto image2 = makeImage(window4, window4, PixelAspectRatio::square(), checker(4, 4));
+    if (!image2) {
+        expectations.expect(false, "foreign-thread source image builds");
+        return;
+    }
     auto resident2 =
         upload(*uploader.upload, std::make_shared<const Rgba32fImage>(std::move(*image2)));
     if (resident2) {
@@ -310,6 +330,10 @@ void testRejections(Expectations& expectations, GpuDevice& device) {
         std::vector<Rgba32f> pixels(16, Rgba32f::transparent());
         pixels[0] = *subnormal.value();
         auto bad = makeImage(window4, window4, PixelAspectRatio::square(), pixels);
+        if (!bad) {
+            expectations.expect(false, "subnormal probe image builds");
+            return;
+        }
         auto badResident =
             upload(*uploader.upload, std::make_shared<const Rgba32fImage>(std::move(*bad)));
         if (badResident) {
@@ -339,7 +363,7 @@ void testForeignInputs(Expectations& expectations, GpuDevice& device) {
     if (!composite || !uploader) {
         return;
     }
-    const auto window4 = *window(0, 0, 4, 4);
+    const auto window4 = window(0, 0, 4, 4);
 
     GpuDeviceCreationOptions options;
     auto second = GpuDevice::create(options);
@@ -354,6 +378,10 @@ void testForeignInputs(Expectations& expectations, GpuDevice& device) {
         return;
     }
     auto image = makeImage(window4, window4, PixelAspectRatio::square(), checker(4, 4));
+    if (!image) {
+        expectations.expect(false, "the foreign image builds");
+        return;
+    }
     auto foreignResident =
         upload(*foreignUploader.upload, std::make_shared<const Rgba32fImage>(std::move(*image)));
     expectations.expect(foreignResident.has_value(), "the foreign image is uploaded");
@@ -372,6 +400,10 @@ void testForeignInputs(Expectations& expectations, GpuDevice& device) {
 
     // Source-over with the foreign image on each side.
     auto sameImage = makeImage(window4, window4, PixelAspectRatio::square(), checker(4, 4));
+    if (!sameImage) {
+        expectations.expect(false, "the same-device image builds");
+        return;
+    }
     auto sameResident =
         upload(*uploader.upload, std::make_shared<const Rgba32fImage>(std::move(*sameImage)));
     if (!sameResident) {
@@ -409,8 +441,12 @@ void testActualAllocationBudget(Expectations& expectations, GpuDevice& device) {
         expectations.expect(false, "allocation-budget hosts created");
         return;
     }
-    const auto window4 = *window(0, 0, 4, 4);
+    const auto window4 = window(0, 0, 4, 4);
     auto image = makeImage(window4, window4, PixelAspectRatio::square(), checker(4, 4));
+    if (!image) {
+        expectations.expect(false, "allocation-budget source image builds");
+        return;
+    }
     auto resident =
         upload(*uploader.upload, std::make_shared<const Rgba32fImage>(std::move(*image)));
     if (!resident) {
@@ -452,7 +488,7 @@ void testChain(Expectations& expectations, GpuDevice& device) {
         expectations.expect(false, "chain hosts created");
         return;
     }
-    const auto window16 = *window(0, 0, 16, 4);
+    const auto window16 = window(0, 0, 16, 4);
     auto backdrop = solid(*solidOp.solid, Color4d{0.2, 0.4, 0.8, 1.0}, window16, window16,
                           PixelAspectRatio::square());
     if (!backdrop) {
@@ -461,6 +497,10 @@ void testChain(Expectations& expectations, GpuDevice& device) {
     }
     auto foregroundImage =
         makeImage(window16, window16, PixelAspectRatio::square(), checker(16, 4));
+    if (!foregroundImage) {
+        expectations.expect(false, "chain foreground image builds");
+        return;
+    }
     auto foreground =
         upload(*uploader.upload, std::make_shared<const Rgba32fImage>(std::move(*foregroundImage)));
     if (!foreground) {

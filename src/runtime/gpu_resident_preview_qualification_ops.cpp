@@ -66,7 +66,7 @@ ProbeResult verifySolidParity(ProbeContext& context) noexcept {
         std::vector<Rgba32f> measured;
         std::shared_ptr<const GpuImage> taken;
         std::string reason;
-        const auto ran = runSolidReadback(context, params, measured, taken, reason);
+        auto ran = runSolidReadback(context, params, measured, taken, reason);
         if (ran.code != GpuResidentPreviewDiagnosticCode::None) {
             return ran;
         }
@@ -141,7 +141,7 @@ ProbeResult verifyCoveredParity(ProbeContext& context) noexcept {
             std::vector<Rgba32f> measured;
             std::string reason;
             const GpuSolidParameters base{*pixel.value(), *rowWindow, *rowWindow, *par};
-            const auto ran = runCovered(base, coverage, opacity, measured, reason);
+            auto ran = runCovered(base, coverage, opacity, measured, reason);
             if (ran.code != GpuResidentPreviewDiagnosticCode::None) {
                 return ran;
             }
@@ -157,7 +157,7 @@ ProbeResult verifyCoveredParity(ProbeContext& context) noexcept {
         std::vector<Rgba32f> oddMeasured;
         std::string oddReason;
         const GpuSolidParameters oddBase{*pixel.value(), *oddWindow, *oddWindow, *par};
-        const auto oddRan = runCovered(oddBase, oddCoverage, 0.75F, oddMeasured, oddReason);
+        auto oddRan = runCovered(oddBase, oddCoverage, 0.75F, oddMeasured, oddReason);
         if (oddRan.code != GpuResidentPreviewDiagnosticCode::None) {
             return oddRan;
         }
@@ -250,7 +250,7 @@ ProbeResult verifyUploadAndCompositeParity(ProbeContext& context) noexcept {
         std::string reason;
         const render::GpuTranslationParameters params{sharedSource, *outputWindow, testCase.dx,
                                                       testCase.dy, testCase.opacity};
-        const auto ran = runTranslationReadback(context, params, measured, output, reason);
+        auto ran = runTranslationReadback(context, params, measured, output, reason);
         if (ran.code != GpuResidentPreviewDiagnosticCode::None) {
             return ran;
         }
@@ -286,7 +286,8 @@ ProbeResult verifyUploadAndCompositeParity(ProbeContext& context) noexcept {
 
     // A nonzero subnormal translation input must be rejected whole-frame, never published.
     {
-        std::vector<Rgba32f> badPixels(kWidth * kHeight, Rgba32f::transparent());
+        std::vector<Rgba32f> badPixels(static_cast<std::size_t>(kWidth) * kHeight,
+                                       Rgba32f::transparent());
         const auto subnormal =
             Rgba32f::fromPremultiplied(std::numeric_limits<float>::denorm_min(), 0.0F, 0.0F, 1.0F);
         if (subnormal) {
@@ -381,7 +382,7 @@ ProbeResult verifyUploadAndCompositeParity(ProbeContext& context) noexcept {
     std::vector<Rgba32f> soMeasured;
     std::shared_ptr<const GpuImage> soOutput;
     std::string soReason;
-    const auto soRan = runSourceOverReadback(
+    auto soRan = runSourceOverReadback(
         context, render::GpuSourceOverParameters{foregroundShared, backdropShared}, soMeasured,
         soOutput, soReason);
     if (soRan.code != GpuResidentPreviewDiagnosticCode::None) {

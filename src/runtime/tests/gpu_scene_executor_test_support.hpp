@@ -98,6 +98,27 @@ format(const std::uint32_t width, const std::uint32_t height,
     return *value;
 }
 
+// Checked constructors for the canonical test fixture values, mirroring the scene-preparation
+// support header. They keep every call site free of an unchecked optional dereference while
+// preserving the fail-fast behaviour on an invalid fixture.
+[[nodiscard]] inline bloom::core::PixelAspectRatio pixelAspect(const std::uint64_t numerator,
+                                                               const std::uint64_t denominator) {
+    const auto value = bloom::core::PixelAspectRatio::create(numerator, denominator);
+    if (!value.has_value()) {
+        throw std::logic_error("test pixel aspect must be valid");
+    }
+    return *value;
+}
+
+[[nodiscard]] inline RationalTime rationalTime(const std::int64_t numerator,
+                                               const std::int64_t denominator) {
+    const auto value = RationalTime::create(numerator, denominator);
+    if (!value.has_value()) {
+        throw std::logic_error("test rational time must be valid");
+    }
+    return *value;
+}
+
 [[nodiscard]] inline CompiledLayerOutput layerOutput(const bloom::document::NodeId nodeId,
                                                      const bloom::document::LayerId layerId,
                                                      const OperationIndex input, const LayerIds ids,

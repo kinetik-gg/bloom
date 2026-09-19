@@ -84,7 +84,7 @@ void GpuPreparedUploadCache::store(std::string key,
         pushed = true;
         inserted = order_.begin();
         const auto placed =
-            entries_.emplace(std::string_view{*inserted}, Entry{image, bytes, inserted});
+            entries_.emplace(std::string_view{*inserted}, Entry{std::move(image), bytes, inserted});
         if (!placed.second) {
             order_.erase(inserted);
             return;

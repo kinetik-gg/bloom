@@ -59,7 +59,7 @@ class RamPreviewPipeline final {
     // True when a frame for exactly this pixels-identity (everything but requestGeneration) is
     // already preparing. A range rebase consults this before it re-scans so it can never submit a
     // duplicate of a frame still in flight.
-    [[nodiscard]] bool isInFlight(const PreviewFrameCacheKey& key) const noexcept;
+    [[nodiscard]] bool isInFlight(const PreviewFrameCacheKey& key) const;
 
     // Adds an accepted submission. Caller must have checked hasCapacity().
     void add(InFlight slot);

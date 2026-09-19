@@ -1864,11 +1864,16 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
             const bool chainValid = event.result.succeeded() &&
                                     event.result.beforeRevision == previousRevision &&
                                     event.result.afterRevision == snapshot_.revision();
-            if (!chainValid) {
+            // A contiguous non-render-affecting command is neutral regardless of its affected-time
+            // footprint: preserve every retained span exactly, so no reset and no provenance
+            // change. A missing affected-time footprint is NOT neutral by itself: a
+            // render-affecting command with no footprint means a whole invalidation and resets. A
+            // non-contiguous (stale or external) chain resets as well.
+            if (!chainValid ||
+                (event.result.renderAffecting && !event.result.affectedTimes.has_value())) {
+                // Whole/unknown/mixed (or stale/external revision): conservative full-live reset.
                 provenanceChanged = resetEvaluationRangesToLive();
-            } else if (!event.result.renderAffecting) {
-                // Neutral: preserve every retained span exactly.
-            } else if (event.result.affectedTimes.has_value()) {
+            } else if (event.result.renderAffecting) {
                 // SPLIT-2: a finite footprint replaces the changed pixel intervals with live (which
                 // clears their mappings) and composes any geometry remaps onto the unaffected
                 // segments, so an equivalent split keeps BOTH halves' cached pixels while their
@@ -1901,8 +1906,8 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
                                                  sameMappings(left.mappings, right.mappings);
                                       });
             } else {
-                // Whole/unknown/mixed: conservative full-live reset.
-                provenanceChanged = resetEvaluationRangesToLive();
+                // Neutral: a contiguous non-render-affecting command preserves every retained span
+                // and never emits documentEvaluationChanged.
             }
         }
         invalidateTransformInteractionOnStaleRevision();

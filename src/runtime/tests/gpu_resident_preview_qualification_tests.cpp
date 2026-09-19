@@ -192,8 +192,9 @@ void verifyEmbeddedShaderPins(Expectations& expectations) {
                                                              sourceOver, display};
     const auto& pins = bloom::runtime::kGpuResidentPreviewShaderPins;
     for (std::size_t index = 0; index < measured.size(); ++index) {
-        expectations.expect(measured[index].has_value() &&
-                                *measured[index] == std::string(pins[index].spv_sha256),
+        const auto& digest = measured[index];
+        expectations.expect(digest.has_value() &&
+                                digest.value() == std::string(pins[index].spv_sha256),
                             "the embedded " + std::string(pins[index].name) +
                                 " SPIR-V array hashes to its pinned digest");
     }

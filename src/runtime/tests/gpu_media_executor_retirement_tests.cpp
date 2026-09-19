@@ -244,37 +244,43 @@ void testUploadRetirement(Expectations& expectations, GpuDevice& device,
 } // namespace
 
 int main(const int argc, char** argv) {
-    const Options options = parseOptions(argc, argv);
-    if (!options.valid) {
-        return 2;
-    }
-    Expectations expectations;
-    const CpuCompositionEvaluator evaluator;
-    const auto fixture = makeFixture();
-    evaluator.setAssetBaseDirectory(fixture.directory);
-
-    GpuDeviceCreationOptions createOptions;
-    createOptions.loader_path = options.loader_path;
-    auto device = GpuDevice::create(createOptions);
-    if (!device) {
-        if (options.require_device) {
-            std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message << '\n';
-            return 1;
+    try {
+        const Options options = parseOptions(argc, argv);
+        if (!options.valid) {
+            return 2;
         }
-        std::cout << "SKIP: no compatible Vulkan device available: " << device.diagnostic.message
-                  << '\n';
-        return expectations.ok() ? 0 : 1;
-    }
+        Expectations expectations;
+        const CpuCompositionEvaluator evaluator;
+        const auto fixture = makeFixture();
+        evaluator.setAssetBaseDirectory(fixture.directory);
 
-    testCancellation(expectations, *device.device, evaluator, fixture);
+        GpuDeviceCreationOptions createOptions;
+        createOptions.loader_path = options.loader_path;
+        auto device = GpuDevice::create(createOptions);
+        if (!device) {
+            if (options.require_device) {
+                std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message
+                          << '\n';
+                return 1;
+            }
+            std::cout << "SKIP: no compatible Vulkan device available: "
+                      << device.diagnostic.message << '\n';
+            return expectations.ok() ? 0 : 1;
+        }
+
+        testCancellation(expectations, *device.device, evaluator, fixture);
 #ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
-    testUploadRetirement(expectations, *device.device, evaluator, fixture);
+        testUploadRetirement(expectations, *device.device, evaluator, fixture);
 #endif
 
-    if (!expectations.ok()) {
-        std::cerr << "FAIL: GPU media executor retirement expectations failed\n";
+        if (!expectations.ok()) {
+            std::cerr << "FAIL: GPU media executor retirement expectations failed\n";
+            return 1;
+        }
+        std::cout << "PASS: GPU media executor retirement\n";
+        return 0;
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
         return 1;
     }
-    std::cout << "PASS: GPU media executor retirement\n";
-    return 0;
 }

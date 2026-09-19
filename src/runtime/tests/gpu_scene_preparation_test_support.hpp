@@ -28,6 +28,7 @@
 #include <memory>
 #include <ranges>
 #include <source_location>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -84,7 +85,7 @@ class Expectations final {
                std::to_string(cpu.pixels().size());
     }
     for (std::size_t i = 0; i < replayed.pixels().size(); ++i) {
-        if (std::memcmp(&replayed.pixels()[i], &cpu.pixels()[i], sizeof(Rgba32f)) != 0) {
+        if (!(replayed.pixels()[i] == cpu.pixels()[i])) {
             return "index " + std::to_string(i) + " (" +
                    std::to_string(replayed.pixels()[i].red()) + "," +
                    std::to_string(replayed.pixels()[i].green()) + ") vs (" +
@@ -124,6 +125,26 @@ format(const std::uint32_t width, const std::uint32_t height,
     const auto value = CompositionFormat::create(width, height, pixelAspect);
     if (!value.has_value()) {
         throw std::logic_error("test composition format must be valid");
+    }
+    return *value;
+}
+
+// Checked constructors for the canonical test fixture values. These keep every call site free of an
+// unchecked optional dereference while preserving the fail-fast behaviour on an invalid fixture.
+[[nodiscard]] bloom::core::PixelAspectRatio pixelAspect(const std::uint64_t numerator,
+                                                        const std::uint64_t denominator) {
+    const auto value = bloom::core::PixelAspectRatio::create(numerator, denominator);
+    if (!value.has_value()) {
+        throw std::logic_error("test pixel aspect must be valid");
+    }
+    return *value;
+}
+
+[[nodiscard]] RationalTime rationalTime(const std::int64_t numerator,
+                                        const std::int64_t denominator) {
+    const auto value = RationalTime::create(numerator, denominator);
+    if (!value.has_value()) {
+        throw std::logic_error("test rational time must be valid");
     }
     return *value;
 }

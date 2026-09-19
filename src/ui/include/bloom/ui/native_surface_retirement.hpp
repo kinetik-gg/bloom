@@ -80,8 +80,8 @@ class NativeSurfaceRetirementGate final {
     // Starts a retirement. Null entries are ignored and duplicates collapsed. `finish` runs exactly
     // once (inline for the synchronous case) unless abandon() is used. When the caller needs the
     // synchronous result it passes `synchronousResult`.
-    StartStatus begin(std::vector<EditorNativeSurface*> targets, Commit commit, Finish finish,
-                      NativeSurfaceRetirementOptions options = {},
+    StartStatus begin(const std::vector<EditorNativeSurface*>& targets, Commit commit,
+                      Finish finish, NativeSurfaceRetirementOptions options = {},
                       Result* synchronousResult = nullptr);
 
     // Abandons a pending request without committing and without invoking finish. Any target that

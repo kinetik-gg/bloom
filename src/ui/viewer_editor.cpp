@@ -2,6 +2,8 @@
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/viewer_editor.hpp>
+#include <bloom/ui/viewer_gpu_resident.hpp>
+#include <bloom/ui/viewer_gpu_resident_overlay.hpp>
 #include <memory>
 
 #include "composition_editor_support.hpp"
@@ -42,6 +44,7 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QImage>
+#include <QInputMethodEvent>
 #include <QIntValidator>
 #include <QKeyEvent>
 #include <QKeySequence>
@@ -53,6 +56,8 @@
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
+#include <QRegion>
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QSettings>
@@ -660,6 +665,11 @@ QRectF viewTransformedDisplayRect(const QRectF& available, const render::ImageEx
     return QRectF(centeredTopLeft + transform.pan, QSizeF(width, height));
 }
 
+bool cpuFallbackCompletionIsCurrent(const runtime::PreviewRequestIdentity& completed,
+                                    const runtime::PreviewRequestIdentity& current) {
+    return completed == current;
+}
+
 ViewTransform zoomAboutPoint(const ViewTransform& transform, const QRectF& available,
                              const render::ImageExtent extent,
                              const core::PixelAspectRatio pixelAspect, const QPointF screenPoint,
@@ -847,6 +857,8 @@ void ViewerEditor::buildHeader() {
     connect(safeAreasAction_, &QAction::toggled, this, [this](const bool enabled) {
         overlayOptions_.safeAreas = enabled;
         QSettings().setValue(kSafeAreasSetting, enabled);
+        ++gpuOverlayRevision_;
+        updateGpuResidentPresentation();
         update();
     });
 
@@ -883,7 +895,11 @@ void ViewerEditor::buildHeader() {
             *state = enabled;
             QSettings().setValue(setting, enabled);
         });
-        connect(action, &QAction::toggled, this, [this] { update(); });
+        connect(action, &QAction::toggled, this, [this] {
+            ++gpuOverlayRevision_;
+            updateGpuResidentPresentation();
+            update();
+        });
         return action;
     };
     centreCrossAction_ = addOverlayToggle(
@@ -1697,6 +1713,8 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     });
     connect(&session_, &CompositionSession::selectionChanged, this, [this] {
         rebuildObjectSelector();
+        ++gpuOverlayRevision_;
+        updateGpuResidentPresentation();
         update();
         if (statusBarFooter_ != nullptr) {
             statusBarFooter_->update();
@@ -1753,9 +1771,37 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     updatePreviewResolution();
     updatePreviewAccessibility();
     updateOverlayActions();
+
+    // GPU-resident presentation is inert until setGpuPresentationDependencies() supplies a live
+    // client. It never creates a device/thread here; the adapter owns the only native objects.
+    gpuResident_ = std::make_unique<ViewerGpuResidentController>();
+    gpuResident_->setPresentAck([this](const bool presented, const std::string&) {
+        // True only after the owner genuinely published a present for this request.
+        residentActive_ = presented;
+        update();
+    });
+    gpuResident_->setCpuFallback([this] { requestResidentCpuFallback(); });
+    gpuResident_->setCpuCoverSnapshot([this]() -> QPixmap { return renderCpuCoverSnapshot(); });
+    gpuResident_->setInputSink(
+        [this](const ViewerGpuInputEvent& event) { forwardGpuInput(event); });
+    gpuResident_->setStateChanged([this] { updateGpuResidentPresentation(); });
+    gpuResidentTimer_ = new QTimer(this);
+    gpuResidentTimer_->setInterval(16);
+    connect(gpuResidentTimer_, &QTimer::timeout, this, &ViewerEditor::pollGpuResident);
 }
 
 ViewerEditor::~ViewerEditor() {
+    if (gpuResidentTimer_ != nullptr) {
+        gpuResidentTimer_->stop();
+    }
+    if (cpuFallbackTask_.has_value()) {
+        cpuFallbackTask_->cancel();
+        cpuFallbackTask_.reset();
+    }
+    // The host retire-before-mutation gate must have already settled any live native target. A
+    // target still live here is the ownership-contract violation ViewerGpuPresenter documents.
+    gpuResident_.reset();
+    gpuContainer_ = nullptr;
     clearProbe();
     if (adjustTask_)
         adjustTask_->cancel();
@@ -1990,6 +2036,7 @@ void ViewerEditor::setChannel(const ViewerChannel channel) {
             }
         }
     }
+    updateGpuResidentPresentation();
     update();
 }
 
@@ -2014,6 +2061,7 @@ void ViewerEditor::setBackground(const ViewerBackground background) {
             }
         }
     }
+    updateGpuResidentPresentation();
     update();
 }
 
@@ -2115,6 +2163,12 @@ void ViewerEditor::refreshZoomDropdown() {
 }
 
 void ViewerEditor::updatePreviewResolution() {
+    // A resident frame is presented at its native resolution. Auto stays stable Full so a zoom/pan
+    // only updates the present parameters (destination/source) and never forces a re-evaluation or
+    // an implicit proxy resolution change. Half/Quarter remain explicit choices made elsewhere.
+    if (residentFrameIsDisplayed()) {
+        return;
+    }
     const auto geometry = currentDisplayGeometry();
     if (!geometry.has_value()) {
         return;
@@ -2149,6 +2203,7 @@ bool ViewerEditor::event(QEvent* event) {
             endDrag(false);
         }
         updatePreviewResolution();
+        updateGpuResidentPresentation();
     }
     return handled;
 }
@@ -2206,7 +2261,24 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
                          session_.composition() ? session_.composition()->backgroundColor()
                                                 : core::Color4d{0.0, 0.0, 0.0, 1.0});
 
-    const PreparedPreviewFrameHandle displayedFrame = this->displayedFrame();
+    // While a native present is genuinely active the child QWindow occludes this widget's painting
+    // and owns the pixels AND the overlays (they were recorded into the native overlay). Do not
+    // paint a CPU image behind it.
+    if (residentActive_ && !coverSnapshotInProgress_) {
+        return;
+    }
+
+    paintViewerContent(painter);
+}
+
+void ViewerEditor::paintViewerContent(QPainter& painter) {
+    // During a cover snapshot the last valid CPU frame is drawn explicitly (never the resident arm,
+    // whose CPU span is empty and whose native child is excluded from this pixmap anyway).
+    const PreparedPreviewFrameHandle displayedFrame =
+        coverSnapshotInProgress_
+            ? (cpuFallbackFrame_ != nullptr ? cpuFallbackFrame_ : lastCpuFrame_)
+            : paintableCpuFrame();
+    const QRectF frame = canvasRect();
     if (displayedFrame != nullptr) {
         // displayBufferView() normalizes both display-product alternatives (reference and
         // qualified) to the same packed-RGBA8 shape -- the viewer draws pixels identically either
@@ -2830,6 +2902,7 @@ void ViewerEditor::resizeEvent(QResizeEvent* event) {
     }
     layoutStatusBar();
     updatePreviewResolution();
+    updateGpuResidentPresentation();
 }
 
 void ViewerEditor::contextMenuEvent(QContextMenuEvent* event) {
@@ -2873,5 +2946,7 @@ void ViewerEditor::contextMenuEvent(QContextMenuEvent* event) {
 
 #include "viewer_tools.ipp"
 #include "viewer_tools_path.ipp"
+
+#include "viewer_editor_gpu.ipp"
 
 } // namespace bloom::ui

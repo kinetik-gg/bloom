@@ -301,7 +301,7 @@ void dispatchResidentCpuFallbackChild(const std::shared_ptr<PreviewDisplayServic
 
 void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                                const std::shared_ptr<PreviewDisplayStageRecord>& stage,
-                               TaskResult<PreviewGpuSceneStageOutcomeHandle> result) {
+                               const TaskResult<PreviewGpuSceneStageOutcomeHandle>& result) {
     using Result = TaskResult<PreviewPreparationResultHandle>;
     switch (result.state()) {
     case TaskState::Cancelled:

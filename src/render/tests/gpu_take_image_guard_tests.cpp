@@ -227,7 +227,7 @@ void testCoveredSolidGuard(Expectations& expectations, GpuDevice& device) {
     if (!window || !pixel) {
         return;
     }
-    std::vector<std::uint8_t> coverage(7U * 3U);
+    std::vector<std::uint8_t> coverage(static_cast<std::size_t>(7U) * 3U);
     for (std::size_t i = 0; i < coverage.size(); ++i) {
         coverage[i] = static_cast<std::uint8_t>(i * 255U / (coverage.size() - 1U));
     }

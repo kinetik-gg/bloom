@@ -289,8 +289,8 @@ std::optional<PreparedPreviewFrame> buildResidentPreviewFrame(
         if (!resident->isDisplayValid()) {
             return std::nullopt;
         }
-        return PreparedPreviewFrame::createResident(resident->desiredIdentity().requestGeneration,
-                                                    std::move(resident));
+        const std::uint64_t requestGeneration = resident->desiredIdentity().requestGeneration;
+        return PreparedPreviewFrame::createResident(requestGeneration, std::move(resident));
     } catch (...) {
         return std::nullopt;
     }

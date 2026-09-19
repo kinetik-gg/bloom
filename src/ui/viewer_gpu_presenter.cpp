@@ -8,11 +8,7 @@
 #include <cstdint>
 #include <utility>
 
-// Portable UI build: when the configured render backend has no Vulkan headers, this translation
-// unit must still compile and link. The visible adapter then truthfully reports Unsupported with no
-// QVulkanInstance/QWindow/container and no attach attempt, instead of pulling <vulkan/vulkan.h>
-// into a Vulkan-free desktop build. The macro is set by src/ui/CMakeLists.txt only when Vulkan
-// headers are actually available.
+// Portable UI builds compile this TU empty; the Unsupported fallback lives in the portable TU.
 #ifdef BLOOM_UI_HAS_VULKAN
 
 #include <QEvent>
@@ -28,11 +24,9 @@
 #include <vulkan/vulkan.h>
 
 #include <cmath>
-#include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <string>
-#include <utility>
 
 namespace bloom::ui {
 namespace {
@@ -40,6 +34,9 @@ namespace {
 constexpr int kPollIntervalMs = 8;
 
 [[nodiscard]] VkInstance instanceOf(const std::uint64_t bits) noexcept {
+    // The borrowed VkInstance crosses Qt's QVulkanInstance boundary as an integer handle; this is
+    // the single documented reconstruction point.
+    // NOLINTNEXTLINE(performance-no-int-to-ptr)
     return reinterpret_cast<VkInstance>(static_cast<std::uintptr_t>(bits));
 }
 
@@ -89,6 +86,9 @@ struct ViewerGpuPresenter::Impl final {
                          "this is an ownership-contract violation, not a safe handoff\n",
                          static_cast<unsigned>(state));
             Q_ASSERT(false);
+            // The quarantined instance must not be deleted while its surface is still busy;
+            // release() deliberately hands ownership to the caller and the result is dropped.
+            // NOLINTNEXTLINE(bugprone-unused-return-value)
             static_cast<void>(instance.release());
         } else {
             delete container; // owns the QWindow
@@ -136,6 +136,11 @@ struct ViewerGpuPresenter::Impl final {
         window->installEventFilter(self);
 
         container = QWidget::createWindowContainer(window);
+        if (containerParent != nullptr) {
+            // Parent BEFORE the window is exposed/attached, so the host never reparents a live
+            // surface.
+            container->setParent(containerParent);
+        }
         container->setObjectName(QStringLiteral("bloomViewerGpuContainer"));
         container->setFocusPolicy(Qt::StrongFocus);
         container->setMouseTracking(true);
@@ -298,6 +303,10 @@ struct ViewerGpuPresenter::Impl final {
     }
 
     void applySnapshot(const runtime::GpuPresentationTargetSnapshot& snapshot) {
+        if (snapshot.id == target) {
+            appliedSequenceValue = snapshot.appliedSequence;
+            presentCountValue = snapshot.presentCount;
+        }
         switch (snapshot.state) {
         case runtime::GpuPresentationTargetState::Attaching:
             state = mutationPending ? State::Retiring : State::Attaching;
@@ -381,10 +390,7 @@ struct ViewerGpuPresenter::Impl final {
 
     [[nodiscard]] bool safeNow() const noexcept { return safeToDestroy; }
 
-    // Releases the owner-side record for a target already proven terminal-safe. Called only from
-    // the Retired/Rejected terminal branches, AFTER `diagnostic` and any mutation callback captured
-    // the terminal snapshot message. A live/unproven target is never passed here, and the runtime
-    // refuses one with NotTerminal if it ever were.
+    // Releases the owner-side record for a terminal-safe target, after the terminal message.
     void reclaimTerminalRecord() {
         if (terminalRecordReclaimed || target == runtime::kInvalidPresentationTarget || !port) {
             return;
@@ -415,6 +421,7 @@ struct ViewerGpuPresenter::Impl final {
         const runtime::GpuPresentationPortResult result =
             port->update(target, sequenceValue, std::move(updateValue));
         if (result.accepted()) {
+            lastEnqueued = sequenceValue;
             return true;
         }
         diagnostic = result.message.empty() ? "the present update was refused" : result.message;
@@ -441,6 +448,7 @@ struct ViewerGpuPresenter::Impl final {
         const runtime::GpuPresentationPortResult result =
             port->resize(target, sequenceValue, deviceWidth, deviceHeight);
         if (result.accepted()) {
+            lastEnqueued = sequenceValue;
             return true;
         }
         pendingResize = false;
@@ -558,6 +566,13 @@ struct ViewerGpuPresenter::Impl final {
     bool readyNotified = false;
     bool terminalRecordReclaimed = false;
 
+    // Owner-observed present progress (from the published snapshot). A mailbox admission is not a
+    // native present; presentCountValue only advances when the owner actually presents.
+    std::uint64_t appliedSequenceValue = 0;
+    std::uint64_t presentCountValue = 0;
+    std::uint64_t lastEnqueued = 0;
+    QWidget* containerParent = nullptr;
+
     QPointF lastLocal{0.0, 0.0};
     QPointF lastGlobal{0.0, 0.0};
 
@@ -579,9 +594,7 @@ ViewerGpuPresenter::ViewerGpuPresenter(std::shared_ptr<ViewerGpuPort> port, Conf
     : QObject(parent), impl_(std::make_unique<Impl>(this, std::move(port), std::move(config))) {}
 
 ViewerGpuPresenter::~ViewerGpuPresenter() {
-    // Precondition: no live native target. The host must have retired it through
-    // prepareForMutation() and observed SafeToMutate. A live target here is an ownership-contract
-    // violation that cannot be made safe; the truthful release diagnostic is emitted by Impl.
+    // Precondition: no live native target (retired via prepareForMutation/SafeToMutate).
     Q_ASSERT_X(impl_ == nullptr || !impl_->attached || impl_->safeToDestroy, "~ViewerGpuPresenter",
                "destroyed with a live GPU presentation target; host must settle "
                "prepareForMutation() first");
@@ -634,6 +647,20 @@ render::GpuBorrowedInstanceView ViewerGpuPresenter::borrowedInstanceView() const
 
 std::uint64_t ViewerGpuPresenter::surfaceBits() const noexcept { return impl_->surfaceBits; }
 
+std::uint64_t ViewerGpuPresenter::lastEnqueuedSequence() const noexcept {
+    return impl_->lastEnqueued;
+}
+
+std::uint64_t ViewerGpuPresenter::appliedSequence() const noexcept {
+    return impl_->appliedSequenceValue;
+}
+
+std::uint64_t ViewerGpuPresenter::presentCount() const noexcept { return impl_->presentCountValue; }
+
+void ViewerGpuPresenter::setContainerParent(QWidget* parent) noexcept {
+    impl_->containerParent = parent;
+}
+
 void ViewerGpuPresenter::setReadyCallback(ReadyCallback callback) {
     impl_->readyCallback = std::move(callback);
 }
@@ -666,92 +693,6 @@ bool ViewerGpuPresenter::pollNow() {
 bool ViewerGpuPresenter::eventFilter(QObject* watched, QEvent* event) {
     return impl_->handleEvent(watched, event);
 }
-
-} // namespace bloom::ui
-
-#else // BLOOM_UI_HAS_VULKAN
-
-// Truthful unsupported fallback for a Vulkan-free UI build. No Qt Vulkan object, no container, and
-// no attach is created; the caller keeps its CPU path. This deliberately claims no fallback beyond
-// the diagnostic and never pretends a surface was retained.
-namespace bloom::ui {
-
-struct ViewerGpuPresenter::Impl final {
-    State state = State::Unsupported;
-    std::string diagnostic = "this build has no Vulkan presentation support";
-    bool safeToDestroy = true;
-    ReadyCallback readyCallback;
-};
-
-ViewerGpuPresenter::ViewerGpuPresenter(std::shared_ptr<runtime::GpuPresentationClient>, Config,
-                                       QObject* parent)
-    : QObject(parent), impl_(std::make_unique<Impl>()) {}
-
-ViewerGpuPresenter::ViewerGpuPresenter(std::shared_ptr<ViewerGpuPort>, Config, QObject* parent)
-    : QObject(parent), impl_(std::make_unique<Impl>()) {}
-
-ViewerGpuPresenter::~ViewerGpuPresenter() = default;
-
-bool ViewerGpuPresenter::pinVulkanLoader(const std::string&) { return false; }
-
-bool ViewerGpuPresenter::initialize() {
-    if (impl_->readyCallback) {
-        impl_->readyCallback(false, impl_->diagnostic);
-    }
-    return false;
-}
-
-bool ViewerGpuPresenter::initialized() const noexcept { return false; }
-
-QWidget* ViewerGpuPresenter::container() const noexcept { return nullptr; }
-
-QWindow* ViewerGpuPresenter::window() const noexcept { return nullptr; }
-
-ViewerGpuPresenter::State ViewerGpuPresenter::state() const noexcept { return impl_->state; }
-
-bool ViewerGpuPresenter::attached() const noexcept { return false; }
-
-bool ViewerGpuPresenter::acceptingPresent() const noexcept { return false; }
-
-runtime::GpuPresentationTargetId ViewerGpuPresenter::targetId() const noexcept {
-    return runtime::kInvalidPresentationTarget;
-}
-
-std::uint64_t ViewerGpuPresenter::lastSequence() const noexcept { return 0; }
-
-bool ViewerGpuPresenter::surfaceSafeToDestroy() const noexcept { return impl_->safeToDestroy; }
-
-const std::string& ViewerGpuPresenter::diagnostic() const noexcept { return impl_->diagnostic; }
-
-render::GpuBorrowedInstanceView ViewerGpuPresenter::borrowedInstanceView() const { return {}; }
-
-std::uint64_t ViewerGpuPresenter::surfaceBits() const noexcept { return 0; }
-
-void ViewerGpuPresenter::setReadyCallback(ReadyCallback callback) {
-    impl_->readyCallback = std::move(callback);
-}
-
-void ViewerGpuPresenter::setInputCallback(InputCallback) {}
-
-bool ViewerGpuPresenter::present(const runtime::GpuResidentFrameLease&,
-                                 const render::GpuPresentImageParams&,
-                                 std::shared_ptr<const runtime::GpuPresentationOverlay>) {
-    return false;
-}
-
-bool ViewerGpuPresenter::requestResize(std::uint32_t, std::uint32_t) { return false; }
-
-bool ViewerGpuPresenter::prepareForMutation(MutationCallback completion) {
-    if (completion) {
-        completion(
-            MutationResult{MutationOutcome::SafeToMutate, impl_->state, true, impl_->diagnostic});
-    }
-    return true;
-}
-
-bool ViewerGpuPresenter::pollNow() { return false; }
-
-bool ViewerGpuPresenter::eventFilter(QObject*, QEvent*) { return false; }
 
 } // namespace bloom::ui
 

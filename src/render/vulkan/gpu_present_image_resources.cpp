@@ -53,7 +53,8 @@ void destroyBufferVma(DeviceAllocatorState& control, VkBuffer& buffer,
 [[nodiscard]] bool createOverlayImageVma(DeviceAllocatorState& control, const std::uint32_t width,
                                          const std::uint32_t height, VkImage& outImage,
                                          VmaAllocation& outAllocation) {
-    VkImageCreateInfo createInfo{};
+    VkImageCreateInfo createInfo;
+    std::memset(&createInfo, 0, sizeof(createInfo));
     createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     createInfo.imageType = VK_IMAGE_TYPE_2D;
     createInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -326,7 +327,8 @@ bool PresentImagePipeline::ensureSwapchainResources(
     const auto* dispatcher = control->device.getDispatcher();
     if (builtFormat != resources.format || builtFinalLayout != resources.finalLayout ||
         !*pipeline) {
-        VkAttachmentDescription color{};
+        VkAttachmentDescription color;
+        std::memset(&color, 0, sizeof(color));
         color.format = resources.format;
         color.samples = VK_SAMPLE_COUNT_1_BIT;
         color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -354,7 +356,8 @@ bool PresentImagePipeline::ensureSwapchainResources(
         }
         renderPass = vk::raii::RenderPass(control->device, rawRenderPass);
 
-        VkPipelineShaderStageCreateInfo stages[2]{};
+        VkPipelineShaderStageCreateInfo stages[2];
+        std::memset(stages, 0, sizeof(stages));
         stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
         stages[0].module = *vertexShader;
@@ -378,7 +381,8 @@ bool PresentImagePipeline::ensureSwapchainResources(
         raster.cullMode = VK_CULL_MODE_NONE;
         raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         raster.lineWidth = 1.0F;
-        VkPipelineMultisampleStateCreateInfo multisample{};
+        VkPipelineMultisampleStateCreateInfo multisample;
+        std::memset(&multisample, 0, sizeof(multisample));
         multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
         multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
         VkPipelineColorBlendAttachmentState blendAttachment{};

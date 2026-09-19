@@ -76,7 +76,9 @@ struct GpuResidentFrameLeaseRegistry::Impl final {
         wakeGuard = true;
         try {
             wake();
-        } catch (...) {
+        } catch (...) { // NOLINT(bugprone-empty-catch)
+            // A host wake callback must never terminate a lease-registry operation; the exception
+            // is deliberately contained and the guard is cleared below.
         }
         wakeGuard = false;
     }

@@ -55,8 +55,7 @@ void testBasicAndMerge(Expectations& expectations, const CpuCompositionEvaluator
 void testProxyNonSquareParAndCentered(Expectations& expectations,
                                       const CpuCompositionEvaluator& evaluator) {
     const auto plan = twoLayerPlan(
-        format(9, 6, *bloom::core::PixelAspectRatio::create(4, 3)),
-        LayerValues{.position = {4.5, 3.0}, .opacity = 1.0},
+        format(9, 6, pixelAspect(4, 3)), LayerValues{.position = {4.5, 3.0}, .opacity = 1.0},
         LayerValues{.position = {2.7, 4.9}, .anchor = {1.0, -0.5}, .opacity = 0.5}, 4.0, 3.0, 2000);
     const auto extent = bloom::render::ImageExtent::create(5, 4);
     expectations.expect(static_cast<bool>(extent), "the proxy extent builds");
@@ -85,7 +84,7 @@ void testAnimatedOpacity(Expectations& expectations, const CpuCompositionEvaluat
                                bloom::runtime::CompiledKeyframeInterpolation::Linear});
     definition.scalarCurves.push_back(std::move(curve));
     const auto plan = publish(std::move(definition));
-    checkParity(expectations, evaluator, plan, requestFor(*plan, *RationalTime::create(1, 2)),
+    checkParity(expectations, evaluator, plan, requestFor(*plan, rationalTime(1, 2)),
                 "animated opacity");
 }
 
@@ -207,7 +206,7 @@ void testAnimatedPosition(Expectations& expectations, const CpuCompositionEvalua
          bloom::runtime::CompiledKeyframeInterpolation::Linear}};
     definition.vec2Curves.push_back(std::move(curve));
     const auto plan = publish(std::move(definition));
-    checkParity(expectations, evaluator, plan, requestFor(*plan, *RationalTime::create(1, 2)),
+    checkParity(expectations, evaluator, plan, requestFor(*plan, rationalTime(1, 2)),
                 "animated position");
 }
 
@@ -408,24 +407,29 @@ void testUnsupported(Expectations& expectations) {
 } // namespace
 
 int main() {
-    Expectations expectations;
-    const CpuCompositionEvaluator evaluator;
-    testBasicAndMerge(expectations, evaluator);
-    testProxyNonSquareParAndCentered(expectations, evaluator);
-    testAnimatedOpacity(expectations, evaluator);
-    testIntegerNativeGrid(expectations, evaluator);
-    testFractionalSignsAndOpacity(expectations, evaluator);
-    testAnimatedPosition(expectations, evaluator);
-    testCoverageCacheReuse(expectations, evaluator);
-    testTimeActivation(expectations, evaluator);
-    testInactiveAndMuteSolo(expectations, evaluator);
-    testBudgetRefusal(expectations);
-    testKeyStability(expectations);
-    testUnsupported(expectations);
-    if (!expectations.ok()) {
-        std::cerr << "FAIL: GPU scene preparation expectations failed\n";
+    try {
+        Expectations expectations;
+        const CpuCompositionEvaluator evaluator;
+        testBasicAndMerge(expectations, evaluator);
+        testProxyNonSquareParAndCentered(expectations, evaluator);
+        testAnimatedOpacity(expectations, evaluator);
+        testIntegerNativeGrid(expectations, evaluator);
+        testFractionalSignsAndOpacity(expectations, evaluator);
+        testAnimatedPosition(expectations, evaluator);
+        testCoverageCacheReuse(expectations, evaluator);
+        testTimeActivation(expectations, evaluator);
+        testInactiveAndMuteSolo(expectations, evaluator);
+        testBudgetRefusal(expectations);
+        testKeyStability(expectations);
+        testUnsupported(expectations);
+        if (!expectations.ok()) {
+            std::cerr << "FAIL: GPU scene preparation expectations failed\n";
+            return 1;
+        }
+        std::cout << "PASS: CPU GPU scene preparation\n";
+        return 0;
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
         return 1;
     }
-    std::cout << "PASS: CPU GPU scene preparation\n";
-    return 0;
 }

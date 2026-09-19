@@ -129,7 +129,7 @@ void testPortFuseAndRetainedBound(Expectations& expectations) {
     GpuPresentationTargetId newest = 0U;
     for (int index = 0; index < 4; ++index) {
         const auto attached =
-            client->attach(surface(static_cast<std::uint64_t>(index + 1), 7U), 16U, 16U);
+            client->attach(surface(static_cast<std::uint64_t>(index) + 1U, 7U), 16U, 16U);
         expectations.expect(attached.accepted(), "an attach under the record cap is admitted");
         newest = attached.target;
     }

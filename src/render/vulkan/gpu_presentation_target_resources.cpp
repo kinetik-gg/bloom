@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -33,7 +34,8 @@ makeSwapchain(vk::raii::Device const& device, VkSurfaceKHR surface,
               std::uint32_t imageCount, VkSurfaceTransformFlagBitsKHR preTransform,
               VkCompositeAlphaFlagBitsKHR compositeAlpha, VkSwapchainKHR oldSwapchain) {
     const std::uint32_t familyIndices[2] = {computeQueueFamily, presentQueueFamily};
-    VkSwapchainCreateInfoKHR createInfo{};
+    VkSwapchainCreateInfoKHR createInfo;
+    std::memset(&createInfo, 0, sizeof(createInfo));
     createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     createInfo.surface = surface;
     createInfo.minImageCount = imageCount;
@@ -533,6 +535,11 @@ GpuPresentationTargetCode pollPresent(SwapchainResources& resources, vk::raii::D
             if (resources.retirement == GpuPresentationRetirement::PresentFence) {
                 if (index >= resources.presentFences.size()) {
                     message = "the present fence for a pending image is missing";
+                    anyPending = true;
+                    continue;
+                }
+                if (dispatcher->vkGetFenceStatus == nullptr) {
+                    message = "the present fence query entry point is unavailable";
                     anyPending = true;
                     continue;
                 }

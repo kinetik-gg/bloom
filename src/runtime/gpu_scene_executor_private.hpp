@@ -101,9 +101,31 @@ makeDiagnostic(const GpuSceneExecutorDiagnosticCode code, std::string message) {
     return true;
 }
 
+// No std::visit: std::get_if is genuinely non-throwing, so the noexcept contract holds even for a
+// valueless variant. A valueless command has no cache key; the empty key is the fail-closed cache
+// miss, exactly like an empty semantic key.
+inline const std::string kEmptyCommandKey;
+
 [[nodiscard]] inline const std::string& commandKey(const GpuSceneCommand& command) noexcept {
-    return std::visit([](const auto& item) -> const std::string& { return item.semanticKey; },
-                      command);
+    if (const auto* solid = std::get_if<GpuSceneSolidCommand>(&command)) {
+        return solid->semanticKey;
+    }
+    if (const auto* translation = std::get_if<GpuSceneTranslationCommand>(&command)) {
+        return translation->semanticKey;
+    }
+    if (const auto* covered = std::get_if<GpuSceneCoverageSolidCommand>(&command)) {
+        return covered->semanticKey;
+    }
+    if (const auto* upload = std::get_if<GpuSceneUploadCommand>(&command)) {
+        return upload->semanticKey;
+    }
+    if (const auto* merge = std::get_if<GpuSceneMergeCommand>(&command)) {
+        return merge->semanticKey;
+    }
+    if (const auto* output = std::get_if<GpuSceneCompositionOutputCommand>(&command)) {
+        return output->semanticKey;
+    }
+    return kEmptyCommandKey;
 }
 
 [[nodiscard]] inline bool windowsEqual(const std::optional<render::ImageWindow> lhs,
@@ -117,43 +139,42 @@ makeDiagnostic(const GpuSceneExecutorDiagnosticCode code, std::string message) {
 [[nodiscard]] inline bool descriptorMatches(const GpuSceneCommand& command,
                                             const render::GpuImage& image,
                                             const render::GpuImage* translationInput) noexcept {
-    return std::visit(
-        [&](const auto& item) -> bool {
-            using T = std::decay_t<decltype(item)>;
-            if constexpr (std::is_same_v<T, GpuSceneSolidCommand>) {
-                return windowsEqual(image.dataWindow(), item.dataWindow) &&
-                       windowsEqual(image.displayWindow(), item.displayWindow) &&
-                       image.pixelAspect() == item.pixelAspect;
-            } else if constexpr (std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
-                return windowsEqual(image.dataWindow(), item.outputWindow) &&
-                       windowsEqual(image.displayWindow(), item.displayWindow) &&
-                       image.pixelAspect() == item.pixelAspect;
-            } else if constexpr (std::is_same_v<T, GpuSceneTranslationCommand>) {
-                if (!windowsEqual(image.dataWindow(), item.outputWindow)) {
-                    return false;
-                }
-                if (translationInput != nullptr) {
-                    return image.displayWindow() == translationInput->displayWindow() &&
-                           image.pixelAspect() == translationInput->pixelAspect();
-                }
-                return true;
-            } else if constexpr (std::is_same_v<T, GpuSceneMergeCommand>) {
-                return windowsEqual(image.dataWindow(), item.outputWindow) &&
-                       windowsEqual(image.displayWindow(), item.displayWindow) &&
-                       image.pixelAspect() == item.pixelAspect;
-            } else if constexpr (std::is_same_v<T, GpuSceneCompositionOutputCommand>) {
-                return windowsEqual(image.dataWindow(), item.dataWindow) &&
-                       windowsEqual(image.displayWindow(), item.displayWindow) &&
-                       image.pixelAspect() == item.pixelAspect;
-            } else if constexpr (std::is_same_v<T, GpuSceneUploadCommand>) {
-                return windowsEqual(image.dataWindow(), item.descriptor.dataWindow()) &&
-                       windowsEqual(image.displayWindow(), item.descriptor.displayWindow()) &&
-                       image.pixelAspect() == item.descriptor.pixelAspect();
-            } else {
-                return false;
-            }
-        },
-        command);
+    if (const auto* solid = std::get_if<GpuSceneSolidCommand>(&command)) {
+        return windowsEqual(image.dataWindow(), solid->dataWindow) &&
+               windowsEqual(image.displayWindow(), solid->displayWindow) &&
+               image.pixelAspect() == solid->pixelAspect;
+    }
+    if (const auto* output = std::get_if<GpuSceneCompositionOutputCommand>(&command)) {
+        return windowsEqual(image.dataWindow(), output->dataWindow) &&
+               windowsEqual(image.displayWindow(), output->displayWindow) &&
+               image.pixelAspect() == output->pixelAspect;
+    }
+    if (const auto* covered = std::get_if<GpuSceneCoverageSolidCommand>(&command)) {
+        return windowsEqual(image.dataWindow(), covered->outputWindow) &&
+               windowsEqual(image.displayWindow(), covered->displayWindow) &&
+               image.pixelAspect() == covered->pixelAspect;
+    }
+    if (const auto* merge = std::get_if<GpuSceneMergeCommand>(&command)) {
+        return windowsEqual(image.dataWindow(), merge->outputWindow) &&
+               windowsEqual(image.displayWindow(), merge->displayWindow) &&
+               image.pixelAspect() == merge->pixelAspect;
+    }
+    if (const auto* translation = std::get_if<GpuSceneTranslationCommand>(&command)) {
+        if (!windowsEqual(image.dataWindow(), translation->outputWindow)) {
+            return false;
+        }
+        if (translationInput != nullptr) {
+            return image.displayWindow() == translationInput->displayWindow() &&
+                   image.pixelAspect() == translationInput->pixelAspect();
+        }
+        return true;
+    }
+    if (const auto* upload = std::get_if<GpuSceneUploadCommand>(&command)) {
+        return windowsEqual(image.dataWindow(), upload->descriptor.dataWindow()) &&
+               windowsEqual(image.displayWindow(), upload->descriptor.displayWindow()) &&
+               image.pixelAspect() == upload->descriptor.pixelAspect();
+    }
+    return false;
 }
 
 [[nodiscard]] inline bool cachedDescriptorMatches(const GpuSceneCommand& command,
@@ -186,13 +207,11 @@ expectedDescriptorOf(const PreparedGpuScene& scene, const GpuSceneCommandIndex i
                     return std::nullopt;
                 }
                 return SceneDescriptorInfo{item.outputWindow, source->display, source->pixelAspect};
-            } else if constexpr (std::is_same_v<T, GpuSceneCompositionOutputCommand>) {
+            } else if constexpr (std::is_same_v<T, GpuSceneCompositionOutputCommand> ||
+                                 std::is_same_v<T, GpuSceneSolidCommand>) {
                 return SceneDescriptorInfo{item.dataWindow, item.displayWindow, item.pixelAspect};
-            } else if constexpr (std::is_same_v<T, GpuSceneMergeCommand>) {
-                return SceneDescriptorInfo{item.outputWindow, item.displayWindow, item.pixelAspect};
-            } else if constexpr (std::is_same_v<T, GpuSceneSolidCommand>) {
-                return SceneDescriptorInfo{item.dataWindow, item.displayWindow, item.pixelAspect};
-            } else if constexpr (std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
+            } else if constexpr (std::is_same_v<T, GpuSceneMergeCommand> ||
+                                 std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
                 return SceneDescriptorInfo{item.outputWindow, item.displayWindow, item.pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneUploadCommand>) {
                 return SceneDescriptorInfo{item.descriptor.dataWindow(),

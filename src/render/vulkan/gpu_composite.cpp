@@ -99,7 +99,10 @@ GpuCompositeJobState GpuComposite::state() const noexcept {
 }
 const GpuCompositeDiagnostic& GpuComposite::diagnostic() const noexcept {
     static const GpuCompositeDiagnostic none{};
-    return impl_ != nullptr ? impl_->jobDiagnostic : none;
+    if (impl_ == nullptr) {
+        return none;
+    }
+    return impl_->jobDiagnostic;
 }
 bool GpuComposite::isBoundTo(GpuDevice& device) const noexcept {
     if (impl_ == nullptr || !impl_->onOwnerThread()) {

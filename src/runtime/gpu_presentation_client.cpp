@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <utility>
 #include <vector>
 
@@ -82,8 +83,14 @@ GpuPresentationOverlay::create(std::vector<std::uint8_t> pixels, const std::uint
     if (stride > static_cast<std::uint64_t>(UINT32_MAX)) {
         return nullptr;
     }
-    return std::shared_ptr<const GpuPresentationOverlay>(new GpuPresentationOverlay(
-        std::move(pixels), width, height, static_cast<std::uint32_t>(stride), token));
+    try {
+        return std::shared_ptr<const GpuPresentationOverlay>(new GpuPresentationOverlay(
+            std::move(pixels), width, height, static_cast<std::uint32_t>(stride), token));
+    } catch (const std::bad_alloc&) {
+        // Fail closed: a malformed overlay already reports null, so an allocation failure must not
+        // escape this noexcept factory. The caller then refuses the update.
+        return nullptr;
+    }
 }
 
 // --- GpuPresentationClient ----------------------------------------------------------------------

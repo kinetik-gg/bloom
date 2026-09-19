@@ -138,6 +138,9 @@ void testAdoptRejectsSizeMismatchAndPreservesVector(Expectations& expectations) 
     const Rgba8* const originalData = pixels.data();
     auto result = PreparedReferenceDisplayBuffer::adopt(*descriptor, std::move(pixels), 1U << 20U);
     expectations.expect(!result.hasValue(), "a wrong pixel count is rejected");
+    // adopt() only moves the payload once every check passes, so a rejected adoption leaves the
+    // caller's vector owned; this asserts that documented rejection contract, not a use-after-move.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     expectations.expect(pixels.size() == 3 && pixels.data() == originalData,
                         "a rejected adoption leaves the caller's vector owned and unchanged");
 }
@@ -152,6 +155,9 @@ void testAdoptRejectsBudgetAndPreservesVector(Expectations& expectations) {
     const Rgba8* const originalData = pixels.data();
     auto result = PreparedReferenceDisplayBuffer::adopt(*descriptor, std::move(pixels), 8U);
     expectations.expect(!result.hasValue(), "an over-budget adoption is rejected");
+    // adopt() only moves the payload once every check passes, so a rejected adoption leaves the
+    // caller's vector owned; this asserts that documented rejection contract, not a use-after-move.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     expectations.expect(pixels.size() == 16 && pixels.data() == originalData,
                         "a budget-rejected adoption leaves the caller's vector owned");
 }
@@ -196,6 +202,9 @@ void testAdoptRejectsExcessReserveAndPreservesVector(Expectations& expectations)
     const std::size_t originalCapacity = pixels.capacity();
     auto result = PreparedReferenceDisplayBuffer::adopt(*descriptor, std::move(pixels), 1U << 20U);
     expectations.expect(!result.hasValue(), "a vector with excess capacity is rejected");
+    // adopt() only moves the payload once every check passes, so a rejected adoption leaves the
+    // caller's vector owned; this asserts that documented rejection contract, not a use-after-move.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     expectations.expect(pixels.size() == 16 && pixels.data() == originalData &&
                             pixels.capacity() == originalCapacity,
                         "an excess-reserve rejection leaves the caller's vector untouched");
@@ -436,6 +445,9 @@ void testQualifiedNativeProduct(
             !bloom::runtime::makeGpuNeutralDisplayPreview(nullStage, report, std::move(preserved))
                  .has_value(),
             "a null-process stage is rejected without dereferencing it");
+        // The null-process rejection happens before any adoption moves the readback, so this
+        // asserts the documented preservation contract, not a use-after-move.
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         expectations.expect(preserved.pixels.size() == preservedSize &&
                                 preserved.pixels.data() == preservedData,
                             "a null-process rejection preserves the caller's readback bytes");

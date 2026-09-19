@@ -420,10 +420,15 @@ target_sources(
         viewer_editor_text_input.cpp
         viewer_editor_text_layout.cpp
         viewer_gpu_presenter.cpp
+        viewer_gpu_presenter_portable.cpp
         viewer_gpu_presenter_input.cpp
         viewer_gpu_presenter_input.hpp
         viewer_gpu_presenter_port.cpp
         viewer_gpu_presenter_port.hpp
+        viewer_gpu_resident.cpp
+        viewer_gpu_resident_cover.hpp
+        viewer_gpu_resident_overlay.cpp
+        gpu_viewer_bootstrap.cpp
         native_surface_retirement.cpp
         window_status_bar.cpp
         workspace_host.cpp
@@ -476,6 +481,9 @@ target_sources(
             include/bloom/ui/viewer_editor.hpp
             include/bloom/ui/viewer_editor_probe.hpp
             include/bloom/ui/viewer_gpu_presenter.hpp
+            include/bloom/ui/viewer_gpu_resident.hpp
+            include/bloom/ui/viewer_gpu_resident_overlay.hpp
+            include/bloom/ui/gpu_viewer_bootstrap.hpp
             include/bloom/ui/window_status_bar.hpp
             include/bloom/ui/workspace_host.hpp
 )

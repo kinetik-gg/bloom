@@ -162,7 +162,7 @@ CompositionPreviewController::currentLayerBounds() const {
         auto translated = bounds;
         translated.layerId = session_.currentLayerForRetained(
             identity.sourceRevision, identity.projectId, time, bounds.layerId);
-        result.push_back(std::move(translated));
+        result.push_back(translated);
     }
     return result;
 }
@@ -197,7 +197,7 @@ CompositionPreviewController::selectedLayerBounds() const {
             continue;
         auto translated = bounds;
         translated.layerId = currentLayer;
-        result.push_back(std::move(translated));
+        result.push_back(translated);
     }
     return result;
 }

@@ -1262,3 +1262,139 @@ bloom_add_test(
     TIMEOUT 120
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
+
+# GPU-resident viewer: the off-UI premultiplied overlay raster and the controller's inert/no-live
+# semantics. Device-free and Vulkan-free, so it registers unconditionally and runs offscreen.
+add_executable(bloom_ui_viewer_gpu_resident_controller_test viewer_gpu_resident_controller_tests.cpp)
+target_link_libraries(bloom_ui_viewer_gpu_resident_controller_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_viewer_gpu_resident_controller_test)
+bloom_add_test(
+    NAME bloom.ui.viewer_gpu_resident_controller
+    COMMAND bloom_ui_viewer_gpu_resident_controller_test
+    LABELS ui unit gpu
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+# The actual ViewerEditor resident integration gate: injects the private port seam and proves the
+# unchanged CPU paint path for a non-resident frame. Device-free; the private src/ui port header is
+# reached through the module's own source root.
+add_executable(bloom_ui_viewer_editor_resident_test viewer_editor_resident_tests.cpp)
+target_include_directories(bloom_ui_viewer_editor_resident_test PRIVATE ..)
+target_link_libraries(bloom_ui_viewer_editor_resident_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_viewer_editor_resident_test)
+bloom_add_test(
+    NAME bloom.ui.viewer_editor_resident
+    COMMAND bloom_ui_viewer_editor_resident_test
+    LABELS ui integration
+    TIMEOUT 180
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+# Real Wayland device present/ack/resize/resume for the resident controller. Without a packaged
+# loader it skips cleanly (no --loader is passed by normal CTest, which stays offscreen); the
+# supervisor passes --loader/--require-device under QT_QPA_PLATFORM=wayland for the native run.
+add_executable(bloom_ui_viewer_gpu_resident_native_test viewer_gpu_resident_native_tests.cpp)
+target_link_libraries(bloom_ui_viewer_gpu_resident_native_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_viewer_gpu_resident_native_test)
+bloom_add_test(
+    NAME bloom.ui.viewer_gpu_resident_native
+    COMMAND bloom_ui_viewer_gpu_resident_native_test
+    LABELS ui integration gpu presentation
+    TIMEOUT 300
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+# The typed app-activation bootstrap helper: budget/cap alignment, additive cache limits, capability
+# fallback and session-refreshing media context. Device-free and Vulkan-free.
+add_executable(bloom_ui_gpu_viewer_bootstrap_test gpu_viewer_bootstrap_tests.cpp)
+target_link_libraries(bloom_ui_gpu_viewer_bootstrap_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_gpu_viewer_bootstrap_test)
+bloom_add_test(
+    NAME bloom.ui.gpu_viewer_bootstrap
+    COMMAND bloom_ui_gpu_viewer_bootstrap_test
+    LABELS ui unit gpu
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+# The resident cache sublimit + LRU eviction regression against the genuine product fixture. It
+# creates a device; without a packaged loader it skips cleanly. The supervisor passes
+# --loader/--require-device for the native run.
+add_executable(bloom_ui_preview_frame_cache_resident_limits_test
+    preview_frame_cache_resident_limits_tests.cpp)
+target_link_libraries(bloom_ui_preview_frame_cache_resident_limits_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_preview_frame_cache_resident_limits_test)
+bloom_add_test(
+    NAME bloom.ui.preview-frame-cache-resident-limits
+    COMMAND bloom_ui_preview_frame_cache_resident_limits_test
+    LABELS ui unit gpu cache
+    TIMEOUT 300
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+# GPU end-to-end vertical acceptance over a genuine media document. The two service-chain targets
+# adopt the borrowed VkInstance through Qt's public QVulkanInstance and write real OpenEXR fixtures,
+# so they need Vulkan headers and the dependency prefix's OpenEXR/Imath and register only when this
+# build has them. Normal CTest runs use QT_QPA_PLATFORM=offscreen; the supervisor passes
+# --loader/--require-device for the real native gate, and --require-device fails closed.
+if(BLOOM_UI_VULKAN_AVAILABLE)
+    bloom_find_dependency(OpenEXR)
+
+    add_executable(bloom_ui_gpu_resident_service_chain_test
+        gpu_resident_service_chain_tests.cpp
+        gpu_service_chain_fixture.hpp
+        gpu_vertical_proof_support.hpp)
+    target_include_directories(bloom_ui_gpu_resident_service_chain_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    target_link_libraries(bloom_ui_gpu_resident_service_chain_test
+        PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
+    bloom_enable_warnings(bloom_ui_gpu_resident_service_chain_test)
+    bloom_enable_strict_floating_point(bloom_ui_gpu_resident_service_chain_test)
+    bloom_add_test(
+        NAME bloom.ui.gpu_resident_service_chain
+        COMMAND bloom_ui_gpu_resident_service_chain_test
+        LABELS ui gpu resident media
+        TIMEOUT 300
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
+
+    add_executable(bloom_ui_gpu_viewer_service_chain_test
+        gpu_viewer_service_chain_tests.cpp
+        gpu_service_chain_fixture.hpp
+        gpu_vertical_proof_support.hpp)
+    target_include_directories(bloom_ui_gpu_viewer_service_chain_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    target_link_libraries(bloom_ui_gpu_viewer_service_chain_test
+        PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
+    bloom_enable_warnings(bloom_ui_gpu_viewer_service_chain_test)
+    bloom_enable_strict_floating_point(bloom_ui_gpu_viewer_service_chain_test)
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/lib/libvulkan.so.1")
+        set(bloom_ui_gpu_viewer_service_chain_loader_args
+            --loader "${BLOOM_DEPENDENCY_PREFIX}/lib/libvulkan.so.1")
+    else()
+        set(bloom_ui_gpu_viewer_service_chain_loader_args)
+    endif()
+    bloom_add_test(
+        NAME bloom.ui.gpu_viewer_service_chain
+        COMMAND bloom_ui_gpu_viewer_service_chain_test
+                ${bloom_ui_gpu_viewer_service_chain_loader_args}
+        LABELS ui gpu viewer resident
+        TIMEOUT 300
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
+endif()
+
+# Device-free ViewerEditor view-coordinate oracle: fit / zoom-about-cursor / pan pinned against an
+# independent CPU reference built from the production fitDisplayRect()/actualPixelRect() primitives.
+add_executable(bloom_ui_gpu_viewer_end_to_end_test gpu_viewer_end_to_end_tests.cpp)
+target_link_libraries(bloom_ui_gpu_viewer_end_to_end_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_ui_gpu_viewer_end_to_end_test)
+bloom_enable_strict_floating_point(bloom_ui_gpu_viewer_end_to_end_test)
+bloom_add_test(
+    NAME bloom.ui.gpu_viewer_end_to_end
+    COMMAND bloom_ui_gpu_viewer_end_to_end_test
+    LABELS ui gpu viewer
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)

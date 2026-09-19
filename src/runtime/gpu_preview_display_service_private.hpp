@@ -88,6 +88,11 @@ struct PreviewDisplayStageRecord final {
 
 // Shared-owned service core. The loop, the scheduler wake sink, and every child task capture this
 // by shared_ptr; no raw `this` of the public service is ever reachable from a scheduler thread.
+// Fields are deliberately grouped by lifetime and synchronization domain (immutable dependencies,
+// owner-thread native state, stateMutex-guarded state, wake state, stage bookkeeping) so the single
+// long-lived service instance's ownership and destruction order stay obvious; the resulting ~59
+// padding bytes are negligible for one service and reordering would obscure that grouping.
+// NOLINTNEXTLINE(clang-analyzer-optin.performance.Padding)
 struct PreviewDisplayServiceCore final {
     PreviewDisplayServiceCore() = default;
     PreviewDisplayServiceCore(const PreviewDisplayServiceCore&) = delete;
@@ -311,7 +316,7 @@ void disableGpuAfterNativeFailure(const std::shared_ptr<PreviewDisplayServiceCor
 // Resident-route service-thread jobs.
 void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                                const std::shared_ptr<PreviewDisplayStageRecord>& stage,
-                               TaskResult<PreviewGpuSceneStageOutcomeHandle> result);
+                               const TaskResult<PreviewGpuSceneStageOutcomeHandle>& result);
 // Dispatches the FULL original CPU path for a resident stage whose GPU subset is unavailable: the
 // CPU stage function is run again and then the display fallback, exactly the existing CPU pipeline.
 void dispatchResidentCpuFallbackChild(const std::shared_ptr<PreviewDisplayServiceCore>& core,

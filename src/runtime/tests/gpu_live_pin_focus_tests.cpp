@@ -398,34 +398,40 @@ void testWarmReuseReleases(Expectations& expectations, GpuDevice& device,
 } // namespace
 
 int main(const int argc, char** argv) {
-    const Options options = parseOptions(argc, argv);
-    if (!options.valid) {
-        return 2;
-    }
-    Expectations expectations;
-    const CpuCompositionEvaluator oracle;
+    try {
+        const Options options = parseOptions(argc, argv);
+        if (!options.valid) {
+            return 2;
+        }
+        Expectations expectations;
+        const CpuCompositionEvaluator oracle;
 
-    GpuDeviceCreationOptions createOptions;
-    createOptions.loader_path = options.loader_path;
-    auto device = GpuDevice::create(createOptions);
-    if (!device) {
-        if (options.require_device) {
-            std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message << '\n';
+        GpuDeviceCreationOptions createOptions;
+        createOptions.loader_path = options.loader_path;
+        auto device = GpuDevice::create(createOptions);
+        if (!device) {
+            if (options.require_device) {
+                std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message
+                          << '\n';
+                return 1;
+            }
+            std::cout << "SKIP: no compatible Vulkan device available: "
+                      << device.diagnostic.message << '\n';
+            return expectations.ok() ? 0 : 1;
+        }
+
+        testLongSequentialBudget(expectations, *device.device, oracle);
+        testSharedInputNotFreedEarly(expectations, *device.device, oracle);
+        testWarmReuseReleases(expectations, *device.device, oracle);
+
+        if (!expectations.ok()) {
+            std::cerr << "FAIL: live-pin focus expectations failed\n";
             return 1;
         }
-        std::cout << "SKIP: no compatible Vulkan device available: " << device.diagnostic.message
-                  << '\n';
-        return expectations.ok() ? 0 : 1;
-    }
-
-    testLongSequentialBudget(expectations, *device.device, oracle);
-    testSharedInputNotFreedEarly(expectations, *device.device, oracle);
-    testWarmReuseReleases(expectations, *device.device, oracle);
-
-    if (!expectations.ok()) {
-        std::cerr << "FAIL: live-pin focus expectations failed\n";
+        std::cout << "PASS: live-pin focus\n";
+        return 0;
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
         return 1;
     }
-    std::cout << "PASS: live-pin focus\n";
-    return 0;
 }

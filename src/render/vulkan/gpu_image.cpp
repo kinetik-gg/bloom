@@ -226,7 +226,7 @@ SolidImageSupport querySolidImageSupport(vulkan_detail::DeviceAllocatorState& st
         return support;
     }
     const auto* dispatcher = state.physicalDevice.getDispatcher();
-    const auto physical = static_cast<VkPhysicalDevice>(*state.physicalDevice);
+    auto* const physical = static_cast<VkPhysicalDevice>(*state.physicalDevice);
 
     VkPhysicalDeviceProperties properties{};
     dispatcher->vkGetPhysicalDeviceProperties(physical, &properties);
@@ -272,7 +272,8 @@ SolidImageSupport querySolidImageSupport(vulkan_detail::DeviceAllocatorState& st
 
 bool createResidentImage(vulkan_detail::DeviceAllocatorState& state, const std::uint32_t width,
                          const std::uint32_t height, GpuImageImpl& out) {
-    VkImageCreateInfo imageInfo{};
+    VkImageCreateInfo imageInfo;
+    std::memset(&imageInfo, 0, sizeof(imageInfo));
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
     imageInfo.format = kSolidFormat;

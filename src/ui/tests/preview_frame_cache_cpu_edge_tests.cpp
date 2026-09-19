@@ -144,7 +144,7 @@ cpuFrame(const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
     if (!prepared.has_value()) {
         return nullptr;
     }
-    return std::make_shared<const PreparedPreviewFrame>(std::move(*prepared));
+    return std::make_shared<const PreparedPreviewFrame>(*prepared);
 }
 
 } // namespace

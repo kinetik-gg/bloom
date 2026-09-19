@@ -153,7 +153,7 @@ ResidentDisplaySupport queryResidentDisplaySupport(DeviceAllocatorState& state,
         return support;
     }
     const auto* dispatcher = state.physicalDevice.getDispatcher();
-    const auto physical = static_cast<VkPhysicalDevice>(*state.physicalDevice);
+    auto* const physical = static_cast<VkPhysicalDevice>(*state.physicalDevice);
     VkPhysicalDeviceProperties properties{};
     dispatcher->vkGetPhysicalDeviceProperties(physical, &properties);
 
@@ -201,7 +201,8 @@ ResidentDisplaySupport queryResidentDisplaySupport(DeviceAllocatorState& state,
 
 bool createDisplayImage(DeviceAllocatorState& state, const std::uint32_t width,
                         const std::uint32_t height, GpuDisplayImageImpl& out) {
-    VkImageCreateInfo imageInfo{};
+    VkImageCreateInfo imageInfo;
+    std::memset(&imageInfo, 0, sizeof(imageInfo));
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
     imageInfo.format = kDisplayFormat;

@@ -122,11 +122,13 @@ namespace {
 }
 } // namespace
 
-GpuPresentationTargetCode renderResidentIntoAcquired(
-    presentation_detail::SwapchainResources& resources,
-    const std::shared_ptr<vulkan_detail::DeviceAllocatorState>& control,
-    std::shared_ptr<PresentImagePipeline>& presenter, std::shared_ptr<const GpuDisplayImage> input,
-    const GpuPresentImageParams& params, const GpuPresentOverlay& overlay, std::string& message) {
+GpuPresentationTargetCode
+renderResidentIntoAcquired(presentation_detail::SwapchainResources& resources,
+                           const std::shared_ptr<vulkan_detail::DeviceAllocatorState>& control,
+                           std::shared_ptr<PresentImagePipeline>& presenter,
+                           const std::shared_ptr<const GpuDisplayImage>& input,
+                           const GpuPresentImageParams& params, const GpuPresentOverlay& overlay,
+                           std::string& message) {
     if (control == nullptr) {
         message = "the device has no live allocator state";
         return GpuPresentationTargetCode::DriverUnavailable;

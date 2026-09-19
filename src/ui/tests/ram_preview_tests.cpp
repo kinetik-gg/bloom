@@ -1108,6 +1108,10 @@ void testWorkAreaRangeManagement(Expectations& expectations) {
     expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 4,
                         "the expanded range fills");
     const auto key1 = fixture.controller.cacheKeyForTime(time(1, 25));
+    if (!key1.has_value() || !key2.has_value() || !key3.has_value() || !key4.has_value()) {
+        expectations.expect(false, "the cache key fixtures are available");
+        return;
+    }
     expectations.expect(
         fixture.preparationCount.load() == beforeExpansion + 2 && key1 &&
             fixture.frameCache->contains(*key1) && fixture.frameCache->contains(*key2) &&
@@ -1121,6 +1125,10 @@ void testWorkAreaRangeManagement(Expectations& expectations) {
     expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 4,
                         "the shifted range caches four frames");
     const auto key5 = fixture.controller.cacheKeyForTime(time(5, 25));
+    if (!key5.has_value()) {
+        expectations.expect(false, "the shifted cache key fixture is available");
+        return;
+    }
     expectations.expect(
         !fixture.frameCache->contains(*key1) && fixture.frameCache->contains(*key2) &&
             fixture.frameCache->contains(*key3) && fixture.frameCache->contains(*key4) && key5 &&

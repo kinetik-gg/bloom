@@ -76,7 +76,7 @@ GpuPresentationCoordinator::~GpuPresentationCoordinator() {
             } else {
                 // Defensive: latch the fuse and leak the raw generation rather than destroy it.
                 presentation_coordinator_detail::latchQuarantineFuse();
-                static_cast<void>(entry.native.release());
+                static_cast<void>(entry.native.release()); // NOLINT(bugprone-unused-return-value)
             }
         } else {
             impl_->releaseActiveImage(entry);

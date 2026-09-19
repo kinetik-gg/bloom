@@ -226,7 +226,7 @@ void pumpServicePresentation(const std::shared_ptr<PreviewDisplayServiceCore>& c
                 core->presentation->registry->collectExpired();
             }
         }
-    } catch (...) {
+    } catch (...) { // NOLINT(bugprone-empty-catch)
         // A single pump fault must not terminate the service thread; the next pump retries.
     }
     publishServicePresentation(core);

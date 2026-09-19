@@ -22,6 +22,7 @@
 #include <memory>
 #include <optional>
 #include <source_location>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -96,16 +97,24 @@ struct Options final {
     return options;
 }
 
-[[nodiscard]] inline std::optional<ImageWindow>
-window(const std::int64_t x, const std::int64_t y, const std::uint64_t w, const std::uint64_t h) {
+// The fixed fixture literals below are always valid; a rejected value means the fixture itself is
+// broken. Fail the test with a diagnostic instead of returning an empty optional that a caller
+// could dereference unchecked.
+[[nodiscard]] inline ImageWindow window(const std::int64_t x, const std::int64_t y,
+                                        const std::uint64_t w, const std::uint64_t h) {
     const auto result = ImageWindow::create(x, y, w, h);
-    return result ? std::optional(*result.value()) : std::nullopt;
+    if (!result) {
+        throw std::logic_error("invalid composite-proof fixture window");
+    }
+    return *result.value();
 }
 
-[[nodiscard]] inline std::optional<Rgba32f> pixel(const float r, const float g, const float b,
-                                                  const float a) {
+[[nodiscard]] inline Rgba32f pixel(const float r, const float g, const float b, const float a) {
     const auto result = Rgba32f::fromPremultiplied(r, g, b, a);
-    return result ? std::optional(*result.value()) : std::nullopt;
+    if (!result) {
+        throw std::logic_error("invalid composite-proof fixture pixel");
+    }
+    return *result.value();
 }
 
 [[nodiscard]] inline std::optional<Rgba32fImage> makeImage(const ImageWindow dataWindow,
@@ -206,7 +215,7 @@ window(const std::int64_t x, const std::int64_t y, const std::uint64_t w, const 
     for (std::uint32_t y = 0; y < height; ++y) {
         for (std::uint32_t x = 0; x < width; ++x) {
             pixels[static_cast<std::size_t>(y) * width + x] =
-                (x % 2 == 0) ? *pixel(1.0F, 1.0F, 1.0F, 1.0F) : *pixel(0.0F, 0.0F, 0.0F, 1.0F);
+                (x % 2 == 0) ? pixel(1.0F, 1.0F, 1.0F, 1.0F) : pixel(0.0F, 0.0F, 0.0F, 1.0F);
         }
     }
     return pixels;
@@ -220,7 +229,7 @@ window(const std::int64_t x, const std::int64_t y, const std::uint64_t w, const 
             const auto fx = static_cast<float>(x) / static_cast<float>(width);
             const auto fy = static_cast<float>(y) / static_cast<float>(height);
             pixels[static_cast<std::size_t>(y) * width + x] =
-                *pixel(2.0F * fx, -0.5F + fy, 0.25F + 3.0F * fx, fx * fy);
+                pixel(2.0F * fx, -0.5F + fy, 0.25F + 3.0F * fx, fx * fy);
         }
     }
     return pixels;

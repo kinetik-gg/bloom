@@ -80,7 +80,10 @@ GpuResidentDisplayJobState GpuResidentDisplay::state() const noexcept {
 }
 const GpuResidentDisplayDiagnostic& GpuResidentDisplay::diagnostic() const noexcept {
     static const GpuResidentDisplayDiagnostic none{};
-    return impl_ != nullptr ? impl_->jobDiagnostic : none;
+    if (impl_ == nullptr) {
+        return none;
+    }
+    return impl_->jobDiagnostic;
 }
 bool GpuResidentDisplay::isBoundTo(GpuDevice& device) const noexcept {
     if (impl_ == nullptr || !impl_->onOwnerThread()) {

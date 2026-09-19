@@ -95,9 +95,7 @@ bool createCompositeBuffer(DeviceAllocatorState& state, const std::uint64_t byte
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferInfo.size = bytes;
     bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    if (hostVisible) {
-        bufferInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    } else if (initialData != nullptr) {
+    if (hostVisible || initialData != nullptr) {
         bufferInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     }
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
