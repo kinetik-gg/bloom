@@ -221,3 +221,23 @@ bloom_add_test(
     LABELS runtime unit gpu color
     TIMEOUT 120
 )
+
+# GPU Neutral display preview product: adopts a successful native packed readback into the existing
+# display-only product. The adoption/pointer cases run without hardware; the qualification-driven
+# cases take --loader/--require-device from the local supervisor and skip cleanly otherwise.
+add_executable(
+    bloom_runtime_gpu_preview_display_product_test
+    gpu_preview_display_product_tests.cpp
+)
+target_link_libraries(
+    bloom_runtime_gpu_preview_display_product_test
+    PRIVATE bloom_runtime_evaluator
+)
+bloom_enable_warnings(bloom_runtime_gpu_preview_display_product_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_preview_display_product_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_preview_display_product
+    COMMAND bloom_runtime_gpu_preview_display_product_test
+    LABELS runtime unit gpu color
+    TIMEOUT 120
+)

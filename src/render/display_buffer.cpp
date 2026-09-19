@@ -86,6 +86,34 @@ PreparedReferenceDisplayBuffer::create(const ReferenceDisplayBufferDescriptor de
     }
 }
 
+ImageResult<PreparedReferenceDisplayBuffer>
+PreparedReferenceDisplayBuffer::adopt(const ReferenceDisplayBufferDescriptor descriptor,
+                                      std::vector<Rgba8>&& pixels,
+                                      const std::size_t pixelStorageByteLimit) noexcept {
+    const auto requiredBytes = descriptor.layout().pixelStorageBytes;
+    const auto ownedBytes = pixels.size() * sizeof(Rgba8);
+    if (pixels.size() != descriptor.layout().pixelCount) {
+        return ImageResult<PreparedReferenceDisplayBuffer>::failure(
+            ImageError::storageSizeMismatch(ownedBytes, requiredBytes));
+    }
+    // Minimal zero-copy policy: the adopted vector must own exactly its pixel count. A vector with
+    // spare capacity would retain unaccounted bytes for the frame's whole lifetime, so it is
+    // rejected without moving the caller's buffer (which still owns its pixels).
+    if (pixels.capacity() != pixels.size()) {
+        return ImageResult<PreparedReferenceDisplayBuffer>::failure(
+            ImageError::storageSizeMismatch(ownedBytes, requiredBytes));
+    }
+    if (requiredBytes > pixelStorageByteLimit) {
+        return ImageResult<PreparedReferenceDisplayBuffer>::failure(
+            ImageError::pixelStorageBudgetExceeded(requiredBytes, pixelStorageByteLimit));
+    }
+    // Every check has passed, so the payload is moved now and no allocation can fail: the private
+    // constructor is noexcept. A rejected adoption above returned before this point, leaving the
+    // caller's vector untouched.
+    return ImageResult<PreparedReferenceDisplayBuffer>::success(
+        PreparedReferenceDisplayBuffer(descriptor, std::move(pixels)));
+}
+
 bool PreparedReferenceDisplayBuffer::isValid() const noexcept {
     return descriptor_.has_value() && pixels_.size() == descriptor_->layout().pixelCount;
 }

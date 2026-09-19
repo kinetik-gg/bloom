@@ -82,10 +82,10 @@ PreparedPreviewFrame::createQualified(const std::uint64_t requestGeneration,
 
 PreviewDisplayOnlyFrame::PreviewDisplayOnlyFrame(
     PreviewRequestIdentity desiredIdentity, ProcessFrameIdentity processIdentity,
-    render::PreparedReferenceDisplayBuffer buffer, const bool isOcioQualified,
+    render::PreparedReferenceDisplayBuffer buffer, PreviewDisplayProvenance provenance,
     std::vector<EvaluatedOperationBounds> bounds) noexcept
     : desiredIdentity_(std::move(desiredIdentity)), processIdentity_(std::move(processIdentity)),
-      buffer_(std::move(buffer)), isOcioQualified_(isOcioQualified), bounds_(std::move(bounds)) {}
+      buffer_(std::move(buffer)), provenance_(std::move(provenance)), bounds_(std::move(bounds)) {}
 
 std::optional<PreviewDisplayOnlyFrame>
 PreviewDisplayOnlyFrame::create(const PreparedPreviewFrame& source,
@@ -116,7 +116,7 @@ PreviewDisplayOnlyFrame::create(const PreparedPreviewFrame& source,
     try {
         return PreviewDisplayOnlyFrame(
             source.desiredIdentity(), source.processIdentity(), std::move(*buffer.value()),
-            view->isOcioQualified,
+            source.provenance(),
             std::vector<EvaluatedOperationBounds>(geometry.begin(), geometry.end()));
     } catch (const std::exception&) {
         return std::nullopt;
@@ -134,7 +134,7 @@ PreviewDisplayOnlyFrame::displayBufferView() const noexcept {
         .pixelAspect = descriptor->pixelAspect(),
         .layout = descriptor->layout(),
         .pixels = buffer_.pixels(),
-        .isOcioQualified = isOcioQualified_,
+        .isOcioQualified = isOcioQualified(),
     };
 }
 
@@ -149,9 +149,16 @@ std::optional<PreparedPreviewFrame> PreparedPreviewFrame::createDisplayOnly(
         !displayFrame->displayBufferView().has_value()) {
         return std::nullopt;
     }
-    PreviewRequestIdentity desiredIdentity = displayFrame->desiredIdentity();
-    desiredIdentity.requestGeneration = requestGeneration;
-    return PreparedPreviewFrame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
+    // Re-stamping copies the identity (including its display/view name strings) and the envelope's
+    // own state; a bad_alloc there must be a clean rejection, not a terminate at this noexcept
+    // boundary. The GPU finalizer's own catch cannot see an exception that terminates here.
+    try {
+        PreviewRequestIdentity desiredIdentity = displayFrame->desiredIdentity();
+        desiredIdentity.requestGeneration = requestGeneration;
+        return PreparedPreviewFrame(desiredIdentity, DisplayFrameVariant(std::move(displayFrame)));
+    } catch (...) {
+        return std::nullopt;
+    }
 }
 
 PreparedPreviewFrame::PreparedPreviewFrame(PreviewRequestIdentity desiredIdentity,
@@ -174,6 +181,17 @@ bool PreparedPreviewFrame::isOcioQualified() const noexcept {
         return (*displayOnly)->isOcioQualified();
     }
     return std::holds_alternative<QualifiedPtr>(displayFrame_);
+}
+
+PreviewDisplayProvenance PreparedPreviewFrame::provenance() const noexcept {
+    if (std::holds_alternative<ReferencePtr>(displayFrame_)) {
+        return PreviewDisplayProvenance{};
+    }
+    if (const auto* displayOnly = std::get_if<DisplayOnlyPtr>(&displayFrame_)) {
+        return (*displayOnly)->provenance();
+    }
+    return PreviewDisplayProvenance{.provider = PreviewDisplayProvider::CpuOcio,
+                                    .gpuQualification = nullptr};
 }
 
 bool PreparedPreviewFrame::hasProcessFrame() const noexcept {

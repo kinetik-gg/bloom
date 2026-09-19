@@ -87,6 +87,7 @@ target_sources(
         reference_display_preparation.cpp
         gpu_neutral_display_qualification.cpp
         gpu_neutral_display_qualification_fixtures.cpp
+        gpu_preview_display_product.cpp
         view_adjust.cpp
         view_adjust_support.hpp
         value_graph_evaluation.cpp
@@ -106,6 +107,7 @@ target_sources(
             include/bloom/runtime/cpu_composition_evaluator.hpp
             include/bloom/runtime/evaluation.hpp
             include/bloom/runtime/gpu_neutral_display_qualification.hpp
+            include/bloom/runtime/gpu_preview_display_product.hpp
             include/bloom/runtime/input_color_context.hpp
             include/bloom/runtime/prepared_preview_frame.hpp
             include/bloom/runtime/preview_cpu_stage.hpp

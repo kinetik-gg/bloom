@@ -11,6 +11,12 @@
 #include <variant>
 #include <vector>
 
+// Forward-declared at its true namespace scope, never as a nested bloom::runtime::render, so the
+// existing `render::` spellings throughout this header keep resolving to bloom::render.
+namespace bloom::render {
+struct GpuNeutralDisplayReadback;
+} // namespace bloom::render
+
 namespace bloom::runtime {
 
 enum class PreviewOutput : std::uint8_t {
@@ -59,7 +65,39 @@ struct PreviewDisplayBufferView final {
     bool isOcioQualified = false;
 };
 
+class GpuNeutralDisplayQualificationReport;
+
+// Which execution produced a display-only frame's packed pixels. This is provenance, not a second
+// color model: the CPU reference mapper, the qualified CPU Bloom Neutral transform, and the
+// qualified GPU Bloom Neutral transform all publish the same straight-RGBA8 sRGB packing.
+enum class PreviewDisplayProvider : std::uint8_t {
+    CpuReference,
+    CpuOcio,
+    GpuNeutral,
+};
+
+// The provenance a display-only frame retains beside its pixels. `gpuQualification` is non-null
+// exactly for GpuNeutral and is the immutable report from the dispatch that produced the pixels; a
+// CPU frame never carries one. The report is retained (not copied) and never reinterpreted.
+struct PreviewDisplayProvenance final {
+    PreviewDisplayProvider provider = PreviewDisplayProvider::CpuReference;
+    std::shared_ptr<const GpuNeutralDisplayQualificationReport> gpuQualification;
+
+    friend bool operator==(const PreviewDisplayProvenance&,
+                           const PreviewDisplayProvenance&) = default;
+};
+
+class PreviewDisplayOnlyFrame;
 class PreparedPreviewFrame;
+class PreviewCpuStage;
+
+// The one validating GPU product entry point, declared here so PreviewDisplayOnlyFrame can friend
+// it to construct its private, already-validated storage directly. Defined in
+// gpu_preview_display_product.cpp.
+[[nodiscard]] std::optional<PreparedPreviewFrame>
+makeGpuNeutralDisplayPreview(const PreviewCpuStage& stage,
+                             std::shared_ptr<const GpuNeutralDisplayQualificationReport> report,
+                             render::GpuNeutralDisplayReadback&& readback) noexcept;
 
 // A preview frame reduced to what a viewer actually paints: the packed RGBA8 display buffer, the
 // request identity it answers, evaluated geometry, and the process identity that produced it --
@@ -102,31 +140,49 @@ class PreviewDisplayOnlyFrame final {
     [[nodiscard]] std::span<const EvaluatedOperationBounds> evaluatedBounds() const noexcept {
         return bounds_;
     }
-    [[nodiscard]] bool isOcioQualified() const noexcept { return isOcioQualified_; }
+    // The display provider this frame was copied from. Derived from provenance, never independently
+    // claimed: the storage type below carries no qualification flag of its own.
+    [[nodiscard]] const PreviewDisplayProvenance& provenance() const& noexcept {
+        return provenance_;
+    }
+    [[nodiscard]] const PreviewDisplayProvenance& provenance() const&& = delete;
+    [[nodiscard]] bool isOcioQualified() const noexcept {
+        return provenance_.provider != PreviewDisplayProvider::CpuReference;
+    }
     [[nodiscard]] std::optional<PreviewDisplayBufferView> displayBufferView() const noexcept;
     // What retaining this frame costs: packed display pixels plus evaluated geometry.
     [[nodiscard]] std::size_t displayByteCost() const noexcept;
 
   private:
+    // Only the validating GPU product finalizer may construct this private storage directly; there
+    // is deliberately no public unchecked factory that could attach arbitrary provenance.
+    friend std::optional<PreparedPreviewFrame>
+    makeGpuNeutralDisplayPreview(const PreviewCpuStage& stage,
+                                 std::shared_ptr<const GpuNeutralDisplayQualificationReport> report,
+                                 render::GpuNeutralDisplayReadback&& readback) noexcept;
+
     PreviewDisplayOnlyFrame(PreviewRequestIdentity desiredIdentity,
                             ProcessFrameIdentity processIdentity,
-                            render::PreparedReferenceDisplayBuffer buffer, bool isOcioQualified,
+                            render::PreparedReferenceDisplayBuffer buffer,
+                            PreviewDisplayProvenance provenance,
                             std::vector<EvaluatedOperationBounds> bounds) noexcept;
 
     PreviewRequestIdentity desiredIdentity_;
     ProcessFrameIdentity processIdentity_;
-    // One storage type for both display products: PreviewDisplayBufferView already normalizes them
-    // to the same packed shape, so the qualified flag is carried beside the pixels rather than by
-    // the pixels' own type.
+    // One storage type for all display products: PreviewDisplayBufferView already normalizes them
+    // to the same packed shape, so provenance is carried beside the pixels rather than by the
+    // pixels' own type.
     render::PreparedReferenceDisplayBuffer buffer_;
-    bool isOcioQualified_ = false;
+    PreviewDisplayProvenance provenance_;
     std::vector<EvaluatedOperationBounds> bounds_;
 };
 
 // A closed alternative over the two production display products (issue #97, task C3, design
 // decision 2) plus the retained display-only product above: the temporary built-in reference
 // product (ReferenceDisplayFrame), the qualified OCIO product (QualifiedDisplayFrame), or a
-// PreviewDisplayOnlyFrame -- exactly one of the three. The reference alternative's own accessors
+// PreviewDisplayOnlyFrame -- exactly one of the three. A display-only frame is itself produced by
+// any of the three PreviewDisplayProvider executions (CPU reference, CPU OCIO, GPU Neutral); its
+// provenance() says which. The reference alternative's own accessors
 // (displayFrame(), displayIdentity(), displayBuffer()) keep their exact pre-existing signatures and
 // behavior for backward compatibility -- calling one of them when another alternative is active is
 // a precondition violation (a null-pointer dereference, never a thrown exception): no existing or
@@ -160,6 +216,11 @@ class PreparedPreviewFrame final {
     // alternative always reports false here, never silently relabeled (design decision 2); a
     // display-only frame reports what the product it was copied from reported.
     [[nodiscard]] bool isOcioQualified() const noexcept;
+
+    // Which execution produced this frame's display pixels, with the GPU qualification report
+    // retained for a GpuNeutral display-only frame. CPU reference/qualified frames report their
+    // provider with no report; no GPU report is ever fabricated for a CPU frame.
+    [[nodiscard]] PreviewDisplayProvenance provenance() const noexcept;
 
     // False exactly for a display-only frame: its scene-linear pixels were deliberately not
     // retained, so processFrame() is null and processImage() must not be called.
