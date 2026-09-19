@@ -185,7 +185,12 @@ struct SessionFixture final {
     runtime::TaskScheduler scheduler;
     ui::TaskUiBridge bridge;
     PipelineFixture pipelineFixture;
-    ui::PreviewFrameCacheHandle frameCache = std::make_shared<ui::PreviewFrameCache>();
+    // A private, never-polled ledger keeps the preview budgets here a decision of the test rather
+    // than of live host memory pressure: the process ledger can trim an explicit budget mid-test,
+    // which then reads as cache churn the background controller never performed.
+    runtime::MemoryBudgetLedger ledger{std::size_t{16} * 1024 * 1024 * 1024};
+    ui::PreviewFrameCacheHandle frameCache =
+        std::make_shared<ui::PreviewFrameCache>(ui::defaultPreviewFrameCacheByteBudget(), ledger);
     std::atomic<int> preparationCount = 0;
     // When set, the preparation whose ordinal (counting from zero) equals this one blocks in
     // `gate`.
