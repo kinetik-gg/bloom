@@ -99,6 +99,64 @@ else()
 endif()
 bloom_enable_strict_floating_point(bloom_render_stb_truetype)
 
+# --- Vulkan GPU device bootstrap: optional, exact-prefix, CPU stub fallback ---------------------
+#
+# The Vulkan device surface is an optional accelerated capability, not a build requirement. When the
+# locked prefix provides Vulkan-Headers and Vulkan Memory Allocator, the Vulkan bootstrap is
+# compiled; otherwise src/render compiles the portable CPU-unavailable stub with the exact same
+# Bloom-owned API, so a build without any GPU dependency still links and the CPU reference path
+# remains the correctness oracle.
+#
+# Qualified mode never falls back to a host package: detection searches only BLOOM_DEPENDENCY_PREFIX
+# with NO_DEFAULT_PATH. developer-system mode may resolve host packages for local iteration and is
+# labeled Unqualified. The governed bloom_find_dependency() helper is called only after a QUIET
+# availability check has proven both package targets exist.
+option(BLOOM_RENDER_ENABLE_VULKAN
+    "Compile the Vulkan GPU device bootstrap when the locked prefix provides Vulkan headers and VMA"
+    ON)
+
+set(BLOOM_RENDER_VULKAN_AVAILABLE OFF)
+if(BLOOM_RENDER_ENABLE_VULKAN AND DEFINED BLOOM_DEPENDENCY_MODE)
+    if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
+        find_package(VulkanHeaders QUIET CONFIG
+            PATHS "${BLOOM_DEPENDENCY_PREFIX}" NO_DEFAULT_PATH)
+        find_package(VulkanMemoryAllocator QUIET CONFIG
+            PATHS "${BLOOM_DEPENDENCY_PREFIX}" NO_DEFAULT_PATH)
+    elseif(BLOOM_DEPENDENCY_MODE STREQUAL "developer-system")
+        find_package(VulkanHeaders QUIET CONFIG)
+        find_package(VulkanMemoryAllocator QUIET CONFIG)
+    endif()
+
+    if(TARGET Vulkan::Headers AND TARGET GPUOpen::VulkanMemoryAllocator)
+        # Availability is proven; now bind through the governed, mode-aware helper so qualified
+        # mode is enforced by the same fail-closed path as every other dependency.
+        bloom_find_dependency(VulkanHeaders)
+        bloom_find_dependency(VulkanMemoryAllocator)
+        set(BLOOM_RENDER_VULKAN_AVAILABLE ON)
+    else()
+        message(STATUS "Bloom render: Vulkan headers/VMA not found in this dependency mode; "
+            "building the CPU-unavailable GPU device stub.")
+    endif()
+endif()
+
+# VMA's implementation is isolated in its own object target, exactly like the vendored stb_truetype
+# target above: third-party code gets its own warning profile and never inherits Bloom's
+# warnings-as-errors, while the strict floating-point flags the rest of src/render uses still apply.
+if(BLOOM_RENDER_VULKAN_AVAILABLE)
+    add_library(bloom_render_vma OBJECT vulkan/vma.cpp)
+    target_compile_features(bloom_render_vma PUBLIC cxx_std_20)
+    target_link_libraries(
+        bloom_render_vma
+        PRIVATE Vulkan::Headers GPUOpen::VulkanMemoryAllocator
+    )
+    if(MSVC)
+        target_compile_options(bloom_render_vma PRIVATE /w)
+    else()
+        target_compile_options(bloom_render_vma PRIVATE -w)
+    endif()
+    bloom_enable_strict_floating_point(bloom_render_vma)
+endif()
+
 add_library(bloom_render STATIC)
 
 target_sources(
@@ -118,11 +176,21 @@ target_sources(
             include/bloom/render/cpu_image_primitives.hpp
             include/bloom/render/display_buffer.hpp
             include/bloom/render/embedded_fonts.hpp
+            include/bloom/render/gpu_device.hpp
             include/bloom/render/image.hpp
             include/bloom/render/image_types.hpp
             include/bloom/render/text_raster.hpp
             include/bloom/render/path_raster.hpp
 )
+
+# Exactly one of the two implementations defines the shared API symbols. The Vulkan translation
+# unit keeps its include requirements PRIVATE so no Vulkan header reaches bloom_render consumers or
+# the desktop application.
+if(BLOOM_RENDER_VULKAN_AVAILABLE)
+    target_sources(bloom_render PRIVATE vulkan/gpu_device.cpp vulkan/gpu_device_private.hpp)
+else()
+    target_sources(bloom_render PRIVATE gpu_device_stub.cpp)
+endif()
 
 target_compile_features(bloom_render PUBLIC cxx_std_20)
 target_link_libraries(
@@ -130,6 +198,16 @@ target_link_libraries(
     PUBLIC bloom_core
     PRIVATE bloom_render_fonts bloom_render_stb_truetype
 )
+if(BLOOM_RENDER_VULKAN_AVAILABLE)
+    target_link_libraries(
+        bloom_render
+        PRIVATE
+            bloom_render_vma
+            Vulkan::Headers
+            GPUOpen::VulkanMemoryAllocator
+            ${CMAKE_DL_LIBS}
+    )
+endif()
 bloom_enable_warnings(bloom_render)
 bloom_enable_strict_floating_point(bloom_render)
 

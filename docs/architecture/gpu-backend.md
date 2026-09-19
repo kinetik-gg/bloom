@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-08-25
+Updated: 2026-09-19
 
 ## Purpose
 
@@ -42,6 +42,50 @@ a Vulkan subset over public Metal APIs and converts SPIR-V to Metal Shading Lang
 documents known portability limits, so support is capability-driven rather than inferred from an API
 version alone. [Vulkan specification](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html),
 [MoltenVK documentation](https://github.com/KhronosGroup/MoltenVK/blob/main/README.md)
+
+## Implementation Status
+
+Status vocabulary: `implemented` means present in the repository and locally exercised on Linux;
+`pending` means defined but not yet built or qualified. Nothing below makes a Windows or macOS GPU
+claim.
+
+Implemented in this slice:
+
+- A Qt-free and Vulkan-free `bloom::render` public surface (`bloom/render/gpu_device.hpp`): typed
+  device state, per-operation-and-precision `GpuQualification`, ordered structured diagnostics, an
+  immutable generation-scoped capability report, and opaque move-only buffer ownership. No `Vk*`
+  type, native handle, or catch-all backend interface is public.
+- An optional Vulkan bootstrap behind that surface. CMake resolves `Vulkan::Headers` and
+  `GPUOpen::VulkanMemoryAllocator` only from the validated dependency prefix in `qualified` mode;
+  when they are absent, or Vulkan is disabled, the same API is provided by a CPU-unavailable stub
+  that reports a typed `BackendNotBuilt` diagnostic. No Vulkan header reaches the stub, the desktop
+  application, or any public consumer header.
+- Device probing that explicitly checks Vulkan 1.2, `timelineSemaphore`, and a compute-capable
+  queue family before use; a missing loader, device, or entry point produces a typed Unavailable
+  diagnostic instead of a startup crash.
+- A privately opened dynamic loader (the platform loader name only, never a workspace path) and a
+  Vulkan-Hpp typed RAII owner. The allocator is created with explicit `VmaVulkanFunctions`
+  (`vkGetInstanceProcAddr`/`vkGetDeviceProcAddr`); VMA's implementation is isolated in its own
+  translation unit and no static Vulkan prototypes are required.
+- One bounded host-visible allocation path (64 MiB ceiling) that proves the allocator is live. The
+  creating thread is recorded; exposed operations fail closed on another thread, and device
+  destruction asserts its owner. An outstanding allocation co-owns that allocator generation, so
+  the Vulkan allocator is torn down only after the last buffer is released, on the owner thread.
+- The capability report advertises no operation: every operation/precision stays `Unavailable`
+  until the frozen fixtures pass, and an unsupported entry is never inherited from another
+  operation.
+
+Locally verified on Linux: real bootstrap/create/destroy and a tiny VMA host allocation on an
+NVIDIA GeForce RTX 5080 (driver 615.71.9.0, API 1.4); the CPU-unavailable stub on a build with no
+GPU dependency; the existing CPU render tests; and a Qt-free CPU application that links no Vulkan
+loader. Actual device/driver facts from a run are diagnostic evidence, not qualification.
+
+Pending and unchanged: the dedicated GPU service thread and all submission/fence/timeline work,
+resource retirement, cancellation, device loss and recovery, offscreen CPU/GPU transfer, shader
+and pipeline compilation including OCIO GPU programs, presentation/swapchain integration, the
+cross-platform Linux/macOS/Windows parity spike, operation kernels, and scheduler or UI
+integration. The qualified Linux prefix manifest and Windows/macOS GPU support remain pending, so
+this direction stays `working`.
 
 ## Boundaries
 
