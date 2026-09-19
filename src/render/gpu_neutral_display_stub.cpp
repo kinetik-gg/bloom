@@ -32,6 +32,8 @@ GpuNeutralDisplayJobState GpuNeutralDisplay::state() const noexcept {
     return GpuNeutralDisplayJobState::Idle;
 }
 
+bool GpuNeutralDisplay::isBoundTo(GpuDevice&) const noexcept { return false; }
+
 const GpuNeutralDisplayDiagnostic& GpuNeutralDisplay::diagnostic() const noexcept {
     static const GpuNeutralDisplayDiagnostic unavailable{
         GpuNeutralDisplayDiagnosticCode::DeviceUnavailable,

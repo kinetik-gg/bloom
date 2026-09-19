@@ -105,6 +105,13 @@ class GpuNeutralDisplay final {
     [[nodiscard]] GpuNeutralDisplayJobState state() const noexcept;
     [[nodiscard]] const GpuNeutralDisplayDiagnostic& diagnostic() const noexcept;
 
+    // True when this pipeline was created from exactly this device generation. False for a
+    // moved-from/uninitialized pipeline, a null device, a different device, a CPU-stub build, or a
+    // call from a non-owner thread (the query is owner-thread-only and fails closed). The
+    // comparison is against the retained renderer ownership, so no native handle is exposed and no
+    // global generation is required.
+    [[nodiscard]] bool isBoundTo(GpuDevice& device) const noexcept;
+
     // Copies `source` immediately, validates the pixel count, layout arithmetic, device limits, and
     // the byte budget, then records and submits one dispatch. Returns a None diagnostic when the
     // job was accepted; Busy/WrongThread/Unsupported/OverBudget otherwise. An empty source is

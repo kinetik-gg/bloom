@@ -109,6 +109,16 @@ GpuNeutralDisplayJobState GpuNeutralDisplay::state() const noexcept {
     return impl_ != nullptr ? impl_->jobState : GpuNeutralDisplayJobState::Idle;
 }
 
+bool GpuNeutralDisplay::isBoundTo(GpuDevice& device) const noexcept {
+    // Owner-only query: a foreign thread must not read device renderer state, and the answer is
+    // false rather than racing.
+    if (impl_ == nullptr || !impl_->onOwnerThread()) {
+        return false;
+    }
+    const auto deviceState = GpuRendererAccess::state(device);
+    return deviceState != nullptr && deviceState == impl_->state;
+}
+
 const GpuNeutralDisplayDiagnostic& GpuNeutralDisplay::diagnostic() const noexcept {
     static const GpuNeutralDisplayDiagnostic none{};
     if (impl_ != nullptr) {

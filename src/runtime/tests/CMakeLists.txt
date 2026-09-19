@@ -200,3 +200,24 @@ target_link_libraries(bloom_runtime_image_effect_test PRIVATE bloom_runtime_eval
 bloom_enable_warnings(bloom_runtime_image_effect_test)
 bloom_enable_strict_floating_point(bloom_runtime_image_effect_test)
 bloom_add_test(NAME bloom.runtime.image-effects COMMAND bloom_runtime_image_effect_test LABELS unit runtime color)
+
+# Bounded runtime qualification for the embedded Bloom Neutral v1 display operation. The hardware
+# body is compiled unconditionally and depends only on runtime create() availability, so the same
+# target runs against the CPU stub; --loader/--require-device are supplied by the local supervisor
+# for a native run. CTest runs it with no arguments, which prints an explicit skip on absent hardware.
+add_executable(
+    bloom_runtime_gpu_neutral_display_qualification_test
+    gpu_neutral_display_qualification_tests.cpp
+)
+target_link_libraries(
+    bloom_runtime_gpu_neutral_display_qualification_test
+    PRIVATE bloom_runtime_evaluator
+)
+bloom_enable_warnings(bloom_runtime_gpu_neutral_display_qualification_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_neutral_display_qualification_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_neutral_display_qualification
+    COMMAND bloom_runtime_gpu_neutral_display_qualification_test
+    LABELS runtime unit gpu color
+    TIMEOUT 120
+)

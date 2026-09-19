@@ -92,21 +92,48 @@ Submission retirement is tracked independently of the API job state: an unknown 
 retire the submission, and owner-thread teardown drains within a bounded budget or quarantines (never
 destroys a queue-busy generation) under a process-wide fuse. Wrong-thread `begin`/`poll`/`readback`
 fail closed without mutating owned state; `state()`/`diagnostic()` are owner-thread-only reads.
+`GpuNeutralDisplay::isBoundTo()` binds a pipeline to exactly its creating device, so no device can be
+labelled with another device's results.
+
+Bounded runtime qualification now exists for this one operation
+(`bloom/runtime/gpu_neutral_display_qualification.hpp`), with no service, scheduler, frame product,
+or UI activation. It runs on the native device/pipeline owner thread, refuses any processor other
+than the exact default Bloom Neutral v1 handle: it reconstructs the expected canonical identity with
+the official `writeDisplayProcessorIdentityV1` (pinned revision, empty context, `lin_rec709_scene`
+source, default `srgb_rec709_display` display/view, `LookMode::Bypass` with empty looks, and the
+constant quality/semantics/packing) and compares the resulting canonical bytes to the handle's own
+identity bytes, in addition to the processor cache ID, OCIO version, and display/view provenance.
+The identity parser validates canonical records, but the exact expected values are enforced by this
+byte comparison, so a canonically valid but incompatible source/context/look/packing record is
+rejected. Qualification then verifies `isBoundTo`, and executes real native
+`begin/poll/readback` against real `produceBloomNeutralDisplayFrame` at the production 65536-pixel
+chunk. Parity holds to the frozen contract (RGB within one straight-RGBA8 code, alpha exact) over
+1 px, an odd 257-pixel tail, alpha endpoints and all quantization-adjacent samples, and signed/HDR
+and tiny-normal values. A nonzero subnormal frame is measured as whole-frame shader rejection and
+remains a per-frame CPU fallback, never a parity failure or a claimed supported domain. Timing
+measures one warmup plus three alternating pairs at 256x144, 640x360, 1280x720, 1920x1080, and
+3840x2160; the eligible interval is the contiguous faster suffix ending at 4K, so an unmeasured or
+slower 4K leaves the operation CPU-only. The report carries the exact device identity/generation,
+shader digest, config revision, processor cache ID, numeric contract, fixture digest, timing
+samples, and eligible interval, and its construction is private to the qualification function. The
+outcome is `PreviewOnly`; final output is unchanged and stays on CPU.
 
 Locally verified on Linux: real bootstrap/create/destroy and a tiny VMA host allocation on an
 NVIDIA GeForce RTX 5080 (driver 615.71.9.0, API 1.4); the Neutral v1 display dispatch matching the
 independent CPU OCIO oracle within the documented one-code RGB tolerance and exact alpha across
 1 px, 257 px, special values, the full alpha-quantization boundary sweep, 1280x720, and 1920x1080;
-the CPU-unavailable stub on a build with no GPU dependency; the existing CPU render tests; and a
-Qt-free CPU application that links no Vulkan loader. Actual device/driver facts from a run are
-diagnostic evidence, not qualification.
+and the bounded qualification reaching `PreviewOnly` with native faster than CPU at all five
+measured sizes (about 0.06/0.35/1.27/2.83/11.25 ms native versus 0.66/4.19/17.0/37.8/152.8 ms CPU).
+The CPU-unavailable stub, the existing CPU render tests, and a Qt-free CPU application that links no
+Vulkan loader also pass. Actual device/driver facts from a run are diagnostic evidence, not
+qualification.
 
-Pending and unchanged: the dedicated GPU service thread and the runtime/scheduler integration, the
-per-operation qualification fixtures and `ReferenceParity` outcome (the operation stays
-`Unavailable` until those pass), general graph execution, presentation/swapchain integration, the
-cross-platform Linux/macOS/Windows parity spike, shader compilation of generated OCIO programs, and
-Windows/macOS GPU support. The qualified Linux prefix manifest remains pending, so this direction
-stays `working`.
+Pending and unchanged: the dedicated GPU service thread and the runtime/scheduler integration, any
+UI activation of the qualified operation, the full per-operation qualification fixtures for a future
+`ReferenceParity` profile (this operation stays `PreviewOnly`), general graph execution,
+presentation/swapchain integration, the cross-platform Linux/macOS/Windows parity spike, shader
+compilation of generated OCIO programs, and Windows/macOS GPU support. The qualified Linux prefix
+manifest remains pending, so this direction stays `working`.
 
 ## Boundaries
 
