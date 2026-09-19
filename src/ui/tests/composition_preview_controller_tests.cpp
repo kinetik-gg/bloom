@@ -1167,6 +1167,7 @@ bloom::document::NodeId firstGraphNode(const bloom::ui::CompositionSession& sess
 }
 
 #include "composition_preview_controller_01_layout.ipp"
+#include "composition_preview_controller_01b_groups.ipp"
 #include "composition_preview_controller_02_snapshot.ipp"
 #include "composition_preview_controller_03_split.ipp"
 #include "composition_preview_controller_04_retention.ipp"
@@ -1194,6 +1195,7 @@ int main(int argc, char** argv) {
         testCompositionSwitchClearsPixels(expectations);
         testQualifiedDisplayReadinessAndFailClosed(expectations);
         testLayoutEditRetainsEvaluationWork(expectations);
+        testGroupCommandsRetainEvaluationWork(expectations);
         testPixelMixedAndRebindAdvanceEvaluation(expectations);
         testInFlightFrameSurvivesLayoutEdit(expectations);
         testInFlightFrameRejectedAfterPixelEdit(expectations);

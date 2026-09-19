@@ -563,10 +563,11 @@ connection intact. Video rows retain ordinary layer selection, expansion and pro
 Solo and range remain the same Layer semantics as other rows. An unavailable audio
 file shows the warning glyph and remains relinkable from Assets.
 
-New Composition and the composition Properties section expose a `KColorChip` Background Colour.
-Viewer Solid mode paints that authored RGBA colour, initially opaque black. Black, White and
-Checkerboard remain session choices. This viewer background does not alter composition pixels
-or export alpha.
+New Composition and the composition Properties section expose a `KColorChip` Background Colour for
+the composition itself. The Viewer surround is chosen separately in the Viewer footer: Solid paints
+the panel Canvas token, Black and White paint literal values, and Checkerboard is the default so
+alpha behind the composition is always visible. The surround does not alter composition pixels, the
+authored Background Colour, or export alpha.
 
 ## Live Value Editing
 

@@ -99,7 +99,7 @@ void KPanelFrame::paintEvent(QPaintEvent*) {
     QPainterPath outside;
     outside.addRect(QRectF(rect()));
     painter.fillPath(outside.subtracted(frame), color(Color::Background));
-    painter.setPen(QPen(color(active_ ? Color::BorderActive : Color::Border), kHairlineWidth));
+    painter.setPen(QPen(color(active_ ? Color::Accent : Color::Border), kHairlineWidth));
     painter.setBrush(Qt::NoBrush);
     painter.drawPath(frame);
 }

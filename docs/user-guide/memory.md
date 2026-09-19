@@ -38,8 +38,9 @@ shown explicitly.
 
 ## Changing the budgets
 
-Two settings keys set ceilings. Both are **byte counts written as decimal numbers**, read when
-Bloom starts:
+Set these under **Edit → Preferences… → Memory & Caches**. They are read when Bloom starts, so a
+change takes effect after restart. Underneath, two settings keys set the ceilings; both are **byte
+counts written as decimal numbers**:
 
 | Key | What it sets |
 | --- | --- |

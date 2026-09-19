@@ -357,6 +357,11 @@ target_sources(
         frame_export_controller_deliverables.cpp
         composition_export_dialog.cpp
         composition_export_dialog.hpp
+        acceleration_status.cpp
+        application_preferences.cpp
+        preferences_window.cpp
+        preferences_window.hpp
+        preferences_window_performance.cpp
         frameless_window_support.cpp
         jobs_editor.cpp
         licenses_window.cpp
@@ -437,6 +442,8 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/ui/acceleration_status.hpp
+            include/bloom/ui/application_preferences.hpp
             include/bloom/ui/background_preview_controller.hpp
             include/bloom/ui/application_shutdown_coordinator.hpp
             include/bloom/ui/composition_authoring.hpp
@@ -463,6 +470,7 @@ target_sources(
             include/bloom/ui/node_editor.hpp
             include/bloom/ui/node_layout_arrange.hpp
             include/bloom/ui/playback_controller.hpp
+            include/bloom/ui/preferences_aware.hpp
             include/bloom/ui/preview_frame_cache.hpp
             include/bloom/ui/project_host.hpp
             include/bloom/ui/ram_preview_controller.hpp

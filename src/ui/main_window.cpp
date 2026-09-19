@@ -1,13 +1,17 @@
+#include "preferences_window.hpp"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/main_window.hpp>
+#include <bloom/ui/preferences_aware.hpp>
 #include <memory>
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/host/project_session.hpp>
+#include <bloom/ui/acceleration_status.hpp>
+#include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
@@ -38,6 +42,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QTimer>
 #include <QUrl>
@@ -78,11 +83,13 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                        CompositionPreviewController* const previewController, QWidget* parent,
                        PlaybackController* const playbackController,
                        runtime::OperationCache* const operationCache,
-                       media::cache::MediaDiskCache* const mediaDiskCache)
+                       media::cache::MediaDiskCache* const mediaDiskCache,
+                       const AccelerationStatusProvider* const accelerationStatus)
     : QMainWindow(parent), compositionSession_(compositionSession), projectHost_(projectHost),
       frameExportController_(frameExportController), ramPreview_(ramPreview),
       previewController_(previewController), playbackController_(playbackController),
-      operationCache_(operationCache), mediaDiskCache_(mediaDiskCache) {
+      operationCache_(operationCache), mediaDiskCache_(mediaDiskCache),
+      accelerationStatus_(accelerationStatus) {
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
     resize(1600, 1000);
@@ -306,6 +313,18 @@ void MainWindow::createMenus(QMenuBar& menuBar) {
     connect(redoAction_, &QAction::triggered, &compositionSession_, &CompositionSession::redo);
     connect(&compositionSession_, &CompositionSession::historyChanged, this,
             &MainWindow::updateEditActions);
+
+    // Edit | Preferences... (macOS routes a PreferencesRole action into the application menu with
+    // the standard shortcut; on Windows and Linux it stays here). This edits global application
+    // preferences; it is deliberately separate from File | Project Settings..., which edits
+    // project truth.
+    editMenu->addSeparator();
+    preferencesAction_ = editMenu->addAction(tr("Preferences…"));
+    preferencesAction_->setObjectName(QStringLiteral("preferencesAction"));
+    preferencesAction_->setMenuRole(QAction::PreferencesRole);
+    preferencesAction_->setShortcut(QKeySequence::Preferences);
+    preferencesAction_->setShortcutContext(Qt::WindowShortcut);
+    connect(preferencesAction_, &QAction::triggered, this, &MainWindow::showPreferences);
 
     compositionMenu_ = menuBar.addMenu("&Composition");
     createCompositionMenu(*compositionMenu_);
@@ -648,6 +667,50 @@ void MainWindow::showProjectColorSettings() {
                              tr("The selected colour configuration could not be resolved."));
 }
 
+void MainWindow::showPreferences() {
+    // The window edits a value, not QSettings; the commit path here is the only writer, so a
+    // cancelled dialog leaves the stored preferences untouched.
+    const QSettings currentSettings;
+    PreferencesWindow dialog(loadApplicationPreferences(currentSettings), accelerationStatus_,
+                             this);
+    connect(&dialog, &PreferencesWindow::preferencesApplied, this,
+            [this](const ApplicationPreferences& preferences) {
+                QSettings settings;
+                saveApplicationPreferences(settings, preferences);
+                settings.sync();
+                applyPreferencesToOpenEditors(preferences);
+                emit preferencesChanged();
+            });
+    dialog.exec();
+}
+
+void MainWindow::applyPreferencesToOpenEditors(const ApplicationPreferences& preferences) {
+    // Editors are constructed with only their session and controller, not a preferences reference,
+    // so the window reaches the live ones through the widget tree. A widget that does not implement
+    // PreferencesAware is skipped; new editors built after this point read the saved value at
+    // construction.
+    const auto descendants = findChildren<QWidget*>();
+    for (QWidget* widget : descendants) {
+        if (auto* aware = dynamic_cast<PreferencesAware*>(widget); aware != nullptr) {
+            aware->applyApplicationPreferences(preferences);
+        }
+    }
+    // The audio View action is a QAction, not a PreferencesAware widget, so the loop above never
+    // reaches it; without this it would keep reporting the pre-commit check state and the next
+    // click would toggle from stale state. Mirror the committed preference with signals blocked so
+    // no duplicate playback command runs here; the app's preferencesChanged handler owns the
+    // playback engine update.
+    if (viewAudioEnabledAction_ != nullptr &&
+        viewAudioEnabledAction_->isChecked() != preferences.audioEnabled) {
+        const QSignalBlocker blocker(viewAudioEnabledAction_);
+        viewAudioEnabledAction_->setChecked(preferences.audioEnabled);
+    }
+}
+
+void MainWindow::applyCommittedPreferencesForTest(const ApplicationPreferences& preferences) {
+    applyPreferencesToOpenEditors(preferences);
+}
+
 void MainWindow::updateFileActions() {
     const bool busy = projectHost_.isBusy();
     if (auto* import = findChild<QAction*>("importAssetsAction"))
@@ -791,9 +854,18 @@ void MainWindow::resetCompositingLayout(const bool persist) {
         settings.remove(QLatin1StringView(timelineLayerColumnWidthKey));
     }
 
-    workspaceHost_->resetToDefaultLayout(
-        {"bloom.assets", "bloom.viewer", "bloom.nodes", "bloom.properties"}, "bloom.timeline");
+    workspaceHost_->resetToDefaultLayout("bloom.viewer", "bloom.nodes", "bloom.assets",
+                                         "bloom.timeline", "bloom.properties");
     workspaceLayoutWritable_ = true;
+
+    // The Timeline's 37% divider default is applied at show time, but the Timeline is nested inside
+    // a splitter whose weights settle on a later event turn, so its show-time width can precede its
+    // final extent. Re-apply the ratio once geometry is final, before the deferred persist below
+    // records the width.
+    QTimer::singleShot(0, workspaceHost_, [this] {
+        if (auto* timeline = workspaceHost_->findChild<TimelineEditor*>())
+            timeline->applyDefaultLayerColumnWidth();
+    });
 
     if (persist) {
         const auto persistResetState = [this] {

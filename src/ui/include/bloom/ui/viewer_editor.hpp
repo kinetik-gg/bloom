@@ -5,6 +5,7 @@
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_native_surface.hpp>
 #include <bloom/ui/playback_controller.hpp>
+#include <bloom/ui/preferences_aware.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/viewer_editor_probe.hpp>
 #include <bloom/ui/viewer_gpu_resident.hpp>
@@ -83,10 +84,13 @@ enum class ViewerChannel : std::uint8_t {
 };
 
 // What the Viewer paints behind (and around) the composition (task VIEW-1). Persisted under
-// "viewer/background"; Solid is the default.
+// "viewer/background"; Checkerboard is the default so alpha behind the composition is always
+// visible.
 //
-// Solid reads the selected composition's authored backgroundColor (default opaque black).
-// It is viewer presentation only and never fills process or export alpha.
+// Solid fills with the panel Canvas token, so the surround blends with the panel chrome rather
+// than reading as a separate black rectangle; it does not read the composition's authored
+// backgroundColor. Black and White are literal. It is viewer presentation only and never fills
+// process or export alpha.
 enum class ViewerBackground : std::uint8_t {
     Solid,
     Checkerboard,
@@ -180,11 +184,18 @@ struct ViewTransform final {
 // unaffected by this amendment.
 struct ViewerTextEdit;
 
-class ViewerEditor final : public QWidget, public EditorChromeProvider, public EditorNativeSurface {
+class ViewerEditor final : public QWidget,
+                           public EditorChromeProvider,
+                           public EditorNativeSurface,
+                           public PreferencesAware {
     Q_OBJECT
 
   public:
     [[nodiscard]] EditorChromeSpec& editorChrome() override { return chrome_; }
+    // Applies the Preferences window's committed viewer preferences by driving this panel's own
+    // controls, so their existing persistence and preview-controller updates stay the single code
+    // path.
+    void applyApplicationPreferences(const ApplicationPreferences& preferences) override;
     // `ramPreview` is the RAM Preview command (task PERF1, item 3), shared with the Composition
     // menu so both entry points call one method. Null leaves the footer's RAM Preview button
     // present and disabled -- an affordance that is visibly unavailable rather than one that
@@ -251,6 +262,10 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider, public E
     // Test-only: inject the adapter's private port seam so a CPU-only fixture can drive the
     // controller without a device. The product never calls this.
     void setGpuPresentationPortForTest(std::shared_ptr<ViewerGpuPort> port);
+    // Test-only: the resident present request the viewer would submit for the current transform,
+    // channel, and background. Device-free, so a test can prove the GPU surround matches the CPU
+    // drawCanvasBackground() paint for every background mode.
+    [[nodiscard]] ResidentPresentRequest buildResidentPresentRequestForTest();
 
   signals:
     void probeChanged(ProbeReadout readout);
@@ -534,7 +549,7 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider, public E
     QAction* stepToEndAction_ = nullptr;
     QMetaObject::Connection focusConnection_;
     ViewerChannel channel_ = ViewerChannel::Rgba;
-    ViewerBackground background_ = ViewerBackground::Solid;
+    ViewerBackground background_ = ViewerBackground::Checkerboard;
     // The channel remap's one cached result. Keyed on the FRAME HANDLE (held by value, so the
     // bytes it was built from cannot be freed and a later frame cannot reuse the address) plus the
     // channel, so a repaint at an unchanged channel and frame costs nothing and playback does not

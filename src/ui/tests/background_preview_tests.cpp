@@ -31,6 +31,7 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QMouseEvent>
+#include <QRectF>
 #include <QWidget>
 
 #include <algorithm>
@@ -258,6 +259,43 @@ void testWorkAreaBoundsBackground(Expectations& expectations) {
         const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
         expectations.expect(key && fixture.frameCache->contains(*key) == (frame >= 2 && frame < 5),
                             "background cache respects both exclusive range edges");
+    }
+    background.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
+// A background fill must submit the SAME ROI the cache key carries. Before the fix, fillNextFrame
+// built the identity with no `.roi`, so when an ROI was active the completion-key comparison
+// (cacheKeyForTime includes roi, forIdentity(activeIdentity) did not) never matched: the completed
+// frame was silently discarded and never entered the cache.
+void testBackgroundFillHonoursRegionOfInterest(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Background ROI", time(3, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "ROI fixture foreground settled");
+    fixture.controller.setRegionOfInterest(QRectF(0.25, 0.25, 0.5, 0.5));
+    expectations.expect(fixture.controller.regionOfInterest().has_value(),
+                        "the controller exposes the ROI window");
+    fixture.frameCache->clear();
+
+    ui::BackgroundPreviewController background(fixture.session, fixture.controller,
+                                               fixture.scheduler, fixture.bridge,
+                                               fixture.countingPipeline());
+    background.fillNextFrame();
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() >= 1; }),
+                        "a ROI background frame enters the cache");
+
+    const auto roiKey = fixture.controller.cacheKeyForTime(time(0, 25));
+    expectations.expect(roiKey.has_value() && roiKey->roi.has_value(),
+                        "the cache key carries the ROI window");
+    if (roiKey.has_value()) {
+        expectations.expect(fixture.frameCache->contains(*roiKey),
+                            "the completed ROI frame is cached under the ROI key");
+        // The same time WITHOUT the ROI is a different key; its absence proves the cached entry was
+        // the ROI frame, not a wasted full-frame submission that reused the plain key.
+        auto plainKey = *roiKey;
+        plainKey.roi = std::nullopt;
+        expectations.expect(!fixture.frameCache->contains(plainKey),
+                            "no full-frame entry is cached for the ROI time");
     }
     background.beginShutdown();
     finishFixture(fixture, expectations);
@@ -668,6 +706,7 @@ int main(int argc, char** argv) {
         testVisibleAdmissionAndSupersession(expectations);
         testBackgroundFillsAheadWhilePlaying(expectations);
         testWorkAreaBoundsBackground(expectations);
+        testBackgroundFillHonoursRegionOfInterest(expectations);
         testOutwardOrderBudgetAndRestart(expectations);
         testYieldsAndKeepsCancelledHandleUntilTerminal(expectations);
         testLayoutEditKeepsBackgroundOnRetainedRevision(expectations);

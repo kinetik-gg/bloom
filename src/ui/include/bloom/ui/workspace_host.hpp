@@ -44,11 +44,14 @@ class WorkspaceHost final : public QFrame {
     [[nodiscard]] int areaCount() const;
     void setActiveArea(EditorArea* area);
     void resetToSingleArea(std::string_view editorId = {});
-    // Builds the application's five-area first-run arrangement. The host owns the proportions and
-    // topology; callers supply editor identities so the generic split tree remains replaceable.
-    void resetToDefaultLayout(const std::array<std::string_view, 4>& topRowEditorIds,
-                              std::string_view bottomRowEditorId,
-                              std::size_t activeTopRowIndex = 1);
+    // Builds the application's five-area first-run arrangement: a full-height right column (Assets
+    // over Properties) beside a left region whose top row is Viewer | Nodes and whose bottom is the
+    // Timeline. The host owns the proportions and topology; callers supply editor identities so the
+    // generic split tree remains replaceable. `activeIndex` selects the active area in the order
+    // Viewer (0), Nodes (1), Assets (2), Timeline (3), Properties (4).
+    void resetToDefaultLayout(std::string_view viewerEditorId, std::string_view nodesEditorId,
+                              std::string_view assetsEditorId, std::string_view timelineEditorId,
+                              std::string_view propertiesEditorId, std::size_t activeIndex = 0);
 
     EditorArea* splitActiveArea(Qt::Orientation orientation);
     EditorArea* splitArea(EditorArea& area, Qt::Orientation orientation,

@@ -112,5 +112,13 @@ struct ValueCellSpec {
 [[nodiscard]] kit::KSection* addSection(QVBoxLayout* layout, QWidget* parent, const QString& id,
                                         const QString& title);
 
+// The policy-free core of addSection(): a KSection with an explicit object name and persistence
+// key, appended to `layout`. Properties calls this and then stamps its own filter group; the
+// Preferences window calls it with a `preferences/sections/...` key, so both surfaces build a
+// section the same way instead of each re-spelling construction.
+[[nodiscard]] kit::KSection* makeSection(QVBoxLayout* layout, QWidget* parent,
+                                         const QString& objectName, const QString& title,
+                                         const QString& persistenceKey);
+
 } // namespace properties
 } // namespace bloom::ui

@@ -164,6 +164,25 @@ removalTimeFootprint(const document::Composition& composition,
             return std::nullopt;
     }
 
+    // A muted Layer Stack compiles only its first slot (snapshot_compiler_lowering.ipp). Removing a
+    // participating layer can promote a later layer into that slot, changing output wherever the
+    // promoted layer is active -- which need not lie inside the removed boundary's own span. That
+    // is unprovable, so a removed boundary participating in a muted stack forces whole-render.
+    for (const auto* boundary : boundaries) {
+        const bool participatesInMutedStack =
+            std::ranges::any_of(graph.merges(), [&](const document::LayerStack& stack) {
+                const auto layout = composition.nodeLayout().find(stack.nodeId());
+                if (layout == composition.nodeLayout().end() || !layout->second.muted)
+                    return false;
+                return std::ranges::any_of(stack.entries(),
+                                           [&](const document::LayerStackEntry& entry) {
+                                               return entry.layerId == boundary->layerId;
+                                           });
+            });
+        if (participatesInMutedStack)
+            return std::nullopt;
+    }
+
     // The change is confined to where a removed, merge-participating boundary was active. A
     // boundary with no merge slot is isolated (no outgoing edges were allowed above) and
     // contributes nothing.

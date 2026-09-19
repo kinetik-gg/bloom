@@ -50,12 +50,20 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
     }
     request.channel = static_cast<render::GpuPresentChannel>(channel_);
     request.background = static_cast<render::GpuPresentBackground>(background_);
-    const auto* composition = session_.composition();
-    const core::Color4d backgroundColor =
-        composition != nullptr ? composition->backgroundColor() : core::Color4d{0.0, 0.0, 0.0, 1.0};
-    request.backgroundColor = render::GpuPresentColor{
-        static_cast<float>(backgroundColor.red), static_cast<float>(backgroundColor.green),
-        static_cast<float>(backgroundColor.blue), static_cast<float>(backgroundColor.alpha)};
+    // The surround must match drawCanvasBackground()'s CPU paint for every mode. Solid uses the
+    // panel Canvas token -- the composition's authored background lives in the display image
+    // itself, never in the surround -- Black and White are literal, and Checkerboard comes from the
+    // checker colours below. The present shader overrides Black/White/Checkerboard from the mode,
+    // so this value is authoritative for Solid and consistent with the CPU path for the others.
+    QColor surround = kit::color(kit::Color::Canvas);
+    if (background_ == ViewerBackground::Black) {
+        surround = QColor(Qt::black);
+    } else if (background_ == ViewerBackground::White) {
+        surround = QColor(Qt::white);
+    }
+    request.backgroundColor = render::GpuPresentColor{static_cast<float>(surround.redF()),
+                                                      static_cast<float>(surround.greenF()),
+                                                      static_cast<float>(surround.blueF()), 1.0F};
     const QColor checkerA = kit::color(kit::Color::Surface);
     const QColor checkerB = kit::color(kit::Color::SurfaceRaised);
     request.checkerColorA = render::GpuPresentColor{static_cast<float>(checkerA.redF()),
@@ -71,6 +79,7 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
     // The worker only replays this picture; it reads no widget and no session state.
     const auto frame = displayedFrame();
     const auto resident = frame != nullptr ? residentFrameGeometry(*frame) : std::nullopt;
+    const auto* composition = session_.composition();
     if (frame != nullptr && resident.has_value() && geometry.has_value()) {
         const QRectF displayRect = request.destination;
         QPicture picture;
@@ -157,10 +166,7 @@ QPixmap ViewerEditor::renderCpuCoverSnapshot() {
     painter.translate(-content.topLeft());
     // The cover must reproduce the CPU paint, including the canvas background (the display buffer
     // may be transparent where no layer covers).
-    const auto* composition = session_.composition();
-    drawCanvasBackground(painter, content, background_,
-                         composition != nullptr ? composition->backgroundColor()
-                                                : core::Color4d{0.0, 0.0, 0.0, 1.0});
+    drawCanvasBackground(painter, content, background_);
     coverSnapshotInProgress_ = true;
     paintViewerContent(painter);
     coverSnapshotInProgress_ = false;
@@ -169,6 +175,10 @@ QPixmap ViewerEditor::renderCpuCoverSnapshot() {
 }
 
 QPixmap ViewerEditor::renderCpuCoverSnapshotForTest() { return renderCpuCoverSnapshot(); }
+
+ResidentPresentRequest ViewerEditor::buildResidentPresentRequestForTest() {
+    return buildResidentPresentRequest();
+}
 
 void ViewerEditor::updateGpuResidentPresentation() {
     if (gpuResident_ == nullptr) {

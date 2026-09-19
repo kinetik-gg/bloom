@@ -558,6 +558,7 @@ void testTheFourCornersAreClippedToWindowBackground(Expectations& expectations) 
     }
 
     const QColor background = kit::color(kit::Color::Background);
+    const QColor border = kit::color(kit::Color::Border);
     const qreal dpr = image.devicePixelRatio();
     const int w = image.width();
     const int h = image.height();
@@ -568,9 +569,24 @@ void testTheFourCornersAreClippedToWindowBackground(Expectations& expectations) 
         QPoint(0, h - 1 - last),
         QPoint(w - 1 - last, h - 1 - last),
     };
-    // Background (#111111) and Surface (#141414, the header/footer's own fill) differ by only 3
-    // per channel, so this checks exact equality rather than a tolerant "near" match -- a loose
-    // tolerance would pass even if a header/footer/content corner bled straight through.
+    const int r = kit::KPanelFrame::radiusPx() * static_cast<int>(std::lround(dpr));
+    if (r == 0) {
+        // Square panels: there is no corner curve to clip, so the border reaches the corner and
+        // the corner is border ink rather than the window background a rounded panel revealed.
+        const int inkFloor =
+            (qGray(border.rgb()) + qGray(kit::color(kit::Color::Surface).rgb())) / 2;
+        for (const auto& corner : corners) {
+            expectations.expect(qGray(image.pixelColor(corner).rgb()) >= inkFloor,
+                                "a square panel's corner carries border ink at (" +
+                                    std::to_string(corner.x()) + ", " + std::to_string(corner.y()) +
+                                    ")");
+        }
+        return;
+    }
+    // Rounded panels: Background (#111111) and Surface (#141414, the header/footer's own fill)
+    // differ by only 3 per channel, so this checks exact equality rather than a tolerant "near"
+    // match -- a loose tolerance would pass even if a header/footer/content corner bled straight
+    // through.
     for (const auto& corner : corners) {
         expectations.expect(image.pixelColor(corner) == background,
                             "the panel corner at (" + std::to_string(corner.x()) + ", " +
@@ -581,8 +597,6 @@ void testTheFourCornersAreClippedToWindowBackground(Expectations& expectations) 
     // Owner, 2026-09-15: the extreme pixel was never the problem; the header's square corner
     // showed INSIDE the curve and cut the border. Walk the top-left arc: every pixel outside it
     // is window background and the arc itself carries the border ink, on the header's own rows.
-    const int r = kit::KPanelFrame::radiusPx() * static_cast<int>(std::lround(dpr));
-    const QColor border = kit::color(kit::Color::Border);
     bool outsideIsBackground = true;
     bool arcCarriesBorder = true;
     for (int y = 1; y < r / 2; ++y) {

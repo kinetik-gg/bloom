@@ -42,10 +42,10 @@ enum class Color : std::uint8_t {
     Faint,
     Border,
     BorderHover,
-    // The active-panel indicator (task U8, issue #131, fix 1): a subtle neutral border a focused
-    // EditorArea takes instead of Accent. Panel chrome never reads as accent-colored; this is the
-    // one role that marks "this is the active panel."
+    // A neutral border used by navigator-style controls for hover/drag. The active-panel border is
+    // Accent, matching the playhead, so this is no longer an active-area role.
     BorderActive,
+    // Selection, focus, the active-panel border, and the playhead.
     Accent,
     OnAccent,
     AccentHover,
@@ -116,9 +116,9 @@ enum class Radius : int {
     Large = 12,
     XLarge = 16,
     Full = -1,
-    // task U8 (issue 131), formal amendment 1, A3: the panel body's own radius, exactly 4 --
-    // deliberately its own named step, not a reuse of Small (3) or any other named radius.
-    Panel = 4,
+    // The panel body's own radius, deliberately its own named step rather than a reuse of Small or
+    // Medium. Trial: square panels (0). See docs/ux/ui-grammar.md before changing.
+    Panel = 0,
 };
 
 [[nodiscard]] int radiusPx(Radius token, int extentPx);
@@ -256,6 +256,9 @@ enum class Size : int {
     PropertiesComponentMinWidth = 48,
     PropertiesDropdownWidth = 108,
     PropertiesSearchWidth = 180,
+    // The Settings window's category rail: wide enough for the longest category label plus its
+    // selection bar, sized in Figma design px through kit::px() like every other Size token.
+    PreferencesRailWidth = 180,
     PropertiesCheckBox = 12,
     PropertiesSwatchHeight = 26,
     PropertiesAnchorDot = 8,

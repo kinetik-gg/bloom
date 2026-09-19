@@ -26,6 +26,7 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
@@ -72,9 +73,9 @@ struct ViewerSample final {
     bool opaque = false;
 };
 
-// The viewer's default background is the composition's Solid background colour (opaque black).
-// The resident present composites the frame over it, so the displayed colour is the reference
-// premultiplied over black; the grim capture only ever sees opaque composited pixels.
+// The viewer's background is a compositing backdrop: the resident present composites the frame over
+// it, so a transparent composition pixel shows the backdrop and an opaque one reads source-over it.
+// The grim capture only ever sees opaque composited pixels.
 [[nodiscard]] render::Rgba8 overOpaqueBlack(const render::Rgba8 rgba) {
     const auto scale = [](const std::uint8_t value, const std::uint8_t alpha) {
         return static_cast<std::uint8_t>((static_cast<int>(value) * static_cast<int>(alpha) + 127) /
@@ -82,6 +83,56 @@ struct ViewerSample final {
     };
     return render::Rgba8{scale(rgba.red, rgba.alpha), scale(rgba.green, rgba.alpha),
                          scale(rgba.blue, rgba.alpha), 255};
+}
+
+// Byte-for-byte source-over of a straight-alpha sample onto an opaque backdrop, mirroring the
+// premultiplied-over-opaque compositing the present shader and the CPU paint both perform.
+[[nodiscard]] render::Rgba8 compositeOver(const render::Rgba8 backdrop, const render::Rgba8 rgba) {
+    const auto multiply = [](const std::uint8_t value, const std::uint8_t alpha) {
+        return static_cast<std::uint8_t>((static_cast<int>(value) * static_cast<int>(alpha) + 127) /
+                                         255);
+    };
+    const auto add = [](const std::uint8_t a, const std::uint8_t b) {
+        return static_cast<std::uint8_t>(std::min(255, static_cast<int>(a) + static_cast<int>(b)));
+    };
+    return render::Rgba8{
+        add(multiply(rgba.red, rgba.alpha), multiply(backdrop.red, 255 - rgba.alpha)),
+        add(multiply(rgba.green, rgba.alpha), multiply(backdrop.green, 255 - rgba.alpha)),
+        add(multiply(rgba.blue, rgba.alpha), multiply(backdrop.blue, 255 - rgba.alpha)), 255};
+}
+
+// The CPU background colour a mode paints behind the composition (viewer_editor.cpp
+// drawCanvasBackground above): Solid is the panel Canvas token, Black/White literal, and
+// Checkerboard alternates Surface (base) and SurfaceRaised (raised) on the 22px kit ViewerChecker
+// grid. The checker cell for a device-pixel coordinate is derived from the CPU semantics, NOT by
+// reading the GPU request fields, so the two paths are compared independently.
+[[nodiscard]] render::Rgba8 cpuBackgroundColor(const ui::ViewerBackground mode, const int deviceX,
+                                               const int deviceY, const double dpr) {
+    switch (mode) {
+    case ui::ViewerBackground::Solid: {
+        const QColor canvas = ui::kit::color(ui::kit::Color::Canvas);
+        return render::Rgba8{static_cast<std::uint8_t>(canvas.red()),
+                             static_cast<std::uint8_t>(canvas.green()),
+                             static_cast<std::uint8_t>(canvas.blue()), 255};
+    }
+    case ui::ViewerBackground::Black:
+        return render::Rgba8{0, 0, 0, 255};
+    case ui::ViewerBackground::White:
+        return render::Rgba8{255, 255, 255, 255};
+    case ui::ViewerBackground::Checkerboard:
+        break;
+    }
+    const auto tile =
+        static_cast<int>(std::lround(ui::kit::px(ui::kit::Size::ViewerChecker) * dpr));
+    const int span = std::max(1, tile);
+    const int column = deviceX >= 0 ? deviceX / span : -((-deviceX + span - 1) / span);
+    const int row = deviceY >= 0 ? deviceY / span : -((-deviceY + span - 1) / span);
+    const bool raised = ((row + column) & 1) == 0;
+    const QColor color = raised ? ui::kit::color(ui::kit::Color::SurfaceRaised)
+                                : ui::kit::color(ui::kit::Color::Surface);
+    return render::Rgba8{static_cast<std::uint8_t>(color.red()),
+                         static_cast<std::uint8_t>(color.green()),
+                         static_cast<std::uint8_t>(color.blue()), 255};
 }
 
 [[nodiscard]] render::Rgba8 channelReference(const render::Rgba8 rgba,
@@ -155,6 +206,66 @@ struct ViewerSample final {
         // emitted in TOP-LEVEL WINDOW coordinates; the capture is that same window region.
         sample.windowLocal = QPointF(viewer.mapTo(&host, local.toPoint()));
         sample.expected = overOpaqueBlack(channelReference(referencePixel, channel));
+        sample.opaque = referencePixel.alpha == 255;
+        samples.push_back(sample);
+    }
+    return samples;
+}
+
+// RGBA background phases: build mapped samples whose expected colour is the channel-remapped CPU
+// reference composited over the mode's own CPU background. At least one sample per mode lands on a
+// transparent composition pixel, so a mode whose GPU surround disagreed with the CPU paint (the
+// original Solid-as-authored-colour bug) would fail the external comparison. Checker geometry is
+// derived from the CPU 22px grid at the sample's device-pixel coordinate relative to the container
+// origin; the interior fractions keep every sample away from the tile edges.
+[[nodiscard]] std::vector<ViewerSample>
+buildBackgroundSamples(ui::ViewerEditor& viewer, QWidget& host,
+                       const runtime::PreparedPreviewFrame& reference,
+                       const ui::ViewerBackground mode) {
+    std::vector<ViewerSample> samples;
+    const auto view = reference.displayBufferView();
+    if (!view.has_value()) {
+        return samples;
+    }
+    const render::ImageWindow window = view->displayWindow;
+    const auto width = static_cast<std::uint32_t>(window.extent().width());
+    const auto height = static_cast<std::uint32_t>(window.extent().height());
+    const auto extent = render::ImageExtent::create(width, height);
+    if (!extent || width == 0U || height == 0U) {
+        return samples;
+    }
+    const QRectF destination =
+        ui::viewTransformedDisplayRect(viewer.canvasRectForTest(), *extent.value(),
+                                       view->pixelAspect, viewer.viewTransformForTest());
+    if (!destination.isValid() || destination.width() <= 0.0 || destination.height() <= 0.0) {
+        return samples;
+    }
+    const double dpr = viewer.devicePixelRatioF() > 0.0 ? viewer.devicePixelRatioF() : 1.0;
+    const QRectF container = viewer.contentRectForTest();
+    const std::array<QPointF, 4> fractions{QPointF(0.13, 0.17), QPointF(0.37, 0.19),
+                                           QPointF(0.81, 0.77), QPointF(0.47, 0.33)};
+    for (const QPointF fraction : fractions) {
+        const QPointF local(destination.left() + fraction.x() * destination.width(),
+                            destination.top() + fraction.y() * destination.height());
+        const auto originX = static_cast<int>(window.originX());
+        const auto originY = static_cast<int>(window.originY());
+        const int compX =
+            std::clamp(originX + static_cast<int>(fraction.x() * static_cast<double>(width)),
+                       originX, originX + static_cast<int>(width) - 1);
+        const int compY =
+            std::clamp(originY + static_cast<int>(fraction.y() * static_cast<double>(height)),
+                       originY, originY + static_cast<int>(height) - 1);
+        const render::Rgba8 referencePixel =
+            view->pixels[static_cast<std::size_t>(compY - originY) * width +
+                         static_cast<std::size_t>(compX - originX)];
+        const int deviceX = static_cast<int>(std::lround((local.x() - container.left()) * dpr));
+        const int deviceY = static_cast<int>(std::lround((local.y() - container.top()) * dpr));
+        const render::Rgba8 backdrop = cpuBackgroundColor(mode, deviceX, deviceY, dpr);
+        ViewerSample sample;
+        sample.widgetLocal = local;
+        sample.windowLocal = QPointF(viewer.mapTo(&host, local.toPoint()));
+        sample.expected =
+            compositeOver(backdrop, channelReference(referencePixel, ui::ViewerChannel::Rgba));
         sample.opaque = referencePixel.alpha == 255;
         samples.push_back(sample);
     }
@@ -500,14 +611,46 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     emitSamples("red-rgba", buildSamples(*viewer, *host, *reference, ui::ViewerChannel::Red));
     holdForCapture(4s);
 
-    // Phase 4: checkerboard background must not disturb the resident present.
-    checks.expect(setDropdownIndex(*viewer, "viewerBackgroundDropdown",
-                                   static_cast<int>(ui::ViewerBackground::Checkerboard)),
-                  "the background dropdown is reachable and set to Checkerboard");
+    // Phase 4: RGBA background proofs. Each mode emits samples whose expected colour composites the
+    // CPU reference over that mode's own CPU background, including transparent composition pixels,
+    // so the external capture can prove the GPU surround matches the CPU paint for Solid (Canvas),
+    // Black, White, and Checkerboard. This is the binding background pixel proof, not a claim from
+    // the request fields. The channel is returned to RGBA so the surround, not the remap, is what
+    // these samples isolate.
+    checks.expect(setDropdownIndex(*viewer, "viewerChannelDropdown",
+                                   static_cast<int>(ui::ViewerChannel::Rgba)),
+                  "the channel dropdown is returned to RGBA for the background phases");
     checks.expect(
-        waitUntil([&] { return viewer->backgroundForTest() == ui::ViewerBackground::Checkerboard; },
-                  10s),
-        "the viewer reports the Checkerboard background");
+        waitUntil([&] { return viewer->channelForTest() == ui::ViewerChannel::Rgba; }, 10s),
+        "the viewer reports the RGBA channel for the background phases");
+    struct BackgroundPhase final {
+        ui::ViewerBackground mode;
+        const char* label;
+    };
+    const std::array<BackgroundPhase, 4> backgroundPhases{
+        BackgroundPhase{ui::ViewerBackground::Solid, "bg-solid-rgba"},
+        BackgroundPhase{ui::ViewerBackground::Black, "bg-black-rgba"},
+        BackgroundPhase{ui::ViewerBackground::White, "bg-white-rgba"},
+        BackgroundPhase{ui::ViewerBackground::Checkerboard, "bg-checker-rgba"}};
+    for (const auto& phaseSpec : backgroundPhases) {
+        checks.expect(
+            setDropdownIndex(*viewer, "viewerBackgroundDropdown", static_cast<int>(phaseSpec.mode)),
+            std::string("the background dropdown is set to ") + phaseSpec.label);
+        checks.expect(waitUntil([&] { return viewer->backgroundForTest() == phaseSpec.mode; }, 10s),
+                      std::string("the viewer reports the background mode for ") + phaseSpec.label);
+        checks.expect(waitUntil([&] { return viewer->residentPresentationActiveForTest(); }, 15s),
+                      std::string("the viewer re-presents for ") + phaseSpec.label);
+        reference = referenceFor();
+        checks.expect(reference != nullptr,
+                      std::string("the displayed identity still resolves a CPU reference for ") +
+                          phaseSpec.label);
+        if (reference == nullptr) {
+            break;
+        }
+        emitSamples(phaseSpec.label,
+                    buildBackgroundSamples(*viewer, *host, *reference, phaseSpec.mode));
+        holdForCapture(4s);
+    }
     phase("viewer-checker",
           "residentActive=" + std::string(viewer->residentPresentationActiveForTest() ? "1" : "0"));
 

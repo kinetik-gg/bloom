@@ -36,11 +36,20 @@ constexpr int layoutSchema = bloom::ui::kit::Layout::WorkspaceVersion;
 constexpr int maximumLayoutDepth = 64;
 constexpr int maximumAreaCount = 64;
 constexpr int defaultSplitWeight = 1000;
-// First-run / Reset Workspace proportions in per mille of the usable splitter extent: the top
-// row is Assets 16%, Viewer 31%, Nodes 32%, Properties 19%; the bottom Timeline row is 32% below
-// the 68% top row. These are weights, never pixels, so the arrangement follows the window size.
-constexpr std::array<int, 4> defaultTopRowWeights{160, 310, 320, 190};
-constexpr std::array<int, 2> defaultWorkspaceRowWeights{680, 320};
+// The visible Background band between two panels is the splitter handle. Because each panel also
+// draws its own 1px border INSIDE its rect, a between-panel boundary shows two border strokes while
+// the window edge shows one. Subtracting one border from the handle makes the border-to-border span
+// equal the window's edge-to-border padding, so the gutter reads the same on every side at any DPR.
+constexpr int panelGutterHandleWidth = bloom::ui::kit::px(bloom::ui::kit::Spacing::Gutter) -
+                                       bloom::ui::kit::px(bloom::ui::kit::Size::Hairline);
+// First-run / Reset Workspace proportions in per mille of the usable splitter extent. The
+// arrangement is a full-height right column -- Assets over Properties -- beside a left region whose
+// top row is Viewer | Nodes and whose bottom is the Timeline. These are weights, never pixels, so
+// the arrangement follows the window size.
+constexpr std::array<int, 2> defaultRootColumnWeights{800, 200};
+constexpr std::array<int, 2> defaultLeftColumnWeights{560, 440};
+constexpr std::array<int, 2> defaultTopLeftRowWeights{505, 495};
+constexpr std::array<int, 2> defaultRightColumnWeights{395, 605};
 
 template <std::size_t count>
 void setWeightedSizes(QSplitter& splitter, const std::array<int, count>& weights) {
@@ -337,34 +346,64 @@ void WorkspaceHost::resetToSingleArea(const std::string_view editorId) {
         {});
 }
 
-void WorkspaceHost::resetToDefaultLayout(const std::array<std::string_view, 4>& topRowEditorIds,
-                                         const std::string_view bottomRowEditorId,
-                                         const std::size_t activeTopRowIndex) {
+void WorkspaceHost::resetToDefaultLayout(const std::string_view viewerEditorId,
+                                         const std::string_view nodesEditorId,
+                                         const std::string_view assetsEditorId,
+                                         const std::string_view timelineEditorId,
+                                         const std::string_view propertiesEditorId,
+                                         const std::size_t activeIndex) {
     if (surfaceRetirementGate_.isPending()) {
         return;
     }
     restoreMaximizedArea();
 
-    (void)beginWorkspaceMutation(
-        [this, topRowEditorIds, bottomRowEditorId, activeTopRowIndex] {
-            auto* topRow = createSplitter(Qt::Horizontal);
-            std::array<EditorArea*, 4> topRowAreas{};
-            for (std::size_t index = 0; index < topRowEditorIds.size(); ++index) {
-                topRowAreas[index] = createArea(topRowEditorIds[index]);
-                topRow->addWidget(topRowAreas[index]);
-            }
-            setWeightedSizes(*topRow, defaultTopRowWeights);
+    // Own every editor identity before the mutation is deferred. `beginWorkspaceMutation` may not
+    // run its commit until one or more native surfaces retire, so a caller passing a temporary or
+    // string-backed id would otherwise leave the deferred lambda reading expired storage. The
+    // public signature stays string_view; only the deferral owns the bytes.
+    const std::string viewerId(viewerEditorId);
+    const std::string nodesId(nodesEditorId);
+    const std::string assetsId(assetsEditorId);
+    const std::string timelineId(timelineEditorId);
+    const std::string propertiesId(propertiesEditorId);
 
-            auto* bottomRow = createArea(bottomRowEditorId);
-            auto* root = createSplitter(Qt::Vertical);
-            root->addWidget(topRow);
-            root->addWidget(bottomRow);
-            setWeightedSizes(*root, defaultWorkspaceRowWeights);
+    // The whole rebuild (including constructing the replacement areas) runs inside the commit so a
+    // refused or deferred mutation leaves no detached half-built tree behind.
+    (void)beginWorkspaceMutation(
+        [this, viewerId, nodesId, assetsId, timelineId, propertiesId, activeIndex] {
+            // Left region, top row: Viewer | Nodes.
+            auto* topLeftRow = createSplitter(Qt::Horizontal);
+            auto* viewerArea = createArea(viewerId);
+            auto* nodesArea = createArea(nodesId);
+            topLeftRow->addWidget(viewerArea);
+            topLeftRow->addWidget(nodesArea);
+            setWeightedSizes(*topLeftRow, defaultTopLeftRowWeights);
+
+            // Left region, bottom: the Timeline, spanning both top-left areas.
+            auto* timelineArea = createArea(timelineId);
+            auto* leftColumn = createSplitter(Qt::Vertical);
+            leftColumn->addWidget(topLeftRow);
+            leftColumn->addWidget(timelineArea);
+            setWeightedSizes(*leftColumn, defaultLeftColumnWeights);
+
+            // Right column, full height: Assets over Properties.
+            auto* assetsArea = createArea(assetsId);
+            auto* propertiesArea = createArea(propertiesId);
+            auto* rightColumn = createSplitter(Qt::Vertical);
+            rightColumn->addWidget(assetsArea);
+            rightColumn->addWidget(propertiesArea);
+            setWeightedSizes(*rightColumn, defaultRightColumnWeights);
+
+            auto* root = createSplitter(Qt::Horizontal);
+            root->addWidget(leftColumn);
+            root->addWidget(rightColumn);
+            setWeightedSizes(*root, defaultRootColumnWeights);
 
             replaceRoot(root);
             activeArea_.clear();
-            const auto selectedIndex = std::min(activeTopRowIndex, topRowAreas.size() - 1);
-            setActiveArea(topRowAreas[selectedIndex]);
+            const std::array<EditorArea*, 5> areas{viewerArea, nodesArea, assetsArea, timelineArea,
+                                                   propertiesArea};
+            setActiveArea(areas[std::min(activeIndex, areas.size() - 1)]);
             updateAreaControls();
             emit areaCountChanged(areaCount());
         },
@@ -789,10 +828,11 @@ QSplitter* WorkspaceHost::createSplitter(Qt::Orientation orientation) const {
     auto* splitter = new QSplitter(orientation);
     splitter->setObjectName("workspaceSplitter");
     splitter->setChildrenCollapsible(false);
-    // The gutter (task U1, issue #117): panels are separated by a visible Background gap of
-    // Spacing::Gutter, not by a hairline seam. The handle's own fill comes from the theme's
-    // QSplitter::handle rule; this is the width that makes the gap real and grabbable.
-    splitter->setHandleWidth(kit::px(kit::Spacing::Gutter));
+    // The gutter (task U1, issue #117): panels are separated by a visible Background gap, not by a
+    // hairline seam. The handle's own fill comes from the theme's QSplitter::handle rule; its width
+    // is the window padding less one panel border, so the border-to-border separation between two
+    // panels matches the edge-to-border window padding exactly.
+    splitter->setHandleWidth(panelGutterHandleWidth);
     splitter->setOpaqueResize(true);
     return splitter;
 }

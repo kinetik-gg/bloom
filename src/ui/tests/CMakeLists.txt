@@ -978,6 +978,44 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# The shared global-preferences model: defaults, round-trip, invalid-value fallback, and the
+# absolute-path/zero-budget rules the existing readers rely on. Also covers non-finite grid values.
+add_executable(bloom_application_preferences_test application_preferences_tests.cpp)
+target_link_libraries(bloom_application_preferences_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_application_preferences_test)
+bloom_add_test(
+    NAME bloom.ui.application-preferences
+    COMMAND bloom_application_preferences_test
+    LABELS ui unit
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+# The acceleration-status mapping: a pure, device-free mapping from one already-published GPU
+# service status to the Performance page model, including initializing, ready-without-resident,
+# lost-presentation, and post-bootstrap device-loss truths. It never constructs a service or device.
+add_executable(bloom_acceleration_status_test acceleration_status_tests.cpp)
+target_link_libraries(bloom_acceleration_status_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_acceleration_status_test)
+bloom_add_test(
+    NAME bloom.ui.acceleration-status
+    COMMAND bloom_acceleration_status_test
+    LABELS ui unit
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+# The Settings window: control/preference binding, dirty-state gating, Apply emission, restore
+# defaults, restart badges, category navigation, and the read-only Performance page.
+add_executable(bloom_preferences_window_test preferences_window_tests.cpp)
+target_link_libraries(bloom_preferences_window_test PRIVATE bloom_ui)
+target_include_directories(bloom_preferences_window_test PRIVATE ..)
+bloom_enable_warnings(bloom_preferences_window_test)
+bloom_add_test(
+    NAME bloom.ui.preferences-window
+    COMMAND bloom_preferences_window_test
+    LABELS ui unit
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 add_executable(bloom_background_preview_test background_preview_tests.cpp)
 target_link_libraries(bloom_background_preview_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_background_preview_test)

@@ -216,13 +216,14 @@ key.
 Honest outcome: the production application source wires the resident display route end to end, and a
 main-linked vertical acceptance now passes over a genuine OpenEXR document (a real `AddImageLayer`
 image source compiled by the real `SnapshotCompiler` and the unmodified stage factories) through the
-resident frame cache into the actual `ViewerEditor`: stitch, zoom-pan, and Red-channel captures match
-the CPU reference with zero byte difference, warm cache reuse adds no native dispatches, the
-unsupported path returns the CPU fallback, and shutdown drains cleanly. The combined settings/CI
-acceptance is still pending, so this document makes no full-application FPS claim and no universal
-qualification claim. The fixed operation remains `PreviewOnly`, final output stays on CPU, and nothing
-here is a Windows or macOS GPU claim; Linux Wayland is the only locally exercised resident-present
-platform.
+resident frame cache into the actual `ViewerEditor`: fit, zoom-pan, and Red-channel captures match the
+CPU reference with zero byte difference, and the four viewer background modes (Solid/Canvas, Black,
+White, Checkerboard) each match the CPU surround, including transparent composition pixels, so the
+GPU and CPU display paths agree. Warm cache reuse adds no native dispatches, the unsupported path
+returns the CPU fallback, and shutdown drains cleanly. This document makes no full-application FPS
+claim and no universal qualification claim. The fixed operation remains `PreviewOnly`, final output
+stays on CPU, and nothing here is a Windows or macOS GPU claim; Linux Wayland is the only locally
+exercised resident-present platform.
 
 Genuinely unimplemented / future work. Per-layer GPU compositing selection by the scene evaluator;
 general (non-subset) graph execution; a whole-application benchmark; the full per-operation

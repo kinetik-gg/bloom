@@ -135,6 +135,12 @@ namespace {
         const auto* slot = std::get_if<document::LayerStackInputRef>(&edge.destination);
         if (slot == nullptr || slot->role != document::kLayerStackContentInputRole)
             return false;
+        // A muted Layer Stack compiles only its first slot (snapshot_compiler_lowering.ipp), so
+        // splitting the layer in that slot moves the tail out of the compiled plan. The head+tail
+        // is then not output-equivalent, and the split must stay conservatively whole-render.
+        const auto layout = composition.nodeLayout().find(slot->stackNodeId);
+        if (layout != composition.nodeLayout().end() && layout->second.muted)
+            return false;
     }
     for (const auto& layer : composition.graph().layerOutputs()) {
         if (layer.nodeId != original.nodeId && layer.parent.has_value() &&

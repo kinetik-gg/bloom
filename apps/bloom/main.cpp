@@ -10,6 +10,7 @@
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/ui/acceleration_status.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/audio_playback_session.hpp>
@@ -370,12 +371,26 @@ int main(int argc, char* argv[]) {
                      applyAudioMix);
     (void)audioPlaybackSession.refresh();
     applyAudioMix();
+    // The Preferences window's read-only Performance page reads this cached provider. The existing
+    // status poll below hands it one already-published `service.status()` read per tick, so the
+    // page follows Initializing -> Ready -> a later capability loss without any UI-thread device
+    // probe. Declared before the window so it outlives the borrowed pointer the window holds.
+    bloom::ui::CachedAccelerationStatusProvider accelerationStatus;
     // Native (server-side) window chrome only (task C1): MainWindow no longer takes a chrome mode
     // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,
                                  frameExportController, &ramPreviewController, &previewController,
                                  nullptr, &playback, cpuEvaluator.operationCache().get(),
-                                 mediaDiskCache.get());
+                                 mediaDiskCache.get(), &accelerationStatus);
+    // Settings the composition root owns take effect immediately: the window has already saved the
+    // value, and these read the same keys back. Cache budgets and the disk cache are startup-read
+    // and deliberately not re-applied here.
+    QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &playback, [&playback] {
+        const QSettings settings;
+        playback.setAudioEnabled(
+            settings.value(QStringLiteral("playback/audio-enabled"), true).toBool());
+        playback.setLooping(settings.value(QStringLiteral("playback/loop"), true).toBool());
+    });
     playback.installWindowShortcut(window);
     // The shutdown contract's second half: the workspace enumerates every live editor native
     // surface so the coordinator can require genuine retirement before Qt teardown. A CPU-only
@@ -427,10 +442,13 @@ int main(int argc, char* argv[]) {
     // The EXISTING TaskUiBridge poll drives the cached capability refresh and keeps running until
     // shutdown, so a capability that is later lost is observed and published as a null client --
     // the stop-on-Ready timer it replaces could never see a loss. This is a locked status read
-    // only: it never probes the device, blocks, or renders on the UI thread.
+    // only: it never probes the device, blocks, or renders on the UI thread. One read feeds both
+    // the bootstrap (which republishes the presentation client) and the cached Preferences status.
     QObject::connect(&taskUiBridge, &bloom::ui::TaskUiBridge::snapshotsPolled, &application,
-                     [&gpuViewerBootstrap, &gpuPreviewDisplayService] {
-                         gpuViewerBootstrap.refreshFromStatus(gpuPreviewDisplayService.status());
+                     [&gpuViewerBootstrap, &gpuPreviewDisplayService, &accelerationStatus] {
+                         const auto status = gpuPreviewDisplayService.status();
+                         gpuViewerBootstrap.refreshFromStatus(status);
+                         accelerationStatus.setServiceStatus(status);
                      });
     taskUiBridge.wake();
 

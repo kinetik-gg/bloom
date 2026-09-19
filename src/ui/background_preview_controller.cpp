@@ -190,6 +190,7 @@ void BackgroundPreviewController::fillNextFrame() {
             .quality = key->quality,
             .colorIntent = key->colorIntent,
             .resolutionPolicy = key->resolutionPolicy,
+            .roi = key->roi,
             .displayName = key->displayName,
             .viewName = key->viewName,
             .showLook = key->showLook,

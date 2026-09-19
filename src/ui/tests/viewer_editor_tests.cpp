@@ -1214,8 +1214,8 @@ void testChannelDropdownRemapsOnlyThePresentedImage(Expectations& expectations) 
     reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
 }
 
-// The background dropdown chooses what the canvas surround is, defaults to Solid, and persists the
-// choice under "viewer/background".
+// The background dropdown chooses what the canvas surround is, defaults to Checkerboard, and
+// persists the choice under "viewer/background".
 void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectations) {
     using namespace bloom;
     QSettings().remove("viewer/background");
@@ -1227,9 +1227,10 @@ void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectati
         auto* background =
             fixture.viewer.findChild<ui::kit::KDropdown*>("viewerBackgroundDropdown");
         expectations.expect(background != nullptr && background->count() == 4 &&
-                                background->currentText() == QStringLiteral("Solid") &&
-                                fixture.viewer.backgroundForTest() == ui::ViewerBackground::Solid,
-                            "the footer offers four backgrounds and defaults to Solid");
+                                background->currentText() == QStringLiteral("Checkerboard") &&
+                                fixture.viewer.backgroundForTest() ==
+                                    ui::ViewerBackground::Checkerboard,
+                            "the footer offers four backgrounds and defaults to Checkerboard");
         if (background == nullptr) {
             reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
             return;
@@ -1242,7 +1243,40 @@ void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectati
             return fixture.viewer.grab().toImage().pixelColor(
                 fixture.viewer.canvasRectForTest().topLeft().toPoint() + QPoint(2, 2));
         };
-        expectations.expect(corner() == QColor(Qt::black), "Solid defaults to opaque black");
+        // The GPU resident request must carry the SAME surround as the CPU paint for every mode, so
+        // a transparent composition region cannot read one colour on the GPU and another on the
+        // CPU.
+        const auto gpuColor = [](const render::GpuPresentColor color) {
+            const auto byteOf = [](const float value) {
+                const float clamped = value < 0.0F ? 0.0F : (value > 1.0F ? 1.0F : value);
+                return static_cast<int>(std::lround(clamped * 255.0F));
+            };
+            return QColor(byteOf(color.red), byteOf(color.green), byteOf(color.blue));
+        };
+        const auto requestMatches = [&fixture, &gpuColor](const ui::ViewerBackground mode,
+                                                          const QColor& surround) {
+            const auto request = fixture.viewer.buildResidentPresentRequestForTest();
+            return request.background == static_cast<render::GpuPresentBackground>(mode) &&
+                   gpuColor(request.backgroundColor) == surround;
+        };
+        // The default Checkerboard: the resident checker tiles come from the panel Surface tokens.
+        {
+            const auto request = fixture.viewer.buildResidentPresentRequestForTest();
+            expectations.expect(
+                request.background == render::GpuPresentBackground::Checkerboard &&
+                    gpuColor(request.checkerColorA) == ui::kit::color(ui::kit::Color::Surface) &&
+                    gpuColor(request.checkerColorB) ==
+                        ui::kit::color(ui::kit::Color::SurfaceRaised),
+                "the GPU resident checkerboard uses the same panel Surface tokens as the CPU");
+        }
+        // Choose Solid explicitly: it paints the panel's own background token, so the surround
+        // blends with the panel chrome, and it is deliberately not the composition's black.
+        background->setCurrentIndex(0); // Solid
+        QCoreApplication::processEvents();
+        const QColor panelBackground = ui::kit::color(ui::kit::Color::Canvas);
+        expectations.expect(corner() == panelBackground, "Solid paints the panel background token");
+        expectations.expect(requestMatches(ui::ViewerBackground::Solid, panelBackground),
+                            "the GPU resident request uses the same Canvas Solid surround");
         commands::Transaction backgroundEdit("Background", fixture.session.snapshot().revision());
         backgroundEdit.emplace<commands::SetCompositionBackgroundColor>(
             fixture.session.compositionId(), core::Color4d{0.2, 0.4, 0.6, 1.0});
@@ -1250,16 +1284,20 @@ void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectati
             fixture.session.executeTransaction(std::move(backgroundEdit)).succeeded(),
             "authored background edit commits");
         QCoreApplication::processEvents();
-        expectations.expect(corner() == QColor(51, 102, 153),
-                            "Solid paints the authored composition colour");
+        expectations.expect(corner() == panelBackground,
+                            "Solid ignores the authored composition background");
         background->setCurrentIndex(2); // Black
         QCoreApplication::processEvents();
         expectations.expect(fixture.viewer.backgroundForTest() == ui::ViewerBackground::Black &&
                                 corner() == QColor(Qt::black),
                             "Black is literal black, not a token that merely reads dark");
+        expectations.expect(requestMatches(ui::ViewerBackground::Black, QColor(Qt::black)),
+                            "the GPU resident request also paints the literal Black surround");
         background->setCurrentIndex(3); // White
         QCoreApplication::processEvents();
         expectations.expect(corner() == QColor(Qt::white), "and White is literal white");
+        expectations.expect(requestMatches(ui::ViewerBackground::White, QColor(Qt::white)),
+                            "the GPU resident request also paints the literal White surround");
         // The surround fills the WHOLE content area, edge to edge (owner, 2026-09-15): the first
         // pixel right of the tool column at the very top, and the last pixel above the footer at
         // the far right, are both surround, not the canvas token behind it.
@@ -1285,8 +1323,9 @@ void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectati
     QSettings().setValue("viewer/background", QStringLiteral("nonsense"));
     {
         ViewerFixture invalid(makeTestProject("Background Fallback Test"));
-        expectations.expect(invalid.viewer.backgroundForTest() == ui::ViewerBackground::Solid,
-                            "an unrecognized saved background falls back to Solid");
+        expectations.expect(invalid.viewer.backgroundForTest() ==
+                                ui::ViewerBackground::Checkerboard,
+                            "an unrecognized saved background falls back to Checkerboard");
         reachQuiescence(invalid.controller, invalid.bridge, invalid.scheduler, expectations);
     }
     QSettings().remove("viewer/background");

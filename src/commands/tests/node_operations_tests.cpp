@@ -439,6 +439,18 @@ void testSplitEquivalenceEvidence(TestContext& test) {
                     "an equivalent split publishes the original->tail remap over the tail span");
     }
     {
+        // F1 regression: with the Layer Stack muted only the first slot compiles. Splitting that
+        // first-slot layer leaves the head inactive over the tail span while the tail copy is
+        // pruned, so live output changes there and the split cannot claim equivalence.
+        Fixture fixture;
+        (void)apply<SetLayerRange>(fixture, kFirstLayerId, t(0), t(5));
+        (void)apply<SetNodeMuted>(fixture, kLayerStackNodeId, true);
+        const auto split = apply<SplitLayerAtTime>(fixture, kFirstLayerId, t(2));
+        test.expect(split.changed() && split.renderAffecting && !split.affectedTimes.has_value() &&
+                        !split.layerIdentityRemaps.has_value(),
+                    "splitting the first layer of a muted layer stack keeps whole-render");
+    }
+    {
         // A non-merge downstream consumer of the original output is conservative. The second Layer
         // Output's image input is a node input, not a Merge slot.
         Fixture fixture;
@@ -1124,10 +1136,10 @@ void testNodeGroups(TestContext& test) {
     test.expect(groups().empty(), "removing a group's last node removes the group");
 }
 
-// LAYOUT-1: the three card-layout commands opt out of render effect; every other node command
-// keeps the conservative render-affecting default. The classification is declared per operation,
-// never inferred from which document field the operation writes -- SetNodeMuted writes nodeLayout
-// and layer.enabled together, and must stay render-affecting.
+// LAYOUT-1: the card-layout and node-group commands opt out of render effect; every other node
+// command keeps the conservative render-affecting default. The classification is declared per
+// operation, never inferred from which document field the operation writes -- SetNodeMuted writes
+// nodeLayout and layer.enabled together, and must stay render-affecting.
 void testRenderAffectingClassification(TestContext& test) {
     {
         Fixture fixture;
@@ -1139,6 +1151,21 @@ void testRenderAffectingClassification(TestContext& test) {
                     "SetNodeCollapsed is layout-only");
         test.expect(!apply<SetNodeWidth>(fixture, source, 256.0).renderAffecting,
                     "SetNodeWidth is layout-only");
+        const auto group = apply<GroupNodes>(fixture, std::set<NodeId>{source});
+        test.expect(!group.renderAffecting, "GroupNodes is layout-only");
+        const auto groupId = group.outputId<NodeGroupId>(kGroupNodesOutput);
+        test.expect(groupId.has_value(), "GroupNodes reports the group it created");
+        if (groupId.has_value()) {
+            test.expect(
+                !apply<RenameGroup>(fixture, *groupId, std::string("Renamed")).renderAffecting,
+                "RenameGroup is layout-only");
+            test.expect(!apply<SetGroupMembers>(fixture, *groupId,
+                                                std::set<NodeId>{source, kFirstLayerNodeId})
+                             .renderAffecting,
+                        "SetGroupMembers is layout-only");
+            test.expect(!apply<UngroupNodes>(fixture, *groupId).renderAffecting,
+                        "UngroupNodes is layout-only");
+        }
         test.expect(apply<SetNodeMuted>(fixture, source, true).renderAffecting,
                     "SetNodeMuted is pixel-affecting despite living in node layout");
         test.expect(
@@ -1195,6 +1222,19 @@ void testRenderAffectingClassification(TestContext& test) {
         const auto redo = fixture.stack.redo();
         test.expect(redo.changed() && !redo.renderAffecting,
                     "redo replays the stored layout-only render impact");
+    }
+
+    // A group edit replays its stored layout-only impact through undo and redo too.
+    {
+        Fixture fixture;
+        if (!apply<GroupNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId}).changed())
+            throw std::logic_error("group layout undo/redo fixture");
+        const auto undo = fixture.stack.undo();
+        test.expect(undo.changed() && !undo.renderAffecting,
+                    "undo replays the stored group layout-only render impact");
+        const auto redo = fixture.stack.redo();
+        test.expect(redo.changed() && !redo.renderAffecting,
+                    "redo replays the stored group layout-only render impact");
     }
 }
 
@@ -1293,6 +1333,27 @@ void testRemovalTimeFootprint(TestContext& test) {
         const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
         test.expect(result.changed() && !result.affectedTimes.has_value(),
                     "a non-merge downstream consumer forces whole-render");
+    }
+    {
+        // F1 regression: a muted Layer Stack compiles only its first slot, so deleting the layer
+        // currently in that slot can promote a later layer into it. The change at [5,10) is not
+        // inside the deleted layer's own [0,5) span, so the proof must fall back to whole-render.
+        Fixture fixture;
+        (void)apply<SetLayerRange>(fixture, kFirstLayerId, core::RationalTime{},
+                                   core::RationalTime::fromInteger(5));
+        (void)apply<SetNodeMuted>(fixture, kLayerStackNodeId, true);
+        const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
+        test.expect(result.changed() && result.renderAffecting && !result.affectedTimes.has_value(),
+                    "deleting the first layer of a muted layer stack is whole-render");
+    }
+    {
+        // The same clipped delete without the mute keeps the finite half-open span proof.
+        Fixture fixture;
+        (void)apply<SetLayerRange>(fixture, kFirstLayerId, core::RationalTime{},
+                                   core::RationalTime::fromInteger(5));
+        const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
+        expectSpan(result.affectedTimes, 0, 5,
+                   "an unmuted clipped first-layer delete stays finite");
     }
     {
         Fixture fixture;

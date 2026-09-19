@@ -235,6 +235,51 @@ void shutdownRetirementLeavesTreeUntilAck() {
     check(host.areaCount() == countBefore, "shutdown retirement does not mutate the tree");
 }
 
+// A default-layout reset must own the caller's editor identities before its native gate can defer
+// the rebuild. If the deferred commit read the caller's storage, a mutable std::string id the
+// caller changed or destroyed between the call and the ack would materialize the wrong editor. This
+// passes mutable ids, drops them before the ack, and asserts the owned copies still build the exact
+// five-editor topology.
+void defaultLayoutResetOwnsDeferredIds() {
+    auto state = std::make_shared<FakeState>();
+    bloom::ui::EditorRegistry registry;
+    registerEditors(registry, state);
+    bloom::ui::WorkspaceHost host(registry);
+    host.resetToSingleArea("native");
+    check(state->created.data() != nullptr, "native editor hosted before default reset");
+
+    std::string viewerId = "cpu";
+    std::string nodesId = "cpu";
+    std::string assetsId = "cpu";
+    std::string timelineId = "cpu";
+    std::string propertiesId = "cpu";
+    host.resetToDefaultLayout(viewerId, nodesId, assetsId, timelineId, propertiesId, 2);
+    check(host.isNativeSurfaceMutationPending(), "default reset defers on the live native surface");
+    check(host.activeArea() != nullptr && host.activeArea()->editorId() == "native",
+          "default reset leaves the current tree until the ack");
+
+    // Poison the caller's storage: the owned copies must be immune. Overwriting and freeing the
+    // strings would leave a captured string_view reading expired bytes.
+    viewerId.assign(4096, 'x');
+    nodesId.assign(4096, 'y');
+    assetsId.assign(4096, 'z');
+    timelineId.assign(4096, 'w');
+    propertiesId.assign(4096, 'q');
+    viewerId.clear();
+    nodesId.clear();
+    assetsId.clear();
+    timelineId.clear();
+    propertiesId.clear();
+
+    state->ack();
+    check(!host.isNativeSurfaceMutationPending(), "default reset completes after ack");
+    check(host.areaCount() == 5, "default reset built exactly five areas");
+    // activeIndex 2 selects Assets in the Viewer(0), Nodes(1), Assets(2), Timeline(3),
+    // Properties(4) order.
+    check(host.activeArea() != nullptr && host.activeArea()->editorId() == "cpu",
+          "default reset active area is a valid cpu area, not a dangling id");
+}
+
 void cpuOnlyWorkspaceStaysSynchronous() {
     auto state = std::make_shared<FakeState>();
     bloom::ui::EditorRegistry registry;
@@ -261,6 +306,7 @@ int main(int argc, char** argv) {
     workspaceCloseIsDeferred();
     workspaceRootRestoreIsDeferred();
     shutdownRetirementLeavesTreeUntilAck();
+    defaultLayoutResetOwnsDeferredIds();
     cpuOnlyWorkspaceStaysSynchronous();
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

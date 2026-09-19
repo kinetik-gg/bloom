@@ -28,7 +28,9 @@
 #include <QColor>
 #include <QEventLoop>
 #include <QLabel>
+#include <QPainter>
 #include <QPixmap>
+#include <QRect>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -394,10 +396,22 @@ int main(int argc, char** argv) {
         // distinctive marker) must be the visible pixel until the gate opens and
         // the owner publishes a genuine present.
         host.setWindowTitle(QStringLiteral("bloom-resident-visible-proof"));
+        // Four distinct quadrants across the full 320x240 physical pixmap at DPR2, so a half-crop
+        // or wrong-DPR display can never pass: TL green, TR yellow, BL magenta, BR cyan. Paint in
+        // PHYSICAL coordinates at DPR1 first -- QPainter uses device pixels until the ratio is set,
+        // so the 160x120 split is the physical half -- then raise the ratio to 2.0 before
+        // returning. Setting the ratio before painting would make the logical canvas 160x120 and
+        // push every other quadrant outside the pixmap. A uniform fill would only prove "some
+        // green".
         controller->setCpuCoverSnapshot([]() -> QPixmap {
             QPixmap snapshot(320, 240);
-            snapshot.setDevicePixelRatio(2.0);
             snapshot.fill(QColor(0, 255, 0));
+            QPainter painter(&snapshot);
+            painter.fillRect(QRect(160, 0, 160, 120), QColor(255, 255, 0));   // top-right
+            painter.fillRect(QRect(0, 120, 160, 120), QColor(255, 0, 255));   // bottom-left
+            painter.fillRect(QRect(160, 120, 160, 120), QColor(0, 255, 255)); // bottom-right
+            painter.end();
+            snapshot.setDevicePixelRatio(2.0);
             return snapshot;
         });
         runCommand(Cmd::SetGate, true);
@@ -465,10 +479,15 @@ int main(int argc, char** argv) {
     if (const auto* coverLabel = qobject_cast<const QLabel*>(controller->cpuCoverForTest())) {
         const QPixmap handoff = coverLabel->pixmap(Qt::ReturnByValue);
         expectations.expect(!handoff.isNull(), "the native CPU cover holds the handoff snapshot");
-        expectations.expect(qFuzzyCompare(handoff.devicePixelRatio(), 2.0),
-                            "the native CPU cover preserves the DPR2 handoff snapshot");
-        expectations.expect(handoff.width() == 320 && handoff.height() == 240,
-                            "the native CPU cover keeps the full physical pixmap, not a half crop");
+        // QLabel::pixmap() MAY return a normalized copy: Qt can scale the stored DPR2 pixmap to its
+        // logical device-independent extent and reset the ratio to 1.0 (Qt-dependent). The portable
+        // contract this asserts is therefore the logical display extent the cover is asked to fill
+        // plus scaledContents; the genuine full-physical four-quadrant handoff is proven by the
+        // native before-ack capture, not by this normalizing getter.
+        const auto deviceIndependent = handoff.deviceIndependentSize();
+        expectations.expect(deviceIndependent.width() == 160.0 &&
+                                deviceIndependent.height() == 120.0,
+                            "the cover handoff displays the full logical snapshot extent");
         expectations.expect(coverLabel->hasScaledContents(),
                             "the native CPU cover lets QLabel scale the full device pixmap");
     } else {

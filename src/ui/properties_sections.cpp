@@ -279,13 +279,20 @@ QWidget* makeLinkToggle(const QString& objectName, const QString& tooltip, QWidg
     return toggle;
 }
 
+kit::KSection* makeSection(QVBoxLayout* layout, QWidget* parent, const QString& objectName,
+                           const QString& title, const QString& persistenceKey) {
+    auto* section = new kit::KSection(title, parent);
+    section->setObjectName(objectName);
+    section->setPersistenceKey(persistenceKey);
+    layout->addWidget(section);
+    return section;
+}
+
 kit::KSection* addSection(QVBoxLayout* layout, QWidget* parent, const QString& id,
                           const QString& title) {
-    auto* section = new kit::KSection(title, parent);
-    section->setObjectName(QStringLiteral("propertiesSection_") + id);
+    auto* section = makeSection(layout, parent, QStringLiteral("propertiesSection_") + id, title,
+                                QStringLiteral("properties/sections/%1/collapsed").arg(id));
     section->setProperty("propertiesSectionGroup", sectionFilterGroup(id));
-    section->setPersistenceKey(QStringLiteral("properties/sections/%1/collapsed").arg(id));
-    layout->addWidget(section);
     return section;
 }
 
