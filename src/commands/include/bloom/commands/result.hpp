@@ -74,10 +74,45 @@ struct AffectedTimeFootprint final {
     friend bool operator==(const AffectedTimeFootprint&, const AffectedTimeFootprint&) = default;
 };
 
+// SPLIT-1. One ordered, composition/time-scoped layer-identity remap: over the half-open
+// composition-time range [start, end) the output that was produced as `beforeLayerId` /
+// `beforeNodeId` is now produced as `afterLayerId` / `afterNodeId`. Execute order maps the original
+// head to the split tail; undoing reverses the order and swaps before/after (blind replay of the
+// execute list would be wrong). The remap carries no pixels: it only says which current layer/node
+// identity a retained pre-edit frame's geometry must be translated to. Only a proven
+// output-equivalent split publishes one; nothing here relabels a plan or a sourceRevision.
+struct LayerIdentityRemap final {
+    document::CompositionId compositionId;
+    core::RationalTime start;
+    core::RationalTime end;
+    document::LayerId beforeLayerId;
+    document::LayerId afterLayerId;
+    document::NodeId beforeNodeId;
+    document::NodeId afterNodeId;
+
+    friend bool operator==(const LayerIdentityRemap&, const LayerIdentityRemap&) = default;
+};
+
 // The cap past which interval bookkeeping stops being worth it and the footprint collapses to the
 // conservative whole-render default. Pathological growth (many disjoint edits in one transaction)
 // therefore degrades safely rather than growing unboundedly.
 inline constexpr std::size_t kMaxAffectedTimeIntervals = 8;
+// The cap on ordered geometry remaps in one transaction. Exceeding it clears the remaps and forces
+// the conservative whole-render default, because a partially translated frame would mis-identify
+// layers.
+inline constexpr std::size_t kMaxLayerIdentityRemaps = 8;
+
+// Validates each descriptor and requires every remap to name ONE composition; preserves their given
+// order (order is what undo inversion depends on). Returns std::nullopt when a descriptor is
+// malformed, when more than one composition is named, or when the cap is exceeded -- all of which
+// the caller treats as whole-render with no remaps. An empty list normalizes to an empty list.
+[[nodiscard]] std::optional<std::vector<LayerIdentityRemap>>
+normalizeLayerIdentityRemaps(std::vector<LayerIdentityRemap> remaps);
+
+// Undo inversion: reverses the ORDER and swaps before/after layer and node IDs. std::nullopt or
+// empty input yields an empty list.
+[[nodiscard]] std::vector<LayerIdentityRemap>
+invertLayerIdentityRemaps(const std::optional<std::vector<LayerIdentityRemap>>& remaps);
 
 // Sorts and merges overlapping/adjacent intervals in place. Returns std::nullopt when the interval
 // count would exceed kMaxAffectedTimeIntervals, which the caller treats as the whole-render
@@ -101,6 +136,10 @@ struct OperationResult {
     // changed interval sets this to a normalized footprint. NoChange and Rejected operations never
     // advertise one.
     std::optional<AffectedTimeFootprint> affectedTimes;
+    // SPLIT-1. A proven output-equivalent split additionally publishes ordered geometry remaps. It
+    // is meaningful only alongside a finite (possibly deliberately empty) affectedTimes, and is
+    // never published by NoChange, Rejected, stale, or failed results.
+    std::optional<std::vector<LayerIdentityRemap>> layerIdentityRemaps;
 
     [[nodiscard]] static OperationResult applied(std::vector<OperationOutput> outputs = {});
     [[nodiscard]] static OperationResult noChange(std::vector<OperationOutput> outputs = {});
@@ -163,6 +202,11 @@ struct CommandResult {
     // transaction publishes; a present footprint is meaningful only when renderAffecting is true.
     // Rejected, failed, and stale results never carry applicable reuse evidence.
     std::optional<AffectedTimeFootprint> affectedTimes;
+    // SPLIT-1. The transaction's ordered geometry remaps, present only when EVERY applied
+    // render-affecting operation proved a finite footprint and every remap names the same single
+    // composition within the cap. Undo publishes the inverted (reversed, before/after-swapped)
+    // list; redo publishes the stored forward list.
+    std::optional<std::vector<LayerIdentityRemap>> layerIdentityRemaps;
 
     [[nodiscard]] bool succeeded() const noexcept {
         return status == CommandStatus::Succeeded || status == CommandStatus::NoChange;

@@ -78,6 +78,35 @@ class NeutralOp final : public Operation {
     [[nodiscard]] bool renderAffecting() const noexcept override { return false; }
 };
 
+// SPLIT-1: a finite footprint plus ordered remaps, to exercise CommandStack aggregation, inversion,
+// and forward replay without depending on a real layer command.
+class RemapOp final : public Operation {
+  public:
+    RemapOp(AffectedTimeFootprint footprint, std::vector<LayerIdentityRemap> remaps)
+        : footprint_(std::move(footprint)), remaps_(std::move(remaps)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.test.remap"; }
+    [[nodiscard]] OperationResult apply(document::Draft&) const override {
+        auto result = OperationResult::applied();
+        result.affectedTimes = footprint_;
+        result.layerIdentityRemaps = remaps_;
+        return result;
+    }
+
+  private:
+    AffectedTimeFootprint footprint_;
+    std::vector<LayerIdentityRemap> remaps_;
+};
+
+[[nodiscard]] LayerIdentityRemap remap(const std::uint64_t before, const std::uint64_t after) {
+    return LayerIdentityRemap{.compositionId = kCompositionId,
+                              .start = core::RationalTime::fromInteger(1),
+                              .end = core::RationalTime::fromInteger(4),
+                              .beforeLayerId = LayerId::fromRaw(before),
+                              .afterLayerId = LayerId::fromRaw(after),
+                              .beforeNodeId = NodeId::fromRaw(before + 100),
+                              .afterNodeId = NodeId::fromRaw(after + 100)};
+}
+
 [[nodiscard]] AffectedTimeFootprint
 footprint(const std::vector<std::pair<core::RationalTime, core::RationalTime>>& spans) {
     AffectedTimeFootprint result;
@@ -85,6 +114,141 @@ footprint(const std::vector<std::pair<core::RationalTime, core::RationalTime>>& 
     for (const auto& [start, end] : spans)
         result.intervals.push_back({start, end});
     return result;
+}
+
+void testLayerIdentityRemapAggregation(TestContext& test) {
+    const auto t = [](const std::int64_t value) { return core::RationalTime::fromInteger(value); };
+
+    // normalize: malformed descriptor, mixed composition, and cap overflow all fail closed.
+    {
+        auto malformed = remap(30, 31);
+        malformed.start = t(4);
+        malformed.end = t(1);
+        test.expect(!normalizeLayerIdentityRemaps({malformed}).has_value(),
+                    "an inverted remap range is not provable");
+    }
+    {
+        auto foreign = remap(30, 31);
+        foreign.compositionId = CompositionId::fromRaw(999);
+        test.expect(!normalizeLayerIdentityRemaps({remap(30, 31), foreign}).has_value(),
+                    "a mixed-composition remap list is not provable");
+    }
+    {
+        std::vector<LayerIdentityRemap> many;
+        for (std::uint64_t index = 0; index < 10; ++index)
+            many.push_back(remap(30 + index * 2, 31 + index * 2));
+        test.expect(!normalizeLayerIdentityRemaps(many).has_value(),
+                    "remap cap overflow falls back to whole render");
+    }
+
+    Document document(makeProject());
+    CommandStack stack(document);
+    // Forward aggregation preserves order; undo reverses and swaps; redo replays forward.
+    {
+        Transaction transaction("Two ordered remaps", document.snapshot().revision());
+        transaction.emplace<RemapOp>(footprint({{t(1), t(4)}}), std::vector{remap(30, 31)});
+        transaction.emplace<RemapOp>(footprint({{t(1), t(4)}}), std::vector{remap(31, 32)});
+        const auto result = stack.execute(std::move(transaction));
+        test.expect(result.changed() && result.affectedTimes.has_value() &&
+                        result.layerIdentityRemaps.has_value() &&
+                        result.layerIdentityRemaps->size() == 2 &&
+                        result.layerIdentityRemaps->at(0).beforeLayerId == LayerId::fromRaw(30) &&
+                        result.layerIdentityRemaps->at(1).beforeLayerId == LayerId::fromRaw(31),
+                    "forward execute preserves remap order");
+        const auto undo = stack.undo();
+        // Forward [30->31, 31->32] inverted: reverse order then swap each => [32->31, 31->30].
+        test.expect(undo.changed() && undo.layerIdentityRemaps.has_value() &&
+                        undo.layerIdentityRemaps->size() == 2 &&
+                        undo.layerIdentityRemaps->at(0).beforeLayerId == LayerId::fromRaw(32) &&
+                        undo.layerIdentityRemaps->at(0).afterLayerId == LayerId::fromRaw(31) &&
+                        undo.layerIdentityRemaps->at(1).beforeLayerId == LayerId::fromRaw(31) &&
+                        undo.layerIdentityRemaps->at(1).afterLayerId == LayerId::fromRaw(30),
+                    "undo reverses order and swaps before/after IDs");
+        const auto redo = stack.redo();
+        test.expect(redo.changed() && redo.layerIdentityRemaps.has_value() &&
+                        redo.layerIdentityRemaps->at(0).beforeLayerId == LayerId::fromRaw(30) &&
+                        redo.layerIdentityRemaps->at(1).beforeLayerId == LayerId::fromRaw(31),
+                    "redo replays the stored forward ordered list");
+    }
+    // An unclassified op in the same transaction clears remaps and forces whole render.
+    {
+        Transaction transaction("Remap plus unclassified", document.snapshot().revision());
+        transaction.emplace<RemapOp>(footprint({{t(1), t(4)}}), std::vector{remap(40, 41)});
+        transaction.emplace<SetProjectName>("Whole");
+        const auto result = stack.execute(std::move(transaction));
+        test.expect(result.changed() && !result.affectedTimes.has_value() &&
+                        !result.layerIdentityRemaps.has_value(),
+                    "an unclassified op clears remaps and forces whole render");
+    }
+    // A neutral op beside a remap leaves the remap intact.
+    {
+        Transaction transaction("Remap plus neutral", document.snapshot().revision());
+        transaction.emplace<RemapOp>(footprint({{t(1), t(4)}}), std::vector{remap(50, 51)});
+        transaction.emplace<NeutralOp>();
+        const auto result = stack.execute(std::move(transaction));
+        test.expect(result.changed() && result.affectedTimes.has_value() &&
+                        result.layerIdentityRemaps.has_value() &&
+                        result.layerIdentityRemaps->size() == 1,
+                    "a neutral op leaves a remap intact");
+    }
+    // A rejected transaction advertises no remap evidence.
+    {
+        Transaction transaction("Rejected remap", document.snapshot().revision());
+        transaction.emplace<RemapOp>(footprint({{t(1), t(4)}}), std::vector{remap(60, 61)});
+        transaction.emplace<SetCompositionName>(CompositionId::fromRaw(9999), "Missing");
+        const auto result = stack.execute(std::move(transaction));
+        test.expect(result.status == CommandStatus::Rejected &&
+                        !result.layerIdentityRemaps.has_value(),
+                    "a rejected transaction advertises no remap evidence");
+    }
+    // FAIL-CLOSED at the CommandStack level (not merely the normalize helper): any remap
+    // normalization, composition, or cap failure must make the whole transaction whole-render and
+    // publish NEITHER affectedTimes nor remaps, and undo/redo must stay whole too.
+    const auto expectWhole = [&test](const CommandResult& result, const std::string_view message) {
+        test.expect(result.changed() && result.renderAffecting &&
+                        !result.affectedTimes.has_value() &&
+                        !result.layerIdentityRemaps.has_value(),
+                    message);
+    };
+    {
+        // More than kMaxLayerIdentityRemaps remaps spread across applied ops.
+        Transaction transaction("Cap overflow remaps", document.snapshot().revision());
+        for (std::uint64_t index = 0; index < kMaxLayerIdentityRemaps + 1; ++index) {
+            transaction.emplace<RemapOp>(footprint({{t(1), t(4)}}),
+                                         std::vector{remap(70 + index * 2, 71 + index * 2)});
+        }
+        const auto result = stack.execute(std::move(transaction));
+        expectWhole(result, "a cap-overflow remap transaction is whole-render with no metadata");
+        const auto undo = stack.undo();
+        expectWhole(undo, "undo of a cap-overflow remap transaction stays whole-render");
+        const auto redo = stack.redo();
+        expectWhole(redo, "redo of a cap-overflow remap transaction stays whole-render");
+    }
+    {
+        // A malformed descriptor (inverted range) inside an applied op.
+        auto malformed = remap(90, 91);
+        malformed.start = t(4);
+        malformed.end = t(1);
+        Transaction transaction("Malformed remap", document.snapshot().revision());
+        transaction.emplace<RemapOp>(footprint({{t(1), t(4)}}), std::vector{malformed});
+        const auto result = stack.execute(std::move(transaction));
+        expectWhole(result, "a malformed remap descriptor is whole-render with no metadata");
+    }
+    {
+        // Footprint composition A but remap composition B.
+        auto foreign = remap(92, 93);
+        foreign.compositionId = CompositionId::fromRaw(999);
+        Transaction transaction("Footprint/remap composition mismatch",
+                                document.snapshot().revision());
+        transaction.emplace<RemapOp>(footprint({{t(1), t(4)}}), std::vector{foreign});
+        const auto result = stack.execute(std::move(transaction));
+        expectWhole(result,
+                    "a footprint/remap composition mismatch is whole-render with no metadata");
+        const auto undo = stack.undo();
+        expectWhole(undo, "undo of a composition-mismatch remap transaction stays whole-render");
+        const auto redo = stack.redo();
+        expectWhole(redo, "redo of a composition-mismatch remap transaction stays whole-render");
+    }
 }
 
 void testFiniteTimeFootprintAggregation(TestContext& test) {
@@ -495,6 +659,7 @@ int main() {
     bloom::commands::test::TestContext test;
     try {
         bloom::commands::test::testFiniteTimeFootprintAggregation(test);
+        bloom::commands::test::testLayerIdentityRemapAggregation(test);
         bloom::commands::test::testRenderAffectingPublication(test);
         bloom::commands::test::testAtomicTransactionUndoAndRedo(test);
         bloom::commands::test::testRejectedAndInvalidTransactionsAreAtomic(test);

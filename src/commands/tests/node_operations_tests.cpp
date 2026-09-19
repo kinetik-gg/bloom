@@ -409,6 +409,72 @@ void testLayerRanges(TestContext& test) {
                 "split keeps adjacent half-open ranges and exact undo/redo IDs");
 }
 
+// SPLIT-1: an ordinary merge-connected Layer Output split proves output equivalence and publishes a
+// deliberately EMPTY pixel footprint plus an original->tail identity remap. Conservative cases
+// (non-merge consumer, surviving child, unsupported boundary) publish no footprint and no remaps.
+void testSplitEquivalenceEvidence(TestContext& test) {
+    using document::CompositionId;
+    const auto t = [](const std::int64_t value) { return core::RationalTime::fromInteger(value); };
+    {
+        Fixture fixture;
+        // Animate the layer's position so the proof must accept exact curve duplication.
+        (void)exercise<CreateAnimationForParameter>(test, fixture, kFirstPositionId,
+                                                    core::RationalTime{});
+        (void)apply<SetLayerRange>(fixture, kFirstLayerId, t(1), t(8));
+        const auto split = apply<SplitLayerAtTime>(fixture, kFirstLayerId, t(4));
+        const auto copy = split.outputId<LayerId>("layer");
+        test.expect(split.changed() && split.renderAffecting && copy.has_value(),
+                    "an ordinary split publishes");
+        test.expect(split.affectedTimes.has_value() && split.affectedTimes->intervals.empty(),
+                    "an equivalent split publishes a deliberately empty pixel footprint");
+        test.expect(split.layerIdentityRemaps.has_value() &&
+                        split.layerIdentityRemaps->size() == 1 &&
+                        split.layerIdentityRemaps->front().compositionId == kCompositionId &&
+                        split.layerIdentityRemaps->front().start == t(4) &&
+                        split.layerIdentityRemaps->front().end == t(8) &&
+                        split.layerIdentityRemaps->front().beforeLayerId == kFirstLayerId &&
+                        split.layerIdentityRemaps->front().afterLayerId == *copy,
+                    "an equivalent split publishes the original->tail remap over the tail span");
+    }
+    {
+        // A non-merge downstream consumer of the original output is conservative. The second Layer
+        // Output's image input is a node input, not a Merge slot.
+        Fixture fixture;
+        if (!apply<ConnectPorts>(fixture, OutputPortRef{kFirstLayerNodeId, "image"},
+                                 InputPortRef{NodeInputRef{kSecondLayerNodeId, "image"}})
+                 .changed())
+            throw std::logic_error("split consumer fixture");
+        const auto split = apply<SplitLayerAtTime>(fixture, kFirstLayerId, t(2));
+        test.expect(split.changed() && !split.affectedTimes.has_value() &&
+                        !split.layerIdentityRemaps.has_value(),
+                    "a non-merge consumer keeps the split conservative (whole render)");
+    }
+    {
+        // A surviving child parented to the split layer is conservative.
+        Fixture fixture;
+        (void)apply<SetLayerParent>(fixture, kSecondLayerId, kFirstLayerId);
+        const auto split = apply<SplitLayerAtTime>(fixture, kFirstLayerId, t(2));
+        test.expect(split.changed() && !split.affectedTimes.has_value() &&
+                        !split.layerIdentityRemaps.has_value(),
+                    "a surviving child keeps the split conservative (whole render)");
+    }
+
+    {
+        // Locked/invalid splits keep their existing refusal semantics and publish no evidence.
+        Fixture fixture;
+        (void)apply<SetLayerLocked>(fixture, kFirstLayerId, true);
+        const auto locked = apply<SplitLayerAtTime>(fixture, kFirstLayerId, t(2));
+        test.expect(locked.status == CommandStatus::Rejected && !locked.affectedTimes.has_value() &&
+                        !locked.layerIdentityRemaps.has_value(),
+                    "a locked layer split is rejected with no evidence");
+        (void)apply<SetLayerLocked>(fixture, kFirstLayerId, false);
+        const auto invalid = apply<SplitLayerAtTime>(fixture, kFirstLayerId, t(100));
+        test.expect(invalid.status == CommandStatus::Rejected &&
+                        !invalid.layerIdentityRemaps.has_value(),
+                    "an out-of-range split is rejected with no evidence");
+    }
+}
+
 void testValidityQuery(TestContext& test) {
     Fixture fixture;
     const auto before = fixture.document.snapshot();
@@ -1311,6 +1377,7 @@ int main() {
         bloom::commands::test::testRenderAffectingClassification(test);
         bloom::commands::test::testLayerRangeTimeFootprint(test);
         bloom::commands::test::testRemovalTimeFootprint(test);
+        bloom::commands::test::testSplitEquivalenceEvidence(test);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

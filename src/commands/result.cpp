@@ -42,12 +42,50 @@ mergeAffectedTimeFootprints(const std::optional<AffectedTimeFootprint>& accumula
     return normalizeAffectedTimeFootprint(std::move(combined));
 }
 
+std::optional<std::vector<LayerIdentityRemap>>
+normalizeLayerIdentityRemaps(std::vector<LayerIdentityRemap> remaps) {
+    if (remaps.size() > kMaxLayerIdentityRemaps)
+        return std::nullopt;
+    if (remaps.empty())
+        return remaps;
+    const auto compositionId = remaps.front().compositionId;
+    if (!compositionId.isValid())
+        return std::nullopt;
+    for (const auto& remap : remaps) {
+        if (remap.compositionId != compositionId || remap.start < core::RationalTime{} ||
+            remap.start >= remap.end || !remap.beforeLayerId.isValid() ||
+            !remap.afterLayerId.isValid() || remap.beforeLayerId == remap.afterLayerId ||
+            !remap.beforeNodeId.isValid() || !remap.afterNodeId.isValid() ||
+            remap.beforeNodeId == remap.afterNodeId) {
+            return std::nullopt;
+        }
+    }
+    // Order is preserved: undo inversion depends on it.
+    return remaps;
+}
+
+std::vector<LayerIdentityRemap>
+invertLayerIdentityRemaps(const std::optional<std::vector<LayerIdentityRemap>>& remaps) {
+    std::vector<LayerIdentityRemap> inverted;
+    if (!remaps.has_value())
+        return inverted;
+    inverted.reserve(remaps->size());
+    for (auto remap = remaps->rbegin(); remap != remaps->rend(); ++remap) {
+        auto copy = *remap;
+        std::swap(copy.beforeLayerId, copy.afterLayerId);
+        std::swap(copy.beforeNodeId, copy.afterNodeId);
+        inverted.push_back(std::move(copy));
+    }
+    return inverted;
+}
+
 OperationResult OperationResult::applied(std::vector<OperationOutput> outputs) {
     return {
         .status = OperationStatus::Applied,
         .issues = {},
         .outputs = std::move(outputs),
         .affectedTimes = std::nullopt,
+        .layerIdentityRemaps = std::nullopt,
     };
 }
 
@@ -57,6 +95,7 @@ OperationResult OperationResult::noChange(std::vector<OperationOutput> outputs) 
         .issues = {},
         .outputs = std::move(outputs),
         .affectedTimes = std::nullopt,
+        .layerIdentityRemaps = std::nullopt,
     };
 }
 
@@ -66,6 +105,7 @@ OperationResult OperationResult::rejected(OperationIssueCode code, std::string m
         .issues = {{code, std::move(message)}},
         .outputs = {},
         .affectedTimes = std::nullopt,
+        .layerIdentityRemaps = std::nullopt,
     };
 }
 

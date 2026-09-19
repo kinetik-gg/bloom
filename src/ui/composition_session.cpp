@@ -1661,10 +1661,22 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
             } else if (!event.result.renderAffecting) {
                 // Neutral: preserve every retained span exactly.
             } else if (event.result.affectedTimes.has_value()) {
-                bool trustworthy = false;
-                const bool changed =
-                    applyFiniteEvaluationFootprint(*event.result.affectedTimes, trustworthy);
-                provenanceChanged = trustworthy ? changed : resetEvaluationRangesToLive();
+                // SPLIT-1 safety guard: a proven split publishes a deliberately empty pixel
+                // footprint plus geometry remaps, but the consumers that translate retained
+                // geometry to the current layer/node identities do not exist until SPLIT-2.
+                // Retaining pixels without that translation would expose stale layer IDs, so the
+                // session resets to whole-live whenever applicable remaps are present. SPLIT-2
+                // replaces this with actual remap consumption.
+                const bool hasRemaps = event.result.layerIdentityRemaps.has_value() &&
+                                       !event.result.layerIdentityRemaps->empty();
+                if (hasRemaps) {
+                    provenanceChanged = resetEvaluationRangesToLive();
+                } else {
+                    bool trustworthy = false;
+                    const bool changed =
+                        applyFiniteEvaluationFootprint(*event.result.affectedTimes, trustworthy);
+                    provenanceChanged = trustworthy ? changed : resetEvaluationRangesToLive();
+                }
             } else {
                 // Whole/unknown/mixed: conservative full-live reset.
                 provenanceChanged = resetEvaluationRangesToLive();

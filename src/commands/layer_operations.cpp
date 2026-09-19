@@ -105,6 +105,53 @@ OperationResult SetLayerRange::apply(document::Draft& draft) const {
     // valid non-identical spans; a nullopt here would conservatively mean whole-render.
     return result;
 }
+namespace {
+
+// SPLIT-1. Proves that splitting this ordinary Layer Output produces an output-equivalent head+tail
+// whose only image change is the head/tail activity boundary, so the split can publish a
+// deliberately EMPTY finite footprint plus an original->tail identity remap over [split,
+// originalOut).
+//
+// The proof is deliberately narrow. It requires the boundary node to exist and be the ordinary
+// built-in Layer Output schema, the layer's outgoing edges to feed ONLY ordinary content Merge
+// slots (no audio role, no non-merge node consumer), no surviving layer parented to it, and no
+// surviving parameter driver-bound to the boundary node (a driver is a ParameterRecord source, NOT
+// a graph edge, so it must be checked separately; CanonicalGraph::validate restricts a legal driver
+// to a value-node output, so this check is defensive today but must not be dropped -- the
+// classifier reasons from the record store, not from the validator). DuplicateNodes then clones the
+// bound parameters and animation curves (same absolute keyframe sample times) and copies the
+// external image input edge unchanged, so both halves sample the same source at the same absolute
+// composition time. Anything else -- a missing/unsupported node or schema, a driver reference, an
+// audio or node consumer, a child -- returns false and the split stays conservatively whole-render.
+[[nodiscard]] bool splitIsOutputEquivalent(const document::Composition& composition,
+                                           const document::LayerOutputBoundary& original) {
+    const auto* node = composition.graph().findNode(original.nodeId);
+    if (node == nullptr || node->typeId != document::kLayerOutputNodeType ||
+        node->schemaVersion != document::kLayerOutputNodeSchemaVersion)
+        return false;
+    for (const auto& edge : composition.graph().edges()) {
+        if (edge.source.nodeId != original.nodeId)
+            continue;
+        const auto* slot = std::get_if<document::LayerStackInputRef>(&edge.destination);
+        if (slot == nullptr || slot->role != document::kLayerStackContentInputRole)
+            return false;
+    }
+    for (const auto& layer : composition.graph().layerOutputs()) {
+        if (layer.nodeId != original.nodeId && layer.parent.has_value() &&
+            *layer.parent == original.layerId)
+            return false;
+    }
+    for (const auto& record : composition.parameters().records()) {
+        if (const auto* driver = std::get_if<document::DriverBindingSource>(&record.source)) {
+            if (driver->sourceNodeId == original.nodeId)
+                return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
 std::string_view SplitLayerAtTime::typeId() const noexcept { return "bloom.layer.split-at-time"; }
 OperationResult SplitLayerAtTime::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(composition_);
@@ -119,6 +166,9 @@ OperationResult SplitLayerAtTime::apply(document::Draft& draft) const {
     const auto time = snap(time_, *composition);
     if (!time || *time <= original.inPoint || *time >= original.endPoint(composition->duration()))
         return invalidRange();
+    // Classify from the pre-split graph.
+    const bool equivalent = splitIsOutputEquivalent(*composition, original);
+    const auto originalOut = original.endPoint(composition->duration());
     auto duplicated = DuplicateNodes(composition_, {original.nodeId}, {0, 0}).apply(draft);
     if (duplicated.status != OperationStatus::Applied)
         return duplicated;
@@ -134,6 +184,19 @@ OperationResult SplitLayerAtTime::apply(document::Draft& draft) const {
     copy->inPoint = *time;
     copy->outPoint = original.outPoint;
     duplicated.outputs.push_back({"layer", copyId});
+    if (!equivalent)
+        return duplicated; // whole-render default: no footprint, no remaps
+    // The split is output-equivalent, so its changed-time footprint is deliberately EMPTY and the
+    // only additional evidence is the ordered original->tail identity remap over the tail's span.
+    duplicated.affectedTimes = normalizeAffectedTimeFootprint({composition_, {}});
+    duplicated.layerIdentityRemaps =
+        std::vector<LayerIdentityRemap>{LayerIdentityRemap{.compositionId = composition_,
+                                                           .start = *time,
+                                                           .end = originalOut,
+                                                           .beforeLayerId = layer_,
+                                                           .afterLayerId = copyId,
+                                                           .beforeNodeId = original.nodeId,
+                                                           .afterNodeId = copy->nodeId}};
     return duplicated;
 }
 std::string_view SetLayerEnabled::typeId() const noexcept { return "bloom.layer.set-enabled"; }

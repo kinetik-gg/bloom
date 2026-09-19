@@ -66,6 +66,10 @@ class CommandStack final {
         // The proven finite changed-time footprint, when the transaction proved one; std::nullopt
         // is the conservative whole-render default. Replayed verbatim by undo/redo.
         std::optional<AffectedTimeFootprint> affectedTimes;
+        // SPLIT-1. The transaction's FORWARD ordered geometry remaps, when every applied
+        // render-affecting op proved a finite footprint. Undo publishes the inverted list; redo
+        // publishes this stored forward list.
+        std::optional<std::vector<LayerIdentityRemap>> layerIdentityRemaps;
     };
 
     [[nodiscard]] std::optional<CommandResult> staleResult(CommandAction action, std::string label,
