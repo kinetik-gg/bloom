@@ -252,6 +252,9 @@ jobs:
         run: brew install opencolorio openexr libzip yyjson zlib ninja
 
       - name: Install Qt
+        # aqt writes aqtinstall.log into its working directory; run it outside the checkout so the
+        # repository hygiene check never sees it.
+        working-directory: ${{ runner.temp }}
         run: |
           python3 -m venv "$RUNNER_TEMP/aqt-venv"
           "$RUNNER_TEMP/aqt-venv/bin/pip" install --quiet aqtinstall==3.2.1

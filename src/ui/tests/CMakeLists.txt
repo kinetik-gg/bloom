@@ -829,12 +829,18 @@ target_compile_definitions(bloom_window_golden_test PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build"
     BLOOM_GRAMMAR_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/goldens")
 bloom_enable_warnings(bloom_window_golden_test)
-foreach(scale IN ITEMS 1 1.5)
-    add_test(NAME bloom.ui.window_golden.dpr${scale} COMMAND bloom_window_golden_test)
-    set_tests_properties(bloom.ui.window_golden.dpr${scale} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
-        LABELS "ui;golden" TIMEOUT 60)
-endforeach()
+# The whole-window references are platform-specific (glyph rasterization differs between
+# FreeType on Linux and CoreText on macOS), so the comparison runs only against the Linux-approved
+# references; other platforms build the fixture without registering the comparison until their own
+# references exist.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    foreach(scale IN ITEMS 1 1.5)
+        add_test(NAME bloom.ui.window_golden.dpr${scale} COMMAND bloom_window_golden_test)
+        set_tests_properties(bloom.ui.window_golden.dpr${scale} PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+            LABELS "ui;golden" TIMEOUT 60)
+    endforeach()
+endif()
 
 add_executable(bloom_media_ui_test media_ui_tests.cpp)
 target_include_directories(bloom_media_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
