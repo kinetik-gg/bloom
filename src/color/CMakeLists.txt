@@ -331,6 +331,8 @@ if(BUILD_TESTING)
     target_link_libraries(bloom_color_ocio_gpu_program_resources_native_test PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)
     target_include_directories(bloom_color_ocio_gpu_program_resources_native_test
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../render")
+    target_link_libraries(bloom_color_ocio_gpu_program_resources_native_test
+        PRIVATE bloom_render_ocio_test_faults)
     if(bloom_ocio_gpu_glslang_validator AND bloom_ocio_gpu_spirv_val)
         target_compile_definitions(bloom_color_ocio_gpu_program_resources_native_test PRIVATE
             "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_ocio_gpu_tools_dir}\"")
@@ -347,6 +349,8 @@ if(BUILD_TESTING)
     target_link_libraries(bloom_color_ocio_gpu_program_lifecycle_native_test PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)
     target_include_directories(bloom_color_ocio_gpu_program_lifecycle_native_test
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../render")
+    target_link_libraries(bloom_color_ocio_gpu_program_lifecycle_native_test
+        PRIVATE bloom_render_ocio_test_faults)
     if(bloom_ocio_gpu_glslang_validator AND bloom_ocio_gpu_spirv_val)
         target_compile_definitions(bloom_color_ocio_gpu_program_lifecycle_native_test PRIVATE
             "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_ocio_gpu_tools_dir}\"")

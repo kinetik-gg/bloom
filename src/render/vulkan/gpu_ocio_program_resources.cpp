@@ -1,12 +1,14 @@
 #include "gpu_ocio_program_private.hpp"
 
-#include "../ocio_gpu_program_fault.hpp"
+#include "ocio_gpu_program_fault.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <limits>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -15,14 +17,65 @@
 namespace bloom::render::ocio_program_detail {
 
 [[nodiscard]] bool reserveUploadQuarantineIfFree() noexcept;
-void releaseUploadQuarantineFlag() noexcept;
+void releaseReservationIfReserved() noexcept;
+
+[[nodiscard]] bool cancellationRequested(const GpuOcioProgramCancellation& cancellation) noexcept {
+    if (!cancellation) {
+        return false;
+    }
+    try {
+        return cancellation();
+    } catch (...) {
+        return true;
+    }
+}
 
 namespace {
+
 std::atomic<std::uint32_t> g_quarantineCount{0};
 std::atomic<bool> g_teardownIncomplete{false};
 std::atomic<bool> g_faultNotReady{false};
 std::atomic<bool> g_faultCancelAfterSubmit{false};
-std::atomic_flag g_uploadQuarantineFlag = ATOMIC_FLAG_INIT;
+
+// Explicit single-slot ownership. `Reserved` is held from before the first allocation until either
+// the upload retires (released) or the resources move into the slot (`Quarantined`). A foreign
+// thread may only observe the state; it never touches the driver or destroys resources.
+enum class SlotState : std::uint8_t { Free, Reserved, Quarantined };
+
+struct UploadQuarantine final {
+    std::shared_ptr<vulkan_detail::DeviceAllocatorState> state;
+    VkImage image = VK_NULL_HANDLE;
+    VmaAllocation imageAllocation = VK_NULL_HANDLE;
+    VkBuffer staging = VK_NULL_HANDLE;
+    VmaAllocation stagingAllocation = VK_NULL_HANDLE;
+    vk::raii::CommandPool pool{nullptr};
+    vk::raii::CommandBuffer command{nullptr};
+    vk::raii::Fence fence{nullptr};
+};
+
+std::mutex g_slotMutex;
+SlotState g_slotState = SlotState::Free;
+std::thread::id g_slotOwner{};
+
+// The bounded retention slot is intentionally immortal: non-allocating aligned byte storage plus a
+// placement-constructed instance whose pointer has static storage. Its C++ destructor never runs at
+// process exit, so an unretired fence/pool/device can never be destroyed from a foreign exit
+// thread. Construction happens on first use, which is always before any submission.
+alignas(UploadQuarantine) unsigned char g_slotStorage[sizeof(UploadQuarantine)];
+
+[[nodiscard]] UploadQuarantine* quarantineStorage() noexcept {
+    static UploadQuarantine* const slot =
+        ::new (static_cast<void*>(g_slotStorage)) UploadQuarantine();
+    return slot;
+}
+
+void setReasonNoThrow(std::string& reason, const char* text) noexcept {
+    try {
+        reason = text;
+    } catch (...) {
+        // A diagnostic must never unwind through an ownership transition.
+    }
+}
 
 [[nodiscard]] VkFormat channelFormat(const OcioGpuTextureChannel channel,
                                      const std::uint32_t components) noexcept {
@@ -73,8 +126,6 @@ std::atomic_flag g_uploadQuarantineFlag = ATOMIC_FLAG_INIT;
     return {1, 1, 1};
 }
 
-// RAII owner for the raw VMA image until its ownership is transferred (either to a SampledResource
-// or to the upload quarantine). Prevents a leak if any later step throws.
 struct ImageOwner final {
     vulkan_detail::DeviceAllocatorState* state = nullptr;
     VkImage image = VK_NULL_HANDLE;
@@ -109,22 +160,6 @@ struct Staging final {
     }
 };
 
-struct UploadQuarantine final {
-    std::shared_ptr<vulkan_detail::DeviceAllocatorState> state;
-    VkImage image = VK_NULL_HANDLE;
-    VmaAllocation imageAllocation = VK_NULL_HANDLE;
-    VkBuffer staging = VK_NULL_HANDLE;
-    VmaAllocation stagingAllocation = VK_NULL_HANDLE;
-    vk::raii::CommandPool pool{nullptr};
-    vk::raii::CommandBuffer command{nullptr};
-    vk::raii::Fence fence{nullptr};
-};
-
-UploadQuarantine* quarantineSlot() {
-    static auto* const slot = new UploadQuarantine();
-    return slot;
-}
-
 void releaseQuarantineResources(UploadQuarantine& slot) noexcept {
     if (slot.state == nullptr) {
         return;
@@ -143,29 +178,49 @@ void releaseQuarantineResources(UploadQuarantine& slot) noexcept {
     slot.state.reset();
 }
 
-// Moves every resource the outstanding submission may still use into the bounded single-slot
-// quarantine, so nothing is destroyed while the GPU can still read it.
-void quarantineUpload(UploadQuarantine& slot, UploadOutcome& outcome, ImageOwner& image,
-                      Staging& staging, vk::raii::CommandPool& pool,
+// Caller holds g_slotMutex. Only the slot owner may query the driver.
+[[nodiscard]] bool tryRetireQuarantinedLocked() noexcept {
+    if (g_slotState != SlotState::Quarantined || g_slotOwner != std::this_thread::get_id() ||
+        quarantineStorage()->state == nullptr) {
+        return g_slotState == SlotState::Free;
+    }
+    const VkFence rawFence = static_cast<VkFence>(*quarantineStorage()->fence);
+    const VkResult status = quarantineStorage()->state->device.getDispatcher()->vkGetFenceStatus(
+        static_cast<VkDevice>(*quarantineStorage()->state->device), rawFence);
+    if (status != VK_SUCCESS && status != VK_ERROR_DEVICE_LOST) {
+        return false;
+    }
+    releaseQuarantineResources(*quarantineStorage());
+    g_slotState = SlotState::Free;
+    g_slotOwner = std::thread::id{};
+    return true;
+}
+
+// No throwing operations after submission: this only moves already-owned resources and flips the
+// reservation state. Diagnostics are assigned separately by a noexcept helper.
+void quarantineUpload(ImageOwner& image, Staging& staging, vk::raii::CommandPool& pool,
                       vk::raii::CommandBuffer& command, vk::raii::Fence& fence,
                       std::shared_ptr<vulkan_detail::DeviceAllocatorState> state,
                       const bool latchFuse) noexcept {
-    // The bounded retention slot was reserved before any allocation or submission, so this path
-    // never allocates; it only moves the resources the GPU may still touch into that slot.
-    slot.state = std::move(state);
-    slot.image = image.image;
-    slot.imageAllocation = image.allocation;
+    quarantineStorage()->state = std::move(state);
+    quarantineStorage()->image = image.image;
+    quarantineStorage()->imageAllocation = image.allocation;
     image.release();
-    slot.staging = staging.buffer;
-    slot.stagingAllocation = staging.allocation;
+    quarantineStorage()->staging = staging.buffer;
+    quarantineStorage()->stagingAllocation = staging.allocation;
     staging.release();
-    slot.pool = std::move(pool);
-    slot.command = std::move(command);
-    slot.fence = std::move(fence);
+    quarantineStorage()->pool = std::move(pool);
+    quarantineStorage()->command = std::move(command);
+    quarantineStorage()->fence = std::move(fence);
+    {
+        const std::lock_guard<std::mutex> lock(g_slotMutex);
+        if (g_slotState == SlotState::Reserved && g_slotOwner == std::this_thread::get_id()) {
+            g_slotState = SlotState::Quarantined;
+        }
+    }
     if (latchFuse) {
         noteQuarantine();
     }
-    outcome = UploadOutcome::Quarantined;
 }
 
 [[nodiscard]] bool formatSupports(vulkan_detail::DeviceAllocatorState& state, const VkFormat format,
@@ -203,18 +258,36 @@ void quarantineUpload(UploadQuarantine& slot, UploadOutcome& outcome, ImageOwner
     return false;
 }
 
+// Checked sum of the actual image allocation, staging allocation, and padded host scratch against
+// the caller's remaining owned budget. Never wraps.
+[[nodiscard]] bool fitsRemainingBudget(const std::uint64_t imageBytes,
+                                       const std::uint64_t stagingBytes,
+                                       const std::uint64_t scratchBytes,
+                                       const std::uint64_t remaining) noexcept {
+    std::uint64_t total = imageBytes;
+    if (total > std::numeric_limits<std::uint64_t>::max() - stagingBytes) {
+        return false;
+    }
+    total += stagingBytes;
+    if (total > std::numeric_limits<std::uint64_t>::max() - scratchBytes) {
+        return false;
+    }
+    total += scratchBytes;
+    return total <= remaining;
+}
+
 [[nodiscard]] UploadOutcome
 uploadImage(vulkan_detail::DeviceAllocatorState& state,
             const std::shared_ptr<vulkan_detail::DeviceAllocatorState>& owner, ImageOwner& image,
-            UploadQuarantine& slot, const VkExtent3D extent, const void* data,
-            const std::uint64_t bytes, const std::uint64_t remainingOwnedBytes,
+            const VkExtent3D extent, const void* data, const std::uint64_t bytes,
+            const std::uint64_t imageAllocationBytes, const std::uint64_t remainingOwnedBytes,
             const std::uint64_t hostScratchBytes, const GpuOcioProgramCancellation& cancellation,
             std::string& reason) {
     const VkDevice device = static_cast<VkDevice>(*state.device);
     const auto* dispatcher = state.device.getDispatcher();
-    if (cancellation && cancellation()) {
-        reason = "the LUT upload was cancelled before submission";
-        return UploadOutcome::Failed;
+    if (cancellationRequested(cancellation)) {
+        setReasonNoThrow(reason, "the LUT upload was cancelled before submission");
+        return UploadOutcome::Cancelled;
     }
     Staging staging;
     staging.state = &state;
@@ -230,24 +303,20 @@ uploadImage(vulkan_detail::DeviceAllocatorState& state,
     if (vmaCreateBuffer(state.allocator, &bufferInfo, &allocationInfo, &staging.buffer,
                         &staging.allocation, &mappedInfo) != VK_SUCCESS ||
         mappedInfo.pMappedData == nullptr) {
-        reason = "the LUT staging buffer could not be created";
+        setReasonNoThrow(reason, "the LUT staging buffer could not be created");
         return UploadOutcome::Failed;
     }
     std::memcpy(mappedInfo.pMappedData, data, static_cast<std::size_t>(bytes));
-    // The staging allocation is host-visible but not guaranteed host-coherent; make the CPU writes
-    // visible to the transfer engine explicitly.
     static_cast<void>(vmaFlushAllocation(state.allocator, staging.allocation, 0,
                                          static_cast<VkDeviceSize>(bytes)));
 
-    // Actual host-visible staging bytes + the (already-created) image allocation + any padded host
-    // scratch must fit the caller's remaining owned budget before the submission is recorded.
-    std::uint64_t actual = 0;
-    if (__builtin_add_overflow(static_cast<std::uint64_t>(mappedInfo.size), hostScratchBytes,
-                               &actual) ||
-        actual > remainingOwnedBytes) {
-        reason = "the LUT upload exceeds the remaining owned-byte budget";
+    const std::uint64_t stagingBytes = static_cast<std::uint64_t>(mappedInfo.size);
+    if (!fitsRemainingBudget(imageAllocationBytes, stagingBytes, hostScratchBytes,
+                             remainingOwnedBytes)) {
+        setReasonNoThrow(reason, "the LUT upload exceeds the remaining owned-byte budget");
         return UploadOutcome::OverBudget;
     }
+
     vk::raii::CommandPool pool{nullptr};
     vk::raii::CommandBuffer command{nullptr};
     vk::raii::Fence fence{nullptr};
@@ -258,7 +327,7 @@ uploadImage(vulkan_detail::DeviceAllocatorState& state,
         poolInfo.queueFamilyIndex = state.computeQueueFamily;
         VkCommandPool rawPool = VK_NULL_HANDLE;
         if (dispatcher->vkCreateCommandPool(device, &poolInfo, nullptr, &rawPool) != VK_SUCCESS) {
-            reason = "the LUT upload command pool could not be created";
+            setReasonNoThrow(reason, "the LUT upload command pool could not be created");
             return UploadOutcome::Failed;
         }
         pool = vk::raii::CommandPool(state.device, rawPool);
@@ -270,7 +339,7 @@ uploadImage(vulkan_detail::DeviceAllocatorState& state,
         VkCommandBuffer rawCommand = VK_NULL_HANDLE;
         if (dispatcher->vkAllocateCommandBuffers(device, &allocateInfo, &rawCommand) !=
             VK_SUCCESS) {
-            reason = "the LUT upload command buffer could not be allocated";
+            setReasonNoThrow(reason, "the LUT upload command buffer could not be allocated");
             return UploadOutcome::Failed;
         }
         command = vk::raii::CommandBuffer(state.device, rawCommand, rawPool);
@@ -278,7 +347,7 @@ uploadImage(vulkan_detail::DeviceAllocatorState& state,
         fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         VkFence rawFence = VK_NULL_HANDLE;
         if (dispatcher->vkCreateFence(device, &fenceInfo, nullptr, &rawFence) != VK_SUCCESS) {
-            reason = "the LUT upload fence could not be created";
+            setReasonNoThrow(reason, "the LUT upload fence could not be created");
             return UploadOutcome::Failed;
         }
         fence = vk::raii::Fence(state.device, rawFence);
@@ -288,7 +357,7 @@ uploadImage(vulkan_detail::DeviceAllocatorState& state,
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     if (dispatcher->vkBeginCommandBuffer(raw, &beginInfo) != VK_SUCCESS) {
-        reason = "the LUT upload command buffer could not begin";
+        setReasonNoThrow(reason, "the LUT upload command buffer could not begin");
         return UploadOutcome::Failed;
     }
     VkImageMemoryBarrier barrier{};
@@ -317,12 +386,12 @@ uploadImage(vulkan_detail::DeviceAllocatorState& state,
                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
                                      nullptr, 1, &barrier);
     if (dispatcher->vkEndCommandBuffer(raw) != VK_SUCCESS) {
-        reason = "the LUT upload command buffer could not end";
+        setReasonNoThrow(reason, "the LUT upload command buffer could not end");
         return UploadOutcome::Failed;
     }
-    if (cancellation && cancellation()) {
-        reason = "the LUT upload was cancelled before submission";
-        return UploadOutcome::Failed;
+    if (cancellationRequested(cancellation)) {
+        setReasonNoThrow(reason, "the LUT upload was cancelled before submission");
+        return UploadOutcome::Cancelled;
     }
     const VkFence rawFence = static_cast<VkFence>(*fence);
     VkSubmitInfo submit{};
@@ -331,23 +400,22 @@ uploadImage(vulkan_detail::DeviceAllocatorState& state,
     submit.pCommandBuffers = &raw;
     if (dispatcher->vkQueueSubmit(static_cast<VkQueue>(*state.computeQueue), 1, &submit,
                                   rawFence) != VK_SUCCESS) {
-        reason = "the LUT upload submission failed";
+        setReasonNoThrow(reason, "the LUT upload submission failed");
         return UploadOutcome::Failed;
     }
-    // The submission is now outstanding. From here no owned resource may be destroyed on an
-    // unproven outcome; a quarantine slot retains every resource the GPU can still touch.
-    UploadOutcome outcome = UploadOutcome::Retired;
+    // Submission is outstanding. No owned resource may be destroyed on an unproven outcome, and no
+    // throwing operation runs until ownership state is authoritative.
     if (g_faultNotReady.load()) {
-        quarantineUpload(slot, outcome, image, staging, pool, command, fence, owner, true);
-        reason = "the LUT upload completion is unproven (fault-injected)";
-        return outcome;
+        quarantineUpload(image, staging, pool, command, fence, owner, true);
+        setReasonNoThrow(reason, "the LUT upload completion is unproven (fault-injected)");
+        return UploadOutcome::Quarantined;
     }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     VkResult waited = VK_NOT_READY;
     while (true) {
-        if (g_faultCancelAfterSubmit.load() || (cancellation && cancellation())) {
-            quarantineUpload(slot, outcome, image, staging, pool, command, fence, owner, false);
-            reason = "the LUT upload was cancelled after submission";
+        if (g_faultCancelAfterSubmit.load() || cancellationRequested(cancellation)) {
+            quarantineUpload(image, staging, pool, command, fence, owner, false);
+            setReasonNoThrow(reason, "the LUT upload was cancelled after submission");
             return UploadOutcome::Cancelled;
         }
         waited = dispatcher->vkWaitForFences(device, 1, &rawFence, VK_TRUE, 1000000ULL);
@@ -361,30 +429,41 @@ uploadImage(vulkan_detail::DeviceAllocatorState& state,
     if (waited == VK_SUCCESS) {
         return UploadOutcome::Retired;
     }
-    quarantineUpload(slot, outcome, image, staging, pool, command, fence, owner, true);
-    reason = waited == VK_ERROR_DEVICE_LOST ? "the device was lost during LUT upload"
-                                            : "the LUT upload completion is unproven";
-    return outcome;
+    quarantineUpload(image, staging, pool, command, fence, owner, true);
+    setReasonNoThrow(reason, waited == VK_ERROR_DEVICE_LOST
+                                 ? "the device was lost during LUT upload"
+                                 : "the LUT upload completion is unproven");
+    return UploadOutcome::Quarantined;
 }
 
 } // namespace
 
-bool uploadQuarantineReserved() noexcept {
-    return g_uploadQuarantineFlag.test(std::memory_order_acquire);
-}
-
 bool reserveUploadQuarantineIfFree() noexcept {
-    // Touch the preallocated slot BEFORE any submission so no allocation can fail between submit
-    // and a quarantine transfer.
-    static_cast<void>(quarantineSlot());
-    if (g_uploadQuarantineFlag.test_and_set(std::memory_order_acq_rel)) {
+    try {
+        const std::lock_guard<std::mutex> lock(g_slotMutex);
+        if (g_slotState == SlotState::Quarantined && g_slotOwner == std::this_thread::get_id()) {
+            static_cast<void>(tryRetireQuarantinedLocked());
+        }
+        if (g_slotState != SlotState::Free) {
+            return false;
+        }
+        g_slotState = SlotState::Reserved;
+        g_slotOwner = std::this_thread::get_id();
+        return true;
+    } catch (...) {
         return false;
     }
-    return true;
 }
 
-void releaseUploadQuarantineFlag() noexcept {
-    g_uploadQuarantineFlag.clear(std::memory_order_release);
+void releaseReservationIfReserved() noexcept {
+    try {
+        const std::lock_guard<std::mutex> lock(g_slotMutex);
+        if (g_slotState == SlotState::Reserved && g_slotOwner == std::this_thread::get_id()) {
+            g_slotState = SlotState::Free;
+            g_slotOwner = std::thread::id{};
+        }
+    } catch (...) {
+    }
 }
 
 UploadOutcome
@@ -392,22 +471,16 @@ createSampledResource(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>
                       const OcioGpuTextureDesc& texture, const std::uint64_t remainingOwnedBytes,
                       const GpuOcioProgramCancellation& cancellation,
                       SampledResource& out) noexcept {
-    if (cancellation && cancellation()) {
-        return UploadOutcome::Failed;
+    if (cancellationRequested(cancellation)) {
+        return UploadOutcome::Cancelled;
     }
     if (!reserveUploadQuarantineIfFree()) {
         // A retention slot must exist before we allocate or submit anything; refuse typed.
         return UploadOutcome::Failed;
     }
-    bool retained = false;
-    struct SlotGuard final {
-        bool& retained;
-        ~SlotGuard() {
-            if (!retained) {
-                releaseUploadQuarantineFlag();
-            }
-        }
-    } slotGuard{retained};
+    struct ReservationGuard final {
+        ~ReservationGuard() { releaseReservationIfReserved(); }
+    } reservationGuard;
     try {
         vulkan_detail::DeviceAllocatorState& state = *owner;
         const VkDevice device = static_cast<VkDevice>(*state.device);
@@ -420,8 +493,6 @@ createSampledResource(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>
         std::uint32_t components = nativeComponents;
         VkFormat format = channelFormat(texture.channel, nativeComponents);
         if (!formatSupports(state, format, linear)) {
-            // RGBA is almost universal; padding preserves exact texel meaning (the shader reads
-            // only .rgb / .r).
             format = VK_FORMAT_R32G32B32A32_SFLOAT;
             components = 4;
             if (!formatSupports(state, format, linear)) {
@@ -493,19 +564,15 @@ createSampledResource(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>
             source = padded.data();
         }
         const std::uint64_t bytes = static_cast<std::uint64_t>(texels) * components * sizeof(float);
-        std::string reason;
         const std::uint64_t hostScratchBytes = padded.empty() ? 0U : padded.size() * sizeof(float);
-        const UploadOutcome outcome =
-            uploadImage(state, owner, image, *quarantineSlot(), extent, source, bytes,
-                        remainingOwnedBytes, hostScratchBytes, cancellation, reason);
-        if (outcome == UploadOutcome::Quarantined || outcome == UploadOutcome::Cancelled) {
-            // The image is now owned by the quarantine; the sampler/view are not referenced by the
-            // outstanding copy and are safely destroyed by RAII. Keep the reserved slot.
-            retained = true;
-            return outcome;
-        }
+        std::string reason;
+        const UploadOutcome outcome = uploadImage(
+            state, owner, image, extent, source, bytes, static_cast<std::uint64_t>(mapped.size),
+            remainingOwnedBytes, hostScratchBytes, cancellation, reason);
         if (outcome != UploadOutcome::Retired) {
-            return UploadOutcome::Failed;
+            // Quarantined/Cancelled keep the reservation (resources retained); OverBudget/Failed
+            // release it via the guard. Typed outcomes are preserved for the caller.
+            return outcome;
         }
         out.image = image.image;
         out.view = *view;
@@ -547,33 +614,27 @@ void noteQuarantine() noexcept {
 }
 bool teardownIncomplete() noexcept { return g_teardownIncomplete.load(); }
 
-bool uploadQuarantineOccupied() noexcept { return g_uploadQuarantineFlag.test(); }
+bool uploadQuarantineOccupied() noexcept {
+    try {
+        const std::lock_guard<std::mutex> lock(g_slotMutex);
+        return g_slotState != SlotState::Free;
+    } catch (...) {
+        return true;
+    }
+}
 
 void retireUploadQuarantine() noexcept {
-    UploadQuarantine& slot = *quarantineSlot();
-    if (slot.state == nullptr) {
-        releaseUploadQuarantineFlag();
-        return;
+    try {
+        const std::lock_guard<std::mutex> lock(g_slotMutex);
+        if (g_slotState != SlotState::Quarantined || g_slotOwner != std::this_thread::get_id()) {
+            return;
+        }
+        static_cast<void>(tryRetireQuarantinedLocked());
+    } catch (...) {
     }
-    if (slot.state->owner != std::this_thread::get_id()) {
-        // Foreign-thread reclamation must never touch the driver or destroy resources.
-        return;
-    }
-    const VkFence rawFence = static_cast<VkFence>(*slot.fence);
-    const VkResult status = slot.state->device.getDispatcher()->vkGetFenceStatus(
-        static_cast<VkDevice>(*slot.state->device), rawFence);
-    if (status != VK_SUCCESS && status != VK_ERROR_DEVICE_LOST) {
-        return; // still unproven; keep every resource and the flag set
-    }
-    releaseQuarantineResources(slot);
-    releaseUploadQuarantineFlag();
 }
 
-void setUploadFenceOverrideForTest(const UploadFenceOverride override) noexcept {
-    g_faultNotReady.store(override == UploadFenceOverride::NotReady);
-    g_faultCancelAfterSubmit.store(override == UploadFenceOverride::CancelAfterSubmit);
-}
-bool uploadQuarantineOccupiedForTest() noexcept { return uploadQuarantineOccupied(); }
-void retireUploadQuarantineForTest() noexcept { retireUploadQuarantine(); }
+std::atomic<bool>& ocioFaultNotReady() noexcept { return g_faultNotReady; }
+std::atomic<bool>& ocioFaultCancelAfterSubmit() noexcept { return g_faultCancelAfterSubmit; }
 
 } // namespace bloom::render::ocio_program_detail

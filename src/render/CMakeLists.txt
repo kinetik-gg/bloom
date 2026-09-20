@@ -845,6 +845,7 @@ else()
 endif()
 
 target_compile_features(bloom_render PUBLIC cxx_std_20)
+target_include_directories(bloom_render PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(
     bloom_render
     PUBLIC bloom_core
@@ -864,5 +865,12 @@ bloom_enable_warnings(bloom_render)
 bloom_enable_strict_floating_point(bloom_render)
 
 if(BUILD_TESTING)
+    # Test-only fault setters, deliberately NOT part of bloom_render: production targets never link
+    # this library, so shipping builds cannot expose fault behavior.
+    add_library(bloom_render_ocio_test_faults STATIC vulkan/gpu_ocio_program_fault_test.cpp)
+    target_compile_features(bloom_render_ocio_test_faults PUBLIC cxx_std_20)
+    target_include_directories(bloom_render_ocio_test_faults PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/vulkan")
+    bloom_enable_warnings(bloom_render_ocio_test_faults)
     add_subdirectory(tests)
 endif()
