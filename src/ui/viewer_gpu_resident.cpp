@@ -388,6 +388,12 @@ struct ViewerGpuResidentController::Impl final {
             }
             return;
         }
+        if (presentPending) {
+            // A newer present is authored but not yet enqueued (the target is still attaching or
+            // resizing). The previous present's sequence must not acknowledge the newer request, or
+            // the cover would hide over a stale frame.
+            return;
+        }
         if (!presenter->acceptingPresent()) {
             return; // still attaching/resizing; wait
         }
@@ -584,14 +590,17 @@ bool ViewerGpuResidentController::present(const runtime::PreparedPreviewFrame& f
         impl_->targetWidth = width;
         impl_->targetHeight = height;
     } else if (width != impl_->targetWidth || height != impl_->targetHeight) {
-        // The swapchain resize gate: retire the old extent and wait for the new one
-        // to become Active before presenting. The next poll re-presents with the
-        // new params.
+        // The swapchain resize gate: retire the old extent and wait for the new one to become
+        // Active before presenting. Raise the CPU cover above the resizing surface (its last
+        // acknowledged swapchain image is stale for the new extent) and fall through to author the
+        // re-present with the new extent; pumpPendingPresent() enqueues it as soon as the target is
+        // Active again. Waiting on a presenter state-change edge alone loses the re-present when
+        // the owner finishes the resize within one poll interval.
         if (!requestTargetResize(width, height)) {
             impl_->failCpu(impl_->diagnostic);
             return false;
         }
-        return true;
+        static_cast<void>(impl_->ensureCover(request.containerRect.toRect()));
     }
 
     // Destination is the PAR-folded display rect in native-container device pixels; source is the
