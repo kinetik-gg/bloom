@@ -56,6 +56,10 @@
 // controller only ever calls TaskHandle<...>::tryTakeResult()/TaskScheduler::snapshot() from the
 // authoring thread between submissions -- the "established mailbox idiom" the doc names,
 // generalized from bloom/host/session_async_io.hpp's own single-stage use of it.
+namespace bloom::runtime {
+class GpuProcessFrameEvaluator;
+} // namespace bloom::runtime
+
 namespace bloom::host {
 
 struct OutputAnalysisAttemptRequestV1 final {
@@ -79,6 +83,14 @@ struct OutputAnalysisAttemptRequestV1 final {
     // Failed, the blocking stage resolves and builds its own; that is a real cost, never a silent
     // fallback to an unqualified transform. Must outlive the whole asynchronous operation.
     runtime::QualifiedDisplayProcessorProvider* displayProcessorProvider = nullptr;
+    // Optional, non-owning GPU final-render bridge. When it is non-null and its device is
+    // available, the Evaluating stage tries the genuine native scene executor first (the same
+    // PreparedGpuScene /GpuSceneExecutor vocabulary the resident preview route uses) and performs
+    // the one final RGBA32F readback into a GPU-provenance ProcessFrame. An unavailable device or a
+    // scene outside the currently qualified prepared-GPU subset falls through to the CPU reference
+    // evaluator on the same snapshot/identity/request; unsupported operations are diagnosed by the
+    // scene builder and remain required by contract. Must outlive the whole asynchronous operation.
+    runtime::GpuProcessFrameEvaluator* gpuEvaluator = nullptr;
 };
 
 enum class OutputAnalysisAttemptStageV1 : std::uint8_t {

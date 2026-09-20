@@ -7,6 +7,7 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/platform/staged_artifact.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/gpu_process_frame.hpp>
 
 #include <algorithm>
 #include <array>
@@ -299,6 +300,68 @@ void testResourceExhaustionIsTypedWithZeroLeak(Expectations& expectations) {
                         "resource exhaustion: a refused attempt charges nothing (zero leak)");
 }
 
+// Exercises the ACTUAL export host path (beginOutputAnalysisAttemptV1 -> Resolving -> Evaluating ->
+// Identifying -> Analyzing) with the genuine GPU final-render bridge attached. The loader is read
+// from BLOOM_TEST_VULKAN_LOADER so no machine-specific path is embedded in source; an absent loader
+// or device prints an explicit NOTE and is not a failure. The runtime fixture
+// bloom.runtime.gpu_process_frame is the authority for native dispatch counters, GPU provenance,
+// and CPU-oracle parity.
+void testGpuEvaluatorHostPath(Expectations& expectations) {
+    const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER");
+    if (loader == nullptr || *loader == '\0') {
+        std::cout << "NOTE: BLOOM_TEST_VULKAN_LOADER unset; skipping the GPU export host path\n";
+        return;
+    }
+    auto evaluator = runtime::GpuProcessFrameEvaluator::create(
+        {.enabled = true, .loaderPath = std::filesystem::path(loader)});
+    expectations.expect(evaluator != nullptr, "gpu host path: evaluator constructed");
+    if (evaluator == nullptr) {
+        return;
+    }
+    if (!evaluator->gpuAvailable()) {
+        std::cout << "NOTE: no compatible Vulkan device; skipping the GPU export host path: "
+                  << evaluator->availabilityDiagnostic().message << '\n';
+        return;
+    }
+    TempDirectory directory;
+    expectations.expect(directory.isValid(), "gpu host path: temp directory is available");
+    if (!directory.isValid()) {
+        return;
+    }
+    runtime::TaskScheduler scheduler;
+    auto artifacts = platform::StagedArtifactCoordinator::create({});
+    expectations.expect(artifacts.succeeded(), "gpu host path: coordinator is created");
+    if (!artifacts) {
+        return;
+    }
+    auto coordinator = std::move(artifacts).takeCoordinator();
+    output::ExportResourceLedgerV1 ledger;
+
+    auto request = requestFor(directory.path() / "gpu-attempt.exr");
+    request.gpuEvaluator = evaluator.get();
+    auto begin =
+        host::beginOutputAnalysisAttemptV1(scheduler, coordinator, ledger, std::move(request));
+    expectations.expect(static_cast<bool>(begin),
+                        "gpu host path: begin submits the Resolving task");
+    if (!begin) {
+        return;
+    }
+    auto runner = std::move(begin).takeHandle();
+    auto outcome = pumpUntilComplete(runner);
+    expectations.expect(outcome.has_value(), "gpu host path: attempt reaches a terminal outcome");
+    if (!outcome.has_value()) {
+        return;
+    }
+    expectations.expect(static_cast<bool>(*outcome),
+                        "gpu host path: the GPU-evaluated attempt completes");
+    if (*outcome) {
+        expectations.expect((*outcome).attempt()->approvable() &&
+                                (*outcome).attempt()->digest().has_value(),
+                            "gpu host path: the attempt is approvable with a digest");
+    }
+    evaluator->beginShutdown();
+}
+
 } // namespace
 
 int main() {
@@ -306,5 +369,6 @@ int main() {
     testFullGraphProducesStableDigestAcrossTwoRuns(expectations);
     testCancellationBeforeResolvingCompletes(expectations);
     testResourceExhaustionIsTypedWithZeroLeak(expectations);
+    testGpuEvaluatorHostPath(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

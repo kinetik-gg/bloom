@@ -4,6 +4,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_process_frame.hpp>
 
 #include <new>
 #include <type_traits>
@@ -314,6 +315,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
         }
         const auto preset = state_->request.preset;
         auto* ledger = state_->ledger;
+        auto* gpuEvaluator = state_->request.gpuEvaluator;
         auto plan = state_->request.plan;
         auto evaluation = state_->request.evaluation;
 
@@ -322,28 +324,43 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu);
         auto submission = state_->scheduler->submit<BuildOutcomeV1>(
             std::move(cpuRequest),
-            [plan = std::move(plan), evaluation, resolved, preset,
-             ledger](runtime::TaskContext& context) -> runtime::TaskResult<BuildOutcomeV1> {
+            [plan = std::move(plan), evaluation, resolved, preset, ledger,
+             gpuEvaluator](runtime::TaskContext& context) -> runtime::TaskResult<BuildOutcomeV1> {
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
                 }
 
                 context.reportProgress(
                     {.phase = "Evaluating", .subphase = "", .completed = 0, .total = std::nullopt});
-                const runtime::CpuCompositionEvaluator evaluator;
-                auto evalResult = evaluator.evaluate(plan, evaluation, context.cancellation());
-                if (evalResult.status() == runtime::EvaluationStatus::Cancelled) {
-                    return runtime::TaskResult<BuildOutcomeV1>::cancelled();
+                // GPU final-render bridge: when an available device and a prepared-GPU-subset scene
+                // exist, evaluate through the genuine native scene executor and read the final
+                // RGBA32F back exactly once. An unavailable device or a scene outside the subset
+                // falls through to the CPU reference evaluator on the same snapshot/identity.
+                std::shared_ptr<const runtime::ProcessFrame> evaluatedFrame;
+                if (gpuEvaluator != nullptr && gpuEvaluator->gpuAvailable()) {
+                    auto gpuOutcome =
+                        gpuEvaluator->evaluate(plan, evaluation, context.cancellation());
+                    if (gpuOutcome.status == runtime::GpuProcessFrameStatus::Evaluated) {
+                        evaluatedFrame = gpuOutcome.frame;
+                    }
                 }
-                if (evalResult.status() != runtime::EvaluationStatus::Evaluated ||
-                    evalResult.frame() == nullptr) {
-                    const auto code = evalResult.diagnostics().empty()
-                                          ? runtime::EvaluationDiagnosticCode::InternalInvariant
-                                          : evalResult.diagnostics().front().code;
-                    return runtime::TaskResult<BuildOutcomeV1>::succeeded(
-                        {.succeeded = false,
-                         .failureKind = BuildFailureKindV1::Evaluation,
-                         .rawCode = static_cast<std::uint8_t>(code)});
+                if (evaluatedFrame == nullptr) {
+                    const runtime::CpuCompositionEvaluator evaluator;
+                    auto evalResult = evaluator.evaluate(plan, evaluation, context.cancellation());
+                    if (evalResult.status() == runtime::EvaluationStatus::Cancelled) {
+                        return runtime::TaskResult<BuildOutcomeV1>::cancelled();
+                    }
+                    if (evalResult.status() != runtime::EvaluationStatus::Evaluated ||
+                        evalResult.frame() == nullptr) {
+                        const auto code = evalResult.diagnostics().empty()
+                                              ? runtime::EvaluationDiagnosticCode::InternalInvariant
+                                              : evalResult.diagnostics().front().code;
+                        return runtime::TaskResult<BuildOutcomeV1>::succeeded(
+                            {.succeeded = false,
+                             .failureKind = BuildFailureKindV1::Evaluation,
+                             .rawCode = static_cast<std::uint8_t>(code)});
+                    }
+                    evaluatedFrame = evalResult.frame();
                 }
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
@@ -355,7 +372,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                                         .total = std::nullopt});
                 const output::ProcessFrameSemanticIdentityV1Preparer identityPreparer;
                 auto identityResult =
-                    identityPreparer.prepare(evalResult.frame(), context.cancellation());
+                    identityPreparer.prepare(evaluatedFrame, context.cancellation());
                 if (identityResult.status() ==
                     output::ProcessFrameSemanticIdentityPreparationStatus::Cancelled) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
@@ -415,7 +432,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                 }
 
                 auto buildResult = output::buildOutputAnalysisAttemptV1(
-                    {.frame = evalResult.frame(),
+                    {.frame = evaluatedFrame,
                      .processIdentity = identityResult.identity(),
                      .report = analyzed.report(),
                      .target = resolved->target,
