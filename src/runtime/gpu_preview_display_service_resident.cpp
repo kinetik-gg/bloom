@@ -181,7 +181,7 @@ void retireResidentRoute(const std::shared_ptr<PreviewDisplayServiceCore>& core)
     core->residentSceneCache.reset();
 }
 
-void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
     core->nativeReady.clear();
     core->nativeActive.reset();
     core->nativeInFlight = false;

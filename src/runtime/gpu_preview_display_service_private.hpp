@@ -43,7 +43,7 @@ struct PreviewDisplayServiceCore;
 // Defined in gpu_preview_display_service_resident.cpp. Owner-thread teardown of the service's
 // native ownership: retire presentation, then the resident route, then the packed display and
 // device.
-void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
+void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core);
 // Defined in gpu_preview_display_service_cache_purge.cpp. Runs on the service owner thread: claims
 // a pending resident-cache purge under `cachePurgeMutex`, clears the scene cache, and publishes
 // completion. A withdrawn (timed-out) request is never cleared.
