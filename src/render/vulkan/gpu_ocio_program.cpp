@@ -1,6 +1,6 @@
 #include "gpu_ocio_program_private.hpp"
 
-#include "gpu_ocio_program_reflection.hpp"
+#include "gpu_ocio_program_reflection_validate.hpp"
 
 #include <array>
 #include <cstdint>
