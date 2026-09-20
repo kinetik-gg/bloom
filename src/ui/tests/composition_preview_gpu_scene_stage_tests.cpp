@@ -199,6 +199,8 @@ void compareSceneToCpuOracle(Fixture& fixture, const bloom::runtime::PreparedGpu
     const auto& frame = *evaluated.frame();
     expectations.expect(scene.processIdentity() == frame.identity(),
                         label + ": prepared identity matches the CPU frame identity");
+    expectations.expect(scene.outputDescriptor() == *frame.processImage().descriptor(),
+                        label + ": prepared output descriptor matches the CPU frame descriptor");
     expectations.expect(scene.bounds().size() == frame.evaluatedBounds().size(),
                         label + ": prepared operation bounds cover the CPU frame");
     std::size_t comparedBounds = 0;
@@ -308,9 +310,11 @@ void testRotationIsPrepared(Expectations& expectations) {
                         "a rotated layer is prepared by the production GPU scene builder");
 }
 
-// Genuine unsupported coverage is retained: the prepared GPU subset refuses a request carrying an
-// ROI, and the stage must take the full original CPU fallback without fabricating a scene.
-void testRoiIsGpuSubsetFallback(Expectations& expectations) {
+// A request ROI is now resolved by the production GPU scene builder exactly as the CPU evaluator
+// resolves it: the stage prepares the clipped scene, and the prepared scene must match the CPU
+// frame identity, output descriptor, evaluated geometry, and every output pixel through the
+// existing oracle.
+void testRoiIsPrepared(Expectations& expectations) {
     Fixture fixture;
     auto project = makeProject();
     const auto compositionId = project.initialCompositionId;
@@ -330,8 +334,39 @@ void testRoiIsGpuSubsetFallback(Expectations& expectations) {
     }
     const auto outcome = runStage(fixture, identity, snapshot, {}, expectations, "ROI");
     expectations.expect(outcome != nullptr &&
+                            outcome->status == PreviewGpuSceneStageStatus::Prepared &&
+                            outcome->stage != nullptr,
+                        "a supported ROI request is prepared by the production GPU scene builder");
+    if (outcome == nullptr || outcome->stage == nullptr || outcome->stage->scene() == nullptr) {
+        return;
+    }
+    compareSceneToCpuOracle(fixture, *outcome->stage->scene(), snapshot, identity, expectations,
+                            "ROI");
+}
+
+// Genuine unsupported coverage is retained: the prepared GPU subset refuses a request whose quality
+// is not Reference, and the stage must take the full original CPU fallback without fabricating a
+// scene. EvaluationQuality currently has one enumerator, so this out-of-enum value exercises the
+// builder's explicit quality guard exactly as a future non-Reference quality would.
+void testNonReferenceQualityIsGpuSubsetFallback(Expectations& expectations) {
+    Fixture fixture;
+    auto project = makeProject();
+    const auto compositionId = project.initialCompositionId;
+    bloom::document::Document document(std::move(project.project));
+    bloom::commands::CommandStack commands(document);
+    bloom::ui::CompositionSession session(document, commands, compositionId);
+    expectations.expect(
+        session.addSolidLayer(QStringLiteral("Solid"), bloom::core::Color4d{0.2, 0.4, 0.8, 1.0}),
+        "the fixture creates a solid layer");
+    fixture.provider.publish(bloom::runtime::buildBloomNeutralQualifiedDisplayProcessor());
+    const auto snapshot = session.snapshot();
+    auto identity = identityFor(snapshot, compositionId);
+    identity.quality = static_cast<bloom::runtime::EvaluationQuality>(255);
+    const auto outcome =
+        runStage(fixture, identity, snapshot, {}, expectations, "Non-Reference quality");
+    expectations.expect(outcome != nullptr &&
                             outcome->status == PreviewGpuSceneStageStatus::UnsupportedGpuSubset,
-                        "an ROI request takes the full original CPU fallback");
+                        "a non-Reference quality request takes the full original CPU fallback");
     expectations.expect(outcome != nullptr && outcome->stage == nullptr,
                         "an unsupported GPU subset never fabricates a stage or empty frame");
 }
@@ -530,7 +565,8 @@ int runTests(int argc, char** argv) {
     testPreparedSolidMatchesCpuOracle(expectations);
     testTextIsPrepared(expectations);
     testRotationIsPrepared(expectations);
-    testRoiIsGpuSubsetFallback(expectations);
+    testRoiIsPrepared(expectations);
+    testNonReferenceQualityIsGpuSubsetFallback(expectations);
     testPendingReferencePreparesWithoutProcessor(expectations);
     testFailedProviderFailsClosed(expectations);
     testOverrideChangesSceneWithoutPoisoningPlanCache(expectations);
