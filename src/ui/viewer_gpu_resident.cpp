@@ -130,9 +130,12 @@ struct ViewerGpuResidentController::Impl final {
         }
     }
 
-    void ensureCover(const QRect& rect) {
+    // Returns true only on the conceal->reveal transition that actually showed and restacked the
+    // cover. A cover that is already visible is left completely untouched so a stable presentation
+    // performs no native mutation.
+    [[nodiscard]] bool ensureCover(const QRect& rect) {
         if (!coverSnapshot) {
-            return;
+            return false;
         }
         if (cover == nullptr) {
             cover = new ViewerGpuCpuCover(dependencies.containerParent);
@@ -152,7 +155,9 @@ struct ViewerGpuResidentController::Impl final {
         if (!cover->isVisible()) {
             cover->show();
             cover->raise();
+            return true;
         }
+        return false;
     }
 
     void showCover() {
@@ -426,7 +431,7 @@ void ViewerGpuResidentController::revealCpuCover(const QRect& containerRect) {
     // buffers); a fresh capture happens only after a conceal, so a blank/no-frame state stays blank
     // rather than flashing the previous native frame.
     impl_->coverRequired = true;
-    impl_->ensureCover(containerRect);
+    static_cast<void>(impl_->ensureCover(containerRect));
 }
 
 bool ViewerGpuResidentController::cpuCoverVisibleForTest() const noexcept {
@@ -534,19 +539,25 @@ bool ViewerGpuResidentController::present(const runtime::PreparedPreviewFrame& f
     }
     // Parent to the injected host and give final geometry BEFORE first attach; never reparent a
     // live surface. The native CPU cover is raised above it until a genuine present ack.
-    if (impl_->coverRequired) {
-        impl_->ensureCover(request.containerRect.toRect());
-    }
+    const bool coverRevealed =
+        impl_->coverRequired && impl_->ensureCover(request.containerRect.toRect());
     if (QWidget* container = impl_->presenter->container(); container != nullptr) {
         const QRect target(request.containerRect.topLeft().toPoint(),
                            request.containerRect.size().toSize());
         if (container->geometry() != target) {
             container->setGeometry(target);
         }
-        if (!container->isVisible()) {
+        const bool containerRevealed = !container->isVisible();
+        if (containerRevealed) {
             container->show();
         }
-        if (impl_->cover != nullptr) {
+        // Restack the cover only on a genuine reveal transition (the cover was just shown, or the
+        // container was just mapped above it). A native child QWidget flushed through its parent's
+        // Wayland SHM backing store allocates a fresh memfd ("wayland-shm") buffer on every flush,
+        // and QWidget::raise() dirties the whole widget whenever it has to reorder. Calling it on
+        // every poll/present tick therefore grows RSS without bound even though presentation is
+        // stable; a cover that is already visible and topmost needs no restack.
+        if (impl_->cover != nullptr && (coverRevealed || containerRevealed)) {
             impl_->cover->raise();
         }
     }

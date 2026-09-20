@@ -152,8 +152,16 @@ struct ViewerGpuPresenter::Impl final {
         window = new QWindow();
         window->setSurfaceType(QSurface::VulkanSurface);
         window->setVulkanInstance(instance.get());
-        window->resize(static_cast<int>(logicalExtent(targetWidth, config.device_pixel_ratio)),
-                       static_cast<int>(logicalExtent(targetHeight, config.device_pixel_ratio)));
+        // Only a standalone presenter owns its QWindow geometry. An embedded QWindow is sized by
+        // its QWindowContainer from the host's live logical contentRect and DPR; sizing it here
+        // with the once-injected config ratio seeds an immediate size disagreement that the
+        // container undoes, driving redundant native geometry changes (and parent-expose/SHM-buffer
+        // churn).
+        if (presenterOwnsWindowGeometry(containerParent)) {
+            const double ratio = standaloneWindowRatio(window, config.device_pixel_ratio);
+            window->resize(static_cast<int>(logicalExtent(targetWidth, ratio)),
+                           static_cast<int>(logicalExtent(targetHeight, ratio)));
+        }
         window->installEventFilter(self);
 
         container = QWidget::createWindowContainer(window);

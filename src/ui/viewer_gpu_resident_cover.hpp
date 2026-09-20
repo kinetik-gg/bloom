@@ -26,6 +26,12 @@ class ViewerGpuCpuCover final : public kit::KLabel {
   public:
     explicit ViewerGpuCpuCover(QWidget* parent) : kit::KLabel(QString{}, parent) {
         setAttribute(Qt::WA_NativeWindow, true);
+        // Force only this widget native so it can stack above the QWindowContainer; do NOT drag the
+        // editor/panel/top-level ancestor chain native with it. Qt's QWindowContainer explicitly
+        // honours this attribute before creating native ancestors, and every extra native ancestor
+        // is another Wayland subsurface whose parent-backed flush allocates a fresh wayland-shm
+        // buffer.
+        setAttribute(Qt::WA_DontCreateNativeAncestors, true);
         setAttribute(Qt::WA_TransparentForMouseEvents, true);
         setAttribute(Qt::WA_NoSystemBackground, true);
         setFocusPolicy(Qt::NoFocus);
