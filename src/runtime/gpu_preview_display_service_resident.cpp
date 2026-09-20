@@ -181,6 +181,37 @@ void retireResidentRoute(const std::shared_ptr<PreviewDisplayServiceCore>& core)
     core->residentSceneCache.reset();
 }
 
+void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+    core->nativeReady.clear();
+    core->nativeActive.reset();
+    core->nativeInFlight = false;
+    // Presentation owns the resident-frame lease registry and the coordinator on this same device.
+    // Retire it first: coordinator, then registry, then the compute pipeline, then the device. The
+    // helper keeps pumping through pending retirement and reports an unproven/quarantined target
+    // rather than a false safe ack.
+    retireServicePresentation(core);
+    // Resident native ownership (executor -> display -> scene cache) drains/cancels on this owner
+    // thread; any unproven submission is retained by the owned pipeline until it proves retirement
+    // or is destroyed. Then the packed native teardown drains/quarantines in GpuNeutralDisplay.
+    core->residentNativeReady.clear();
+    core->residentNativeActive.reset();
+    core->residentNativeInFlight = false;
+    retireResidentRoute(core);
+    core->display.reset();
+    if (core->presentationRetirementUnproven) {
+        // A native presentation generation could not be proven retired. The process quarantine now
+        // holds raw native targets that reference this device, so the device is deliberately
+        // retained rather than destroyed out from under them. This is an explicit, reported
+        // retention (never a fabricated safe ack) and the host must not tear down its Qt surfaces.
+        static_cast<void>(core->device.release()); // NOLINT(bugprone-unused-return-value)
+    } else {
+        core->device.reset();
+    }
+    std::lock_guard lock(core->stateMutex);
+    core->state = GpuPreviewDisplayServiceState::Stopped;
+    core->gpuAvailable = false;
+}
+
 bool residentStageIsEligible(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                              const PreviewDisplayStageRecord& stage, std::string& reason) noexcept {
     if (core->gpuStageFunction == nullptr || core->residentExecutor == nullptr ||

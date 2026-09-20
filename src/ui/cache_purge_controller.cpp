@@ -113,10 +113,10 @@ void CachePurgeController::submitPurgeTask(const Mode mode) {
         {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
         runtime::TaskPriority::Background, executor);
     // Capture the BORROWED store pointers and callbacks by value, never `this`: a result that
-    // arrives after this controller is destroyed cannot touch the controller. The stores themselves
-    // are not owned here; the application composition root declares them before the scheduler and
-    // the shutdown coordinator's quiescence gate guarantees no purge task is still running when
-    // they are destroyed.
+    // arrives after this controller is destroyed cannot touch the controller. The stores are not
+    // owned here; the application composition root declares them after the scheduler and before
+    // this controller, and the shutdown coordinator's quiescence gate guarantees no purge task is
+    // still running when they are destroyed.
     auto* const disk = diskCache_;
     auto* const operation = operationCache_;
     auto* const prepared = preparedUploadCache_;

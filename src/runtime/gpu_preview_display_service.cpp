@@ -52,37 +52,6 @@ void waitForWake(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core,
     });
 }
 
-void retireNativeOnOwner(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core) {
-    core->nativeReady.clear();
-    core->nativeActive.reset();
-    core->nativeInFlight = false;
-    // Presentation owns the resident-frame lease registry and the coordinator on this same device.
-    // Retire it first: coordinator, then registry, then the compute pipeline, then the device. The
-    // helper keeps pumping through pending retirement and reports an unproven/quarantined target
-    // rather than a false safe ack.
-    detail::retireServicePresentation(core);
-    // Resident native ownership (executor -> display -> scene cache) drains/cancels on this owner
-    // thread; any unproven submission is retained by the owned pipeline until it proves retirement
-    // or is destroyed. Then the packed native teardown drains/quarantines in GpuNeutralDisplay.
-    core->residentNativeReady.clear();
-    core->residentNativeActive.reset();
-    core->residentNativeInFlight = false;
-    detail::retireResidentRoute(core);
-    core->display.reset();
-    if (core->presentationRetirementUnproven) {
-        // A native presentation generation could not be proven retired. The process quarantine now
-        // holds raw native targets that reference this device, so the device is deliberately
-        // retained rather than destroyed out from under them. This is an explicit, reported
-        // retention (never a fabricated safe ack) and the host must not tear down its Qt surfaces.
-        static_cast<void>(core->device.release()); // NOLINT(bugprone-unused-return-value)
-    } else {
-        core->device.reset();
-    }
-    std::lock_guard lock(core->stateMutex);
-    core->state = GpuPreviewDisplayServiceState::Stopped;
-    core->gpuAvailable = false;
-}
-
 // The single drain path, including the exception path: no ownership deadline and no early release.
 // Native is cancelled/quarantined first, then the loop waits for actual child terminality and
 // native retirement before any completion is consumed. The poll interval is responsiveness only,
@@ -151,7 +120,7 @@ void drainService(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core
             std::this_thread::yield();
         }
     }
-    retireNativeOnOwner(core);
+    detail::retireNativeOnOwner(core);
 }
 
 void runServiceLoop(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core) {

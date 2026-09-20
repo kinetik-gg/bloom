@@ -440,8 +440,8 @@ thumbnail cache). It is the same store both consult: `decodeThroughDiskCache()`
 `$XDG_CACHE_HOME/bloom` or `$HOME/.cache/bloom`) plus a `media` leaf, or a `media/disk-cache-directory`
 QSettings override (an absolute path; anything else falls back to the platform default). The
 enable flag, directory, and byte budget are edited under **Edit → Preferences… → Memory & Caches**
-(the disk cache also has **Composition → Clear Media Cache…**); the operation-cache and RAM-preview
-budgets share that page. These values are read once at startup, so a change takes effect after
+(the disk cache can also be purged at any time from **Edit → Purge… → Purge media cache**); the
+operation-cache and RAM-preview budgets share that page. These values are read once at startup, so a change takes effect after
 restart. The owning reader is `bloom::ui::media_disk_cache_settings` for the disk cache and
 `preview_frame_cache.hpp`'s `ramPreviewByteBudgetFromSettings()`/`operationCacheByteBudgetFromSettings()`
 for the two memory ceilings.
@@ -501,8 +501,10 @@ compositions remain conservatively fully bypassed on an override (no read-only r
 for this slice.
 
 **Controls.** `media/disk-cache-enabled` (default on), `media/disk-cache-budget-bytes`, and
-`media/disk-cache-directory` in QSettings; "Clear Media Cache…" in the Composition menu asks for
-confirmation, then clears every entry and resets statistics. The window status bar's own disk-
+`media/disk-cache-directory` in QSettings; **Edit → Purge… → Purge media cache** clears every entry
+and resets statistics, together with the applicable in-memory decoded media, on the task system's
+BlockingIo lane (never the UI thread, and with no confirmation, since the caches are rebuildable).
+Source files are never read, written, or changed. The window status bar's own disk-
 cache cell (`mediaDiskCacheStatusText()`, beside the existing RAM-preview cache cell) reports a
 lightweight-polled hit rate and resident byte count, or "Disk cache off" when disabled -- a
 second, independent budget from the RAM preview and operation caches `animation-and-time.md`
