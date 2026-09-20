@@ -143,7 +143,7 @@ struct GpuSceneNestedResult final {
 // fail the build rather than let a splice silently skip remapping or resident-byte accounting for a
 // new input-bearing command.
 template <typename> inline constexpr bool kNestedCommandUnhandled = false;
-static_assert(std::variant_size_v<GpuSceneCommand> == 9,
+static_assert(std::variant_size_v<GpuSceneCommand> == 10,
               "GpuSceneCommand gained an alternative; add its nested reference remapping and "
               "resident-byte accounting to gpu_scene_nested");
 
@@ -156,10 +156,12 @@ inline void offsetNestedCommandReferences(GpuSceneCommand& command,
             using T = std::decay_t<decltype(item)>;
             if constexpr (std::is_same_v<T, GpuSceneTranslationCommand> ||
                           std::is_same_v<T, GpuSceneAffineCommand> ||
-                          std::is_same_v<T, GpuSceneOcioEffectCommand>) {
-                // The OCIO ProcessEffect is input-bearing: its resident input is the upstream
-                // command, so the splice must remap that dependency exactly like an affine or
-                // translation. Its immutable program identity/metadata is copied unchanged.
+                          std::is_same_v<T, GpuSceneOcioEffectCommand> ||
+                          std::is_same_v<T, GpuScenePointResampleCommand>) {
+                // The OCIO ProcessEffect and the point-resample gather are input-bearing: their
+                // resident input is the upstream command, so the splice must remap that dependency
+                // exactly like an affine or translation. Their immutable program/scale metadata is
+                // copied unchanged.
                 if (item.input != kInvalidGpuSceneCommand) {
                     item.input = static_cast<GpuSceneCommandIndex>(item.input + base);
                 }
@@ -252,6 +254,10 @@ inline void addWindowBytes(std::uint64_t& total, const render::ImageWindow windo
                     // The OCIO effect's resident output is the same RGBA32F window it publishes;
                     // its program resources are accounted by the executor/cache ledger, not the
                     // scene preparation allowance.
+                    nested_detail::addWindowBytes(total, item.outputWindow);
+                } else if constexpr (std::is_same_v<T, GpuScenePointResampleCommand>) {
+                    // The resample publishes one RGBA32F proxy output; its axis metadata is
+                    // accounted by the executor, not the scene preparation allowance.
                     nested_detail::addWindowBytes(total, item.outputWindow);
                 } else {
                     static_assert(kNestedCommandUnhandled<T>,

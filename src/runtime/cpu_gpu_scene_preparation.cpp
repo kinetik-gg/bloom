@@ -356,39 +356,18 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             continue;
         }
 
-        if (const auto* image = std::get_if<CompiledImageSource>(&operation)) {
+        if (std::holds_alternative<CompiledImageSource>(operation) ||
+            std::holds_alternative<CompiledVideoSource>(operation)) {
             const auto remainingBudget = allowance > chargedBytes ? allowance - chargedBytes : 0;
             detail::GpuSceneUploadLeafResult leaf;
-            const auto error = detail::buildImageColorLeaf(
-                *image, request, *plan, resolved, mediaContext_, ocioContext_, remainingBudget,
-                hScale, vScale, charge, cancellation, mediaStatistics, leaf);
+            const auto error = detail::buildAndEmitMediaLeaf(
+                operation, operationIndex, request, *plan, resolved, mediaContext_, ocioContext_,
+                remainingBudget, hScale, vScale, charge, cancellation, mediaStatistics, emit,
+                outputWindowOf[index], commandForOperation[index], keyOf[index], leaf);
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
             }
             bounds[index] = leaf.bounds;
-            outputWindowOf[index] = leaf.outputWindow;
-            if (const auto emitError = detail::emitMediaLeafCommands(
-                    operationIndex, leaf, charge, emit, commandForOperation[index], keyOf[index])) {
-                return failed(emitError->code, emitError->message, mediaStatistics);
-            }
-            continue;
-        }
-
-        if (const auto* video = std::get_if<CompiledVideoSource>(&operation)) {
-            const auto remainingBudget = allowance > chargedBytes ? allowance - chargedBytes : 0;
-            detail::GpuSceneUploadLeafResult leaf;
-            const auto error = detail::buildVideoColorLeaf(
-                *video, request, *plan, resolved, mediaContext_, ocioContext_, remainingBudget,
-                hScale, vScale, charge, cancellation, mediaStatistics, leaf);
-            if (error) {
-                return failed(error->code, error->message, mediaStatistics);
-            }
-            bounds[index] = leaf.bounds;
-            outputWindowOf[index] = leaf.outputWindow;
-            if (const auto emitError = detail::emitMediaLeafCommands(
-                    operationIndex, leaf, charge, emit, commandForOperation[index], keyOf[index])) {
-                return failed(emitError->code, emitError->message, mediaStatistics);
-            }
             continue;
         }
 

@@ -338,6 +338,75 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         return {};
     }
 
+    if (const auto* resample = std::get_if<GpuScenePointResampleCommand>(&command)) {
+        if (!gpu_scene_executor_detail::pointResampleFieldsValid(*resample)) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "a point-resample command has invalid proxy scales");
+        }
+        if (const auto plan = planCommand(resample->input, color);
+            plan.code != GpuSceneExecutorDiagnosticCode::None) {
+            return plan;
+        }
+        if (color[resample->input] != 2) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                  "a point-resample input was not planned");
+        }
+        const auto inputDescriptor = expectedDescriptorOf(*scene, resample->input, 0);
+        if (!inputDescriptor.has_value()) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                  "the point-resample input descriptor is not derivable");
+        }
+        // The output window must be exactly the derived proxy window and the display window/PAR
+        // must be inherited from the input, so a malformed command can never resample to another
+        // grid.
+        const auto expectedOutput = render::ImageWindow::create(
+            0, 0,
+            static_cast<std::uint64_t>(std::max(
+                1.0, std::ceil(static_cast<double>(inputDescriptor->data.extent().width()) *
+                               resample->horizontalScale))),
+            static_cast<std::uint64_t>(std::max(
+                1.0, std::ceil(static_cast<double>(inputDescriptor->data.extent().height()) *
+                               resample->verticalScale))));
+        const bool geometryMatches = static_cast<bool>(expectedOutput) &&
+                                     resample->outputWindow == *expectedOutput.value() &&
+                                     resample->sourceWindow == inputDescriptor->data &&
+                                     resample->pixelAspect == inputDescriptor->pixelAspect;
+        if (!geometryMatches) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "a point-resample command geometry does not match its input");
+        }
+        std::uint64_t bytes = 0;
+        if (!checkedImageBytes(resample->outputWindow, bytes)) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "a point-resample command has an empty output window");
+        }
+        GpuSceneExecutorStep step;
+        step.kind = GpuSceneExecutorStepKind::PointResample;
+        step.command = index;
+        step.input = resample->input;
+        step.cacheKey = key;
+        step.cacheOnComplete = true;
+        step.outputWindow = resample->outputWindow;
+        step.pointResampleHorizontalScale = resample->horizontalScale;
+        step.pointResampleVerticalScale = resample->verticalScale;
+        const auto outputDescriptor = render::Rgba32fImageDescriptor::create(
+            resample->outputWindow, inputDescriptor->display, resample->pixelAspect);
+        if (!outputDescriptor) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "a point-resample descriptor is invalid");
+        }
+        step.pointResampleOutput = *outputDescriptor.value();
+        steps.push_back(std::move(step));
+        color[index] = 2;
+        return {};
+    }
+
     if (const auto* merge = std::get_if<GpuSceneMergeCommand>(&command)) {
         for (const GpuSceneCommandIndex foreground : merge->foregrounds) {
             if (const auto plan = planCommand(foreground, color);

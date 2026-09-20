@@ -566,6 +566,52 @@ replayScene(const PreparedGpuScene& scene, std::vector<std::shared_ptr<const Rgb
             images[affine->index] = freeze(*builder.value());
             continue;
         }
+        if (const auto* resample =
+                std::get_if<bloom::runtime::GpuScenePointResampleCommand>(&command)) {
+            const auto* input = images[resample->input].get();
+            if (input == nullptr) {
+                return false;
+            }
+            const auto view = input->view();
+            if (!view) {
+                return false;
+            }
+            const auto descriptor = Rgba32fImageDescriptor::create(
+                resample->outputWindow, input->descriptor()->displayWindow(),
+                input->descriptor()->pixelAspect());
+            if (!descriptor) {
+                return false;
+            }
+            auto builder = Rgba32fImageBuilder::create(*descriptor.value(), kBudget);
+            if (!builder) {
+                return false;
+            }
+            // The exact CPU media-image proxy oracle: sourceX = min(extent-1, (uint32)(x/scale)).
+            const auto sourceWindow = input->descriptor()->dataWindow();
+            const auto outputWidth = resample->outputWindow.extent().width();
+            const auto outputHeight = resample->outputWindow.extent().height();
+            for (std::uint32_t y = 0; y < outputHeight; ++y) {
+                const auto sourceY = std::min(
+                    sourceWindow.extent().height() - 1,
+                    static_cast<std::uint32_t>(static_cast<double>(y) / resample->verticalScale));
+                auto outputRow = builder.value()->row(resample->outputWindow.originY() +
+                                                      static_cast<std::int64_t>(y));
+                if (!outputRow) {
+                    return false;
+                }
+                for (std::uint32_t x = 0; x < outputWidth; ++x) {
+                    const auto sourceX =
+                        std::min(sourceWindow.extent().width() - 1,
+                                 static_cast<std::uint32_t>(static_cast<double>(x) /
+                                                            resample->horizontalScale));
+                    (*outputRow.value())[x] = input->pixels()[static_cast<std::size_t>(sourceY) *
+                                                                  sourceWindow.extent().width() +
+                                                              sourceX];
+                }
+            }
+            images[resample->index] = freeze(*builder.value());
+            continue;
+        }
         if (const auto* blend = std::get_if<bloom::runtime::GpuSceneBlendCommand>(&command)) {
             const auto* source = images[blend->source].get();
             const auto* destination = images[blend->destination].get();
