@@ -157,6 +157,10 @@ struct GpuProcessFrameEvaluator::Impl final {
     bool initialized = false;
     std::atomic_bool gpuReady{false};
     std::atomic_bool stopRequested{false};
+    // The owner worker's thread identity. `evaluate()` rejects a call made from the owner thread
+    // (a reentrant request issued from inside a progress callback), which would otherwise deadlock
+    // waiting on itself.
+    std::atomic<std::thread::id> ownerThreadId{};
     GpuProcessFrameDiagnostic availability;
 
     // Owner-thread only.
@@ -344,8 +348,13 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
     }
 
     // 5. The ONE final RGBA32F readback, at the CPU output-adapter boundary, through the production
-    // bounded/cancellable primitive. Host memory is budgeted for BOTH the readback pixel vector and
-    // the immutable image built from it; the product is checked before either allocation.
+    // bounded/cancellable primitive. The host-buffer peak across the whole publish path is
+    // max(staging VMA allocation + readback vector, readback vector + immutable image), NOT the sum
+    // of all three: the staging allocation is released when the fence retires, before the immutable
+    // image is built. Both phases hold two pixel-sized buffers, so the preflight requires
+    // 2 * pixelsBytes <= readbackByteBudget. The readback primitive independently re-checks the
+    // ACTUAL allocator-rounded staging size plus the eventual vector against the same budget before
+    // it submits, so allocator rounding cannot exceed the allowance.
     const auto& descriptor = scene->outputDescriptor();
     const std::uint64_t width = descriptor.dataWindow().extent().width();
     const std::uint64_t height = descriptor.dataWindow().extent().height();
@@ -459,6 +468,7 @@ std::shared_ptr<const ProcessFrame> GpuProcessFrameEvaluator::publishGpuProcessF
 }
 
 void GpuProcessFrameEvaluator::Impl::runOwner() {
+    ownerThreadId.store(std::this_thread::get_id(), std::memory_order_release);
     // Bootstrap must never terminate the owner thread or leave create() waiting. Every failure path
     // publishes a typed availability diagnostic, marks the evaluator initialized, and wakes
     // create()/evaluate(); the request loop then serves only cancellations until shutdown.
@@ -548,8 +558,11 @@ GpuProcessFrameEvaluator::GpuProcessFrameEvaluator(std::unique_ptr<Impl> impl) n
 
 GpuProcessFrameEvaluator::~GpuProcessFrameEvaluator() {
     if (impl_ != nullptr) {
-        // Controlled destruction: signal shutdown, then join on the owner thread. The join is here
-        // (not in beginShutdown) so it can never self-deadlock a request served by this object.
+        // Caller-owned lifetime contract: the evaluator must be destroyed only from a non-owner
+        // thread, and must not be destroyed or re-evaluated from inside a progress callback (which
+        // runs on the owner thread). Destroying it on the owner thread would join the owner thread
+        // to itself and deadlock; evaluate() therefore rejects a reentrant owner-thread call with a
+        // typed failure before waiting. Under that contract this join is safe.
         impl_->stopRequested.store(true, std::memory_order_release);
         {
             std::lock_guard lock(impl_->mutex);
@@ -605,6 +618,15 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
     if (!impl_->options.enabled) {
         return failure(GpuProcessFrameStatus::Disabled, GpuProcessFrameDiagnosticCode::Disabled,
                        "GPU process-frame evaluation is disabled");
+    }
+    // Reentrancy: caller-owned lifetime forbids destroying the evaluator or issuing another
+    // evaluate() from inside a progress callback on the owner thread. A non-owner queued caller is
+    // fine; only the owner thread itself is rejected, before any wait, so it cannot deadlock on its
+    // own completion.
+    if (impl_->ownerThreadId.load(std::memory_order_acquire) == std::this_thread::get_id()) {
+        return failure(GpuProcessFrameStatus::Failed,
+                       GpuProcessFrameDiagnosticCode::InternalInvariant,
+                       "reentrant GPU evaluate from the owner thread is not permitted");
     }
 
     // Admit one request slot under the shared mutex. Shutdown rejects new calls; a full queue

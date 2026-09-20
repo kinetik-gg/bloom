@@ -175,6 +175,39 @@ void runThrowingProgressTest(Expectations& expectations, const Options& options)
     evaluator->beginShutdown();
 }
 
+// Reentrancy: an evaluate() issued from inside a progress callback (the owner thread) must be
+// rejected with a typed failure before any wait, so it cannot deadlock on its own completion.
+void runReentrantEvaluateTest(Expectations& expectations, const Options& options) {
+    auto evaluator = GpuProcessFrameEvaluator::create(
+        GpuProcessFrameEvaluatorOptions{.enabled = true,
+                                        .loaderPath = options.loader_path,
+                                        .requestByteBudget = kRequestBudget,
+                                        .readbackByteBudget = kReadbackBudget});
+    expectations.expect(evaluator != nullptr, "reentrant: evaluator constructed");
+    if (evaluator == nullptr || !evaluator->gpuAvailable()) {
+        return;
+    }
+    const auto plan = lifecyclePlan();
+    const auto request = requestFor(*plan);
+    std::atomic<bool> reentrantRejected{false};
+    std::atomic<bool> reentrantReturned{false};
+    const auto outcome =
+        evaluator->evaluate(plan, request, {}, [&](const bloom::runtime::EvaluationProgress&) {
+            const auto nested = evaluator->evaluate(plan, request);
+            if (nested.status == GpuProcessFrameStatus::Failed && nested.frame == nullptr) {
+                reentrantRejected.store(true);
+            }
+            reentrantReturned.store(true);
+        });
+    expectations.expect(outcome.status == GpuProcessFrameStatus::Evaluated ||
+                            outcome.status == GpuProcessFrameStatus::Failed,
+                        "reentrant: the outer request reaches a typed outcome");
+    expectations.expect(
+        reentrantReturned.load() && reentrantRejected.load(),
+        "reentrant: the nested owner-thread evaluate is rejected typed, no deadlock");
+    evaluator->beginShutdown();
+}
+
 // A request whose real TaskScheduler cancellation token is already cancelled returns Cancelled
 // promptly without waiting for a nonexistent active request. The token is produced by the real
 // scheduler task handle, never a test-only setter.
@@ -233,6 +266,7 @@ void runLifecycleTests(Expectations& expectations, const Options& options) {
     runQueuedRequestsTest(expectations, options);
     runShutdownRejectsNewCallsTest(expectations, options);
     runThrowingProgressTest(expectations, options);
+    runReentrantEvaluateTest(expectations, options);
     runCancelledTokenTest(expectations, options);
 }
 

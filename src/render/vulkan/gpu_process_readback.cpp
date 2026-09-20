@@ -415,6 +415,17 @@ bool GpuProcessReadback::begin(std::shared_ptr<const GpuImage> image,
         }
         staging.armed = true;
 
+        // Actual-size budget: this submission concurrently owns the VMA staging allocation
+        // (stagingInfo.size, allocator-rounded) and, once the fence retires, the host pixel vector
+        // of `bytes`. Both must fit `byteBudget` together; the logical `bytes <= byteBudget` check
+        // before the claim is only a cheap preflight. Overflow-safe.
+        const std::uint64_t actualStagingBytes = static_cast<std::uint64_t>(stagingInfo.size);
+        if (actualStagingBytes > byteBudget || bytes > byteBudget - actualStagingBytes) {
+            impl_->fail(GpuProcessReadbackCode::OverBudget,
+                        "the actual staging buffer plus host vector exceeds the byte budget");
+            return false;
+        }
+
         vk::raii::CommandPool pool{nullptr};
         {
             VkCommandPoolCreateInfo poolInfo{};
