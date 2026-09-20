@@ -86,8 +86,11 @@ using bloom::runtime::TaskState;
 using bloom::runtime::TaskSubmissionStatus;
 using bloom::runtime::ViewAdjust;
 
-constexpr std::size_t kBudget = std::size_t{1} << 30;
 constexpr int kSkipExit = 77;
+
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
+
+constexpr std::size_t kBudget = std::size_t{1} << 30;
 constexpr auto kProjectId = bloom::document::ProjectId::fromRaw(1);
 constexpr auto kCompositionId = bloom::document::CompositionId::fromRaw(2);
 constexpr auto kSolid = bloom::document::NodeId::fromRaw(10);
@@ -103,6 +106,8 @@ constexpr auto kAnchorP = bloom::document::ParameterId::fromRaw(43);
 constexpr auto kScaleP = bloom::document::ParameterId::fromRaw(44);
 constexpr auto kRotP = bloom::document::ParameterId::fromRaw(45);
 constexpr auto kBlendP = bloom::document::ParameterId::fromRaw(46);
+
+#endif // BLOOM_GPU_TOOLS_AVAILABLE
 
 struct TestOptions final {
     std::filesystem::path loaderPath;
@@ -126,6 +131,8 @@ struct TestOptions final {
     }
     return options;
 }
+
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
 
 class Expectations final {
   public:
@@ -427,5 +434,7 @@ isResidentPrepared(const std::optional<TaskResult<PreviewPreparationResultHandle
     out = result.frame();
     return true;
 }
+
+#endif // BLOOM_GPU_TOOLS_AVAILABLE
 
 } // namespace

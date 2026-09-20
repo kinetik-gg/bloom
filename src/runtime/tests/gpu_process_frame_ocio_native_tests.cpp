@@ -88,6 +88,8 @@ using namespace bloom::runtime::media_executor_test;
 
 using namespace std::chrono_literals;
 
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
+
 constexpr std::string_view kAcesWorking = "ACEScg";
 constexpr std::string_view kAcesAlternate = "ACES2065-1";
 constexpr std::string_view kAcesTextureInput = "sRGB - Texture";
@@ -106,6 +108,8 @@ class Checks final {
     int failures_ = 0;
 };
 
+// Consumed only by the packaged-tools vector in run(); these self-contained helpers stay inside the
+// tools-available guard with the rest of the native fixture builders.
 [[nodiscard]] std::optional<bloom::core::Sha256Digest> parseDigest(const std::string_view text) {
     constexpr std::string_view prefix = "sha256:";
     if (text.size() != prefix.size() + bloom::core::kSha256HexCharacters ||
@@ -303,6 +307,8 @@ mixedPlan(const CompositionFormat compositionFormat, const document::AssetRecord
     return request;
 }
 
+#endif // BLOOM_GPU_TOOLS_AVAILABLE
+
 int run(int argc, char** argv) {
     const auto options = parseOptions(argc, argv);
     if (!options.valid) {
@@ -310,6 +316,10 @@ int run(int argc, char** argv) {
         return 2;
     }
 #if !defined(BLOOM_GPU_TOOLS_AVAILABLE) || !BLOOM_GPU_TOOLS_AVAILABLE
+    if (options.require_device) {
+        std::cerr << "FAIL: required device unavailable: packaged GPU shader tools unavailable\n";
+        return 1;
+    }
     std::cout << "SKIP: packaged GPU shader tools unavailable\n";
     return 77;
 #else

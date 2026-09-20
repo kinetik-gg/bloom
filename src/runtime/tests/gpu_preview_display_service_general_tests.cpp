@@ -28,6 +28,11 @@ int run(const int argc, char** argv) {
         return 2;
     }
 #if !defined(BLOOM_GPU_TOOLS_AVAILABLE) || (BLOOM_GPU_TOOLS_AVAILABLE == 0)
+    if (options.requireDevice) {
+        std::cerr << "FAIL: required device unavailable: the packaged GPU shader tools are "
+                     "unavailable\n";
+        return 1;
+    }
     std::cout << "SKIP: the packaged GPU shader tools are unavailable\n";
     return kSkipExit;
 #else

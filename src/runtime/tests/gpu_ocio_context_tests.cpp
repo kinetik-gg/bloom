@@ -54,6 +54,10 @@ class Expectations final {
     int failures_ = 0;
 };
 
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
+
+// These helpers are consumed only by the packaged-tools vectors below; guarding them under the same
+// condition keeps the CPU-fallback (tools-unavailable) translation unit warning-clean.
 constexpr std::string_view kComputeShader = R"(#version 450
 layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;
 void main() { }
@@ -75,6 +79,8 @@ std::optional<bloom::core::Sha256Digest> parsePinnedDigest(const std::string_vie
     }
     return bloom::core::Sha256Digest::fromLowercaseHex(text.substr(prefix.size()));
 }
+
+#endif // BLOOM_GPU_TOOLS_AVAILABLE
 
 // A package descriptor that is structurally complete but has no real tools; used for the
 // request-validation vectors that must not touch the filesystem.

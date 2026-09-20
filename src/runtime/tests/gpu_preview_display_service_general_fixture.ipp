@@ -28,6 +28,8 @@
 
 namespace {
 
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
+
 // A unique, per-run scoped throwaway directory. It never scans or removes a shared/known user path,
 // so concurrent runs of this test cannot collide or delete each other's fixtures.
 [[nodiscard]] std::filesystem::path makeUniqueProductionMediaDirectory() {
@@ -174,5 +176,7 @@ makeProductionMediaTextPlan(const bloom::document::CompositionFormat composition
             document::Revision::fromRaw(7), kProjectId, kCompositionId, compositionFormat,
             std::move(operations), runtime::OperationIndex::fromRaw(7)});
 }
+
+#endif // BLOOM_GPU_TOOLS_AVAILABLE
 
 } // namespace
