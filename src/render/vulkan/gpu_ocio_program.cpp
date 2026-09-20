@@ -1,5 +1,7 @@
 #include "gpu_ocio_program_private.hpp"
 
+#include "gpu_ocio_program_reflection.hpp"
+
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -459,6 +461,20 @@ GpuOcioProgramCreateResult GpuOcioProgram::create(GpuDevice& device, OcioGpuProg
         return {nullptr,
                 makeDiagnostic(GpuOcioProgramDiagnosticCode::InvalidArgument,
                                "the immutable uniform snapshot does not match the UBO size")};
+    }
+    // Reflect the compiled module and confirm its descriptor interface matches the immutable
+    // descriptor and the Bloom I/O contract BEFORE any native allocation, layout, or submission.
+    // A mismatch is a typed ShaderRejected refusal.
+    const auto shaderInterface = ocio_program_detail::validateOcioShaderInterface(
+        program, spirv, ocio_program_detail::kWorkgroupSizeX);
+    if (!shaderInterface.valid()) {
+        return {nullptr,
+                makeDiagnostic(GpuOcioProgramDiagnosticCode::ShaderRejected,
+                               std::string("the compiled shader interface does not match the "
+                                           "declared OCIO program (") +
+                                   std::string(ocio_program_detail::ocioShaderInterfaceErrorName(
+                                       shaderInterface.error)) +
+                                   ", detail=" + std::to_string(shaderInterface.detail) + ")")};
     }
     VkPhysicalDeviceProperties deviceLimits{};
     state->physicalDevice.getDispatcher()->vkGetPhysicalDeviceProperties(
