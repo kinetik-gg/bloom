@@ -20,7 +20,7 @@
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
-#include "../layer_parent_transform.hpp"
+#include "layer_parent_transform.hpp"
 
 #include <algorithm>
 #include <cstddef>

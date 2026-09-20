@@ -365,6 +365,7 @@ bloom_add_test(
 # drives a genuine CpuCompositionEvaluator oracle and needs no loader and no device; it is a pure
 # CPU test that runs against the CPU stub too.
 add_executable(bloom_runtime_gpu_scene_preparation_test gpu_scene_preparation_tests.cpp)
+target_include_directories(bloom_runtime_gpu_scene_preparation_test PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
 target_link_libraries(bloom_runtime_gpu_scene_preparation_test PRIVATE bloom_runtime_evaluator bloom_render)
 bloom_enable_warnings(bloom_runtime_gpu_scene_preparation_test)
 bloom_enable_strict_floating_point(bloom_runtime_gpu_scene_preparation_test)
@@ -380,6 +381,7 @@ bloom_add_test(
 # evaluator oracle. Pure CPU: no loader, no device.
 add_executable(bloom_runtime_gpu_nested_scene_preparation_test
     gpu_nested_scene_preparation_tests.cpp)
+target_include_directories(bloom_runtime_gpu_nested_scene_preparation_test PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
 target_link_libraries(bloom_runtime_gpu_nested_scene_preparation_test
     PRIVATE bloom_runtime_evaluator bloom_render)
 bloom_enable_warnings(bloom_runtime_gpu_nested_scene_preparation_test)
