@@ -65,17 +65,19 @@ class PreviewGpuSceneStage final {
           pixelStorageByteLimit_(pixelStorageByteLimit), diagnostics_(std::move(diagnostics)) {}
 
     // The general-display form: additionally carries the off-UI-prepared immutable GPU display
-    // program (exact OCIO DisplayRgba8 command + its CPU oracle) for this request's own display/view
-    // pair. A null displayProgram means the request takes the startup Neutral fast path or the CPU
-    // display fallback; it is never a silent downgrade of a prepared general program.
+    // program (exact OCIO DisplayRgba8 command + its CPU oracle) for this request's own
+    // display/view pair. A null displayProgram means the request takes the startup Neutral fast
+    // path or the CPU display fallback; it is never a silent downgrade of a prepared general
+    // program.
     PreviewGpuSceneStage(
         PreviewRequestIdentity desiredIdentity, std::shared_ptr<const PreparedGpuScene> scene,
         std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> displayProcessor,
         std::shared_ptr<const GpuDisplayProgram> displayProgram, std::size_t pixelStorageByteLimit,
         std::vector<TaskDiagnostic> diagnostics) noexcept
         : desiredIdentity_(std::move(desiredIdentity)), scene_(std::move(scene)),
-          displayProcessor_(std::move(displayProcessor)), displayProgram_(std::move(displayProgram)),
-          pixelStorageByteLimit_(pixelStorageByteLimit), diagnostics_(std::move(diagnostics)) {}
+          displayProcessor_(std::move(displayProcessor)),
+          displayProgram_(std::move(displayProgram)), pixelStorageByteLimit_(pixelStorageByteLimit),
+          diagnostics_(std::move(diagnostics)) {}
 
     [[nodiscard]] const PreviewRequestIdentity& desiredIdentity() const& noexcept {
         return desiredIdentity_;
@@ -101,8 +103,9 @@ class PreviewGpuSceneStage final {
 
     // The off-UI-prepared general GPU display program for this request's display/view pair. Null
     // when the request's display/view is the startup self-qualified Neutral pair (handled by the
-    // service's fast path) or when display preparation was not attempted. Non-null means the service
-    // must dispatch THIS command through the general display arm -- never fall back silently.
+    // service's fast path) or when display preparation was not attempted. Non-null means the
+    // service must dispatch THIS command through the general display arm -- never fall back
+    // silently.
     [[nodiscard]] const std::shared_ptr<const GpuDisplayProgram>& displayProgram() const& noexcept {
         return displayProgram_;
     }

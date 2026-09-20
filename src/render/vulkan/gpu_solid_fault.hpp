@@ -27,8 +27,8 @@ enum class SolidRetirementFault : std::uint8_t {
 // Production-owned atomic read by the retirement path.
 [[nodiscard]] std::atomic<std::uint8_t>& solidRetirementFault() noexcept;
 
-// Bounded resident pool observability. Every GpuSolid native resource set (compute pipeline plus any
-// in-flight job and Ready resident) occupies exactly one fixed slot, acquired before its first
+// Bounded resident pool observability. Every GpuSolid native resource set (compute pipeline plus
+// any in-flight job and Ready resident) occupies exactly one fixed slot, acquired before its first
 // native allocation and held until owner-thread release. A foreign-thread destruction only marks
 // the already-owned slot orphaned and never destroys native state; the owner drain retires orphaned
 // residents (allocation-free, noexcept) and returns their slots. Admission refuses cleanly when the

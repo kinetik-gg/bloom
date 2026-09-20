@@ -31,8 +31,8 @@ void testEmbeddedSpirvDigest(Expectations& expectations) {
                   "SPIR-V word count must exactly cover the byte count");
     const auto* raw =
         reinterpret_cast<const std::byte*>(bloom::render::vulkan_detail::kPathCoverageSpirvCode);
-    const std::span<const std::byte> bytes(raw,
-                                           bloom::render::vulkan_detail::kPathCoverageSpirvByteCount);
+    const std::span<const std::byte> bytes(
+        raw, bloom::render::vulkan_detail::kPathCoverageSpirvByteCount);
     const auto digest = bloom::core::Sha256Hasher::hash(bytes);
     expectations.expect(digest.has_value(), "the embedded GpuPathCoverage SPIR-V hashes");
     if (!digest.has_value()) {
@@ -77,8 +77,8 @@ int main(int argc, char** argv) {
         auto produced = GpuPathCoverage::create(*device.device);
         expectations.expect(produced.hasValue(), "the GpuPathCoverage pipeline is created");
         if (!produced) {
-            std::cerr << "FAIL: GpuPathCoverage create failed: "
-                      << produced.diagnostic.message << '\n';
+            std::cerr << "FAIL: GpuPathCoverage create failed: " << produced.diagnostic.message
+                      << '\n';
             return 1;
         }
         auto created = GpuSolid::create(*device.device);

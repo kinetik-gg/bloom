@@ -122,8 +122,8 @@ void testResidentConsumption(Expectations& expectations, GpuPathCoverage& produc
     if (!pixel) {
         return;
     }
-    auto raster = PathRaster::transformed(
-        std::array{rectanglePath(18.0, 12.0)}, {}, PathMatrix{1, 0, 0, 1, 0.3, 0.3}, 1, 1);
+    auto raster = PathRaster::transformed(std::array{rectanglePath(18.0, 12.0)}, {},
+                                          PathMatrix{1, 0, 0, 1, 0.3, 0.3}, 1, 1);
     expectations.expect(static_cast<bool>(raster), "the resident chain raster builds");
     if (!raster) {
         return;
@@ -131,9 +131,9 @@ void testResidentConsumption(Expectations& expectations, GpuPathCoverage& produc
     const auto coverage = cpuCoverage(*raster.value(), w, PathFillRule::NonZero, false);
     const std::uint64_t before = GpuPathCoverage::nativeDispatchCount();
     std::vector<std::uint8_t> measured;
-    expectations.expect(runCoverage(producer, w, PathFillRule::NonZero, false, *raster.value(),
-                                    measured),
-                        "the resident coverage producer completes");
+    expectations.expect(
+        runCoverage(producer, w, PathFillRule::NonZero, false, *raster.value(), measured),
+        "the resident coverage producer completes");
     expectations.expect(GpuPathCoverage::nativeDispatchCount() > before,
                         "a native coverage dispatch was counted");
     expectations.expect(producer.isBoundTo(device), "the producer is bound to its device");
@@ -154,21 +154,21 @@ void testResidentConsumption(Expectations& expectations, GpuPathCoverage& produc
         return;
     }
     // CPU oracle: coverageRow then coverageSolidRow plus the separate Float32 opacity.
-    std::vector<Rgba32f> reference(static_cast<std::size_t>(w.extent().width()) *
-                                       w.extent().height(),
-                                   Rgba32f::transparent());
+    std::vector<Rgba32f> reference(
+        static_cast<std::size_t>(w.extent().width()) * w.extent().height(), Rgba32f::transparent());
     const std::uint32_t width = w.extent().width();
     const std::uint32_t height = w.extent().height();
     for (std::uint32_t row = 0; row < height; ++row) {
         const auto offset = static_cast<std::size_t>(row) * width;
         const auto rowCoverage = std::span<const std::uint8_t>(coverage.data() + offset, width);
         const auto rowOutput = std::span<Rgba32f>(reference.data() + offset, width);
-        expectations.expect(!bloom::render::coverageSolidRow(rowCoverage, *pixel.value(), rowOutput),
-                            "the CPU covered oracle runs");
+        expectations.expect(
+            !bloom::render::coverageSolidRow(rowCoverage, *pixel.value(), rowOutput),
+            "the CPU covered oracle runs");
         for (auto& value : rowOutput) {
-            const auto faded = Rgba32f::fromPremultiplied(
-                value.red() * opacity, value.green() * opacity, value.blue() * opacity,
-                value.alpha() * opacity);
+            const auto faded =
+                Rgba32f::fromPremultiplied(value.red() * opacity, value.green() * opacity,
+                                           value.blue() * opacity, value.alpha() * opacity);
             value = *faded.value();
         }
     }
@@ -188,9 +188,9 @@ void testGuards(Expectations& expectations, GpuPathCoverage& producer, GpuSolid&
         expectations.expect(false, "the guard raster builds");
         return;
     }
-    const auto geometry = raster.value()->coverageGeometry(
-        w.originX(), w.originY(), w.extent().width(), w.extent().height(), PathFillRule::NonZero,
-        false);
+    const auto geometry =
+        raster.value()->coverageGeometry(w.originX(), w.originY(), w.extent().width(),
+                                         w.extent().height(), PathFillRule::NonZero, false);
     expectations.expect(static_cast<bool>(geometry), "the guard geometry builds");
     if (!geometry) {
         return;
@@ -201,10 +201,9 @@ void testGuards(Expectations& expectations, GpuPathCoverage& producer, GpuSolid&
     const auto mismatchWindow = ImageWindow::create(0, 0, 9, 4);
     expectations.expect(static_cast<bool>(mismatchWindow), "the mismatched window builds");
     if (mismatchWindow) {
-        const auto mismatch =
-            producer.begin(GpuPathCoverageParameters{*mismatchWindow.value(), w,
-                                                     PixelAspectRatio::square()},
-                           *geometry.value(), 1ULL << 34ULL);
+        const auto mismatch = producer.begin(
+            GpuPathCoverageParameters{*mismatchWindow.value(), w, PixelAspectRatio::square()},
+            *geometry.value(), 1ULL << 34ULL);
         expectations.expect(mismatch.code == GpuPathCoverageDiagnosticCode::InvalidArgument,
                             "a mismatched data window is rejected");
     }
@@ -217,10 +216,9 @@ void testGuards(Expectations& expectations, GpuPathCoverage& producer, GpuSolid&
     // Consuming a non-Ready producer is refused.
     const auto pixel =
         bloom::render::solidPixelFromStraightLinearRec709Scene(Color4d{0.5, 0.5, 0.5, 1.0});
-    const auto notReady =
-        solid.beginCoveredResident(GpuSolidParameters{*pixel.value(), w, w,
-                                                      PixelAspectRatio::square()},
-                                   producer, 0.5F, 1ULL << 34ULL);
+    const auto notReady = solid.beginCoveredResident(
+        GpuSolidParameters{*pixel.value(), w, w, PixelAspectRatio::square()}, producer, 0.5F,
+        1ULL << 34ULL);
     expectations.expect(notReady.code == GpuSolidDiagnosticCode::InvalidArgument,
                         "a non-Ready resident coverage is rejected");
 
@@ -236,9 +234,9 @@ void testGuards(Expectations& expectations, GpuPathCoverage& producer, GpuSolid&
 
     // Reuse after cancel produces the exact mask.
     std::vector<std::uint8_t> measured;
-    expectations.expect(runCoverage(producer, w, PathFillRule::NonZero, false, *raster.value(),
-                                    measured),
-                        "the producer recovers after cancellation");
+    expectations.expect(
+        runCoverage(producer, w, PathFillRule::NonZero, false, *raster.value(), measured),
+        "the producer recovers after cancellation");
     expectations.expect(measured == cpuCoverage(*raster.value(), w, PathFillRule::NonZero, false),
                         "the recovered coverage is exact");
 
@@ -410,8 +408,8 @@ void testTwoDimensionalPlan(Expectations& expectations, GpuPathCoverage& produce
     if (!window || !raster) {
         return;
     }
-    const auto reference = cpuCoverage(*raster.value(), *window.value(), PathFillRule::NonZero,
-                                       false);
+    const auto reference =
+        cpuCoverage(*raster.value(), *window.value(), PathFillRule::NonZero, false);
     setPathCoverageMaxWorkGroupCountXForTest(3);
     setPathCoverageMaxWorkGroupCountYForTest(4);
     std::vector<std::uint8_t> measured;
@@ -440,7 +438,8 @@ void testResidentPoolBound(Expectations& expectations, GpuDevice& device) {
     const std::size_t capacity = pathCoverageResidentCapacity();
     expectations.expect(capacity > 0, "the resident pool has a positive bounded capacity");
     const std::size_t inUseBefore = pathCoverageResidentInUse();
-    expectations.expect(inUseBefore <= capacity, "the resident pool invariant holds before the test");
+    expectations.expect(inUseBefore <= capacity,
+                        "the resident pool invariant holds before the test");
     const std::size_t available = capacity - inUseBefore;
     expectations.expect(available > 0, "the resident pool has at least one free slot");
     if (available == 0) {
@@ -524,8 +523,8 @@ void testResidentPoolBound(Expectations& expectations, GpuDevice& device) {
     expectations.expect(recovered.hasValue(), "a producer is creatable after recovery");
     if (recovered) {
         std::vector<std::uint8_t> measured;
-        expectations.expect(runCoverage(*recovered.coverage, *window.value(),
-                                        PathFillRule::NonZero, false, *raster.value(), measured),
+        expectations.expect(runCoverage(*recovered.coverage, *window.value(), PathFillRule::NonZero,
+                                        false, *raster.value(), measured),
                             "a begin works after recovery");
     }
 }
@@ -636,7 +635,8 @@ void testPerformance(Expectations& expectations, GpuPathCoverage& producer) {
         };
         const auto gpuRun = [&]() {
             std::vector<std::uint8_t> measured;
-            if (!runCoverage(producer, w, PathFillRule::NonZero, false, *raster.value(), measured)) {
+            if (!runCoverage(producer, w, PathFillRule::NonZero, false, *raster.value(),
+                             measured)) {
                 expectations.expect(false, "the performance coverage job runs");
             }
         };

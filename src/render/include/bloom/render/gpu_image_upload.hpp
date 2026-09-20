@@ -86,8 +86,8 @@ class GpuImageUpload final {
 
     // Prepares the upload on the device owner thread. Creation is lazy: an idle instance allocates
     // no native resources, and the command pool/command buffer/fence are allocated on the first
-    // begin under a bounded process-wide resident slot. No shader, no pipeline. Wrong thread returns
-    // WrongThread.
+    // begin under a bounded process-wide resident slot. No shader, no pipeline. Wrong thread
+    // returns WrongThread.
     [[nodiscard]] static GpuImageUploadCreateResult
     create(GpuDevice& device, const GpuImageUploadBudgets& budgets = {});
 

@@ -81,8 +81,8 @@ void compare(const char* label, const PathRaster& raster, const Window& window,
     if (direct != reconstructed) {
         for (std::size_t i = 0; i < direct.size(); ++i) {
             if (direct[i] != reconstructed[i]) {
-                std::cerr << label << ": mismatch at " << (i % window.w) << ','
-                          << (i / window.w) << " cpu " << static_cast<int>(direct[i]) << " geom "
+                std::cerr << label << ": mismatch at " << (i % window.w) << ',' << (i / window.w)
+                          << " cpu " << static_cast<int>(direct[i]) << " geom "
                           << static_cast<int>(reconstructed[i]) << '\n';
             }
         }
@@ -156,7 +156,8 @@ void testTransforms() {
 
 void testStrokes() {
     const Window window{0, 0, 24, 16};
-    for (auto align : {PathStrokeAlign::Center, PathStrokeAlign::Inside, PathStrokeAlign::Outside}) {
+    for (auto align :
+         {PathStrokeAlign::Center, PathStrokeAlign::Inside, PathStrokeAlign::Outside}) {
         for (auto join : {PathStrokeJoin::Miter, PathStrokeJoin::Round, PathStrokeJoin::Bevel}) {
             const PathStroke stroke{2.0, align, join, PathStrokeCap::Butt};
             compareResult("stroke-rect",
@@ -165,18 +166,18 @@ void testStrokes() {
         }
     }
     for (auto cap : {PathStrokeCap::Butt, PathStrokeCap::Round, PathStrokeCap::Square}) {
-        compareResult("stroke-line-cap",
-                      PathRaster::create(linePath({1, 1}, {4, 1}),
-                                         {1.0, PathStrokeAlign::Outside, PathStrokeJoin::Miter, cap},
-                                         1, 1),
-                      Window{0, 0, 6, 6}, PathFillRule::NonZero, true);
+        compareResult(
+            "stroke-line-cap",
+            PathRaster::create(linePath({1, 1}, {4, 1}),
+                               {1.0, PathStrokeAlign::Outside, PathStrokeJoin::Miter, cap}, 1, 1),
+            Window{0, 0, 6, 6}, PathFillRule::NonZero, true);
     }
     const double c = std::sqrt(0.5);
     compareResult("stroke-rotated",
-                  PathRaster::transformed(std::array{rectanglePath(10.0, 6.0)},
-                                          {2.5, PathStrokeAlign::Center, PathStrokeJoin::Round,
-                                           PathStrokeCap::Round},
-                                          PathMatrix{c, -c, c, c, 10.0, 4.0}, 1, 1),
+                  PathRaster::transformed(
+                      std::array{rectanglePath(10.0, 6.0)},
+                      {2.5, PathStrokeAlign::Center, PathStrokeJoin::Round, PathStrokeCap::Round},
+                      PathMatrix{c, -c, c, c, 10.0, 4.0}, 1, 1),
                   Window{0, 0, 24, 24}, PathFillRule::NonZero, true);
 }
 
@@ -206,12 +207,12 @@ void testGlyphs() {
     const auto bounds = raster.value()->bounds(true, false);
     const auto x0 = static_cast<std::int64_t>(std::floor(bounds.left)) - 1;
     const auto y0 = static_cast<std::int64_t>(std::floor(bounds.top)) - 1;
-    const auto width = static_cast<std::uint32_t>(
-                           std::ceil(bounds.right - static_cast<double>(x0))) + 2U;
-    const auto height = static_cast<std::uint32_t>(
-                            std::ceil(bounds.bottom - static_cast<double>(y0))) + 2U;
-    compare("glyph-contours", *raster.value(), Window{x0, y0, width, height},
-            PathFillRule::NonZero, false);
+    const auto width =
+        static_cast<std::uint32_t>(std::ceil(bounds.right - static_cast<double>(x0))) + 2U;
+    const auto height =
+        static_cast<std::uint32_t>(std::ceil(bounds.bottom - static_cast<double>(y0))) + 2U;
+    compare("glyph-contours", *raster.value(), Window{x0, y0, width, height}, PathFillRule::NonZero,
+            false);
     compare("glyph-contours-evenodd", *raster.value(), Window{x0, y0, width, height},
             PathFillRule::EvenOdd, false);
 }

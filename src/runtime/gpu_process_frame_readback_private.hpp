@@ -39,16 +39,13 @@ struct FinalReadbackOutcome final {
 };
 
 // Owner-thread only. Runs the one combined final readback against an admitted stage, bounded by
-// `nativeDeadline` and observing cancellation/stop, then publishes an immutable Rgba32fImage from the
-// unchanged process payload. The encoded output is kept distinct from the process payload.
-[[nodiscard]] FinalReadbackOutcome
-runFinalCombinedReadback(GpuOutputColorStage& stage,
-                         const render::Rgba32fImageDescriptor& descriptor,
-                         std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
-                         std::shared_ptr<const render::GpuImage> image,
-                         std::uint64_t readbackByteBudget,
-                         std::chrono::milliseconds nativeDeadline,
-                         const CancellationToken& cancellation,
-                         const std::atomic_bool& stopRequested);
+// `nativeDeadline` and observing cancellation/stop, then publishes an immutable Rgba32fImage from
+// the unchanged process payload. The encoded output is kept distinct from the process payload.
+[[nodiscard]] FinalReadbackOutcome runFinalCombinedReadback(
+    GpuOutputColorStage& stage, const render::Rgba32fImageDescriptor& descriptor,
+    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
+    std::shared_ptr<const render::GpuImage> image, std::uint64_t readbackByteBudget,
+    std::chrono::milliseconds nativeDeadline, const CancellationToken& cancellation,
+    const std::atomic_bool& stopRequested);
 
 } // namespace bloom::runtime::detail

@@ -251,8 +251,8 @@ makeProgram(bloom::render::GpuDevice& device, bloom::render::OcioGpuProgramDesc 
     return std::shared_ptr<GpuOcioProgram>(std::move(created.program));
 }
 
-bloom::render::GpuOcioProgramPollResult
-awaitOcioCompletion(bloom::render::GpuOcioProgram& program, Expectations& expectations) {
+bloom::render::GpuOcioProgramPollResult awaitOcioCompletion(bloom::render::GpuOcioProgram& program,
+                                                            Expectations& expectations) {
     // Finite ceiling: ~20 s of 1 ms ticks. A job that has not retired by then is a failure, never a
     // hang. This is a bounded wait, not a naked busy loop.
     constexpr int kMaxAttempts = 20000;

@@ -84,8 +84,7 @@ gpuEvaluatorOptions(const std::filesystem::path& loaderPath) {
 // Two concurrent callers each receive exactly one outcome; neither hangs even though the owner
 // runs one request at a time. Bounded by a wall-clock deadline so a missed wake-up is a hard fail.
 void runTwoCallerTest(Expectations& expectations, const Options& options) {
-    auto evaluator = GpuProcessFrameEvaluator::create(
-        gpuEvaluatorOptions(options.loader_path));
+    auto evaluator = GpuProcessFrameEvaluator::create(gpuEvaluatorOptions(options.loader_path));
     expectations.expect(evaluator != nullptr, "two-caller: evaluator constructed");
     if (evaluator == nullptr || !evaluator->gpuAvailable()) {
         return;
@@ -117,8 +116,7 @@ void runTwoCallerTest(Expectations& expectations, const Options& options) {
 
 // Two independent queued requests both resolve in order without hanging.
 void runQueuedRequestsTest(Expectations& expectations, const Options& options) {
-    auto evaluator = GpuProcessFrameEvaluator::create(
-        gpuEvaluatorOptions(options.loader_path));
+    auto evaluator = GpuProcessFrameEvaluator::create(gpuEvaluatorOptions(options.loader_path));
     expectations.expect(evaluator != nullptr, "queued: evaluator constructed");
     if (evaluator == nullptr || !evaluator->gpuAvailable()) {
         return;
@@ -140,8 +138,7 @@ void runQueuedRequestsTest(Expectations& expectations, const Options& options) {
 
 // After beginShutdown(), new evaluate() calls are rejected with a typed failure.
 void runShutdownRejectsNewCallsTest(Expectations& expectations, const Options& options) {
-    auto evaluator = GpuProcessFrameEvaluator::create(
-        gpuEvaluatorOptions(options.loader_path));
+    auto evaluator = GpuProcessFrameEvaluator::create(gpuEvaluatorOptions(options.loader_path));
     expectations.expect(evaluator != nullptr, "shutdown-reject: evaluator constructed");
     if (evaluator == nullptr || !evaluator->gpuAvailable()) {
         return;
@@ -158,8 +155,7 @@ void runShutdownRejectsNewCallsTest(Expectations& expectations, const Options& o
 // A throwing progress callback must never unwind out of the owner worker; the request still
 // completes with a typed outcome.
 void runThrowingProgressTest(Expectations& expectations, const Options& options) {
-    auto evaluator = GpuProcessFrameEvaluator::create(
-        gpuEvaluatorOptions(options.loader_path));
+    auto evaluator = GpuProcessFrameEvaluator::create(gpuEvaluatorOptions(options.loader_path));
     expectations.expect(evaluator != nullptr, "throwing-progress: evaluator constructed");
     if (evaluator == nullptr || !evaluator->gpuAvailable()) {
         return;
@@ -179,8 +175,7 @@ void runThrowingProgressTest(Expectations& expectations, const Options& options)
 // Reentrancy: an evaluate() issued from inside a progress callback (the owner thread) must be
 // rejected with a typed failure before any wait, so it cannot deadlock on its own completion.
 void runReentrantEvaluateTest(Expectations& expectations, const Options& options) {
-    auto evaluator = GpuProcessFrameEvaluator::create(
-        gpuEvaluatorOptions(options.loader_path));
+    auto evaluator = GpuProcessFrameEvaluator::create(gpuEvaluatorOptions(options.loader_path));
     expectations.expect(evaluator != nullptr, "reentrant: evaluator constructed");
     if (evaluator == nullptr || !evaluator->gpuAvailable()) {
         return;
@@ -210,8 +205,7 @@ void runReentrantEvaluateTest(Expectations& expectations, const Options& options
 // promptly without waiting for a nonexistent active request. The token is produced by the real
 // scheduler task handle, never a test-only setter.
 void runCancelledTokenTest(Expectations& expectations, const Options& options) {
-    auto evaluator = GpuProcessFrameEvaluator::create(
-        gpuEvaluatorOptions(options.loader_path));
+    auto evaluator = GpuProcessFrameEvaluator::create(gpuEvaluatorOptions(options.loader_path));
     expectations.expect(evaluator != nullptr, "cancelled-token: evaluator constructed");
     if (evaluator == nullptr || !evaluator->gpuAvailable()) {
         return;
@@ -326,10 +320,11 @@ void runPreparationOffOwnerTest(Expectations& expectations, const Options& optio
     expectations.expect(providerThread.load() == evaluateThread.load(),
                         "prep-off-owner: the media context provider (decode/preparation) runs on "
                         "the calling CPU worker, never the GPU owner");
-    expectations.expect(operationThread.load() != evaluateThread.load() &&
-                            operationThread.load() != std::thread::id{},
-                        "prep-off-owner: the native Operation event fires on the GPU owner, not the "
-                        "caller");
+    expectations.expect(
+        operationThread.load() != evaluateThread.load() &&
+            operationThread.load() != std::thread::id{},
+        "prep-off-owner: the native Operation event fires on the GPU owner, not the "
+        "caller");
     evaluator->beginShutdown();
 }
 
@@ -371,8 +366,8 @@ void runShutdownDuringPreparationTest(Expectations& expectations, const Options&
     std::atomic<bool> entered{false};
     std::atomic<GpuProcessFrameStatus> status{GpuProcessFrameStatus::Failed};
     std::thread caller([&] {
-        const auto outcome =
-            evaluator->evaluate(plan, request, {}, [&](const bloom::runtime::EvaluationProgress& event) {
+        const auto outcome = evaluator->evaluate(
+            plan, request, {}, [&](const bloom::runtime::EvaluationProgress& event) {
                 if (event.stage == bloom::runtime::EvaluationProgressStage::Preflight) {
                     entered.store(true, std::memory_order_release);
                     while (!release.load(std::memory_order_acquire)) {
@@ -398,8 +393,7 @@ void runShutdownDuringPreparationTest(Expectations& expectations, const Options&
     release.store(true, std::memory_order_release);
     caller.join();
     const auto retireDeadline = std::chrono::steady_clock::now() + 10s;
-    while (!evaluator->retirementComplete() &&
-           std::chrono::steady_clock::now() < retireDeadline) {
+    while (!evaluator->retirementComplete() && std::chrono::steady_clock::now() < retireDeadline) {
         std::this_thread::sleep_for(1ms);
     }
     expectations.expect(evaluator->retirementComplete(),
@@ -432,8 +426,7 @@ int run(int argc, char** argv) {
         Color4d{0.125, 0.375, 0.75, 0.5}, LayerValues{.position = {7.5, 6.25}}, 9.0, 7.0, 9000);
     const auto request = requestFor(*plan);
 
-    auto evaluator = GpuProcessFrameEvaluator::create(
-        gpuEvaluatorOptions(options.loader_path));
+    auto evaluator = GpuProcessFrameEvaluator::create(gpuEvaluatorOptions(options.loader_path));
     expectations.expect(evaluator != nullptr, "the evaluator is constructed");
     if (evaluator == nullptr) {
         return 1;

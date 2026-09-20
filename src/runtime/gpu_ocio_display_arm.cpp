@@ -30,8 +30,8 @@
 namespace bloom::runtime {
 namespace {
 
-[[nodiscard]] GpuOcioDisplayArmDiagnostic displayDiagnostic(
-    const GpuOcioDisplayArmDiagnosticCode code, std::string message) {
+[[nodiscard]] GpuOcioDisplayArmDiagnostic
+displayDiagnostic(const GpuOcioDisplayArmDiagnosticCode code, std::string message) {
     GpuOcioDisplayArmDiagnostic diagnostic;
     diagnostic.code = code;
     diagnostic.message = std::move(message);
@@ -102,8 +102,7 @@ GpuOcioDisplayArmCreateResult GpuOcioDisplayArm::create(render::GpuDevice& devic
                                                     "created")
                                       : created.diagnostic.message)};
     }
-    return {std::unique_ptr<GpuOcioDisplayArm>(
-                new GpuOcioDisplayArm(std::move(created.executor))),
+    return {std::unique_ptr<GpuOcioDisplayArm>(new GpuOcioDisplayArm(std::move(created.executor))),
             GpuOcioDisplayArmDiagnostic{}};
 }
 
@@ -145,8 +144,8 @@ GpuOcioDisplayArmDiagnostic GpuOcioDisplayArm::begin(const GpuOcioDisplayRequest
                                  "the view adjustment is out of range");
     }
     // The prepared command carries the exact baked post-display ViewAdjust; a request adjustment
-    // that differs from the command's is an identity mismatch (a different adjustment is a different
-    // command), never a silent substitution.
+    // that differs from the command's is an identity mismatch (a different adjustment is a
+    // different command), never a silent substitution.
     if (!(request.viewAdjust == request.command->viewAdjust())) {
         return displayDiagnostic(
             GpuOcioDisplayArmDiagnosticCode::IdentityMismatch,
@@ -165,7 +164,8 @@ GpuOcioDisplayArmDiagnostic GpuOcioDisplayArm::begin(const GpuOcioDisplayRequest
         return displayDiagnostic(GpuOcioDisplayArmDiagnosticCode::IdentityMismatch,
                                  "the input image geometry does not match the prepared command");
     }
-    const auto diagnostic = executor_->begin(request.command, request.input, {}, request.byteBudget);
+    const auto diagnostic =
+        executor_->begin(request.command, request.input, {}, request.byteBudget);
     return displayDiagnostic(mapExecutorCode(diagnostic.code), diagnostic.message);
 }
 
@@ -243,7 +243,6 @@ constexpr std::string_view kGpuOcioDisplayNumericContract =
     return pixels;
 }
 
-
 // Bounded poll of the display arm. Returns false and sets the report diagnostic on failure.
 [[nodiscard]] bool pollDisplayArm(GpuOcioDisplayArm& arm, std::uint64_t deadlineNanoseconds,
                                   GpuOcioDisplayDiagnostic& diagnostic) {
@@ -263,8 +262,8 @@ constexpr std::string_view kGpuOcioDisplayNumericContract =
             diagnostic.message = arm.executor().diagnostic().message;
             return false;
         }
-        if (std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - start)
+        if (std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() -
+                                                                 start)
                 .count() >= static_cast<std::int64_t>(deadlineNanoseconds)) {
             arm.cancel();
             diagnostic.code = GpuOcioDisplayDiagnosticCode::NativeFailure;
@@ -365,8 +364,7 @@ qualifyGpuOcioDisplay(std::shared_ptr<const PreparedGpuOcioCommand> command,
             return fail(GpuOcioDisplayDiagnosticCode::DeviceUnavailable);
         }
         const render::GpuImageUploadParameters uploadParameters{.source = source};
-        const auto uploadDiagnostic =
-            upload.upload->begin(uploadParameters, budgets.maxImageBytes);
+        const auto uploadDiagnostic = upload.upload->begin(uploadParameters, budgets.maxImageBytes);
         if (uploadDiagnostic.code != render::GpuImageUploadDiagnosticCode::None) {
             return fail(GpuOcioDisplayDiagnosticCode::NativeFailure);
         }
@@ -406,8 +404,7 @@ qualifyGpuOcioDisplay(std::shared_ptr<const PreparedGpuOcioCommand> command,
         if (!display.has_value()) {
             return fail(GpuOcioDisplayDiagnosticCode::NativeFailure);
         }
-        const auto readback =
-            render::readbackResidentDisplayImage(*display, budgets.maxImageBytes);
+        const auto readback = render::readbackResidentDisplayImage(*display, budgets.maxImageBytes);
         if (!readback.hasValue()) {
             return fail(GpuOcioDisplayDiagnosticCode::NativeFailure);
         }
@@ -419,8 +416,8 @@ qualifyGpuOcioDisplay(std::shared_ptr<const PreparedGpuOcioCommand> command,
         if (!sourceView.hasValue()) {
             return fail(GpuOcioDisplayDiagnosticCode::CpuOracleFailure);
         }
-        auto cpuFrame = color::produceBloomNeutralDisplayFrame(
-            cpuOracle, *sourceView.value(), 65536, budgets.maxImageBytes);
+        auto cpuFrame = color::produceBloomNeutralDisplayFrame(cpuOracle, *sourceView.value(),
+                                                               65536, budgets.maxImageBytes);
         if (!cpuFrame.hasValue()) {
             return fail(GpuOcioDisplayDiagnosticCode::CpuOracleFailure);
         }
@@ -449,8 +446,8 @@ bool gpuDisplayProgramMatchesRequest(const GpuDisplayProgram& program,
     if (actual.expectedRevision != requested.expectedRevision) {
         return false;
     }
-    // An empty requested display/view selects the config's own default pair; the program records the
-    // actual resolved pair. An explicit request must match exactly. The config locator/revision
+    // An empty requested display/view selects the config's own default pair; the program records
+    // the actual resolved pair. An explicit request must match exactly. The config locator/revision
     // above are always compared, so an empty request never crosses configs.
     if ((!requested.display.empty() && actual.display != requested.display) ||
         (!requested.view.empty() && actual.view != requested.view)) {
@@ -461,17 +458,16 @@ bool gpuDisplayProgramMatchesRequest(const GpuDisplayProgram& program,
            actual.workingColorSpaceId == requested.workingColorSpaceId;
 }
 
-GpuDisplayColorBinding
-gpuDisplayColorBindingForIntent(const EvaluationColorIntent& intent, const std::string_view display,
-                                const std::string_view view) noexcept {
+GpuDisplayColorBinding gpuDisplayColorBindingForIntent(const EvaluationColorIntent& intent,
+                                                       const std::string_view display,
+                                                       const std::string_view view) noexcept {
     GpuDisplayColorBinding binding;
     binding.locatorKind = color::OcioConfigLocatorKind::BloomBuiltIn;
-    const std::string_view uri = intent.ocioConfigUri.empty() ? color::kBloomNeutralV1ConfigUri
-                                                              : intent.ocioConfigUri;
+    const std::string_view uri =
+        intent.ocioConfigUri.empty() ? color::kBloomNeutralV1ConfigUri : intent.ocioConfigUri;
     binding.locatorValue = std::string(uri);
     binding.expectedRevision =
-        intent.ocioConfigRevision == core::Sha256Digest{} &&
-                uri == color::kBloomNeutralV1ConfigUri
+        intent.ocioConfigRevision == core::Sha256Digest{} && uri == color::kBloomNeutralV1ConfigUri
             ? color::kBloomNeutralV1ConfigDigest
             : intent.ocioConfigRevision;
     binding.workingColorSpaceId = std::string(intent.workingColorSpaceId);

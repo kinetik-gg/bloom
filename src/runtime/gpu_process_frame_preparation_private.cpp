@@ -32,14 +32,13 @@ mapSceneDiagnostic(const PreparedGpuSceneDiagnosticCode code) {
 
 } // namespace
 
-ExportScenePreparation prepareExportScene(const GpuProcessFrameEvaluatorOptions& options,
-                                          const std::shared_ptr<const CompiledCompositionPlan>& plan,
-                                          const EvaluationRequest& request,
-                                          const CancellationToken& cancellation) {
+ExportScenePreparation
+prepareExportScene(const GpuProcessFrameEvaluatorOptions& options,
+                   const std::shared_ptr<const CompiledCompositionPlan>& plan,
+                   const EvaluationRequest& request, const CancellationToken& cancellation) {
     ExportScenePreparation result;
-    const GpuSceneMediaContext mediaContext = options.mediaContextProvider
-                                                  ? options.mediaContextProvider()
-                                                  : options.mediaContext;
+    const GpuSceneMediaContext mediaContext =
+        options.mediaContextProvider ? options.mediaContextProvider() : options.mediaContext;
     const CpuGpuSceneBuilder builder(nullptr, mediaContext,
                                      options.ocioContext != nullptr ? *options.ocioContext
                                                                     : GpuSceneOcioContext{});

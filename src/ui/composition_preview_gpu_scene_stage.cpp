@@ -211,17 +211,16 @@ runtime::PreviewGpuSceneStageFunction makeCompositionPreviewGpuSceneStage(
         // color identity and prepare the OCIO DisplayRgba8 command for THAT binding on this CPU
         // worker (never the UI thread; the service resolves tools and config lazily). The returned
         // program's own binding is validated before it is carried on the stage, so a program for
-        // another config, working space, or display/view can never be accepted for this request even
-        // when the display/view names and geometry agree. Any refusal takes the full CPU display
-        // path (the stage carries no general program); it is never a silent downgrade.
+        // another config, working space, or display/view can never be accepted for this request
+        // even when the display/view names and geometry agree. Any refusal takes the full CPU
+        // display path (the stage carries no general program); it is never a silent downgrade.
         std::shared_ptr<const runtime::GpuDisplayProgram> displayProgram;
         if (displayProgramService != nullptr) {
             const auto& descriptor = buildResult.scene->outputDescriptor();
             const auto width = descriptor.dataWindow().extent().width();
             const auto height = descriptor.dataWindow().extent().height();
             const auto expectedBinding = runtime::gpuDisplayColorBindingForIntent(
-                desiredIdentity.colorIntent, desiredIdentity.displayName,
-                desiredIdentity.viewName);
+                desiredIdentity.colorIntent, desiredIdentity.displayName, desiredIdentity.viewName);
             context.reportProgress({.phase = "Preparing GPU preview scene",
                                     .subphase = "Preparing the OCIO display program",
                                     .completed = 0,

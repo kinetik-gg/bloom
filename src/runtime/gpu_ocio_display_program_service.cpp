@@ -50,8 +50,7 @@ struct OracleEntry final {
 struct GpuDisplayProgramService::Impl final {
     Impl(std::shared_ptr<GpuOcioContextResolver> resolverValue, const std::size_t maxConfigsValue,
          const std::size_t maxOraclesValue)
-        : resolver(std::move(resolverValue)),
-          maxConfigs(std::max<std::size_t>(maxConfigsValue, 1)),
+        : resolver(std::move(resolverValue)), maxConfigs(std::max<std::size_t>(maxConfigsValue, 1)),
           maxOracles(std::max<std::size_t>(maxOraclesValue, 1)) {}
 
     std::shared_ptr<GpuOcioContextResolver> resolver;
@@ -63,17 +62,18 @@ struct GpuDisplayProgramService::Impl final {
     mutable std::vector<OracleEntry> oracles;
 };
 
-GpuDisplayProgramService::GpuDisplayProgramService(
-    std::shared_ptr<GpuOcioContextResolver> resolver, const std::size_t maxConfigs,
-    const std::size_t maxOracles)
+GpuDisplayProgramService::GpuDisplayProgramService(std::shared_ptr<GpuOcioContextResolver> resolver,
+                                                   const std::size_t maxConfigs,
+                                                   const std::size_t maxOracles)
     : impl_(std::make_unique<Impl>(std::move(resolver), maxConfigs, maxOracles)) {}
 
 GpuDisplayProgramService::~GpuDisplayProgramService() = default;
 
-GpuDisplayProgramResult
-GpuDisplayProgramService::prepare(const GpuDisplayColorBinding& binding, const std::uint32_t width,
-                                  const std::uint32_t height, const ViewAdjust viewAdjust,
-                                  const GpuOcioCancellation& cancel) const {
+GpuDisplayProgramResult GpuDisplayProgramService::prepare(const GpuDisplayColorBinding& binding,
+                                                          const std::uint32_t width,
+                                                          const std::uint32_t height,
+                                                          const ViewAdjust viewAdjust,
+                                                          const GpuOcioCancellation& cancel) const {
     GpuDisplayProgramResult result;
     if (width == 0 || height == 0 || !viewAdjust.valid() || binding.locatorValue.empty() ||
         binding.expectedRevision == core::Sha256Digest{}) {
@@ -93,7 +93,8 @@ GpuDisplayProgramService::prepare(const GpuDisplayColorBinding& binding, const s
     }
 
     // Resolve the one shared context (idempotent after the first success). Its single preparer is
-    // reused for every config and its compile options carry the validated executable-relative tools.
+    // reused for every config and its compile options carry the validated executable-relative
+    // tools.
     const auto contextResult = impl_->resolver->resolve(cancel);
     if (!contextResult.hasValue()) {
         if (contextResult.error == GpuOcioContextError::Cancelled) {
@@ -150,7 +151,8 @@ GpuDisplayProgramService::prepare(const GpuDisplayColorBinding& binding, const s
                 result.diagnostic = "the resolved config does not match the requested binding";
                 return result;
             }
-            config = std::make_shared<const color::ResolvedBloomNeutralConfig>(std::move(*resolved));
+            config =
+                std::make_shared<const color::ResolvedBloomNeutralConfig>(std::move(*resolved));
             if (impl_->configs.size() >= impl_->maxConfigs) {
                 const auto victim = std::min_element(
                     impl_->configs.begin(), impl_->configs.end(),
@@ -166,7 +168,8 @@ GpuDisplayProgramService::prepare(const GpuDisplayColorBinding& binding, const s
         const std::string resolvedView =
             binding.view.empty() ? std::string(config->viewName()) : binding.view;
         for (auto& entry : impl_->oracles) {
-            if (entry.key == key && entry.display == resolvedDisplay && entry.view == resolvedView) {
+            if (entry.key == key && entry.display == resolvedDisplay &&
+                entry.view == resolvedView) {
                 entry.serial = ++impl_->serial;
                 oracle = entry.oracle;
                 break;
@@ -204,9 +207,8 @@ GpuDisplayProgramService::prepare(const GpuDisplayColorBinding& binding, const s
     spec.workingSpaceId = std::string(config->processColorSpaceId());
     spec.viewAdjust = viewAdjust;
 
-    const auto prepared =
-        context.preparer->prepare(*config, spec, GpuOcioCommandGeometry{width, height},
-                                  context.compileOptions, cancel);
+    const auto prepared = context.preparer->prepare(
+        *config, spec, GpuOcioCommandGeometry{width, height}, context.compileOptions, cancel);
     if (!prepared.hasValue()) {
         result.error = prepared.error == GpuOcioPreparationError::CompileCancelled
                            ? GpuDisplayProgramError::Cancelled

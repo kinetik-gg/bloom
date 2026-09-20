@@ -95,7 +95,8 @@ void GpuExportProvider::prepare(runtime::TaskScheduler& scheduler) {
                 // to both the evaluator it creates and its own output-display preparation. A typed
                 // refusal (missing/invalid tools, cancellation) leaves the context null and the
                 // caller on the unchanged CPU reference path; nothing is poisoned for a retry.
-                if (state->options.ocioContext == nullptr && state->options.ocioResolver != nullptr) {
+                if (state->options.ocioContext == nullptr &&
+                    state->options.ocioResolver != nullptr) {
                     const auto resolved = state->options.ocioResolver->resolve(
                         [&context] { return context.isCancellationRequested(); });
                     if (resolved.hasValue()) {

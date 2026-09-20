@@ -87,10 +87,9 @@ class Expectations final {
     return false;
 }
 
-[[nodiscard]] inline std::shared_ptr<const GpuImage> uploadImage(GpuImageUpload& uploader,
-                                                          const std::uint32_t width,
-                                                          const std::uint32_t height,
-                                                          const std::vector<Rgba32f>& pixels) {
+[[nodiscard]] inline std::shared_ptr<const GpuImage>
+uploadImage(GpuImageUpload& uploader, const std::uint32_t width, const std::uint32_t height,
+            const std::vector<Rgba32f>& pixels) {
     const auto windowResult = bloom::render::ImageWindow::create(0, 0, width, height);
     if (!windowResult) {
         return nullptr;
@@ -153,7 +152,8 @@ uint bloom_ocio_quantize(float value)
 )";
 }
 
-[[nodiscard]] inline std::string buildWrapperGlsl(const OcioGpuProgramDesc& desc, const bool display) {
+[[nodiscard]] inline std::string buildWrapperGlsl(const OcioGpuProgramDesc& desc,
+                                                  const bool display) {
     std::ostringstream out;
     out << "#version 460\n";
     out << "layout(local_size_x = 64) in;\n";
@@ -196,7 +196,8 @@ uint bloom_ocio_quantize(float value)
     return out.str();
 }
 
-[[nodiscard]] inline std::optional<std::vector<std::uint32_t>> compileGlsl(const std::string& glsl) {
+[[nodiscard]] inline std::optional<std::vector<std::uint32_t>>
+compileGlsl(const std::string& glsl) {
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
     const std::filesystem::path tools{BLOOM_GPUSHADER_TOOLS_DIR};
     const std::filesystem::path glslang = tools / "glslangValidator";
@@ -268,13 +269,13 @@ makeProgram(GpuDevice& device, OcioGpuProgramDesc desc,
 }
 
 [[nodiscard]] inline std::shared_ptr<GpuOcioProgram> makeProgram(GpuDevice& device,
-                                                          OcioGpuProgramDesc desc) {
+                                                                 OcioGpuProgramDesc desc) {
     return makeProgram(device, std::move(desc), {});
 }
 
 // Bounded, non-busy completion wait. Never loops without a finite attempt ceiling.
 [[nodiscard]] inline bool pollOcio(Expectations& expectations, GpuOcioProgram& program,
-                            const std::string_view label) {
+                                   const std::string_view label) {
     constexpr int kMaxAttempts = 20000;
     for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
         const auto result = program.poll();
@@ -306,7 +307,7 @@ makeProgram(GpuDevice& device, OcioGpuProgramDesc desc,
 }
 
 [[nodiscard]] inline std::vector<Rgba32f> fixturePixels(const std::uint32_t width,
-                                                 const std::uint32_t height) {
+                                                        const std::uint32_t height) {
     std::vector<Rgba32f> pixels(static_cast<std::size_t>(width) * height, Rgba32f::transparent());
     for (std::uint32_t y = 0; y < height; ++y) {
         for (std::uint32_t x = 0; x < width; ++x) {
@@ -324,7 +325,7 @@ makeProgram(GpuDevice& device, OcioGpuProgramDesc desc,
 }
 
 [[nodiscard]] inline OCIO::ConstCPUProcessorRcPtr exposureContrastCpu(const double exposure,
-                                                               const double contrast) {
+                                                                      const double contrast) {
     auto config = OCIO::Config::CreateFromBuiltinConfig("cg-config-v1.0.0_aces-v1.3_ocio-v2.1");
     auto transform = OCIO::ExposureContrastTransform::Create();
     transform->setStyle(OCIO::EXPOSURE_CONTRAST_LINEAR);

@@ -113,8 +113,8 @@ void bufferBarrier(const Dispatcher& dispatcher, VkCommandBuffer commandBuffer, 
     barrier.buffer = buffer;
     barrier.offset = 0;
     barrier.size = VK_WHOLE_SIZE;
-    dispatcher.vkCmdPipelineBarrier(commandBuffer, srcStage, dstStage, 0, 0, nullptr, 1, &barrier, 0,
-                                    nullptr);
+    dispatcher.vkCmdPipelineBarrier(commandBuffer, srcStage, dstStage, 0, 0, nullptr, 1, &barrier,
+                                    0, nullptr);
 }
 
 [[nodiscard]] std::uint64_t checkedDivide(const std::uint64_t numerator,
@@ -124,24 +124,25 @@ void bufferBarrier(const Dispatcher& dispatcher, VkCommandBuffer commandBuffer, 
 
 } // namespace
 
-
 GpuPathCoverageCreateResult GpuPathCoverage::create(GpuDevice& device,
                                                     const GpuPathCoverageBudgets& budgets) {
     if (device.state() != GpuDeviceState::Ready) {
-        return {nullptr, {GpuPathCoverageDiagnosticCode::DeviceUnavailable,
-                          "the GPU device is not Ready"}};
+        return {nullptr,
+                {GpuPathCoverageDiagnosticCode::DeviceUnavailable, "the GPU device is not Ready"}};
     }
     if (GpuRendererAccess::owner(device) != std::this_thread::get_id()) {
-        return {nullptr, {GpuPathCoverageDiagnosticCode::WrongThread,
-                          "the GpuPathCoverage pipeline must be created on the device "
-                          "owner thread"}};
+        return {nullptr,
+                {GpuPathCoverageDiagnosticCode::WrongThread,
+                 "the GpuPathCoverage pipeline must be created on the device "
+                 "owner thread"}};
     }
     // Retire orphaned foreign-released residents on the owner thread so admission recovers.
     path_coverage_detail::drainPathCoverageResidentOrphansOnOwnerThread();
     auto control = GpuRendererAccess::state(device);
     if (control == nullptr) {
-        return {nullptr, {GpuPathCoverageDiagnosticCode::DeviceUnavailable,
-                          "the GPU device exposes no renderer state"}};
+        return {nullptr,
+                {GpuPathCoverageDiagnosticCode::DeviceUnavailable,
+                 "the GPU device exposes no renderer state"}};
     }
     // Lazy creation: an idle producer allocates no native resources and holds no resident slot.
     auto impl = std::make_unique<GpuPathCoverageImpl>();
@@ -259,18 +260,17 @@ GpuPathCoverageDiagnostic GpuPathCoverage::begin(const GpuPathCoverageParameters
         return {GpuPathCoverageDiagnosticCode::DeviceLost,
                 "the device generation changed; this pipeline must not be reused"};
     }
-    // Flattened 2D grid plan: a capacity-valid large geometry is split across Y rather than refused.
+    // Flattened 2D grid plan: a capacity-valid large geometry is split across Y rather than
+    // refused.
     const std::uint64_t totalGroups = checkedDivide(wordCount, kWorkgroupSizeX);
-    const std::uint32_t maxX = path_coverage_detail::pathCoverageMaxWorkGroupCountXOverride().load() !=
-                                       0
-                                   ? path_coverage_detail::pathCoverageMaxWorkGroupCountXOverride()
-                                         .load()
-                                   : impl.control->maxComputeWorkGroupCountX;
-    const std::uint32_t maxY = path_coverage_detail::pathCoverageMaxWorkGroupCountYOverride().load() !=
-                                       0
-                                   ? path_coverage_detail::pathCoverageMaxWorkGroupCountYOverride()
-                                         .load()
-                                   : impl.maxWorkGroupCountY;
+    const std::uint32_t maxX =
+        path_coverage_detail::pathCoverageMaxWorkGroupCountXOverride().load() != 0
+            ? path_coverage_detail::pathCoverageMaxWorkGroupCountXOverride().load()
+            : impl.control->maxComputeWorkGroupCountX;
+    const std::uint32_t maxY =
+        path_coverage_detail::pathCoverageMaxWorkGroupCountYOverride().load() != 0
+            ? path_coverage_detail::pathCoverageMaxWorkGroupCountYOverride().load()
+            : impl.maxWorkGroupCountY;
     if (maxX == 0 || maxY == 0) {
         return {GpuPathCoverageDiagnosticCode::Unsupported,
                 "the device reports no usable compute workgroup grid limit"};
@@ -374,16 +374,16 @@ GpuPathCoverageDiagnostic GpuPathCoverage::begin(const GpuPathCoverageParameters
                        "a coverage geometry buffer could not be flushed");
     }
 
-    const std::uint64_t actualRanges =
-        actualAllocationBytes(*impl.control, impl.ranges.allocation);
+    const std::uint64_t actualRanges = actualAllocationBytes(*impl.control, impl.ranges.allocation);
     const std::uint64_t actualSpans = actualAllocationBytes(*impl.control, impl.spans.allocation);
     const std::uint64_t actualMask = actualAllocationBytes(*impl.control, impl.mask->allocation);
     const std::uint64_t actualGeometry = actualRanges + actualSpans;
     const std::uint64_t actualRetained = actualGeometry + actualMask;
     if (actualGeometry > geometryAllowance || actualMask > coverageAllowance ||
         actualRetained < actualMask || actualRetained > byteBudget) {
-        return failJob(GpuPathCoverageDiagnosticCode::OverBudget,
-                       "actual VMA allocation sizes exceed the configured or requested byte budget");
+        return failJob(
+            GpuPathCoverageDiagnosticCode::OverBudget,
+            "actual VMA allocation sizes exceed the configured or requested byte budget");
     }
     impl.lastJobBytes = actualRetained;
 
@@ -395,7 +395,8 @@ GpuPathCoverageDiagnostic GpuPathCoverage::begin(const GpuPathCoverageParameters
         poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
         poolInfo.queueFamilyIndex = impl.control->computeQueueFamily;
         VkCommandPool rawPool = VK_NULL_HANDLE;
-        if (dispatcher->vkCreateCommandPool(rawDevice, &poolInfo, nullptr, &rawPool) != VK_SUCCESS) {
+        if (dispatcher->vkCreateCommandPool(rawDevice, &poolInfo, nullptr, &rawPool) !=
+            VK_SUCCESS) {
             return failJob(GpuPathCoverageDiagnosticCode::AllocationFailed,
                            "the coverage command pool could not be created");
         }
@@ -524,6 +525,5 @@ GpuPathCoverageDiagnostic GpuPathCoverage::begin(const GpuPathCoverageParameters
     impl.jobDiagnostic = {};
     return {};
 }
-
 
 } // namespace bloom::render

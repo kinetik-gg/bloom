@@ -1,12 +1,12 @@
 #pragma once
 
 // Shared OCIO context for the bounded GPU coverage fixtures. The exact production
-// runtime::GpuOcioContextResolver is built from the packaged executable-relative shader tools staged
-// beside THIS gate executable (bloom_package_gpu_shader_tools), never from PATH, an environment
-// variable, or a guessed path. resolve() runs once and the immutable context (its single preparer and
-// validated tool paths) is shared by every effect/working-space fixture. Without qualified tools the
-// context is empty and a non-identity transform fails closed exactly as production does, so the gate
-// can never fake a prepared colour transform.
+// runtime::GpuOcioContextResolver is built from the packaged executable-relative shader tools
+// staged beside THIS gate executable (bloom_package_gpu_shader_tools), never from PATH, an
+// environment variable, or a guessed path. resolve() runs once and the immutable context (its
+// single preparer and validated tool paths) is shared by every effect/working-space fixture.
+// Without qualified tools the context is empty and a non-identity transform fails closed exactly as
+// production does, so the gate can never fake a prepared colour transform.
 
 #include <bloom/color/gpu_shader_tool_resolver.hpp>
 #include <bloom/core/sha256.hpp>
@@ -28,16 +28,14 @@ namespace bloom::gpu_coverage_ocio {
 #endif
 }
 
-// The one immutable context resolved from the real packaged tools. A function-local static keeps the
-// single resolve and the shared preparer alive for the whole gate run.
-[[nodiscard]] inline std::shared_ptr<const bloom::runtime::GpuSceneOcioContext>
-sharedContext() {
+// The one immutable context resolved from the real packaged tools. A function-local static keeps
+// the single resolve and the shared preparer alive for the whole gate run.
+[[nodiscard]] inline std::shared_ptr<const bloom::runtime::GpuSceneOcioContext> sharedContext() {
 #if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
     static const std::shared_ptr<const bloom::runtime::GpuSceneOcioContext> context = [] {
         namespace color = bloom::color;
         bloom::runtime::GpuOcioContextRequest request;
-        request.applicationExecutable =
-            std::filesystem::path{BLOOM_GPU_COVERAGE_TEST_EXECUTABLE};
+        request.applicationExecutable = std::filesystem::path{BLOOM_GPU_COVERAGE_TEST_EXECUTABLE};
         request.toolPackage.toolsDirectory = BLOOM_GPU_TOOLS_DIR;
         request.toolPackage.inventoryName = BLOOM_GPU_TOOLS_INVENTORY_NAME;
         request.toolPackage.glslangValidatorName = BLOOM_GPU_TOOLS_GLSLANG_NAME;

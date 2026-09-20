@@ -206,7 +206,8 @@ constexpr std::array<AdjustCase, 6> kAdjustCases{{
 // Runs one strict display dispatch through the arm and verifies the resident RGBA8 output against
 // the independent CPU OCIO display oracle. Returns the RGB mismatch count, or nullopt on a native
 // failure. `expectColdDispatch` and `expectWarmDispatch` assert the actual native dispatch delta.
-void testDisplayPair(Expectations& expectations, GpuDevice& device, GpuOcioProgramPreparer& preparer,
+void testDisplayPair(Expectations& expectations, GpuDevice& device,
+                     GpuOcioProgramPreparer& preparer,
                      const bloom::color::ResolvedBloomNeutralConfig& config,
                      const std::string& display, const std::string& view,
                      const std::string_view label, const bool adjustMatrix) {
@@ -216,16 +217,14 @@ void testDisplayPair(Expectations& expectations, GpuDevice& device, GpuOcioProgr
     spec.view = view;
     constexpr GpuOcioCommandGeometry geometry{5, 2};
     const auto prepared = preparer.prepare(config, spec, geometry, compileOptions());
-    expectations.expect(prepared.hasValue(),
-                        std::string(label) + ": the display command prepares");
+    expectations.expect(prepared.hasValue(), std::string(label) + ": the display command prepares");
     if (!prepared) {
         return;
     }
     expectations.expect(prepared.command->encoding() == GpuOcioOutputEncoding::DisplayRgba8,
                         std::string(label) + ": the display command is DisplayRgba8");
 
-    const auto cpuHandle =
-        bloom::color::buildCpuDisplayProcessorForView(config, display, view);
+    const auto cpuHandle = bloom::color::buildCpuDisplayProcessorForView(config, display, view);
     expectations.expect(cpuHandle.handle() != nullptr,
                         std::string(label) + ": the CPU display oracle prepares");
     if (cpuHandle.handle() == nullptr) {
@@ -315,8 +314,7 @@ void testDisplayPair(Expectations& expectations, GpuDevice& device, GpuOcioProgr
     }
     expectations.expect(rgbMismatches == 0,
                         std::string(label) + ": every display pixel is within one RGBA8 code");
-    expectations.expect(alphaMismatches == 0,
-                        std::string(label) + ": display alpha is byte-exact");
+    expectations.expect(alphaMismatches == 0, std::string(label) + ": display alpha is byte-exact");
 
     // Warm frame: same command/input, zero dispatch, zero creation.
     const auto warm = armResult.arm->begin(request);
@@ -354,8 +352,8 @@ void testDisplayPair(Expectations& expectations, GpuDevice& device, GpuOcioProgr
             adjustSpec.display = display;
             adjustSpec.view = view;
             adjustSpec.viewAdjust = adjustCase.adjust;
-            const auto adjustedCommand = preparer.prepare(config, adjustSpec, geometry,
-                                                          compileOptions());
+            const auto adjustedCommand =
+                preparer.prepare(config, adjustSpec, geometry, compileOptions());
             expectations.expect(adjustedCommand.hasValue(),
                                 std::string(label) + ": the adjusted display command prepares (" +
                                     adjustCase.name + ")");
@@ -363,7 +361,8 @@ void testDisplayPair(Expectations& expectations, GpuDevice& device, GpuOcioProgr
                 continue;
             }
             expectations.expect(adjustedCommand.command->viewAdjust() == adjustCase.adjust,
-                                std::string(label) + ": the command carries the exact adjustment (" +
+                                std::string(label) +
+                                    ": the command carries the exact adjustment (" +
                                     adjustCase.name + ")");
             identities.push_back(adjustedCommand.command->identity());
 
@@ -428,8 +427,9 @@ void testDisplayPair(Expectations& expectations, GpuDevice& device, GpuOcioProgr
                 }
             }
             expectations.expect(adjustedMismatches == 0,
-                                std::string(label) + ": every adjusted pixel matches the exact CPU "
-                                                     "semantics (" +
+                                std::string(label) +
+                                    ": every adjusted pixel matches the exact CPU "
+                                    "semantics (" +
                                     adjustCase.name + ")");
         }
         expectations.expect(identities.size() == kAdjustCases.size(),
@@ -451,8 +451,7 @@ void testDisplayPair(Expectations& expectations, GpuDevice& device, GpuOcioProgr
     // Genuine runtime qualification of the actual program/descriptor.
     const auto report = qualifyGpuOcioDisplay(prepared.command, *cpuHandle.handle(), device,
                                               GpuOcioDisplayQualificationBudgets{kBudget, kBudget});
-    expectations.expect(report.outcome() == GpuOcioDisplayOutcome::PreviewOnly &&
-                            report.eligible(),
+    expectations.expect(report.outcome() == GpuOcioDisplayOutcome::PreviewOnly && report.eligible(),
                         std::string(label) + ": the program qualifies on real parity");
     expectations.expect(report.eligibleFor(device, *prepared.command),
                         std::string(label) + ": the report names this device and command");
@@ -544,10 +543,9 @@ int main(int argc, char** argv) {
         std::cout << "SKIP: the Bloom Neutral built-in is unavailable\n";
         return kSkipExit;
     }
-    auto resolution =
-        bloom::color::resolveOcioBuiltIn(bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
-                                         bloom::color::kBloomNeutralV1ConfigUri, *revision,
-                                         std::string{});
+    auto resolution = bloom::color::resolveOcioBuiltIn(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kBloomNeutralV1ConfigUri,
+        *revision, std::string{});
     auto neutral = std::move(resolution).takeResolved();
     if (!neutral.has_value()) {
         std::cerr << "FAILED: the Bloom Neutral built-in does not resolve\n";
@@ -569,10 +567,10 @@ int main(int argc, char** argv) {
     // the SAME general display arm (with no pixel-interval/4K gate). The >4K case below proves the
     // retired ceiling specifically.
     testDisplayPair(expectations, *device.device, preparer, *neutral,
-                    std::string(neutral->displayName()), std::string(neutral->viewName()), "default",
-                    false);
-    // The baseline root: two real ACES 1.3 CG display/view pairs, each across the full six-adjustment
-    // matrix, against the unchanged CPU oracle.
+                    std::string(neutral->displayName()), std::string(neutral->viewName()),
+                    "default", false);
+    // The baseline root: two real ACES 1.3 CG display/view pairs, each across the full
+    // six-adjustment matrix, against the unchanged CPU oracle.
     const auto acesRevision = bloom::color::ocioBuiltInContentRevision(
         bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
     std::size_t ranAcesViews = 0;

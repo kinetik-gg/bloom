@@ -56,7 +56,9 @@ struct GpuPathCoverageHostBuffer final {
     GpuPathCoverageHostBuffer() = default;
     GpuPathCoverageHostBuffer(const GpuPathCoverageHostBuffer&) = delete;
     GpuPathCoverageHostBuffer& operator=(const GpuPathCoverageHostBuffer&) = delete;
-    GpuPathCoverageHostBuffer(GpuPathCoverageHostBuffer&& other) noexcept { *this = std::move(other); }
+    GpuPathCoverageHostBuffer(GpuPathCoverageHostBuffer&& other) noexcept {
+        *this = std::move(other);
+    }
     GpuPathCoverageHostBuffer& operator=(GpuPathCoverageHostBuffer&& other) noexcept {
         if (this != &other) {
             release();
@@ -98,8 +100,8 @@ struct GpuPathCoverageHostBuffer final {
 // proven retirement returns it to Free; an unproven retirement moves the exact submission
 // (geometry, mask, command pool/buffer, fence, device generation) into the retained quarantine, so
 // only the genuine owner thread can later prove retirement or observe device loss. Admission is
-// refused while the slot is occupied, so at most one in-flight submission exists and a foreign-thread
-// destruction can retain at most that one Impl rather than leaking per object.
+// refused while the slot is occupied, so at most one in-flight submission exists and a
+// foreign-thread destruction can retain at most that one Impl rather than leaking per object.
 namespace path_coverage_detail {
 
 enum class ReservationState : std::uint8_t { Free, Reserved, Quarantined };
@@ -148,8 +150,7 @@ inline void freeQuarantinedLocked(Reservation& slot) noexcept {
 }
 
 inline bool isReservationOwnerLocked(const Reservation& slot) noexcept {
-    return slot.state != ReservationState::Free &&
-           slot.ownerThread == std::this_thread::get_id();
+    return slot.state != ReservationState::Free && slot.ownerThread == std::this_thread::get_id();
 }
 
 // Owner-only, non-blocking.

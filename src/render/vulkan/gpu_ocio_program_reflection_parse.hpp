@@ -198,9 +198,8 @@ struct Module final {
             if (wordCount != 9 && wordCount != 10) {
                 return false;
             }
-            module.images[operand(1)] =
-                ImageType{operand(2), operand(3), operand(4), operand(5),
-                          operand(6), operand(7), operand(8)};
+            module.images[operand(1)] = ImageType{operand(2), operand(3), operand(4), operand(5),
+                                                  operand(6), operand(7), operand(8)};
             break;
         case kOpTypeSampledImage:
             if (wordCount != 3) {
@@ -378,8 +377,8 @@ struct Module final {
 }
 
 [[nodiscard]] inline bool isStorage(const std::uint32_t storageClass) noexcept {
-    return storageClass == kStorageClassUniformConstant ||
-           storageClass == kStorageClassUniform || storageClass == kStorageClassStorageBuffer;
+    return storageClass == kStorageClassUniformConstant || storageClass == kStorageClassUniform ||
+           storageClass == kStorageClassStorageBuffer;
 }
 
 // A runtime-array<uint> storage buffer with exact std140 I/O layout: one member at offset 0 whose
@@ -463,8 +462,7 @@ struct Module final {
     if (count == 0) {
         return false;
     }
-    if (count == 1 &&
-        (floatElement ? isFloat32(module, typeId) : isInt32(module, typeId, 1))) {
+    if (count == 1 && (floatElement ? isFloat32(module, typeId) : isInt32(module, typeId, 1))) {
         bytes = 4;
         return true;
     }
@@ -477,8 +475,7 @@ struct Module final {
         return false;
     }
     const auto lengthType = module.constantTypes.find(array->second.length);
-    if (lengthType == module.constantTypes.end() ||
-        !isInt32(module, lengthType->second, 0)) {
+    if (lengthType == module.constantTypes.end() || !isInt32(module, lengthType->second, 0)) {
         return false;
     }
     if (floatElement ? !isFloat32(module, array->second.element)

@@ -300,8 +300,8 @@ ImageResult<PathRaster> PathRaster::transformed(std::span<const Path> paths, Pat
 }
 ImageResult<PathRasterCoverageGeometry>
 PathRaster::coverageGeometry(const std::int64_t x, const std::int64_t y, const std::uint32_t width,
-                             const std::uint32_t height, const PathFillRule rule,
-                             const bool stroke, const PathCancellation& cancelled) const {
+                             const std::uint32_t height, const PathFillRule rule, const bool stroke,
+                             const PathCancellation& cancelled) const {
     const auto failure = [] {
         return ImageResult<PathRasterCoverageGeometry>::failure(
             ImageError::codeOnly(ImageErrorCode::InvalidParameter));
@@ -321,10 +321,9 @@ PathRaster::coverageGeometry(const std::int64_t x, const std::int64_t y, const s
         for (std::uint32_t sy = 0; sy < 4; ++sy) {
             if (stopped(cancelled))
                 return failure();
-            const double sampleY =
-                (static_cast<double>(y) + static_cast<double>(row) +
-                 (static_cast<double>(sy) + 0.5) / 4) /
-                scaleY_;
+            const double sampleY = (static_cast<double>(y) + static_cast<double>(row) +
+                                    (static_cast<double>(sy) + 0.5) / 4) /
+                                   scaleY_;
             fill.clear();
             outline.clear();
             clip.clear();
@@ -392,9 +391,9 @@ PathRaster::coverageGeometry(const std::int64_t x, const std::int64_t y, const s
             }
             if (cursor < sampleCount && !emit(cursor, sampleCount - 1, fw, sw, cw))
                 return failure();
-            geometry.rows[rangeIndex] = {static_cast<std::uint32_t>(beginOffset),
-                                         static_cast<std::uint32_t>(geometry.spans.size() -
-                                                                    beginOffset)};
+            geometry.rows[rangeIndex] = {
+                static_cast<std::uint32_t>(beginOffset),
+                static_cast<std::uint32_t>(geometry.spans.size() - beginOffset)};
         }
     }
     return ImageResult<PathRasterCoverageGeometry>::success(std::move(geometry));

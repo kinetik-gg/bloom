@@ -48,7 +48,8 @@ struct PathBounds {
 struct PathRasterCoverageRange {
     std::uint32_t offset = 0;
     std::uint32_t count = 0;
-    friend bool operator==(const PathRasterCoverageRange&, const PathRasterCoverageRange&) = default;
+    friend bool operator==(const PathRasterCoverageRange&,
+                           const PathRasterCoverageRange&) = default;
 };
 struct PathRasterCoverageSpan {
     std::uint32_t first = 0; // inclusive sample index within the row
@@ -88,8 +89,7 @@ class PathRaster final {
     // coverageRow but emits integer sample spans instead of a per-pixel mask.
     [[nodiscard]] ImageResult<PathRasterCoverageGeometry>
     coverageGeometry(std::int64_t x, std::int64_t y, std::uint32_t width, std::uint32_t height,
-                     PathFillRule rule, bool stroke,
-                     const PathCancellation& cancelled = {}) const;
+                     PathFillRule rule, bool stroke, const PathCancellation& cancelled = {}) const;
 
   private:
     std::vector<PathPoint> fill_;

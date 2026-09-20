@@ -39,20 +39,18 @@ void testShapeMatrix(Expectations& expectations, GpuPathCoverage& producer) {
                         rasterOf(PathRaster::transformed(std::array{rectanglePath(20.0, 12.0)}, {},
                                                          PathMatrix{1, 0, 0, 1, 0.3, 0.3}, 1, 1)),
                         w, PathFillRule::NonZero, false, "rect+translate coverage");
-    expectGeometryMatch(
-        expectations, producer,
-        rasterOf(PathRaster::create(rectanglePath(18.0, 12.0, 3.5), {}, 1, 1)), w,
-        PathFillRule::NonZero, false, "rounded rect coverage");
+    expectGeometryMatch(expectations, producer,
+                        rasterOf(PathRaster::create(rectanglePath(18.0, 12.0, 3.5), {}, 1, 1)), w,
+                        PathFillRule::NonZero, false, "rounded rect coverage");
     expectGeometryMatch(expectations, producer,
                         rasterOf(PathRaster::create(ellipsePath(20.0, 12.0), {}, 1, 1)), w,
                         PathFillRule::NonZero, false, "ellipse coverage");
     expectGeometryMatch(expectations, producer,
                         rasterOf(PathRaster::create(polygonPath(20.0, 12.0, 3), {}, 1, 1)), w,
                         PathFillRule::NonZero, false, "triangle coverage");
-    expectGeometryMatch(
-        expectations, producer,
-        rasterOf(PathRaster::create(polygonPath(20.0, 12.0, 5, 2.0), {}, 1, 1)), w,
-        PathFillRule::NonZero, false, "rounded polygon coverage");
+    expectGeometryMatch(expectations, producer,
+                        rasterOf(PathRaster::create(polygonPath(20.0, 12.0, 5, 2.0), {}, 1, 1)), w,
+                        PathFillRule::NonZero, false, "rounded polygon coverage");
     expectGeometryMatch(expectations, producer,
                         rasterOf(PathRaster::create(starPath(20.0, 12.0, 5, 0.5), {}, 1, 1)), w,
                         PathFillRule::NonZero, false, "star coverage");
@@ -82,12 +80,11 @@ void testShapeMatrix(Expectations& expectations, GpuPathCoverage& producer) {
         rasterOf(PathRaster::transformed(std::array{rectanglePath(8.0, 8.0)}, {},
                                          PathMatrix{1.7, 0.3, -0.2, 1.3, 0.25, 0.75}, 2.0, 1.5)),
         d, PathFillRule::NonZero, false, "nonuniform scale coverage");
-    expectGeometryMatch(
-        expectations, producer,
-        rasterOf(PathRaster::transformed(std::array{rectanglePath(20.0, 12.0)}, {},
-                                         PathMatrix{1, 0, 0, 1, 0.3, 0.3}, 1, 1, {},
-                                         PathBounds{4.0, 3.0, 16.0, 10.0})),
-        w, PathFillRule::NonZero, false, "clipped coverage");
+    expectGeometryMatch(expectations, producer,
+                        rasterOf(PathRaster::transformed(std::array{rectanglePath(20.0, 12.0)}, {},
+                                                         PathMatrix{1, 0, 0, 1, 0.3, 0.3}, 1, 1, {},
+                                                         PathBounds{4.0, 3.0, 16.0, 10.0})),
+                        w, PathFillRule::NonZero, false, "clipped coverage");
     expectGeometryMatch(expectations, producer,
                         rasterOf(PathRaster::create(rectanglePath(3.0, 3.0), {}, 1, 1)), s,
                         PathFillRule::NonZero, false, "edge-on-sample coverage");
@@ -102,7 +99,8 @@ void testShapeMatrix(Expectations& expectations, GpuPathCoverage& producer) {
                                          PathMatrix{1, 0, 0, 1, 0.875, 0.875}, 1, 1)),
         s, PathFillRule::NonZero, false, "edge-shift-0.875 coverage");
 
-    for (auto align : {PathStrokeAlign::Center, PathStrokeAlign::Inside, PathStrokeAlign::Outside}) {
+    for (auto align :
+         {PathStrokeAlign::Center, PathStrokeAlign::Inside, PathStrokeAlign::Outside}) {
         for (auto join : {PathStrokeJoin::Miter, PathStrokeJoin::Round, PathStrokeJoin::Bevel}) {
             const PathStroke stroke{2.0, align, join, PathStrokeCap::Butt};
             expectGeometryMatch(
@@ -117,12 +115,12 @@ void testShapeMatrix(Expectations& expectations, GpuPathCoverage& producer) {
         if (!capWindow) {
             break;
         }
-        expectGeometryMatch(
-            expectations, producer,
-            rasterOf(PathRaster::create(linePath({1, 1}, {4, 1}),
-                                        {1.0, PathStrokeAlign::Outside, PathStrokeJoin::Miter, cap},
-                                        1, 1)),
-            *capWindow.value(), PathFillRule::NonZero, true, "stroke line cap coverage");
+        expectGeometryMatch(expectations, producer,
+                            rasterOf(PathRaster::create(
+                                linePath({1, 1}, {4, 1}),
+                                {1.0, PathStrokeAlign::Outside, PathStrokeJoin::Miter, cap}, 1, 1)),
+                            *capWindow.value(), PathFillRule::NonZero, true,
+                            "stroke line cap coverage");
     }
 
     // Empty geometry: an anchorless path yields a zero mask.
@@ -180,10 +178,10 @@ void testGlyphs(Expectations& expectations, GpuPathCoverage& producer) {
     const auto bounds = raster.value()->bounds(true, false);
     const auto x0 = static_cast<std::int64_t>(std::floor(bounds.left)) - 1;
     const auto y0 = static_cast<std::int64_t>(std::floor(bounds.top)) - 1;
-    const auto width = static_cast<std::uint32_t>(
-                           std::ceil(bounds.right - static_cast<double>(x0))) + 2U;
-    const auto height = static_cast<std::uint32_t>(
-                            std::ceil(bounds.bottom - static_cast<double>(y0))) + 2U;
+    const auto width =
+        static_cast<std::uint32_t>(std::ceil(bounds.right - static_cast<double>(x0))) + 2U;
+    const auto height =
+        static_cast<std::uint32_t>(std::ceil(bounds.bottom - static_cast<double>(y0))) + 2U;
     const auto window = ImageWindow::create(x0, y0, width, height);
     expectations.expect(static_cast<bool>(window), "the glyph window builds");
     if (!window) {

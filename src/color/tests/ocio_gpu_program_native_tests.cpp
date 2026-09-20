@@ -267,9 +267,9 @@ void testGeometryAndBudgetLifecycle(Expectations& expectations, GpuDevice& devic
         const std::uint64_t jobBytes = (*program)->lastJobAllocationBytes();
         // The accessor must be nonzero and cover at least the RGBA8 output image bytes for the
         // current geometry (it also includes the packed buffer).
-        expectations.expect(
-            jobBytes > 0 && jobBytes >= static_cast<std::uint64_t>(width) * height * 4U,
-            "the display accessor reports the current packed and output bytes");
+        expectations.expect(jobBytes > 0 &&
+                                jobBytes >= static_cast<std::uint64_t>(width) * height * 4U,
+                            "the display accessor reports the current packed and output bytes");
         if (recordSmall) {
             smallJobBytes = jobBytes;
         }
@@ -293,10 +293,9 @@ void testGeometryAndBudgetLifecycle(Expectations& expectations, GpuDevice& devic
             if (p.alpha() != 0.0F) {
                 straight = {p.red() / p.alpha(), p.green() / p.alpha(), p.blue() / p.alpha()};
             }
-            const auto display = processor->referenceToDisplayLinear(
-                bloom::core::Color4d{static_cast<double>(straight[0]),
-                                     static_cast<double>(straight[1]),
-                                     static_cast<double>(straight[2]), 1.0});
+            const auto display = processor->referenceToDisplayLinear(bloom::core::Color4d{
+                static_cast<double>(straight[0]), static_cast<double>(straight[1]),
+                static_cast<double>(straight[2]), 1.0});
             if (!display.has_value()) {
                 ++mismatches;
                 continue;
@@ -358,12 +357,11 @@ void testGeometryAndBudgetLifecycle(Expectations& expectations, GpuDevice& devic
     constexpr std::uint32_t effectWidth = 4;
     constexpr std::uint32_t effectHeight = 3;
     const auto effectPixels = fixturePixels(effectWidth, effectHeight);
-    const auto effectInput =
-        uploadImage(*uploader.upload, effectWidth, effectHeight, effectPixels);
+    const auto effectInput = uploadImage(*uploader.upload, effectWidth, effectHeight, effectPixels);
     expectations.expect(effectInput != nullptr, "the effect lifecycle input uploads");
     if (effectInput != nullptr) {
-        const std::uint64_t outputBytes = static_cast<std::uint64_t>(effectWidth) * effectHeight *
-                                          sizeof(bloom::render::Rgba32f);
+        const std::uint64_t outputBytes =
+            static_cast<std::uint64_t>(effectWidth) * effectHeight * sizeof(bloom::render::Rgba32f);
         const auto refused = (*effectProgram)->beginEffect(effectInput, {}, outputBytes - 1U);
         expectations.expect(refused.code == GpuOcioProgramDiagnosticCode::OverBudget,
                             "an effect budget below the RGBA32F output is refused");

@@ -111,9 +111,9 @@ struct Options final {
 [[nodiscard]] inline bool runCoverage(GpuPathCoverage& producer, const ImageWindow& window,
                                       const PathFillRule rule, const bool stroke,
                                       const PathRaster& raster, std::vector<std::uint8_t>& out) {
-    const auto geometry = raster.coverageGeometry(window.originX(), window.originY(),
-                                                  window.extent().width(),
-                                                  window.extent().height(), rule, stroke);
+    const auto geometry =
+        raster.coverageGeometry(window.originX(), window.originY(), window.extent().width(),
+                                window.extent().height(), rule, stroke);
     if (!geometry) {
         return false;
     }

@@ -60,9 +60,10 @@ void GpuImageUpload::releaseImpl() noexcept {
         return;
     }
     if (!impl_->onOwnerThread()) {
-        // Foreign thread: never destroy native state. An Impl that owns a resident slot is preserved
-        // in that same slot (orphaned) for owner retirement; an Impl with no slot owns no Vulkan
-        // objects (the command resources are created lazily under a slot) and can be destroyed here.
+        // Foreign thread: never destroy native state. An Impl that owns a resident slot is
+        // preserved in that same slot (orphaned) for owner retirement; an Impl with no slot owns no
+        // Vulkan objects (the command resources are created lazily under a slot) and can be
+        // destroyed here.
         if (impl_->residentSlot != kUploadNoResidentSlot) {
             impl_->orphanResidentSlot();
             (void)impl_.release();
@@ -264,9 +265,10 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
     // Acquire the bounded resident slot BEFORE the first native allocation, and create the command
     // resources lazily under it. A full pool refuses cleanly without allocating anything.
     if (!impl.acquireResidentSlot()) {
-        return uploadDiagnostic(GpuImageUploadDiagnosticCode::DeviceUnavailable,
-                                "the bounded upload resident pool is full; no native resources were "
-                                "allocated");
+        return uploadDiagnostic(
+            GpuImageUploadDiagnosticCode::DeviceUnavailable,
+            "the bounded upload resident pool is full; no native resources were "
+            "allocated");
     }
     if (!impl.resourcesReady) {
         if (!impl.createResources()) {

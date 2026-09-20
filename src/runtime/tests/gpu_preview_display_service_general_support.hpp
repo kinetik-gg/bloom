@@ -252,7 +252,8 @@ makeNeutralProcessor(const bloom::color::ResolvedBloomNeutralConfig& config) {
     return [plan = std::move(plan), builder = std::move(builder),
             programService = std::move(programService), processor = std::move(processor)](
                const bloom::document::Snapshot&, const PreviewRequestIdentity& identity,
-               const std::size_t limit, const std::vector<bloom::runtime::SnapshotParameterOverride>&,
+               const std::size_t limit,
+               const std::vector<bloom::runtime::SnapshotParameterOverride>&,
                TaskContext& context) -> TaskResult<PreviewGpuSceneStageOutcomeHandle> {
         using R = TaskResult<PreviewGpuSceneStageOutcomeHandle>;
         if (context.isCancellationRequested()) {
@@ -267,7 +268,8 @@ makeNeutralProcessor(const bloom::color::ResolvedBloomNeutralConfig& config) {
         auto built = builder->build(plan, request, context.cancellation());
         if (!built.hasValue() || built.scene == nullptr) {
             return R::succeeded(std::make_shared<const PreviewGpuSceneStageOutcome>(
-                PreviewGpuSceneStageOutcome{PreviewGpuSceneStageStatus::UnsupportedGpuSubset, nullptr,
+                PreviewGpuSceneStageOutcome{PreviewGpuSceneStageStatus::UnsupportedGpuSubset,
+                                            nullptr,
                                             {failDiag("harness.scene-build-refused")}}));
         }
         const auto& descriptor = built.scene->outputDescriptor();
@@ -280,8 +282,8 @@ makeNeutralProcessor(const bloom::color::ResolvedBloomNeutralConfig& config) {
             bloom::runtime::GpuOcioCancellation cancel = [&context] {
                 return context.isCancellationRequested();
             };
-            auto prepared = programService->prepare(binding, width, height, identity.viewAdjust,
-                                                    cancel);
+            auto prepared =
+                programService->prepare(binding, width, height, identity.viewAdjust, cancel);
             if (prepared.error == bloom::runtime::GpuDisplayProgramError::Cancelled) {
                 return R::cancelled();
             }
@@ -290,11 +292,12 @@ makeNeutralProcessor(const bloom::color::ResolvedBloomNeutralConfig& config) {
                 program = std::make_shared<const GpuDisplayProgram>(std::move(prepared.program));
             }
         }
-        auto stage = std::make_shared<const PreviewGpuSceneStage>(
-            identity, built.scene, processor, std::move(program), limit,
-            std::vector<TaskDiagnostic>{});
-        return R::succeeded(std::make_shared<const PreviewGpuSceneStageOutcome>(
-            PreviewGpuSceneStageOutcome{PreviewGpuSceneStageStatus::Prepared, std::move(stage), {}}));
+        auto stage = std::make_shared<const PreviewGpuSceneStage>(identity, built.scene, processor,
+                                                                  std::move(program), limit,
+                                                                  std::vector<TaskDiagnostic>{});
+        return R::succeeded(
+            std::make_shared<const PreviewGpuSceneStageOutcome>(PreviewGpuSceneStageOutcome{
+                PreviewGpuSceneStageStatus::Prepared, std::move(stage), {}}));
     };
 }
 
@@ -333,8 +336,8 @@ makeNeutralProcessor(const bloom::color::ResolvedBloomNeutralConfig& config) {
     };
 }
 
-[[nodiscard]] PreviewCpuDisplayFallback generalFallback(
-    std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle> processor) {
+[[nodiscard]] PreviewCpuDisplayFallback
+generalFallback(std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle> processor) {
     return [processor = std::move(processor)](
                const PreviewCpuStage& stage,
                TaskContext& context) -> TaskResult<PreviewPreparationResultHandle> {
@@ -404,9 +407,10 @@ awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds tim
 }
 
 // True when the result carries a genuine resident frame on the requested generation.
-[[nodiscard]] bool isResidentPrepared(const std::optional<TaskResult<PreviewPreparationResultHandle>>& r,
-                                      const std::uint64_t generation,
-                                      std::shared_ptr<const bloom::runtime::PreparedPreviewFrame>& out) {
+[[nodiscard]] bool
+isResidentPrepared(const std::optional<TaskResult<PreviewPreparationResultHandle>>& r,
+                   const std::uint64_t generation,
+                   std::shared_ptr<const bloom::runtime::PreparedPreviewFrame>& out) {
     if (!r.has_value() || r->state() != TaskState::Succeeded || !r->value().has_value()) {
         return false;
     }
@@ -416,7 +420,8 @@ awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds tim
         result.frame()->desiredIdentity().requestGeneration != generation) {
         return false;
     }
-    if (result.frame()->provenance().provider != bloom::runtime::PreviewDisplayProvider::GpuResident) {
+    if (result.frame()->provenance().provider !=
+        bloom::runtime::PreviewDisplayProvider::GpuResident) {
         return false;
     }
     out = result.frame();

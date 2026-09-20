@@ -1,12 +1,12 @@
 #pragma once
 
 // Genuine native display proofs for the bounded GPU coverage gate. There is no display-only
-// exemption and no "claimed from a test name" evidence: a real OCIO display program is compiled with
-// the shared GpuSceneOcioContext, dispatched through the production GpuOcioProgramExecutor on the
-// owner thread, read back, and compared to the unchanged CPU display oracle (RGB within one RGBA8
-// code, alpha exact). `view_adjust` uses a non-neutral post-display exposure/gamma; the custom view
-// proof uses a non-default display/view pair extracted from the pinned ACES built-in. No CPU frame is
-// ever relabelled GPU.
+// exemption and no "claimed from a test name" evidence: a real OCIO display program is compiled
+// with the shared GpuSceneOcioContext, dispatched through the production GpuOcioProgramExecutor on
+// the owner thread, read back, and compared to the unchanged CPU display oracle (RGB within one
+// RGBA8 code, alpha exact). `view_adjust` uses a non-neutral post-display exposure/gamma; the
+// custom view proof uses a non-default display/view pair extracted from the pinned ACES built-in.
+// No CPU frame is ever relabelled GPU.
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
@@ -71,9 +71,9 @@ inline constexpr std::uint64_t kDisplayBudget = std::uint64_t{1} << 30;
         if (!revision.has_value()) {
             return std::optional<bloom::color::ResolvedBloomNeutralConfig>{};
         }
-        auto result = bloom::color::resolveOcioBuiltIn(
-            bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri,
-            *revision, "ACEScg");
+        auto result =
+            bloom::color::resolveOcioBuiltIn(bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
+                                             bloom::color::kAcesCgV1ConfigUri, *revision, "ACEScg");
         return std::move(result).takeResolved();
     }();
     return resolved.has_value() ? &*resolved : nullptr;
@@ -174,9 +174,9 @@ runDisplayProof(GpuDevice& device, const GpuSceneOcioContext& ocioContext, const
         return outcome;
     }
     const auto pair = pairs[std::min<std::size_t>(pairs.size() - 1, customView ? 1U : 0U)];
-    const ViewAdjust adjust =
-        customView ? ViewAdjust{} : ViewAdjust{.exposure = 1.0, .gamma = 0.8};
-    auto cpuResult = bloom::color::buildCpuDisplayProcessorForView(*config, pair.display, pair.view);
+    const ViewAdjust adjust = customView ? ViewAdjust{} : ViewAdjust{.exposure = 1.0, .gamma = 0.8};
+    auto cpuResult =
+        bloom::color::buildCpuDisplayProcessorForView(*config, pair.display, pair.view);
     const auto* const processor = cpuResult.handle();
     if (processor == nullptr) {
         outcome.evidence = "the CPU display oracle did not prepare";
@@ -203,9 +203,8 @@ runDisplayProof(GpuDevice& device, const GpuSceneOcioContext& ocioContext, const
     spec.display = pair.display;
     spec.view = pair.view;
     spec.viewAdjust = adjust;
-    const auto prepared = ocioContext.preparer->prepare(*config, spec,
-                                                        GpuOcioCommandGeometry{width, height},
-                                                        ocioContext.compileOptions);
+    const auto prepared = ocioContext.preparer->prepare(
+        *config, spec, GpuOcioCommandGeometry{width, height}, ocioContext.compileOptions);
     if (!prepared) {
         outcome.evidence = "the display program did not prepare: " +
                            std::string{bloom::runtime::gpuOcioPreparationErrorName(prepared.error)};

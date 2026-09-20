@@ -82,9 +82,9 @@ ocioShaderInterfaceErrorName(const OcioShaderInterfaceError error) noexcept {
 // the Bloom I/O contract. `expectedWorkgroupSizeX` is the workgroup size the dispatcher plans with.
 // Never throws; any allocation failure or malformed input is a typed refusal. Defined in
 // gpu_ocio_program_reflection_validate.hpp.
-[[nodiscard]] OcioShaderInterfaceCheck validateOcioShaderInterface(
-    const OcioGpuProgramDesc& program, std::span<const std::uint32_t> spirv,
-    std::uint32_t expectedWorkgroupSizeX) noexcept;
+[[nodiscard]] OcioShaderInterfaceCheck
+validateOcioShaderInterface(const OcioGpuProgramDesc& program, std::span<const std::uint32_t> spirv,
+                            std::uint32_t expectedWorkgroupSizeX) noexcept;
 
 } // namespace bloom::render::ocio_program_detail
 

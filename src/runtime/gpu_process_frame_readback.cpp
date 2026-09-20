@@ -11,8 +11,7 @@ using namespace std::chrono_literals;
 
 } // namespace
 
-GpuProcessFrameDiagnosticCode
-mapOutputColorCode(const GpuOutputColorDiagnosticCode code) noexcept {
+GpuProcessFrameDiagnosticCode mapOutputColorCode(const GpuOutputColorDiagnosticCode code) noexcept {
     switch (code) {
     case GpuOutputColorDiagnosticCode::None:
         return GpuProcessFrameDiagnosticCode::None;
@@ -57,7 +56,8 @@ FinalReadbackOutcome runFinalCombinedReadback(
         return outcome;
     }
 
-    const auto accepted = stage.begin(std::move(outputCommand), std::move(image), readbackByteBudget);
+    const auto accepted =
+        stage.begin(std::move(outputCommand), std::move(image), readbackByteBudget);
     if (accepted.code != GpuOutputColorDiagnosticCode::None) {
         const auto code = mapOutputColorCode(accepted.code);
         outcome.status = code == GpuProcessFrameDiagnosticCode::Cancelled
@@ -108,8 +108,8 @@ FinalReadbackOutcome runFinalCombinedReadback(
         return outcome;
     }
 
-    auto imageBuilder =
-        render::Rgba32fImageBuilder::create(descriptor, static_cast<std::size_t>(readbackByteBudget));
+    auto imageBuilder = render::Rgba32fImageBuilder::create(
+        descriptor, static_cast<std::size_t>(readbackByteBudget));
     if (!imageBuilder) {
         outcome.status = GpuProcessFrameStatus::Failed;
         outcome.diagnosticCode = GpuProcessFrameDiagnosticCode::BadAllocation;
@@ -141,8 +141,7 @@ FinalReadbackOutcome runFinalCombinedReadback(
         outcome.diagnosticMessage = "the process image could not be frozen";
         return outcome;
     }
-    outcome.processImage =
-        std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
+    outcome.processImage = std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
 
     outcome.status = GpuProcessFrameStatus::Evaluated;
     outcome.encodedArm = colorFrame->arm;

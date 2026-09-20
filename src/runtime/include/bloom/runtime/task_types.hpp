@@ -175,11 +175,11 @@ struct TaskSchedulerConfig {
     std::size_t gpuLiveContinuationCapacity = 64;
     std::size_t gpuQueuedCommandByteCapacity = std::size_t{256} * 1024U * 1024U;
     // AGGREGATE GPU request-owned byte reservation ceiling: the scheduler sums each admitted
-    // GpuTaskAdmission::requestOwnedBytes over pending/accepted GPU tasks and refuses when the total
-    // would exceed this. The DEFAULT (see defaults()) is host-budget-derived, not a fixed 1 GiB: a
-    // full-resolution 6000x4000 resident preview legitimately reserves a multi-GiB budget, and a
-    // fixed small ceiling would silently force every such request onto the CPU. An explicit small
-    // value is still honoured as an intentional refusal.
+    // GpuTaskAdmission::requestOwnedBytes over pending/accepted GPU tasks and refuses when the
+    // total would exceed this. The DEFAULT (see defaults()) is host-budget-derived, not a fixed 1
+    // GiB: a full-resolution 6000x4000 resident preview legitimately reserves a multi-GiB budget,
+    // and a fixed small ceiling would silently force every such request onto the CPU. An explicit
+    // small value is still honoured as an intentional refusal.
     std::size_t gpuRequestOwnedByteCapacity = std::size_t{1024} * 1024U * 1024U;
     std::size_t terminalHistoryCapacity = 256;
     std::size_t diagnosticsPerTask = 64;

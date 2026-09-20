@@ -23,10 +23,10 @@ namespace bloom::gpu_coverage_gate {
 
 // A native-only fixture runs its own genuine proof on the owner thread (for example a display
 // program dispatched through the production executor and compared to the CPU display oracle). It
-// returns true only when the real GPU path ran and matched; the evidence string is reported by name.
-using NativeProofRunner = std::function<bool(bloom::render::GpuDevice&,
-                                             const bloom::runtime::GpuSceneOcioContext&,
-                                             std::string& evidence)>;
+// returns true only when the real GPU path ran and matched; the evidence string is reported by
+// name.
+using NativeProofRunner = std::function<bool(
+    bloom::render::GpuDevice&, const bloom::runtime::GpuSceneOcioContext&, std::string& evidence)>;
 
 // One prepared frame of a fixture. A time-mapped fixture (video) carries more than one distinct
 // frame, and a real prepared scene is retained so the native acceptance pass can execute the same

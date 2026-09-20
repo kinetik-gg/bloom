@@ -94,8 +94,8 @@ class GpuSolid final {
 
     // Prepares the SolidV1 operation on the device owner thread. Creation is lazy: an idle instance
     // allocates no native resources, and the cached shader module, descriptor layout, pipeline
-    // layout, compute pipeline, command pool, and fence are built on the first begin under a bounded
-    // process-wide resident slot. Wrong thread returns WrongThread.
+    // layout, compute pipeline, command pool, and fence are built on the first begin under a
+    // bounded process-wide resident slot. Wrong thread returns WrongThread.
     [[nodiscard]] static GpuSolidCreateResult create(GpuDevice& device,
                                                      const GpuSolidBudgets& budgets = {});
 
@@ -135,8 +135,7 @@ class GpuSolid final {
     // a non-Ready or mismatched coverage.
     [[nodiscard]] GpuSolidDiagnostic beginCoveredResident(const GpuSolidParameters& base,
                                                           const GpuPathCoverage& coverage,
-                                                          float opacity,
-                                                          std::uint64_t byteBudget);
+                                                          float opacity, std::uint64_t byteBudget);
 
     // Non-blocking fence query. Pending/Ready/Failure; WrongThread from a foreign
     // thread.

@@ -32,11 +32,10 @@ void emit(std::vector<std::uint32_t>& words, const std::uint32_t opcode,
 [[nodiscard]] std::vector<std::uint32_t> buildDisplayModule(const bool entryNameTerminated) {
     std::vector<std::uint32_t> module{0x07230203u, 0x00010000u, 0u, 100u, 0u};
     // EntryPoint GLCompute %1 "main"; name is "main\0" or an unterminated "mainmain".
-    emit(module, kOpEntryPoint,
-         {5u, 1u, 0x6E69616Du, entryNameTerminated ? 0u : 0x6E69616Du});
+    emit(module, kOpEntryPoint, {5u, 1u, 0x6E69616Du, entryNameTerminated ? 0u : 0x6E69616Du});
     emit(module, kOpExecutionMode, {1u, 17u, 64u, 1u, 1u});
-    emit(module, kOpTypeInt, {10u, 32u, 0u});   // %10 uint
-    emit(module, kOpTypeFloat, {11u, 32u});     // %11 float
+    emit(module, kOpTypeInt, {10u, 32u, 0u});                       // %10 uint
+    emit(module, kOpTypeFloat, {11u, 32u});                         // %11 float
     emit(module, kOpTypeImage, {12u, 11u, 1u, 0u, 0u, 0u, 2u, 1u}); // input 2D storage rgba32f
     emit(module, kOpTypePointer, {13u, 0u, 12u});
     emit(module, kOpVariable, {13u, 20u, 0u});
@@ -51,7 +50,7 @@ void emit(std::vector<std::uint32_t>& words, const std::uint32_t opcode,
     emit(module, kOpTypeStruct, {23u, 10u, 10u, 10u});
     emit(module, kOpTypePointer, {24u, 9u, 23u});
     emit(module, kOpVariable, {24u, 25u, 9u});
-    emit(module, kOpTypeStruct, {26u, 11u});           // UBO { float }
+    emit(module, kOpTypeStruct, {26u, 11u}); // UBO { float }
     emit(module, kOpTypePointer, {27u, 2u, 26u});
     emit(module, kOpVariable, {27u, 28u, 2u});
     for (const auto decoration : {33u, 34u}) {
@@ -77,8 +76,7 @@ void emit(std::vector<std::uint32_t>& words, const std::uint32_t opcode,
 
 [[nodiscard]] bloom::render::OcioGpuProgramDesc displayDescriptor(
     const std::uint32_t uniformBufferSize = 8u, const std::uint32_t uniformOffset = 0u,
-    const bloom::render::OcioGpuUniformType uniformType =
-        bloom::render::OcioGpuUniformType::Double,
+    const bloom::render::OcioGpuUniformType uniformType = bloom::render::OcioGpuUniformType::Double,
     const std::uint32_t elementCount = 1u) {
     bloom::render::OcioGpuProgramDesc desc;
     desc.descriptorSetIndex = 0;
@@ -180,9 +178,9 @@ void testShaderInterfaceMalformed(Expectations& expectations) {
     }
     // UBO wrong member type, wrong offset, and extent beyond the bound bytes.
     expectations.expect(
-        validateOcioShaderInterface(spirv_test::displayDescriptor(
-                                        8u, 0u, bloom::render::OcioGpuUniformType::Float3, 3u),
-                                    base, kWorkgroup)
+        validateOcioShaderInterface(
+            spirv_test::displayDescriptor(8u, 0u, bloom::render::OcioGpuUniformType::Float3, 3u),
+            base, kWorkgroup)
                 .error == Error::DescriptorMismatch,
         "a UBO member whose kind does not match the descriptor is rejected");
     expectations.expect(
@@ -319,8 +317,9 @@ void testShaderInterfaceReflection(Expectations& expectations, GpuDevice& device
     expectations.expect(
         !validateOcioShaderInterface(*desc.program(), typeMutated, kWorkgroup).valid(),
         "a mutated image dimensionality is refused by reflection");
-    expectations.expect(refusedByCreate(typeMutated),
-                        "a mutated image type is refused ShaderRejected before the native pipeline");
+    expectations.expect(
+        refusedByCreate(typeMutated),
+        "a mutated image type is refused ShaderRejected before the native pipeline");
 
     auto sizeMutated = *validSpirv;
     expectations.expect(mutateLocalSizeX(sizeMutated), "a LocalSize execution mode is present");
@@ -371,6 +370,5 @@ void testShaderInterfaceReflection(Expectations& expectations, GpuDevice& device
     expectations.expect(program->takeDisplayOutput().isValid(),
                         "the valid display output publishes after the refusals");
 }
-
 
 } // namespace bloom::color::ocio_resources_test

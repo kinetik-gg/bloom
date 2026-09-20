@@ -26,9 +26,8 @@ bool GpuPathCoverageImpl::createPipeline() {
     if (dispatcher->vkCreateShaderModule(
             rawDevice, reinterpret_cast<const VkShaderModuleCreateInfo*>(&shaderInfo), nullptr,
             &rawShader) != VK_SUCCESS) {
-        createDiagnostic =
-            {GpuPathCoverageDiagnosticCode::ShaderRejected,
-             "the embedded GpuPathCoverage shader module was rejected"};
+        createDiagnostic = {GpuPathCoverageDiagnosticCode::ShaderRejected,
+                            "the embedded GpuPathCoverage shader module was rejected"};
         return false;
     }
     shaderModule = vk::raii::ShaderModule(control->device, rawShader);
@@ -47,9 +46,8 @@ bool GpuPathCoverageImpl::createPipeline() {
     if (dispatcher->vkCreateDescriptorSetLayout(
             rawDevice, reinterpret_cast<const VkDescriptorSetLayoutCreateInfo*>(&layoutInfo),
             nullptr, &rawLayout) != VK_SUCCESS) {
-        createDiagnostic =
-            {GpuPathCoverageDiagnosticCode::ShaderRejected,
-             "the GpuPathCoverage descriptor set layout was rejected"};
+        createDiagnostic = {GpuPathCoverageDiagnosticCode::ShaderRejected,
+                            "the GpuPathCoverage descriptor set layout was rejected"};
         return false;
     }
     descriptorSetLayout = vk::raii::DescriptorSetLayout(control->device, rawLayout);
@@ -68,9 +66,8 @@ bool GpuPathCoverageImpl::createPipeline() {
     if (dispatcher->vkCreatePipelineLayout(
             rawDevice, reinterpret_cast<const VkPipelineLayoutCreateInfo*>(&pipelineLayoutInfo),
             nullptr, &rawPipelineLayout) != VK_SUCCESS) {
-        createDiagnostic =
-            {GpuPathCoverageDiagnosticCode::ShaderRejected,
-             "the GpuPathCoverage pipeline layout was rejected"};
+        createDiagnostic = {GpuPathCoverageDiagnosticCode::ShaderRejected,
+                            "the GpuPathCoverage pipeline layout was rejected"};
         return false;
     }
     pipelineLayout = vk::raii::PipelineLayout(control->device, rawPipelineLayout);
@@ -85,9 +82,8 @@ bool GpuPathCoverageImpl::createPipeline() {
             rawDevice, VK_NULL_HANDLE, 1,
             reinterpret_cast<const VkComputePipelineCreateInfo*>(&pipelineInfo), nullptr,
             &rawPipeline) != VK_SUCCESS) {
-        createDiagnostic =
-            {GpuPathCoverageDiagnosticCode::ShaderRejected,
-             "the embedded GpuPathCoverage compute pipeline was rejected"};
+        createDiagnostic = {GpuPathCoverageDiagnosticCode::ShaderRejected,
+                            "the embedded GpuPathCoverage compute pipeline was rejected"};
         return false;
     }
     pipeline = vk::raii::Pipeline(control->device, rawPipeline);
@@ -123,6 +119,5 @@ bool GpuPathCoverageImpl::createPipeline() {
     descriptorSet = vk::raii::DescriptorSet(control->device, rawSet, *descriptorPool);
     return true;
 }
-
 
 } // namespace bloom::render

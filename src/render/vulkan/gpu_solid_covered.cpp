@@ -331,8 +331,8 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
     }
 
     // Acquire the bounded resident slot BEFORE the first native allocation, and create the shared
-    // base pipeline (command pool/buffer/fence) lazily under it. A full pool refuses cleanly without
-    // allocating anything.
+    // base pipeline (command pool/buffer/fence) lazily under it. A full pool refuses cleanly
+    // without allocating anything.
     if (!impl.acquireResidentSlot()) {
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
                                   "the bounded SolidV1 resident pool is full; no native resources "
@@ -431,8 +431,8 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
     }
     if (vmaFlushAllocation(impl.control->allocator, impl.coveredPalette.allocation, 0,
                            VK_WHOLE_SIZE) != VK_SUCCESS ||
-        (!usingResident && vmaFlushAllocation(impl.control->allocator, impl.coveredMask.allocation, 0,
-                                         VK_WHOLE_SIZE) != VK_SUCCESS)) {
+        (!usingResident && vmaFlushAllocation(impl.control->allocator, impl.coveredMask.allocation,
+                                              0, VK_WHOLE_SIZE) != VK_SUCCESS)) {
         impl.coveredPalette.release();
         impl.coveredMask.release();
         impl.releaseResident();
@@ -446,7 +446,7 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
         actualAllocationBytes(*impl.control, impl.coveredPalette.allocation);
     const std::uint64_t actualMask =
         usingResident ? residentMaskBytes
-                 : actualAllocationBytes(*impl.control, impl.coveredMask.allocation);
+                      : actualAllocationBytes(*impl.control, impl.coveredMask.allocation);
     const std::uint64_t actualRetained = actualImage + actualPalette + actualMask;
     if (actualImage > impl.budgets.maxImageBytes || actualRetained < actualImage ||
         actualRetained > byteBudget) {
@@ -535,8 +535,8 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
     const VkAccessFlags inputSourceAccess =
         VK_ACCESS_HOST_WRITE_BIT | (usingResident ? VK_ACCESS_SHADER_WRITE_BIT : 0U);
     const VkPipelineStageFlags inputSourceStage =
-        VK_PIPELINE_STAGE_HOST_BIT |
-        (usingResident ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : static_cast<VkPipelineStageFlags>(0U));
+        VK_PIPELINE_STAGE_HOST_BIT | (usingResident ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                                                    : static_cast<VkPipelineStageFlags>(0U));
     for (std::size_t index = 0; index < inputBarriers.size(); ++index) {
         inputBarriers[index].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
         inputBarriers[index].srcAccessMask = inputSourceAccess;
@@ -548,10 +548,9 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
     }
     inputBarriers[0].buffer = impl.coveredPalette.buffer;
     inputBarriers[1].buffer = impl.coveredMask.buffer;
-    dispatcher->vkCmdPipelineBarrier(rawCommandBuffer, inputSourceStage,
-                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
-                                     static_cast<std::uint32_t>(inputBarriers.size()),
-                                     inputBarriers.data(), 0, nullptr);
+    dispatcher->vkCmdPipelineBarrier(
+        rawCommandBuffer, inputSourceStage, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+        static_cast<std::uint32_t>(inputBarriers.size()), inputBarriers.data(), 0, nullptr);
 
     impl.commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *impl.covered.pipeline);
     impl.commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,

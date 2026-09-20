@@ -16,8 +16,9 @@
 //   * a missing-tools resolver yields no fabricated program (typed CPU fallback);
 //   * cancellation is typed.
 //
-// Without the pinned tools the test is a clean skip. Media leaves and CST effects are covered by the
-// runtime preparation/native suites (which exercise the same builder + shared resolver context).
+// Without the pinned tools the test is a clean skip. Media leaves and CST effects are covered by
+// the runtime preparation/native suites (which exercise the same builder + shared resolver
+// context).
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
@@ -198,7 +199,8 @@ parsePinnedDigest(const std::string_view text) {
     request.toolPackage.bundleRelative = true;
 #endif
 #ifdef BLOOM_GPU_TOOLS_GLSLANG_STAGED_SHA256
-    request.toolPackage.glslangStagedDigest = parsePinnedDigest(BLOOM_GPU_TOOLS_GLSLANG_STAGED_SHA256);
+    request.toolPackage.glslangStagedDigest =
+        parsePinnedDigest(BLOOM_GPU_TOOLS_GLSLANG_STAGED_SHA256);
 #endif
 #ifdef BLOOM_GPU_TOOLS_SPIRV_VAL_STAGED_SHA256
     request.toolPackage.spirvValStagedDigest =
@@ -207,8 +209,8 @@ parsePinnedDigest(const std::string_view text) {
     return std::make_shared<bloom::runtime::GpuOcioContextResolver>(std::move(request));
 }
 
-[[nodiscard]] bloom::document::ColorSettings acesColorSettings(
-    const bloom::document::ColorSettings& base) {
+[[nodiscard]] bloom::document::ColorSettings
+acesColorSettings(const bloom::document::ColorSettings& base) {
     const auto revision = bloom::color::ocioBuiltInContentRevision(
         bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
     if (!revision.has_value()) {
@@ -243,25 +245,23 @@ int runTests(int argc, char** argv) {
     expectations.expect(neutralSession.addSolidLayer(QStringLiteral("Solid"),
                                                      bloom::core::Color4d{0.2, 0.5, 0.7, 1.0}),
                         "neutral: solid layer added");
-    expectations.expect(neutralSession.addTextLayer(QStringLiteral("Title"),
-                                                    QStringLiteral("Bloom")),
-                        "neutral: text layer added");
+    expectations.expect(
+        neutralSession.addTextLayer(QStringLiteral("Title"), QStringLiteral("Bloom")),
+        "neutral: text layer added");
     fixture.provider.publish(bloom::runtime::buildBloomNeutralQualifiedDisplayProcessor());
     const auto neutralSnapshot = neutralSession.snapshot();
     const auto neutralIdentity =
         identityFor(neutralSnapshot, neutralComposition, neutralSession.colorIntent());
 
     auto resolver = packagedResolver();
-    const auto neutralOutcome = runStage(fixture, resolver, neutralIdentity, neutralSnapshot,
-                                         expectations, "neutral");
+    const auto neutralOutcome =
+        runStage(fixture, resolver, neutralIdentity, neutralSnapshot, expectations, "neutral");
     expectations.expect(neutralOutcome != nullptr &&
                             neutralOutcome->status == PreviewGpuSceneStageStatus::Prepared,
                         "neutral: solid+text prepares a GPU scene");
-    const bool neutralHasProgram =
-        neutralOutcome != nullptr && neutralOutcome->stage != nullptr &&
-        neutralOutcome->stage->hasGeneralDisplayProgram();
-    expectations.expect(neutralHasProgram,
-                        "neutral: the stage carries a general display program");
+    const bool neutralHasProgram = neutralOutcome != nullptr && neutralOutcome->stage != nullptr &&
+                                   neutralOutcome->stage->hasGeneralDisplayProgram();
+    expectations.expect(neutralHasProgram, "neutral: the stage carries a general display program");
     if (!neutralHasProgram) {
         if (neutralOutcome != nullptr && neutralOutcome->stage != nullptr) {
             for (const auto& diagnostic : neutralOutcome->stage->diagnostics()) {
@@ -292,8 +292,7 @@ int runTests(int argc, char** argv) {
     expectations.expect(acesSession.addSolidLayer(QStringLiteral("Solid"),
                                                   bloom::core::Color4d{0.2, 0.5, 0.7, 1.0}),
                         "aces: solid layer added");
-    expectations.expect(acesSession.addTextLayer(QStringLiteral("Title"),
-                                                 QStringLiteral("Bloom")),
+    expectations.expect(acesSession.addTextLayer(QStringLiteral("Title"), QStringLiteral("Bloom")),
                         "aces: text layer added");
     const auto acesSnapshot = acesSession.snapshot();
     const auto acesIdentity = identityFor(acesSnapshot, acesComposition, acesSession.colorIntent());

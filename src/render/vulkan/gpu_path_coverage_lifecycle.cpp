@@ -83,8 +83,7 @@ void orphanResidentSlot(GpuPathCoverageImpl* const impl) noexcept {
             return false;
         }
         const VkResult status = impl->control->device.getDispatcher()->vkGetFenceStatus(
-            static_cast<VkDevice>(*impl->control->device),
-            static_cast<VkFence>(*impl->jobFence));
+            static_cast<VkDevice>(*impl->control->device), static_cast<VkFence>(*impl->jobFence));
         if (status != VK_SUCCESS && status != VK_ERROR_DEVICE_LOST) {
             return false;
         }
@@ -292,8 +291,8 @@ bool GpuPathCoverageImpl::quarantine() noexcept {
 
 GpuPathCoverageImpl::~GpuPathCoverageImpl() {
     // A resident slot must have been returned by owner retirement before destruction; an Impl with
-    // no slot owns no Vulkan objects (the pipeline is created lazily under a slot), so it is safe to
-    // destroy on any thread.
+    // no slot owns no Vulkan objects (the pipeline is created lazily under a slot), so it is safe
+    // to destroy on any thread.
     assert(residentSlot == kPathCoverageNoResidentSlot);
     ranges.release();
     spans.release();
@@ -317,9 +316,9 @@ void GpuPathCoverage::releaseImpl() noexcept {
         return;
     }
     if (!impl_->onOwnerThread()) {
-        // Foreign thread: never destroy native state. An Impl that owns a resident slot is preserved
-        // in that same slot (orphaned) for owner retirement; an Impl with no slot owns no Vulkan
-        // objects and can be destroyed here.
+        // Foreign thread: never destroy native state. An Impl that owns a resident slot is
+        // preserved in that same slot (orphaned) for owner retirement; an Impl with no slot owns no
+        // Vulkan objects and can be destroyed here.
         if (impl_->residentSlot != kPathCoverageNoResidentSlot) {
             orphanResidentSlot(impl_.get());
             (void)impl_.release();
@@ -349,7 +348,6 @@ void GpuPathCoverage::releaseImpl() noexcept {
     impl_.reset();
 }
 
-
 GpuPathCoveragePollResult GpuPathCoverage::poll() {
     if (impl_ == nullptr) {
         return GpuPathCoveragePollResult::Failure;
@@ -368,9 +366,8 @@ GpuPathCoveragePollResult GpuPathCoverage::poll() {
     if (!impl.submitted) {
         return GpuPathCoveragePollResult::Failure;
     }
-    const auto fault =
-        static_cast<path_coverage_detail::PathCoverageFault>(
-            path_coverage_detail::pathCoverageFault().load());
+    const auto fault = static_cast<path_coverage_detail::PathCoverageFault>(
+        path_coverage_detail::pathCoverageFault().load());
     VkResult status = VK_NOT_READY;
     if (fault == path_coverage_detail::PathCoverageFault::ForceDeviceLost) {
         status = VK_ERROR_DEVICE_LOST;
@@ -385,7 +382,8 @@ GpuPathCoveragePollResult GpuPathCoverage::poll() {
             std::chrono::steady_clock::now() >=
                 impl.submittedAt + std::chrono::nanoseconds(kCoverageDeadlineNanoseconds);
         if (!deadlineExceeded) {
-            return pending ? GpuPathCoveragePollResult::Pending : GpuPathCoveragePollResult::Failure;
+            return pending ? GpuPathCoveragePollResult::Pending
+                           : GpuPathCoveragePollResult::Failure;
         }
         const bool cancelled = impl.discardRequested.load();
         if (!impl.quarantine()) {
@@ -445,8 +443,7 @@ GpuPathCoverageReadback GpuPathCoverage::readback(const std::uint64_t byteBudget
         result.message = "readback must run on the device owner thread";
         return result;
     }
-    const std::uint64_t pixels =
-        static_cast<std::uint64_t>(impl.mask->width) * impl.mask->height;
+    const std::uint64_t pixels = static_cast<std::uint64_t>(impl.mask->width) * impl.mask->height;
     if (pixels > byteBudget) {
         result.code = GpuPathCoverageReadbackCode::OverBudget;
         result.message = "the coverage readback exceeds the requested byte budget";

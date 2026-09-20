@@ -46,7 +46,6 @@ std::size_t defaultGpuProcessFrameByteBudget() noexcept {
     return gpuProcessFrameByteBudgetForAvailable(machineMemorySample().availableBytes);
 }
 
-
 // One caller-visible request slot. The calling CPU worker builds the immutable `scene` BEFORE the
 // slot is enqueued; the owner thread owns native execution and writes `outcome`. The caller owns
 // `done` observation under the shared mutex. Each request carries its own completion condition
@@ -111,8 +110,7 @@ struct GpuProcessFrameEvaluator::Impl final {
                                       std::shared_ptr<const PreparedGpuOcioCommand> outputCommand);
     GpuProcessFrameOutcome
     runRequestImpl(std::shared_ptr<const CompiledCompositionPlan> plan,
-                   const EvaluationRequest& request,
-                   std::shared_ptr<const PreparedGpuScene> scene,
+                   const EvaluationRequest& request, std::shared_ptr<const PreparedGpuScene> scene,
                    const CancellationToken& cancellation,
                    const EvaluationProgressCallback& progress,
                    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand);
@@ -427,9 +425,9 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
             continue;
         }
 
-        auto outcome = runRequest(active->plan, *active->evaluation, active->scene,
-                                  active->cancellation, active->progress,
-                                  std::move(active->outputCommand));
+        auto outcome =
+            runRequest(active->plan, *active->evaluation, active->scene, active->cancellation,
+                       active->progress, std::move(active->outputCommand));
 
         std::lock_guard lock(mutex);
         active->outcome = std::move(outcome);
@@ -549,8 +547,7 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
                                : impl_->availability.code,
                            impl_->availability.message);
         }
-        if (impl_->inFlightPreparations + impl_->queue.size() >=
-            impl_->options.maxQueuedRequests) {
+        if (impl_->inFlightPreparations + impl_->queue.size() >= impl_->options.maxQueuedRequests) {
             return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::OverBudget,
                            "the GPU evaluator request queue is full");
         }
@@ -632,8 +629,7 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
         }
         impl_->cv.notify_all();
     } catch (const std::bad_alloc&) {
-        return failure(GpuProcessFrameStatus::Failed,
-                       GpuProcessFrameDiagnosticCode::BadAllocation,
+        return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::BadAllocation,
                        "the GPU request failed to allocate its host buffers");
     } catch (const std::exception&) {
         return failure(GpuProcessFrameStatus::Failed,
@@ -687,9 +683,9 @@ bool GpuProcessFrameEvaluator::retirementComplete() const noexcept {
         return false;
     }
     // The owner worker has retired, but an active calling worker may still be preparing a scene (or
-    // converting its reservation into a queue slot). Retirement is complete only when no such caller
-    // is in flight, so an owner that observes completion may safely release the evaluator without
-    // racing a live `evaluate()`.
+    // converting its reservation into a queue slot). Retirement is complete only when no such
+    // caller is in flight, so an owner that observes completion may safely release the evaluator
+    // without racing a live `evaluate()`.
     std::lock_guard lock(impl_->mutex);
     return impl_->inFlightPreparations == 0;
 }

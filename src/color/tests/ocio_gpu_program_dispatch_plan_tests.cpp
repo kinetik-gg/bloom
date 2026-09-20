@@ -20,8 +20,7 @@ void testDispatchPlan(Expectations& expectations) {
         if (plan.groupsX > maxX || plan.groupsY > maxY) {
             return false;
         }
-        const std::uint64_t stride =
-            static_cast<std::uint64_t>(plan.groupsX) * kWorkgroup;
+        const std::uint64_t stride = static_cast<std::uint64_t>(plan.groupsX) * kWorkgroup;
         if (stride > 0xFFFFFFFFULL) {
             return false;
         }
@@ -39,7 +38,8 @@ void testDispatchPlan(Expectations& expectations) {
     const std::uint64_t boundary = static_cast<std::uint64_t>(65535) * kWorkgroup + 1ULL;
     const auto boundaryPlan = planOcioDispatch(boundary, kWorkgroup, 65535, 65535);
     expectations.expect(boundaryPlan.valid() && boundaryPlan.groupsX == 65535 &&
-                            boundaryPlan.groupsY == 2 && covers(boundaryPlan, boundary, 65535, 65535),
+                            boundaryPlan.groupsY == 2 &&
+                            covers(boundaryPlan, boundary, 65535, 65535),
                         "the >4M-pixel X boundary plans a bounded 2D grid");
     // Injected tiny limits force many rows.
     const auto tiny = planOcioDispatch(256, kWorkgroup, 3, 64);
@@ -137,7 +137,8 @@ void testForcedDispatchPlanning(Expectations& expectations, GpuDevice& device,
         }
         compareEffect(
             expectations, pixels, readback.pixels,
-            [&](std::array<float, 3>& rgb) { static_cast<void>(cpu->applyRGB(rgb.data())); }, label);
+            [&](std::array<float, 3>& rgb) { static_cast<void>(cpu->applyRGB(rgb.data())); },
+            label);
     };
     run(5, 7, "small forced-planning geometry");
     run(401, 4, "tail forced-planning geometry");

@@ -35,7 +35,6 @@ struct ResolvingOutcomeV1 final {
 };
 static_assert(runtime::TaskResultValue<ResolvingOutcomeV1>);
 
-
 enum class BuildFailureKindV1 : std::uint8_t {
     None,
     Evaluation,
@@ -231,8 +230,8 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
         auto* ledger = state_->ledger;
         auto gpuProvider = state_->request.gpuProvider; // shared ownership travels with the task
         // The command the combined readback will run. The canonical command was prepared on the
-        // Resolving CPU task from the EXACT resolved config/working space/display/view and the exact
-        // data-window geometry. `request.outputColorCommand` is an explicit test seam and is
+        // Resolving CPU task from the EXACT resolved config/working space/display/view and the
+        // exact data-window geometry. `request.outputColorCommand` is an explicit test seam and is
         // accepted ONLY when it byte-identifies that canonical command; any other command (wrong
         // transform, stale config revision, or a command prepared for a different frame) is
         // refused, and the attempt falls back honestly to the CPU reference/display path instead of
@@ -244,10 +243,10 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
             (canonicalCommand == nullptr ||
              requestedCommand->identity() != canonicalCommand->identity());
         const bool forceCpuFallback = refusedRequestedCommand;
-        auto outputColorCommand = refusedRequestedCommand
-                                      ? nullptr
-                                      : (requestedCommand != nullptr ? requestedCommand
-                                                                     : canonicalCommand);
+        auto outputColorCommand =
+            refusedRequestedCommand
+                ? nullptr
+                : (requestedCommand != nullptr ? requestedCommand : canonicalCommand);
         auto plan = state_->request.plan;
         auto evaluation = state_->request.evaluation;
 

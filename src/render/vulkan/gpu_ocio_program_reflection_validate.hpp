@@ -9,9 +9,10 @@ namespace bloom::render::ocio_program_detail {
 // Validates the compiled module's descriptor interface against the immutable program descriptor and
 // the Bloom I/O contract. `expectedWorkgroupSizeX` is the workgroup size the dispatcher plans with.
 // Never throws; any allocation failure or malformed input is a typed refusal.
-[[nodiscard]] inline OcioShaderInterfaceCheck validateOcioShaderInterface(
-    const OcioGpuProgramDesc& program, const std::span<const std::uint32_t> spirv,
-    const std::uint32_t expectedWorkgroupSizeX) noexcept {
+[[nodiscard]] inline OcioShaderInterfaceCheck
+validateOcioShaderInterface(const OcioGpuProgramDesc& program,
+                            const std::span<const std::uint32_t> spirv,
+                            const std::uint32_t expectedWorkgroupSizeX) noexcept {
     using namespace ocio_reflection_detail;
     try {
         Module module;
@@ -49,8 +50,7 @@ namespace bloom::render::ocio_program_detail {
                 return {OcioShaderInterfaceError::UnexpectedDescriptor, id};
             }
             if (!expectedDescriptor(decoration->second.set, decoration->second.binding, program)) {
-                return {OcioShaderInterfaceError::UnexpectedDescriptor,
-                        decoration->second.binding};
+                return {OcioShaderInterfaceError::UnexpectedDescriptor, decoration->second.binding};
             }
         }
 
@@ -87,8 +87,7 @@ namespace bloom::render::ocio_program_detail {
             for (std::uint32_t member = 0; member < structure->members.size(); ++member) {
                 const OcioGpuUniformDesc& field = program.uniforms[member];
                 const auto offset = module.memberOffsets.find(memberKey(structure->id, member));
-                if (offset == module.memberOffsets.end() ||
-                    offset->second != field.bufferOffset) {
+                if (offset == module.memberOffsets.end() || offset->second != field.bufferOffset) {
                     return {OcioShaderInterfaceError::DescriptorMismatch, field.bufferOffset};
                 }
                 std::uint32_t memberBytes = 0;

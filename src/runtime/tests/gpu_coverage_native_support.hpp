@@ -193,8 +193,8 @@ struct NativeFixtureOutcome final {
     return true;
 }
 
-// The first component that breaks the strict gate, for an actionable failure message. Empty when the
-// spans match exactly (the same predicate pixelsClose() applies).
+// The first component that breaks the strict gate, for an actionable failure message. Empty when
+// the spans match exactly (the same predicate pixelsClose() applies).
 [[nodiscard]] inline std::string
 pixelParityDetail(const std::span<const bloom::render::Rgba32f> actual,
                   const std::span<const bloom::render::Rgba32f> expected) {
@@ -335,9 +335,8 @@ runNativeFixture(bloom::render::GpuDevice& device,
     // process window), so a legitimate clipped ROI is not a dropped ROI; a prepared scene that
     // widened the ROI to the whole frame no longer matches the oracle data window and is.
     outcome.roiRequired = request.roi.has_value();
-    outcome.roiDropped =
-        outcome.roiRequired &&
-        scene->outputDescriptor().dataWindow() != cpuImage.descriptor()->dataWindow();
+    outcome.roiDropped = outcome.roiRequired && scene->outputDescriptor().dataWindow() !=
+                                                    cpuImage.descriptor()->dataWindow();
     if (outcome.roiDropped) {
         outcome.evidence = "MISSED_GPU: the request ROI was silently dropped by the prepared scene";
         return outcome;

@@ -98,8 +98,8 @@ struct GpuImageUpload::Impl final {
     void orphanResidentSlot() noexcept;
     static void drainResidentOrphansOnOwnerThread() noexcept;
     // Frees the command pool/buffer/fence. Called only on the owner thread after a failed
-    // createResources() so an Impl that then holds no resident slot owns no Vulkan object and may be
-    // destroyed from any thread.
+    // createResources() so an Impl that then holds no resident slot owns no Vulkan object and may
+    // be destroyed from any thread.
     void resetResources() noexcept;
     [[nodiscard]] bool createResources();
     // Bounded owner-thread drain. Returns true when the submission is proved retired.

@@ -17,10 +17,10 @@
 // readback() exists only for parity tests and the CPU oracle. The production
 // path keeps the coverage resident and hands its buffer to GpuSolid.
 
+#include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/render/path_raster.hpp>
-#include <bloom/core/pixel_aspect_ratio.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -65,9 +65,9 @@ struct GpuPathCoverageParameters final {
 };
 
 // Explicit caller allowances. These are the configured upper bounds for the uploaded geometry and
-// the retained mask, not an artificial fixed ceiling: create() accepts any nonzero value and begin()
-// additionally checks the genuine device storage-buffer range and the 32-bit span/word index bounds.
-// The per-call byteBudget is a tighter allowance and must cover both.
+// the retained mask, not an artificial fixed ceiling: create() accepts any nonzero value and
+// begin() additionally checks the genuine device storage-buffer range and the 32-bit span/word
+// index bounds. The per-call byteBudget is a tighter allowance and must cover both.
 struct GpuPathCoverageBudgets final {
     std::uint64_t maxGeometryBytes = 64ULL * 1024ULL * 1024ULL;
     std::uint64_t maxCoverageBytes = 256ULL * 1024ULL * 1024ULL;
@@ -109,9 +109,9 @@ class GpuPathCoverage final {
 
     // Validates the geometry window/entry bounds and budget, uploads the bounded
     // geometry, records and submits one dispatch. Returns None when accepted.
-    [[nodiscard]] GpuPathCoverageDiagnostic
-    begin(const GpuPathCoverageParameters& parameters, const PathRasterCoverageGeometry& geometry,
-          std::uint64_t byteBudget);
+    [[nodiscard]] GpuPathCoverageDiagnostic begin(const GpuPathCoverageParameters& parameters,
+                                                  const PathRasterCoverageGeometry& geometry,
+                                                  std::uint64_t byteBudget);
 
     [[nodiscard]] GpuPathCoveragePollResult poll();
 

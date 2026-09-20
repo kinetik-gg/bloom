@@ -8,24 +8,25 @@
 // device, with NO full-frame host readback.
 //
 // It deliberately reuses the producer's GpuOcioProgramExecutor rather than a second compiler or a
-// second native program cache: the executor retains native programs keyed on the command's canonical
-// identity, so a warm frame with the same command performs ZERO program creation and ZERO resource
-// upload and only the dispatch runs. A changed display/view (or, once the producer wrapper carries
-// it, a changed exposure/gamma uniform snapshot) is a different command identity and therefore a
-// different program.
+// second native program cache: the executor retains native programs keyed on the command's
+// canonical identity, so a warm frame with the same command performs ZERO program creation and ZERO
+// resource upload and only the dispatch runs. A changed display/view (or, once the producer wrapper
+// carries it, a changed exposure/gamma uniform snapshot) is a different command identity and
+// therefore a different program.
 //
-// The arm owns no thread and no device: begin/poll/take/cancel/destruction are owner-thread only and
-// fail closed from another thread. It never decodes, evaluates, or re-renders the process scene; it
-// only displays the resident scene-linear image the caller already produced. The final composited
-// image is read back once only at the CPU codec/file boundary by the export route, never here.
+// The arm owns no thread and no device: begin/poll/take/cancel/destruction are owner-thread only
+// and fail closed from another thread. It never decodes, evaluates, or re-renders the process
+// scene; it only displays the resident scene-linear image the caller already produced. The final
+// composited image is read back once only at the CPU codec/file boundary by the export route, never
+// here.
 //
-// ViewAdjust: the CPU reference (runtime::ViewAdjust, see view_adjust.cpp / view_adjust.hpp) applies
-// exposure on the LINEAR DISPLAY LIGHT after the OCIO display function and gamma on the ENCODED
-// value before RGBA8 quantization. That is a post-display operation and is NOT the same as OCIO's
-// ExposureContrast transform (which acts in the source/working space before the display transform).
-// The producer DisplayRgba8 wrapper bakes this exact post-display step into the program (see
-// buildGpuOcioWrapperGlsl(program, ViewAdjust)), so the arm dispatches the prepared command's own
-// baked adjustment for both neutral and non-neutral values. A changed adjustment is a different
+// ViewAdjust: the CPU reference (runtime::ViewAdjust, see view_adjust.cpp / view_adjust.hpp)
+// applies exposure on the LINEAR DISPLAY LIGHT after the OCIO display function and gamma on the
+// ENCODED value before RGBA8 quantization. That is a post-display operation and is NOT the same as
+// OCIO's ExposureContrast transform (which acts in the source/working space before the display
+// transform). The producer DisplayRgba8 wrapper bakes this exact post-display step into the program
+// (see buildGpuOcioWrapperGlsl(program, ViewAdjust)), so the arm dispatches the prepared command's
+// own baked adjustment for both neutral and non-neutral values. A changed adjustment is a different
 // command identity; a request adjustment that differs from the prepared command's is refused rather
 // than substituted, and no guessed mapping is ever used.
 
@@ -51,8 +52,7 @@ namespace bloom::runtime {
 
 // Accepted only when the command is a real DisplayRgba8 program: a ProcessEffect (FinalRgba32f)
 // command is a different pixel contract and is refused rather than displayed.
-[[nodiscard]] bool
-gpuOcioDisplayCommandIsDisplay(const PreparedGpuOcioCommand& command) noexcept;
+[[nodiscard]] bool gpuOcioDisplayCommandIsDisplay(const PreparedGpuOcioCommand& command) noexcept;
 
 // The exact OCIO uniform snapshot a DisplayRgba8 command dispatch uses. Empty means "use the
 // command's immutable snapshot". A caller may override same-size uniform bytes per request (for
@@ -83,8 +83,9 @@ enum class GpuOcioDisplayArmDiagnosticCode : std::uint8_t {
     NotADisplayCommand,
     // The input geometry does not match the prepared command geometry.
     IdentityMismatch,
-    // Retained for compatibility. The producer DisplayRgba8 wrapper now bakes the exact post-display
-    // adjustment, so this arm no longer produces it; a mismatched adjustment reports IdentityMismatch.
+    // Retained for compatibility. The producer DisplayRgba8 wrapper now bakes the exact
+    // post-display adjustment, so this arm no longer produces it; a mismatched adjustment reports
+    // IdentityMismatch.
     ViewAdjustUnsupported,
     Busy,
     OwnerDrainRequired,
@@ -134,8 +135,9 @@ class GpuOcioDisplayArm final {
     [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
     [[nodiscard]] bool deviceLost() const noexcept;
 
-    // Begins one display job. Validates the command/input/geometry/view-adjust gate before any native
-    // call; on refusal no native submission is made and the caller should take the CPU display path.
+    // Begins one display job. Validates the command/input/geometry/view-adjust gate before any
+    // native call; on refusal no native submission is made and the caller should take the CPU
+    // display path.
     [[nodiscard]] GpuOcioDisplayArmDiagnostic begin(const GpuOcioDisplayRequest& request);
 
     // Non-blocking. Advances the single in-flight job.
@@ -161,7 +163,8 @@ class GpuOcioDisplayArm final {
 // the real native parity run inside qualifyGpuOcioDisplay() can construct an eligible value, so no
 // later code can fabricate success.
 enum class GpuOcioDisplayOutcome : std::uint8_t {
-    // Any required operation failed parity, a native call failed, or a budget/identity gate refused.
+    // Any required operation failed parity, a native call failed, or a budget/identity gate
+    // refused.
     Unavailable,
     // Native display output matched the CPU OCIO display oracle within the documented contract.
     PreviewOnly,
@@ -216,8 +219,7 @@ class [[nodiscard]] GpuOcioDisplayQualificationReport final {
     GpuOcioDisplayQualificationReport(GpuOcioDisplayQualificationReport&&) noexcept;
     GpuOcioDisplayQualificationReport& operator=(GpuOcioDisplayQualificationReport&&) noexcept;
     GpuOcioDisplayQualificationReport(const GpuOcioDisplayQualificationReport&) = delete;
-    GpuOcioDisplayQualificationReport&
-    operator=(const GpuOcioDisplayQualificationReport&) = delete;
+    GpuOcioDisplayQualificationReport& operator=(const GpuOcioDisplayQualificationReport&) = delete;
     ~GpuOcioDisplayQualificationReport() = default;
 
     [[nodiscard]] GpuOcioDisplayOutcome outcome() const noexcept { return outcome_; }
@@ -228,8 +230,8 @@ class [[nodiscard]] GpuOcioDisplayQualificationReport final {
         return diagnostic_;
     }
     [[nodiscard]] const GpuOcioDisplayDiagnostic& diagnostic() const&& = delete;
-    // The exact command identity this report qualified. A consumer must match this to the command it
-    // is about to dispatch; a report for another program never blesses this one.
+    // The exact command identity this report qualified. A consumer must match this to the command
+    // it is about to dispatch; a report for another program never blesses this one.
     [[nodiscard]] const core::Sha256Digest& commandIdentity() const& noexcept {
         return commandIdentity_;
     }
@@ -266,13 +268,13 @@ class [[nodiscard]] GpuOcioDisplayQualificationReport final {
 // whose DisplayRgba8 program is the exact OCIO display transform for that pair in THAT config, plus
 // the matching qualified CPU display processor used as the independent oracle.
 //
-// It is BLOCKING and must never run on the UI thread or the native GPU owner thread: it resolves the
-// config, extracts the OCIO GPU program, generates the Bloom wrapper, and invokes glslang/spirv-val
-// through the shared runtime::GpuOcioProgramPreparer (no second compiler and no second tool
-// invocation path). Both the shader-tool resolution and the config resolution are lazy: the service
-// is constructed with an options provider and performs its first I/O on the first prepare() call,
-// which the stage runs on a CPU worker. A warm identical request returns the cached immutable
-// command without re-resolving the config, re-extracting, or recompiling.
+// It is BLOCKING and must never run on the UI thread or the native GPU owner thread: it resolves
+// the config, extracts the OCIO GPU program, generates the Bloom wrapper, and invokes
+// glslang/spirv-val through the shared runtime::GpuOcioProgramPreparer (no second compiler and no
+// second tool invocation path). Both the shader-tool resolution and the config resolution are lazy:
+// the service is constructed with an options provider and performs its first I/O on the first
+// prepare() call, which the stage runs on a CPU worker. A warm identical request returns the cached
+// immutable command without re-resolving the config, re-extracting, or recompiling.
 //
 // The binding is part of the program: two configs that expose the SAME display/view names but have
 // different content revisions or working spaces produce different bindings and different commands.
@@ -283,7 +285,8 @@ class [[nodiscard]] GpuOcioDisplayQualificationReport final {
 // function and gamma on the encoded value before RGBA8 quantization (runtime::ViewAdjust, see
 // view_adjust.hpp). That is a post-display operation, not OCIO's ExposureContrast. The producer
 // DisplayRgba8 wrapper bakes that exact step into the program and binds it into the command
-// identity, so both neutral and non-neutral adjustments are prepared exactly and never approximated.
+// identity, so both neutral and non-neutral adjustments are prepared exactly and never
+// approximated.
 struct GpuDisplayColorBinding final {
     color::OcioConfigLocatorKind locatorKind = color::OcioConfigLocatorKind::BloomBuiltIn;
     std::string locatorValue;
@@ -295,8 +298,7 @@ struct GpuDisplayColorBinding final {
     std::string display;
     std::string view;
 
-    friend bool operator==(const GpuDisplayColorBinding&,
-                           const GpuDisplayColorBinding&) = default;
+    friend bool operator==(const GpuDisplayColorBinding&, const GpuDisplayColorBinding&) = default;
 };
 
 // The exact binding a program was prepared against. `workingColorSpaceId` is the actual resolved
@@ -390,9 +392,10 @@ class GpuDisplayProgramService final {
 
     // Blocking. Resolves the shared context (idempotent), resolves the requested config/working
     // space on first use, then prepares the command through the SHARED preparer.
-    [[nodiscard]] GpuDisplayProgramResult
-    prepare(const GpuDisplayColorBinding& binding, std::uint32_t width, std::uint32_t height,
-            ViewAdjust viewAdjust = {}, const GpuOcioCancellation& cancel = {}) const;
+    [[nodiscard]] GpuDisplayProgramResult prepare(const GpuDisplayColorBinding& binding,
+                                                  std::uint32_t width, std::uint32_t height,
+                                                  ViewAdjust viewAdjust = {},
+                                                  const GpuOcioCancellation& cancel = {}) const;
 
     [[nodiscard]] GpuOcioPreparerCounters counters() const;
 

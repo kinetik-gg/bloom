@@ -128,9 +128,9 @@ struct GpuSolid::Impl final {
     void releaseResidentSlot() noexcept;
     void orphanResidentSlot() noexcept;
     static void drainResidentOrphansOnOwnerThread() noexcept;
-    // Frees every base pipeline/command/fence native resource. Called only on the owner thread after
-    // a failed createPipeline() so an Impl that then holds no resident slot owns no Vulkan object
-    // and may be destroyed from any thread.
+    // Frees every base pipeline/command/fence native resource. Called only on the owner thread
+    // after a failed createPipeline() so an Impl that then holds no resident slot owns no Vulkan
+    // object and may be destroyed from any thread.
     void resetPipelineResources() noexcept;
     [[nodiscard]] bool createPipeline();
     // Builds the CoveredSolidV1 shader module, descriptor layout, pipeline

@@ -36,11 +36,9 @@ struct ColorResolutionOutcomeV1 final {
 // returning nullopt so the caller can fail the attempt AT the ColorPreparing stage, while every
 // modelled configuration/adapter state returns a populated outcome that the analyzer turns into a
 // truthful, non-approvable report.
-[[nodiscard]] std::optional<ColorResolutionOutcomeV1>
-resolvePngDisplayProducts(runtime::QualifiedDisplayProcessorProvider* provider,
-                          GpuExportProvider* gpuProvider,
-                          const runtime::EvaluationColorIntent& intent,
-                          runtime::GpuOcioCommandGeometry geometry,
-                          const runtime::GpuOcioCancellation& cancel) noexcept;
+[[nodiscard]] std::optional<ColorResolutionOutcomeV1> resolvePngDisplayProducts(
+    runtime::QualifiedDisplayProcessorProvider* provider, GpuExportProvider* gpuProvider,
+    const runtime::EvaluationColorIntent& intent, runtime::GpuOcioCommandGeometry geometry,
+    const runtime::GpuOcioCancellation& cancel) noexcept;
 
 } // namespace bloom::host::detail

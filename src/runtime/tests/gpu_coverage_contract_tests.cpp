@@ -195,10 +195,10 @@ runMediaBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionP
         result.evidence = "the Bloom Neutral OCIO config is unavailable";
         return result;
     }
-    return runBuilder(effectPlan(bloom::runtime::CstKernel{std::string{config->processColorSpaceId()},
-                                                           std::string{
-                                                               config->sRgbTextureColorSpaceId()}},
-                                 idBase));
+    return runBuilder(
+        effectPlan(bloom::runtime::CstKernel{std::string{config->processColorSpaceId()},
+                                             std::string{config->sRgbTextureColorSpaceId()}},
+                   idBase));
 }
 
 // A genuine non-identity FileTransform: a real 1D .cube read back through color::readLutFile. The
@@ -230,18 +230,18 @@ runMediaBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionP
     const auto prepared = builder.build(plan, request);
     if (prepared) {
         result.prepared = true;
-        result.frames.push_back(FrameRun{plan, request, bloom::gpu_coverage_media::gateDirectory(),
-                                         prepared.scene});
-        result.evidence =
-            "prepared working-space " + std::to_string(prepared.scene->commands().size()) +
-            " commands";
+        result.frames.push_back(
+            FrameRun{plan, request, bloom::gpu_coverage_media::gateDirectory(), prepared.scene});
+        result.evidence = "prepared working-space " +
+                          std::to_string(prepared.scene->commands().size()) + " commands";
         return result;
     }
     result.evidence = codeName(prepared.diagnostic.code) + ": " + prepared.diagnostic.message;
     return result;
 }
 
-// A native-only display proof runner: the display support function reports its own genuine evidence.
+// A native-only display proof runner: the display support function reports its own genuine
+// evidence.
 [[nodiscard]] bloom::gpu_coverage_gate::NativeProofRunner
 displayProofRunner(const bool customView) {
     return [customView](bloom::render::GpuDevice& device,
@@ -397,10 +397,12 @@ displayProofRunner(const bool customView) {
     // executor, compared to the CPU display oracle at one RGBA8 code with exact alpha. The
     // view-adjust proof uses a non-neutral exposure/gamma; the custom-view proof uses a non-default
     // display/view pair.
-    add("feature.display.view_adjust", GpuCoverageFixtureCriterion::NativeRequired,
+    add(
+        "feature.display.view_adjust", GpuCoverageFixtureCriterion::NativeRequired,
         "src/runtime GpuSceneExecutor display view-adjust native proof",
         [] { return FixtureRun{}; }, displayProofRunner(false));
-    add("feature.display.custom_view_transform", GpuCoverageFixtureCriterion::NativeRequired,
+    add(
+        "feature.display.custom_view_transform", GpuCoverageFixtureCriterion::NativeRequired,
         "src/runtime GpuSceneExecutor custom display/view native proof",
         [] { return FixtureRun{}; }, displayProofRunner(true));
 

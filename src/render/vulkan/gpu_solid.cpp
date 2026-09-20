@@ -53,9 +53,9 @@ void GpuSolid::releaseImpl() noexcept {
         return;
     }
     if (!impl_->onOwnerThread()) {
-        // Foreign thread: never destroy native state. An Impl that owns a resident slot is preserved
-        // in that same slot (orphaned) for owner retirement; an Impl with no slot owns no Vulkan
-        // objects (the pipeline is created lazily under a slot) and can be destroyed here.
+        // Foreign thread: never destroy native state. An Impl that owns a resident slot is
+        // preserved in that same slot (orphaned) for owner retirement; an Impl with no slot owns no
+        // Vulkan objects (the pipeline is created lazily under a slot) and can be destroyed here.
         if (impl_->residentSlot != kSolidNoResidentSlot) {
             impl_->orphanResidentSlot();
             (void)impl_.release();
@@ -127,10 +127,10 @@ bool GpuSolid::Impl::drainAndRetire() noexcept {
 }
 
 GpuSolid::Impl::~Impl() {
-    // A slot-less Impl owns no native Vulkan resources (the pipeline is created lazily under a slot,
-    // and a failed creation is reset before the slot is released), so it may be destroyed from any
-    // thread. A slot-holding Impl is only ever destroyed on its owner thread: a foreign destruction
-    // orphans the slot instead.
+    // A slot-less Impl owns no native Vulkan resources (the pipeline is created lazily under a
+    // slot, and a failed creation is reset before the slot is released), so it may be destroyed
+    // from any thread. A slot-holding Impl is only ever destroyed on its owner thread: a foreign
+    // destruction orphans the slot instead.
     assert(residentSlot == kSolidNoResidentSlot);
     releaseResident();
     coveredPalette.release();

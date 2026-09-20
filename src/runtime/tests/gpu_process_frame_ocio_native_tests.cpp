@@ -2,8 +2,8 @@
 // GpuProcessFrameEvaluator drives the PRODUCTION CpuGpuSceneBuilder with the resolved shared
 // GpuSceneOcioContext and the configured GpuSceneMediaContext on a mixed media + CST + text graph,
 // then performs ONE combined final readback that transfers the unchanged process payload plus the
-// encoded DisplayRgba8 output (two payloads). The identity arm (no output command) transfers exactly
-// one process payload.
+// encoded DisplayRgba8 output (two payloads). The identity arm (no output command) transfers
+// exactly one process payload.
 //
 // The OCIO context is qualified through the REAL GpuOcioContextResolver from this target's own
 // BLOOM_GPU_TOOLS_* packaging (never a manually built preparer or an ambient path), which is the
@@ -219,7 +219,8 @@ struct Fixture final {
 
 [[nodiscard]] Fixture makeAcesFixture() {
     Fixture fixture;
-    fixture.directory = std::filesystem::temp_directory_path() / "bloom_gpu_process_frame_ocio_test";
+    fixture.directory =
+        std::filesystem::temp_directory_path() / "bloom_gpu_process_frame_ocio_test";
     std::filesystem::remove_all(fixture.directory);
     std::filesystem::create_directories(fixture.directory);
     const auto path = fixture.directory / "aces_ap0.exr";
@@ -324,9 +325,11 @@ int main(int argc, char** argv) {
     }
 
     // Qualify the packaged tools through the production resolver exactly as the roots do.
-    GpuOcioContextResolver resolver{GpuOcioContextRequest{
-        std::filesystem::path{BLOOM_GPU_OCIO_CONTEXT_TEST_EXECUTABLE}, packagedToolsDescriptor(),
-        {}, {}}};
+    GpuOcioContextResolver resolver{
+        GpuOcioContextRequest{std::filesystem::path{BLOOM_GPU_OCIO_CONTEXT_TEST_EXECUTABLE},
+                              packagedToolsDescriptor(),
+                              {},
+                              {}}};
     const auto resolved = resolver.resolve();
     expectations.expect(resolved.hasValue(), "the packaged tools resolve to a shared context");
     if (!resolved.hasValue()) {
@@ -346,23 +349,22 @@ int main(int argc, char** argv) {
     // budget path the desktop/CLI/MCP roots take.
     evaluatorOptions.ocioContext = ocioContext;
     evaluatorOptions.mediaContext = GpuSceneMediaContext::fromEvaluator(cpuEvaluator);
-    expectations.expect(
-        evaluatorOptions.requestByteBudget ==
-                bloom::runtime::defaultGpuProcessFrameByteBudget() &&
-            evaluatorOptions.readbackByteBudget ==
-                bloom::runtime::defaultGpuProcessFrameByteBudget() &&
-            evaluatorOptions.requestByteBudget > 0,
-        "the default factory budget is the host-availability-derived budget");
+    expectations.expect(evaluatorOptions.requestByteBudget ==
+                                bloom::runtime::defaultGpuProcessFrameByteBudget() &&
+                            evaluatorOptions.readbackByteBudget ==
+                                bloom::runtime::defaultGpuProcessFrameByteBudget() &&
+                            evaluatorOptions.requestByteBudget > 0,
+                        "the default factory budget is the host-availability-derived budget");
     // Pure policy: a conservative quarter of available, no fixed floor or ceiling; unknown
     // availability is a small typed fallback.
     expectations.expect(
-        bloom::runtime::gpuProcessFrameByteBudgetForAvailable(
-            std::size_t{128} * 1024U * 1024U) == std::size_t{32} * 1024U * 1024U &&
-            bloom::runtime::gpuProcessFrameByteBudgetForAvailable(
-                std::size_t{16} * 1024U * 1024U * 1024U) ==
+        bloom::runtime::gpuProcessFrameByteBudgetForAvailable(std::size_t{128} * 1024U * 1024U) ==
+                std::size_t{32} * 1024U * 1024U &&
+            bloom::runtime::gpuProcessFrameByteBudgetForAvailable(std::size_t{16} * 1024U * 1024U *
+                                                                  1024U) ==
                 std::size_t{4} * 1024U * 1024U * 1024U &&
-            bloom::runtime::gpuProcessFrameByteBudgetForAvailable(
-                std::size_t{128} * 1024U * 1024U * 1024U) ==
+            bloom::runtime::gpuProcessFrameByteBudgetForAvailable(std::size_t{128} * 1024U * 1024U *
+                                                                  1024U) ==
                 std::size_t{32} * 1024U * 1024U * 1024U &&
             bloom::runtime::gpuProcessFrameByteBudgetForAvailable(std::nullopt) ==
                 std::size_t{512} * 1024U * 1024U,
@@ -398,9 +400,8 @@ int main(int argc, char** argv) {
         evaluator->beginShutdown();
         return 1;
     }
-    const auto geometry =
-        GpuOcioCommandGeometry{descriptor->dataWindow().extent().width(),
-                               descriptor->dataWindow().extent().height()};
+    const auto geometry = GpuOcioCommandGeometry{descriptor->dataWindow().extent().width(),
+                                                 descriptor->dataWindow().extent().height()};
 
     // Prepare the display command from the SAME shared preparer the evaluator uses.
     auto configResolution = bloom::color::resolveOcioBuiltIn(
@@ -478,11 +479,10 @@ int main(int argc, char** argv) {
              .viewName = {},
              .showLook = true},
             {});
-        expectations.expect(
-            cpuDisplay.status() ==
-                    bloom::runtime::QualifiedDisplayPreparationStatus::Prepared &&
-                cpuDisplay.frame() != nullptr,
-            "the ACES CPU display frame prepares");
+        expectations.expect(cpuDisplay.status() ==
+                                    bloom::runtime::QualifiedDisplayPreparationStatus::Prepared &&
+                                cpuDisplay.frame() != nullptr,
+                            "the ACES CPU display frame prepares");
         if (cpuDisplay.frame() != nullptr) {
             const auto cpuPixels = cpuDisplay.frame()->buffer().pixels();
             expectations.expect(cpuPixels.size() == display.encodedDisplayRgba8.size(),
@@ -493,13 +493,11 @@ int main(int argc, char** argv) {
                     const auto& cpuPixel = cpuPixels[index];
                     const auto& gpuPixel = display.encodedDisplayRgba8[index];
                     const auto close = [](const std::uint8_t left, const std::uint8_t right) {
-                        return left == right ||
-                               (left > right ? left - right : right - left) <= 1;
+                        return left == right || (left > right ? left - right : right - left) <= 1;
                     };
                     if (!close(cpuPixel.red, gpuPixel.red) ||
                         !close(cpuPixel.green, gpuPixel.green) ||
-                        !close(cpuPixel.blue, gpuPixel.blue) ||
-                        cpuPixel.alpha != gpuPixel.alpha) {
+                        !close(cpuPixel.blue, gpuPixel.blue) || cpuPixel.alpha != gpuPixel.alpha) {
                         withinOneCode = false;
                         break;
                     }
@@ -526,10 +524,10 @@ int main(int argc, char** argv) {
 
     // The large-composition GPU gate with the DEFAULT export budget and a real media source: a
     // 6000x4000 media+CST+text composition must evaluate through the real GpuProcessFrame evaluator
-    // (positive GPU dispatch, not a CPU fallback) with the exact combined readback payload counters,
-    // and its process payload must match the strict CPU oracle. The full-resolution producer limits
-    // are host-capacity-derived, so a 384 MB frame is admitted whenever the host genuinely has the
-    // memory; the budget is never a fixed 1 GiB gate.
+    // (positive GPU dispatch, not a CPU fallback) with the exact combined readback payload
+    // counters, and its process payload must match the strict CPU oracle. The full-resolution
+    // producer limits are host-capacity-derived, so a 384 MB frame is admitted whenever the host
+    // genuinely has the memory; the budget is never a fixed 1 GiB gate.
     {
         constexpr std::uint32_t kLargeWidth = 6000;
         constexpr std::uint32_t kLargeHeight = 4000;
@@ -557,8 +555,8 @@ int main(int argc, char** argv) {
                                 "default host-derived budget");
             const auto expectedProcessBytes =
                 static_cast<std::uint64_t>(kLargeWidth) * kLargeHeight * sizeof(float) * 4U;
-            const auto expectedEncodedBytes = static_cast<std::uint64_t>(kLargeWidth) *
-                                              kLargeHeight * sizeof(std::uint8_t) * 4U;
+            const auto expectedEncodedBytes =
+                static_cast<std::uint64_t>(kLargeWidth) * kLargeHeight * sizeof(std::uint8_t) * 4U;
             expectations.expect(
                 large.encodedArm == bloom::runtime::GpuOutputColorArm::DisplayRgba8 &&
                     large.outputColorCounters.readbackSubmissions == 1 &&
