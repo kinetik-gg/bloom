@@ -43,11 +43,13 @@ target_sources(
         gpu_shader_compiler.cpp
         gpu_shader_compiler_process.cpp
         gpu_shader_compiler_process.hpp
+        gpu_shader_tool_resolver.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
             include/bloom/color/gpu_shader_compiler.hpp
+            include/bloom/color/gpu_shader_tool_resolver.hpp
 )
 
 target_compile_features(bloom_color_gpu_shader PUBLIC cxx_std_20)
@@ -92,6 +94,20 @@ if(BUILD_TESTING)
         ENVIRONMENT ${bloom_gpu_shader_test_environment}
     )
     set_tests_properties(bloom.color.gpu-shader-compiler PROPERTIES SKIP_RETURN_CODE 77)
+
+    add_executable(
+        bloom_color_gpu_shader_tool_resolver_test
+        tests/gpu_shader_tool_resolver_tests.cpp
+    )
+    target_link_libraries(bloom_color_gpu_shader_tool_resolver_test PRIVATE bloom_color_gpu_shader)
+    bloom_enable_warnings(bloom_color_gpu_shader_tool_resolver_test)
+    bloom_add_test(
+        NAME bloom.color.gpu-shader-tool-resolver
+        COMMAND bloom_color_gpu_shader_tool_resolver_test
+        LABELS unit color gpu
+        ENVIRONMENT ${bloom_gpu_shader_test_environment}
+    )
+    set_tests_properties(bloom.color.gpu-shader-tool-resolver PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # bloom_color_ocio (issue #95): the in-process Bloom Neutral CPU display processor adapter.

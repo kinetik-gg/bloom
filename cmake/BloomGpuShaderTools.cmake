@@ -112,6 +112,7 @@ function(_bloom_gpu_tools_private_runtime prefix tool_path out_paths out_names)
                 "Bloom GPU shader tools: readelf is required to inspect ${tool_path} linked "
                 "dependencies; refusing to guess whether a private runtime library is needed.")
         endif()
+        file(REAL_PATH "${prefix}" _prefix_real)
         set(_queue "${tool_path}")
         set(_seen "")
         while(_queue)
@@ -143,6 +144,13 @@ function(_bloom_gpu_tools_private_runtime prefix tool_path out_paths out_names)
                         "${prefix}/lib; refusing to depend on an accidental ambient library.")
                 elseif(_kind STREQUAL "private")
                     file(REAL_PATH "${_path}" _path_real)
+                    cmake_path(IS_PREFIX _prefix_real "${_path_real}" NORMALIZE _under_prefix)
+                    if(NOT _under_prefix)
+                        message(FATAL_ERROR
+                            "Bloom GPU shader tools: private library ${_path} resolves outside the "
+                            "qualified prefix (${_path_real}); refusing to copy a symlink-escaped "
+                            "dependency.")
+                    endif()
                     list(APPEND _paths "${_path_real}")
                     list(APPEND _names "${_needed_name}")
                     list(APPEND _queue "${_path_real}")
