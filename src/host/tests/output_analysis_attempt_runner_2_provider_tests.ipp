@@ -340,7 +340,7 @@ void testGpuDisplayConcurrentSetterPrepare(Expectations& expectations) {
 // output display. No setGpuDisplayCompileOptions() call appears anywhere; a build without packaged
 // tools reports the route unavailable and this test asserts only the typed fallback.
 void testGpuExportProviderFactoryDisplayPreparation(Expectations& expectations) {
-#ifdef BLOOM_GPU_TOOLS_AVAILABLE
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
     runtime::TaskScheduler scheduler;
     auto resolver = host::makePackagedGpuOcioResolver(host::currentExecutablePath());
     expectations.expect(resolver != nullptr, "factory: the packaged resolver is composed");
@@ -391,6 +391,27 @@ void testGpuExportProviderFactoryDisplayPreparation(Expectations& expectations) 
     }
     static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
 #else
-    static_cast<void>(expectations);
+    // CPU-fallback build: this target publishes no packaged tools, so the shared composition-root
+    // helper composes no resolver and the provider must report the display route unavailable. This
+    // is the real typed fallback path, asserted rather than skipped.
+    runtime::TaskScheduler scheduler;
+    const auto resolver = host::makePackagedGpuOcioResolver(host::currentExecutablePath());
+    expectations.expect(resolver == nullptr,
+                        "factory: no packaged resolver is composed without qualified tools");
+    runtime::GpuProcessFrameEvaluatorOptions options;
+    options.enabled = false; // display preparation is CPU-only: no device needed here
+    options.ocioResolver = resolver;
+    auto provider = host::GpuExportProvider::create(std::move(options));
+    provider->prepare(scheduler);
+    const auto deadline = std::chrono::steady_clock::now() + 20s;
+    while (!provider->prepared() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    expectations.expect(provider->prepared(),
+                        "factory: the CPU-fallback bootstrap reaches a terminal state");
+    expectations.expect(!provider->gpuDisplayPreparationAvailable(),
+                        "factory: without packaged tools the display route is a typed unavailable "
+                        "fallback");
+    static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
 #endif
 }
