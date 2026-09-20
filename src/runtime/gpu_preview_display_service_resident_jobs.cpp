@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -34,6 +35,44 @@ using StagePhase = PreviewDisplayStageRecord::Phase;
             .summary = std::move(summary),
             .detail = std::move(detail),
             .suggestedAction = "Review the GPU preview display service resident diagnostics."};
+}
+
+// Publish the concrete refusal reason for a resident-stage failure. Without this the service
+// reports an empty residentDetail and the actual GpuSceneExecutor/native diagnostic is lost.
+void publishResidentJobDetail(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                              std::string detail) {
+    std::lock_guard lock(core->stateMutex);
+    core->publishedResidentDetail = std::move(detail);
+}
+
+// The executor's own diagnostic (code + message) plus the actual peak live bytes it charged
+// against the per-request allowance: the required-vs-admitted evidence a refusal lacks otherwise.
+[[nodiscard]] std::string executorFailureDetail(const GpuSceneExecutor& executor,
+                                                const std::uint64_t admittedBytes,
+                                                std::string_view prefix) {
+    const auto diagnostic = executor.diagnostic();
+    const auto counters = executor.counters();
+    std::string detail(prefix);
+    if (!diagnostic.message.empty()) {
+        detail += ": ";
+        detail += diagnostic.message;
+    }
+    detail += " [code=";
+    detail += std::to_string(static_cast<unsigned>(diagnostic.code));
+    detail += ", admittedBytes=";
+    detail += std::to_string(admittedBytes);
+    detail += ", peakLiveBytes=";
+    detail += std::to_string(counters.peakLiveImageBytes);
+    detail += ", liveBytes=";
+    detail += std::to_string(counters.currentLiveImageBytes);
+    detail += ']';
+    return detail;
+}
+
+[[nodiscard]] std::uint64_t
+residentStageAdmittedBytes(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                           const PreviewDisplayStageRecord& stage) noexcept {
+    return stage.gpuByteAllowance != 0 ? stage.gpuByteAllowance : core->previewByteAllowance();
 }
 
 void completeCancelled(const std::shared_ptr<PreviewDisplayStageRecord>& stage,
@@ -404,6 +443,13 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
         }
         std::string reason;
         if (!residentExecutorBegin(core, *stage, reason)) {
+            const std::uint64_t admitted = residentStageAdmittedBytes(core, *stage);
+            const std::uint64_t live = core->residentExecutor != nullptr
+                                           ? core->residentExecutor->counters().peakLiveImageBytes
+                                           : 0U;
+            publishResidentJobDetail(core, "resident scene executor begin refused: " + reason +
+                                               " [admittedBytes=" + std::to_string(admitted) +
+                                               ", peakLiveBytes=" + std::to_string(live) + ']');
             if (residentDeviceLost(core)) {
                 teardownTerminalResidentRoute(core);
                 finishResidentImmediately(core, stage, true);
@@ -448,6 +494,12 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             return;
         }
         if (poll != GpuSceneExecutorPollResult::Ready) {
+            if (core->residentExecutor != nullptr) {
+                publishResidentJobDetail(
+                    core, executorFailureDetail(*core->residentExecutor,
+                                                residentStageAdmittedBytes(core, *stage),
+                                                "resident scene executor failed"));
+            }
             beginResidentRetirement(core, stage);
             return;
         }
@@ -457,6 +509,9 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
         }
         std::string reason;
         if (!residentDisplayBegin(core, *stage, reason)) {
+            publishResidentJobDetail(
+                core, "resident display begin refused: " + reason + " [admittedBytes=" +
+                          std::to_string(residentStageAdmittedBytes(core, *stage)) + ']');
             if (residentDisplayHasUnretiredSubmission(core) ||
                 residentExecutorHasUnretiredSubmission(core) || residentOwnerDrainRequired(core)) {
                 beginResidentRetirement(core, stage);
@@ -506,6 +561,9 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
                     stage->phase = StagePhase::Done;
                     return;
                 }
+            }
+            if (!reason.empty()) {
+                publishResidentJobDetail(core, "resident display frame refused: " + reason);
             }
         }
         finishResidentImmediately(core, stage, true);
