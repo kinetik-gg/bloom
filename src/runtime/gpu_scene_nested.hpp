@@ -157,11 +157,12 @@ inline void offsetNestedCommandReferences(GpuSceneCommand& command,
             if constexpr (std::is_same_v<T, GpuSceneTranslationCommand> ||
                           std::is_same_v<T, GpuSceneAffineCommand> ||
                           std::is_same_v<T, GpuSceneOcioEffectCommand> ||
-                          std::is_same_v<T, GpuScenePointResampleCommand>) {
-                // The OCIO ProcessEffect and the point-resample gather are input-bearing: their
-                // resident input is the upstream command, so the splice must remap that dependency
-                // exactly like an affine or translation. Their immutable program/scale metadata is
-                // copied unchanged.
+                          std::is_same_v<T, GpuScenePointResampleCommand> ||
+                          std::is_same_v<T, GpuSceneCompositionOutputCommand>) {
+                // The OCIO ProcessEffect, the point-resample gather, and the composition output are
+                // input-bearing: their resident input is the upstream command, so the splice must
+                // remap that dependency exactly like an affine or translation. Their immutable
+                // program/scale metadata is copied unchanged.
                 if (item.input != kInvalidGpuSceneCommand) {
                     item.input = static_cast<GpuSceneCommandIndex>(item.input + base);
                 }
@@ -177,10 +178,6 @@ inline void offsetNestedCommandReferences(GpuSceneCommand& command,
                     if (foreground != kInvalidGpuSceneCommand) {
                         foreground = static_cast<GpuSceneCommandIndex>(foreground + base);
                     }
-                }
-            } else if constexpr (std::is_same_v<T, GpuSceneCompositionOutputCommand>) {
-                if (item.input != kInvalidGpuSceneCommand) {
-                    item.input = static_cast<GpuSceneCommandIndex>(item.input + base);
                 }
             } else if constexpr (std::is_same_v<T, GpuSceneSolidCommand> ||
                                  std::is_same_v<T, GpuSceneCoverageSolidCommand> ||

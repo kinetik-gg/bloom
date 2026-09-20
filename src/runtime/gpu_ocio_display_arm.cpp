@@ -24,7 +24,6 @@
 #include <optional>
 #include <span>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace bloom::runtime {
@@ -60,7 +59,6 @@ mapExecutorCode(const GpuOcioExecutorDiagnosticCode code) noexcept {
     case GpuOcioExecutorDiagnosticCode::OverBudget:
         return GpuOcioDisplayArmDiagnosticCode::OverBudget;
     case GpuOcioExecutorDiagnosticCode::Unsupported:
-        return GpuOcioDisplayArmDiagnosticCode::DispatchRefused;
     case GpuOcioExecutorDiagnosticCode::ProgramRefused:
     case GpuOcioExecutorDiagnosticCode::DispatchRefused:
     case GpuOcioExecutorDiagnosticCode::InternalInvariant:
@@ -255,10 +253,7 @@ constexpr std::string_view kGpuOcioDisplayNumericContract =
         if (polled != GpuOcioExecutorPollResult::Pending) {
             diagnostic.code = polled == GpuOcioExecutorPollResult::WrongThread
                                   ? GpuOcioDisplayDiagnosticCode::WrongThread
-                                  : (arm.executor().diagnostic().code ==
-                                             GpuOcioExecutorDiagnosticCode::NativeTimeout
-                                         ? GpuOcioDisplayDiagnosticCode::NativeFailure
-                                         : GpuOcioDisplayDiagnosticCode::NativeFailure);
+                                  : GpuOcioDisplayDiagnosticCode::NativeFailure;
             diagnostic.message = arm.executor().diagnostic().message;
             return false;
         }

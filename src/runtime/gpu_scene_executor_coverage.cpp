@@ -95,6 +95,10 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::ensurePathCoverage() {
 // covered fill (Solid). The windowing/pixel/opacity fields are shared.
 GpuSceneExecutorDiagnostic
 GpuSceneExecutor::Impl::startCoveredStep(const GpuSceneExecutorStep& step) {
+    if (!step.solidDataWindow.has_value() || !step.solidDisplayWindow.has_value()) {
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                              "a covered step has no window");
+    }
     const std::uint64_t remaining = remainingBudget();
     const render::GpuSolidParameters parameters{step.solidPixel, *step.solidDataWindow,
                                                 *step.solidDisplayWindow, step.solidPixelAspect};
@@ -212,6 +216,11 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollPathCoverage() {
         return GpuSceneExecutorPollResult::Failure;
     }
     const GpuSceneExecutorStep& step = steps[cursor];
+    if (!step.solidDataWindow.has_value() || !step.solidDisplayWindow.has_value()) {
+        fail(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+             "the vector coverage step has no window", false);
+        return GpuSceneExecutorPollResult::Failure;
+    }
     const render::GpuSolidParameters parameters{step.solidPixel, *step.solidDataWindow,
                                                 *step.solidDisplayWindow, step.solidPixelAspect};
     const auto native = solid->beginCoveredResident(parameters, *pathCoverage, step.coveredOpacity,

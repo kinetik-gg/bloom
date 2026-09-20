@@ -380,6 +380,10 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
             }
+            if (!nested.outputWindow.has_value()) {
+                return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                              "Nested composition published no output window", mediaStatistics);
+            }
             bounds[index] = nested.bounds;
             outputWindowOf[index] = *nested.outputWindow;
             keyOf[index] = nested.outputKey;
@@ -435,17 +439,23 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             detail::LayerMatrix composed = authoredMatrix;
             if (layer->parent) {
                 const auto parentIndex = layer->parent->value();
-                if (parentIndex >= operationCount || !layerMatrices[parentIndex].has_value()) {
+                if (parentIndex >= operationCount) {
                     return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                                   "Layer parent matrix is unavailable");
                 }
-                composed = layerMatrices[parentIndex]->times(authoredMatrix);
+                const auto& parentMatrix = layerMatrices[parentIndex];
+                if (!parentMatrix.has_value()) {
+                    return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                                  "Layer parent matrix is unavailable");
+                }
+                composed = parentMatrix->times(authoredMatrix);
             }
             layerMatrices[index] = composed;
+            std::optional<detail::GpuSceneVectorChain> chained;
             if (inputVec.has_value()) {
-                vectors[index] =
-                    GpuSceneVectorChain{inputVec->source, composed.times(inputVec->matrix),
-                                        inputVec->opacity * opacity->value};
+                chained = GpuSceneVectorChain{inputVec->source, composed.times(inputVec->matrix),
+                                              inputVec->opacity * opacity->value};
+                vectors[index] = *chained;
             }
             // The CPU Layer Output stage publishes no image and no bounds outside its active range.
             if (request.time < layer->inPoint ||
@@ -539,7 +549,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             // composed matrix multiplied into the input's own chain. For a direct leaf this is just
             // the layer's own matrix.
             const detail::LayerMatrix chainMatrix =
-                inputVec.has_value() ? vectors[index]->matrix : composed;
+                chained.has_value() ? chained->matrix : composed;
 
             if (inputVec.has_value()) {
                 // A vector layer (direct leaf or a chain through enclosing layers) is rasterized by

@@ -93,7 +93,7 @@ OutputAnalysisAttemptOutcomeV1 OutputAnalysisAttemptOutcomeV1::completed(
     std::optional<OutputAnalysisAttemptGpuProvenanceV1> gpuProvenance) noexcept {
     OutputAnalysisAttemptOutcomeV1 outcome;
     outcome.attempt_ = std::move(attempt);
-    outcome.gpuProvenance_ = std::move(gpuProvenance);
+    outcome.gpuProvenance_ = gpuProvenance;
     return outcome;
 }
 
@@ -452,14 +452,15 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
         return OutputAnalysisAttemptOutcomeV1::failure(
             {OutputAnalysisAttemptStageV1::Evaluating, true, std::monostate{}});
     }
-    const auto& product = taken->value()->product;
-    if (taken->state() != runtime::TaskState::Succeeded || !taken->value().has_value() ||
-        !taken->value()->succeeded || product == nullptr || product->attempt == nullptr) {
-        if (taken->value().has_value()) {
-            return OutputAnalysisAttemptOutcomeV1::failure(translateBuildFailure(*taken->value()));
-        }
+    if (!taken->value().has_value()) {
         return OutputAnalysisAttemptOutcomeV1::failure(
             {OutputAnalysisAttemptStageV1::Analyzing, false, std::monostate{}});
+    }
+    const auto& buildValue = taken->value();
+    const auto& product = buildValue->product;
+    if (taken->state() != runtime::TaskState::Succeeded || !buildValue->succeeded ||
+        product == nullptr || product->attempt == nullptr) {
+        return OutputAnalysisAttemptOutcomeV1::failure(translateBuildFailure(*buildValue));
     }
     return OutputAnalysisAttemptOutcomeV1::completed(product->attempt, product->gpuProvenance);
 }

@@ -42,6 +42,8 @@ inline void safeProgress(const EvaluationProgressCallback& progress,
     try {
         progress(event);
     } catch (...) {
+        // The callback is advisory and caller-supplied; a throw must never unwind the run.
+        return;
     }
 }
 

@@ -240,29 +240,31 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
         std::string composedKey;
         GpuSceneCommandIndex strokeIndex = kInvalidGpuSceneCommand;
         std::string strokeKey;
-        if (shapeCoverage.hasFill()) {
-            if (const auto error = chargeCoverage(*shapeCoverage.fill)) {
+        auto& fill = shapeCoverage.fill;
+        auto& stroke = shapeCoverage.stroke;
+        if (fill.has_value()) {
+            if (const auto error = chargeCoverage(*fill)) {
                 return error;
             }
-            composedKey = shapeCoverage.fill->semanticKey;
-            shapeCoverage.fill->sourceOperation = operationIndex;
-            composed = emit(std::move(*shapeCoverage.fill));
+            composedKey = fill->semanticKey;
+            fill->sourceOperation = operationIndex;
+            composed = emit(std::move(*fill));
         }
-        if (shapeCoverage.hasStroke()) {
-            if (const auto error = chargeCoverage(*shapeCoverage.stroke)) {
+        if (stroke.has_value()) {
+            if (const auto error = chargeCoverage(*stroke)) {
                 return error;
             }
-            strokeKey = shapeCoverage.stroke->semanticKey;
-            shapeCoverage.stroke->sourceOperation = operationIndex;
-            strokeIndex = emit(std::move(*shapeCoverage.stroke));
+            strokeKey = stroke->semanticKey;
+            stroke->sourceOperation = operationIndex;
+            strokeIndex = emit(std::move(*stroke));
             // A stroke-only shape has no fill and no internal fill/stroke merge, so the stroke
             // coverage IS the layer command. Without this the layer composed nothing.
-            if (!shapeCoverage.hasFill()) {
+            if (!fill.has_value()) {
                 composed = strokeIndex;
                 composedKey = strokeKey;
             }
         }
-        if (shapeCoverage.hasFill() && shapeCoverage.hasStroke()) {
+        if (fill.has_value() && stroke.has_value()) {
             // CPU composes stroke OVER fill; the merge folds foregrounds in order over a
             // transparent destination, so {fill, stroke} reproduces it exactly.
             OperationKey mergeKey;

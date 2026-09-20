@@ -223,9 +223,12 @@ GpuOcioExecutorJobState GpuOcioProgramExecutor::state() const noexcept {
     return impl_ != nullptr ? impl_->jobState : GpuOcioExecutorJobState::Failure;
 }
 const GpuOcioExecutorDiagnostic& GpuOcioProgramExecutor::diagnostic() const noexcept {
+    if (impl_ != nullptr) {
+        return impl_->jobDiagnostic;
+    }
     static const GpuOcioExecutorDiagnostic unavailable =
         makeDiagnostic(GpuOcioExecutorDiagnosticCode::DeviceUnavailable, "no executor was created");
-    return impl_ != nullptr ? impl_->jobDiagnostic : unavailable;
+    return unavailable;
 }
 bool GpuOcioProgramExecutor::isBoundTo(const render::GpuDevice& device) const noexcept {
     return impl_ != nullptr && impl_->device == &device && impl_->epoch == device.ownershipEpoch();

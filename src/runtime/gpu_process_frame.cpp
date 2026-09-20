@@ -102,18 +102,17 @@ struct GpuProcessFrameEvaluator::Impl final {
     bool stopping = false;
 
     void runOwner();
-    GpuProcessFrameOutcome runRequest(std::shared_ptr<const CompiledCompositionPlan> plan,
+    GpuProcessFrameOutcome runRequest(const std::shared_ptr<const CompiledCompositionPlan>& plan,
                                       const EvaluationRequest& request,
-                                      std::shared_ptr<const PreparedGpuScene> scene,
+                                      const std::shared_ptr<const PreparedGpuScene>& scene,
                                       const CancellationToken& cancellation,
                                       const EvaluationProgressCallback& progress,
                                       std::shared_ptr<const PreparedGpuOcioCommand> outputCommand);
-    GpuProcessFrameOutcome
-    runRequestImpl(std::shared_ptr<const CompiledCompositionPlan> plan,
-                   const EvaluationRequest& request, std::shared_ptr<const PreparedGpuScene> scene,
-                   const CancellationToken& cancellation,
-                   const EvaluationProgressCallback& progress,
-                   std::shared_ptr<const PreparedGpuOcioCommand> outputCommand);
+    GpuProcessFrameOutcome runRequestImpl(
+        const std::shared_ptr<const CompiledCompositionPlan>& plan,
+        const EvaluationRequest& request, const std::shared_ptr<const PreparedGpuScene>& scene,
+        const CancellationToken& cancellation, const EvaluationProgressCallback& progress,
+        std::shared_ptr<const PreparedGpuOcioCommand> outputCommand);
 };
 
 // Marks a queued-but-not-yet-run request done with a Cancelled outcome and wakes its caller. Called
@@ -127,12 +126,12 @@ void completeQueuedAsCancelled(const std::shared_ptr<GpuProcessFrameRequest>& re
 }
 
 GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequest(
-    std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
-    std::shared_ptr<const PreparedGpuScene> scene, const CancellationToken& cancellation,
+    const std::shared_ptr<const CompiledCompositionPlan>& plan, const EvaluationRequest& request,
+    const std::shared_ptr<const PreparedGpuScene>& scene, const CancellationToken& cancellation,
     const EvaluationProgressCallback& progress,
     std::shared_ptr<const PreparedGpuOcioCommand> outputCommand) {
     try {
-        return runRequestImpl(std::move(plan), request, std::move(scene), cancellation, progress,
+        return runRequestImpl(plan, request, scene, cancellation, progress,
                               std::move(outputCommand));
     } catch (const std::bad_alloc&) {
         return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::BadAllocation,
@@ -149,8 +148,8 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequest(
 }
 
 GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
-    std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
-    std::shared_ptr<const PreparedGpuScene> scene, const CancellationToken& cancellation,
+    const std::shared_ptr<const CompiledCompositionPlan>& plan, const EvaluationRequest& request,
+    const std::shared_ptr<const PreparedGpuScene>& scene, const CancellationToken& cancellation,
     const EvaluationProgressCallback& progress,
     std::shared_ptr<const PreparedGpuOcioCommand> outputCommand) {
     if (executor == nullptr || device == nullptr || cache == nullptr) {
@@ -425,9 +424,19 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
             continue;
         }
 
-        auto outcome =
-            runRequest(active->plan, *active->evaluation, active->scene, active->cancellation,
-                       active->progress, std::move(active->outputCommand));
+        const auto& evaluation = active->evaluation;
+        if (!evaluation.has_value()) {
+            std::lock_guard lock(mutex);
+            active->outcome = failure(GpuProcessFrameStatus::Failed,
+                                      GpuProcessFrameDiagnosticCode::InternalInvariant,
+                                      "the queued GPU request has no evaluation");
+            active->done = true;
+            active->completion.notify_all();
+            continue;
+        }
+
+        auto outcome = runRequest(active->plan, *evaluation, active->scene, active->cancellation,
+                                  active->progress, std::move(active->outputCommand));
 
         std::lock_guard lock(mutex);
         active->outcome = std::move(outcome);
@@ -556,21 +565,20 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
     // Scope-bound reservation release: EVERY exit -- including a bad_alloc from scene preparation,
     // slot allocation, or queue insertion -- releases exactly one reservation. A successful enqueue
     // converts the reservation into a queue slot and marks it released under the same lock.
-    bool reservationHeld = true;
     struct ReservationGuard final {
         Impl* impl;
-        bool& held;
+        bool released = false;
         ~ReservationGuard() {
-            if (!held) {
+            if (released) {
                 return;
             }
-            held = false;
+            released = true;
             std::lock_guard lock(impl->mutex);
             if (impl->inFlightPreparations > 0) {
                 --impl->inFlightPreparations;
             }
         }
-    } reservationGuard{impl_.get(), reservationHeld};
+    } reservationGuard{impl_.get()};
 
     std::shared_ptr<GpuProcessFrameRequest> slot;
     try {
@@ -625,7 +633,7 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
             if (impl_->inFlightPreparations > 0) {
                 --impl_->inFlightPreparations;
             }
-            reservationHeld = false;
+            reservationGuard.released = true;
         }
         impl_->cv.notify_all();
     } catch (const std::bad_alloc&) {

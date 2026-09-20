@@ -90,16 +90,14 @@ gpuSceneCommandDescriptorOf(const std::vector<GpuSceneCommand>& commands,
                 }
                 return GpuSceneCommandDescriptor{item.outputWindow, backdrop->display,
                                                  backdrop->pixelAspect};
-            } else if constexpr (std::is_same_v<T, GpuSceneOcioEffectCommand>) {
+            } else if constexpr (std::is_same_v<T, GpuSceneOcioEffectCommand> ||
+                                 std::is_same_v<T, GpuSceneMergeCommand> ||
+                                 std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
                 return GpuSceneCommandDescriptor{item.outputWindow, item.displayWindow,
                                                  item.pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneCompositionOutputCommand> ||
                                  std::is_same_v<T, GpuSceneSolidCommand>) {
                 return GpuSceneCommandDescriptor{item.dataWindow, item.displayWindow,
-                                                 item.pixelAspect};
-            } else if constexpr (std::is_same_v<T, GpuSceneMergeCommand> ||
-                                 std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
-                return GpuSceneCommandDescriptor{item.outputWindow, item.displayWindow,
                                                  item.pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneUploadCommand>) {
                 return GpuSceneCommandDescriptor{item.descriptor.dataWindow(),
@@ -313,11 +311,12 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     GpuSceneCommandIndex inputCommand = commandForOperation[inputValue];
     std::string inputKey = keyOf[inputValue];
     if (inputCommand == kInvalidGpuSceneCommand) {
-        if (!vectors[inputValue].has_value()) {
+        const auto& vectorChain = vectors[inputValue];
+        if (!vectorChain.has_value()) {
             return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                         "A non-identity image effect input is not materializable");
         }
-        const auto& chain = *vectors[inputValue];
+        const auto& chain = *vectorChain;
         if (chain.source >= plan.operations().size()) {
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                         "An image effect vector chain is invalid");

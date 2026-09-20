@@ -186,6 +186,7 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
 
 [[nodiscard]] inline std::vector<GpuFeatureCoverageEntry> gpuFeatureCoverage() {
     std::vector<GpuFeatureCoverageEntry> out;
+    out.reserve(core::kBlendModes.size());
     for (const auto mode : core::kBlendModes) {
         out.push_back(GpuFeatureCoverageEntry{std::string{"feature.blend."} +
                                                   std::to_string(core::blendModeStoredValue(mode)),

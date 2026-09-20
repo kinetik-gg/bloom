@@ -30,6 +30,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -181,11 +182,11 @@ inline const std::string kEmptyCommandKey;
 }
 
 // The single AffineBilinearV1 artifact token. Affine has one shader, so its effective pin is fixed.
-inline const std::string kAffineArtifactToken = "affine-bilinear-v1";
+inline constexpr std::string_view kAffineArtifactToken = "affine-bilinear-v1";
 
 // The single PointResampleV1 artifact token. PointResample has one shader, so its effective pin is
 // fixed.
-inline const std::string kPointResampleArtifactToken = "point-resample-v1";
+inline constexpr std::string_view kPointResampleArtifactToken = "point-resample-v1";
 
 [[nodiscard]] inline bool affineFieldsFinite(const GpuSceneAffineCommand& affine) noexcept {
     return std::isfinite(affine.matrix.a) && std::isfinite(affine.matrix.b) &&
@@ -212,9 +213,9 @@ pointResampleFieldsValid(const GpuScenePointResampleCommand& resample) noexcept 
         if (!affineFieldsFinite(*affine)) {
             return {};
         }
-        return makeGpuSceneAffineSemanticKey(affine->inputKey, affine->sourceWindow, affine->matrix,
-                                             affine->opacity, affine->outputWindow,
-                                             affine->pixelAspect, kAffineArtifactToken);
+        return makeGpuSceneAffineSemanticKey(
+            affine->inputKey, affine->sourceWindow, affine->matrix, affine->opacity,
+            affine->outputWindow, affine->pixelAspect, std::string{kAffineArtifactToken});
     }
     if (const auto* resample = std::get_if<GpuScenePointResampleCommand>(&command)) {
         if (!pointResampleFieldsValid(*resample)) {
@@ -223,7 +224,7 @@ pointResampleFieldsValid(const GpuScenePointResampleCommand& resample) noexcept 
         return makeGpuScenePointResampleSemanticKey(
             resample->inputKey, resample->sourceWindow, resample->outputWindow,
             resample->displayWindow, resample->horizontalScale, resample->verticalScale,
-            resample->pixelAspect, kPointResampleArtifactToken);
+            resample->pixelAspect, std::string{kPointResampleArtifactToken});
     }
     if (std::get_if<GpuSceneBlendCommand>(&command) != nullptr) {
         return {};
@@ -369,7 +370,9 @@ expectedDescriptorOf(const PreparedGpuScene& scene, const GpuSceneCommandIndex i
                 }
                 return SceneDescriptorInfo{item.outputWindow, backdrop->display,
                                            backdrop->pixelAspect};
-            } else if constexpr (std::is_same_v<T, GpuSceneOcioEffectCommand>) {
+            } else if constexpr (std::is_same_v<T, GpuSceneOcioEffectCommand> ||
+                                 std::is_same_v<T, GpuSceneMergeCommand> ||
+                                 std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
                 return SceneDescriptorInfo{item.outputWindow, item.displayWindow, item.pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuScenePointResampleCommand>) {
                 const auto source = expectedDescriptorOf(scene, item.input, depth + 1);
@@ -380,9 +383,6 @@ expectedDescriptorOf(const PreparedGpuScene& scene, const GpuSceneCommandIndex i
             } else if constexpr (std::is_same_v<T, GpuSceneCompositionOutputCommand> ||
                                  std::is_same_v<T, GpuSceneSolidCommand>) {
                 return SceneDescriptorInfo{item.dataWindow, item.displayWindow, item.pixelAspect};
-            } else if constexpr (std::is_same_v<T, GpuSceneMergeCommand> ||
-                                 std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
-                return SceneDescriptorInfo{item.outputWindow, item.displayWindow, item.pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneUploadCommand>) {
                 return SceneDescriptorInfo{item.descriptor.dataWindow(),
                                            item.descriptor.displayWindow(),
