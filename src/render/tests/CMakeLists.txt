@@ -208,6 +208,24 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         COMMAND bloom_render_gpu_composite_test
         LABELS unit gpu render
     )
+
+    # Production final-output readback primitive: real begin/poll/take, wrong-thread poll that
+    # leaves the job Pending, and a foreign owner thread that cannot steal an active reservation.
+    add_executable(bloom_render_gpu_process_readback_test gpu_process_readback_tests.cpp)
+    target_link_libraries(bloom_render_gpu_process_readback_test PRIVATE bloom_render)
+    target_include_directories(bloom_render_gpu_process_readback_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan" "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/include/vulkan")
+        target_include_directories(bloom_render_gpu_process_readback_test
+            SYSTEM PRIVATE "${BLOOM_DEPENDENCY_PREFIX}/include")
+    endif()
+    bloom_enable_warnings(bloom_render_gpu_process_readback_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_process_readback_test)
+    bloom_add_test(
+        NAME bloom.render.gpu_process_readback
+        COMMAND bloom_render_gpu_process_readback_test
+        LABELS unit gpu render export
+    )
 endif()
 
 # CPU-only kernel-prep and host-metadata test for AffineBilinearV1: hashes the embedded SPIR-V array

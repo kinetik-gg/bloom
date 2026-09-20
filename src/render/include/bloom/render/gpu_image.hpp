@@ -58,6 +58,10 @@ class GpuImage final {
     friend GpuImageReadback readbackResidentImage(const GpuImage& image,
                                                   std::uint64_t byteBudget) noexcept;
     friend const GpuImageImpl* gpuImageImpl(const GpuImage& image) noexcept;
+    // Narrow trusted friend: the production final-output readback primitive owns the one legitimate
+    // asynchronous device->host transfer. It reaches this same private impl only to set/clear the
+    // unretired-submission flag that keeps the source alive until its fence is proven retired.
+    friend class GpuProcessReadback;
     explicit GpuImage(std::unique_ptr<GpuImageImpl> impl) noexcept;
     void releaseOwnedImpl() noexcept;
 

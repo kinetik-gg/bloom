@@ -445,8 +445,23 @@ bloom_add_test(
     TIMEOUT 600
 )
 
-# Focused real-device live-pin ref-count regression for the executor (audit F1) plus the
-# upload-cancel branch consistency fix (audit F2). It runs its own 24-level distinct-index merge DAG
+# Bounded GPU final-render/export bridge: the real plan -> CpuGpuSceneBuilder -> GpuSceneExecutor
+# -> production GpuProcessReadback -> GPU-provenance ProcessFrame path, checked against the CPU
+# reference oracle and the canonical process-frame semantic identity. Uses the same loader/
+# --require-device contract and skips explicitly without a device.
+add_executable(bloom_runtime_gpu_process_frame_test gpu_process_frame_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_process_frame_test
+    PRIVATE bloom_runtime_evaluator bloom_render bloom_output)
+bloom_enable_warnings(bloom_runtime_gpu_process_frame_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_process_frame_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_process_frame
+    COMMAND bloom_runtime_gpu_process_frame_test
+    LABELS runtime unit gpu render export
+    TIMEOUT 600
+)
+
+# Focused real-device live-pin ref-count regression for the executor (audit F1) plus the# upload-cancel branch consistency fix (audit F2). It runs its own 24-level distinct-index merge DAG
 # under a budget of a known live-image count times the probe-measured actual per-image allocation,
 # independent of the buggy whole-graph retained peak; the unchanged executor suite above keeps its
 # own coverage. Same loader/--require-device contract.

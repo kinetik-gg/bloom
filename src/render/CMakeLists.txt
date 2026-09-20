@@ -753,6 +753,7 @@ target_sources(
             include/bloom/render/ocio_gpu_program.hpp
             include/bloom/render/gpu_presentation_target.hpp
             include/bloom/render/gpu_presentation_types.hpp
+            include/bloom/render/gpu_process_readback.hpp
             include/bloom/render/gpu_resident_display.hpp
             include/bloom/render/gpu_shader_artifact.hpp
             include/bloom/render/gpu_solid.hpp
@@ -797,6 +798,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_presentation_target.cpp
         vulkan/gpu_presentation_target_private.hpp
         vulkan/gpu_presentation_target_resources.cpp
+        vulkan/gpu_process_readback.cpp
         vulkan/gpu_resident_display.cpp
         vulkan/gpu_resident_display_private.hpp
         vulkan/gpu_resident_display_resources.cpp
@@ -838,7 +840,8 @@ else()
                                      gpu_image_upload_stub.cpp gpu_neutral_display_stub.cpp
                                      gpu_ocio_program_stub.cpp
                                      gpu_present_image_stub.cpp gpu_presentation_target_stub.cpp
-                                     gpu_resident_display_stub.cpp gpu_solid_stub.cpp)
+                                     gpu_process_readback_stub.cpp gpu_resident_display_stub.cpp
+                                     gpu_solid_stub.cpp)
 endif()
 
 target_compile_features(bloom_render PUBLIC cxx_std_20)
