@@ -1180,7 +1180,7 @@ void testUnconnectedCompositionOutputIsTransparent(Expectations& expectations) {
                                 .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
                                 .pixelStorageByteLimit = 1U << 28U},
                                runtime::CancellationToken{});
-        const auto frame = evaluated.frame();
+        const auto& frame = evaluated.frame();
         expectations.expect(frame != nullptr && evaluated.diagnostics().empty(),
                             "the disconnected composition still renders a reference frame");
         if (frame != nullptr) {
