@@ -23,10 +23,6 @@ using GpuRendererAccess = bloom::render::GpuRendererAccess;
 
 constexpr std::uint32_t kWorkgroupSizeX = 256;
 constexpr std::uint64_t kDrainTimeoutNanoseconds = 2ULL * 1000ULL * 1000ULL * 1000ULL;
-constexpr std::int32_t kMaxQuarantines = 4;
-
-std::atomic<std::int32_t> g_quarantineCount{0};
-std::atomic<bool> g_teardownIncomplete{false};
 
 struct SolidPushConstants final {
     float pixel[4];
@@ -34,15 +30,6 @@ struct SolidPushConstants final {
     std::uint32_t height;
 };
 static_assert(sizeof(SolidPushConstants) == 24);
-
-[[nodiscard]] bool quarantineAllowed() noexcept {
-    return g_quarantineCount.load() < kMaxQuarantines;
-}
-
-void noteQuarantine() noexcept {
-    g_quarantineCount.fetch_add(1);
-    g_teardownIncomplete.store(true);
-}
 
 } // namespace
 
@@ -66,14 +53,30 @@ void GpuSolid::releaseImpl() noexcept {
         return;
     }
     if (!impl_->onOwnerThread()) {
-        noteQuarantine();
-        [[maybe_unused]] const auto* const quarantined = impl_.release();
+        // Foreign thread: never destroy native state. An Impl that owns a resident slot is preserved
+        // in that same slot (orphaned) for owner retirement; an Impl with no slot owns no Vulkan
+        // objects (the pipeline is created lazily under a slot) and can be destroyed here.
+        if (impl_->residentSlot != kSolidNoResidentSlot) {
+            impl_->orphanResidentSlot();
+            (void)impl_.release();
+        } else {
+            impl_.reset();
+        }
         return;
     }
-    if (!impl_->drainAndRetire()) {
-        noteQuarantine();
-        [[maybe_unused]] const auto* const quarantined = impl_.release();
-        return;
+    // Owner thread: prove retirement if needed, then free native resources and return the slot. An
+    // unproven submission is retained in the bounded pool for a later owner drain rather than
+    // destroyed in flight.
+    if (impl_->residentSlot != kSolidNoResidentSlot) {
+        if (impl_->queueSubmitted) {
+            cancel();
+            if (!impl_->drainAndRetire()) {
+                impl_->orphanResidentSlot();
+                [[maybe_unused]] const auto* const retained = impl_.release();
+                return;
+            }
+        }
+        impl_->releaseResidentSlot();
     }
     impl_.reset();
 }
@@ -124,10 +127,27 @@ bool GpuSolid::Impl::drainAndRetire() noexcept {
 }
 
 GpuSolid::Impl::~Impl() {
-    assert(owner == std::this_thread::get_id());
+    // A slot-less Impl owns no native Vulkan resources (the pipeline is created lazily under a slot,
+    // and a failed creation is reset before the slot is released), so it may be destroyed from any
+    // thread. A slot-holding Impl is only ever destroyed on its owner thread: a foreign destruction
+    // orphans the slot instead.
+    assert(residentSlot == kSolidNoResidentSlot);
     releaseResident();
     coveredPalette.release();
     coveredMask.release();
+}
+
+void GpuSolid::Impl::resetPipelineResources() noexcept {
+    shaderModule = vk::raii::ShaderModule{nullptr};
+    descriptorSetLayout = vk::raii::DescriptorSetLayout{nullptr};
+    pipelineLayout = vk::raii::PipelineLayout{nullptr};
+    pipeline = vk::raii::Pipeline{nullptr};
+    descriptorPool = vk::raii::DescriptorPool{nullptr};
+    descriptorSet = vk::raii::DescriptorSet{nullptr};
+    commandPool = vk::raii::CommandPool{nullptr};
+    commandBuffer = vk::raii::CommandBuffer{nullptr};
+    fence = vk::raii::Fence{nullptr};
+    pipelineReady = false;
 }
 
 bool GpuSolid::Impl::createPipeline() {
@@ -284,10 +304,8 @@ GpuSolidCreateResult GpuSolid::create(GpuDevice& device, const GpuSolidBudgets& 
                                             "the SolidV1 pipeline must be created on the device "
                                             "owner thread")};
     }
-    if (!quarantineAllowed()) {
-        return {nullptr, gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
-                                            "too many undrained GPU generations are quarantined")};
-    }
+    // Retire orphaned foreign-released residents on the owner thread so admission recovers.
+    Impl::drainResidentOrphansOnOwnerThread();
     auto control = GpuRendererAccess::state(device);
     if (control == nullptr) {
         return {nullptr, gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
@@ -297,14 +315,14 @@ GpuSolidCreateResult GpuSolid::create(GpuDevice& device, const GpuSolidBudgets& 
     // refuse the pipeline: the actual requested image is validated against the device's real
     // maxResourceSize in begin() (querySolidImageSupport), so a small request runs even when the
     // configured maximum is larger than any physical image.
+    // Lazy creation: an idle GpuSolid allocates no native resources and holds no resident slot. The
+    // pipeline is created on the first begin under the bounded slot, so many pre-created instances
+    // are bounded by the fixed pool rather than each owning native state.
     auto impl = std::make_unique<Impl>();
     impl->owner = std::this_thread::get_id();
     impl->control = std::move(control);
     impl->budgets = budgets;
     impl->expectedGeneration = impl->control->generation;
-    if (!impl->createPipeline()) {
-        return {nullptr, impl->createDiagnostic};
-    }
     return {std::unique_ptr<GpuSolid>(new GpuSolid(std::move(impl))), GpuSolidDiagnostic{}};
 }
 
@@ -319,6 +337,8 @@ GpuSolidDiagnostic GpuSolid::begin(const GpuSolidParameters& parameters,
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::WrongThread,
                                   "begin must run on the device owner thread");
     }
+    // Opportunistic, non-blocking retirement of orphaned foreign-released residents.
+    Impl::drainResidentOrphansOnOwnerThread();
     if (impl.deviceLost) {
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceLost,
                                   "the device was lost; this generation must not be reused");
@@ -353,6 +373,22 @@ GpuSolidDiagnostic GpuSolid::begin(const GpuSolidParameters& parameters,
     if (required > support.maxImageBytes) {
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::OverBudget,
                                   "the resident image exceeds the device resource limit");
+    }
+
+    // Acquire the bounded resident slot BEFORE the first native allocation, and create the pipeline
+    // lazily under it. A full pool refuses cleanly without allocating anything.
+    if (!impl.acquireResidentSlot()) {
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
+                                  "the bounded SolidV1 resident pool is full; no native resources "
+                                  "were allocated");
+    }
+    if (!impl.pipelineReady) {
+        if (!impl.createPipeline()) {
+            impl.resetPipelineResources();
+            impl.releaseResidentSlot();
+            return impl.createDiagnostic;
+        }
+        impl.pipelineReady = true;
     }
 
     impl.clearJob();
@@ -616,6 +652,10 @@ void GpuSolid::cancel() noexcept {
     }
 }
 
-bool GpuSolid::teardownDrainIncomplete() noexcept { return g_teardownIncomplete.load(); }
+bool GpuSolid::teardownDrainIncomplete() noexcept {
+    // Recoverable pressure, not a permanent fuse: true while a foreign-released or unproven
+    // resident is retained in the bounded pool, and false again once the rightful owner drains it.
+    return solid_detail::solidResidentOrphaned() > 0;
+}
 
 } // namespace bloom::render

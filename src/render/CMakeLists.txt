@@ -1026,6 +1026,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_affine_resources.cpp
         vulkan/gpu_blend.cpp
         vulkan/gpu_blend_private.hpp
+        vulkan/gpu_bounded_retirement.hpp
         vulkan/gpu_composite.cpp
         vulkan/gpu_composite_private.hpp
         vulkan/gpu_composite_resources.cpp
@@ -1035,8 +1036,10 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_image.cpp
         vulkan/gpu_image_private.hpp
         vulkan/gpu_image_upload.cpp
+        vulkan/gpu_image_upload_fault.hpp
         vulkan/gpu_image_upload_private.hpp
         vulkan/gpu_image_upload_resources.cpp
+        vulkan/gpu_image_upload_retirement.cpp
         vulkan/gpu_neutral_display.cpp
         vulkan/gpu_neutral_display_private.hpp
         vulkan/gpu_neutral_display_resources.cpp
@@ -1063,7 +1066,9 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_resident_display_resources.cpp
         vulkan/gpu_solid.cpp
         vulkan/gpu_solid_covered.cpp
+        vulkan/gpu_solid_fault.hpp
         vulkan/gpu_solid_private.hpp
+        vulkan/gpu_solid_retirement.cpp
         vulkan/gpu_path_coverage.cpp
         vulkan/gpu_path_coverage_lifecycle.cpp
         vulkan/gpu_path_coverage_resources.cpp

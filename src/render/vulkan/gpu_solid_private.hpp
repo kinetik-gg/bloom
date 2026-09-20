@@ -12,8 +12,10 @@
 
 #include "gpu_device_private.hpp"
 #include "gpu_image_private.hpp"
+#include "gpu_solid_fault.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -93,6 +95,9 @@ struct GpuSolidCoveredResources final {
     std::string reason;
 };
 
+// Sentinel for an Impl that owns no bounded resident-pool slot.
+inline constexpr std::size_t kSolidNoResidentSlot = static_cast<std::size_t>(-1);
+
 struct GpuSolid::Impl final {
     Impl() = default;
     Impl(const Impl&) = delete;
@@ -115,6 +120,18 @@ struct GpuSolid::Impl final {
         coveredMask.release();
     }
     void releaseResident() { residentImage.reset(); }
+    // Bounded resident-slot management, defined in gpu_solid_retirement.cpp. Acquire is called
+    // before the first native allocation; release is owner-thread retirement; orphan is the
+    // foreign-thread or unproven owner path that preserves the already-owned slot for the owner
+    // drain. The drain is a static member because it names the private Impl type.
+    [[nodiscard]] bool acquireResidentSlot() noexcept;
+    void releaseResidentSlot() noexcept;
+    void orphanResidentSlot() noexcept;
+    static void drainResidentOrphansOnOwnerThread() noexcept;
+    // Frees every base pipeline/command/fence native resource. Called only on the owner thread after
+    // a failed createPipeline() so an Impl that then holds no resident slot owns no Vulkan object
+    // and may be destroyed from any thread.
+    void resetPipelineResources() noexcept;
     [[nodiscard]] bool createPipeline();
     // Builds the CoveredSolidV1 shader module, descriptor layout, pipeline
     // layout, pipeline, descriptor pool, and descriptor set.
@@ -135,6 +152,10 @@ struct GpuSolid::Impl final {
     std::shared_ptr<vulkan_detail::DeviceAllocatorState> control;
     GpuSolidBudgets budgets;
     std::uint32_t expectedGeneration = 0;
+    // Bounded resident-pool slot owned by this Impl from before its first native allocation until
+    // owner-thread release. kSolidNoResidentSlot means this Impl owns no native resources.
+    std::size_t residentSlot = kSolidNoResidentSlot;
+    bool pipelineReady = false;
 
     vk::raii::ShaderModule shaderModule{nullptr};
     vk::raii::DescriptorSetLayout descriptorSetLayout{nullptr};

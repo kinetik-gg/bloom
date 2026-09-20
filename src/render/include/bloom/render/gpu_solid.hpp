@@ -92,9 +92,10 @@ class GpuSolid final {
     GpuSolid& operator=(GpuSolid&& other) noexcept;
     ~GpuSolid();
 
-    // Builds the cached shader module, descriptor layout, pipeline layout,
-    // compute pipeline, command pool, and fence once on the device owner thread.
-    // Wrong thread returns WrongThread.
+    // Prepares the SolidV1 operation on the device owner thread. Creation is lazy: an idle instance
+    // allocates no native resources, and the cached shader module, descriptor layout, pipeline
+    // layout, compute pipeline, command pool, and fence are built on the first begin under a bounded
+    // process-wide resident slot. Wrong thread returns WrongThread.
     [[nodiscard]] static GpuSolidCreateResult create(GpuDevice& device,
                                                      const GpuSolidBudgets& budgets = {});
 
@@ -157,9 +158,9 @@ class GpuSolid final {
     // retires.
     void cancel() noexcept;
 
-    // Process-global reported limitation: teardown could not drain an in-flight
-    // job within its bounded budget and retained (did not destroy) busy Vulkan
-    // objects.
+    // Recoverable bounded-pool pressure, not a permanent fuse: true while a foreign-released or
+    // unproven resident is retained for owner drain, and false again once the rightful owner thread
+    // has proved retirement (or device loss) and freed it.
     [[nodiscard]] static bool teardownDrainIncomplete() noexcept;
 
   private:

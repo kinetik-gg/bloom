@@ -263,6 +263,8 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::WrongThread,
                                   "beginCovered must run on the device owner thread");
     }
+    // Opportunistic, non-blocking retirement of orphaned foreign-released residents.
+    Impl::drainResidentOrphansOnOwnerThread();
     if (impl.deviceLost) {
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceLost,
                                   "the device was lost; this generation must not be reused");
@@ -326,6 +328,23 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
     if (imageBytes > support.maxImageBytes) {
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::OverBudget,
                                   "the resident image exceeds the device resource limit");
+    }
+
+    // Acquire the bounded resident slot BEFORE the first native allocation, and create the shared
+    // base pipeline (command pool/buffer/fence) lazily under it. A full pool refuses cleanly without
+    // allocating anything.
+    if (!impl.acquireResidentSlot()) {
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
+                                  "the bounded SolidV1 resident pool is full; no native resources "
+                                  "were allocated");
+    }
+    if (!impl.pipelineReady) {
+        if (!impl.createPipeline()) {
+            impl.resetPipelineResources();
+            impl.releaseResidentSlot();
+            return impl.createDiagnostic;
+        }
+        impl.pipelineReady = true;
     }
 
     impl.clearJob();

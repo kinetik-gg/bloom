@@ -15,8 +15,10 @@
 
 #include "gpu_device_private.hpp"
 #include "gpu_image_private.hpp"
+#include "gpu_image_upload_fault.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -56,15 +58,13 @@ struct UploadStagingBuffer final {
 [[nodiscard]] std::uint64_t uploadAllocationBytes(vulkan_detail::DeviceAllocatorState& state,
                                                   VmaAllocation allocation) noexcept;
 
-// Process-global bounded quarantine accounting and teardown fuse, shared by both translation units.
-[[nodiscard]] bool uploadQuarantineAllowed() noexcept;
-void noteUploadQuarantine() noexcept;
-[[nodiscard]] bool uploadTeardownIncomplete() noexcept;
-
 [[nodiscard]] inline GpuImageUploadDiagnostic
 uploadDiagnostic(const GpuImageUploadDiagnosticCode code, std::string message) {
     return GpuImageUploadDiagnostic{code, std::move(message)};
 }
+
+// Sentinel for an Impl that owns no bounded resident-pool slot.
+inline constexpr std::size_t kUploadNoResidentSlot = static_cast<std::size_t>(-1);
 
 // The single job state machine behind GpuImageUpload, defined here so both translation units can
 // implement its members without a second public header or a second Impl definition.
@@ -89,6 +89,18 @@ struct GpuImageUpload::Impl final {
         staging.release();
     }
     void releaseResident() { residentImage.reset(); }
+    // Bounded resident-slot management, defined in gpu_image_upload_retirement.cpp. Acquire is
+    // called before the first native allocation; release is owner-thread retirement; orphan is the
+    // foreign-thread or unproven owner path that preserves the already-owned slot for the owner
+    // drain. The drain is a static member because it names the private Impl type.
+    [[nodiscard]] bool acquireResidentSlot() noexcept;
+    void releaseResidentSlot() noexcept;
+    void orphanResidentSlot() noexcept;
+    static void drainResidentOrphansOnOwnerThread() noexcept;
+    // Frees the command pool/buffer/fence. Called only on the owner thread after a failed
+    // createResources() so an Impl that then holds no resident slot owns no Vulkan object and may be
+    // destroyed from any thread.
+    void resetResources() noexcept;
     [[nodiscard]] bool createResources();
     // Bounded owner-thread drain. Returns true when the submission is proved retired.
     [[nodiscard]] bool drainAndRetire() noexcept;
@@ -97,6 +109,10 @@ struct GpuImageUpload::Impl final {
     std::shared_ptr<vulkan_detail::DeviceAllocatorState> control;
     GpuImageUploadBudgets budgets;
     std::uint32_t expectedGeneration = 0;
+    // Bounded resident-pool slot owned by this Impl from before its first native allocation until
+    // owner-thread release. kUploadNoResidentSlot means this Impl owns no native resources.
+    std::size_t residentSlot = kUploadNoResidentSlot;
+    bool resourcesReady = false;
 
     vk::raii::CommandPool commandPool{nullptr};
     vk::raii::CommandBuffer commandBuffer{nullptr};
