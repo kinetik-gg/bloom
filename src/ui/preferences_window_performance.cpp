@@ -76,9 +76,6 @@ QWidget* PreferencesWindow::buildPerformancePage() {
     performanceStateValue_ =
         addStatusRow(QStringLiteral("preferencesPerformanceStateValue"),
                      QStringLiteral("preferencesPerformanceStateRow"), tr("Device state"), nullptr);
-    performanceRouteValue_ = addStatusRow(QStringLiteral("preferencesPerformanceRouteValue"),
-                                          QStringLiteral("preferencesPerformanceRouteRow"),
-                                          tr("Available preview route"), nullptr);
     performancePresentationValue_ = addStatusRow(
         QStringLiteral("preferencesPerformancePresentationValue"),
         QStringLiteral("preferencesPerformancePresentationRow"), tr("Presentation"), nullptr);
@@ -88,24 +85,6 @@ QWidget* PreferencesWindow::buildPerformancePage() {
     performanceDriverValue_ = addStatusRow(QStringLiteral("preferencesPerformanceDriverValue"),
                                            QStringLiteral("preferencesPerformanceDriverRow"),
                                            tr("Driver"), &performanceDriverRow_);
-
-    performanceOperations_ = new kit::KLabel(content);
-    performanceOperations_->setObjectName(QStringLiteral("preferencesPerformanceOperationValue"));
-    performanceOperations_->setWordWrap(true);
-    rows->addWidget(performanceOperations_);
-
-    performanceSummary_ = new kit::KLabel(content);
-    performanceSummary_->setObjectName(QStringLiteral("preferencesPerformanceSummary"));
-    performanceSummary_->setWordWrap(true);
-    rows->addWidget(performanceSummary_);
-
-    auto* note = new kit::KLabel(
-        tr("GPU execution is an acceleration over the same evaluation; the CPU reference remains "
-           "the correctness oracle."),
-        content);
-    note->setObjectName(QStringLiteral("preferencesPerformanceNote"));
-    note->setWordWrap(true);
-    layout->addWidget(note);
 
     layout->addStretch(1);
 
@@ -129,7 +108,6 @@ void PreferencesWindow::refreshPerformancePage() {
 
     performanceBackendValue_->setText(status.backend);
     performanceStateValue_->setText(status.deviceState);
-    performanceRouteValue_->setText(status.previewRoute);
     performancePresentationValue_->setText(status.presentationStatus);
 
     const bool hasDevice = !status.deviceName.isEmpty();
@@ -142,12 +120,6 @@ void PreferencesWindow::refreshPerformancePage() {
     if (performanceDriverRow_ != nullptr) {
         performanceDriverRow_->setVisible(hasDriver);
     }
-
-    if (performanceOperations_ != nullptr) {
-        performanceOperations_->setText(status.operationStatus.join(QStringLiteral("\n")));
-        performanceOperations_->setVisible(!status.operationStatus.isEmpty());
-    }
-    performanceSummary_->setText(status.summary);
 }
 
 void PreferencesWindow::showEvent(QShowEvent* event) {
