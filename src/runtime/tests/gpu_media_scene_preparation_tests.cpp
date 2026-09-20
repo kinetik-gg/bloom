@@ -7,9 +7,23 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <thread>
+
+namespace bloom::runtime {
+
+// Proof-only fixture seam: the builder's private, default-empty checkpoint callback is set only
+// from the test translation unit (mirroring GpuSceneFixtureBuilder). Production defines neither
+// this accessor nor a way to install one.
+struct GpuSceneBuilderTestAccess final {
+    static void setCheckpoint(CpuGpuSceneBuilder& builder, std::function<void()> checkpoint) {
+        builder.checkpoint_ = std::move(checkpoint);
+    }
+};
+
+} // namespace bloom::runtime
 
 namespace {
 

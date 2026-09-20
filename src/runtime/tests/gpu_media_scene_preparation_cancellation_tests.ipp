@@ -14,7 +14,10 @@ void testPreCancelledPreparationPublishesNothing(
                         "a pre-cancelled request returns no partial scene");
 }
 
-// Cancellation requested while preparation is already running still publishes no partial scene.
+// Cancellation requested while preparation is already running still publishes no partial scene. The
+// builder is deterministically parked at its private in-build checkpoint before the request is
+// issued, so this cannot race a build that has already finished. No wall-clock sleep is used as
+// synchronization, and the bounded wait fails the test rather than hanging.
 void testCancellationDuringPreparation(Expectations& expectations) {
     const auto plan =
         twoLayerPlan(format(16, 12), LayerValues{.position = {8.3, 6.1}},
@@ -24,22 +27,26 @@ void testCancellationDuringPreparation(Expectations& expectations) {
     config.cpuWorkerCount = 1;
     config.blockingIoWorkerCount = 1;
     bloom::runtime::TaskScheduler scheduler(config);
+
     std::mutex mutex;
     std::condition_variable condition;
-    bool started = false;
+    bool entered = false;
+    bool released = false;
+    CpuGpuSceneBuilder builder{};
+    bloom::runtime::GpuSceneBuilderTestAccess::setCheckpoint(builder, [&] {
+        std::unique_lock lock(mutex);
+        entered = true;
+        condition.notify_all();
+        condition.wait(lock, [&] { return released; });
+    });
+
     std::atomic_bool observedCancelled = false;
     std::atomic_bool observedSuccess = false;
-    const CpuGpuSceneBuilder builder{};
     auto submission = scheduler.submit<void>(
         bloom::runtime::TaskRequest("gpu media cancellation fixture",
                                     {.kind = bloom::runtime::TaskOwnerKind::Composition,
                                      .id = bloom::runtime::TaskOwnerId::fromRaw(78)}),
         [&](bloom::runtime::TaskContext& context) {
-            {
-                std::lock_guard lock(mutex);
-                started = true;
-            }
-            condition.notify_all();
             const auto prepared = builder.build(plan, request, context.cancellation());
             if (!prepared) {
                 observedCancelled.store(prepared.diagnostic.code ==
@@ -52,9 +59,17 @@ void testCancellationDuringPreparation(Expectations& expectations) {
     expectations.expect(submission.accepted(), "the cancellation fixture task is accepted");
     {
         std::unique_lock lock(mutex);
-        condition.wait(lock, [&] { return started; });
+        const bool reached =
+            condition.wait_for(lock, std::chrono::seconds(10), [&] { return entered; });
+        expectations.expect(reached,
+                            "preparation deterministically reaches the in-build checkpoint");
     }
     submission.handle.cancel();
+    {
+        std::lock_guard lock(mutex);
+        released = true;
+    }
+    condition.notify_all();
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (!submission.handle.tryTakeResult().has_value() &&
            std::chrono::steady_clock::now() < deadline) {

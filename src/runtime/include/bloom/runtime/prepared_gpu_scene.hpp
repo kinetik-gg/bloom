@@ -49,6 +49,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -614,6 +615,11 @@ class CpuGpuSceneBuilder final {
           const EvaluationRequest& request, const CancellationToken& cancellation = {}) const;
 
   private:
+    // Proof-only fixture seam: a private, default-empty checkpoint callback, declared as a friend
+    // here and defined only in the test translation unit (mirroring GpuSceneFixtureBuilder), so
+    // production exposes no creation API for it and an empty callback leaves behavior unchanged.
+    friend struct GpuSceneBuilderTestAccess;
+
     [[nodiscard]] PreparedGpuSceneBuildResult
     buildImpl(const std::shared_ptr<const CompiledCompositionPlan>& plan,
               const EvaluationRequest& request, const CancellationToken& cancellation) const;
@@ -621,6 +627,7 @@ class CpuGpuSceneBuilder final {
     std::shared_ptr<GpuSceneCoverageCache> coverageCache_;
     GpuSceneMediaContext mediaContext_;
     GpuSceneOcioContext ocioContext_;
+    std::function<void()> checkpoint_;
 };
 
 } // namespace bloom::runtime

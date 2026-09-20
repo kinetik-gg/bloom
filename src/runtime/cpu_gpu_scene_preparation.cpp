@@ -278,6 +278,12 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         return std::nullopt;
     };
 
+    // Test-only checkpoint (empty in production): a test can pause preparation here, request
+    // cancellation, then release it so the per-operation cancellation check below observes a
+    // genuinely mid-build request deterministically.
+    if (checkpoint_) {
+        checkpoint_();
+    }
     for (std::size_t index = 0; index < operationCount; ++index) {
         if (!reachable[index]) {
             continue;
