@@ -1,7 +1,14 @@
 #pragma once
 
+#include <bloom/ui/editor_native_surface.hpp>
+#include <bloom/ui/native_surface_retirement.hpp>
+
 #include <QObject>
 #include <QTimer>
+
+#include <functional>
+#include <string>
+#include <vector>
 
 class QEvent;
 
@@ -17,13 +24,24 @@ class ApplicationShutdownCoordinator final : public QObject {
     ApplicationShutdownCoordinator(CompositionPreviewController& previewController,
                                    TaskUiBridge& taskUiBridge, QObject* parent = nullptr);
 
+    // Optional. Must be set before beginShutdown(). The function returns every live native surface
+    // in the application's workspace; an empty function (the CPU-only / no-native default) means
+    // the surface half of the shutdown contract is already satisfied and behavior is unchanged. A
+    // plain function seam (not a second QObject base) keeps the frozen moc vtable intact.
+    using NativeSurfaceSource = std::function<std::vector<EditorNativeSurface*>()>;
+    void setNativeSurfaceSource(NativeSurfaceSource source);
+
     [[nodiscard]] bool isShuttingDown() const noexcept;
+    [[nodiscard]] bool nativeSurfaceRetirementSatisfied() const noexcept;
+    [[nodiscard]] const std::string& nativeSurfaceRefusalDiagnostic() const noexcept;
 
   public slots:
     void beginShutdown();
 
   signals:
     void shutdownStarted();
+    // Emitted only once BOTH runtime task quiescence AND native-surface retirement have been
+    // observed. A retained/unproven surface keeps this un-emitted on purpose.
     void shutdownQuiescent();
 
   protected:
@@ -38,11 +56,18 @@ class ApplicationShutdownCoordinator final : public QObject {
     // log the task bridge's outstanding task snapshots once so a real future occurrence is
     // self-explaining instead of silently unresponsive.
     void logStillShuttingDownDiagnostic() const;
+    void beginNativeSurfaceRetirement();
+    void publishQuiescenceIfReady();
 
     CompositionPreviewController& previewController_;
     TaskUiBridge& taskUiBridge_;
+    NativeSurfaceSource nativeSurfaceSource_;
+    NativeSurfaceRetirementGate surfaceRetirementGate_;
+    std::string nativeSurfaceRefusalDiagnostic_;
     QTimer stuckShutdownDiagnosticTimer_;
     bool shuttingDown_ = false;
+    bool taskQuiescence_ = false;
+    bool surfaceRetirementComplete_ = false;
     bool quiescencePublished_ = false;
 };
 

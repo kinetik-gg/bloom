@@ -22,6 +22,9 @@ CommandResult makeResult(CommandAction action, CommandStatus status,
         .operationFailures = {},
         .outputs = {},
         .validation = {},
+        .renderAffecting = true,
+        .affectedTimes = std::nullopt,
+        .layerIdentityRemaps = std::nullopt,
     };
 }
 
@@ -149,6 +152,15 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
 
     document::Draft draft = document_.draft(before);
     bool changed = false;
+    bool renderAffecting = false;
+    // True as soon as an applied render-affecting operation did NOT prove a finite footprint, which
+    // makes the transaction's affected time the conservative whole render.
+    bool wholeRender = false;
+    std::optional<AffectedTimeFootprint> affectedTimes;
+    // SPLIT-1. Ordered remaps, appended in operation order. Any unknown/mixed/cap failure clears
+    // them and forces whole render.
+    std::vector<LayerIdentityRemap> layerIdentityRemaps;
+    bool remapsValid = true;
     std::vector<CommandOutput> outputs;
     std::size_t operationIndex = 0;
     for (const auto& operation : transaction.operations()) {
@@ -176,6 +188,58 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
                 {operationIndex, std::string(operation->typeId()), std::move(output)});
         }
         changed = changed || operationResult.status == OperationStatus::Applied;
+        // Only an operation that actually applied can change pixels. A pixel-affecting operation
+        // that reported NoChange contributes nothing, so a layout edit beside it stays layout-only.
+        if (operationResult.status == OperationStatus::Applied && operation->renderAffecting()) {
+            renderAffecting = true;
+            // A proven finite footprint narrows the affected time; an operation that proved none
+            // (the default) dominates to the whole render. A mixed-composition union also fails
+            // closed to whole render.
+            if (operationResult.affectedTimes.has_value() && remapsValid) {
+                const auto merged =
+                    mergeAffectedTimeFootprints(affectedTimes, *operationResult.affectedTimes);
+                if (!merged.has_value()) {
+                    wholeRender = true;
+                    remapsValid = false;
+                } else {
+                    affectedTimes = merged;
+                    // Ordered remaps ride alongside a finite footprint. Every remap must name the
+                    // SAME composition as the finite footprint it accompanies, or the whole
+                    // transaction fails closed: normalizing remaps among themselves cannot catch a
+                    // footprint/remap composition mismatch. A malformed descriptor, an invalid
+                    // composition id, an inverted range, or a cap overflow also fails closed.
+                    if (operationResult.layerIdentityRemaps.has_value()) {
+                        for (const auto& remap : *operationResult.layerIdentityRemaps) {
+                            if (remap.compositionId != merged->compositionId) {
+                                wholeRender = true;
+                                remapsValid = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (remapsValid && operationResult.layerIdentityRemaps.has_value()) {
+                        const auto normalized = normalizeLayerIdentityRemaps([&] {
+                            auto combined = layerIdentityRemaps;
+                            combined.insert(combined.end(),
+                                            operationResult.layerIdentityRemaps->begin(),
+                                            operationResult.layerIdentityRemaps->end());
+                            return combined;
+                        }());
+                        if (normalized.has_value())
+                            layerIdentityRemaps = *normalized;
+                        else {
+                            wholeRender = true;
+                            remapsValid = false;
+                        }
+                    }
+                }
+            } else {
+                // An operation that proved no finite footprint, or a transaction already failed
+                // closed on remaps, dominates to whole render and can never publish remaps.
+                wholeRender = true;
+                remapsValid = false;
+            }
+        }
         ++operationIndex;
     }
 
@@ -199,8 +263,25 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     auto result = resultForCommit(CommandAction::Execute, std::string(transaction.label()), before,
                                   std::move(commitResult));
     result.outputs = std::move(outputs);
+    result.renderAffecting = renderAffecting;
+    // A finite footprint is published only when the whole transaction's render effect is confined
+    // to it. A layout-only transaction (renderAffecting false) publishes none, matching its
+    // render-neutral semantics.
+    if (renderAffecting && !wholeRender && remapsValid && affectedTimes.has_value()) {
+        result.affectedTimes = affectedTimes;
+        // Remaps require the whole transaction to be finite; a nonempty set is published only when
+        // every descriptor validated. An empty set is a legitimate "no remaps".
+        const auto normalized = normalizeLayerIdentityRemaps(layerIdentityRemaps);
+        if (normalized.has_value())
+            result.layerIdentityRemaps = *normalized;
+        else
+            result.affectedTimes.reset();
+    }
+    const auto storedAffectedTimes = result.affectedTimes;
+    const auto storedRemaps = result.layerIdentityRemaps;
     history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(cursor_), history_.end());
-    history_.push_back({std::string(transaction.label()), before, after});
+    history_.push_back({std::string(transaction.label()), before, after, renderAffecting,
+                        storedAffectedTimes, storedRemaps});
     cursor_ = history_.size();
     trackedRevision_ = after.revision();
     notify(result);
@@ -233,6 +314,11 @@ CommandResult CommandStack::undo() {
     const document::Revision restoredRevision = restoreResult.snapshot->revision();
     auto result =
         resultForCommit(CommandAction::Undo, entry.label, before, std::move(restoreResult));
+    result.renderAffecting = entry.renderAffecting;
+    result.affectedTimes = entry.affectedTimes;
+    // Undo reverses order and swaps before/after IDs.
+    if (entry.layerIdentityRemaps.has_value() && !entry.layerIdentityRemaps->empty())
+        result.layerIdentityRemaps = invertLayerIdentityRemaps(entry.layerIdentityRemaps);
     --cursor_;
     trackedRevision_ = restoredRevision;
     notify(result);
@@ -265,6 +351,10 @@ CommandResult CommandStack::redo() {
     const document::Revision restoredRevision = restoreResult.snapshot->revision();
     auto result =
         resultForCommit(CommandAction::Redo, entry.label, before, std::move(restoreResult));
+    result.renderAffecting = entry.renderAffecting;
+    result.affectedTimes = entry.affectedTimes;
+    // Redo replays the stored FORWARD ordered list.
+    result.layerIdentityRemaps = entry.layerIdentityRemaps;
     ++cursor_;
     trackedRevision_ = restoredRevision;
     notify(result);

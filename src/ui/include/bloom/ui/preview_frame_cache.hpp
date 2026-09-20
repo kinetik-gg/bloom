@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -48,7 +49,7 @@ struct PreviewFrameCacheKey final {
     runtime::PreviewResolutionPolicy resolutionPolicy = runtime::PreviewResolutionPolicy::Auto;
 
     [[nodiscard]] static PreviewFrameCacheKey
-    forIdentity(const runtime::PreviewRequestIdentity& identity) noexcept;
+    forIdentity(const runtime::PreviewRequestIdentity& identity);
 
     std::optional<render::ImageWindow> roi = std::nullopt;
     runtime::ViewAdjust viewAdjust{};
@@ -100,8 +101,46 @@ class PreviewFrameCache final : public QObject {
         std::uint64_t allocationFailures = 0;
         // Frames dropped by a memory-pressure trim, as opposed to ordinary budget eviction.
         std::uint64_t pressureDrops = 0;
+        // Frames dropped (or refused on insertion) because a work-area edit put them outside the
+        // retained range. Counted apart from evictions and pressure so an explicit range trim never
+        // reads as, or behaves as, memory pressure.
+        std::uint64_t rangeDrops = 0;
+        // GPU-resident entries evicted to stay inside the additive GPU-resident sublimits below.
+        // Counted apart from the overall-budget evictions because the two mean different things:
+        // this one says the bounded resident set is the limit, the other says the whole cache is.
+        std::uint64_t gpuResidentEvictions = 0;
 
         friend bool operator==(const Statistics&, const Statistics&) = default;
+    };
+
+    // The half-open time range [start, end) this cache is scoped to for one composition, taken from
+    // the LIVE work area. A frame whose project/composition matches and whose time falls outside is
+    // not retained (it may still be displayed), and setting a narrower range prunes what is already
+    // held. std::nullopt means "retain anything", which is the default and what a standalone cache
+    // uses; the shared cache of `CompositionPreviewController` always sets it from the session.
+    struct RetentionRange final {
+        document::ProjectId projectId;
+        document::CompositionId compositionId;
+        core::RationalTime start;
+        core::RationalTime end;
+
+        friend bool operator==(const RetentionRange&, const RetentionRange&) = default;
+    };
+
+    // TEMPORAL-2B. One accepted provenance span: while a composition's time is inside [start, end),
+    // the ONLY genuine snapshot revision a retained frame for that time may carry is `revision`.
+    // This is the session's time-indexed provenance, so multiple revisions coexist across a
+    // composition's timeline after finite edits. An empty list means "no provenance policy" and
+    // retains anything (standalone caches and tests); the shared controller cache always sets the
+    // session's full-cover list.
+    struct RetentionSnapshot final {
+        document::ProjectId projectId;
+        document::CompositionId compositionId;
+        document::Revision revision;
+        core::RationalTime start;
+        core::RationalTime end;
+
+        friend bool operator==(const RetentionSnapshot&, const RetentionSnapshot&) = default;
     };
 
     explicit PreviewFrameCache(
@@ -138,6 +177,40 @@ class PreviewFrameCache final : public QObject {
     [[nodiscard]] Statistics statistics() const noexcept { return statistics_; }
     void clear();
 
+    // Additive GPU-resident sublimits INSIDE the overall byte budget. The default is unlimited, so
+    // a standalone cache -- and every pre-existing test -- is unchanged, and the overall CPU cache
+    // budget is never rewritten. The shared application cache sets these from the aligned resident
+    // budget plan so its retained resident set cannot outgrow the service's lease registry: when
+    // either limit is exceeded, least-recently-used RESIDENT entries are evicted. Eviction drops
+    // only the cache's reference; a live lease stays valid for the viewer and for the native pins
+    // that still hold it, so no live lease is invalidated. CPU entries are never touched by these
+    // limits.
+    void setGpuResidentLimits(std::size_t maxBytes, std::size_t maxEntries);
+    // Actual resident bytes and resident entry count retained right now. Deliberately distinct from
+    // residentBytes()/size(), which count EVERY entry (CPU and resident).
+    [[nodiscard]] std::size_t gpuResidentBytes() const noexcept { return gpuResidentBytes_; }
+    [[nodiscard]] std::size_t gpuResidentEntryCount() const noexcept { return gpuResidentEntries_; }
+    [[nodiscard]] std::size_t gpuResidentByteLimit() const noexcept {
+        return gpuResidentByteLimit_;
+    }
+    [[nodiscard]] std::size_t gpuResidentEntryLimit() const noexcept {
+        return gpuResidentEntryLimit_;
+    }
+
+    // WORKAREA-1: scope retention to one composition's half-open [start, end) time range, pruning
+    // any entry it excludes immediately. std::nullopt restores "retain anything" without pruning.
+    // This is range management, not invalidation: it neither advances the revision nor touches a
+    // displayed frame, and the frames it removes are counted as rangeDrops.
+    void setRetentionRange(std::optional<RetentionRange> range);
+    // Drops every retained entry for the range's project/composition whose time is outside it.
+    // Returns the number dropped. Counted as rangeDrops, never as eviction or pressure.
+    std::size_t pruneToRange(const RetentionRange& range);
+
+    // TEMPORAL-2B. Installs the accepted provenance spans and prunes every entry whose time is no
+    // longer represented by its own snapshot revision. Entries in other retained segments survive.
+    // Empty clears the policy (retain anything) without pruning.
+    void setRetentionSnapshots(std::vector<RetentionSnapshot> snapshots);
+
     // What RETAINING one frame costs: its packed display buffer, and nothing else. Deliberately not
     // what holding the frame costs right now -- insertion keeps the display buffer and drops the
     // Float32 process image (see runtime::PreviewDisplayOnlyFrame).
@@ -150,26 +223,60 @@ class PreviewFrameCache final : public QObject {
     void byteBudgetChanged();
 
   private:
+    struct Entry;
     void scheduleNotification();
+    // A resident entry is live exactly while its lease is; a CPU entry is always live. An
+    // invalidated resident lease is never a hit and is never listed by contains()/timesFor().
+    [[nodiscard]] static bool entryIsLive(const Entry& entry) noexcept;
     QTimer notificationTimer_;
     struct Entry final {
         PreviewFrameCacheKey key;
-        // Display-only: the packed buffer plus its identity, never the process image it was mapped
-        // from. A hit is wrapped back into a PreparedPreviewFrame envelope on the way out.
+        // Display-only CPU product: the packed buffer plus its identity, never the process image it
+        // was mapped from. A hit is wrapped back into a PreparedPreviewFrame envelope on the way
+        // out. Exactly one of `frame`/`resident` is set.
         std::shared_ptr<const runtime::PreviewDisplayOnlyFrame> frame;
+        // Fourth arm: the opaque owner-bound lease plus its identity, never a CPU pixel. Retained
+        // by pointer only -- no copy -- and restamped cheaply on the way out. A resident entry is
+        // live only while its lease is; an invalidated lease is never a hit and never listed.
+        std::shared_ptr<const runtime::PreviewResidentDisplayFrame> resident;
         std::size_t bytes = 0;
     };
 
     void dropStaleRevisions(const PreviewFrameCacheKey& current);
     void evictToBudget();
+    // Evicts the least-recently-used RESIDENT entry (entries_ is MRU-first) while either additive
+    // GPU-resident limit is exceeded. It only drops the cache's reference; it never invalidates a
+    // lease and never removes a CPU entry.
+    void evictGpuResidentToLimits();
     void removeAt(std::size_t index);
+    // Drops every entry whose time is no longer accepted under the current work-area range or
+    // provenance spans, counting rangeDrops for a work-area exclusion and staleDrops for a
+    // provenance mismatch. Retained segments are never touched wholesale.
+    void pruneUnaccepted();
+    // True when `key` belongs to the retention range's composition and its time is inside
+    // [start, end); true when no range is set or the key names a different composition.
+    [[nodiscard]] bool retains(const PreviewFrameCacheKey& key) const noexcept;
+    [[nodiscard]] bool workAreaAllows(const PreviewFrameCacheKey& key) const noexcept;
+    [[nodiscard]] bool provenanceAllows(const PreviewFrameCacheKey& key) const noexcept;
+    // The accepted snapshot revision for `key`'s time, when a provenance policy is installed and
+    // the time is covered. std::nullopt when no policy is installed or the time is not covered.
+    [[nodiscard]] std::optional<document::Revision>
+    acceptedRevision(const PreviewFrameCacheKey& key) const noexcept;
+    [[nodiscard]] bool hasProvenancePolicy() const noexcept { return !retentionSnapshots_.empty(); }
 
     // Most-recently-used first.
     std::vector<Entry> entries_;
     runtime::MemoryBudgetLedger& ledger_;
     std::size_t byteBudget_ = defaultPreviewFrameCacheByteBudget();
     std::size_t residentBytes_ = 0;
+    // GPU-resident accounting, distinct from the all-entry totals above.
+    std::size_t gpuResidentBytes_ = 0;
+    std::size_t gpuResidentEntries_ = 0;
+    std::size_t gpuResidentByteLimit_ = std::numeric_limits<std::size_t>::max();
+    std::size_t gpuResidentEntryLimit_ = std::numeric_limits<std::size_t>::max();
     std::optional<bool> displayQualified_;
+    std::optional<RetentionRange> retentionRange_;
+    std::vector<RetentionSnapshot> retentionSnapshots_;
     Statistics statistics_;
 };
 

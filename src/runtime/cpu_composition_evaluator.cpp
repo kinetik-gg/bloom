@@ -1,4 +1,5 @@
 #include "cpu_composition_evaluator_support.hpp"
+#include "cpu_composition_resolution.hpp"
 #include "image_effect.hpp"
 #include "image_source.hpp"
 #include "layer_parent_transform.hpp"
@@ -552,149 +553,6 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
         }
     }
     return true;
-}
-
-// One driven parameter's value, read out of the frame's already-evaluated value graph. A value of
-// the wrong alternative cannot be substituted here -- there is no defensible fallback for "this
-// parameter wanted a colour and the graph produced a string" -- so it is reported as an invalid
-// plan, which is what a compiler that honoured the document's typing could never produce.
-template <typename Value>
-[[nodiscard]] static const Value* resolvedValue(const ValueOutputIndex output,
-                                                const ResolvedEvaluation& resolved) noexcept {
-    const auto index = output.value();
-    if (index >= resolved.valueOutputs.size()) {
-        return nullptr;
-    }
-    return std::get_if<Value>(&resolved.valueOutputs[index]);
-}
-
-template <typename Value> struct ResolvedParameter final {
-    Value value;
-    document::ParameterId parameterId;
-    std::optional<document::AnimationCurveId> animationCurveId;
-    std::optional<document::KeyframeId> keyframeId;
-};
-
-[[nodiscard]] static std::optional<ResolvedParameter<document::Vec2d>>
-resolveParameter(const CompiledVec2Parameter& parameter, const CompiledCompositionPlan& plan,
-                 const ResolvedEvaluation& resolved) noexcept {
-    if (const auto* constant = std::get_if<document::Vec2d>(&parameter.source)) {
-        return ResolvedParameter<document::Vec2d>{*constant, parameter.id, std::nullopt,
-                                                  std::nullopt};
-    }
-    if (const auto* driven = std::get_if<ValueOutputIndex>(&parameter.source)) {
-        const auto* value = resolvedValue<document::Vec2d>(*driven, resolved);
-        return value == nullptr ? std::nullopt
-                                : std::optional(ResolvedParameter<document::Vec2d>{
-                                      *value, parameter.id, std::nullopt, std::nullopt});
-    }
-    const auto* curve = std::get_if<Vec2CurveIndex>(&parameter.source);
-    if (curve == nullptr) {
-        return std::nullopt;
-    }
-    const auto index = curve->value();
-    if (index >= resolved.vec2CurveValues.size() || index >= plan.vec2Curves().size()) {
-        return std::nullopt;
-    }
-    const auto& sample = resolved.vec2CurveValues[index];
-    return ResolvedParameter<document::Vec2d>{sample.value, parameter.id,
-                                              plan.vec2Curves()[index].id, sample.segmentStart};
-}
-
-[[nodiscard]] static std::optional<ResolvedParameter<core::Color4d>>
-resolveParameter(const CompiledColorParameter& parameter, const CompiledCompositionPlan& plan,
-                 const ResolvedEvaluation& resolved) noexcept {
-    if (const auto* constant = std::get_if<core::Color4d>(&parameter.source)) {
-        return ResolvedParameter<core::Color4d>{*constant, parameter.id, std::nullopt,
-                                                std::nullopt};
-    }
-    if (const auto* driven = std::get_if<ValueOutputIndex>(&parameter.source)) {
-        const auto* value = resolvedValue<core::Color4d>(*driven, resolved);
-        return value == nullptr ? std::nullopt
-                                : std::optional(ResolvedParameter<core::Color4d>{
-                                      *value, parameter.id, std::nullopt, std::nullopt});
-    }
-    const auto* curve = std::get_if<Color4CurveIndex>(&parameter.source);
-    if (curve == nullptr) {
-        return std::nullopt;
-    }
-    const auto index = curve->value();
-    if (index >= resolved.color4CurveValues.size() || index >= plan.color4Curves().size()) {
-        return std::nullopt;
-    }
-    const auto& sample = resolved.color4CurveValues[index];
-    return ResolvedParameter<core::Color4d>{sample.value, parameter.id,
-                                            plan.color4Curves()[index].id, sample.segmentStart};
-}
-
-[[nodiscard]] static std::optional<ResolvedParameter<double>>
-resolveParameter(const CompiledScalarParameter& parameter, const CompiledCompositionPlan& plan,
-                 const ResolvedEvaluation& resolved) noexcept {
-    if (const auto* constant = std::get_if<double>(&parameter.source)) {
-        return ResolvedParameter<double>{*constant, parameter.id, std::nullopt, std::nullopt};
-    }
-    if (const auto* driven = std::get_if<ValueOutputIndex>(&parameter.source)) {
-        const auto* value = resolvedValue<double>(*driven, resolved);
-        return value == nullptr ? std::nullopt
-                                : std::optional(ResolvedParameter<double>{
-                                      *value, parameter.id, std::nullopt, std::nullopt});
-    }
-    const auto* curve = std::get_if<ScalarCurveIndex>(&parameter.source);
-    if (curve == nullptr) {
-        return std::nullopt;
-    }
-    const auto index = curve->value();
-    if (index >= resolved.scalarCurveValues.size() || index >= plan.scalarCurves().size()) {
-        return std::nullopt;
-    }
-    const auto& sample = resolved.scalarCurveValues[index];
-    return ResolvedParameter<double>{sample.value, parameter.id, plan.scalarCurves()[index].id,
-                                     sample.segmentStart};
-}
-
-// Task DRIVE-1. The fourth member of this family, for the parameter kinds that cannot interpolate
-// -- a String, an Integer (every enum-backed one included) and a Boolean. They have no curve table
-// to index, so unlike their three animatable siblings they answer only the two questions that are
-// left: the authored constant the compiler resolved, or the value-graph output a driver binding
-// hands them this frame. A driven output of the wrong alternative answers nothing, for exactly the
-// reason resolvedValue() gives -- there is no defensible substitute for "this parameter wanted a
-// String and the graph produced a colour" -- so a malformed plan is diagnosed rather than trusted.
-template <typename Value>
-[[nodiscard]] static std::optional<ResolvedParameter<Value>>
-resolveParameter(const document::ParameterId id, const Value& authored,
-                 const std::optional<ValueOutputIndex>& driven,
-                 const ResolvedEvaluation& resolved) noexcept {
-    if (!driven.has_value()) {
-        return ResolvedParameter<Value>{authored, id, std::nullopt, std::nullopt};
-    }
-    const auto* value = resolvedValue<Value>(*driven, resolved);
-    return value == nullptr
-               ? std::nullopt
-               : std::optional(ResolvedParameter<Value>{*value, id, std::nullopt, std::nullopt});
-}
-
-// The blend mode one layer composites with at this frame. An authored mode and a driven one are the
-// same closed set of modes, because both go through core::blendModeFromStoredValue(): a driven
-// Integer naming no implemented mode answers nothing rather than silently compositing Normal. The
-// document cannot store such an integer -- ParameterStore refuses it on insert and validation
-// refuses it on publication -- so only a malformed plan can produce one.
-[[nodiscard]] static std::optional<core::BlendMode>
-resolveParameter(const CompiledLayerOutput& layer, const ResolvedEvaluation& resolved) noexcept {
-    const auto stored =
-        resolveParameter(layer.blendModeParameterId, core::blendModeStoredValue(layer.blendMode),
-                         layer.drivenBlendMode, resolved);
-    return stored.has_value() ? core::blendModeFromStoredValue(stored->value) : std::nullopt;
-}
-
-template <typename Value>
-[[nodiscard]] EvaluationSubject parameterSubject(EvaluationSubject subject,
-                                                 const ResolvedParameter<Value>& parameter,
-                                                 std::string field) {
-    subject.parameterId = parameter.parameterId;
-    subject.animationCurveId = parameter.animationCurveId;
-    subject.keyframeId = parameter.keyframeId;
-    subject.field = std::move(field);
-    return subject;
 }
 
 [[nodiscard]] PreflightOutcome preflight(const std::shared_ptr<const CompiledCompositionPlan>& plan,
@@ -1605,14 +1463,31 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
     OperationCacheStatistics frameStatistics;
     if (statistics)
         *statistics = {};
-    auto* cache = (request.bypassOperationCache || (plan && plan->bypassOperationCache()))
-                      ? nullptr
-                      : cache_.get();
+    // CACHE-1 separates two bypasses that used to share one pointer. `request.bypassOperationCache`
+    // is the explicit evaluation bypass: it disables DERIVED operation memoization and the
+    // still-image source memory and disk entries (an uncached re-decode). It is not the preview
+    // controller's frame-cache refresh, and it leaves the video decoded cache and colour-processor
+    // caches alone. A plan compiled for an interactive parameter override
+    // (`plan->bypassOperationCache()`) still bypasses DERIVED operation memoization, but may READ
+    // an already-verified immutable decoded still-image out of the same memory cache -- that reuse
+    // keeps an otherwise unchanged image from being re-decoded as the artist drags a transform. It
+    // never inserts a source entry on a gesture miss.
+    const bool explicitBypass = request.bypassOperationCache;
+    const bool planBypass = plan != nullptr && plan->bypassOperationCache();
+    auto* cache = (explicitBypass || planBypass) ? nullptr : cache_.get();
     // Same gate as `cache` above: an interactive/overridden request's pixels belong to a gesture,
     // not to a revision, so they are never written to or read from the disk cache either (media-
     // io.md "Disk cache": "Never cache overridden/interactive frames").
     const auto diskCacheHandle = mediaDiskCache();
     auto* const diskCache = cache != nullptr ? diskCacheHandle.get() : nullptr;
+    // The native decoded still-image memory entry is a distinct seam from derived operation
+    // memoization. Only the explicit evaluation bypass turns it off; an interactive plan gets a
+    // read-only view of it.
+    auto* const imageMemoryCache = explicitBypass ? nullptr : cache_.get();
+    const auto imageMemoryAccess =
+        explicitBypass ? detail::ImageSourceMemoryCacheAccess::Disabled
+                       : (planBypass ? detail::ImageSourceMemoryCacheAccess::ReadOnly
+                                     : detail::ImageSourceMemoryCacheAccess::ReadWrite);
     std::vector<EvaluationDiagnostic> imageWarnings;
     const auto mediaBase = assetBaseDirectory();
     try {
@@ -2254,8 +2129,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 return;
                             auto image = detail::evaluateImageSource(
                                 *selectedImage, resolved.imageDescriptor, resolved.horizontalScale,
-                                resolved.verticalScale, remainingPixelBudget(), cache, cancellation,
-                                diskCache);
+                                resolved.verticalScale, remainingPixelBudget(), imageMemoryCache,
+                                imageMemoryAccess, cancellation, diskCache);
                             if (image.cancelled) {
                                 operationCancelled = true;
                                 return;

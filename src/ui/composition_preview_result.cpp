@@ -123,11 +123,16 @@ void CompositionPreviewController::consumeReadyResult() {
                 next.message = tr("Preview rendering returned pixels for a different request");
                 break;
             }
-            // Alternative-agnostic (issue #97, task C3): frame may carry either the reference or
-            // the qualified display product (PreparedPreviewFrame's closed alternative), and
-            // displayBufferView() normalizes both to the same validity/shape check rather than
-            // assuming the reference-only displayBuffer() accessor.
-            if (!frame->displayBufferView().has_value()) {
+            // Alternative-agnostic (issue #97, task C3): frame may carry the reference product, the
+            // qualified product, the CPU display-only product, or the GPU-resident product
+            // (PreparedPreviewFrame's closed alternative). displayBufferView() normalizes the
+            // first three; the resident arm deliberately has no CPU pixels, so its validity is the
+            // live lease and is checked via isDisplayValid(). The resident arm is identified by its
+            // honest provenance because residentFrame() is resident-only and would read an inactive
+            // variant member on a CPU frame.
+            const bool resident =
+                frame->provenance().provider == runtime::PreviewDisplayProvider::GpuResident;
+            if (resident ? !frame->isDisplayValid() : !frame->displayBufferView().has_value()) {
                 next.message = tr("Preview rendering returned an invalid display buffer");
                 break;
             }

@@ -120,9 +120,9 @@ void testGeometryTokensCarryTheSpecifiedNumbers(Expectations& expectations) {
     expectations.expect(kit::radiusPx(kit::Radius::XLarge, 26) == 16, "Radius::XLarge is 16");
     expectations.expect(kit::radiusPx(kit::Radius::Full, 26) == 13,
                         "Radius::Full is a pill: half the control extent");
-    // task U8, issue #131, formal amendment 1, A3: the panel body's own radius, its own named
-    // step -- Radius::Small stays 3 everywhere else.
-    expectations.expect(kit::radiusPx(kit::Radius::Panel, 26) == 4, "Radius::Panel is 4");
+    // The panel body's own radius, its own named step. It is 0: panels are square, square corners
+    // and all; Radius::Small stays 3 everywhere else.
+    expectations.expect(kit::radiusPx(kit::Radius::Panel, 26) == 0, "Radius::Panel is 0");
 
     expectations.expect(kit::px(kit::Spacing::XXS) == 2, "Spacing::XXS is 2");
     expectations.expect(kit::px(kit::Spacing::XS) == 4, "Spacing::XS is 4");

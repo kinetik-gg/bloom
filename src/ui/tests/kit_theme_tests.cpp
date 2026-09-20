@@ -133,9 +133,9 @@ void testTheStyleSheetPreservesEveryStyledObjectName(Expectations& expectations)
                         "the active-area border rule survives, property selector and all");
 }
 
-// task U8, issue #131, fix 1 and fix 2: the active-panel border is the new neutral BorderActive
-// token, never Accent, and panel bodies take the smallest corner radius.
-void testTheActivePanelBorderIsNeutralNotAccent(Expectations& expectations) {
+// The active-panel border is the blue Accent, matching the playhead, so the active panel is
+// unambiguous; panel bodies take their own corner radius.
+void testTheActivePanelBorderUsesAccent(Expectations& expectations) {
     const QString sheet = kit::kinetikStyleSheet();
     const qsizetype activeRule =
         sheet.indexOf(QStringLiteral("QFrame#editorArea[active=\"true\"]"));
@@ -144,11 +144,10 @@ void testTheActivePanelBorderIsNeutralNotAccent(Expectations& expectations) {
         return;
     }
     const QString block = sheet.mid(activeRule, 80);
-    expectations.expect(block.contains(kit::hex(kit::Color::BorderActive)),
-                        "the active border paints BorderActive (#444444, formal amendment 1's "
-                        "final value), not Accent");
-    expectations.expect(!block.contains(kit::hex(kit::Color::Accent)),
-                        "no accent color leaks into panel chrome");
+    expectations.expect(block.contains(kit::hex(kit::Color::Accent)),
+                        "the active border paints Accent (#0C8CE9), matching the playhead");
+    expectations.expect(!block.contains(kit::hex(kit::Color::BorderActive)),
+                        "the neutral BorderActive is no longer the active-panel border");
 
     const qsizetype restRule = sheet.indexOf(QStringLiteral("QFrame#editorArea {"));
     expectations.expect(restRule >= 0, "the resting-area rule exists");
@@ -233,7 +232,7 @@ int main(int argc, char** argv) {
     testTheInstallerIsReRunnable(application, expectations);
     testTheStyleSheetIsGeneratedEntirelyFromTokens(expectations);
     testTheStyleSheetPreservesEveryStyledObjectName(expectations);
-    testTheActivePanelBorderIsNeutralNotAccent(expectations);
+    testTheActivePanelBorderUsesAccent(expectations);
     testControlSurfaceBacksHeaderButtonsAndDropdownFieldsBorderStaysConsistent(expectations);
     testTokenExpansionResolvesNumbersAndColors(expectations);
     testThemedWidgetsResolveTheirTokenColors(application, expectations);

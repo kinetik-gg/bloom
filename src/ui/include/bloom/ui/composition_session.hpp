@@ -545,8 +545,84 @@ class CompositionSession final : public QObject {
     void rebind(document::Document& document, commands::CommandStack& commandStack,
                 document::CompositionId compositionId);
 
+    // The retained evaluation snapshot: the genuine document snapshot whose render-relevant
+    // content the prepared frames, compiled plans and cache keys represent. It is normally the live
+    // snapshot, but verified contiguous layout-only commands leave it on the previous genuine
+    // snapshot, so committed preview work, compiled-plan and frame-cache keys, and RAM/background
+    // captures keep ONE real revision instead of one per card drag. It is never a re-stamped
+    // revision: every snapshot this returns is one the session actually read from the document, and
+    // it advances to live on any render-affecting command, rebind, or unknown transition (see
+    // evaluationChanged). "Represents" here means the pixels a request built on it would produce;
+    // this accessor does not claim a preparation has already run for it.
+    [[nodiscard]] const document::Snapshot& evaluationSnapshot() const noexcept;
+
+    // TEMPORAL-2A. One half-open [start, end) span of COMPOSITION time whose rendered output is
+    // represented by one genuine document snapshot. Every span names a real snapshot the session
+    // read from this document; no revision is ever rewritten. Spans are sorted, non-overlapping,
+    // and together cover the composition's [0, duration).
+    //
+    // SPLIT-2 adds `mappings`: source-snapshot layer/node IDs -> current-live layer/node IDs, so a
+    // retained frame's evaluated geometry can be translated to the CURRENT graph. Every entry spans
+    // this whole range (segments are subdivided at remap boundaries), and a live segment carries
+    // none. The mapping never relabels a plan or a sourceRevision.
+    struct EvaluationSnapshotRange final {
+        core::RationalTime start;
+        core::RationalTime end;
+        document::Snapshot snapshot;
+        std::vector<commands::LayerIdentityRemap> mappings;
+    };
+
+    // The cap past which split-span bookkeeping stops being worth it: a transaction whose finite
+    // changed range would produce more spans than this resets the whole composition to the live
+    // snapshot conservatively. Bounded so an adversarial sequence of disjoint edits cannot grow
+    // session state without limit.
+    static constexpr std::size_t kMaxEvaluationSnapshotRanges = 32;
+
+    // The genuine snapshot that represents composition time `time`. Within [0, duration) this is
+    // the snapshot of the covering span; outside it, the current live snapshot conservatively.
+    [[nodiscard]] const document::Snapshot&
+    evaluationSnapshotForTime(core::RationalTime time) const noexcept;
+
+    // The whole time-indexed provenance, for the next slice's frame-cache retention. Read-only.
+    [[nodiscard]] std::vector<EvaluationSnapshotRange> evaluationSnapshotRanges() const;
+
+    // Translates a retained frame's evaluated layer/node identity to the CURRENT live graph. The
+    // frame's own revision and project are a provenance gate: a mapping applies only when they
+    // match the covering segment's retained snapshot, so a live override frame passes through
+    // unchanged. Returns `layer`/`node` unchanged when the time has no mapping or the frame is not
+    // retained.
+    [[nodiscard]] document::LayerId currentLayerForRetained(document::Revision frameRevision,
+                                                            document::ProjectId frameProjectId,
+                                                            core::RationalTime time,
+                                                            document::LayerId layer) const noexcept;
+    [[nodiscard]] document::NodeId currentNodeForRetained(document::Revision frameRevision,
+                                                          document::ProjectId frameProjectId,
+                                                          core::RationalTime time,
+                                                          document::NodeId node) const noexcept;
+
   signals:
+    // Fired by rebind() AFTER the new live and evaluation snapshots are installed but BEFORE every
+    // other signal, so a consumer can drop state that belongs to the old document -- most
+    // importantly cached frames and plans whose numeric (project, composition, revision) tuples
+    // collide with the new document's -- before the ordinary refresh signals build new requests.
+    void documentRebound();
     void snapshotChanged();
+    // Fired when the composition's EFFECTIVE work area changes -- Set/ClearWorkArea, and the
+    // undo/redo of either. It is deliberately separate from snapshotChanged: a range edit is
+    // render-neutral, so it must not refresh pixels or advance the evaluation snapshot, but it does
+    // change which frames a range command retains and fills. Consumers read the live workArea()
+    // here, never the retained evaluation snapshot's.
+    void workAreaChanged();
+    // TEMPORAL-2B. Emitted when a DOCUMENT command moved the time-indexed evaluation provenance
+    // (evaluationSnapshotForTime). Consumers decide per time whether their retained pixels are
+    // still accepted; this is the only signal a finite clip-range edit emits, so a range edit can
+    // reuse unaffected frames. It is deliberately distinct from evaluationChanged().
+    void documentEvaluationChanged();
+    // Emitted when the evaluation inputs changed for a NON-document reason that always forces a
+    // fresh derivation: the qualified display transform becoming available, a colour-settings
+    // change, and rebind. These leave every snapshot revision unchanged, so a consumer must NOT
+    // treat "same revision" as "same pixels" here. UI surfaces keep following snapshotChanged.
+    void evaluationChanged();
     void compositionChanged();
     void currentTimeChanged();
     void selectionChanged();
@@ -659,6 +735,29 @@ class CompositionSession final : public QObject {
     // revision also cancel"). Called after handleResult() adopts a new snapshot.
     void invalidateTransformInteractionOnStaleRevision();
 
+    // TEMPORAL-2A. Rebuilds the time-indexed provenance to a single full-cover span of the live
+    // snapshot. Used on rebind, composition switch, and every conservative (whole/unknown/mixed)
+    // transition. Returns true when the provenance actually changed.
+    [[nodiscard]] bool resetEvaluationRangesToLive();
+    // Applies a finite footprint: spans outside the half-open changed intervals keep their genuine
+    // snapshot, spans inside switch to the live snapshot. Returns true when anything changed;
+    // returns std::nullopt (via out-param) when the evidence is not trustworthy and the caller must
+    // fall back to resetEvaluationRangesToLive().
+    [[nodiscard]] bool
+    applyFiniteEvaluationFootprint(const commands::AffectedTimeFootprint& footprint,
+                                   const std::vector<commands::LayerIdentityRemap>* remaps,
+                                   const document::Snapshot& previousSnapshot, bool& trustworthy);
+    // SPLIT-2. Composes an incoming command's before->after remaps onto every segment whose
+    // snapshot still names the before identity, subdividing segments at the remap range boundaries.
+    // Returns false (caller resets whole-live) when a descriptor is inconsistent with the previous
+    // or new live graph, the composition/project is wrong, or a bound is exceeded.
+    [[nodiscard]] bool
+    applyLayerIdentityRemaps(const std::vector<commands::LayerIdentityRemap>& remaps,
+                             const document::Snapshot& previousSnapshot);
+    // The composition's frame mapping is usable for time-indexed provenance: a real composition
+    // with a positive duration and a constructible frame-time mapping.
+    [[nodiscard]] bool evaluationTimeBaseUsable() const noexcept;
+
     // Session-only, never persisted (docs/architecture/animation-and-time.md, "Direct
     // Manipulation And Preview Overrides"). Named after exactly what the contract freezes.
     struct TransformInteraction final {
@@ -695,6 +794,10 @@ class CompositionSession final : public QObject {
     commands::CommandObserverId commandObserverId_ = 0;
     std::shared_ptr<CommandObserverState> commandObserverState_;
     document::Snapshot snapshot_;
+    // TEMPORAL-2A time-indexed provenance. Sorted, non-overlapping, full-cover spans of the active
+    // composition's time, each naming a genuine snapshot. Empty until the first refresh; then a
+    // single full-cover span of the live snapshot.
+    std::vector<EvaluationSnapshotRange> evaluationRanges_;
     document::CompositionId compositionId_;
     core::RationalTime currentTime_ = core::RationalTime::fromInteger(0);
     CompositionSelection selection_;

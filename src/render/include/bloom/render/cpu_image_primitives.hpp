@@ -168,6 +168,12 @@ class LayerTransform final {
     [[nodiscard]] SamplePoint inverseMap(double outputX, double outputY) const noexcept;
     [[nodiscard]] SamplePoint forwardMap(double localX, double localY) const noexcept;
 
+    // The resolved translation-only device translation (authored translation times the proxy
+    // scale), or nullopt when the resolved transform is not translation-only. Read-only; lets GPU
+    // preparation derive its local translation without duplicating LayerTransform's private
+    // arithmetic. (GPU scene builder seam.)
+    [[nodiscard]] std::optional<SamplePoint> translationOnlyDeviceTranslation() const noexcept;
+
     // The output pixels this transform can write a non-transparent value to, clipped to `clip`
     // (the composition's own window). No value means the layer's bilinear support misses `clip`
     // entirely, so the layer contributes nothing at all and needs no image. The bounds are

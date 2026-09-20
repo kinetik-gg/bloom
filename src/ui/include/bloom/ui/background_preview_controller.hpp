@@ -19,7 +19,8 @@ class BackgroundPreviewController final : public QObject {
     BackgroundPreviewController(CompositionSession& session,
                                 CompositionPreviewController& previewController,
                                 runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
-                                PreviewPreparationFunction preparation, QObject* parent = nullptr);
+                                PreviewPreparationFunction preparation, QObject* parent = nullptr,
+                                PreviewPreparationSubmitter submitter = {});
     ~BackgroundPreviewController() override;
 
     void setPlaying(bool playing);
@@ -42,6 +43,7 @@ class BackgroundPreviewController final : public QObject {
     runtime::TaskScheduler& scheduler_;
     TaskUiBridge& bridge_;
     PreviewPreparationFunction preparation_;
+    PreviewPreparationSubmitter submitter_;
     QTimer idleTimer_;
     std::optional<runtime::TaskHandle<PreviewPreparationResultHandle>> active_;
     std::optional<runtime::PreviewRequestIdentity> activeIdentity_;

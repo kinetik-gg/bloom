@@ -33,7 +33,8 @@ const std::vector<EditorDescriptor>& EditorRegistry::editors() const noexcept { 
 
 bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& session,
                                CompositionPreviewController& previewController,
-                               RamPreviewController* const ramPreview, ProjectHost* projectHost) {
+                               RamPreviewController* const ramPreview, ProjectHost* projectHost,
+                               const ViewerGpuDependencies* const gpuDependencies) {
     std::shared_ptr<ScriptPanelRuntime> script;
 #ifdef BLOOM_BUILD_PYTHON
     if (projectHost)
@@ -46,10 +47,17 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
             {.id = std::move(id), .displayName = std::move(name), .create = std::move(factory)});
     };
 
-    return addEditor("bloom.viewer", "Viewer",
-                     [&session, &previewController, ramPreview](QWidget* parent) {
-                         return new ViewerEditor(session, previewController, ramPreview, parent);
-                     }) &&
+    return addEditor(
+               "bloom.viewer", "Viewer",
+               [&session, &previewController, ramPreview, gpuDependencies](QWidget* parent) {
+                   auto* viewer = new ViewerEditor(session, previewController, ramPreview, parent);
+                   if (gpuDependencies != nullptr && gpuDependencies->presentationClient) {
+                       viewer->setGpuPresentationDependencies(
+                           gpuDependencies->presentationClient(), gpuDependencies->scheduler,
+                           gpuDependencies->vulkanLoaderPath, gpuDependencies->devicePixelRatio);
+                   }
+                   return viewer;
+               }) &&
            addEditor(
                "bloom.nodes", "Nodes",
                [&session](QWidget* parent) { return new NodeGraphEditor(session, parent); }) &&

@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-08-25
+Updated: 2026-09-20
 
 ## Purpose
 
@@ -42,6 +42,196 @@ a Vulkan subset over public Metal APIs and converts SPIR-V to Metal Shading Lang
 documents known portability limits, so support is capability-driven rather than inferred from an API
 version alone. [Vulkan specification](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html),
 [MoltenVK documentation](https://github.com/KhronosGroup/MoltenVK/blob/main/README.md)
+
+## Implementation Status
+
+Status vocabulary: `implemented` means present in the repository and locally exercised on Linux;
+`pending` means defined but not yet built or qualified. Nothing below makes a Windows or macOS GPU
+claim. This section is the current ownership/behavior/gate summary.
+
+Capability surface and device bootstrap. A Qt-free and Vulkan-free `bloom::render` public surface
+(`bloom/render/gpu_device.hpp`) exposes typed device state, per-operation-and-precision
+`GpuQualification`, ordered structured diagnostics, an immutable generation-scoped capability report,
+and opaque move-only buffer ownership; no `Vk*` type, native handle, or catch-all backend interface is
+public. An optional Vulkan bootstrap resolves `Vulkan::Headers` and
+`GPUOpen::VulkanMemoryAllocator` only from the validated dependency prefix in `qualified` mode;
+absent Vulkan, or when disabled, the same API is a CPU-unavailable stub that reports a typed
+`BackendNotBuilt` diagnostic, with no Vulkan header reaching the stub, the desktop application, or a
+public consumer header. Device probing checks Vulkan 1.2, `timelineSemaphore`, and a compute-capable
+queue family before use; a missing loader, device, or entry point produces a typed `Unavailable`
+diagnostic instead of a startup crash. A privately opened dynamic loader (platform loader name only)
+and a Vulkan-Hpp RAII owner host one bounded host-visible allocation path (64 MiB ceiling) that proves
+the allocator is live; outstanding allocations co-own the allocator generation, and creation,
+exposed operations, and destruction are owner-thread-bound. The capability report advertises no
+operation: every operation/precision stays `Unavailable` until the frozen fixtures pass, and an
+unsupported entry is never inherited from another operation.
+
+Native render primitives. Their public headers are Qt-free and Vulkan-free with portable
+CPU-unavailable stubs. `GpuSolid` runs `SolidV1` and the covered arm `CoveredSolidV1` (a host-built
+premultiplied palette from the existing CPU coverage primitive, bit-exact on readback). `GpuImage`
+owns a device-resident RGBA32F image; `GpuImageUpload` stages one already-decoded host `Rgba32fImage`
+with no media decode on the GPU thread; `GpuComposite` runs `TranslationOpacityBilinearV1` and
+`SourceOverV1`, each writing a new resident image; `GpuResidentDisplay` copies a resident RGBA32F
+image device-to-device through the embedded Bloom Neutral V1 shader into a resident packed RGBA8
+image, reading back only the 4-byte status word; `GpuNeutralDisplay` runs the fixed `OcioDisplayV1`
+compute operation. Every shipped shader is an offline artifact under `tools/gpu-shaders`, pinned by
+SHA-256 with a manifest binding and a configure-time `glslangValidator`/`spirv-val` regeneration check
+against the embedded SPIR-V digest, so the source -> SPIR-V -> embedded-array relationship is closed
+and no runtime code loads or compiles a shader. All primitives share one bounded policy: owner-thread
+operations, explicit byte budgets checked against actual VMA allocation sizes and the transient
+staging peak with overflow-safe arithmetic, cancellation, device-binding checks, and a bounded
+teardown that quarantines an unproved submission rather than destroying it in flight.
+
+Qualification. `bloom/runtime/gpu_neutral_display_qualification.hpp` runs the native device/pipeline
+on the owner thread, refuses any processor other than the exact default Bloom Neutral v1 handle
+(canonical identity byte comparison plus processor cache ID, OCIO version, and display/view
+provenance), and executes real `begin`/`poll`/`readback` at the production 65536-pixel chunk. Parity
+holds to the frozen contract (RGB within one straight-RGBA8 code, alpha exact) over 1 px, an odd
+257-pixel tail, alpha endpoints, quantization-adjacent samples, and signed/HDR and tiny-normal
+values; a nonzero subnormal frame is measured as whole-frame shader rejection and remains a per-frame
+CPU fallback, never a parity failure or a claimed supported domain. Timing measures a warmup plus
+alternating pairs, and the eligible interval is the contiguous faster suffix ending at 4K, so an
+unmeasured or slower 4K leaves the operation CPU-only. The outcome is `PreviewOnly`; final output
+stays on CPU. `gpu_resident_preview_qualification.hpp` reuses the caller's already-created typed
+pipelines, refuses any pipeline not bound to the exact actual device (`GpuDevice::ownershipEpoch()`
+is the unique ownership identity), and compares every pixel against the CPU primitives and the
+independent OCIO oracle; its report is constructed only by its private factory and is `PreviewOnly`
+only.
+
+Scene preparation, caches, and executor. `CpuGpuSceneBuilder` (`prepared_gpu_scene.hpp`) turns a real
+`CompiledCompositionPlan` plus an `EvaluationRequest` into ordered immutable `GpuSceneCommand`s
+(solid, covered solid, unparented translation-only layer, image/video upload, Normal merge,
+composition output) using the evaluator's real preflight resolution and, for a fractional
+translation-only solid, the same CPU coverage raster; it allocates no full RGBA CPU image and fails
+closed `Unsupported` for every out-of-subset reachable operation. Command semantic keys carry the
+resolved operands plus the pinned render SPIR-V digests and never node/layer IDs, operation indexes,
+or the revision. `ImageSource`/`VideoSource` leaves resolve and colour-convert on the CPU task thread
+through the evaluator's own entry points and publish a frozen upload command whose source semantic key
+contains no node id, plan index, frame time, or layer transform; a reachable unsupported layer is
+screened before any decode. `GpuSceneCoverageCache` is a bounded transactional LRU keyed on raster
+geometry alone; `GpuPreparedUploadCache` (128 MiB / 4096 entries default, zero disables) reuses a
+converted source across a transform-only change. `GpuSceneExecutor` (`gpu_scene_executor.hpp`) drives
+one immutable `PreparedGpuScene` as a bounded sequence of already-typed native operations on an
+existing `GpuDevice`; `begin` validates and flattens the reachable DAG consulting `GpuSceneCache`
+first, so a warm unchanged output performs zero native dispatches, `poll` is non-blocking and starts
+at most one native dispatch per call, and the request byte budget bounds the actual LIVE unique pinned
+bytes with each charge released at the last dependency. Each native op's real retained allocation
+comes from an additive `hasUnretiredSubmission()`/`lastJobAllocationBytes()` accessor pair, and only a
+native result that proves fence retirement may release pins: a failure with a submission still
+outstanding retains every pin and refuses reuse. `GpuSceneCache` maps an already-computed semantic
+digest to a resident image, charges `GpuImage::allocationBytes()`, runs only on the device owner
+thread, rejects a foreign-device image by ownership identity, and never evicts an image still pinned
+by an external `shared_ptr`. `GpuResidentFrameLeaseRegistry` takes strong native ownership of one
+device-bound `GpuDisplayImage`, charges the actual VMA allocation bytes, and returns a move-only
+owner-thread `GpuResidentFramePin`; there is deliberately no accessor returning a strong image outside
+that pin.
+
+Resident preview product and service. The closed `PreparedPreviewFrame` display variant has a fourth,
+GPU-resident arm, `PreviewResidentDisplayFrame`, built only by the validating owner-thread factory in
+`gpu_resident_preview_product.hpp`. Its only pixel storage is the opaque, owner-bound
+`GpuResidentFrameLease`; it retains no CPU pixel vector, no native object, and no Vulkan handle, and
+performs no readback. Alongside the lease it retains the genuine immutable resident qualification
+report, the request/process identity, the evaluated bounds, and explicit
+`EvaluationProvider::GpuResident`/`CpuReference` provenance. The factory validates the report's
+eligibility against the exact device ownership epoch and processor, the registry binding and owner
+thread, the trusted expected descriptor, the native display geometry against that descriptor, the
+measured eligible interval, and the actual native allocation plus geometry inside the request budget.
+`GpuPreviewDisplayService` owns one dedicated service thread, the native device/pipeline created and
+used only on it, the scheduler GPU executor, and one outstanding native job at a time. It exposes two
+routes on that same owner thread and scheduler lease:
+
+- The packed-readback route (default constructor) composes the accepted CPU stage with the display
+  fallback and, when the report's measured eligible interval and the overhead-adjusted comparison
+  admit it, runs one bounded native `OcioDisplayV1` dispatch producing packed RGBA8 with
+  `PreviewDisplayProvider::GpuNeutral` provenance; otherwise the same evaluated stage is mapped by
+  the CPU display fallback and is never compiled or evaluated twice.
+- The opt-in resident route (additive constructor) runs a genuine startup `qualifyResidentPreview()`,
+  prepares the GPU scene on a CPU child, drives it through `GpuSceneExecutor` -> `GpuResidentDisplay`
+  -> the resident product factory, and publishes an opaque owner-bound `GpuResidentFrameLease` into
+  the service's presentation registry with zero full-frame readback. It supports the qualified
+  Solid/covered-solid, translation/opacity, `SourceOver`, and media-upload operations plus the default
+  Bloom Neutral display; anything else takes the full original CPU path on the same
+  snapshot/identity/overrides.
+
+A stage whose failure, deadline, cancellation, or lost generation leaves a native submission
+unretired enters an explicit `Retiring` phase that retains the stage, its completion token, and the
+native pins until retirement is actually proven. Healthy registry budget pressure is a temporary
+refusal that falls back to the CPU without invalidating live leases or pins; only an actual unproven
+retention or allocation failure latches the process-wide fuse. The bounded counter snapshot exposes
+`fullFrameReadbacks` (always zero by construction), `displayStatusReads` (the 4-byte status word),
+cache hits/misses, fallbacks, and refusals, so a test can prove no full-frame readback occurred.
+`beginShutdown()` is non-blocking; the destructor joins the service thread and drains child/native
+ownership before releasing the lease.
+
+Presentation lane. The qualified Linux loader is rebuilt with `BUILD_WSI_WAYLAND_SUPPORT=ON` alone
+(XCB/Xlib/Xrandr and DirectFB stay `OFF`; the Wayland branch adds no pkg-config or `DT_NEEDED` entry).
+Device bootstrap adds an opt-in presentation request that enables `VK_KHR_surface`,
+`VK_KHR_wayland_surface`, and `VK_KHR_swapchain` only when actually advertised, records whether the
+accepted `VK_EXT/KHR_swapchain_maintenance1` present fence or `VK_KHR_present_wait` retirement
+mechanism is genuinely enabled, borrows the instance to a caller-minted surface through integer
+handle bits plus a per-device epoch, prefers one combined graphics+compute queue so resident images
+stay exclusive, and reports `Unavailable` (CPU fallback) when the compute family cannot present.
+`GpuPresentationTarget` owns the swapchain, per-image semaphores/fences, and the clear-and-present
+command; it never calls `vkQueueWaitIdle`/`vkDeviceWaitIdle`, retains an image until the
+presentation-engine signal actually proves retirement, propagates device loss, and quarantines a
+foreign-thread or unproven teardown under a bounded process fuse. `gpu_present_image.hpp` and
+`presentImage` sample the resident display image into the acquired swapchain with an explicit affine
+destination/source mapping, viewer channel remap, background/checkerboard, and an optional
+premultiplied RGBA8 overlay; both shaders are SHA-256 pinned with a manifest binding and a
+configure-time regeneration check. `GpuPresentationCoordinator` (with the Qt-free, Vulkan-free
+`GpuPresentationClient`) is a coordinator, not a thread, service, device, or message bus: it is
+constructed on the existing service owner thread, does no work until its `pump()` is called, crosses a
+UI-created surface as integer handle bits, reuses the target acquire/present/retire path and the
+strong-lease-pin contract, publishes `Retired` only after presentation-engine proof, and bounds
+retained records with `maxRetainedTargets`, an explicit `forget()` terminal acknowledgement, and a
+fixed process quarantine reservation store. `bloom::ui::ViewerGpuPresenter` adopts the coordinator
+client's borrowed instance through `QVulkanInstance`, creates one `QWindow`/container on the UI
+thread, forwards actual Qt input, and presents only through the opaque lease/params/overlay port; it
+creates no device, pipeline, queue, service, or thread and performs no native work on the UI thread.
+It never reparents, hides, or destroys the container while a target is live: the host must call
+`prepareForMutation()` and wait for `SafeToMutate`.
+
+Host gating and application integration (current source). A typed optional `EditorNativeSurface`
+lifecycle interface lets a host ask an editor's presenter to retire a live native target and wait for
+a genuine `SafeToMutate`. `NativeSurfaceRetirementGate` makes every affected mutation all-or-nothing;
+`EditorArea` defers a picker replacement of a live-native editor and reverts the picker until the
+rebuild actually applies; `WorkspaceHost` retires the whole conservative tree before
+split/close/collapse/root-replace/restore, reports `Deferred` rather than a premature `Restored`, and
+resumes only targets still attached to the live root; `ApplicationShutdownCoordinator` emits
+`shutdownQuiescent` only once BOTH task quiescence and native-surface retirement are observed, and the
+application begins service shutdown on `shutdownQuiescent`. `apps/bloom/main.cpp` now constructs the
+resident service overload (GPU scene stage + CPU stage + display fallback), derives bounded resident
+lease/scene-cache budgets from the artist's UI frame-cache budget, requests Wayland presentation only
+for a bundled loader on a genuine Wayland session, shares the coverage and prepared-upload caches, and
+builds a session-refreshing GPU scene stage so relative media follows the live session base directory.
+`bloom::ui::GpuViewerBootstrap` caches the service's presentation client/availability and hands every
+current and future `ViewerEditor` a typed `ViewerGpuDependencies`; `ViewerEditor` presents the
+resident arm through `ViewerGpuResidentController`, which owns the same-request CPU fallback, the
+native CPU cover, and off-thread overlay rasterization, and forwards native window input back through
+the real event handlers. The RAM preview controller fills its range with a bounded two-deep pipeline
+so the next frame's CPU preparation overlaps the previous frame's display stage, with the
+pixels-identity duplicate guard, out-of-order collection, cancel-all, and no cross-frame coalescing
+key.
+
+Honest outcome: the production application source wires the resident display route end to end, and a
+main-linked vertical acceptance now passes over a genuine OpenEXR document (a real `AddImageLayer`
+image source compiled by the real `SnapshotCompiler` and the unmodified stage factories) through the
+resident frame cache into the actual `ViewerEditor`: fit, zoom-pan, and Red-channel captures match the
+CPU reference with zero byte difference, and the four viewer background modes (Solid/Canvas, Black,
+White, Checkerboard) each match the CPU surround, including transparent composition pixels, so the
+GPU and CPU display paths agree. Warm cache reuse adds no native dispatches, the unsupported path
+returns the CPU fallback, and shutdown drains cleanly. This document makes no full-application FPS
+claim and no universal qualification claim. The fixed operation remains `PreviewOnly`, final output
+stays on CPU, and nothing here is a Windows or macOS GPU claim; Linux Wayland is the only locally
+exercised resident-present platform.
+
+Genuinely unimplemented / future work. Per-layer GPU compositing selection by the scene evaluator;
+general (non-subset) graph execution; a whole-application benchmark; the full per-operation
+qualification fixtures for a future `ReferenceParity` profile (the qualified display transform and
+the resident scene route remain `PreviewOnly`; no operation reaches `ReferenceParity`); runtime
+compilation of generated OCIO shader programs; the cross-platform Linux/macOS/Windows parity spike;
+Windows/macOS GPU support; and a reviewed XCB/Xlib/Xrandr presentation intake. The qualified Linux
+prefix manifest remains pending, so this direction stays `working`.
 
 ## Boundaries
 
@@ -121,10 +311,36 @@ request. Callers must preflight those declared sizes before constructing large r
 products; this slice does not expose a reservation API. Queue exhaustion applies back-pressure at
 admission.
 This continuation path, exactly-once terminalization, strict service-thread completion, independent
-admission caps, generation loss/recovery, and scheduler shutdown fallback are implemented with a
-fake service. The Vulkan device service, fence integration, resource retirement, and cross-platform
-qualification spike remain pending; a synchronous fence wait hidden inside a task function is not a
-valid interim implementation.
+admission caps, generation loss/recovery, and scheduler shutdown fallback are implemented and
+locally exercised on Linux. The Vulkan device service, fence integration, and resource retirement
+are implemented; the cross-platform Linux/macOS/Windows qualification spike remains pending, and a
+synchronous fence wait hidden inside a task function is not a valid interim implementation.
+
+### CPU Composition Seam
+
+The composition preview's CPU half is now split from the display product applied to it, so a later
+GPU display stage can reuse the evaluated frame instead of recomputing the graph:
+
+- `bloom::runtime::PreviewCpuStage` (`src/runtime/include/bloom/runtime/preview_cpu_stage.hpp`) is
+  the immutable result of compiling, evaluating, and selecting a CPU display processor for one
+  request: the evaluated `ProcessFrame`, the selected
+  `color::PreparedCpuDisplayProcessorHandle` (null on the reference/unqualified startup path), the
+  request identity, the display byte budget, and the compile/evaluation diagnostics. It introduces
+  no new document, plan, or color type.
+- `PreviewCpuStageFunction` runs the compile/evaluate/selection half and returns an explicit
+  `Evaluated` stage or an explicit `Unsupported` outcome; cancellation and genuine failure stay
+  terminal `TaskResult` states, never a fabricated empty frame.
+- `PreviewCpuDisplayFallback` applies the reference or qualified display product to the stage's own
+  `ProcessFrame` and never compiles or re-evaluates. The stage owns the identity and budget, so the
+  fallback reads them from the stage rather than taking duplicate parameters.
+- `bloom::ui::makeCompositionPreviewPipeline()` is now a thin composition of the two factories in
+  `src/ui/composition_preview_cpu_stage.cpp`; the public `PreviewPreparationFunction` alias and all
+  callers are unchanged. The qualified provider's Ready/Pending/Failed behavior, ACES and
+  non-default display/view selection, view adjustments, overrides, ROI, progress, and diagnostics
+  are preserved.
+
+This seam is CPU-only. No GPU service, device, or pipeline is activated by it, and the renderworker's
+`GpuNeutralDisplayPipeline` is not yet consumed here.
 
 - Requests carry snapshot identity, time, output, resolution, quality, color intent, and a
   cancellation generation.

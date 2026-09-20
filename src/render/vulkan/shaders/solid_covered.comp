@@ -1,0 +1,42 @@
+#version 460
+// Bloom CoveredSolidV1 compute shader. Offline-generated/embedded; do not edit at runtime.
+//
+// Operation: CoveredSolidV1 (the CPU vector-coverage solid path). The host has already materialized
+// the ENTIRE result space as a 256-entry premultiplied RGBA32F palette: palette[c] is exactly what
+// the CPU arm produces for an 8-bit coverage value c (coverageSolidRow() at that sample followed by
+// the separate Float32 opacity multiply and Rgba32f validation). The shader therefore performs NO
+// Color arithmetic and NO Float64 work: it extracts one coverage byte from the packed R8 mask and
+// stores the already-computed palette value. A full CPU reference frame is bit-identical to this
+// shader by construction, because the shader only selects stored bytes.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform image2D bloom_covered_output;
+
+// 256 premultiplied lin_rec709_scene RGBA32F values, one per possible coverage byte.
+layout(set = 0, binding = 1, std430) readonly buffer BloomCoveredPalette {
+    vec4 bloom_covered_palette[256];
+};
+
+// R8 coverage packed four bytes per uint32 word with an explicit little-endian byte order:
+// word = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24); byte i lives at shift (i & 3) * 8.
+layout(set = 0, binding = 2, std430) readonly buffer BloomCoveredMask {
+    uint bloom_covered_mask[];
+};
+
+layout(push_constant) uniform BloomCoveredPushConstants {
+    uint width;  // data-window width in pixels
+    uint height; // data-window height in pixels
+} bloom_covered_push;
+
+void main()
+{
+    const uvec2 index = gl_GlobalInvocationID.xy;
+    if (index.x >= bloom_covered_push.width || index.y >= bloom_covered_push.height) {
+        return;
+    }
+    const uint pixel = index.y * bloom_covered_push.width + index.x;
+    const uint word = bloom_covered_mask[pixel >> 2u];
+    const uint shift = (pixel & 3u) * 8u;
+    const uint coverage = (word >> shift) & 0xFFu;
+    imageStore(bloom_covered_output, ivec2(index), bloom_covered_palette[coverage]);
+}

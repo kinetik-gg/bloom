@@ -3,9 +3,12 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
+#include <bloom/ui/editor_native_surface.hpp>
 #include <bloom/ui/playback_controller.hpp>
+#include <bloom/ui/preferences_aware.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/viewer_editor_probe.hpp>
+#include <bloom/ui/viewer_gpu_resident.hpp>
 #include <bloom/ui/viewer_overlays.hpp>
 
 #include <QCursor>
@@ -21,9 +24,14 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace bloom::core {
 class PixelAspectRatio;
+}
+
+namespace bloom::runtime {
+class GpuPresentationClient;
 }
 
 namespace bloom::render {
@@ -38,6 +46,7 @@ class KValueField;
 
 class QAction;
 class QLabel;
+class QPixmap;
 class QToolButton;
 class QTimer;
 
@@ -75,10 +84,13 @@ enum class ViewerChannel : std::uint8_t {
 };
 
 // What the Viewer paints behind (and around) the composition (task VIEW-1). Persisted under
-// "viewer/background"; Solid is the default.
+// "viewer/background"; Checkerboard is the default so alpha behind the composition is always
+// visible.
 //
-// Solid reads the selected composition's authored backgroundColor (default opaque black).
-// It is viewer presentation only and never fills process or export alpha.
+// Solid fills with the panel Canvas token, so the surround blends with the panel chrome rather
+// than reading as a separate black rectangle; it does not read the composition's authored
+// backgroundColor. Black and White are literal. It is viewer presentation only and never fills
+// process or export alpha.
 enum class ViewerBackground : std::uint8_t {
     Solid,
     Checkerboard,
@@ -145,6 +157,11 @@ struct ViewTransform final {
                                                 core::PixelAspectRatio pixelAspect,
                                                 const ViewTransform& transform) noexcept;
 
+// True when a completed CPU-fallback frame answers the CURRENT resident request identity. A stale
+// completion for a superseded identity is false and must be dropped, then the latest requeued.
+[[nodiscard]] bool cpuFallbackCompletionIsCurrent(const runtime::PreviewRequestIdentity& completed,
+                                                  const runtime::PreviewRequestIdentity& current);
+
 // Returns a new (fitToWindow == false) transform stepped by `factor` (>1 zooms in, <1 zooms out)
 // such that the composition point under `screenPoint` -- expressed as `screenPoint`'s fractional
 // position across the CURRENT viewTransformedDisplayRect() -- lands under `screenPoint` again after
@@ -167,11 +184,18 @@ struct ViewTransform final {
 // unaffected by this amendment.
 struct ViewerTextEdit;
 
-class ViewerEditor final : public QWidget, public EditorChromeProvider {
+class ViewerEditor final : public QWidget,
+                           public EditorChromeProvider,
+                           public EditorNativeSurface,
+                           public PreferencesAware {
     Q_OBJECT
 
   public:
     [[nodiscard]] EditorChromeSpec& editorChrome() override { return chrome_; }
+    // Applies the Preferences window's committed viewer preferences by driving this panel's own
+    // controls, so their existing persistence and preview-controller updates stay the single code
+    // path.
+    void applyApplicationPreferences(const ApplicationPreferences& preferences) override;
     // `ramPreview` is the RAM Preview command (task PERF1, item 3), shared with the Composition
     // menu so both entry points call one method. Null leaves the footer's RAM Preview button
     // present and disabled -- an affordance that is visibly unavailable rather than one that
@@ -210,6 +234,38 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     [[nodiscard]] ViewerChannel channelForTest() const noexcept;
     [[nodiscard]] ViewerBackground backgroundForTest() const noexcept;
     [[nodiscard]] QString timeReadoutTextForTest() const;
+
+    // --- GPU-resident presentation (prepared integration) --------------------------------------
+    // Explicit dependency injection, callable by the later application integration. There is no
+    // global locator; a null client (or a non-resident displayed frame) leaves the CPU paint path
+    // completely unchanged. `scheduler` is used only to rasterize overlays off the UI thread.
+    void setGpuPresentationDependencies(std::shared_ptr<runtime::GpuPresentationClient> client,
+                                        runtime::TaskScheduler* scheduler,
+                                        std::string vulkanLoaderPath, double devicePixelRatio);
+
+    // EditorNativeSurface: the host's retire-before-mutation gate, forwarded to the adapter.
+    [[nodiscard]] bool hasLiveNativeTarget() const override;
+    [[nodiscard]] PrepareOutcome prepareNativeSurfaceMutation(std::uint64_t generation,
+                                                              PrepareCallback completion) override;
+    void resumeNativeSurfaceAfterMutation() override;
+    [[nodiscard]] std::string nativeSurfaceDiagnostic() const override;
+
+    // Test/diagnostic seams only (same terms as the accessors above).
+    [[nodiscard]] bool residentPresentationActiveForTest() const noexcept;
+    [[nodiscard]] bool gpuResidentConfiguredForTest() const noexcept;
+    [[nodiscard]] std::size_t gpuPresentAttemptCountForTest() const noexcept;
+    [[nodiscard]] std::size_t gpuPresentAcceptedCountForTest() const noexcept;
+    [[nodiscard]] std::string gpuPresentationDiagnosticForTest() const;
+    void pollGpuResidentForTest();
+    // Renders the actual cover handoff pixmap for the current CPU content (test seam).
+    [[nodiscard]] QPixmap renderCpuCoverSnapshotForTest();
+    // Test-only: inject the adapter's private port seam so a CPU-only fixture can drive the
+    // controller without a device. The product never calls this.
+    void setGpuPresentationPortForTest(std::shared_ptr<ViewerGpuPort> port);
+    // Test-only: the resident present request the viewer would submit for the current transform,
+    // channel, and background. Device-free, so a test can prove the GPU surround matches the CPU
+    // drawCanvasBackground() paint for every background mode.
+    [[nodiscard]] ResidentPresentRequest buildResidentPresentRequestForTest();
 
   signals:
     void probeChanged(ProbeReadout readout);
@@ -328,6 +384,27 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     void refreshZoomDropdown();
     void updatePreviewResolution();
 
+    // GPU-resident presentation plumbing (viewer_gpu_resident.cpp): presents the resident arm
+    // through the adapter, records the overlays as an immutable QPicture for off-thread raster, and
+    // forwards the native window input back through the real event handlers with the container
+    // origin added exactly once.
+    void updateGpuResidentPresentation();
+    void pollGpuResident();
+    void requestResidentCpuFallback();
+    void pollResidentCpuFallback();
+    void forwardGpuInput(const ViewerGpuInputEvent& event);
+    [[nodiscard]] bool residentFrameIsDisplayed() const;
+    // The frame the CPU paint path should draw: the live frame for a CPU arm, the same-request CPU
+    // fallback (or the last CPU frame) while a resident present is pending/failed, and nothing
+    // while a resident present is genuinely active.
+    [[nodiscard]] PreparedPreviewFrameHandle paintableCpuFrame();
+    [[nodiscard]] ResidentPresentRequest buildResidentPresentRequest();
+    // Renders the last valid CPU content into a bounded pixmap for the native CPU cover, with the
+    // correct device pixel ratio and content origin, excluding native children/cover.
+    [[nodiscard]] QPixmap renderCpuCoverSnapshot();
+    // Paints the CPU image + viewer overlays (shared by paintEvent and the cover snapshot).
+    void paintViewerContent(QPainter& painter);
+
     CompositionSession& session_;
     CompositionPreviewController& previewController_;
     bool dragActive_ = false;
@@ -383,6 +460,9 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     QPoint probeCachePixel_;
     std::optional<core::Color4d> probeCacheReference_;
     std::optional<core::Color4d> probeCacheDisplayLinear_;
+    // The packed display sample for a probe whose source frame is the resident arm: it has no CPU
+    // pixels, so the sample arrives with the async 1x1 CPU analysis and is cached here.
+    std::optional<render::Rgba8> probeCacheDisplay_;
     QString probeFailure_;
     [[nodiscard]] PreparedPreviewFrameHandle displayedFrame() const;
     runtime::ViewAdjust viewAdjust_{};
@@ -469,7 +549,7 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     QAction* stepToEndAction_ = nullptr;
     QMetaObject::Connection focusConnection_;
     ViewerChannel channel_ = ViewerChannel::Rgba;
-    ViewerBackground background_ = ViewerBackground::Solid;
+    ViewerBackground background_ = ViewerBackground::Checkerboard;
     // The channel remap's one cached result. Keyed on the FRAME HANDLE (held by value, so the
     // bytes it was built from cannot be freed and a later frame cannot reuse the address) plus the
     // channel, so a repaint at an unchanged channel and frame costs nothing and playback does not
@@ -507,6 +587,30 @@ class ViewerEditor final : public QWidget, public EditorChromeProvider {
     QAction* pixelGridAction_ = nullptr;
     QMenu* safeAreaPresetMenu_ = nullptr;
     std::array<QAction*, 5> safeAreaPresetActions_{};
+    // GPU-resident presentation state. `gpuResident_` is a plain typed member (no QObject base),
+    // created once in the constructor; the native container it owns is parented to this widget and
+    // is never reparented or destroyed while a target is live (the host gate retires first).
+    std::unique_ptr<ViewerGpuResidentController> gpuResident_;
+    QWidget* gpuContainer_ = nullptr;
+    QTimer* gpuResidentTimer_ = nullptr;
+    bool residentActive_ = false;
+    PreparedPreviewFrameHandle lastCpuFrame_;
+    // The explicit same-request CPU fallback for a resident frame that could not be presented. It
+    // is produced by the existing async viewer-analysis CPU path (never a GPU readback).
+    PreparedPreviewFrameHandle cpuFallbackFrame_;
+    std::optional<runtime::TaskHandle<runtime::PreviewPreparationResultHandle>> cpuFallbackTask_;
+    // The identity the active fallback task was submitted for, and the identity that genuinely
+    // failed (so a stale completion is dropped and an actual failure is not retried forever).
+    std::optional<runtime::PreviewRequestIdentity> cpuFallbackIdentity_;
+    std::optional<runtime::PreviewRequestIdentity> cpuFallbackFailedIdentity_;
+    PreparedPreviewFrameHandle gpuPresentedFrame_;
+    ViewTransform gpuPresentedTransform_{};
+    std::uint64_t gpuOverlayToken_ = 0;
+    // True only while renderCpuCoverSnapshot() is painting the CPU content into the cover pixmap.
+    bool coverSnapshotInProgress_ = false;
+    // Bumped whenever something the native overlay depends on but the view transform does not
+    // (selection handles/paths/ROI, overlay toggles) changes, so the overlay signature changes.
+    std::uint64_t gpuOverlayRevision_ = 0;
     ViewerOverlayOptions overlayOptions_{};
 };
 

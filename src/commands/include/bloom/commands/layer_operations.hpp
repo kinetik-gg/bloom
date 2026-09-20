@@ -99,6 +99,10 @@ class SetWorkArea final : public Operation {
         : composition_(composition), start_(start), end_(end) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    // The work area scopes which frames a range command caches; it is not a compiled or evaluated
+    // input, so changing it cannot change a pixel. A mixed transaction containing a pixel op still
+    // aggregates to render-affecting.
+    [[nodiscard]] bool renderAffecting() const noexcept override { return false; }
 
   private:
     document::CompositionId composition_;
@@ -109,6 +113,8 @@ class ClearWorkArea final : public Operation {
     explicit ClearWorkArea(document::CompositionId composition) : composition_(composition) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    // Clearing the work area only widens the cached range; it changes no pixel.
+    [[nodiscard]] bool renderAffecting() const noexcept override { return false; }
 
   private:
     document::CompositionId composition_;

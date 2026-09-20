@@ -22,6 +22,8 @@ class MediaDiskCache;
 
 namespace bloom::ui {
 
+struct ApplicationPreferences;
+class AccelerationStatusProvider;
 class CompositionPreviewController;
 class CompositionSession;
 class EditorRegistry;
@@ -69,13 +71,16 @@ class MainWindow final : public QMainWindow {
     // status bar's disk-cache cell (docs/architecture/media-io.md "Disk cache"). Null leaves the
     // menu item present but reporting "not enabled" rather than absent, matching `ramPreview`'s
     // own null convention above.
+    // `accelerationStatus` feeds the Preferences window's read-only Performance page. Null reports
+    // the CPU-only truth. Borrowed and must outlive the window.
     MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
                ProjectHost& projectHost, FrameExportController& frameExportController,
                RamPreviewController* ramPreview = nullptr,
                CompositionPreviewController* previewController = nullptr, QWidget* parent = nullptr,
                PlaybackController* playbackController = nullptr,
                runtime::OperationCache* operationCache = nullptr,
-               media::cache::MediaDiskCache* mediaDiskCache = nullptr);
+               media::cache::MediaDiskCache* mediaDiskCache = nullptr,
+               const AccelerationStatusProvider* accelerationStatus = nullptr);
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);
@@ -92,9 +97,16 @@ class MainWindow final : public QMainWindow {
     // The one persistent reporting surface (task VIEW-1). Exposed so a test can read what the
     // window is currently saying without grabbing pixels.
     [[nodiscard]] WindowStatusBar* statusStrip() const noexcept { return statusStrip_; }
+    // Test-only seam (same terms as the other test/diagnostic accessors): applies committed
+    // preferences exactly as the Preferences dialog's approved path does, without presenting the
+    // modal dialog, so a test can assert the View action mirror and the open-editor propagation.
+    void applyCommittedPreferencesForTest(const ApplicationPreferences& preferences);
 
   signals:
     void shutdownRequested();
+    // Emitted after the Preferences window commits and persists a new value, so the composition
+    // root can re-apply the preferences it owns (for example the audio engine).
+    void preferencesChanged();
 
   protected:
     void closeEvent(QCloseEvent* event) override;
@@ -120,6 +132,8 @@ class MainWindow final : public QMainWindow {
     void updateCompositionActions();
     void toggleFullScreen();
     void showProjectColorSettings();
+    void showPreferences();
+    void applyPreferencesToOpenEditors(const ApplicationPreferences& preferences);
 
     CompositionSession& compositionSession_;
     ProjectHost& projectHost_;
@@ -134,6 +148,8 @@ class MainWindow final : public QMainWindow {
     runtime::OperationCache* operationCache_ = nullptr;
     // Borrowed, may be null; owned by the application composition root.
     media::cache::MediaDiskCache* mediaDiskCache_ = nullptr;
+    // Borrowed, may be null; null means the Performance page reports the CPU-only truth.
+    const AccelerationStatusProvider* accelerationStatus_ = nullptr;
     QMenuBar* menuBar_ = nullptr;
     QMenu* windowMenu_ = nullptr;
     QMenu* viewMenu_ = nullptr;
@@ -152,6 +168,7 @@ class MainWindow final : public QMainWindow {
     QAction* saveProjectAsAction_ = nullptr;
     QAction* saveProjectCopyAction_ = nullptr;
     QAction* projectColorSettingsAction_ = nullptr;
+    QAction* preferencesAction_ = nullptr;
     QAction* exportFrameAction_ = nullptr;
     // Task S5, item 3a: the frame-range export, and the cancel a long sequence needs -- the single
     // frame export never had one because it is one attempt plus one publish.

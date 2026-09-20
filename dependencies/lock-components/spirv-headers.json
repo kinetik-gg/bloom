@@ -1,0 +1,77 @@
+{
+  "name": "spirv-headers",
+  "version": "29981f65241605e08b0ede4cfeb999fe3b723c6a",
+  "source": {
+    "url": "https://codeload.github.com/KhronosGroup/SPIRV-Headers/tar.gz/29981f65241605e08b0ede4cfeb999fe3b723c6a",
+    "archiveSha256": "sha256:232899f1ad4104fb5bc377b94596c7621575eee62ad9a9e8f929b63a7dd8a7ad",
+    "archiveSizeBytes": 572275,
+    "retrievedAt": "2026-09-19",
+    "commit": "29981f65241605e08b0ede4cfeb999fe3b723c6a",
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/spirv-headers/provenance.md",
+      "sha256": "sha256:4b73b1c7d1bd7cdf15a5c4a3e69a28354142d8b4b7db2708312017eb81fe2d41"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "MIT AND CC-BY-4.0",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/spirv-headers/LICENSE",
+        "sha256": "sha256:ea43b1de38a6f90c488800d66dec1ed671e68cda530266bc96951fb5b6307613"
+      },
+      {
+        "path": "dependencies/licenses/spirv-headers/LICENSES/CC-BY-4.0.txt",
+        "sha256": "sha256:d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744"
+      },
+      {
+        "path": "dependencies/licenses/spirv-headers/LICENSES/MIT.txt",
+        "sha256": "sha256:6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/spirv-headers/review.md",
+      "sha256": "sha256:afddb445c6961f1cab1ab1115c4079a23667020dc7791f95f7f979233aea4519"
+    },
+    "reviewedAt": "2026-09-19"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [
+    {
+      "profileId": "bloom.linux-x86-64-clang-release",
+      "linkage": "header-only",
+      "cmakeOptions": [
+        {
+          "name": "SPIRV_HEADERS_ENABLE_INSTALL",
+          "value": "OFF"
+        },
+        {
+          "name": "SPIRV_HEADERS_ENABLE_TESTS",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.spirv-headers"
+      ],
+      "shippingRoles": [
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    }
+  ],
+  "securityReview": {
+    "reviewedAt": "2026-09-19",
+    "record": {
+      "path": "dependencies/licenses/spirv-headers/security.md",
+      "sha256": "sha256:57a029d8606c63bd8bbc6f04209d73b0ce4664cf9140bddc55bbeb06f41941b5"
+    },
+    "vulnerabilities": []
+  }
+}

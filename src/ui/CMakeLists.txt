@@ -335,6 +335,10 @@ target_sources(
         composition_editor_support.cpp
         composition_plan_cache.cpp
         composition_preview_controller.cpp
+        composition_preview_cpu_stage.cpp
+        composition_preview_stage_shared.cpp
+        composition_preview_stage_shared.hpp
+        composition_preview_gpu_scene_stage.cpp
         composition_preview_pipeline.cpp
         composition_preview_playback.cpp
         composition_preview_result.cpp
@@ -353,6 +357,11 @@ target_sources(
         frame_export_controller_deliverables.cpp
         composition_export_dialog.cpp
         composition_export_dialog.hpp
+        acceleration_status.cpp
+        application_preferences.cpp
+        preferences_window.cpp
+        preferences_window.hpp
+        preferences_window_performance.cpp
         frameless_window_support.cpp
         jobs_editor.cpp
         licenses_window.cpp
@@ -379,6 +388,7 @@ target_sources(
         preview_frame_cache.cpp
         project_host.cpp
         ram_preview_controller.cpp
+        ram_preview_pipeline.cpp
         properties_editor.cpp
         properties_editor_sections.cpp
         properties_editor_sources.cpp
@@ -414,6 +424,17 @@ target_sources(
         viewer_editor_text.cpp
         viewer_editor_text_input.cpp
         viewer_editor_text_layout.cpp
+        viewer_gpu_presenter.cpp
+        viewer_gpu_presenter_portable.cpp
+        viewer_gpu_presenter_input.cpp
+        viewer_gpu_presenter_input.hpp
+        viewer_gpu_presenter_port.cpp
+        viewer_gpu_presenter_port.hpp
+        viewer_gpu_resident.cpp
+        viewer_gpu_resident_cover.hpp
+        viewer_gpu_resident_overlay.cpp
+        gpu_viewer_bootstrap.cpp
+        native_surface_retirement.cpp
         window_status_bar.cpp
         workspace_host.cpp
         "${BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP}"
@@ -421,6 +442,8 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/ui/acceleration_status.hpp
+            include/bloom/ui/application_preferences.hpp
             include/bloom/ui/background_preview_controller.hpp
             include/bloom/ui/application_shutdown_coordinator.hpp
             include/bloom/ui/composition_authoring.hpp
@@ -428,10 +451,14 @@ target_sources(
             include/bloom/ui/composition_plan_cache.hpp
             include/bloom/ui/composition_preview_controller.hpp
             include/bloom/ui/audio_playback_session.hpp
+            include/bloom/ui/composition_preview_cpu_stage.hpp
+            include/bloom/ui/composition_preview_gpu_scene_stage.hpp
             include/bloom/ui/composition_preview_pipeline.hpp
             include/bloom/ui/composition_session.hpp
             include/bloom/ui/editor_area.hpp
             include/bloom/ui/editor_registry.hpp
+            include/bloom/ui/editor_native_surface.hpp
+            include/bloom/ui/native_surface_retirement.hpp
             include/bloom/ui/frame_export_controller.hpp
             include/bloom/ui/frameless_window_support.hpp
             include/bloom/ui/jobs_editor.hpp
@@ -443,6 +470,7 @@ target_sources(
             include/bloom/ui/node_editor.hpp
             include/bloom/ui/node_layout_arrange.hpp
             include/bloom/ui/playback_controller.hpp
+            include/bloom/ui/preferences_aware.hpp
             include/bloom/ui/preview_frame_cache.hpp
             include/bloom/ui/project_host.hpp
             include/bloom/ui/ram_preview_controller.hpp
@@ -460,6 +488,10 @@ target_sources(
             include/bloom/ui/viewer_overlays.hpp
             include/bloom/ui/viewer_editor.hpp
             include/bloom/ui/viewer_editor_probe.hpp
+            include/bloom/ui/viewer_gpu_presenter.hpp
+            include/bloom/ui/viewer_gpu_resident.hpp
+            include/bloom/ui/viewer_gpu_resident_overlay.hpp
+            include/bloom/ui/gpu_viewer_bootstrap.hpp
             include/bloom/ui/window_status_bar.hpp
             include/bloom/ui/workspace_host.hpp
 )
@@ -489,6 +521,43 @@ target_link_libraries(
 )
 target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image bloom_media_cache)
 bloom_enable_warnings(bloom_ui)
+
+# ViewerGpuPresenter is the only src/ui translation unit that adopts the borrowed VkInstance through
+# Qt's public QVulkanInstance (whose header includes <vulkan/vulkan.h>) and creates a
+# QWindow/VkSurfaceKHR. Compile it only when this build has BOTH the pinned Vulkan headers and a Qt
+# build that actually shipped QVulkanInstance; otherwise the same source compiles its truthful
+# Unsupported fallback, so a Vulkan-free desktop/UI build still links with no <vulkan/vulkan.h>
+# requirement. The runtime presentation coordinator stays entirely Vulkan-free and Qt-free.
+#
+# Qt's capability is read from the imported Qt6::Gui target that Qt6GuiTargets.cmake exports:
+# QT_ENABLED_PUBLIC_FEATURES is the list of public features this Qt build compiled in. The official
+# Qt 6.8.3 macOS packages are built without Vulkan, so "vulkan" is absent there (it appears in
+# QT_DISABLED_PUBLIC_FEATURES instead) and <QtGui/QVulkanInstance> is not installed. A missing or
+# not-found property fails closed, leaving BLOOM_QT_VULKAN_AVAILABLE OFF.
+set(BLOOM_QT_VULKAN_AVAILABLE OFF)
+if(TARGET Qt6::Gui)
+    get_target_property(_bloom_qt6_gui_public_features Qt6::Gui QT_ENABLED_PUBLIC_FEATURES)
+    if("vulkan" IN_LIST _bloom_qt6_gui_public_features)
+        set(BLOOM_QT_VULKAN_AVAILABLE ON)
+    endif()
+    unset(_bloom_qt6_gui_public_features)
+endif()
+
+set(BLOOM_UI_VULKAN_AVAILABLE OFF)
+if(BLOOM_RENDER_ENABLE_VULKAN AND BLOOM_QT_VULKAN_AVAILABLE AND DEFINED BLOOM_DEPENDENCY_MODE)
+    if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
+        find_package(VulkanHeaders QUIET CONFIG
+            PATHS "${BLOOM_DEPENDENCY_PREFIX}" NO_DEFAULT_PATH)
+    elseif(BLOOM_DEPENDENCY_MODE STREQUAL "developer-system")
+        find_package(VulkanHeaders QUIET CONFIG)
+    endif()
+    if(TARGET Vulkan::Headers)
+        bloom_find_dependency(VulkanHeaders)
+        set(BLOOM_UI_VULKAN_AVAILABLE ON)
+        target_link_libraries(bloom_ui PRIVATE Vulkan::Headers)
+        target_compile_definitions(bloom_ui PRIVATE BLOOM_UI_HAS_VULKAN=1)
+    endif()
+endif()
 
 if(BLOOM_BUILD_PYTHON)
     target_sources(bloom_ui PRIVATE script_panel_runtime.cpp script_panel_runtime.hpp)

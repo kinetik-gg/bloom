@@ -438,13 +438,13 @@ thumbnail cache). It is the same store both consult: `decodeThroughDiskCache()`
 
 **Location.** The platform cache directory (`bloom::platform::userCacheDirectory()`, Linux
 `$XDG_CACHE_HOME/bloom` or `$HOME/.cache/bloom`) plus a `media` leaf, or a `media/disk-cache-directory`
-QSettings override (an absolute path; anything else falls back to the platform default). No
-in-app settings dialog exists yet for the RAM preview or operation-cache byte budgets either
-(`preview_frame_cache.hpp`'s own `ramPreviewByteBudgetFromSettings()`/
-`operationCacheByteBudgetFromSettings()`); the disk cache's `media/disk-cache-enabled`,
-`media/disk-cache-budget-bytes` and `media/disk-cache-directory` keys follow that same
-QSettings-only precedent (`bloom::ui::media_disk_cache_settings`) rather than adding a first
-Preferences surface for one feature.
+QSettings override (an absolute path; anything else falls back to the platform default). The
+enable flag, directory, and byte budget are edited under **Edit → Preferences… → Memory & Caches**
+(the disk cache also has **Composition → Clear Media Cache…**); the operation-cache and RAM-preview
+budgets share that page. These values are read once at startup, so a change takes effect after
+restart. The owning reader is `bloom::ui::media_disk_cache_settings` for the disk cache and
+`preview_frame_cache.hpp`'s `ramPreviewByteBudgetFromSettings()`/`operationCacheByteBudgetFromSettings()`
+for the two memory ceilings.
 
 **Cache key.** Content-addressed and restart-stable, deliberately narrower than the evaluator's
 in-process operation-cache key: asset content digest, member/frame, legacy interpretation, resolved
@@ -479,9 +479,26 @@ index and directory-entry count without limit either. Both are enforced on every
 
 **Never cached.** An interactive or overridden evaluation request's pixels belong to a gesture,
 not to a revision (see `animation-and-time.md`'s "Direct Manipulation And Preview Overrides"); the
-same condition that already excludes such a request from the evaluator's memory operation cache
+same condition that already excludes such a request from the evaluator's derived operation cache
 (`request.bypassOperationCache` / `plan->bypassOperationCache()`) also passes a null disk cache
 into `evaluateImageSource()`, so an override is never read from or written to disk either.
+
+**Read-only decoded-image exception (CACHE-1).** The evaluator's memory cache now distinguishes the
+two bypasses that used to share one switch. An explicit evaluation bypass
+(`request.bypassOperationCache`) disables derived operation memoization and the decoded still-image
+memory and disk entries completely, consult-and-store alike. It is a per-evaluation control, not the
+preview controller's frame-cache refresh, and it does not touch the video decoded cache or
+colour-processor caches. A plan compiled for an interactive parameter override
+(`plan->bypassOperationCache()`) still bypasses derived operation memoization, but may READ an
+already-verified, immutable native decoded STILL-IMAGE entry under its EXISTING content-addressed
+memory source key (`selected.cacheKey`: asset digest, member/frame, interpretation, alpha, input
+processor/color-space id, OCIO identity, plus the resolved path/relink/availability that key already
+carried). It never inserts a source entry on a gesture miss, so gesture data cannot land under an
+unchanged source key, and the disk cache stays null: an interactive miss decodes directly and
+uncached. Content verification is unchanged -- the probe/hash gate still runs before either cache is
+consulted. Motion video already has its own decoded cache and is unchanged by this exception. Nested
+compositions remain conservatively fully bypassed on an override (no read-only reuse in the child)
+for this slice.
 
 **Controls.** `media/disk-cache-enabled` (default on), `media/disk-cache-budget-bytes`, and
 `media/disk-cache-directory` in QSettings; "Clear Media Cache…" in the Composition menu asks for

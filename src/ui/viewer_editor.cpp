@@ -2,6 +2,8 @@
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/viewer_editor.hpp>
+#include <bloom/ui/viewer_gpu_resident.hpp>
+#include <bloom/ui/viewer_gpu_resident_overlay.hpp>
 #include <memory>
 
 #include "composition_editor_support.hpp"
@@ -42,6 +44,7 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QImage>
+#include <QInputMethodEvent>
 #include <QIntValidator>
 #include <QKeyEvent>
 #include <QKeySequence>
@@ -53,6 +56,8 @@
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
+#include <QRegion>
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QSettings>
@@ -363,9 +368,11 @@ void drawCheckerboard(QPainter& painter, const QRectF& bounds) {
 // The canvas surround (task VIEW-1), chosen by the footer's Background dropdown and persisted under
 // "viewer/background". Black and White are literal, because that is exactly what an artist asks for
 // when checking edges against a known value -- a token would be a different, softer colour and
-// would defeat the purpose of the choice. Solid reads the authored composition background.
+// would defeat the purpose of the choice. Solid paints the panel's own background token, so the
+// surround blends with the panel chrome rather than reading as a separate black rectangle; literal
+// black is the Black choice.
 void drawCanvasBackground(QPainter& painter, const QRectF& bounds,
-                          const ViewerBackground background, const core::Color4d color) {
+                          const ViewerBackground background) {
     switch (background) {
     case ViewerBackground::Checkerboard:
         drawCheckerboard(painter, bounds);
@@ -379,11 +386,7 @@ void drawCanvasBackground(QPainter& painter, const QRectF& bounds,
     case ViewerBackground::Solid:
         break;
     }
-    painter.fillRect(bounds,
-                     QColor::fromRgbF(static_cast<float>(std::clamp(color.red, 0.0, 1.0)),
-                                      static_cast<float>(std::clamp(color.green, 0.0, 1.0)),
-                                      static_cast<float>(std::clamp(color.blue, 0.0, 1.0)),
-                                      static_cast<float>(std::clamp(color.alpha, 0.0, 1.0))));
+    painter.fillRect(bounds, kit::color(kit::Color::Canvas));
 }
 
 } // namespace
@@ -660,6 +663,11 @@ QRectF viewTransformedDisplayRect(const QRectF& available, const render::ImageEx
     return QRectF(centeredTopLeft + transform.pan, QSizeF(width, height));
 }
 
+bool cpuFallbackCompletionIsCurrent(const runtime::PreviewRequestIdentity& completed,
+                                    const runtime::PreviewRequestIdentity& current) {
+    return completed == current;
+}
+
 ViewTransform zoomAboutPoint(const ViewTransform& transform, const QRectF& available,
                              const render::ImageExtent extent,
                              const core::PixelAspectRatio pixelAspect, const QPointF screenPoint,
@@ -847,6 +855,8 @@ void ViewerEditor::buildHeader() {
     connect(safeAreasAction_, &QAction::toggled, this, [this](const bool enabled) {
         overlayOptions_.safeAreas = enabled;
         QSettings().setValue(kSafeAreasSetting, enabled);
+        ++gpuOverlayRevision_;
+        updateGpuResidentPresentation();
         update();
     });
 
@@ -883,7 +893,11 @@ void ViewerEditor::buildHeader() {
             *state = enabled;
             QSettings().setValue(setting, enabled);
         });
-        connect(action, &QAction::toggled, this, [this] { update(); });
+        connect(action, &QAction::toggled, this, [this] {
+            ++gpuOverlayRevision_;
+            updateGpuResidentPresentation();
+            update();
+        });
         return action;
     };
     centreCrossAction_ = addOverlayToggle(
@@ -1472,9 +1486,11 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     for (const auto* name : kBackgroundNames) {
         backgroundDropdown_->addItem(tr(name));
     }
+    // The default background is Checkerboard, so alpha behind the composition is always visible. A
+    // missing or unrecognized viewer/background reads as it.
     const auto savedBackground =
-        QSettings().value(kBackgroundSetting, QStringLiteral("Solid")).toString();
-    int backgroundIndex = 0;
+        QSettings().value(kBackgroundSetting, QStringLiteral("Checkerboard")).toString();
+    int backgroundIndex = static_cast<int>(ViewerBackground::Checkerboard);
     for (std::size_t i = 0; i < kBackgroundNames.size(); ++i) {
         if (savedBackground == QLatin1StringView(kBackgroundNames[i])) {
             backgroundIndex = static_cast<int>(i);
@@ -1697,6 +1713,8 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     });
     connect(&session_, &CompositionSession::selectionChanged, this, [this] {
         rebuildObjectSelector();
+        ++gpuOverlayRevision_;
+        updateGpuResidentPresentation();
         update();
         if (statusBarFooter_ != nullptr) {
             statusBarFooter_->update();
@@ -1753,9 +1771,37 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     updatePreviewResolution();
     updatePreviewAccessibility();
     updateOverlayActions();
+
+    // GPU-resident presentation is inert until setGpuPresentationDependencies() supplies a live
+    // client. It never creates a device/thread here; the adapter owns the only native objects.
+    gpuResident_ = std::make_unique<ViewerGpuResidentController>();
+    gpuResident_->setPresentAck([this](const bool presented, const std::string&) {
+        // True only after the owner genuinely published a present for this request.
+        residentActive_ = presented;
+        update();
+    });
+    gpuResident_->setCpuFallback([this] { requestResidentCpuFallback(); });
+    gpuResident_->setCpuCoverSnapshot([this]() -> QPixmap { return renderCpuCoverSnapshot(); });
+    gpuResident_->setInputSink(
+        [this](const ViewerGpuInputEvent& event) { forwardGpuInput(event); });
+    gpuResident_->setStateChanged([this] { updateGpuResidentPresentation(); });
+    gpuResidentTimer_ = new QTimer(this);
+    gpuResidentTimer_->setInterval(16);
+    connect(gpuResidentTimer_, &QTimer::timeout, this, &ViewerEditor::pollGpuResident);
 }
 
 ViewerEditor::~ViewerEditor() {
+    if (gpuResidentTimer_ != nullptr) {
+        gpuResidentTimer_->stop();
+    }
+    if (cpuFallbackTask_.has_value()) {
+        cpuFallbackTask_->cancel();
+        cpuFallbackTask_.reset();
+    }
+    // The host retire-before-mutation gate must have already settled any live native target. A
+    // target still live here is the ownership-contract violation ViewerGpuPresenter documents.
+    gpuResident_.reset();
+    gpuContainer_ = nullptr;
     clearProbe();
     if (adjustTask_)
         adjustTask_->cancel();
@@ -1990,6 +2036,7 @@ void ViewerEditor::setChannel(const ViewerChannel channel) {
             }
         }
     }
+    updateGpuResidentPresentation();
     update();
 }
 
@@ -2014,7 +2061,58 @@ void ViewerEditor::setBackground(const ViewerBackground background) {
             }
         }
     }
+    updateGpuResidentPresentation();
     update();
+}
+
+void ViewerEditor::applyApplicationPreferences(const ApplicationPreferences& preferences) {
+    // Drive the panel's own controls rather than reaching past them, so their existing
+    // persistence and the preview controller's resolution update stay the one code path. An index
+    // equal to the current one emits nothing, which is what makes this idempotent.
+    const auto resolutionIndex = [&preferences] {
+        switch (preferences.viewerResolution) {
+        case ViewerResolutionPreference::Full:
+            return 1;
+        case ViewerResolutionPreference::Half:
+            return 2;
+        case ViewerResolutionPreference::Quarter:
+            return 3;
+        case ViewerResolutionPreference::Auto:
+            break;
+        }
+        return 0;
+    }();
+    if (resolutionDropdown_ != nullptr && resolutionDropdown_->currentIndex() != resolutionIndex) {
+        resolutionDropdown_->setCurrentIndex(resolutionIndex);
+    }
+
+    const auto backgroundIndex = [&preferences] {
+        switch (preferences.viewerBackground) {
+        case ViewerBackgroundPreference::Checkerboard:
+            return 1;
+        case ViewerBackgroundPreference::Black:
+            return 2;
+        case ViewerBackgroundPreference::White:
+            return 3;
+        case ViewerBackgroundPreference::Solid:
+            break;
+        }
+        return 0;
+    }();
+    if (backgroundDropdown_ != nullptr && backgroundDropdown_->currentIndex() != backgroundIndex) {
+        backgroundDropdown_->setCurrentIndex(backgroundIndex);
+    }
+
+    const auto syncAction = [](QAction* action, const bool desired) {
+        if (action != nullptr && action->isChecked() != desired) {
+            action->setChecked(desired);
+        }
+    };
+    syncAction(safeAreasAction_, preferences.viewerSafeAreas);
+    syncAction(centreCrossAction_, preferences.viewerCentreCross);
+    syncAction(thirdsAction_, preferences.viewerThirds);
+    syncAction(rulersAction_, preferences.viewerRulers);
+    syncAction(pixelGridAction_, preferences.viewerPixelGrid);
 }
 
 ViewTransform ViewerEditor::viewTransformForTest() const noexcept { return transform_; }
@@ -2115,6 +2213,12 @@ void ViewerEditor::refreshZoomDropdown() {
 }
 
 void ViewerEditor::updatePreviewResolution() {
+    // A resident frame is presented at its native resolution. Auto stays stable Full so a zoom/pan
+    // only updates the present parameters (destination/source) and never forces a re-evaluation or
+    // an implicit proxy resolution change. Half/Quarter remain explicit choices made elsewhere.
+    if (residentFrameIsDisplayed()) {
+        return;
+    }
     const auto geometry = currentDisplayGeometry();
     if (!geometry.has_value()) {
         return;
@@ -2149,6 +2253,7 @@ bool ViewerEditor::event(QEvent* event) {
             endDrag(false);
         }
         updatePreviewResolution();
+        updateGpuResidentPresentation();
     }
     return handled;
 }
@@ -2193,20 +2298,33 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
         // Honest empty state (decision 5): no evaluation warnings, no busywork -- a quiet,
         // product-neutral invitation. Muted ink, Ui type (Value/Geist Mono is reserved for
         // numeric/timecode surfaces, not prose -- kit/tokens.hpp).
-        drawCanvasBackground(painter, surround, background_,
-                             session_.composition() ? session_.composition()->backgroundColor()
-                                                    : core::Color4d{0.0, 0.0, 0.0, 1.0});
+        drawCanvasBackground(painter, surround, background_);
         painter.setFont(kit::font(kit::TypeRole::Ui));
         painter.setPen(kit::color(kit::Color::Muted));
         painter.drawText(frame, Qt::AlignCenter, tr("Create a layer to begin"));
         return;
     }
 
-    drawCanvasBackground(painter, surround, background_,
-                         session_.composition() ? session_.composition()->backgroundColor()
-                                                : core::Color4d{0.0, 0.0, 0.0, 1.0});
+    drawCanvasBackground(painter, surround, background_);
 
-    const PreparedPreviewFrameHandle displayedFrame = this->displayedFrame();
+    // While a native present is genuinely active the child QWindow occludes this widget's painting
+    // and owns the pixels AND the overlays (they were recorded into the native overlay). Do not
+    // paint a CPU image behind it.
+    if (residentActive_ && !coverSnapshotInProgress_) {
+        return;
+    }
+
+    paintViewerContent(painter);
+}
+
+void ViewerEditor::paintViewerContent(QPainter& painter) {
+    // During a cover snapshot the last valid CPU frame is drawn explicitly (never the resident arm,
+    // whose CPU span is empty and whose native child is excluded from this pixmap anyway).
+    const PreparedPreviewFrameHandle displayedFrame =
+        coverSnapshotInProgress_
+            ? (cpuFallbackFrame_ != nullptr ? cpuFallbackFrame_ : lastCpuFrame_)
+            : paintableCpuFrame();
+    const QRectF frame = canvasRect();
     if (displayedFrame != nullptr) {
         // displayBufferView() normalizes both display-product alternatives (reference and
         // qualified) to the same packed-RGBA8 shape -- the viewer draws pixels identically either
@@ -2317,12 +2435,25 @@ std::optional<ViewerMapping> ViewerEditor::currentMapping() const {
     if (frameHandle == nullptr) {
         return std::nullopt;
     }
-    // A stale frame from another composition -- or an older revision of this one -- is never a
+    // A stale frame from another composition, another project, or an older evaluation is never a
     // mapping source (docs/architecture/animation-and-time.md, "Direct Manipulation And Preview
-    // Overrides").
-    if (frameHandle->desiredIdentity().compositionId != session_.compositionId() ||
-        frameHandle->desiredIdentity().sourceRevision != session_.snapshot().revision() ||
-        frameHandle->desiredIdentity().time != session_.currentTime()) {
+    // Overrides"). A committed frame honestly carries the retained evaluation snapshot's revision,
+    // which a verified layout-only edit may have left behind the live revision; an interactive
+    // frame carries the live revision. Both name THIS live document, so requiring the project id to
+    // agree -- not just the numeric revision -- is what keeps an old project's frame from ever
+    // mapping, even when its revision number collides.
+    const auto& desired = frameHandle->desiredIdentity();
+    const auto& live = session_.snapshot();
+    // TEMPORAL-2B: the genuine snapshot is resolved for the frame's OWN time, so a frame retained
+    // at an older revision inside an unaffected segment still maps; an interactive frame carries
+    // live.
+    const auto& evaluation = session_.evaluationSnapshotForTime(desired.time);
+    if (desired.compositionId != session_.compositionId() ||
+        desired.projectId != live.project().id() ||
+        desired.projectId != evaluation.project().id() ||
+        (desired.sourceRevision != live.revision() &&
+         desired.sourceRevision != evaluation.revision()) ||
+        desired.time != session_.currentTime()) {
         return std::nullopt;
     }
     const auto* composition = session_.composition();
@@ -2381,7 +2512,10 @@ ViewerHit ViewerEditor::hitAt(const ViewerMapping& mapping, const QPointF point)
     const auto& frame = previewController_.state().frame;
     if (!frame)
         return {};
-    const auto bounds = frame->evaluatedBounds();
+    // SPLIT-2: read geometry translated to the CURRENT live graph, then order by the live Merge
+    // entries. The raw frame bounds carry the retained snapshot's layer IDs, which after an
+    // equivalent split name the head.
+    const auto bounds = previewController_.currentLayerBounds();
     if (const auto* stack = session_.timelineMerge()) {
         for (const auto& entry : stack->entries()) {
             const auto found = std::ranges::find(bounds, entry.layerId,
@@ -2814,6 +2948,7 @@ void ViewerEditor::resizeEvent(QResizeEvent* event) {
     }
     layoutStatusBar();
     updatePreviewResolution();
+    updateGpuResidentPresentation();
 }
 
 void ViewerEditor::contextMenuEvent(QContextMenuEvent* event) {
@@ -2857,5 +2992,7 @@ void ViewerEditor::contextMenuEvent(QContextMenuEvent* event) {
 
 #include "viewer_tools.ipp"
 #include "viewer_tools_path.ipp"
+
+#include "viewer_editor_gpu.ipp"
 
 } // namespace bloom::ui

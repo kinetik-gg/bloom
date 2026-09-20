@@ -1,0 +1,58 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "generator": "tools/gpu-shaders compile/validate/embed recipe (reused, not reimplemented)",
+  "generatorRevision": 2,
+  "operation": "ViewerPresentV2",
+  "entrypoint": "main",
+  "shaders": [
+    {
+      "stage": "vertex",
+      "language": "GLSL_460",
+      "source": "viewer_present.vert",
+      "sha256": "c72b8de52cab61b39d3441a18d7bad08f5116154206a0e59b653b49e5589e6ff",
+      "spirvSha256": "02530de5a4b2abf9944d5b9ee40c610069c97b20fdbbfdc27e9f99f2f9aa415a",
+      "wordCount": 334
+    },
+    {
+      "stage": "fragment",
+      "language": "GLSL_460",
+      "source": "viewer_present.frag",
+      "sha256": "817fdaeb48bf7037b69aa38e8a51ee9aee2b28d7beecbfdacbece59fe34ee7b6",
+      "spirvSha256": "8a2120e1c7580034e85c1954c8cce9702ceb4344868d5458e9f9980a08b15105",
+      "wordCount": 2643
+    }
+  ],
+  "specializationConstants": [],
+  "bindings": [
+    {
+      "set": 0,
+      "binding": 0,
+      "kind": "combined-image-sampler",
+      "format": "rgba8-unorm",
+      "role": "resident-straight-rgba8-srgb-display",
+      "filter": "manual-bilinear-premultiplied-taps"
+    },
+    {
+      "set": 0,
+      "binding": 1,
+      "kind": "combined-image-sampler",
+      "format": "rgba8-unorm",
+      "role": "premultiplied-rgba8-overlay",
+      "filter": "hardware-linear-premultiplied"
+    },
+    {
+      "set": 0,
+      "binding": 2,
+      "kind": "uniform-buffer",
+      "role": "present-params",
+      "std140ByteSize": 144
+    }
+  ],
+  "contracts": {
+    "targetFormat": "BGRA8_UNORM or RGBA8_UNORM only; the attachment format owns channel packing and no manual swizzle is performed",
+    "sourceAlpha": "straight; channel remap applied per texel tap, then premultiplied before the bilinear weights",
+    "overlayAlpha": "premultiplied; composited last",
+    "channelEnum": "matches bloom::ui::ViewerChannel (Rgba,Rgb,Red,Green,Blue,Alpha)",
+    "checkerboard": "raised tiles where (row+column) is even, tile pixels and origin supplied by the caller"
+  }
+}

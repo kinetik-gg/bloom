@@ -2,20 +2,27 @@
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
+#include <bloom/runtime/gpu_preview_display_service.hpp>
+#include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/ui/acceleration_status.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/audio_playback_session.hpp>
 #include <bloom/ui/background_preview_controller.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
+#include <bloom/ui/composition_preview_cpu_stage.hpp>
+#include <bloom/ui/composition_preview_gpu_scene_stage.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
+#include <bloom/ui/gpu_viewer_bootstrap.hpp>
 #include <bloom/ui/jobs_editor.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/theme.hpp>
@@ -27,11 +34,16 @@
 #include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/window_status_bar.hpp>
+#include <bloom/ui/workspace_host.hpp>
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDir>
 #include <QEventLoop>
+#include <QGuiApplication>
+#include <QScreen>
 #include <QSettings>
 #include <QTimer>
 
@@ -169,21 +181,103 @@ int main(int argc, char* argv[]) {
     const auto previewPipeline = bloom::ui::makeCompositionPreviewPipeline(
         snapshotCompiler, cpuEvaluator, referenceDisplayPreparer, qualifiedDisplayProcessorProvider,
         compiledPlanCache);
+    // The GPU display half of the preview pipeline. It owns a dedicated service thread and never
+    // exposes a native or Vulkan handle. It is constructed here, after the compiler/evaluator/
+    // qualified provider/frame cache it depends on and before the controllers that submit through
+    // it, so every dependency outlives it and it outlives every controller that captures its
+    // submitter. When no bundled native loader was packaged, `enabled` stays false and the service
+    // never touches a device: every request takes the unchanged CPU stage + display-fallback path.
+    bloom::runtime::GpuPreviewDisplayServiceOptions gpuPreviewDisplayOptions;
+    bool bundledNativeLoader = false;
+#ifdef BLOOM_BUNDLED_VULKAN_LOADER
+    bundledNativeLoader = true;
+    gpuPreviewDisplayOptions.enabled = true;
+    gpuPreviewDisplayOptions.loaderPath =
+        std::filesystem::path(QDir(QCoreApplication::applicationDirPath())
+                                  .filePath(QStringLiteral(BLOOM_BUNDLED_VULKAN_LOADER_SUBDIR
+                                                           "/" BLOOM_BUNDLED_VULKAN_LOADER_NAME))
+                                  .toStdString());
+#endif
+    // Presentation is requested only for the genuine Wayland session with a packaged loader. Every
+    // other platform/session keeps the compute-only or CPU-only path; no blank activation is
+    // claimed and the service still publishes an explicit Unavailable capability if the device
+    // cannot enable a present-capable queue.
+    if (bloom::ui::shouldRequestWaylandPresentation(
+            bundledNativeLoader,
+            QGuiApplication::platformName().contains(QStringLiteral("wayland")))) {
+        gpuPreviewDisplayOptions.presentation =
+            bloom::runtime::GpuPreviewDisplayServicePresentationMode::Wayland;
+    }
+    // Align the resident lease registry with the artist's UI frame-cache budget so the registry can
+    // publish every lease the cache can reference, with bounded in-flight/visible headroom and a
+    // hard VRAM ceiling. No live lease/pin is ever invalidated; pressure takes the CPU fallback.
+    const auto gpuResidentBudgetPlan =
+        bloom::ui::gpuResidentBudgetPlanFor(cacheBudgets.previewFrameCacheByteBudget);
+    bloom::ui::applyGpuResidentBudgetPlan(gpuPreviewDisplayOptions, gpuResidentBudgetPlan);
+    // The shared frame cache gets the matching additive GPU-resident sublimits. Its overall CPU
+    // cache budget is unchanged; only the bounded resident subset is capped, and it evicts LRU
+    // resident entries (dropping the cache's reference only) before the registry can refuse a
+    // publishable lease. No live lease is invalidated.
+    bloom::ui::applyGpuResidentCacheLimits(*previewFrameCache, gpuResidentBudgetPlan);
+    // The coverage cache and the prepared-upload cache are shared across every GPU-scene request.
+    // The media context is NOT captured once here: makeSessionRefreshingGpuSceneStage copies the
+    // evaluator's current assetBaseDirectory per request, so a relative media path follows an
+    // Open/SaveAs that changes the session base directory.
+    auto gpuSceneCoverageCache = std::make_shared<bloom::runtime::GpuSceneCoverageCache>();
+    auto gpuPreparedUploadCache = std::make_shared<bloom::runtime::GpuPreparedUploadCache>();
+    auto gpuPreviewGpuSceneStage = bloom::ui::makeSessionRefreshingGpuSceneStage(
+        snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, gpuSceneCoverageCache,
+        gpuPreparedUploadCache, compiledPlanCache);
+    auto gpuPreviewCpuStage = bloom::ui::makeCompositionPreviewCpuStage(
+        snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, compiledPlanCache);
+    auto gpuPreviewCpuDisplayFallback =
+        bloom::ui::makeCompositionPreviewCpuDisplayFallback(referenceDisplayPreparer);
+    bloom::runtime::GpuPreviewDisplayService gpuPreviewDisplayService(
+        taskScheduler, std::move(gpuPreviewGpuSceneStage), std::move(gpuPreviewCpuStage),
+        std::move(gpuPreviewCpuDisplayFallback), gpuPreviewDisplayOptions);
+    // The one submit seam: each controller hands the request it would otherwise submit to the
+    // scheduler straight to the service, which owns GPU submission and the CPU fallback. The
+    // controller's own preparation function stays live for viewer analysis and probes only.
+    bloom::ui::PreviewPreparationSubmitter gpuPreviewDisplaySubmitter =
+        [&gpuPreviewDisplayService](
+            bloom::runtime::TaskRequest request, const bloom::document::Snapshot& snapshot,
+            const bloom::runtime::PreviewRequestIdentity& identity,
+            const std::size_t pixelStorageByteLimit,
+            const std::vector<bloom::runtime::SnapshotParameterOverride>& overrides) {
+            return gpuPreviewDisplayService.submit(std::move(request), snapshot, identity,
+                                                   pixelStorageByteLimit, overrides);
+        };
     bloom::ui::CompositionPreviewController previewController(
         compositionSession, taskScheduler, taskUiBridge, previewPipeline,
         {.colorIntent = compositionSession.colorIntent(),
          .displayName = {},
          .viewName = {},
          .showLook = true},
-        previewFrameCache);
+        previewFrameCache, nullptr, gpuPreviewDisplaySubmitter);
     bloom::ui::BackgroundPreviewController backgroundPreviewController(
-        compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline);
+        compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline,
+        nullptr, gpuPreviewDisplaySubmitter);
     bloom::ui::RamPreviewController ramPreviewController(
-        compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline);
+        compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline,
+        nullptr, gpuPreviewDisplaySubmitter);
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &ramPreviewController, &bloom::ui::RamPreviewController::beginShutdown);
+    // Non-blocking: the service closes its own admission, cancels the tasks it submitted, and wakes
+    // its thread. Its destructor (which runs before the scheduler's) joins that thread and drains
+    // child/native ownership, so nothing joins the UI thread while GPU work is in flight.
+    //
+    // HOST-RETIREMENT: this is intentionally connected to shutdownQuiescent (both task quiescence
+    // AND native-surface retirement), not shutdownStarted. Beginning service shutdown while a
+    // presenter's native target is still live would cancel the very work whose retirement proof the
+    // shutdown gate waits for; the service must keep pumping until every surface is genuinely
+    // retired. If a future service API exposes a separate "stop admitting, keep pumping" call, add
+    // it on shutdownStarted and keep the destruction hook here.
+    QObject::connect(&shutdownCoordinator,
+                     &bloom::ui::ApplicationShutdownCoordinator::shutdownQuiescent,
+                     &shutdownCoordinator,
+                     [&gpuPreviewDisplayService] { gpuPreviewDisplayService.beginShutdown(); });
     application.installEventFilter(&shutdownCoordinator);
     // Kept live even though no editor shows it (task F1, item F6 removed Jobs from the registry
     // below): this is the model a JobsEditor takes, and it is the bridge's own consumer. Dropping
@@ -200,6 +294,21 @@ int main(int argc, char* argv[]) {
         projectHost.publicationCoordinator(), projectHost.artifactCoordinator(), {},
         &qualifiedDisplayProcessorProvider);
 
+    // The typed viewer GPU dependency context. Its presentation-client getter reads the cached
+    // service capability, so an editor created before the async startup qualification finishes is
+    // handed the client as soon as it is published (the bridge poll below refreshes the cache), and
+    // every later editor -- including a workspace replacement -- reads the same cache. No native
+    // handle ever crosses this seam; a null client leaves the unchanged CPU paint path.
+    //
+    // Declaration order is the lifetime contract: the bootstrap outlives the dependency context,
+    // which outlives the registry whose factories capture a pointer to it, and the window (and its
+    // editors) is declared last so it is destroyed first. No factory is invoked after the context
+    // or the bootstrap is gone.
+    const auto* const primaryScreen = QGuiApplication::primaryScreen();
+    bloom::ui::GpuViewerBootstrap gpuViewerBootstrap(
+        taskScheduler, gpuPreviewDisplayOptions.loaderPath.string(),
+        primaryScreen != nullptr ? primaryScreen->devicePixelRatio() : 1.0);
+    bloom::ui::ViewerGpuDependencies viewerGpuDependencies = gpuViewerBootstrap.dependencies();
     bloom::ui::EditorRegistry editorRegistry;
     // Jobs is deliberately NOT registered (task F1, item F6). An editor in this registry is an
     // editor the panel switcher offers and a workspace can place, and Jobs is wanted in neither
@@ -208,7 +317,8 @@ int main(int argc, char* argv[]) {
     // all it takes to offer the panel again -- so Jobs is reachable programmatically and simply
     // not on offer in the interface.
     const bool editorsRegistered = bloom::ui::registerFoundationEditors(
-        editorRegistry, compositionSession, previewController, &ramPreviewController, &projectHost);
+        editorRegistry, compositionSession, previewController, &ramPreviewController, &projectHost,
+        &viewerGpuDependencies);
     if (!editorsRegistered) {
         QEventLoop shutdownLoop;
         QObject::connect(&shutdownCoordinator,
@@ -261,13 +371,46 @@ int main(int argc, char* argv[]) {
                      applyAudioMix);
     (void)audioPlaybackSession.refresh();
     applyAudioMix();
+    // The Preferences window's read-only Performance page reads this cached provider. The existing
+    // status poll below hands it one already-published `service.status()` read per tick, so the
+    // page follows Initializing -> Ready -> a later capability loss without any UI-thread device
+    // probe. Declared before the window so it outlives the borrowed pointer the window holds.
+    bloom::ui::CachedAccelerationStatusProvider accelerationStatus;
     // Native (server-side) window chrome only (task C1): MainWindow no longer takes a chrome mode
     // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,
                                  frameExportController, &ramPreviewController, &previewController,
                                  nullptr, &playback, cpuEvaluator.operationCache().get(),
-                                 mediaDiskCache.get());
+                                 mediaDiskCache.get(), &accelerationStatus);
+    // Settings the composition root owns take effect immediately: the window has already saved the
+    // value, and these read the same keys back. Cache budgets and the disk cache are startup-read
+    // and deliberately not re-applied here.
+    QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &playback, [&playback] {
+        const QSettings settings;
+        playback.setAudioEnabled(
+            settings.value(QStringLiteral("playback/audio-enabled"), true).toBool());
+        playback.setLooping(settings.value(QStringLiteral("playback/loop"), true).toBool());
+    });
     playback.installWindowShortcut(window);
+    // The shutdown contract's second half: the workspace enumerates every live editor native
+    // surface so the coordinator can require genuine retirement before Qt teardown. A CPU-only
+    // workspace yields no surfaces and shutdown behavior is exactly as before.
+    shutdownCoordinator.setNativeSurfaceSource(
+        [&window] { return window.workspaceHost()->liveNativeSurfaces(); });
+    // Re-publish a changed presentation capability into already-live ViewerEditors: a newly Ready
+    // client is handed over, and a later loss is handed over as a null client so those viewers drop
+    // back to their own CPU paint path. The factory seam covers every editor created later; this
+    // covers the ones the initial workspace restore already built. The viewer owns its own
+    // same-request CPU fallback, and a null client simply leaves that CPU path in place.
+    gpuViewerBootstrap.setPublicationSink([&window](const bloom::ui::ViewerGpuDependencies& deps) {
+        for (auto* surface : window.workspaceHost()->liveNativeSurfaces()) {
+            if (auto* viewer = dynamic_cast<bloom::ui::ViewerEditor*>(surface); viewer != nullptr) {
+                viewer->setGpuPresentationDependencies(deps.presentationClient(), deps.scheduler,
+                                                       deps.vulkanLoaderPath,
+                                                       deps.devicePixelRatio);
+            }
+        }
+    });
     QObject::connect(&ramPreviewController, &bloom::ui::RamPreviewController::stateChanged,
                      &playback, [&] {
                          if (ramPreviewController.isCaching()) {
@@ -295,6 +438,19 @@ int main(int argc, char* argv[]) {
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownQuiescent, &application,
                      &QApplication::quit);
     window.show();
+
+    // The EXISTING TaskUiBridge poll drives the cached capability refresh and keeps running until
+    // shutdown, so a capability that is later lost is observed and published as a null client --
+    // the stop-on-Ready timer it replaces could never see a loss. This is a locked status read
+    // only: it never probes the device, blocks, or renders on the UI thread. One read feeds both
+    // the bootstrap (which republishes the presentation client) and the cached Preferences status.
+    QObject::connect(&taskUiBridge, &bloom::ui::TaskUiBridge::snapshotsPolled, &application,
+                     [&gpuViewerBootstrap, &gpuPreviewDisplayService, &accelerationStatus] {
+                         const auto status = gpuPreviewDisplayService.status();
+                         gpuViewerBootstrap.refreshFromStatus(status);
+                         accelerationStatus.setServiceStatus(status);
+                     });
+    taskUiBridge.wake();
 
     // SAVEFIX-1: the launch after an abnormal exit. Queued, not called inline, so the offer is
     // presented over a window that is already on screen rather than in front of one.

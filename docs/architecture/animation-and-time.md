@@ -428,9 +428,22 @@ ENTRIES still fold in order, bottom to top -- only the rows within one entry ban
 Progress brackets a row pass (`completed` 0, then the total) instead of counting rows, because a band
 runs on a thread the progress callback does not belong to.
 
-A compiled plan is cached per document revision for the same reason a sequence export compiles once:
-the compiler is time-independent, so two requests that differ only in time compile to the same plan.
-A request carrying an interactive parameter override is compiled directly and never retained.
+A compiled plan is cached for the same reason a sequence export compiles once: the compiler is
+time-independent, so two requests that differ only in time compile to the same plan. The cache entry
+retains the immutable input snapshot it was built from, and a request matches only when it carries
+the exact same retained project-state object plus the same composition and revision -- not merely the
+same numeric `(ProjectId, CompositionId, Revision)` tuple, because every New/Open document
+deliberately reuses those numbers. Copies of one snapshot, which is what every request carries, still
+hit; a different document with colliding numbers recompiles. A request carrying an interactive
+parameter override is compiled directly and never retained.
+
+A rebind to a different document (`documentRebound()`) is fired after the new live and evaluation
+snapshots are installed but before the ordinary refresh signals. The foreground preview cancels and
+detaches its active handle, clears any pending request and the frame cache, and resets its displayed
+and request state there, so an old document's queued completion can never publish or cache pixels
+under a colliding numeric key; the normal evaluation/composition signals then build the new
+document's request. RAM preview and background caching already cancel on those signals and discard
+their old completions the same way.
 
 ### Sequence Export
 
@@ -532,12 +545,100 @@ about 8 MB a frame, a 2 GiB preview budget holds roughly 250 frames of a 1920x10
 ten seconds at 24 fps -- and a RAM preview whose range does not fit stops at the first eviction and
 keeps the prefix that does.
 
-**Invalidation is the key.** A document edit advances the revision, so every entry of an earlier
-revision is unreachable by construction; those entries are dropped outright when a frame of a newer
-revision arrives. Two requests never reach the cache at all: one carrying an interactive parameter
-override, whose pixels belong to a gesture rather than to the revision and whose identity cannot say
-so, and an explicit refresh, which asks for the frame to be re-derived precisely because something
-the key does not cover may have changed.
+**Invalidation is the key, and the key is the retained evaluation snapshot, not the live document
+revision.** `CompositionSession::snapshot()` and `snapshotChanged()` remain the live document and UI
+truth: every applied command advances them. Beside them the session retains
+`evaluationSnapshot()`, the newest genuine snapshot whose render-relevant content the preview has
+evaluated, and publishes `evaluationChanged()` only when it actually moves. A command whose own
+result metadata proves it changed no rendered pixel -- the three card-layout commands, `MoveNodes`,
+`SetNodeCollapsed` and `SetNodeWidth`, and only those -- leaves `evaluationSnapshot()` on the
+previous genuine snapshot, so the prepared frame, the frame-cache key and the compiled plan keep one
+real revision instead of one per drag. Every other command, an unknown or unclassified one included,
+advances `evaluationSnapshot()` to live, so the default stays conservative. The retained snapshot is
+never a re-stamped revision: it is one the session actually read from the document, and nested-plan
+`sourceRevision` and `ProcessFrameIdentity` keep naming it. A cache entry becomes unreachable when
+the session no longer accepts its own revision for its own time, and is pruned then -- never by a
+wholesale per-project revision drop. Two requests never reach the cache at all: one
+carrying an interactive parameter override, whose pixels belong to a gesture rather than to the
+snapshot and whose identity cannot say so, and an explicit refresh, which asks for the frame to be
+re-derived precisely because something the key does not cover may have changed. CACHE-1 narrows
+this for one derived input: an interactive override plan may still READ an already-verified,
+immutable native decoded still-image entry out of the evaluator's memory cache instead of
+re-decoding it, but never inserts a source entry on a miss, and derived operation results,
+overridden plans, gesture frame-cache insertion, and disk-cache reads and writes stay bypassed. An
+explicit evaluation bypass (`request.bypassOperationCache`, distinct from the preview frame-cache
+refresh described here) disables even that read-only reuse.
+
+**Time-indexed provenance, and two distinct signals.** TEMPORAL-2A replaced the single retained
+snapshot with `evaluationSnapshotForTime(t)`: a sorted, full-cover list of spans, each naming the
+genuine snapshot whose pixels represent that composition time. A finite changed-time footprint (the
+clip `SetLayerRange` symmetric difference of the old and new half-open activity spans) retains the
+previous genuine snapshot OUTSIDE its changed intervals and switches only those intervals to the
+live snapshot. Every consumer therefore resolves the snapshot FOR ITS OWN TIME: the frame-cache key,
+the foreground committed request, the live-session guard, the analysis request, the viewer's gesture
+mapping, and each RAM/background submission. Nested `sourceRevision` is never rewritten, and each
+retained frame keeps the real revision and plan it came from.
+
+The signal split is what makes this user-visible rather than merely retained. `documentEvaluationChanged()`
+says a DOCUMENT command moved the time-indexed provenance: the foreground preview re-scopes cache
+retention and PRESERVES the displayed frame (and in-flight work) when that frame's time still
+resolves to the same genuine snapshot, otherwise it rebuilds only the changed interval, answering
+from another retained segment's cache entry when possible. RAM and background rescan and submit only
+frames the new provenance no longer accepts; a unitary live reset (a whole-render or unknown edit)
+cancels the RAM run as before. `evaluationChanged()` is reserved for NON-document transitions whose
+snapshot revisions are unchanged but whose pixels are not -- the qualified display transform becoming
+available, a colour-settings change, and rebind -- and still forces a fresh derivation; that is why a
+"same revision" test can never be used to keep a display-qualified frame.
+
+**Split reuse (SPLIT-2).** An output-equivalent `SplitLayerAtTime` publishes a deliberately EMPTY
+finite pixel footprint plus ordered `LayerIdentityRemap`s (original->tail over `[split, originalOut)`).
+The session composes those remaps onto the time-indexed segments instead of resetting whole-live:
+segments are subdivided at each remap boundary, a segment coalesces only when it has the same actual
+snapshot owner AND identical mapping state, and a mapping composes onto existing mapping VALUES so a
+repeated split of a tail collapses original->intermediate->final rather than naming an intermediate
+ID absent from the retained snapshot. A finite pixel-interval replacement switches only the changed
+intervals to live (clearing their mappings); unaffected segments keep their snapshot and mappings.
+Undo publishes the already-inverted list, so `before` is validated against the PREVIOUS live graph
+and `after` against the new one. Whole/cap/rebind/switch fall back to whole-live with no mappings.
+`CompositionPreviewController::currentLayerBounds()` is the one place viewer paint, hit-test, text
+editing and selection read geometry: it translates each retained bound's layer/node ID to the current
+graph for the frame's own time, so a cached tail frame hit-selects and drags the NEW tail while the
+head is untouched. This is metadata only -- no pixel copy and no reevaluation; the retained frame
+keeps its genuine snapshot, revision and process identity. Non-merge/parent/driver cases stay
+conservative (whole-render, no remaps).
+
+**Deletion.** TEMPORAL-DELETE classifies `RemoveNodes` from the graph BEFORE erasing. When every
+removed node is an ordinary layer boundary whose output feeds only the Merge stack, no surviving
+child is parented to a removed boundary, no surviving parameter is driver-bound to a removed node,
+no removed boundary is solo (removing a solo layer can unsuppress others), and the removed set is
+not empty of merge participation, the changed time is the normalized union of the removed boundaries'
+half-open active spans (absent `outPoint` means the composition duration). An isolated boundary
+contributes nothing, and an all-isolated set publishes a deliberate empty footprint. Anything else —
+a source, effect, reroute, or value node; a non-merge downstream consumer; a dependent child; a
+driver dependency; a solo layer — leaves the whole-render default. The result rides the same
+`documentEvaluationChanged`/cache-retention path as a clip trim, so unaffected cached frames are
+retained with zero preparation and only the deleted span re-derives.
+
+**Cache retention.** The cache holds an accepted-provenance policy: while a composition's time is
+inside a span, only that span's revision may be retained there. A finite edit prunes exactly the
+entries whose own revision is no longer accepted for their time (counted as `staleDrops`) while
+unaffected retained segments survive untouched; a work-area exclusion stays `rangeDrops`, never an
+eviction or pressure drop. `timesFor()` matches everything deciding pixels EXCEPT the source
+revision, so the timeline's cached markers span multiple retained revisions. The compatibility
+accessor `evaluationSnapshot()` remains, returning the uniform snapshot or the live snapshot when
+provenance is mixed. `ViewerEditor::currentMapping()` and the controller's live-session guard accept
+a frame whose project, composition and time agree and whose revision is either the live revision or
+the accepted snapshot FOR THAT TIME, so a gesture still maps after an edit while an old project's
+frame can never become current merely because a numeric revision collides. An explicit refresh, a
+resolution change and a display/view change still re-derive; a retained segment is a cache identity,
+not a promise that a forced request will be answered from it. Note that an explicit refresh is NOT a
+"current live revision" oracle: it also resolves `evaluationSnapshotForTime(t)`, so at an unaffected
+time it re-derives from the RETAINED snapshot. Only a request built from `session.snapshot()`
+carries the live revision, which is why pixel-parity tests prepare that live oracle explicitly rather
+than reusing the refresh path. A finite edit that changes the pending/active request's time must
+rebuild that target even when the displayed last-good frame sits at an unaffected earlier time; the
+handler therefore inspects the pending/active identity's own time and provenance, never the
+displayed frame alone.
 
 **The RAM Preview command** (`Ctrl+Shift+Space`, the Composition menu, and the Timeline transport's
 own button) pre-renders the composition's work-area frame range into the cache one frame at a time, in
@@ -546,7 +647,23 @@ asks the transport to play it. Frames already cached are counted without being r
 second RAM preview of an unedited range is immediate. The range is the persisted half-open work
 area when set, otherwise `[0, duration)`, read through `CompositionSession::workArea()`. Playback
 starts inside and loops over those same frame indices. The start frame is included and the end
-frame excluded; a range edit cancels an active cache run through the ordinary revision path.
+frame excluded.
+
+A work-area edit (`SetWorkArea`/`ClearWorkArea`) is render-neutral: it scopes which frames a range
+command caches, not what a pixel looks like, so it is declared layout-like in the command layer and
+never advances the evaluation snapshot or recompiles a plan. It publishes its own
+`workAreaChanged()` -- based on the effective half-open range actually changing, not on every
+document edit -- and the shared preview cache re-scopes to the live range: entries outside it are
+released as `rangeDrops` (never as eviction or memory-pressure, so a trim cannot abort a run as
+though the budget were exceeded), every later insertion is refused if it is out of range so a late
+completion after a trim cannot resurrect a pruned entry, and the already-displayed frame is
+untouched. A frame outside the work area can still be displayed; it is simply not retained. An
+active RAM run adapts rather than cancels: the in-flight frame is allowed to land (retained only if
+still in range), the run rebases onto the new range, and only missing frames are submitted, so an
+expansion or shift fills just the entering interval and a fully cached shrink evaluates nothing.
+Background fill follows the same rule through `workAreaChanged()`; the automatic pass, its budget,
+priority and yielding behavior are otherwise unchanged, and a range edit never turns itself into an
+explicit RAM command.
 
 ### Background caching
 
@@ -565,8 +682,11 @@ and shutdown handling. It never changes session time or publishes Viewer pixels.
 
 Each pass visits at most the nearest set of frames that fits the cache's byte budget. Cached entries
 in that set are reused and protected by the cache's LRU order. The pass then stops, avoiding an endless
-cycle that evicts its own frames. A revision, resolution, playhead, or memory-budget change restarts
-selection. Old revision entries evict through the existing cache policy. Background caching visits
+cycle that evicts its own frames. An evaluation-snapshot, work-area, resolution, playhead, or
+memory-budget change restarts selection; a layout-only edit moves none of those and leaves the pass
+running. A work-area edit re-anchors on the playhead and skips cached in-range frames, so it fills
+only what the new range adds. Old evaluation-snapshot entries evict through the existing cache
+policy. Background caching visits
 only frame times inside the session's resolved work area, including when choosing nearby frames
 around an out-of-range playhead. Cache budgets, cancellation and shutdown behavior are unchanged.
 
@@ -682,7 +802,10 @@ targets, a ninth override and driven sources are refused. A driver is never hidd
 
 Accepted overrides become request-local constant records read by the shared lowering functions,
 including all source operand kinds. Their dormant curves are omitted. The immutable document is
-unchanged; compiled plan and operation caches bypass overridden requests. Preview controller and
+unchanged; compiled plan and derived operation caches bypass overridden requests. The one read the
+override path may still take is a warmed, already-verified native decoded still-image memory entry
+(CACHE-1; see `media-io.md`'s "Read-only decoded-image exception"), never a derived operation
+result. Preview controller and
 pipeline carry the complete vector only on Interactive requests. The first request is immediate;
 subsequent requests retain the 16 ms cadence and one-active/one-newest admission policy. Release
 or cancellation removes the vector. Completed previews are consumed independently of the slower
@@ -760,7 +883,10 @@ Auto follows the fitted viewer scale, using the same proxy mapping as viewer man
 Completed live frames can be presented while newer input is coalesced, so continuous motion does
 not starve feedback. Committing always requests the configured resolution and reference quality.
 These request-only choices never change durable state, compiled-plan grammar, semantics versions
-or committed pixels. Override plans and frames remain excluded from revision caches.
+or committed pixels. Override plans and frames remain excluded from revision caches. The evaluator's
+memory cache admits one exception for interactive overrides: read-only reuse of an already-verified
+decoded still-image source entry (CACHE-1); an explicit evaluation bypass
+(`request.bypassOperationCache`) still turns even that off.
 
 ## Required Verification
 

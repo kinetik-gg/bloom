@@ -1,4 +1,5 @@
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
@@ -30,6 +31,7 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QMouseEvent>
+#include <QRectF>
 #include <QWidget>
 
 #include <algorithm>
@@ -40,6 +42,7 @@
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -256,6 +259,43 @@ void testWorkAreaBoundsBackground(Expectations& expectations) {
         const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
         expectations.expect(key && fixture.frameCache->contains(*key) == (frame >= 2 && frame < 5),
                             "background cache respects both exclusive range edges");
+    }
+    background.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
+// A background fill must submit the SAME ROI the cache key carries. Before the fix, fillNextFrame
+// built the identity with no `.roi`, so when an ROI was active the completion-key comparison
+// (cacheKeyForTime includes roi, forIdentity(activeIdentity) did not) never matched: the completed
+// frame was silently discarded and never entered the cache.
+void testBackgroundFillHonoursRegionOfInterest(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Background ROI", time(3, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "ROI fixture foreground settled");
+    fixture.controller.setRegionOfInterest(QRectF(0.25, 0.25, 0.5, 0.5));
+    expectations.expect(fixture.controller.regionOfInterest().has_value(),
+                        "the controller exposes the ROI window");
+    fixture.frameCache->clear();
+
+    ui::BackgroundPreviewController background(fixture.session, fixture.controller,
+                                               fixture.scheduler, fixture.bridge,
+                                               fixture.countingPipeline());
+    background.fillNextFrame();
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() >= 1; }),
+                        "a ROI background frame enters the cache");
+
+    const auto roiKey = fixture.controller.cacheKeyForTime(time(0, 25));
+    expectations.expect(roiKey.has_value() && roiKey->roi.has_value(),
+                        "the cache key carries the ROI window");
+    if (roiKey.has_value()) {
+        expectations.expect(fixture.frameCache->contains(*roiKey),
+                            "the completed ROI frame is cached under the ROI key");
+        // The same time WITHOUT the ROI is a different key; its absence proves the cached entry was
+        // the ROI frame, not a wasted full-frame submission that reused the plain key.
+        auto plainKey = *roiKey;
+        plainKey.roi = std::nullopt;
+        expectations.expect(!fixture.frameCache->contains(plainKey),
+                            "no full-frame entry is cached for the ROI time");
     }
     background.beginShutdown();
     finishFixture(fixture, expectations);
@@ -521,6 +561,139 @@ void testBackgroundFillsAheadWhilePlaying(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
+// LAYOUT-2: a layout-only edit does not restart the background pass, and it keeps filling under
+// the retained evaluation revision, so the key it fills and the snapshot it captured cannot
+// disagree. (Deliberate foreground priority still yields through the existing event filter.)
+void testLayoutEditKeepsBackgroundOnRetainedRevision(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Background Layout Retain", time(7, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the foreground preview settles before background fills");
+    fixture.frameCache->clear();
+    const auto evalRevision = fixture.session.evaluationSnapshot().revision();
+    const auto nodeId = fixture.session.composition()->graph().nodes().front().id;
+
+    ui::BackgroundPreviewController background(fixture.session, fixture.controller,
+                                               fixture.scheduler, fixture.bridge,
+                                               fixture.countingPipeline());
+    background.fillNextFrame();
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 1; }),
+                        "the background pass fills its first frame");
+
+    commands::Transaction move("Move Nodes", fixture.session.snapshot().revision());
+    move.emplace<commands::MoveNodes>(
+        fixture.session.compositionId(),
+        std::map<document::NodeId, document::Vec2d>{{nodeId, {6.0, 7.0}}});
+    expectations.expect(fixture.session.executeNodeTransaction(std::move(move)).changed() &&
+                            fixture.session.evaluationSnapshot().revision() == evalRevision &&
+                            fixture.session.snapshot().revision() != evalRevision,
+                        "the layout edit retains the evaluation revision");
+
+    background.fillNextFrame();
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() >= 2; }),
+                        "the background pass keeps filling after the layout edit");
+    for (std::int64_t frame = 0; frame < 7; ++frame) {
+        const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
+        if (key.has_value() && fixture.frameCache->contains(*key)) {
+            expectations.expect(key->sourceRevision == evalRevision,
+                                "a background frame is cached under the retained revision");
+        }
+    }
+
+    background.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
+// WORKAREA-1: background fill follows a range edit. Expanding submits only missing frames (cached
+// in-range frames are skipped), and a fully cached shrink submits nothing.
+void testBackgroundFillFollowsWorkArea(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Background Work Area", time(7, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the foreground preview settles");
+    const auto setRange = [&](const core::RationalTime start, const core::RationalTime end) {
+        commands::Transaction range("Set Work Area", fixture.session.snapshot().revision());
+        range.emplace<commands::SetWorkArea>(fixture.session.compositionId(), start, end);
+        return fixture.session.executeTransaction(std::move(range));
+    };
+    expectations.expect(setRange(time(0, 25), time(3, 25)).changed(), "the initial range is set");
+    fixture.frameCache->clear();
+    ui::BackgroundPreviewController background(fixture.session, fixture.controller,
+                                               fixture.scheduler, fixture.bridge,
+                                               fixture.countingPipeline());
+    background.fillNextFrame();
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 3; }),
+                        "the initial range fills");
+    const auto afterInitial = fixture.preparationCount.load();
+
+    // Expand to [0,5): only frames 3 and 4 are missing.
+    expectations.expect(setRange(time(0, 25), time(5, 25)).changed(), "the range expands");
+    background.fillNextFrame();
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 5; }),
+                        "the expanded range fills");
+    expectations.expect(fixture.preparationCount.load() == afterInitial + 2,
+                        "expansion evaluates only the two entering frames");
+
+    // Shrink to [1,3): frames 0 and 4 are pruned, 1 and 2 survive, and no fill is submitted.
+    const auto beforeShrink = fixture.preparationCount.load();
+    expectations.expect(setRange(time(1, 25), time(3, 25)).changed(), "the range shrinks");
+    const auto key0 = fixture.controller.cacheKeyForTime(time(0, 25));
+    const auto key1 = fixture.controller.cacheKeyForTime(time(1, 25));
+    const auto key2 = fixture.controller.cacheKeyForTime(time(2, 25));
+    const auto key4 = fixture.controller.cacheKeyForTime(time(4, 25));
+    expectations.expect(key0 && key1 && key2 && key4 && !fixture.frameCache->contains(*key0) &&
+                            !fixture.frameCache->contains(*key4) &&
+                            fixture.frameCache->contains(*key1) &&
+                            fixture.frameCache->contains(*key2) && fixture.frameCache->size() == 2,
+                        "a shrink retains the overlap and prunes the departing frames");
+    background.fillNextFrame();
+    expectations.expect(fixture.preparationCount.load() == beforeShrink &&
+                            fixture.frameCache->size() == 2,
+                        "a fully cached shrink submits no new fill");
+
+    background.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
+// TEMPORAL-2B: background fill after a finite clip-range edit submits only the invalidated frames,
+// keeps the retained ones, and the markers span the resulting multiple genuine revisions.
+void testBackgroundFillFiniteClipRange(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Background Finite Range", time(7, 25)));
+    expectations.expect(fixture.session.addSolidLayer("Fill", core::Color4d{0.2, 0.4, 0.8, 1.0}),
+                        "the finite-range background fixture has content");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the foreground frame is ready");
+    const auto layerId = fixture.session.composition()->graph().layerOutputs().front().layerId;
+    fixture.frameCache->clear();
+    ui::BackgroundPreviewController background(fixture.session, fixture.controller,
+                                               fixture.scheduler, fixture.bridge,
+                                               fixture.countingPipeline());
+    const auto fillTo = [&](const std::size_t expected) {
+        for (int attempt = 0; attempt < 400 && fixture.frameCache->size() < expected; ++attempt) {
+            background.fillNextFrame();
+            if (!waitUntil([&] { return fixture.frameCache->size() >= expected; }))
+                break;
+        }
+        return fixture.frameCache->size() >= expected;
+    };
+    expectations.expect(fillTo(7), "the whole seven-frame range fills");
+    const auto afterFullFill = fixture.preparationCount.load();
+    const auto oldRevision = fixture.session.snapshot().revision();
+
+    commands::Transaction trim("Trim", fixture.session.snapshot().revision());
+    trim.emplace<commands::SetLayerRange>(fixture.session.compositionId(), layerId,
+                                          core::RationalTime{}, time(3, 25));
+    expectations.expect(fixture.session.executeTransaction(std::move(trim)).changed(),
+                        "the trim publishes");
+    expectations.expect(fillTo(7) && fixture.preparationCount.load() == afterFullFill + 4,
+                        "background fills only the four invalidated frames");
+    const auto probe = fixture.controller.cacheKeyForTime(time(0, 25));
+    expectations.expect(probe.has_value() && probe->sourceRevision == oldRevision &&
+                            fixture.frameCache->timesFor(*probe).size() == 7,
+                        "background markers span multiple retained revisions");
+
+    background.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -533,8 +706,12 @@ int main(int argc, char** argv) {
         testVisibleAdmissionAndSupersession(expectations);
         testBackgroundFillsAheadWhilePlaying(expectations);
         testWorkAreaBoundsBackground(expectations);
+        testBackgroundFillHonoursRegionOfInterest(expectations);
         testOutwardOrderBudgetAndRestart(expectations);
         testYieldsAndKeepsCancelledHandleUntilTerminal(expectations);
+        testLayoutEditKeepsBackgroundOnRetainedRevision(expectations);
+        testBackgroundFillFollowsWorkArea(expectations);
+        testBackgroundFillFiniteClipRange(expectations);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

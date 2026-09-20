@@ -2,6 +2,7 @@
 #pragma once
 
 #include <bloom/ui/editor_area.hpp>
+#include <bloom/ui/preferences_aware.hpp>
 
 #include <bloom/document/animation.hpp>
 #include <bloom/document/document.hpp>
@@ -81,11 +82,14 @@ struct TimelineLayerEntry final {
 
 // Layer stack and lanes share one vertical scroll. EditorArea hosts the split header's name,
 // menus and ruler; column headings start the body, with transport and navigator below the lanes.
-class TimelineEditor final : public QWidget, public EditorChromeProvider {
+class TimelineEditor final : public QWidget, public EditorChromeProvider, public PreferencesAware {
     Q_OBJECT
 
   public:
     [[nodiscard]] EditorChromeSpec& editorChrome() override { return chrome_; }
+    // Applies the Preferences window's committed timeline preferences through the panel's own
+    // setters, so the Preferences window and the Timeline's own View menu share one code path.
+    void applyApplicationPreferences(const ApplicationPreferences& preferences) override;
     // Task VIEW-1 moved the transport -- and with it the RAM Preview button this constructor used
     // to take a controller for -- to the viewer footer. This panel is the layer stack, the ruler,
     // the lanes and the navigator now; it owns no transport command at all.
@@ -107,7 +111,15 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider {
     // task TL-FIX2. The draggable layer-table/lanes divider, and the live width it edits.
     [[nodiscard]] kit::KSplitHandle* splitHandleForTest() const noexcept { return splitHandle_; }
     [[nodiscard]] int layerColumnWidthForTest() const noexcept { return layerColumnWidth_; }
+    // The floor setLayerColumnWidth() clamps to; public only so a test can assert the clamp without
+    // re-deriving the token arithmetic.
+    [[nodiscard]] int minLayerColumnWidthForTest() const noexcept { return minLayerColumnWidth(); }
     void persistLayerColumnWidth();
+    // Re-applies the ratio-based first-run default (37% of this panel's current width). The
+    // workspace calls it after building a default layout once splitter geometry has settled: a
+    // nested Timeline's show-time width can precede its splitter's final extent, so the showEvent()
+    // default alone would compute the share from a not-yet-final width.
+    void applyDefaultLayerColumnWidth();
 
   private:
     EditorChromeSpec chrome_;

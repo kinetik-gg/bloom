@@ -1247,6 +1247,19 @@ void TimelineEditor::setSnappingEnabled(const bool enabled) {
         lanes_->setSnappingEnabled(enabled);
 }
 
+void TimelineEditor::applyApplicationPreferences(const ApplicationPreferences& preferences) {
+    setTimecodeFormat(preferences.timelineTimeFormat == TimelineTimeFormat::Timecode);
+    setSnappingEnabled(preferences.timelineSnapping);
+    // Keyframes and the graph editor are mutually exclusive in this panel; the Preferences window
+    // enforces the same rule, so the stored value is already consistent. Apply the graph choice
+    // last so a legacy inconsistent pair resolves the way the panel's own menus would.
+    setKeyframesVisible(preferences.timelineKeyframesVisible);
+    setGraphEditorEnabled(preferences.timelineGraphEditor);
+    if (preferences.timelineLayerColumnWidth > 0) {
+        setLayerColumnWidth(preferences.timelineLayerColumnWidth, /*persist=*/false);
+    }
+}
+
 void TimelineLaneRegion::setKeyframesVisible(const bool visible) {
     if (keyframesVisible_ == visible)
         return;
@@ -1892,6 +1905,13 @@ void TimelineEditor::showEvent(QShowEvent* event) {
 
 void TimelineEditor::persistLayerColumnWidth() {
     setLayerColumnWidth(layerColumnWidth_, /*persist=*/true);
+}
+
+void TimelineEditor::applyDefaultLayerColumnWidth() {
+    const int width = this->width() > 0
+                          ? static_cast<int>(std::lround(this->width() * kDefaultLayerColumnShare))
+                          : layerColumnWidth();
+    setLayerColumnWidth(width, /*persist=*/false);
 }
 
 // task TL-FIX2. The one place that ever assigns layerColumnWidth_, so every caller -- a live drag

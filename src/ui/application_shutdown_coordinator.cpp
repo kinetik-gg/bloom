@@ -11,6 +11,8 @@
 #include <QLoggingCategory>
 #include <QThread>
 
+#include <utility>
+
 namespace bloom::ui {
 
 namespace {
@@ -28,13 +30,26 @@ ApplicationShutdownCoordinator::ApplicationShutdownCoordinator(
         if (!shuttingDown_ || quiescencePublished_) {
             return;
         }
-        quiescencePublished_ = true;
-        stuckShutdownDiagnosticTimer_.stop();
-        emit shutdownQuiescent();
+        taskQuiescence_ = true;
+        publishQuiescenceIfReady();
     });
 }
 
 bool ApplicationShutdownCoordinator::isShuttingDown() const noexcept { return shuttingDown_; }
+
+bool ApplicationShutdownCoordinator::nativeSurfaceRetirementSatisfied() const noexcept {
+    return surfaceRetirementComplete_;
+}
+
+const std::string& ApplicationShutdownCoordinator::nativeSurfaceRefusalDiagnostic() const noexcept {
+    return nativeSurfaceRefusalDiagnostic_;
+}
+
+void ApplicationShutdownCoordinator::setNativeSurfaceSource(NativeSurfaceSource source) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    Q_ASSERT(!shuttingDown_);
+    nativeSurfaceSource_ = std::move(source);
+}
 
 void ApplicationShutdownCoordinator::beginShutdown() {
     Q_ASSERT(QThread::currentThread() == thread());
@@ -44,7 +59,6 @@ void ApplicationShutdownCoordinator::beginShutdown() {
     shuttingDown_ = true;
     emit shutdownStarted();
     previewController_.beginShutdown();
-    taskUiBridge_.beginShutdown();
     // FORMAL AMENDMENT 1 (S1-C): every shape tried in application_shutdown_tests.cpp (a delivered
     // preview, a preview genuinely in flight, playback armed and never paused, a just-completed
     // frame export -- each closed the same way this method is reached) reaches shutdownQuiescent
@@ -53,6 +67,63 @@ void ApplicationShutdownCoordinator::beginShutdown() {
     // considers outstanding so a genuine future occurrence is self-explaining instead of silently
     // unresponsive.
     stuckShutdownDiagnosticTimer_.start(5'000);
+    taskUiBridge_.beginShutdown();
+    // Native-surface retirement is the second half of the shutdown contract: task quiescence alone
+    // is not enough. The service owner keeps pumping (the adapter's UI-thread timer) until the
+    // owner publishes a genuine retirement; a refusal keeps the tree alive and shutdownQuiescent
+    // un-emitted.
+    beginNativeSurfaceRetirement();
+}
+
+void ApplicationShutdownCoordinator::beginNativeSurfaceRetirement() {
+    if (!nativeSurfaceSource_) {
+        // CPU-only / no-native platform: the surface half is trivially satisfied, so behavior is
+        // exactly the previous task-quiescence-only shutdown.
+        surfaceRetirementComplete_ = true;
+        return;
+    }
+
+    nativeSurfaceRefusalDiagnostic_.clear();
+    NativeSurfaceRetirementOptions options;
+    options.resumeSurvivorsOnSuccess = false;
+    NativeSurfaceRetirementGate::Result synchronous;
+    const auto status = surfaceRetirementGate_.begin(
+        nativeSurfaceSource_(), [] {},
+        [this](const NativeSurfaceRetirementGate::Result& result) {
+            surfaceRetirementComplete_ = result.committed;
+            if (!result.committed) {
+                nativeSurfaceRefusalDiagnostic_ = result.diagnostic;
+                qCWarning(applicationShutdownLog).noquote()
+                    << QStringLiteral(
+                           "Native surface retirement was refused; keeping the window tree alive "
+                           "instead of faking quiescence: %1")
+                           .arg(QString::fromStdString(result.diagnostic));
+            }
+            publishQuiescenceIfReady();
+        },
+        options, &synchronous);
+
+    if (status == NativeSurfaceRetirementGate::StartStatus::CompletedSynchronously) {
+        surfaceRetirementComplete_ = synchronous.committed;
+        if (!synchronous.committed) {
+            nativeSurfaceRefusalDiagnostic_ = synchronous.diagnostic;
+        }
+    } else if (status == NativeSurfaceRetirementGate::StartStatus::Refused) {
+        surfaceRetirementComplete_ = false;
+        nativeSurfaceRefusalDiagnostic_ = synchronous.diagnostic;
+    }
+}
+
+void ApplicationShutdownCoordinator::publishQuiescenceIfReady() {
+    if (!shuttingDown_ || quiescencePublished_) {
+        return;
+    }
+    if (!taskQuiescence_ || !surfaceRetirementComplete_) {
+        return;
+    }
+    quiescencePublished_ = true;
+    stuckShutdownDiagnosticTimer_.stop();
+    emit shutdownQuiescent();
 }
 
 void ApplicationShutdownCoordinator::logStillShuttingDownDiagnostic() const {
@@ -69,11 +140,14 @@ void ApplicationShutdownCoordinator::logStillShuttingDownDiagnostic() const {
     }
     qCWarning(applicationShutdownLog).noquote()
         << QStringLiteral("Shutdown has not reached quiescence 5s after beginShutdown(): %1 "
-                          "outstanding task(s) of %2 tracked, task bridge shutting down=%3")
+                          "outstanding task(s) of %2 tracked, task bridge shutting down=%3, "
+                          "native surface retirement satisfied=%4, surface diagnostic=\"%5\"")
                .arg(outstanding)
                .arg(snapshots.size())
                .arg(taskUiBridge_.isShuttingDown() ? QStringLiteral("true")
-                                                   : QStringLiteral("false"));
+                                                   : QStringLiteral("false"))
+               .arg(surfaceRetirementComplete_ ? QStringLiteral("true") : QStringLiteral("false"))
+               .arg(QString::fromStdString(nativeSurfaceRefusalDiagnostic_));
     for (const auto& snapshot : snapshots) {
         if (runtime::isTerminal(snapshot.state)) {
             continue;

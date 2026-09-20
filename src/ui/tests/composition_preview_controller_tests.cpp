@@ -1,6 +1,8 @@
+#include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/core/sha256.hpp>
@@ -8,6 +10,7 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/render/image_types.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
@@ -35,11 +38,13 @@
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <ranges>
 #include <source_location>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -1152,11 +1157,30 @@ void testProxyPipelineUsesRoundedExtent(Expectations& expectations) {
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
 
+// One node the composition already holds, for a layout-only edit.
+bloom::document::NodeId firstGraphNode(const bloom::ui::CompositionSession& session) {
+    const auto* composition = session.composition();
+    if (composition == nullptr)
+        return bloom::document::NodeId::fromRaw(0);
+    const auto nodes = composition->graph().nodes();
+    return nodes.empty() ? bloom::document::NodeId::fromRaw(0) : nodes.front().id;
+}
+
+#include "composition_preview_controller_01_layout.ipp"
+#include "composition_preview_controller_01b_groups.ipp"
+#include "composition_preview_controller_02_snapshot.ipp"
+#include "composition_preview_controller_03_split.ipp"
+#include "composition_preview_controller_04_retention.ipp"
 } // namespace
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    for (int index = 1; index < argc; ++index) {
+        if (std::string_view(argv[index]) == "--benchmark-temporal") {
+            return runTemporalBenchmark() ? 0 : 1;
+        }
+    }
     Expectations expectations;
     try {
         testResolutionPolicyAndRequestThresholds(expectations);
@@ -1170,6 +1194,26 @@ int main(int argc, char** argv) {
         testLastGoodAndOutcomeMapping(expectations);
         testCompositionSwitchClearsPixels(expectations);
         testQualifiedDisplayReadinessAndFailClosed(expectations);
+        testLayoutEditRetainsEvaluationWork(expectations);
+        testGroupCommandsRetainEvaluationWork(expectations);
+        testPixelMixedAndRebindAdvanceEvaluation(expectations);
+        testInFlightFrameSurvivesLayoutEdit(expectations);
+        testInFlightFrameRejectedAfterPixelEdit(expectations);
+        testViewerAnalysisUsesRetainedProvenance(expectations);
+        testRebindWithCollidingIdentitiesRendersNewPixels(expectations);
+        testRebindInFlightFrameCannotPublishOldPixels(expectations);
+        testWorkAreaEditDoesNotRefreshOrResurrect(expectations);
+        testEvaluationSnapshotTimeIndexedProvenance(expectations);
+        testEvaluationSnapshotRebindAndSwitch(expectations);
+        testEvaluationSnapshotCapFallback(expectations);
+        testTemporalRangeReuseKeepsUnaffectedFrames(expectations);
+        testDocumentEditRebuildsChangedTargetWhileDisplayedUnchanged(expectations);
+        testSplitReusesBothHalvesWithCurrentLayerMetadata(expectations);
+        testSplitAfterLayoutEditMapsRetainedSource(expectations);
+        testMixedFiniteExtendAndSplitLeavesLiveIntervalUnmapped(expectations);
+        testTemporalDeleteRetainsUnaffectedFrames(expectations);
+        testTemporalDeleteParentDependencyInvalidatesWhole(expectations);
+        testInconsistentTimeBaseResetsProvenance(expectations);
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return 1;

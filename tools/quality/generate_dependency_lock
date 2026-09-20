@@ -40,9 +40,28 @@ def upgrade_schema(lock: OrderedDict[str, object]) -> None:
             "ship-source-offer",
         }:
             raise ValueError("legacy source-obligation values require an explicit reviewed input")
-    version["minor"] = 2 if any(
+    # The lock's minor version is selected by the reviewed records it carries and never
+    # downgraded: minor 3 is required the moment any component records the honest header-only or
+    # executable linkage, and an input already at 3 stays at 3 even if those records are removed
+    # by a later reviewed replacement. Minor 2 carries runtimeFetch records; minor 1 is the
+    # static baseline.
+    current_minor = version.get("minor")
+    has_runtime_fetch = any(
         isinstance(component, dict) and "runtimeFetch" in component for component in components
-    ) else 1
+    )
+    has_build_only_linkage = any(
+        isinstance(build, dict) and build.get("linkage") in {"header-only", "executable"}
+        for component in components
+        if isinstance(component, dict)
+        for build in component.get("profileBuilds", [])
+        if isinstance(build, dict)
+    )
+    if current_minor == 3 or has_build_only_linkage:
+        version["minor"] = 3
+    elif has_runtime_fetch:
+        version["minor"] = 2
+    else:
+        version["minor"] = 1
 
 
 def add_component(lock: OrderedDict[str, object], component_path: Path) -> None:

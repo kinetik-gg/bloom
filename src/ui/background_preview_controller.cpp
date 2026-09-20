@@ -17,9 +17,10 @@ namespace bloom::ui {
 BackgroundPreviewController::BackgroundPreviewController(
     CompositionSession& session, CompositionPreviewController& previewController,
     runtime::TaskScheduler& scheduler, TaskUiBridge& bridge, PreviewPreparationFunction preparation,
-    QObject* parent)
+    QObject* parent, PreviewPreparationSubmitter submitter)
     : QObject(parent), session_(session), previewController_(previewController),
-      scheduler_(scheduler), bridge_(bridge), preparation_(std::move(preparation)) {
+      scheduler_(scheduler), bridge_(bridge), preparation_(std::move(preparation)),
+      submitter_(std::move(submitter)) {
     qApp->installEventFilter(this);
     idleTimer_.setInterval(50);
     connect(&idleTimer_, &QTimer::timeout, this, &BackgroundPreviewController::fillNextFrame);
@@ -31,7 +32,18 @@ BackgroundPreviewController::BackgroundPreviewController(
             &BackgroundPreviewController::setPlaying);
     connect(&previewController_, &CompositionPreviewController::resolutionChanged, this,
             &BackgroundPreviewController::restart);
-    connect(&session_, &CompositionSession::snapshotChanged, this,
+    // Pixel work follows the retained evaluation snapshot. A layout-only edit leaves the fill
+    // cursor and the cached key untouched; a render-affecting edit restarts the pass.
+    connect(&session_, &CompositionSession::evaluationChanged, this,
+            &BackgroundPreviewController::restart);
+    // TEMPORAL-2B: a finite clip-range edit re-scopes which times are already valid; restarting
+    // rescans and the contains() check skips retained frames, so only the changed interval fills.
+    connect(&session_, &CompositionSession::documentEvaluationChanged, this,
+            &BackgroundPreviewController::restart);
+    // A work-area edit re-scopes the pass. Restarting re-anchors on the playhead and rescans, so an
+    // expansion or shift fills only the frames the new range adds; cached in-range frames are
+    // skipped by the existing contains() check, and a fully cached shrink fills nothing.
+    connect(&session_, &CompositionSession::workAreaChanged, this,
             &BackgroundPreviewController::restart);
     connect(&session_, &CompositionSession::compositionChanged, this,
             &BackgroundPreviewController::restart);
@@ -178,6 +190,7 @@ void BackgroundPreviewController::fillNextFrame() {
             .quality = key->quality,
             .colorIntent = key->colorIntent,
             .resolutionPolicy = key->resolutionPolicy,
+            .roi = key->roi,
             .displayName = key->displayName,
             .viewName = key->viewName,
             .showLook = key->showLook,
@@ -195,16 +208,24 @@ void BackgroundPreviewController::fillNextFrame() {
         request.sourceVersion = {.documentRevision = key->sourceRevision.value(),
                                  .requestGeneration = identity.requestGeneration};
         submittedAt_ = std::chrono::steady_clock::now();
-        auto submission = scheduler_.submit<PreviewPreparationResultHandle>(
-            std::move(request),
-            [snapshot = session_.snapshot(), identity, preparation = preparation_,
-             limit = previewController_.settings().pixelStorageByteLimit](
-                runtime::TaskContext& context) mutable {
-                if (context.isCancellationRequested()) {
-                    return runtime::TaskResult<PreviewPreparationResultHandle>::cancelled();
-                }
-                return preparation(snapshot, identity, limit, {}, context);
-            });
+        // TEMPORAL-2B: the snapshot is resolved for THIS frame's time, matching the identity's
+        // sourceRevision from cacheKeyForTime above.
+        const auto snapshot = session_.evaluationSnapshotForTime(key->time);
+        runtime::TaskSubmission<PreviewPreparationResultHandle> submission;
+        if (submitter_) {
+            submission = submitter_(std::move(request), snapshot, identity,
+                                    previewController_.settings().pixelStorageByteLimit, {});
+        } else {
+            submission = scheduler_.submit<PreviewPreparationResultHandle>(
+                std::move(request), [snapshot, identity, preparation = preparation_,
+                                     limit = previewController_.settings().pixelStorageByteLimit](
+                                        runtime::TaskContext& context) mutable {
+                    if (context.isCancellationRequested()) {
+                        return runtime::TaskResult<PreviewPreparationResultHandle>::cancelled();
+                    }
+                    return preparation(snapshot, identity, limit, {}, context);
+                });
+        }
         if (!submission.accepted()) {
             --cursor_;
             --considered_;

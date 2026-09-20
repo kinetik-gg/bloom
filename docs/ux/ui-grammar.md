@@ -470,7 +470,9 @@ the chip continues to show the clamped display colour. Entering an RGB number ou
 authors that component in reference space. Editing one field preserves every untouched reference
 channel exactly. Pending or unavailable conversion disables the reference chip and labels numeric
 values as reference. Existing document numbers are preserved; this is a presentation boundary,
-not a data migration. The legacy timeline colour-row adapter remains pending this conversion.
+not a data migration. The timeline colour rows use the same boundary: an in-range colour shows
+normalized display numbers in its expanded R/G/B/A rows, and a signed or HDR RGB switches the whole
+row to exact reference numbers with the `reference` suffix.
 
 ## Image Assets And Source Cards
 
@@ -561,10 +563,11 @@ connection intact. Video rows retain ordinary layer selection, expansion and pro
 Solo and range remain the same Layer semantics as other rows. An unavailable audio
 file shows the warning glyph and remains relinkable from Assets.
 
-New Composition and the composition Properties section expose a `KColorChip` Background Colour.
-Viewer Solid mode paints that authored RGBA colour, initially opaque black. Black, White and
-Checkerboard remain session choices. This viewer background does not alter composition pixels
-or export alpha.
+New Composition and the composition Properties section expose a `KColorChip` Background Colour for
+the composition itself. The Viewer surround is chosen separately in the Viewer footer: Solid paints
+the panel Canvas token, Black and White paint literal values, and Checkerboard is the default so
+alpha behind the composition is always visible. The surround does not alter composition pixels, the
+authored Background Colour, or export alpha.
 
 ## Live Value Editing
 

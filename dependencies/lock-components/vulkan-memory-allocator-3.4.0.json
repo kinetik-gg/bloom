@@ -1,0 +1,75 @@
+{
+  "name": "vulkan-memory-allocator",
+  "version": "3.4.0",
+  "source": {
+    "url": "https://codeload.github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/tar.gz/refs/tags/v3.4.0",
+    "archiveSha256": "sha256:822aa850c6ce77346ae96a8a1d351d52e77e85929f35363849a0a4e638e0a2a1",
+    "archiveSizeBytes": 1002168,
+    "retrievedAt": "2026-09-19",
+    "commit": "3aa921224c154a0d2c43912bc88e1c42ce1f7607",
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/vulkan-memory-allocator/provenance.md",
+      "sha256": "sha256:8b4b179ba2a3cde9acefb8c06f20cd2d2615eb4ef056f233741f09c031408771"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "MIT",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/vulkan-memory-allocator/LICENSE.txt",
+        "sha256": "sha256:52df2c03d6cfc9ffec13c9d3626c530fc9ce0cbe41d5ea3d10cd46edeb1aeb38"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/vulkan-memory-allocator/review.md",
+      "sha256": "sha256:e060f647432c92e269cb8d422ce9c257b03fdaeff2d6af213acd64576bb06c98"
+    },
+    "reviewedAt": "2026-09-19"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [
+    {
+      "profileId": "bloom.linux-x86-64-clang-release",
+      "linkage": "header-only",
+      "cmakeOptions": [
+        {
+          "name": "VMA_BUILD_DOCUMENTATION",
+          "value": "OFF"
+        },
+        {
+          "name": "VMA_BUILD_SAMPLES",
+          "value": "OFF"
+        },
+        {
+          "name": "VMA_ENABLE_INSTALL",
+          "value": "ON"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.vulkan-memory-allocator"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "data",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    }
+  ],
+  "securityReview": {
+    "reviewedAt": "2026-09-19",
+    "record": {
+      "path": "dependencies/licenses/vulkan-memory-allocator/security.md",
+      "sha256": "sha256:50b2f01724f51183b89e646a40c60a5797da6db37e9e4e326d35b6e991ac7f66"
+    },
+    "vulnerabilities": []
+  }
+}

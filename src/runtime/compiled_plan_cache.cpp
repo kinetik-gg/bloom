@@ -3,6 +3,7 @@
 #include <bloom/document/project.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <utility>
 
 namespace bloom::runtime {
@@ -28,8 +29,14 @@ CompiledPlanCache::CompiledPlanCache(const std::size_t capacity) noexcept
 SnapshotCompileResult CompiledPlanCache::compile(const SnapshotCompiler& compiler,
                                                  const SnapshotCompileRequest& request,
                                                  const CancellationToken& cancellation) {
-    const auto projectId = request.snapshot.project().id();
     const auto revision = request.snapshot.revision();
+    // Provenance is the retained project-state object, not the numeric ids: a different Document
+    // reuses ProjectId 1 / CompositionId 1 / the same revision numbers. Matching the address of
+    // `project()` distinguishes two documents while still letting copies of one snapshot hit.
+    const auto sameInput = [&request, revision](const Entry& entry) {
+        return entry.compositionId == request.compositionId && entry.revision == revision &&
+               &entry.snapshot.project() == &request.snapshot.project();
+    };
     if (!request.parameterOverrides.empty()) {
         // An overridden request's plan is not the revision's plan; it is this one gesture frame's.
         {
@@ -41,10 +48,7 @@ SnapshotCompileResult CompiledPlanCache::compile(const SnapshotCompiler& compile
 
     {
         std::lock_guard lock(mutex_);
-        const auto position = std::ranges::find_if(entries_, [&](const Entry& entry) {
-            return entry.projectId == projectId && entry.revision == revision &&
-                   entry.compositionId == request.compositionId;
-        });
+        const auto position = std::ranges::find_if(entries_, sameInput);
         if (position != entries_.end()) {
             ++statistics_.hits;
             std::rotate(entries_.begin(), position, position + 1);
@@ -64,19 +68,17 @@ SnapshotCompileResult CompiledPlanCache::compile(const SnapshotCompiler& compile
     }
 
     std::lock_guard lock(mutex_);
-    const auto existing = std::ranges::find_if(entries_, [&](const Entry& entry) {
-        return entry.projectId == projectId && entry.revision == revision &&
-               entry.compositionId == request.compositionId;
-    });
+    const auto existing = std::ranges::find_if(entries_, sameInput);
     if (existing != entries_.end()) {
         return existing->result;
     }
-    entries_.insert(entries_.begin(), Entry{.projectId = projectId,
+    entries_.insert(entries_.begin(), Entry{.snapshot = request.snapshot,
                                             .compositionId = request.compositionId,
                                             .revision = revision,
                                             .result = result});
     if (entries_.size() > capacity_) {
-        entries_.resize(capacity_);
+        // Erase rather than resize: Snapshot is not default-constructible.
+        entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(capacity_), entries_.end());
     }
     return result;
 }

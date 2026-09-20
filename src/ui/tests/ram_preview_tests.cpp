@@ -5,6 +5,7 @@
 // measuring speed. What is pinned is not how fast a frame is but WHETHER a frame was rendered at
 // all: a cache that works shows up as an invocation count that stops moving.
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
@@ -45,6 +46,7 @@
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -539,7 +541,10 @@ void testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(Expectations& expecta
                             "two pressure polls prevent the preview cache from refilling");
     }
 
-    // A newer revision makes every retained entry unreachable, and inserting one drops them.
+    // A standalone cache with no temporal provenance policy keeps the original conservative rule: a
+    // frame of a newer revision drops every older-revision entry of the project. (The shared
+    // preview cache installs the session's time-indexed policy instead, which retains unaffected
+    // segments.)
     cache.setByteBudget(frameBytes * 8);
     for (const auto& frame : frames) {
         cache.insert(frame);
@@ -556,7 +561,7 @@ void testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(Expectations& expecta
     if (newRevisionFrame != nullptr) {
         cache.insert(newRevisionFrame);
         expectations.expect(cache.size() == 1 && cache.statistics().staleDrops == 3,
-                            "a frame of a newer revision drops every entry of the older one");
+                            "a standalone cache drops every older-revision entry by construction");
     }
 
     finishFixture(fixture, expectations);
@@ -856,6 +861,419 @@ void testOperationCacheUnderRamPreview(Expectations& expectations) {
                         "saved budget is honored");
 }
 
+// LAYOUT-2: a RAM preview run keeps ONE retained evaluation snapshot across a layout-only edit,
+// so the frames it caches stay reusable rather than being re-keyed out from under the run. A pixel
+// edit changes the evaluation snapshot and cancels the run.
+void testLayoutEditRetainsTheRamRun(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM Layout Retain", time(24, 25)));
+    expectations.expect(animateSolidLayer(fixture.session),
+                        "the fixture composition is animated across its range");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the animated composition renders its first frame");
+
+    const auto evalRevision = fixture.session.evaluationSnapshot().revision();
+    const auto nodeId = fixture.session.composition()->graph().nodes().front().id;
+
+    // Pause the run on its first uncached frame so the layout edit lands mid-run.
+    fixture.gateAtCall = fixture.preparationCount.load();
+    ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
+                                 fixture.bridge, fixture.countingPipeline());
+    ram.start();
+    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
+                        "the RAM run reaches a frame on the worker");
+
+    commands::Transaction move("Move Nodes", fixture.session.snapshot().revision());
+    move.emplace<commands::MoveNodes>(
+        fixture.session.compositionId(),
+        std::map<document::NodeId, document::Vec2d>{{nodeId, {4.0, 5.0}}});
+    expectations.expect(fixture.session.executeNodeTransaction(std::move(move)).changed(),
+                        "the layout edit publishes while the run is in flight");
+    expectations.expect(fixture.session.snapshot().revision() != evalRevision &&
+                            fixture.session.evaluationSnapshot().revision() == evalRevision &&
+                            ram.isCaching(),
+                        "the layout edit retains the evaluation snapshot and the run");
+
+    fixture.gate.release();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
+                            ram.cachedFrameCount() == ram.totalFrameCount(),
+                        "the run completes under one retained evaluation revision");
+    for (std::uint64_t frame = 0; frame < ram.totalFrameCount(); ++frame) {
+        const auto key =
+            fixture.controller.cacheKeyForTime(time(static_cast<std::int64_t>(frame), 25));
+        expectations.expect(key.has_value() && key->sourceRevision == evalRevision &&
+                                fixture.frameCache->contains(*key),
+                            "every cached frame is reusable under the retained revision");
+    }
+
+    ram.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
+// LAYOUT-2: a pixel edit advances the evaluation snapshot, which cancels a RAM run in flight
+// because its cached frames would belong to an evaluation the artist has left behind.
+void testPixelEditCancelsTheRamRun(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM Pixel Cancel", time(24, 25)));
+    expectations.expect(animateSolidLayer(fixture.session),
+                        "the fixture composition is animated across its range");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the animated composition renders its first frame");
+    const auto nodeId = fixture.session.composition()->graph().nodes().front().id;
+
+    fixture.gateAtCall = fixture.preparationCount.load();
+    ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
+                                 fixture.bridge, fixture.countingPipeline());
+    ram.start();
+    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }) && ram.isCaching(),
+                        "the RAM run is in flight on the worker");
+
+    commands::Transaction mute("Mute Node", fixture.session.snapshot().revision());
+    mute.emplace<commands::SetNodeMuted>(fixture.session.compositionId(), nodeId, true);
+    expectations.expect(fixture.session.executeNodeTransaction(std::move(mute)).changed() &&
+                            !ram.isCaching() &&
+                            fixture.session.evaluationSnapshot().revision() ==
+                                fixture.session.snapshot().revision(),
+                        "a pixel edit advances evaluation and cancels the run");
+
+    fixture.gate.release();
+    ram.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
+// PROVENANCE-1: the compiled-plan cache binds to the real retained snapshot, not to the numeric
+// (project, composition, revision) tuple every New/Open document deliberately reuses. Copies of one
+// snapshot hit; a different document with colliding numbers must recompile.
+void testCompiledPlanCacheBindsSnapshotIdentity(Expectations& expectations) {
+    auto firstProject = makeTestProject("Plan Provenance First", time(1));
+    const auto compositionId = firstProject.initialCompositionId;
+    document::Document firstDocument(std::move(firstProject.project));
+    commands::CommandStack firstCommands(firstDocument);
+    commands::Transaction firstAdd("Add Solid", firstDocument.snapshot().revision());
+    firstAdd.emplace<commands::AddSolidLayer>(compositionId, std::string("Solid"),
+                                              core::Color4d{1.0, 0.0, 0.0, 1.0});
+    expectations.expect(firstCommands.execute(std::move(firstAdd)).changed(),
+                        "the first document gets a red solid");
+
+    auto secondProject = makeTestProject("Plan Provenance Second", time(1));
+    const auto secondCompositionId = secondProject.initialCompositionId;
+    document::Document secondDocument(std::move(secondProject.project));
+    commands::CommandStack secondCommands(secondDocument);
+    commands::Transaction secondAdd("Add Solid", secondDocument.snapshot().revision());
+    secondAdd.emplace<commands::AddSolidLayer>(secondCompositionId, std::string("Solid"),
+                                               core::Color4d{0.0, 0.0, 1.0, 1.0});
+    expectations.expect(secondCommands.execute(std::move(secondAdd)).changed(),
+                        "the second document gets a blue solid");
+    expectations.expect(
+        firstDocument.snapshot().revision() == secondDocument.snapshot().revision() &&
+            firstDocument.snapshot().project().id() == secondDocument.snapshot().project().id() &&
+            compositionId == secondCompositionId,
+        "the two documents deliberately collide in project/composition/revision");
+
+    runtime::NodeDefinitionRegistry definitions;
+    expectations.expect(runtime::registerBuiltInNodeDefinitions(definitions),
+                        "the plan-provenance fixture registers node definitions");
+    definitions.freeze();
+    const runtime::SnapshotCompiler compiler(definitions);
+    ui::CompiledPlanCache cache;
+
+    const auto firstSnapshot = firstDocument.snapshot();
+    const auto first =
+        cache.compile(compiler, {.snapshot = firstSnapshot, .compositionId = compositionId}, {});
+    const auto repeated =
+        cache.compile(compiler, {.snapshot = firstSnapshot, .compositionId = compositionId}, {});
+    expectations.expect(first.plan != nullptr && repeated.plan == first.plan &&
+                            cache.statistics() ==
+                                ui::CompiledPlanCache::Statistics{.compiles = 1, .hits = 1},
+                        "a repeated request of the same snapshot hits");
+
+    const auto copied = cache.compile(
+        compiler, {.snapshot = firstDocument.snapshot(), .compositionId = compositionId}, {});
+    expectations.expect(copied.plan == first.plan && cache.statistics().hits == 2 &&
+                            cache.statistics().compiles == 1,
+                        "a copied snapshot of the same document state still hits");
+
+    const auto second = cache.compile(
+        compiler, {.snapshot = secondDocument.snapshot(), .compositionId = secondCompositionId},
+        {});
+    expectations.expect(second.plan != nullptr && second.plan != first.plan &&
+                            cache.statistics().compiles == 2 && cache.size() == 2,
+                        "a colliding document recompiles instead of reusing the wrong plan");
+    const auto secondAgain = cache.compile(
+        compiler, {.snapshot = secondDocument.snapshot(), .compositionId = secondCompositionId},
+        {});
+    expectations.expect(secondAgain.plan == second.plan && cache.statistics().hits == 3,
+                        "the second document's own snapshot hits");
+}
+
+// SPLIT-2: an output-equivalent split retains the whole RAM-cached range under ONE provenance; a
+// subsequent RAM run of the split composition prepares nothing.
+void testRamRunReusesBothHalvesAfterSplit(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM Split Reuse", time(7, 25)));
+    expectations.expect(animateSolidLayer(fixture.session),
+                        "the split-reuse fixture is animated across its seven frames");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the foreground frame is ready");
+    const auto boundary = fixture.session.composition()->graph().layerOutputs().front();
+    fixture.frameCache->clear();
+    ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
+                                 fixture.bridge, fixture.countingPipeline());
+    ram.start();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 7,
+                        "the whole range caches");
+    const auto afterFullFill = fixture.preparationCount.load();
+    const auto retainedRevision = fixture.session.evaluationSnapshot().revision();
+
+    // Split at frame 3: [0,3) head, [3,7/25) tail.
+    commands::Transaction split("Split", fixture.session.snapshot().revision());
+    split.emplace<commands::SplitLayerAtTime>(fixture.session.compositionId(), boundary.layerId,
+                                              time(3, 25));
+    const auto splitResult = fixture.session.executeTransaction(std::move(split));
+    expectations.expect(splitResult.changed() && splitResult.affectedTimes.has_value() &&
+                            splitResult.affectedTimes->intervals.empty(),
+                        "the split publishes an empty pixel footprint");
+    expectations.expect(fixture.session.evaluationSnapshotForTime(time(0, 25)).revision() ==
+                            retainedRevision,
+                        "both halves keep the retained provenance");
+    ram.start();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
+                            ram.cachedFrameCount() == 7 &&
+                            fixture.preparationCount.load() == afterFullFill,
+                        "a RAM run after the split prepares nothing");
+    for (std::int64_t frame = 0; frame < 7; ++frame) {
+        const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
+        expectations.expect(key && fixture.frameCache->contains(*key),
+                            "every frame of both halves is retained");
+    }
+
+    ram.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
+// WORKAREA-1: a range edit is render-neutral, so it must not advance the evaluation snapshot or
+// recompile. Expansion/shift fill only the entering frames; a fully cached shrink evaluates
+// nothing; out-of-range entries are released as rangeDrops (never eviction/pressure).
+void testWorkAreaRangeManagement(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Work Area Management", time(7, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the work-area fixture renders its first frame");
+
+    const auto setRange = [&](const core::RationalTime start, const core::RationalTime end) {
+        commands::Transaction range("Set Work Area", fixture.session.snapshot().revision());
+        range.emplace<commands::SetWorkArea>(fixture.session.compositionId(), start, end);
+        return fixture.session.executeTransaction(std::move(range));
+    };
+    const auto compileCount = [&] {
+        return fixture.pipelineFixture.planCache->statistics().compiles;
+    };
+
+    // [2,5): warm all three frames through a RAM run.
+    expectations.expect(setRange(time(2, 25), time(5, 25)).changed(),
+                        "the initial work area is set");
+    const auto evalRevision = fixture.session.evaluationSnapshot().revision();
+    const auto compilesAfterRange = compileCount();
+    fixture.frameCache->clear();
+    ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
+                                 fixture.bridge, fixture.countingPipeline());
+    ram.start();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 3,
+                        "the three-frame work area caches");
+    const auto preparationAfterFill = fixture.preparationCount.load();
+    const auto residentAfterFill = fixture.frameCache->residentBytes();
+    expectations.expect(fixture.session.evaluationSnapshot().revision() == evalRevision &&
+                            compileCount() == compilesAfterRange,
+                        "range edits compiled no plan and did not advance evaluation");
+
+    // Shrink to [3,5): frame 2 is released as a range drop; frames 3,4 survive.
+    const auto rangeDropsBefore = fixture.frameCache->statistics().rangeDrops;
+    expectations.expect(setRange(time(3, 25), time(5, 25)).changed(), "the range shrinks");
+    const auto key2 = fixture.controller.cacheKeyForTime(time(2, 25));
+    const auto key3 = fixture.controller.cacheKeyForTime(time(3, 25));
+    const auto key4 = fixture.controller.cacheKeyForTime(time(4, 25));
+    expectations.expect(key2 && key3 && key4 && !fixture.frameCache->contains(*key2) &&
+                            fixture.frameCache->contains(*key3) &&
+                            fixture.frameCache->contains(*key4) &&
+                            fixture.frameCache->residentBytes() < residentAfterFill &&
+                            fixture.frameCache->statistics().rangeDrops > rangeDropsBefore,
+                        "a shrink releases only the departing frame as a range drop");
+    ram.start();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
+                            fixture.preparationCount.load() == preparationAfterFill &&
+                            ram.cachedFrameCount() == 2,
+                        "a fully cached shrink evaluates nothing");
+
+    // Expand back to [1,5): the two frames the shrink released (1 and 2) are the only ones
+    // evaluated; 3 and 4 stay cached.
+    expectations.expect(setRange(time(1, 25), time(5, 25)).changed(), "the range expands");
+    const auto beforeExpansion = fixture.preparationCount.load();
+    ram.start();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 4,
+                        "the expanded range fills");
+    const auto key1 = fixture.controller.cacheKeyForTime(time(1, 25));
+    if (!key1.has_value() || !key2.has_value() || !key3.has_value() || !key4.has_value()) {
+        expectations.expect(false, "the cache key fixtures are available");
+        return;
+    }
+    expectations.expect(
+        fixture.preparationCount.load() == beforeExpansion + 2 && key1 &&
+            fixture.frameCache->contains(*key1) && fixture.frameCache->contains(*key2) &&
+            fixture.frameCache->contains(*key3) && fixture.frameCache->contains(*key4),
+        "only the two entering frames are evaluated on expansion");
+
+    // Equal-size shift to [2,6): frame 1 departs, frame 5 enters, 2..4 are retained.
+    const auto beforeShift = fixture.preparationCount.load();
+    expectations.expect(setRange(time(2, 25), time(6, 25)).changed(), "the range shifts");
+    ram.start();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 4,
+                        "the shifted range caches four frames");
+    const auto key5 = fixture.controller.cacheKeyForTime(time(5, 25));
+    if (!key5.has_value()) {
+        expectations.expect(false, "the shifted cache key fixture is available");
+        return;
+    }
+    expectations.expect(
+        !fixture.frameCache->contains(*key1) && fixture.frameCache->contains(*key2) &&
+            fixture.frameCache->contains(*key3) && fixture.frameCache->contains(*key4) && key5 &&
+            fixture.frameCache->contains(*key5) &&
+            fixture.preparationCount.load() == beforeShift + 1,
+        "a shift retains the overlap, drops the departing frame and fills one");
+
+    // No-op: the same range again changes nothing.
+    const auto beforeNoop = fixture.preparationCount.load();
+    expectations.expect(setRange(time(2, 25), time(6, 25)).status ==
+                            commands::CommandStatus::NoChange,
+                        "an identical range is a no-op");
+    expectations.expect(fixture.preparationCount.load() == beforeNoop,
+                        "a no-op range edit evaluates nothing");
+
+    // Clear widens to the whole composition [0,7): frames 0 and 6 enter.
+    commands::Transaction clear("Clear Work Area", fixture.session.snapshot().revision());
+    clear.emplace<commands::ClearWorkArea>(fixture.session.compositionId());
+    expectations.expect(fixture.session.executeTransaction(std::move(clear)).changed(),
+                        "clearing the work area publishes");
+    const auto beforeClear = fixture.preparationCount.load();
+    ram.start();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 7,
+                        "the cleared range covers the whole composition");
+    expectations.expect(fixture.preparationCount.load() == beforeClear + 3,
+                        "clearing fills only the frames outside the previous range");
+
+    // Undo restores the narrower range and drops the frames it excluded, still as range drops.
+    const auto dropsBeforeUndo = fixture.frameCache->statistics().rangeDrops;
+    const auto evictionsBeforeUndo = fixture.frameCache->statistics().evictions;
+    expectations.expect(fixture.session.undo(), "the clear undoes");
+    const auto key0 = fixture.controller.cacheKeyForTime(time(0, 25));
+    const auto key6 = fixture.controller.cacheKeyForTime(time(6, 25));
+    expectations.expect(key0 && key6 && !fixture.frameCache->contains(*key0) &&
+                            !fixture.frameCache->contains(*key6) &&
+                            fixture.frameCache->statistics().rangeDrops > dropsBeforeUndo &&
+                            fixture.frameCache->statistics().evictions == evictionsBeforeUndo,
+                        "undoing the clear prunes the re-excluded frames without an eviction");
+
+    // A pixel edit still advances evaluation and invalidates.
+    const auto nodeId = fixture.session.composition()->graph().nodes().front().id;
+    commands::Transaction mute("Mute Node", fixture.session.snapshot().revision());
+    mute.emplace<commands::SetNodeMuted>(fixture.session.compositionId(), nodeId, true);
+    expectations.expect(fixture.session.executeTransaction(std::move(mute)).changed() &&
+                            fixture.session.evaluationSnapshot().revision() ==
+                                fixture.session.snapshot().revision(),
+                        "a pixel edit still advances the evaluation snapshot");
+
+    ram.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
+// WORKAREA-1: a range edit during an active RAM run adapts the run rather than ending it. The
+// in-flight frame is allowed to land, the run rebases onto the new range, and an out-of-range
+// completion is neither retained nor counted, so progress cannot skip or duplicate a frame.
+void testRamRunAdaptsToRangeEditWhileActive(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM Active Range Edit", time(7, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the foreground frame is ready");
+    const auto setRange = [&](const core::RationalTime start, const core::RationalTime end) {
+        commands::Transaction range("Set Work Area", fixture.session.snapshot().revision());
+        range.emplace<commands::SetWorkArea>(fixture.session.compositionId(), start, end);
+        return fixture.session.executeTransaction(std::move(range));
+    };
+    expectations.expect(setRange(time(0, 25), time(7, 25)).changed(), "the whole range is set");
+    fixture.frameCache->clear();
+    const auto evalRevision = fixture.session.evaluationSnapshot().revision();
+
+    // Pause the run on its first uncached frame.
+    fixture.gateAtCall = fixture.preparationCount.load();
+    ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
+                                 fixture.bridge, fixture.countingPipeline());
+    ram.start();
+    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }) && ram.isCaching(),
+                        "the RAM run is in flight");
+
+    // Shrink to [2,4) while the frame is in flight.
+    expectations.expect(setRange(time(2, 25), time(4, 25)).changed(), "the range shrinks mid-run");
+    expectations.expect(fixture.session.evaluationSnapshot().revision() == evalRevision,
+                        "the range edit did not advance evaluation");
+    fixture.gate.release();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
+                            ram.cachedFrameCount() == 2 && ram.totalFrameCount() == 2,
+                        "the run adapts to the new two-frame range and completes");
+    for (std::int64_t frame = 0; frame < 7; ++frame) {
+        const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
+        const bool inRange = frame >= 2 && frame < 4;
+        expectations.expect(key && fixture.frameCache->contains(*key) == inRange,
+                            "only in-range frames remain cached after the mid-run shrink");
+    }
+    expectations.expect(ram.cachedFrameCount() == fixture.controller.frameCache().size(),
+                        "no out-of-range frame is counted as progress");
+
+    ram.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
+// TEMPORAL-2B: a RAM run over a finite clip-range edit re-derives only the changed frames, keeps
+// the retained ones, and the timeline markers span the multiple genuine revisions that result.
+void testRamRunFiniteClipRange(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM Finite Clip Range", time(7, 25)));
+    expectations.expect(animateSolidLayer(fixture.session),
+                        "the finite-range fixture is animated across its seven frames");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the foreground frame is ready");
+    const auto layerId = fixture.session.composition()->graph().layerOutputs().front().layerId;
+    fixture.frameCache->clear();
+    ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
+                                 fixture.bridge, fixture.countingPipeline());
+    ram.start();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) && ram.cachedFrameCount() == 7,
+                        "the whole seven-frame range caches");
+    const auto afterFullFill = fixture.preparationCount.load();
+    const auto oldRevision = fixture.session.snapshot().revision();
+
+    // Trim to [0,3): frames 3..6 lose the layer; 0..2 are unchanged.
+    commands::Transaction trim("Trim", fixture.session.snapshot().revision());
+    trim.emplace<commands::SetLayerRange>(fixture.session.compositionId(), layerId,
+                                          core::RationalTime{}, time(3, 25));
+    expectations.expect(fixture.session.executeTransaction(std::move(trim)).changed(),
+                        "the trim publishes");
+    expectations.expect(fixture.session.evaluationSnapshotForTime(time(0, 25)).revision() !=
+                            fixture.session.snapshot().revision(),
+                        "the retained overlap keeps an older revision");
+    ram.start();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
+                            ram.cachedFrameCount() == 7 &&
+                            fixture.preparationCount.load() == afterFullFill + 4,
+                        "only the four invalidated frames re-prepare");
+    for (std::int64_t frame = 0; frame < 7; ++frame) {
+        const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
+        expectations.expect(key && fixture.frameCache->contains(*key),
+                            "every frame of the range is retained after the trim");
+    }
+    // Markers span both revisions: a probe from the OLD retained revision still reports the frames
+    // re-derived under the new one.
+    const auto probe = fixture.controller.cacheKeyForTime(time(0, 25));
+    expectations.expect(probe.has_value() && probe->sourceRevision == oldRevision &&
+                            fixture.frameCache->timesFor(*probe).size() == 7,
+                        "timesFor spans multiple retained revisions");
+
+    ram.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -871,6 +1289,7 @@ int main(int argc, char** argv) {
         testRamPreviewSharesResolutionAndCachesByPolicy(expectations);
         testResolutionChangeCancelsAnActiveRamPreview(expectations);
         testCompiledPlanCacheCompilesOncePerRevision(expectations);
+        testCompiledPlanCacheBindsSnapshotIdentity(expectations);
         testCacheHitPublishesWithoutEvaluating(expectations);
         testCachingReleasesTheProcessImage(expectations);
         testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(expectations);
@@ -878,6 +1297,12 @@ int main(int argc, char** argv) {
         testRamPreviewCachesTheRangeThenPlaysEveryFrame(expectations);
         testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(expectations);
         testRamPreviewCancellationKeepsWhatItCached(expectations);
+        testLayoutEditRetainsTheRamRun(expectations);
+        testPixelEditCancelsTheRamRun(expectations);
+        testWorkAreaRangeManagement(expectations);
+        testRamRunAdaptsToRangeEditWhileActive(expectations);
+        testRamRunFiniteClipRange(expectations);
+        testRamRunReusesBothHalvesAfterSplit(expectations);
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return 1;

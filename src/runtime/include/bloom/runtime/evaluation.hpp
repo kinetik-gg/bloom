@@ -60,8 +60,12 @@ struct EvaluationColorIntent final {
     friend bool operator==(const EvaluationColorIntent&, const EvaluationColorIntent&) = default;
 };
 
+// A process produced by the GPU scene executor is never stamped CpuReference: GpuResident records
+// that the scene-linear pixels came from the GPU path. This is provenance only -- it participates
+// in ProcessFrameIdentity equality exactly as CpuReference does, and no pixel semantics change.
 enum class EvaluationProvider : std::uint8_t {
     CpuReference,
+    GpuResident,
 };
 
 struct CompositionFormatResolution final {

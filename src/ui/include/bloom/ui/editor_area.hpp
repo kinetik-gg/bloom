@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/ui/native_surface_retirement.hpp>
+
 #include <QFrame>
 #include <QSize>
 #include <QString>
@@ -109,7 +111,21 @@ class EditorArea final : public QFrame {
     [[nodiscard]] const QString& areaId() const noexcept;
     [[nodiscard]] static bool isValidAreaId(QStringView areaId);
     [[nodiscard]] std::string editorId() const;
+    // Non-empty id: always returns true. When a live native-surface editor is being replaced the
+    // actual rebuild is deferred (documented pending result); poll isEditorChangePending() and see
+    // lastNativeSurfaceDiagnostic() on refusal. A CPU-only editor applies synchronously as before.
     [[nodiscard]] bool setEditorId(std::string_view editorId);
+
+    // True while an editor replacement is waiting for its outgoing native surface to retire. During
+    // this window editorId(), the hosted widget, its parent, and the footer are all unchanged.
+    [[nodiscard]] bool isEditorChangePending() const noexcept;
+
+    // The optional native-surface lifecycle interface of the currently hosted editor, or nullptr
+    // for CPU-only editors. WorkspaceHost uses this to preflight a whole subtree.
+    [[nodiscard]] EditorNativeSurface* nativeSurface() const noexcept;
+
+    // Honest diagnostic from the last refused replacement (empty when none).
+    [[nodiscard]] const std::string& lastNativeSurfaceDiagnostic() const noexcept;
 
     void setAreaActive(bool active);
     [[nodiscard]] bool isAreaActive() const noexcept;
@@ -135,6 +151,12 @@ class EditorArea final : public QFrame {
 
   private:
     void rebuildEditor(int editorIndex);
+    // Gated picker entry point: CPU-only editors fall straight through to rebuildEditor(); a live
+    // native surface is retired first and the rebuild is deferred to the completion.
+    void requestEditorChange(int editorIndex);
+    void applyEditorChange(int editorIndex);
+    void revertPickerToAppliedIndex();
+    void onEditorChangeRetired(const NativeSurfaceRetirementGate::Result& result);
     int addUnavailableEditor(std::string_view editorId);
     void watchForActivation(QWidget* widget);
 
@@ -181,6 +203,13 @@ class EditorArea final : public QFrame {
     QMenu* contextMenu_ = nullptr;
     QToolButton* maximizeButton_ = nullptr;
     bool active_ = false;
+    // Retire-before-replace gate for the outgoing editor's native surface (CPU-only: inert).
+    NativeSurfaceRetirementGate surfaceRetirementGate_;
+    // The editor index whose materialization currently matches editorWidget_/footer_/headerMenus_.
+    // -1 until the first successful rebuild. The picker is reverted to this while a retirement is
+    // pending so no selection-truth change is visible before the mutation actually happens.
+    int appliedEditorIndex_ = -1;
+    std::string lastNativeSurfaceDiagnostic_;
 };
 
 } // namespace bloom::ui

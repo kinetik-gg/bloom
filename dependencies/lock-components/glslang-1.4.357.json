@@ -1,0 +1,119 @@
+{
+  "name": "glslang",
+  "version": "16.4.0",
+  "source": {
+    "url": "https://codeload.github.com/KhronosGroup/glslang/tar.gz/refs/tags/vulkan-sdk-1.4.357.0",
+    "archiveSha256": "sha256:81038794e20494556edbcc0fc70fa984d71d1b440f9c49adf2cbaaa60a519757",
+    "archiveSizeBytes": 4412438,
+    "retrievedAt": "2026-09-19",
+    "commit": "168d452a4f460d24b588fed08477a81c44ee27a1",
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/glslang/provenance.md",
+      "sha256": "sha256:f03bfe0e245ad4105d86e3b6f66786e724218b229cd5e4180048207eddf6aa01"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "BSD-3-Clause AND BSD-2-Clause AND MIT AND Apache-2.0 AND GPL-3.0-or-later WITH Bison-exception-2.2",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/glslang/LICENSE.txt",
+        "sha256": "sha256:17e70c676e1521ff3e4686f04a2053d93a7e28a33be8de7ec37ab0ff72feb677"
+      },
+      {
+        "path": "dependencies/licenses/glslang/LICENSES/AML-glslang.txt",
+        "sha256": "sha256:cc8ea571129dbee2997e52a54d1f715f8b0159a22f28f985a9b2b31708a48620"
+      },
+      {
+        "path": "dependencies/licenses/glslang/LICENSES/Apache-2.0.txt",
+        "sha256": "sha256:b22c5c23f3d598370ef51d7e539d5d5074207344fd86e41433f413e116f6a4f7"
+      },
+      {
+        "path": "dependencies/licenses/glslang/LICENSES/BSD-2-Clause.txt",
+        "sha256": "sha256:789daa57a2ebb49cfc3e67cd1a1f994d5dc221138a8c3cd1934b2ed47b86d356"
+      },
+      {
+        "path": "dependencies/licenses/glslang/LICENSES/BSD-3-Clause.txt",
+        "sha256": "sha256:5a93d5831e1297ab10fe643e1a631e83be392896da14ee2951285a79012df69d"
+      },
+      {
+        "path": "dependencies/licenses/glslang/LICENSES/Bison-exception-2.2.txt",
+        "sha256": "sha256:218a0cdacd4059d01e2ccff5b31d3e968a6a9c8ee7e4e0fc231c47d7fbf422c3"
+      },
+      {
+        "path": "dependencies/licenses/glslang/LICENSES/GPL-3.0-or-later.txt",
+        "sha256": "sha256:3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+      },
+      {
+        "path": "dependencies/licenses/glslang/LICENSES/MIT-Khronos-old.txt",
+        "sha256": "sha256:fbeaca472f4f70e276dd1106ca5097435967a22ad6c1d8200aef7ad9f70aaf3f"
+      },
+      {
+        "path": "dependencies/licenses/glslang/LICENSES/MIT.txt",
+        "sha256": "sha256:b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/glslang/review.md",
+      "sha256": "sha256:3b25192557374490bade36419c87ac02fdf65c4e086215d7132bd053ef8126ca"
+    },
+    "reviewedAt": "2026-09-19"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [
+    {
+      "profileId": "bloom.linux-x86-64-clang-release",
+      "linkage": "executable",
+      "cmakeOptions": [
+        {
+          "name": "ALLOW_EXTERNAL_SPIRV_TOOLS",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_EXTERNAL",
+          "value": "OFF"
+        },
+        {
+          "name": "ENABLE_GLSLANG_BINARIES",
+          "value": "ON"
+        },
+        {
+          "name": "ENABLE_HLSL",
+          "value": "OFF"
+        },
+        {
+          "name": "ENABLE_OPT",
+          "value": "OFF"
+        },
+        {
+          "name": "GLSLANG_ENABLE_INSTALL",
+          "value": "ON"
+        },
+        {
+          "name": "GLSLANG_TESTS",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.glslang"
+      ],
+      "shippingRoles": [],
+      "conformanceFixtureSets": []
+    }
+  ],
+  "securityReview": {
+    "reviewedAt": "2026-09-19",
+    "record": {
+      "path": "dependencies/licenses/glslang/security.md",
+      "sha256": "sha256:1f57fe170beb99522ea53c51d35135af140389329c39d57a6142dbae3fbc6420"
+    },
+    "vulnerabilities": []
+  }
+}

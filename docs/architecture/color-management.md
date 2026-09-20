@@ -636,8 +636,10 @@ channel is negative or above 1, all four fields show the original reference numb
 out-of-range RGB value into a display field authors that channel as a reference value and switches
 the row to reference presentation. Unchanged channels retain their exact reference numbers, so
 editing alpha or one component cannot accumulate conversion error in the others. Composition
-background preferences already use Display values and retain that interpretation. The separate
-legacy timeline colour-row adapter still requires adoption of this boundary.
+background preferences already use Display values and retain that interpretation. The timeline
+colour rows apply the same boundary: an in-range colour presents normalized display numbers in its
+expanded R/G/B/A rows, a signed or HDR RGB channel switches the whole row to exact reference
+numbers, and commits convert back through the session `colorConverter` and existing commands.
 
 Regression pins cover display `#F03B2E` becoming approximately reference
 `(0.871367, 0.043735, 0.027321)`, the Properties and node-chip pixels matching that pick, the

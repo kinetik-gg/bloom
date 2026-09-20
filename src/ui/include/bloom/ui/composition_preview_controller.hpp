@@ -68,6 +68,15 @@ using PreviewPreparationFunction =
         const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
         const std::vector<runtime::SnapshotParameterOverride>&, runtime::TaskContext&)>;
 
+// An optional display-stage submitter: when provided, a controller hands the request it would
+// otherwise submit itself to this callable and receives the same TaskSubmission shape. It exists so
+// a runtime-owned service can own GPU display submission without the controller owning any GPU
+// state. When absent, the existing CPU scheduler_.submit path is used unchanged.
+using PreviewPreparationSubmitter =
+    std::function<runtime::TaskSubmission<PreviewPreparationResultHandle>(
+        runtime::TaskRequest, const document::Snapshot&, const runtime::PreviewRequestIdentity&,
+        std::size_t, const std::vector<runtime::SnapshotParameterOverride>&)>;
+
 enum class PreviewActivity : std::uint8_t {
     Rendering,
     Ready,
@@ -115,13 +124,19 @@ class CompositionPreviewController final : public QObject {
                                  TaskUiBridge& taskUiBridge, PreviewPreparationFunction preparation,
                                  const CompositionPreviewSettings& settings = {},
                                  PreviewFrameCacheHandle frameCache = nullptr,
-                                 QObject* parent = nullptr);
+                                 QObject* parent = nullptr,
+                                 PreviewPreparationSubmitter submitter = {});
     ~CompositionPreviewController() override;
 
     [[nodiscard]] const CompositionPreviewState& state() const noexcept;
     // Geometry belongs to the delivered immutable process frame, including its sampled time.
     // No layout, evaluation, or image walk takes place on the UI thread.
     [[nodiscard]] std::vector<runtime::EvaluatedOperationBounds> selectedLayerBounds() const;
+    // SPLIT-2. The displayed frame's evaluated geometry, translated from its retained snapshot's
+    // layer/node identities to the CURRENT live graph. This is the one place viewer paint/hit/text
+    // consumers read geometry, so a retained frame after an equivalent split targets the live tail.
+    // Metadata only: no pixel copy and no reevaluation.
+    [[nodiscard]] std::vector<runtime::EvaluatedOperationBounds> currentLayerBounds() const;
     [[nodiscard]] bool isShuttingDown() const noexcept;
     [[nodiscard]] bool backgroundWorkAllowed() const noexcept;
     [[nodiscard]] PreviewFrameCache& frameCache() const noexcept;
@@ -233,6 +248,16 @@ class CompositionPreviewController final : public QObject {
                           std::optional<runtime::TaskId> taskId,
                           PreparedPreviewFrameHandle retainedFrame);
     void handleCompositionChanged();
+    // TEMPORAL-2B. A document command moved the time-indexed provenance. Re-scope cache retention,
+    // then preserve the displayed frame (and any in-flight work) when its time still resolves to
+    // the same genuine snapshot; only a frame whose time was inside the changed interval is
+    // rebuilt, and it may still be answered from another retained segment's cache entry.
+    void handleDocumentEvaluationChanged();
+    // WORKAREA-1: re-scope the shared cache to the live work area. Prunes out-of-range entries and
+    // bounds every later insertion; it never forces a pixel refresh, because the range is
+    // render-neutral for the frame already displayed.
+    void handleWorkAreaChanged();
+    void refreshRetentionRange();
     void handleCurrentTimeChanged();
     void handleTransformInteractionChanged();
     void handleLiveValueChanged();
@@ -258,6 +283,7 @@ class CompositionPreviewController final : public QObject {
     runtime::TaskScheduler& scheduler_;
     TaskUiBridge& taskUiBridge_;
     PreviewPreparationFunction preparation_;
+    PreviewPreparationSubmitter submitter_;
     CompositionPreviewSettings settings_;
     PreviewFrameCacheHandle frameCache_;
     CompositionPreviewState state_;

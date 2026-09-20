@@ -17,6 +17,7 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -957,6 +958,25 @@ void testHeaderMenuBarCollapsesIntoAnOverflowButtonWhenNarrow(Expectations& expe
 
 namespace {
 
+void testApplyApplicationPreferencesReachesTheScene(Expectations& expectations) {
+    GraphFixture fixture(makeProject("Preferences"));
+    ui::ApplicationPreferences preferences;
+    preferences.nodeLinkStyle = ui::NodeLinkStyle::Angled;
+    preferences.nodeSnap = true;
+    preferences.nodeGridSize = 40.0;
+
+    fixture.editor.applyApplicationPreferences(preferences);
+    expectations.expect(fixture.scene()->linkStyle() == ui::LinkStyle::Angled,
+                        "applying preferences sets the link style");
+    expectations.expect(fixture.scene()->gridSnapEnabled(), "and turns grid snap on");
+    expectations.expect(near(fixture.scene()->gridSize(), 40.0), "and sets the grid size");
+
+    preferences.nodeSnap = false;
+    fixture.editor.applyApplicationPreferences(preferences);
+    expectations.expect(!fixture.scene()->gridSnapEnabled(),
+                        "a second apply turns grid snap back off");
+}
+
 int runAll() {
     Expectations expectations;
     testZoomAboutCursorHoldsTheScenePointUnderTheCursor(expectations);
@@ -976,6 +996,7 @@ int runAll() {
     testInNodeTransformFieldsCommitThroughThePropertiesPath(expectations);
     testColorIsAReadOnlyChipAndParameterlessNodesStayClean(expectations);
     testHeaderMenuBarCollapsesIntoAnOverflowButtonWhenNarrow(expectations);
+    testApplyApplicationPreferencesReachesTheScene(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
 

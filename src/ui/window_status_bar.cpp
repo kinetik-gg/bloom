@@ -75,6 +75,14 @@ PreviewColorState previewColorState(const CompositionPreviewState& preview) {
     }
     const auto bufferView =
         preview.frame != nullptr ? preview.frame->displayBufferView() : std::nullopt;
+    // GPU provenance is reported honestly on the existing color chip: a display-only frame the
+    // fixed GPU Neutral operation produced says so, and the qualification report it carries is
+    // PreviewOnly (RGB tolerance), so this never claims reference parity. CPU reference and
+    // qualified-CPU frames keep their exact existing text.
+    if (preview.frame != nullptr &&
+        preview.frame->provenance().provider == runtime::PreviewDisplayProvider::GpuNeutral) {
+        return {WindowStatusBar::tr("GPU display"), kit::Color::Ok};
+    }
     if (bufferView.has_value() && bufferView->isOcioQualified) {
         return {WindowStatusBar::tr("Qualified · Bloom Neutral"), kit::Color::Ok};
     }

@@ -19,7 +19,7 @@ identity, resource, and qualification rules below are frozen; production compone
 Unicode digests remain pending verified intake and must not be fabricated to populate the shape.
 
 Implementation status: the two exact Draft 2020-12 lock/prefix schema families, including reviewed
-lock schema 1.2, the offline checker for synthetic contract fixtures, and production lock
+lock schemas 1.2 and 1.3, the offline checker for synthetic contract fixtures, and production lock
 validation are implemented — including the reviewed Unicode 15.1 bootstrap tables with two-source
 digest equality, repository-artifact digest binding, and an ASCII-strict v1 string tightening that
 defers NFC machinery. The reviewed production lock contains the static baseline and FFmpeg 8.1.2,
@@ -122,6 +122,18 @@ Lock schema 1.1 retains the v1 canonical ordering rules while permitting the rev
 component fields needed by non-CMake and shared-library dependencies: exact `configureArguments`,
 source archive size/retrieval date, `shared` linkage, and corresponding-source archive digest.
 Components that do not need those fields continue to use the 1.0-compatible static shape.
+
+Lock schema 1.3 is the minimal honest-vocabulary extension. It copies the 1.2 shape, ordering,
+limits, and closure unchanged and alters only the `profileBuild` contract: `linkage` gains
+`header-only` (for a header/data-only dependency whose install is headers, registry data, and a
+CMake package config) and `executable` (for a non-shipping build- or qualify-time tool).
+`shippingRoles` may be an empty array only for `executable` linkage; every other linkage still
+declares at least one role. Empty roles mean the tool's installed binary is build/qualification
+support and is not part of the end-user application package; they do not exempt any installed file
+from the prefix inventory and they make no qualified-prefix claim. The frozen 1.0, 1.1, and 1.2
+schema bytes are unchanged, and a 1.2 lock remains closed to the new enums. The generator selects
+1.3 the moment a reviewed record carries a header-only or executable linkage and never downgrades
+an existing 1.3.
 
 ### Runtime-fetched binary components
 
@@ -316,10 +328,11 @@ be empty only when the reviewed SPDX/license obligations permit it.
 
 `operatingSystem` is `linux`, `macos`, or `windows`; `architecture` is `x86_64` or `aarch64`;
 `buildConfiguration` is `debug` or `release`; `cxxRuntimeLinkage` is `dynamic` or `static`; component
-`linkage` is `dynamic`, `static`, `header-only`, `executable`, or `data-only`; `shippingRoles` is a
-set drawn from `library`, `executable`, `plugin`, `data`, `cmake-package`, `license`, `notice`, and
-`source`.
-`sourceObligation` is `none`, `ship-corresponding-source`, or `ship-source-offer`.
+`linkage` is `static` or `shared` under lock schemas 1.0–1.2, and schema 1.3 additionally admits
+`header-only` and `executable`; `shippingRoles` is a set drawn from `library`, `executable`,
+`plugin`, `data`, `cmake-package`, `license`, `notice`, and `source`. It must contain at least one
+role for every linkage except `executable`, where the empty array is the honest record of a
+non-shipping build-only tool. `sourceObligation` is `none` or `corresponding-source`.
 
 `consumerAbi` has exactly the member order shown in the illustration, including `cxxRuntimeAbi`
 between `cxxRuntime` and `cxxRuntimeLinkage`. `cxxStandard` is the unsigned integer `20` in v1.

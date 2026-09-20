@@ -192,11 +192,33 @@ void testMergeSlotSharesContentAndAudioRoles(TestContext& test) {
 
 void testLayerToggles(TestContext& test) {
     Fixture fixture;
-    (void)exercise<SetWorkArea>(test, fixture, core::RationalTime::fromInteger(1),
-                                core::RationalTime::fromInteger(3));
+    // WORKAREA-1: a work-area edit is render-neutral -- it scopes which frames a range command
+    // caches, not what a pixel looks like -- so both range commands opt out of render effect.
+    const auto setArea = exercise<SetWorkArea>(test, fixture, core::RationalTime::fromInteger(1),
+                                               core::RationalTime::fromInteger(3));
+    test.expect(!setArea.renderAffecting, "SetWorkArea is render-neutral");
     refuse<SetWorkArea>(test, fixture, OperationIssueCode::InvalidValue,
                         core::RationalTime::fromInteger(3), core::RationalTime::fromInteger(1));
-    (void)exercise<ClearWorkArea>(test, fixture);
+    const auto clearArea = exercise<ClearWorkArea>(test, fixture);
+    test.expect(!clearArea.renderAffecting, "ClearWorkArea is render-neutral");
+    // A mixed range+pixel transaction still aggregates to render-affecting.
+    {
+        const auto before = fixture.document.snapshot();
+        Transaction mixed("Range and opacity", before.revision());
+        mixed.emplace<SetWorkArea>(kCompositionId, core::RationalTime::fromInteger(2),
+                                   core::RationalTime::fromInteger(4));
+        mixed.emplace<SetParameterSource>(kCompositionId, kOpacityId,
+                                          document::ParameterSource{ConstantValueSource{0.5}});
+        const auto mixedResult = fixture.stack.execute(std::move(mixed));
+        test.expect(mixedResult.changed() && mixedResult.renderAffecting,
+                    "a mixed range+pixel transaction stays render-affecting");
+        const auto mixedUndo = fixture.stack.undo();
+        test.expect(mixedUndo.changed() && mixedUndo.renderAffecting,
+                    "undo replays the stored mixed range impact");
+        const auto mixedRedo = fixture.stack.redo();
+        test.expect(mixedRedo.changed() && mixedRedo.renderAffecting,
+                    "redo replays the stored mixed range impact");
+    }
     (void)exercise<SetLayerLabelColor>(test, fixture, kFirstLayerId,
                                        std::array<std::uint8_t, 3>{12, 34, 56});
     (void)exercise<SetLayerLabelColor>(test, fixture, kFirstLayerId, std::nullopt);
@@ -225,6 +247,147 @@ void testLayerToggles(TestContext& test) {
     (void)exercise<SetLayerLocked>(test, fixture, kFirstLayerId, false);
 }
 
+// TEMPORAL-1: SetLayerRange is the only operation that opts into a finite changed-time footprint.
+// Its footprint is the symmetric difference of the old and new half-open activity spans, snapped to
+// composition frames. Trimming yields one interval, extending yields one, a shifted equal-length
+// move yields two, and a no-op yields noChange (hence no footprint).
+void testLayerRangeTimeFootprint(TestContext& test) {
+    using document::CompositionId;
+    Fixture fixture;
+    const auto setRange = [&fixture](const core::RationalTime in, const core::RationalTime out) {
+        return apply<SetLayerRange>(fixture, kFirstLayerId, in, out);
+    };
+    const auto expectSpans =
+        [&test](const std::optional<AffectedTimeFootprint>& footprint,
+                const std::vector<std::pair<core::RationalTime, core::RationalTime>>& spans,
+                const std::string_view message) {
+            test.expect(footprint.has_value() && footprint->compositionId == kCompositionId &&
+                            footprint->intervals.size() == spans.size(),
+                        message);
+            if (!footprint.has_value() || footprint->intervals.size() != spans.size())
+                return;
+            for (std::size_t index = 0; index < spans.size(); ++index) {
+                test.expect(footprint->intervals[index].start == spans[index].first &&
+                                footprint->intervals[index].end == spans[index].second,
+                            message);
+            }
+        };
+
+    // The fixture layer starts active for the whole [0,10) composition.
+    // Trim the right edge to [0,4): the departing [4,10) is the only change.
+    expectSpans(setRange(core::RationalTime::fromInteger(0), core::RationalTime::fromInteger(4))
+                    .affectedTimes,
+                {{core::RationalTime::fromInteger(4), core::RationalTime::fromInteger(10)}},
+                "trim right has one changed interval");
+
+    // Extend the right edge back to [0,7): the entering [4,7) is the only change.
+    expectSpans(setRange(core::RationalTime::fromInteger(0), core::RationalTime::fromInteger(7))
+                    .affectedTimes,
+                {{core::RationalTime::fromInteger(4), core::RationalTime::fromInteger(7)}},
+                "extend right has one changed interval");
+
+    // Trim the left edge to [2,7): the departing [0,2) is the only change.
+    expectSpans(setRange(core::RationalTime::fromInteger(2), core::RationalTime::fromInteger(7))
+                    .affectedTimes,
+                {{core::RationalTime::fromInteger(0), core::RationalTime::fromInteger(2)}},
+                "trim left has one changed interval");
+
+    // Shift equal length [2,7) -> [4,9): both [2,4) and [7,9) change.
+    expectSpans(setRange(core::RationalTime::fromInteger(4), core::RationalTime::fromInteger(9))
+                    .affectedTimes,
+                {{core::RationalTime::fromInteger(2), core::RationalTime::fromInteger(4)},
+                 {core::RationalTime::fromInteger(7), core::RationalTime::fromInteger(9)}},
+                "an equal-length shift has two changed intervals");
+
+    // Disjoint move [4,9) -> [1,2): old span and new span do not overlap.
+    expectSpans(setRange(core::RationalTime::fromInteger(1), core::RationalTime::fromInteger(2))
+                    .affectedTimes,
+                {{core::RationalTime::fromInteger(1), core::RationalTime::fromInteger(2)},
+                 {core::RationalTime::fromInteger(4), core::RationalTime::fromInteger(9)}},
+                "a disjoint move reports both spans normalized");
+
+    // A full-duration layer with an explicit outPoint equal to duration is the same as absent: from
+    // [1,2) to [0,10) changes [0,1) and [2,10).
+    const auto full = setRange(core::RationalTime{}, core::RationalTime::fromInteger(10));
+    expectSpans(full.affectedTimes,
+                {{core::RationalTime::fromInteger(0), core::RationalTime::fromInteger(1)},
+                 {core::RationalTime::fromInteger(2), core::RationalTime::fromInteger(10)}},
+                "restoring full duration reports the whole changed span");
+    const auto fullAgain = setRange(core::RationalTime{}, core::RationalTime::fromInteger(10));
+    test.expect(fullAgain.status == CommandStatus::NoChange && !fullAgain.affectedTimes.has_value(),
+                "a no-op range edit advertises no footprint");
+
+    // An unknown pixel operation alongside a finite footprint dominates to whole render (no
+    // footprint); a NoChange pixel operation leaves the finite footprint intact.
+    {
+        const auto before = fixture.document.snapshot();
+        Transaction mixed("Range plus unknown pixel", before.revision());
+        mixed.emplace<SetLayerRange>(kCompositionId, kFirstLayerId,
+                                     core::RationalTime::fromInteger(1),
+                                     core::RationalTime::fromInteger(2));
+        mixed.emplace<SetParameterSource>(kCompositionId, kOpacityId,
+                                          document::ParameterSource{ConstantValueSource{0.5}});
+        const auto mixedResult = fixture.stack.execute(std::move(mixed));
+        test.expect(mixedResult.changed() && mixedResult.renderAffecting &&
+                        !mixedResult.affectedTimes.has_value(),
+                    "a finite footprint beside an unknown pixel op falls back to whole render");
+    }
+    {
+        // Set the range to [1,2) first, then a transaction whose pixel op is a NoChange.
+        (void)setRange(core::RationalTime::fromInteger(1), core::RationalTime::fromInteger(2));
+        const auto before = fixture.document.snapshot();
+        Transaction mixed("Range plus pixel no-change", before.revision());
+        mixed.emplace<SetParameterSource>(kCompositionId, kOpacityId,
+                                          document::ParameterSource{ConstantValueSource{0.5}});
+        mixed.emplace<SetLayerRange>(kCompositionId, kFirstLayerId,
+                                     core::RationalTime::fromInteger(1),
+                                     core::RationalTime::fromInteger(3));
+        const auto mixedResult = fixture.stack.execute(std::move(mixed));
+        test.expect(mixedResult.changed() && mixedResult.renderAffecting &&
+                        mixedResult.affectedTimes.has_value() &&
+                        mixedResult.affectedTimes->intervals.size() == 1 &&
+                        mixedResult.affectedTimes->intervals.front().start ==
+                            core::RationalTime::fromInteger(2) &&
+                        mixedResult.affectedTimes->intervals.front().end ==
+                            core::RationalTime::fromInteger(3),
+                    "a NoChange pixel op leaves the finite range footprint intact");
+    }
+
+    // A render-neutral range edit (work area) beside a finite layer range: work area contributes
+    // nothing, so the footprint stays finite.
+    {
+        const auto before = fixture.document.snapshot();
+        // The layer is at [1,3) here; trim to [1,2) so the change is exactly [2,3).
+        Transaction mixed("Range plus work area", before.revision());
+        mixed.emplace<SetLayerRange>(kCompositionId, kFirstLayerId,
+                                     core::RationalTime::fromInteger(1),
+                                     core::RationalTime::fromInteger(2));
+        mixed.emplace<SetWorkArea>(kCompositionId, core::RationalTime::fromInteger(1),
+                                   core::RationalTime::fromInteger(5));
+        const auto mixedResult = fixture.stack.execute(std::move(mixed));
+        test.expect(mixedResult.changed() && mixedResult.renderAffecting &&
+                        mixedResult.affectedTimes.has_value() &&
+                        mixedResult.affectedTimes->intervals.size() == 1 &&
+                        mixedResult.affectedTimes->intervals.front().start ==
+                            core::RationalTime::fromInteger(2) &&
+                        mixedResult.affectedTimes->intervals.front().end ==
+                            core::RationalTime::fromInteger(3),
+                    "a neutral work-area edit does not widen the finite range footprint");
+    }
+
+    // Undo/redo replay the stored symmetric footprint.
+    {
+        const auto undo = fixture.stack.undo();
+        test.expect(undo.changed() && undo.affectedTimes.has_value() &&
+                        undo.affectedTimes->intervals.size() == 1,
+                    "undo replays the stored finite footprint");
+        const auto redo = fixture.stack.redo();
+        test.expect(redo.changed() && redo.affectedTimes.has_value() &&
+                        redo.affectedTimes->intervals.size() == 1,
+                    "redo replays the stored finite footprint");
+    }
+}
+
 void testLayerRanges(TestContext& test) {
     Fixture fixture;
     (void)exercise<CreateAnimationForParameter>(test, fixture, kFirstPositionId,
@@ -244,6 +407,86 @@ void testLayerRanges(TestContext& test) {
                     graph.findLayer(*copy)->outPoint == out &&
                     graph.findLayer(kFirstLayerId)->outPoint == core::RationalTime::fromInteger(2),
                 "split keeps adjacent half-open ranges and exact undo/redo IDs");
+}
+
+// SPLIT-1: an ordinary merge-connected Layer Output split proves output equivalence and publishes a
+// deliberately EMPTY pixel footprint plus an original->tail identity remap. Conservative cases
+// (non-merge consumer, surviving child, unsupported boundary) publish no footprint and no remaps.
+void testSplitEquivalenceEvidence(TestContext& test) {
+    using document::CompositionId;
+    const auto t = [](const std::int64_t value) { return core::RationalTime::fromInteger(value); };
+    {
+        Fixture fixture;
+        // Animate the layer's position so the proof must accept exact curve duplication.
+        (void)exercise<CreateAnimationForParameter>(test, fixture, kFirstPositionId,
+                                                    core::RationalTime{});
+        (void)apply<SetLayerRange>(fixture, kFirstLayerId, t(1), t(8));
+        const auto split = apply<SplitLayerAtTime>(fixture, kFirstLayerId, t(4));
+        const auto copy = split.outputId<LayerId>("layer");
+        test.expect(split.changed() && split.renderAffecting && copy.has_value(),
+                    "an ordinary split publishes");
+        if (!copy.has_value())
+            throw std::logic_error("split equivalence fixture");
+        test.expect(split.affectedTimes.has_value() && split.affectedTimes->intervals.empty(),
+                    "an equivalent split publishes a deliberately empty pixel footprint");
+        test.expect(split.layerIdentityRemaps.has_value() &&
+                        split.layerIdentityRemaps->size() == 1 &&
+                        split.layerIdentityRemaps->front().compositionId == kCompositionId &&
+                        split.layerIdentityRemaps->front().start == t(4) &&
+                        split.layerIdentityRemaps->front().end == t(8) &&
+                        split.layerIdentityRemaps->front().beforeLayerId == kFirstLayerId &&
+                        split.layerIdentityRemaps->front().afterLayerId == *copy,
+                    "an equivalent split publishes the original->tail remap over the tail span");
+    }
+    {
+        // F1 regression: with the Layer Stack muted only the first slot compiles. Splitting that
+        // first-slot layer leaves the head inactive over the tail span while the tail copy is
+        // pruned, so live output changes there and the split cannot claim equivalence.
+        Fixture fixture;
+        (void)apply<SetLayerRange>(fixture, kFirstLayerId, t(0), t(5));
+        (void)apply<SetNodeMuted>(fixture, kLayerStackNodeId, true);
+        const auto split = apply<SplitLayerAtTime>(fixture, kFirstLayerId, t(2));
+        test.expect(split.changed() && split.renderAffecting && !split.affectedTimes.has_value() &&
+                        !split.layerIdentityRemaps.has_value(),
+                    "splitting the first layer of a muted layer stack keeps whole-render");
+    }
+    {
+        // A non-merge downstream consumer of the original output is conservative. The second Layer
+        // Output's image input is a node input, not a Merge slot.
+        Fixture fixture;
+        if (!apply<ConnectPorts>(fixture, OutputPortRef{kFirstLayerNodeId, "image"},
+                                 InputPortRef{NodeInputRef{kSecondLayerNodeId, "image"}})
+                 .changed())
+            throw std::logic_error("split consumer fixture");
+        const auto split = apply<SplitLayerAtTime>(fixture, kFirstLayerId, t(2));
+        test.expect(split.changed() && !split.affectedTimes.has_value() &&
+                        !split.layerIdentityRemaps.has_value(),
+                    "a non-merge consumer keeps the split conservative (whole render)");
+    }
+    {
+        // A surviving child parented to the split layer is conservative.
+        Fixture fixture;
+        (void)apply<SetLayerParent>(fixture, kSecondLayerId, kFirstLayerId);
+        const auto split = apply<SplitLayerAtTime>(fixture, kFirstLayerId, t(2));
+        test.expect(split.changed() && !split.affectedTimes.has_value() &&
+                        !split.layerIdentityRemaps.has_value(),
+                    "a surviving child keeps the split conservative (whole render)");
+    }
+
+    {
+        // Locked/invalid splits keep their existing refusal semantics and publish no evidence.
+        Fixture fixture;
+        (void)apply<SetLayerLocked>(fixture, kFirstLayerId, true);
+        const auto locked = apply<SplitLayerAtTime>(fixture, kFirstLayerId, t(2));
+        test.expect(locked.status == CommandStatus::Rejected && !locked.affectedTimes.has_value() &&
+                        !locked.layerIdentityRemaps.has_value(),
+                    "a locked layer split is rejected with no evidence");
+        (void)apply<SetLayerLocked>(fixture, kFirstLayerId, false);
+        const auto invalid = apply<SplitLayerAtTime>(fixture, kFirstLayerId, t(100));
+        test.expect(invalid.status == CommandStatus::Rejected &&
+                        !invalid.layerIdentityRemaps.has_value(),
+                    "an out-of-range split is rejected with no evidence");
+    }
 }
 
 void testValidityQuery(TestContext& test) {
@@ -893,6 +1136,240 @@ void testNodeGroups(TestContext& test) {
     test.expect(groups().empty(), "removing a group's last node removes the group");
 }
 
+// LAYOUT-1: the card-layout and node-group commands opt out of render effect; every other node
+// command keeps the conservative render-affecting default. The classification is declared per
+// operation, never inferred from which document field the operation writes -- SetNodeMuted writes
+// nodeLayout and layer.enabled together, and must stay render-affecting.
+void testRenderAffectingClassification(TestContext& test) {
+    {
+        Fixture fixture;
+        const auto source = addSource(fixture);
+        test.expect(!apply<MoveNodes>(fixture, std::map<NodeId, Vec2d>{{source, Vec2d{12, 34}}})
+                         .renderAffecting,
+                    "MoveNodes is layout-only");
+        test.expect(!apply<SetNodeCollapsed>(fixture, source, true).renderAffecting,
+                    "SetNodeCollapsed is layout-only");
+        test.expect(!apply<SetNodeWidth>(fixture, source, 256.0).renderAffecting,
+                    "SetNodeWidth is layout-only");
+        const auto group = apply<GroupNodes>(fixture, std::set<NodeId>{source});
+        test.expect(!group.renderAffecting, "GroupNodes is layout-only");
+        const auto groupId = group.outputId<NodeGroupId>(kGroupNodesOutput);
+        test.expect(groupId.has_value(), "GroupNodes reports the group it created");
+        if (groupId.has_value()) {
+            test.expect(
+                !apply<RenameGroup>(fixture, *groupId, std::string("Renamed")).renderAffecting,
+                "RenameGroup is layout-only");
+            test.expect(!apply<SetGroupMembers>(fixture, *groupId,
+                                                std::set<NodeId>{source, kFirstLayerNodeId})
+                             .renderAffecting,
+                        "SetGroupMembers is layout-only");
+            test.expect(!apply<UngroupNodes>(fixture, *groupId).renderAffecting,
+                        "UngroupNodes is layout-only");
+        }
+        test.expect(apply<SetNodeMuted>(fixture, source, true).renderAffecting,
+                    "SetNodeMuted is pixel-affecting despite living in node layout");
+        test.expect(
+            apply<AddNode>(fixture, std::string(kSolidSourceNodeType), Vec2d{3, 4}).renderAffecting,
+            "an unclassified node operation defaults to render-affecting");
+
+        // A pixel-affecting operation that reports NoChange beside an applied layout edit must not
+        // make the transaction invalidating.
+        const auto before = fixture.document.snapshot();
+        Transaction noChange("Muted no-op and move", before.revision());
+        noChange.emplace<SetNodeMuted>(kCompositionId, source, true);
+        noChange.emplace<MoveNodes>(kCompositionId,
+                                    std::map<NodeId, Vec2d>{{source, Vec2d{40, 41}}});
+        const auto noChangeResult = fixture.stack.execute(std::move(noChange));
+        test.expect(noChangeResult.status == CommandStatus::Succeeded &&
+                        !noChangeResult.renderAffecting,
+                    "a pixel NoChange beside an applied layout edit stays layout-only");
+    }
+
+    // A mixed applied transaction is conservatively render-affecting in both orderings, and both
+    // undo and redo replay the impact stored with the history entry.
+    for (const bool layoutFirst : {true, false}) {
+        Fixture fixture;
+        Transaction mixed("Mixed node edit", fixture.document.snapshot().revision());
+        if (layoutFirst) {
+            mixed.emplace<MoveNodes>(kCompositionId,
+                                     std::map<NodeId, Vec2d>{{kFirstLayerNodeId, Vec2d{11, 12}}});
+            mixed.emplace<SetNodeMuted>(kCompositionId, kFirstLayerNodeId, true);
+        } else {
+            mixed.emplace<SetNodeMuted>(kCompositionId, kFirstLayerNodeId, true);
+            mixed.emplace<MoveNodes>(kCompositionId,
+                                     std::map<NodeId, Vec2d>{{kFirstLayerNodeId, Vec2d{11, 12}}});
+        }
+        const auto mixedResult = fixture.stack.execute(std::move(mixed));
+        test.expect(mixedResult.changed() && mixedResult.renderAffecting,
+                    "a mixed layout+pixel transaction is conservatively render-affecting");
+        const auto undo = fixture.stack.undo();
+        test.expect(undo.changed() && undo.renderAffecting,
+                    "undo replays the stored mixed render impact");
+        const auto redo = fixture.stack.redo();
+        test.expect(redo.changed() && redo.renderAffecting,
+                    "redo replays the stored mixed render impact");
+    }
+
+    // A layout-only transaction replays its stored layout-only impact through undo and redo.
+    {
+        Fixture fixture;
+        const auto source = addSource(fixture);
+        if (!apply<MoveNodes>(fixture, std::map<NodeId, Vec2d>{{source, Vec2d{5, 6}}}).changed())
+            throw std::logic_error("layout undo/redo fixture");
+        const auto undo = fixture.stack.undo();
+        test.expect(undo.changed() && !undo.renderAffecting,
+                    "undo replays the stored layout-only render impact");
+        const auto redo = fixture.stack.redo();
+        test.expect(redo.changed() && !redo.renderAffecting,
+                    "redo replays the stored layout-only render impact");
+    }
+
+    // A group edit replays its stored layout-only impact through undo and redo too.
+    {
+        Fixture fixture;
+        if (!apply<GroupNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId}).changed())
+            throw std::logic_error("group layout undo/redo fixture");
+        const auto undo = fixture.stack.undo();
+        test.expect(undo.changed() && !undo.renderAffecting,
+                    "undo replays the stored group layout-only render impact");
+        const auto redo = fixture.stack.redo();
+        test.expect(redo.changed() && !redo.renderAffecting,
+                    "redo replays the stored group layout-only render impact");
+    }
+}
+
+// TEMPORAL-DELETE: RemoveNodes proves a finite changed-time footprint only when every removed node
+// is an ordinary layer boundary whose deletion cannot influence output outside its active span.
+void testRemovalTimeFootprint(TestContext& test) {
+    using document::CompositionId;
+    const auto expectSpan = [&test](const std::optional<AffectedTimeFootprint>& footprint,
+                                    const std::int64_t start, const std::int64_t end,
+                                    const std::string_view message) {
+        test.expect(footprint.has_value() && footprint->compositionId == kCompositionId &&
+                        footprint->intervals.size() == 1 &&
+                        footprint->intervals.front().start ==
+                            core::RationalTime::fromInteger(start) &&
+                        footprint->intervals.front().end == core::RationalTime::fromInteger(end),
+                    message);
+    };
+    {
+        Fixture fixture;
+        const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
+        test.expect(result.changed() && result.renderAffecting, "layer removal publishes");
+        expectSpan(result.affectedTimes, 0, 10,
+                   "an ordinary full-span layer deletion is confined to its active span");
+    }
+    {
+        Fixture fixture;
+        (void)apply<SetLayerRange>(fixture, kFirstLayerId, core::RationalTime::fromInteger(2),
+                                   core::RationalTime::fromInteger(5));
+        const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
+        expectSpan(result.affectedTimes, 2, 5, "a finite clip reports only its half-open span");
+    }
+    {
+        Fixture fixture;
+        (void)apply<SetLayerRange>(fixture, kFirstLayerId, core::RationalTime::fromInteger(1),
+                                   core::RationalTime::fromInteger(4));
+        (void)apply<SetLayerRange>(fixture, kSecondLayerId, core::RationalTime::fromInteger(6),
+                                   core::RationalTime::fromInteger(9));
+        const auto result =
+            apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId, kSecondLayerNodeId});
+        test.expect(
+            result.changed() && result.affectedTimes.has_value() &&
+                result.affectedTimes->intervals.size() == 2 &&
+                result.affectedTimes->intervals[0].start == core::RationalTime::fromInteger(1) &&
+                result.affectedTimes->intervals[0].end == core::RationalTime::fromInteger(4) &&
+                result.affectedTimes->intervals[1].start == core::RationalTime::fromInteger(6) &&
+                result.affectedTimes->intervals[1].end == core::RationalTime::fromInteger(9),
+            "multiple independent clips publish their normalized union");
+    }
+    {
+        // Undo/redo replay the stored deletion footprint.
+        Fixture fixture;
+        (void)apply<SetLayerRange>(fixture, kFirstLayerId, core::RationalTime::fromInteger(2),
+                                   core::RationalTime::fromInteger(5));
+        const auto removed = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
+        test.expect(removed.changed() && removed.affectedTimes.has_value(),
+                    "the deletion publishes a footprint");
+        const auto undo = fixture.stack.undo();
+        test.expect(
+            undo.changed() && undo.affectedTimes.has_value() &&
+                undo.affectedTimes->intervals.front().start == core::RationalTime::fromInteger(2) &&
+                undo.affectedTimes->intervals.front().end == core::RationalTime::fromInteger(5),
+            "undo replays the deletion footprint");
+        const auto redo = fixture.stack.redo();
+        test.expect(redo.changed() && redo.affectedTimes.has_value() &&
+                        redo.affectedTimes->intervals.size() == 1,
+                    "redo replays the deletion footprint");
+    }
+    {
+        Fixture fixture;
+        const auto source = apply<AddNode>(fixture, std::string(kSolidSourceNodeType), Vec2d{})
+                                .outputId<NodeId>(kAddNodeOutput);
+        if (!source.has_value())
+            throw std::logic_error("removal footprint source fixture");
+        const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{*source});
+        test.expect(result.changed() && result.renderAffecting && !result.affectedTimes.has_value(),
+                    "removing a non-layer node is whole-render");
+    }
+    {
+        Fixture fixture;
+        (void)apply<SetLayerParent>(fixture, kSecondLayerId, kFirstLayerId);
+        const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
+        test.expect(result.changed() && !result.affectedTimes.has_value(),
+                    "a surviving child parented to the removed boundary forces whole-render");
+    }
+    {
+        Fixture fixture;
+        (void)apply<SetLayerSolo>(fixture, kFirstLayerId, true);
+        const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
+        test.expect(result.changed() && !result.affectedTimes.has_value(),
+                    "removing a solo layer can unsuppress others, so it is whole-render");
+    }
+    {
+        Fixture fixture;
+        (void)apply<ConnectPorts>(fixture, OutputPortRef{kFirstLayerNodeId, "image"},
+                                  InputPortRef{NodeInputRef{kSecondLayerNodeId, "image"}});
+        const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
+        test.expect(result.changed() && !result.affectedTimes.has_value(),
+                    "a non-merge downstream consumer forces whole-render");
+    }
+    {
+        // F1 regression: a muted Layer Stack compiles only its first slot, so deleting the layer
+        // currently in that slot can promote a later layer into it. The change at [5,10) is not
+        // inside the deleted layer's own [0,5) span, so the proof must fall back to whole-render.
+        Fixture fixture;
+        (void)apply<SetLayerRange>(fixture, kFirstLayerId, core::RationalTime{},
+                                   core::RationalTime::fromInteger(5));
+        (void)apply<SetNodeMuted>(fixture, kLayerStackNodeId, true);
+        const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
+        test.expect(result.changed() && result.renderAffecting && !result.affectedTimes.has_value(),
+                    "deleting the first layer of a muted layer stack is whole-render");
+    }
+    {
+        // The same clipped delete without the mute keeps the finite half-open span proof.
+        Fixture fixture;
+        (void)apply<SetLayerRange>(fixture, kFirstLayerId, core::RationalTime{},
+                                   core::RationalTime::fromInteger(5));
+        const auto result = apply<RemoveNodes>(fixture, std::set<NodeId>{kFirstLayerNodeId});
+        expectSpan(result.affectedTimes, 0, 5,
+                   "an unmuted clipped first-layer delete stays finite");
+    }
+    {
+        Fixture fixture;
+        const auto before = fixture.document.snapshot();
+        const auto history = fixture.stack.size();
+        Transaction transaction("Atomic refusal");
+        transaction.emplace<SetProjectName>("Must roll back");
+        transaction.emplace<RemoveNodes>(kCompositionId, std::set<NodeId>{kLayerStackNodeId});
+        const auto result = fixture.stack.execute(std::move(transaction));
+        test.expect(result.status == CommandStatus::Rejected && !result.affectedTimes.has_value() &&
+                        fixture.document.snapshot().revision() == before.revision() &&
+                        fixture.stack.size() == history,
+                    "a rejected removal publishes no reuse evidence");
+    }
+}
+
 void testParentCommands(TestContext& test) {
     Fixture mixed;
     test.expect(apply<ConnectPorts>(mixed, OutputPortRef{kFirstLayerNodeId, "image"},
@@ -960,6 +1437,10 @@ int main() {
         bloom::commands::test::testDuplicationOwnershipEdges(test);
         bloom::commands::test::testParameterSocketDrivers(test);
         bloom::commands::test::testNodeGroups(test);
+        bloom::commands::test::testRenderAffectingClassification(test);
+        bloom::commands::test::testLayerRangeTimeFootprint(test);
+        bloom::commands::test::testRemovalTimeFootprint(test);
+        bloom::commands::test::testSplitEquivalenceEvidence(test);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

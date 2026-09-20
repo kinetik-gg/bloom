@@ -1,0 +1,29 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "generator": "tools/gpu-shaders compile/validate/embed recipe (reused, not reimplemented)",
+  "generatorRevision": 1,
+  "operation": "SolidV1",
+  "entrypoint": "main",
+  "shader": {
+    "language": "GLSL_460",
+    "stage": "compute",
+    "sha256": "ac0d5f31bc8b23e2c3744f3edd1ceb2308566d853cb36aea1bffbe5f009a110c",
+    "spirvSha256": "2fae4aef67267e98a53034448639bfb00a69568ec3be1d8ed1a1bc60b31a0318",
+    "localSizeX": 256,
+    "textures": 0,
+    "uniforms": 0
+  },
+  "bindings": [
+    {"set": 0, "binding": 0, "kind": "storage-image", "access": "writeonly", "format": "rgba32f", "role": "resident-premultiplied-rgba32f-output"}
+  ],
+  "pushConstant": {"byteCount": 24, "fields": [
+    {"name": "pixel", "type": "vec4"},
+    {"name": "width", "type": "uint32"},
+    {"name": "height", "type": "uint32"}
+  ]},
+  "contracts": {
+    "numeric": "exact-store",
+    "alphaPreserved": true,
+    "note": "host supplies the already-validated premultiplied pixel; the shader performs no arithmetic"
+  }
+}

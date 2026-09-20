@@ -81,26 +81,44 @@ void testDefaultWorkspaceUsesTheOwnerArrangement(Expectations& expectations) {
     expectations.expect(host.restorePersistedLayout(settings, QStringLiteral("workspace/layout")) ==
                             WorkspaceLayoutRestoreResult::Missing,
                         "default workspace: an empty settings store has no persisted layout");
-    host.resetToDefaultLayout({"bloom.assets", "bloom.viewer", "bloom.nodes", "bloom.properties"},
-                              "bloom.timeline");
+    host.resetToDefaultLayout("bloom.viewer", "bloom.nodes", "bloom.assets", "bloom.timeline",
+                              "bloom.properties");
     host.resize(1920, 1080);
     host.show();
     QCoreApplication::processEvents();
     QCoreApplication::processEvents();
 
-    QSplitter* topRow = nullptr;
-    QSplitter* workspaceRows = nullptr;
+    // The root is the only splitter parented directly to the host; every other one is nested.
+    QSplitter* root = nullptr;
     for (auto* splitter : host.findChildren<QSplitter*>(QStringLiteral("workspaceSplitter"))) {
-        if (splitter->orientation() == Qt::Horizontal && splitter->count() == 4) {
-            topRow = splitter;
-        } else if (splitter->orientation() == Qt::Vertical && splitter->count() == 2) {
-            workspaceRows = splitter;
+        if (splitter->parentWidget() == &host) {
+            root = splitter;
         }
     }
-    expectations.expect(topRow != nullptr, "default workspace: top row is one four-area splitter");
-    expectations.expect(workspaceRows != nullptr,
-                        "default workspace: top and bottom rows are split vertically");
-    if (topRow == nullptr || workspaceRows == nullptr) {
+    expectations.expect(root != nullptr && root->orientation() == Qt::Horizontal &&
+                            root->count() == 2,
+                        "default workspace: the root splits a left region from a right column");
+    if (root == nullptr) {
+        host.hide();
+        return;
+    }
+    auto* leftColumn = qobject_cast<QSplitter*>(root->widget(0));
+    auto* rightColumn = qobject_cast<QSplitter*>(root->widget(1));
+    expectations.expect(leftColumn != nullptr && leftColumn->orientation() == Qt::Vertical &&
+                            leftColumn->count() == 2,
+                        "default workspace: the left region stacks its top row over the Timeline");
+    expectations.expect(rightColumn != nullptr && rightColumn->orientation() == Qt::Vertical &&
+                            rightColumn->count() == 2,
+                        "default workspace: the right column stacks Assets over Properties");
+    if (leftColumn == nullptr || rightColumn == nullptr) {
+        host.hide();
+        return;
+    }
+    auto* topLeftRow = qobject_cast<QSplitter*>(leftColumn->widget(0));
+    expectations.expect(topLeftRow != nullptr && topLeftRow->orientation() == Qt::Horizontal &&
+                            topLeftRow->count() == 2,
+                        "default workspace: the top-left row is Viewer | Nodes");
+    if (topLeftRow == nullptr) {
         host.hide();
         return;
     }
@@ -109,28 +127,35 @@ void testDefaultWorkspaceUsesTheOwnerArrangement(Expectations& expectations) {
         const int total = std::accumulate(sizes.cbegin(), sizes.cend(), 0);
         return total > 0 ? static_cast<double>(sizes[index]) / total : 0.0;
     };
-    const auto topSizes = topRow->sizes();
-    for (const auto [index, expected] : std::array{std::pair{0, 0.16}, std::pair{1, 0.31},
-                                                   std::pair{2, 0.32}, std::pair{3, 0.19}}) {
-        expectations.expect(std::abs(share(topSizes, index) - expected) <= 0.01,
-                            "default workspace: top-row share is within one percentage point");
-    }
-    const auto rowSizes = workspaceRows->sizes();
-    expectations.expect(std::abs(share(rowSizes, 0) - 0.68) <= 0.01 &&
-                            std::abs(share(rowSizes, 1) - 0.32) <= 0.01,
-                        "default workspace: top/bottom row shares are 68%/32%");
-    for (int index = 0; index < topRow->count(); ++index) {
-        const auto* area = qobject_cast<const EditorArea*>(topRow->widget(index));
-        expectations.expect(
-            area != nullptr &&
-                area->editorId() ==
-                    std::array<std::string, 4>{"bloom.assets", "bloom.viewer", "bloom.nodes",
-                                               "bloom.properties"}[static_cast<std::size_t>(index)],
-            "default workspace: top-row editor order is Assets, Viewer, Nodes, Properties");
-    }
-    const auto* timeline = qobject_cast<const EditorArea*>(workspaceRows->widget(1));
-    expectations.expect(timeline != nullptr && timeline->editorId() == "bloom.timeline",
-                        "default workspace: Timeline occupies the full bottom row");
+    const auto rootSizes = root->sizes();
+    expectations.expect(std::abs(share(rootSizes, 0) - 0.80) <= 0.02 &&
+                            std::abs(share(rootSizes, 1) - 0.20) <= 0.02,
+                        "default workspace: the right column is about 20% of the width");
+    const auto leftSizes = leftColumn->sizes();
+    expectations.expect(std::abs(share(leftSizes, 0) - 0.56) <= 0.02 &&
+                            std::abs(share(leftSizes, 1) - 0.44) <= 0.02,
+                        "default workspace: the left top row is about 56% of its height");
+    const auto topLeftSizes = topLeftRow->sizes();
+    expectations.expect(std::abs(share(topLeftSizes, 0) - 0.505) <= 0.02 &&
+                            std::abs(share(topLeftSizes, 1) - 0.495) <= 0.02,
+                        "default workspace: Viewer and Nodes share the top-left row");
+    const auto rightSizes = rightColumn->sizes();
+    expectations.expect(std::abs(share(rightSizes, 0) - 0.395) <= 0.02 &&
+                            std::abs(share(rightSizes, 1) - 0.605) <= 0.02,
+                        "default workspace: the right column splits Assets over Properties");
+
+    const auto editorId = [](QWidget* widget) {
+        const auto* area = qobject_cast<const EditorArea*>(widget);
+        return area != nullptr ? area->editorId() : std::string{};
+    };
+    expectations.expect(editorId(topLeftRow->widget(0)) == "bloom.viewer" &&
+                            editorId(topLeftRow->widget(1)) == "bloom.nodes",
+                        "default workspace: Viewer then Nodes in the top-left row");
+    expectations.expect(editorId(leftColumn->widget(1)) == "bloom.timeline",
+                        "default workspace: the Timeline spans the left region's bottom");
+    expectations.expect(editorId(rightColumn->widget(0)) == "bloom.assets" &&
+                            editorId(rightColumn->widget(1)) == "bloom.properties",
+                        "default workspace: Assets over Properties in the right column");
     host.hide();
 }
 
@@ -147,11 +172,13 @@ void testPanelsAreSeparatedByARealGutter(Expectations& expectations) {
 
     const auto splitters = host.findChildren<QSplitter*>(QStringLiteral("workspaceSplitter"));
     expectations.expect(!splitters.isEmpty(), "splitting produces a workspace splitter");
+    // Each panel draws its own 1px border inside its rect, so a between-panel boundary has two
+    // border strokes while the window edge has one. The handle is the window padding less one
+    // border, which makes the border-to-border span equal the edge-to-border padding.
+    const int expectedHandle = kit::px(kit::Spacing::Gutter) - kit::px(kit::Size::Hairline);
     for (const auto* splitter : splitters) {
-        // The gutter is a visible Background gap between panels, not a hairline seam: the handle
-        // width is what makes that gap real and grabbable.
-        expectations.expect(splitter->handleWidth() == kit::px(kit::Spacing::Gutter),
-                            "every workspace splitter's handle is the gutter token wide");
+        expectations.expect(splitter->handleWidth() == expectedHandle,
+                            "every splitter's handle is the gutter less one panel border");
     }
     expectations.expect(kit::px(kit::Spacing::Gutter) == 6, "and the gutter token is 6");
 }

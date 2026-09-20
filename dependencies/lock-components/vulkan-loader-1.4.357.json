@@ -1,0 +1,121 @@
+{
+  "name": "vulkan-loader",
+  "version": "1.4.357.0",
+  "source": {
+    "url": "https://codeload.github.com/KhronosGroup/Vulkan-Loader/tar.gz/refs/tags/vulkan-sdk-1.4.357.0",
+    "archiveSha256": "sha256:54f2537df22313768da0317dda2abdaaab7711b4081c48c869a79db343d0ae70",
+    "archiveSizeBytes": 1820868,
+    "retrievedAt": "2026-09-19",
+    "commit": "5f157b62e333c63260d05d81bf66faa216ab0fb8",
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/vulkan-loader/provenance.md",
+      "sha256": "sha256:cdb111064c34704a4505e96981962be052459367c37886ce25df460b2915e5d4"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "Apache-2.0 AND MIT AND CC-BY-4.0 AND HPND-Kevlin-Henney AND MIT-Khronos-old",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/vulkan-loader/LICENSE.txt",
+        "sha256": "sha256:43c0a37e6a0fa7ff3c843b3ec5a4fac84b712558ddac103fbd4c1649662a9ece"
+      },
+      {
+        "path": "dependencies/licenses/vulkan-loader/LICENSES/Apache-2.0.txt",
+        "sha256": "sha256:074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+      },
+      {
+        "path": "dependencies/licenses/vulkan-loader/LICENSES/CC-BY-4.0.txt",
+        "sha256": "sha256:d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744"
+      },
+      {
+        "path": "dependencies/licenses/vulkan-loader/LICENSES/HPND-Kevlin-Henney.txt",
+        "sha256": "sha256:9c73641270f020fce60e4b6aa93f56754763916517cd72d21a73527696ccd3ed"
+      },
+      {
+        "path": "dependencies/licenses/vulkan-loader/LICENSES/MIT-Khronos-old.txt",
+        "sha256": "sha256:fbeaca472f4f70e276dd1106ca5097435967a22ad6c1d8200aef7ad9f70aaf3f"
+      },
+      {
+        "path": "dependencies/licenses/vulkan-loader/LICENSES/MIT.txt",
+        "sha256": "sha256:b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/vulkan-loader/review.md",
+      "sha256": "sha256:4840bc70469b73675b16a49bb3768109b868cf2d2df2cb30bbc953e84a91f88e"
+    },
+    "reviewedAt": "2026-09-19"
+  },
+  "patches": [],
+  "dependencies": [
+    {
+      "name": "vulkan-headers",
+      "relationship": "build"
+    }
+  ],
+  "profileBuilds": [
+    {
+      "profileId": "bloom.linux-x86-64-clang-release",
+      "linkage": "shared",
+      "cmakeOptions": [
+        {
+          "name": "BUILD_TESTS",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_WSI_DIRECTFB_SUPPORT",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_WSI_WAYLAND_SUPPORT",
+          "value": "ON"
+        },
+        {
+          "name": "BUILD_WSI_XCB_SUPPORT",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_WSI_XLIB_SUPPORT",
+          "value": "OFF"
+        },
+        {
+          "name": "BUILD_WSI_XLIB_XRANDR_SUPPORT",
+          "value": "OFF"
+        },
+        {
+          "name": "LOADER_CODEGEN",
+          "value": "OFF"
+        },
+        {
+          "name": "UPDATE_DEPS",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [],
+      "capabilities": [
+        "bloom.capability.vulkan-loader"
+      ],
+      "shippingRoles": [
+        "cmake-package",
+        "data",
+        "library",
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    }
+  ],
+  "securityReview": {
+    "reviewedAt": "2026-09-19",
+    "record": {
+      "path": "dependencies/licenses/vulkan-loader/security.md",
+      "sha256": "sha256:3a56b2e743fcc96db98a76b4fe14cddb791984ef38e7e7b88d5f502b518e842d"
+    },
+    "vulnerabilities": []
+  }
+}

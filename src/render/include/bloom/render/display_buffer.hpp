@@ -85,6 +85,13 @@ class PreparedReferenceDisplayBuffer final {
     create(ReferenceDisplayBufferDescriptor descriptor, std::span<const Rgba8> pixels,
            std::size_t pixelStorageByteLimit) noexcept;
 
+    // Adopts caller-owned packed storage after the same descriptor, pixel-count, and byte-budget
+    // checks as create(), moving the payload only once those checks pass. On failure the caller's
+    // vector is left owned by the caller and unchanged; no pixels are copied.
+    [[nodiscard]] static ImageResult<PreparedReferenceDisplayBuffer>
+    adopt(ReferenceDisplayBufferDescriptor descriptor, std::vector<Rgba8>&& pixels,
+          std::size_t pixelStorageByteLimit) noexcept;
+
     [[nodiscard]] bool isValid() const noexcept;
     [[nodiscard]] const ReferenceDisplayBufferDescriptor* descriptor() const& noexcept;
     [[nodiscard]] const ReferenceDisplayBufferDescriptor* descriptor() const&& = delete;

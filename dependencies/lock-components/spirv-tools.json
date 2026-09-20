@@ -1,0 +1,90 @@
+{
+  "name": "spirv-tools",
+  "version": "b707790a898e44038547df54580022fc1cf89c3d",
+  "source": {
+    "url": "https://codeload.github.com/KhronosGroup/SPIRV-Tools/tar.gz/b707790a898e44038547df54580022fc1cf89c3d",
+    "archiveSha256": "sha256:05d8af89737bde57571c48dbd36714c9f520a69623e14de72c3be6b600e277d6",
+    "archiveSizeBytes": 3521745,
+    "retrievedAt": "2026-09-19",
+    "commit": "b707790a898e44038547df54580022fc1cf89c3d",
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/spirv-tools/provenance.md",
+      "sha256": "sha256:c74163ade27b76b0643a4cd4959b0617d704d9abcc20653f3c75010a6869f784"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "Apache-2.0",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/spirv-tools/LICENSE",
+        "sha256": "sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "path": "dependencies/licenses/spirv-tools/utils-vscode-lsp-LICENSE",
+        "sha256": "sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/spirv-tools/review.md",
+      "sha256": "sha256:002175565736c6d60199a7149666d1769a0b4e5f833be5b4890ea862b8ccee94"
+    },
+    "reviewedAt": "2026-09-19"
+  },
+  "patches": [],
+  "dependencies": [
+    {
+      "name": "spirv-headers",
+      "relationship": "build"
+    }
+  ],
+  "profileBuilds": [
+    {
+      "profileId": "bloom.linux-x86-64-clang-release",
+      "linkage": "executable",
+      "cmakeOptions": [
+        {
+          "name": "SPIRV_BUILD_FUZZER",
+          "value": "OFF"
+        },
+        {
+          "name": "SPIRV_SKIP_EXECUTABLES",
+          "value": "OFF"
+        },
+        {
+          "name": "SPIRV_SKIP_TESTS",
+          "value": "ON"
+        },
+        {
+          "name": "SPIRV_WERROR",
+          "value": "OFF"
+        }
+      ],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.spirv-tools.build-version-description",
+          "state": "enabled",
+          "reason": "FORCED_BUILD_VERSION_DESCRIPTION is pinned to the component source commit b707790a898e44038547df54580022fc1cf89c3d for the build and install generation steps so spirv-val --version reports the dependency identity, not the ambient Bloom git HEAD"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.spirv-tools"
+      ],
+      "shippingRoles": [],
+      "conformanceFixtureSets": []
+    }
+  ],
+  "securityReview": {
+    "reviewedAt": "2026-09-19",
+    "record": {
+      "path": "dependencies/licenses/spirv-tools/security.md",
+      "sha256": "sha256:f1b488bc549503ed11996a051505f2955b13a3857f475cb3e4fb25999728bcad"
+    },
+    "vulnerabilities": []
+  }
+}

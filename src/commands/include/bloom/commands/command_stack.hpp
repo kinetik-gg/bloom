@@ -60,6 +60,16 @@ class CommandStack final {
         std::string label;
         document::Snapshot before;
         document::Snapshot after;
+        // The render impact of the transaction that created this entry. Restoring the entry on
+        // undo/redo replays it, because a restore does not re-run the operations that declared it.
+        bool renderAffecting = true;
+        // The proven finite changed-time footprint, when the transaction proved one; std::nullopt
+        // is the conservative whole-render default. Replayed verbatim by undo/redo.
+        std::optional<AffectedTimeFootprint> affectedTimes;
+        // SPLIT-1. The transaction's FORWARD ordered geometry remaps, when every applied
+        // render-affecting op proved a finite footprint. Undo publishes the inverted list; redo
+        // publishes this stored forward list.
+        std::optional<std::vector<LayerIdentityRemap>> layerIdentityRemaps;
     };
 
     [[nodiscard]] std::optional<CommandResult> staleResult(CommandAction action, std::string label,

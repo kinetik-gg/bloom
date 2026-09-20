@@ -22,6 +22,7 @@ enum class ArtifactKind {
     Lock,
     LockV1_1,
     LockV1_2,
+    LockV1_3,
     Prefix,
 };
 

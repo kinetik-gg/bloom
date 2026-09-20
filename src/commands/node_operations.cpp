@@ -106,6 +106,104 @@ OperationResult AddNode::apply(document::Draft& draft) const {
     return OperationResult::applied(std::move(outputs));
 }
 
+namespace {
+
+// TEMPORAL-DELETE. Inspects the graph BEFORE any erase and decides whether removing exactly this
+// set of nodes can only change rendered output inside the union of the removed layer boundaries'
+// half-open active spans. Conservative default: any mismatch yields std::nullopt, which means the
+// whole render may have changed and no reuse evidence is published.
+[[nodiscard]] std::optional<AffectedTimeFootprint>
+removalTimeFootprint(const document::Composition& composition,
+                     const std::set<document::NodeId>& nodes) {
+    const auto& graph = composition.graph();
+    const auto duration = composition.duration();
+
+    // Every removed node must be a known layer boundary. Anything else (a source, effect, reroute,
+    // merge, or value node) is unproven.
+    std::vector<const document::LayerOutputBoundary*> boundaries;
+    std::set<document::LayerId> removedLayers;
+    for (const auto id : nodes) {
+        const auto boundary =
+            std::ranges::find(graph.layerOutputs(), id, &document::LayerOutputBoundary::nodeId);
+        if (boundary == graph.layerOutputs().end())
+            return std::nullopt;
+        boundaries.push_back(&*boundary);
+        removedLayers.insert(boundary->layerId);
+    }
+
+    // A surviving child parented to a removed boundary follows only the deleted head, so its output
+    // outside the deleted span changes too.
+    for (const auto& layer : graph.layerOutputs()) {
+        if (nodes.contains(layer.nodeId))
+            continue;
+        if (layer.parent.has_value() && removedLayers.contains(*layer.parent))
+            return std::nullopt;
+    }
+
+    // A removed boundary's output may not feed any non-merge consumer: node inputs, effects,
+    // reroutes and the composition output all consume the whole output, including outside the
+    // visible span.
+    for (const auto& edge : graph.edges()) {
+        if (!nodes.contains(edge.source.nodeId))
+            continue;
+        if (!std::holds_alternative<document::LayerStackInputRef>(edge.destination))
+            return std::nullopt;
+    }
+
+    // A surviving parameter driven by a removed node's output depends on it at every time.
+    for (const auto& record : composition.parameters().records()) {
+        if (const auto* driver = std::get_if<document::DriverBindingSource>(&record.source)) {
+            if (nodes.contains(driver->sourceNodeId))
+                return std::nullopt;
+        }
+    }
+
+    // Removing a solo layer can UNsuppress other layers across the whole composition.
+    for (const auto* boundary : boundaries) {
+        if (boundary->solo)
+            return std::nullopt;
+    }
+
+    // A muted Layer Stack compiles only its first slot (snapshot_compiler_lowering.ipp). Removing a
+    // participating layer can promote a later layer into that slot, changing output wherever the
+    // promoted layer is active -- which need not lie inside the removed boundary's own span. That
+    // is unprovable, so a removed boundary participating in a muted stack forces whole-render.
+    for (const auto* boundary : boundaries) {
+        const bool participatesInMutedStack =
+            std::ranges::any_of(graph.merges(), [&](const document::LayerStack& stack) {
+                const auto layout = composition.nodeLayout().find(stack.nodeId());
+                if (layout == composition.nodeLayout().end() || !layout->second.muted)
+                    return false;
+                return std::ranges::any_of(stack.entries(),
+                                           [&](const document::LayerStackEntry& entry) {
+                                               return entry.layerId == boundary->layerId;
+                                           });
+            });
+        if (participatesInMutedStack)
+            return std::nullopt;
+    }
+
+    // The change is confined to where a removed, merge-participating boundary was active. A
+    // boundary with no merge slot is isolated (no outgoing edges were allowed above) and
+    // contributes nothing.
+    std::vector<AffectedTimeRange> intervals;
+    for (const auto* boundary : boundaries) {
+        const bool participating = std::ranges::any_of(graph.merges(), [&](const auto& merge) {
+            return std::ranges::any_of(merge.entries(),
+                                       [&](const document::LayerStackEntry& entry) {
+                                           return entry.layerId == boundary->layerId;
+                                       });
+        });
+        if (!participating)
+            continue;
+        intervals.push_back({boundary->inPoint, boundary->endPoint(duration)});
+    }
+    return normalizeAffectedTimeFootprint(AffectedTimeFootprint{.compositionId = composition.id(),
+                                                                .intervals = std::move(intervals)});
+}
+
+} // namespace
+
 std::string_view RemoveNodes::typeId() const noexcept { return "bloom.node.remove"; }
 OperationResult RemoveNodes::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
@@ -125,6 +223,9 @@ OperationResult RemoveNodes::apply(document::Draft& draft) const {
         for (const auto& binding : node->parameters)
             candidates.insert(binding.parameterId);
     }
+    // Classify from the pre-erase graph. std::nullopt is the conservative whole-render default; a
+    // present footprint (possibly empty) is provable bounded reuse evidence.
+    const auto footprint = removalTimeFootprint(*composition, nodes_);
     for (const auto id : nodes_) {
         (void)composition->graph().eraseNode(id);
         composition->nodeLayout().erase(id);
@@ -132,7 +233,9 @@ OperationResult RemoveNodes::apply(document::Draft& draft) const {
     // A removed node leaves its frame, and a frame with nothing left in it goes with it.
     (void)detail::detachFromNodeGroups(*composition, nodes_);
     detail::eraseOrphanedParameters(*composition, candidates);
-    return OperationResult::applied();
+    auto result = OperationResult::applied();
+    result.affectedTimes = footprint;
+    return result;
 }
 
 std::string_view RenameLayer::typeId() const noexcept { return "bloom.layer.rename"; }

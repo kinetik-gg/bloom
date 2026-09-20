@@ -77,6 +77,18 @@ target_sources(
         operation_key.hpp
         animation_sampling.cpp
         cpu_composition_evaluator.cpp
+        cpu_composition_resolution.hpp
+        cpu_gpu_scene_preparation.cpp
+        gpu_scene_preparation_private.hpp
+        gpu_scene_preparation_common.hpp
+        gpu_scene_coverage.cpp
+        gpu_scene_coverage.hpp
+        gpu_scene_coverage_cache.cpp
+        gpu_media_preparation.cpp
+        gpu_media_preparation.hpp
+        gpu_scene_media_layer.cpp
+        gpu_scene_media_layer.hpp
+        gpu_prepared_upload_cache.cpp
         image_effect.cpp
         image_effect.hpp
         cpu_composition_evaluator_support.hpp
@@ -85,6 +97,35 @@ target_sources(
         qualified_display_preparation.cpp
         qualified_display_processor_provider.cpp
         reference_display_preparation.cpp
+        gpu_neutral_display_qualification.cpp
+        gpu_neutral_display_qualification_fixtures.cpp
+        gpu_resident_preview_qualification.cpp
+        gpu_resident_preview_qualification_ops.cpp
+        gpu_resident_preview_qualification_fixtures.cpp
+        gpu_resident_preview_qualification_display.cpp
+        gpu_resident_preview_qualification_internal.hpp
+        gpu_preview_display_product.cpp
+        gpu_resident_preview_product.cpp
+        gpu_resident_frame_lease.cpp
+        gpu_presentation_coordinator.cpp
+        gpu_presentation_coordinator_pump.cpp
+        gpu_presentation_coordinator_state.hpp
+        gpu_presentation_coordinator_private.hpp
+        gpu_presentation_client.cpp
+        gpu_preview_display_service.cpp
+        gpu_preview_display_service_jobs.cpp
+        gpu_preview_display_service_private.hpp
+        gpu_preview_display_service_loop.hpp
+        gpu_preview_display_service_presentation.cpp
+        gpu_preview_display_service_presentation_private.hpp
+        gpu_preview_display_service_resident.cpp
+        gpu_preview_display_service_resident_jobs.cpp
+        gpu_preview_display_service_resident_private.hpp
+        gpu_scene_cache.cpp
+        gpu_scene_executor.cpp
+        gpu_scene_executor_planner.cpp
+        gpu_scene_executor_execution.cpp
+        gpu_scene_executor_private.hpp
         view_adjust.cpp
         view_adjust_support.hpp
         value_graph_evaluation.cpp
@@ -103,8 +144,22 @@ target_sources(
             include/bloom/runtime/animation_sampling.hpp
             include/bloom/runtime/cpu_composition_evaluator.hpp
             include/bloom/runtime/evaluation.hpp
+            include/bloom/runtime/gpu_neutral_display_qualification.hpp
+            include/bloom/runtime/gpu_resident_preview_qualification.hpp
+            include/bloom/runtime/gpu_preview_display_product.hpp
+            include/bloom/runtime/gpu_resident_preview_product.hpp
+            include/bloom/runtime/gpu_preview_display_service.hpp
+            include/bloom/runtime/gpu_presentation_coordinator.hpp
+            include/bloom/runtime/gpu_resident_frame_lease.hpp
+            include/bloom/runtime/gpu_scene_cache.hpp
+            include/bloom/runtime/gpu_scene_coverage_cache.hpp
+            include/bloom/runtime/gpu_prepared_upload_cache.hpp
+            include/bloom/runtime/gpu_scene_executor.hpp
             include/bloom/runtime/input_color_context.hpp
+            include/bloom/runtime/prepared_gpu_scene.hpp
             include/bloom/runtime/prepared_preview_frame.hpp
+            include/bloom/runtime/preview_cpu_stage.hpp
+            include/bloom/runtime/preview_gpu_scene_stage.hpp
             include/bloom/runtime/qualified_display_preparation.hpp
             include/bloom/runtime/qualified_display_processor_provider.hpp
             include/bloom/runtime/reference_display_preparation.hpp

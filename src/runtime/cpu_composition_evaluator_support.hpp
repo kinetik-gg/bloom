@@ -186,6 +186,16 @@ proxyPixelAspect(const document::CompositionFormat& format,
                                          const EvaluationRequest& request,
                                          const CancellationToken& cancellation,
                                          const EvaluationProgressCallback& progress);
+
+// The REAL six-argument preflight (the definition the evaluator calls). Declared here so the
+// shared GPU scene preparation can reuse the exact resolution the CPU evaluator performs,
+// with optional cache/statistics. The four-argument declaration above has no definition.
+[[nodiscard]] PreflightOutcome preflight(const std::shared_ptr<const CompiledCompositionPlan>& plan,
+                                         const EvaluationRequest& request,
+                                         const CancellationToken& cancellation,
+                                         const EvaluationProgressCallback& progress,
+                                         OperationCache* cache,
+                                         OperationCacheStatistics* statistics);
 [[nodiscard]] EvaluationResult unexpectedAllocationFailure();
 
 } // namespace bloom::runtime::detail
