@@ -133,6 +133,56 @@ bloom_add_test(
     LABELS unit gpu render
 )
 
+# CPU-only kernel/formula test for BlendV1: hashes the embedded SPIR-V array against its pinned
+# digest AND compares a Float32 host emulation of blend.comp to the real Float64 CPU primitive for
+# all eight modes. It never dispatches a GPU and registers unconditionally, so it also runs in a
+# CPU-stub build.
+add_executable(bloom_render_gpu_blend_kernel_test gpu_blend_kernel_tests.cpp)
+target_link_libraries(bloom_render_gpu_blend_kernel_test PRIVATE bloom_render)
+target_include_directories(bloom_render_gpu_blend_kernel_test
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+target_compile_definitions(bloom_render_gpu_blend_kernel_test
+    PRIVATE
+        "BLOOM_BLEND_SPV_SHA256=\"4b9cc2009f9a1fcbdc05558bbbbb9e9aeb7573a4fc88a8127e25e22bc6c208f8\""
+        "BLOOM_BLEND_F64_SPV_SHA256=\"a910e190a05875c22f16d1571dea9e05496b32d5a588ede8cc8d95520ea7dbcf\"")
+bloom_enable_warnings(bloom_render_gpu_blend_kernel_test)
+bloom_enable_strict_floating_point(bloom_render_gpu_blend_kernel_test)
+bloom_add_test(
+    NAME bloom.render.gpu_blend_kernel
+    COMMAND bloom_render_gpu_blend_kernel_test
+    LABELS unit gpu render
+)
+
+# Real-device native BlendV1 test for all eight core::BlendMode values with the CPU primitive as
+# oracle, plus rejection, foreign-device, and cold/warm per-operation timing. It compiles the
+# private Vulkan header via the composite support header, so the target exists only where the
+# Vulkan backend is built; it skips cleanly without a device and --require-device fails closed.
+if(BLOOM_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_render_gpu_blend_test
+        gpu_blend_native_tests.cpp
+        gpu_blend_benchmark_tests.cpp
+        gpu_blend_native_support.hpp)
+    target_link_libraries(bloom_render_gpu_blend_test PRIVATE bloom_render)
+    target_include_directories(bloom_render_gpu_blend_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan" "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/include/vulkan")
+        target_include_directories(bloom_render_gpu_blend_test
+            SYSTEM PRIVATE "${BLOOM_DEPENDENCY_PREFIX}/include")
+    endif()
+    target_compile_definitions(bloom_render_gpu_blend_test
+        PRIVATE
+            "BLOOM_BLEND_SPV_SHA256=\"4b9cc2009f9a1fcbdc05558bbbbb9e9aeb7573a4fc88a8127e25e22bc6c208f8\""
+            "BLOOM_BLEND_F64_SPV_SHA256=\"a910e190a05875c22f16d1571dea9e05496b32d5a588ede8cc8d95520ea7dbcf\""
+            BLOOM_RENDER_TEST_VULKAN_BACKEND=1)
+    bloom_enable_warnings(bloom_render_gpu_blend_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_blend_test)
+    bloom_add_test(
+        NAME bloom.render.gpu_blend
+        COMMAND bloom_render_gpu_blend_test
+        LABELS unit gpu render
+    )
+endif()
+
 # Real-device native chain test (Solid -> TranslationOpacityBilinearV1 -> SourceOverV1) with the CPU
 # primitives as oracle. It compiles the private Vulkan header via the composite support header, so
 # the target exists only where the Vulkan backend is built; it skips cleanly without a device and

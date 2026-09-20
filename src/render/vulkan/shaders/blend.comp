@@ -1,0 +1,156 @@
+#version 460
+// Bloom BlendV1 compute shader. Offline-generated/embedded; do not edit at runtime.
+// Operation: BlendV1 (Normal, Add, Multiply, Screen, Overlay, Darken, Lighten, Difference).
+//
+// Mirrors render::blendLinearRec709SceneRow() (src/render/cpu_image_primitives.cpp) for every
+// core::BlendMode value, in premultiplied lin_rec709_scene RGBA32F process space, RGB never clamped.
+// The SOURCE is the foreground; the BACKDROP is the read-only destination image. Normal mode is
+// exactly the retained SourceOverV1 rule (fma(1 - as, backdrop, source)); the other modes are the
+// W3C Compositing and Blending Level 1 separable fold with source-over compositing:
+//
+//   co = as*(1 - ab)*Cs + as*ab*B(Cb, Cs) + (1 - as)*ab*Cb     (premultiplied result)
+//   ao = as + (1 - as)*ab
+//
+// computed on un-premultiplied channels (both alphas strictly positive on this path). Add is the
+// exact premultiplied shortcut co = cs + cb, matching the CPU's own Add specialization; it is a
+// specialization of the same algebra, not a second rule.
+//
+// The window mapping matches SourceOverV1: the destination data window is the output, and the
+// source is sampled at destLocal + sourceOffset, where sourceOffset = destinationDataWindow.origin -
+// sourceDataWindow.origin (the exact CPU oracle mapping). A source tap outside the source data
+// window is exact transparent black. Endpoint shortcuts are exact, as on CPU: a transparent source
+// leaves the backdrop; an empty backdrop writes the source through unchanged. For Normal the
+// "opaque source replaces the backdrop" shortcut does NOT apply, matching the CPU blend kernel.
+//
+// Arithmetic policy: the CPU general fold is Float64 and rounded once to Float32; this shader is
+// Float32 and relies on the documented per-finite-component 2e-6 absolute-or-relative gate rather
+// than claiming bit parity.
+//
+// Unsupported-domain policy (explicit): a non-finite input or result sets a typed error bit; on any
+// error nothing is published for that pixel (the backdrop is written back so the frame is visible
+// as rejected) and the consumer must not publish while flags[0] is nonzero. Any nonzero subnormal
+// input lane likewise rejects the whole frame. flag bit0 non-finite input, bit1 non-finite result,
+// bit2 nonzero subnormal input.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D bloom_blend_source;
+layout(set = 0, binding = 1, rgba32f) uniform readonly image2D bloom_blend_backdrop;
+layout(set = 0, binding = 2, rgba32f) uniform writeonly image2D bloom_blend_output;
+layout(set = 0, binding = 3) buffer BloomBlendError { uint flags[]; } bloom_error;
+
+layout(push_constant) uniform BloomBlendPushConstants {
+    uint destWidth;        // destination data-window width/height
+    uint destHeight;
+    uint sourceWidth;      // source data-window width/height
+    uint sourceHeight;
+    int sourceOffsetX;     // sourceLocal = destLocal + sourceOffset
+    int sourceOffsetY;
+    uint mode;             // core::BlendMode stored value: Normal=0 .. Difference=7
+} bloom_blend_push;
+
+const uint kErrorInputNonFinite = 1u;
+const uint kErrorResultNonFinite = 2u;
+const uint kErrorInputSubnormal = 4u;
+
+bool bloom_is_subnormal(float value)
+{
+    uint bits = floatBitsToUint(value) & 0x7FFFFFFFu;
+    return bits != 0u && bits < 0x00800000u;
+}
+
+uint bloom_lane_errors(vec4 value)
+{
+    uint errors = 0u;
+    if (any(isnan(value)) || any(isinf(value))) { errors |= kErrorInputNonFinite; }
+    if (bloom_is_subnormal(value.x) || bloom_is_subnormal(value.y) ||
+        bloom_is_subnormal(value.z) || bloom_is_subnormal(value.w)) {
+        errors |= kErrorInputSubnormal;
+    }
+    return errors;
+}
+
+float bloom_separable_blend(uint mode, float cb, float cs)
+{
+    if (mode == 1u) { return cb + cs; }                       // Add
+    if (mode == 2u) { return cb * cs; }                       // Multiply
+    if (mode == 3u) { return cb + cs - cb * cs; }             // Screen
+    if (mode == 4u) {                                         // Overlay: backdrop decides
+        return cb <= 0.5 ? 2.0 * cb * cs : 1.0 - 2.0 * (1.0 - cb) * (1.0 - cs);
+    }
+    if (mode == 5u) { return min(cb, cs); }                   // Darken
+    if (mode == 6u) { return max(cb, cs); }                   // Lighten
+    if (mode == 7u) { return abs(cb - cs); }                  // Difference
+    return cs;                                                // Normal (unused on this path)
+}
+
+void main()
+{
+    uvec2 index = gl_GlobalInvocationID.xy;
+    if (index.x >= bloom_blend_push.destWidth || index.y >= bloom_blend_push.destHeight) {
+        return;
+    }
+    ivec2 destLocal = ivec2(index);
+    ivec2 sourceLocal = destLocal + ivec2(bloom_blend_push.sourceOffsetX,
+                                          bloom_blend_push.sourceOffsetY);
+
+    vec4 backdrop = imageLoad(bloom_blend_backdrop, destLocal);
+    bool sourceInside = sourceLocal.x >= 0 && sourceLocal.y >= 0 &&
+                        sourceLocal.x < int(bloom_blend_push.sourceWidth) &&
+                        sourceLocal.y < int(bloom_blend_push.sourceHeight);
+    vec4 source = sourceInside ? imageLoad(bloom_blend_source, sourceLocal) : vec4(0.0);
+
+    uint errors = bloom_lane_errors(backdrop);
+    if (sourceInside) { errors |= bloom_lane_errors(source); }
+    if (errors != 0u) {
+        atomicOr(bloom_error.flags[0], errors);
+        imageStore(bloom_blend_output, destLocal, backdrop);
+        return;
+    }
+
+    // CPU endpoints, exact: a transparent source leaves the backdrop untouched; an empty backdrop
+    // collapses to the source pixel under every mode.
+    if (source.a == 0.0) {
+        imageStore(bloom_blend_output, destLocal, backdrop);
+        return;
+    }
+    if (backdrop.a == 0.0) {
+        imageStore(bloom_blend_output, destLocal, source);
+        return;
+    }
+
+    float inverseSourceAlpha = 1.0 - source.a;
+    vec4 composited = vec4(0.0, 0.0, 0.0, fma(inverseSourceAlpha, backdrop.a, source.a));
+
+    if (bloom_blend_push.mode == 0u) {
+        // Retained SourceOverV1 rule, exact expression.
+        composited.x = fma(inverseSourceAlpha, backdrop.x, source.x);
+        composited.y = fma(inverseSourceAlpha, backdrop.y, source.y);
+        composited.z = fma(inverseSourceAlpha, backdrop.z, source.z);
+    } else if (bloom_blend_push.mode == 1u) {
+        // Add: co = cs + cb in premultiplied space, no round trip through straight alpha.
+        composited.x = source.x + backdrop.x;
+        composited.y = source.y + backdrop.y;
+        composited.z = source.z + backdrop.z;
+    } else {
+        vec3 straightSource = source.rgb / source.a;
+        vec3 straightBackdrop = backdrop.rgb / backdrop.a;
+        float as = source.a;
+        float ab = backdrop.a;
+        for (int channel = 0; channel < 3; ++channel) {
+            float blended = bloom_separable_blend(bloom_blend_push.mode,
+                                                  straightBackdrop[channel],
+                                                  straightSource[channel]);
+            float premultiplied = as * (1.0 - ab) * straightSource[channel] +
+                                  as * ab * blended +
+                                  (1.0 - as) * ab * straightBackdrop[channel];
+            composited[channel] = premultiplied;
+        }
+    }
+
+    if (any(isnan(composited)) || any(isinf(composited))) {
+        atomicOr(bloom_error.flags[0], kErrorResultNonFinite);
+        imageStore(bloom_blend_output, destLocal, backdrop);
+        return;
+    }
+    imageStore(bloom_blend_output, destLocal, composited);
+}

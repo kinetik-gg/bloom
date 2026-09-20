@@ -163,6 +163,9 @@ struct DeviceSelection final {
     std::uint64_t deviceMemoryBytes = 0;
     bool memoryBudgetSupported = false;
     bool portabilitySubset = false;
+    // The device advertises the core shaderFloat64 feature. Enabled at device creation only when
+    // true, so a Float64 kernel is available exactly when the hardware supports it.
+    bool shaderFloat64 = false;
     int rank = -1;
 };
 
@@ -265,6 +268,7 @@ selectPhysicalDevice(const vk::raii::Instance& instance) {
             deviceExtensionAvailable(instance, device, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
         selection.portabilitySubset =
             deviceExtensionAvailable(instance, device, kPortabilitySubsetExtensionName);
+        selection.shaderFloat64 = features2.features.shaderFloat64 == VK_TRUE;
         selection.rank = rank;
         best = selection;
     }
@@ -497,6 +501,10 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     VkPhysicalDeviceFeatures2 enabledFeatures{};
     enabledFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     enabledFeatures.pNext = &enabledFeatures12;
+    // Enable shaderFloat64 only when the selected device actually advertises it. It is requested
+    // additively for the Float64 blend path; a device without it is untouched and keeps the
+    // Float32 path.
+    enabledFeatures.features.shaderFloat64 = selection->shaderFloat64 ? VK_TRUE : VK_FALSE;
 
     VkDeviceCreateInfo deviceInfo{};
     deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -547,6 +555,7 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     control->presentationEpoch = allocatePresentationEpoch();
     control->borrowedInstanceBits = handleBits(static_cast<VkInstance>(rawInstance));
     control->generation = 1;
+    control->shaderFloat64 = selection->shaderFloat64;
     control->maxStorageBufferRange = selection->properties.limits.maxStorageBufferRange;
     control->maxComputeWorkGroupCountX = selection->properties.limits.maxComputeWorkGroupCount[0];
     control->maxComputeWorkGroupInvocations =

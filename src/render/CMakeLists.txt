@@ -422,6 +422,111 @@ else()
         "affine_bilinear.comp digest is still enforced.")
 endif()
 
+# --- Fixed BlendV1 shader: source pin and regeneration check -------------------------------------
+#
+# Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe. The checked-in
+# .comp is pinned here, the manifest must bind that source digest, and, when the locked
+# glslangValidator/spirv-val are present, configure recompiles it and confirms the SPIR-V digest
+# embedded in blend_spirv.inc. Runtime code never compiles or loads a shader.
+set(BLOOM_BLEND_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend.comp")
+set(BLOOM_BLEND_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend.manifest")
+set(BLOOM_BLEND_INC "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_spirv.inc")
+set(BLOOM_BLEND_COMP_SHA256
+    "d9168cc4915ae1fd31a984b00f198e68e85e2c67d1a755ca8c18ba886c873410")
+set(BLOOM_BLEND_SPV_SHA256
+    "4b9cc2009f9a1fcbdc05558bbbbb9e9aeb7573a4fc88a8127e25e22bc6c208f8")
+
+file(SHA256 "${BLOOM_BLEND_COMP}" bloom_blend_comp_sha256)
+if(NOT bloom_blend_comp_sha256 STREQUAL BLOOM_BLEND_COMP_SHA256)
+    message(FATAL_ERROR
+        "blend.comp SHA-256 mismatch: measured ${bloom_blend_comp_sha256}, pinned "
+        "${BLOOM_BLEND_COMP_SHA256}. Regenerate only through the tools/gpu-shaders recipe and update "
+        "the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_BLEND_MANIFEST}" bloom_blend_manifest_text)
+if(NOT bloom_blend_manifest_text MATCHES "${BLOOM_BLEND_COMP_SHA256}")
+    message(FATAL_ERROR "blend.manifest does not bind the pinned blend.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_blend_generated_spv "${CMAKE_CURRENT_BINARY_DIR}/blend.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_BLEND_COMP}" -o "${bloom_blend_generated_spv}"
+        RESULT_VARIABLE bloom_blend_glslang_result)
+    if(NOT bloom_blend_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile blend.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2 "${bloom_blend_generated_spv}"
+        RESULT_VARIABLE bloom_blend_spirv_val_result)
+    if(NOT bloom_blend_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated BlendV1 SPIR-V.")
+    endif()
+    file(SHA256 "${bloom_blend_generated_spv}" bloom_blend_spv_sha256)
+    if(NOT bloom_blend_spv_sha256 STREQUAL BLOOM_BLEND_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated BlendV1 SPIR-V SHA-256 ${bloom_blend_spv_sha256} does not match the "
+            "embedded ${BLOOM_BLEND_SPV_SHA256}; the checked-in .comp and blend_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: blend.comp regenerated and SPIR-V-validated "
+        "(${bloom_blend_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "blend.comp digest is still enforced.")
+endif()
+
+# --- Fixed BlendV1 Float64 shader: source pin and regeneration check -----------------------------
+#
+# The exact-arithmetic companion to blend.comp, used only when the device advertised and enabled the
+# core shaderFloat64 feature. Same offline recipe and pins.
+set(BLOOM_BLEND_F64_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_f64.comp")
+set(BLOOM_BLEND_F64_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_f64.manifest")
+set(BLOOM_BLEND_F64_INC "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_f64_spirv.inc")
+set(BLOOM_BLEND_F64_COMP_SHA256
+    "80b1805269f394051a86231638cf0fcc5fa46a31fd1299a7def14e81ecfc7c91")
+set(BLOOM_BLEND_F64_SPV_SHA256
+    "a910e190a05875c22f16d1571dea9e05496b32d5a588ede8cc8d95520ea7dbcf")
+
+file(SHA256 "${BLOOM_BLEND_F64_COMP}" bloom_blend_f64_comp_sha256)
+if(NOT bloom_blend_f64_comp_sha256 STREQUAL BLOOM_BLEND_F64_COMP_SHA256)
+    message(FATAL_ERROR
+        "blend_f64.comp SHA-256 mismatch: measured ${bloom_blend_f64_comp_sha256}, pinned "
+        "${BLOOM_BLEND_F64_COMP_SHA256}. Regenerate only through the tools/gpu-shaders recipe and "
+        "update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_BLEND_F64_MANIFEST}" bloom_blend_f64_manifest_text)
+if(NOT bloom_blend_f64_manifest_text MATCHES "${BLOOM_BLEND_F64_COMP_SHA256}")
+    message(FATAL_ERROR "blend_f64.manifest does not bind the pinned blend_f64.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_blend_f64_generated_spv "${CMAKE_CURRENT_BINARY_DIR}/blend_f64.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_BLEND_F64_COMP}" -o "${bloom_blend_f64_generated_spv}"
+        RESULT_VARIABLE bloom_blend_f64_glslang_result)
+    if(NOT bloom_blend_f64_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile blend_f64.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2 "${bloom_blend_f64_generated_spv}"
+        RESULT_VARIABLE bloom_blend_f64_spirv_val_result)
+    if(NOT bloom_blend_f64_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated BlendV1 Float64 SPIR-V.")
+    endif()
+    file(SHA256 "${bloom_blend_f64_generated_spv}" bloom_blend_f64_spv_sha256)
+    if(NOT bloom_blend_f64_spv_sha256 STREQUAL BLOOM_BLEND_F64_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated BlendV1 Float64 SPIR-V SHA-256 ${bloom_blend_f64_spv_sha256} does not "
+            "match the embedded ${BLOOM_BLEND_F64_SPV_SHA256}; the checked-in .comp and "
+            "blend_f64_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: blend_f64.comp regenerated and SPIR-V-validated "
+        "(${bloom_blend_f64_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "blend_f64.comp digest is still enforced.")
+endif()
+
 # --- Fixed CoveredSolidV1 resident-image shader: source pin and regeneration check ---------------
 #
 # Offline artifact from the same tools/gpu-shaders compile/validate/embed recipe (no new generator).
@@ -636,6 +741,7 @@ target_sources(
             include/bloom/render/display_buffer.hpp
             include/bloom/render/embedded_fonts.hpp
             include/bloom/render/gpu_affine.hpp
+            include/bloom/render/gpu_blend.hpp
             include/bloom/render/gpu_composite.hpp
             include/bloom/render/gpu_device.hpp
             include/bloom/render/gpu_image.hpp
@@ -660,6 +766,8 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_affine.cpp
         vulkan/gpu_affine_private.hpp
         vulkan/gpu_affine_resources.cpp
+        vulkan/gpu_blend.cpp
+        vulkan/gpu_blend_private.hpp
         vulkan/gpu_composite.cpp
         vulkan/gpu_composite_private.hpp
         vulkan/gpu_composite_resources.cpp
@@ -704,17 +812,23 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/shaders/source_over.comp
         vulkan/shaders/source_over.manifest
         vulkan/shaders/source_over_spirv.inc
+        vulkan/shaders/blend.comp
+        vulkan/shaders/blend.manifest
+        vulkan/shaders/blend_spirv.inc
+        vulkan/shaders/blend_f64.comp
+        vulkan/shaders/blend_f64.manifest
+        vulkan/shaders/blend_f64_spirv.inc
         vulkan/shaders/viewer_present.vert
         vulkan/shaders/viewer_present.frag
         vulkan/shaders/viewer_present.manifest
         vulkan/shaders/viewer_present_spirv.inc
     )
 else()
-    target_sources(bloom_render PRIVATE gpu_composite_stub.cpp gpu_device_stub.cpp
-                                     gpu_affine_stub.cpp gpu_image_upload_stub.cpp
-                                     gpu_neutral_display_stub.cpp gpu_present_image_stub.cpp
-                                     gpu_presentation_target_stub.cpp gpu_resident_display_stub.cpp
-                                     gpu_solid_stub.cpp)
+    target_sources(bloom_render PRIVATE gpu_affine_stub.cpp gpu_blend_stub.cpp
+                                     gpu_composite_stub.cpp gpu_device_stub.cpp
+                                     gpu_image_upload_stub.cpp gpu_neutral_display_stub.cpp
+                                     gpu_present_image_stub.cpp gpu_presentation_target_stub.cpp
+                                     gpu_resident_display_stub.cpp gpu_solid_stub.cpp)
 endif()
 
 target_compile_features(bloom_render PUBLIC cxx_std_20)

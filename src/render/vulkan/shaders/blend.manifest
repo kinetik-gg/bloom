@@ -1,0 +1,84 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "generator": "tools/gpu-shaders compile/validate/embed recipe (reused, not reimplemented)",
+  "generatorRevision": 1,
+  "operation": "BlendV1",
+  "entrypoint": "main",
+  "shader": {
+    "language": "GLSL_460",
+    "stage": "compute",
+    "sha256": "d9168cc4915ae1fd31a984b00f198e68e85e2c67d1a755ca8c18ba886c873410",
+    "spirvSha256": "4b9cc2009f9a1fcbdc05558bbbbb9e9aeb7573a4fc88a8127e25e22bc6c208f8",
+    "localSizeX": 256,
+    "localSizeY": 1,
+    "localSizeZ": 1
+  },
+  "bindings": [
+    {
+      "set": 0,
+      "binding": 0,
+      "kind": "storage-image",
+      "access": "readonly",
+      "format": "rgba32f",
+      "role": "premultiplied-lin_rec709_scene-foreground"
+    },
+    {
+      "set": 0,
+      "binding": 1,
+      "kind": "storage-image",
+      "access": "readonly",
+      "format": "rgba32f",
+      "role": "premultiplied-lin_rec709_scene-backdrop"
+    },
+    {
+      "set": 0,
+      "binding": 2,
+      "kind": "storage-image",
+      "access": "writeonly",
+      "format": "rgba32f",
+      "role": "premultiplied-lin_rec709_scene-output"
+    },
+    {
+      "set": 0,
+      "binding": 3,
+      "kind": "storage-buffer",
+      "access": "readwrite",
+      "element": "uint",
+      "role": "error-flag",
+      "bits": {
+        "inputNonFinite": 1,
+        "resultNonFinite": 2,
+        "inputSubnormal": 4
+      }
+    }
+  ],
+  "pushConstant": {
+    "byteCount": 28,
+    "fields": [
+      { "name": "destWidth", "type": "uint32" },
+      { "name": "destHeight", "type": "uint32" },
+      { "name": "sourceWidth", "type": "uint32" },
+      { "name": "sourceHeight", "type": "uint32" },
+      { "name": "sourceOffsetX", "type": "int32" },
+      { "name": "sourceOffsetY", "type": "int32" },
+      { "name": "mode", "type": "uint32" }
+    ]
+  },
+  "hostDerivation": {
+    "order": "source is the foreground blended OVER the read-only destination backdrop, matching blendLinearRec709SceneRow(mode, source, destination)",
+    "offsets": "sourceOffset = destinationDataWindow.origin - sourceDataWindow.origin (componentwise); sourceLocal = destLocal + sourceOffset",
+    "windows": "destWidth/Height and sourceWidth/Height are data-window extents",
+    "mode": "mode is core::BlendMode's stored integer (Normal=0 .. Difference=7), the same durable mapping the CPU oracle switches on",
+    "checked": "dispatch ceil(destWidth*destHeight/256); host preflights the same overflow/budget the CPU primitive checks"
+  },
+  "contracts": {
+    "numeric": "per-finite-component abs-or-rel 2e-6 against render::blendLinearRec709SceneRow for all 8 core::BlendMode values; never bit-exact by claim except at the exact endpoints",
+    "arithmetic": "Normal reproduces SourceOverV1's fma(1-as,backdrop,source); Add is the premultiplied cs+cb shortcut; the other modes are the Float32 W3C separable fold the CPU computes in Float64",
+    "order": "fixed source-over-backdrop; the destination is read-only and a separate output image is written, so the caller's destination is never mutated",
+    "outOfBounds": "a source tap outside the source data window is transparent black, which leaves the backdrop unchanged -- the CPU oracle's transparent aligned pixel",
+    "nonFinitePolicy": "non-finite input sets bit0, nonzero subnormal input sets bit2, a non-finite result sets bit1; on any error the backdrop pixel is written and the consumer must not publish while flags[0] != 0",
+    "cpuFallback": "non-finite/subnormal domains and any precision the shader cannot match stay on the CPU reference path; no silent substitution",
+    "offsets": "sourceOffset = destinationDataWindow.origin - sourceDataWindow.origin; sourceLocal = destLocal + sourceOffset (the exact CPU oracle mapping)",
+    "modes": "Normal=0, Add=1, Multiply=2, Screen=3, Overlay=4, Darken=5, Lighten=6, Difference=7; unknown stored values are rejected by the host before dispatch"
+  }
+}
