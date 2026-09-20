@@ -133,3 +133,17 @@ visually inspected. Before approval, the mean channel errors against the prior r
 0.112840 (DPR 1) and 0.110435 (DPR 1.5), with changed fractions 0.000763889 and 0.000756173;
 both were within the existing tolerance. After approval both means were 0. The change is
 viewer-only chrome; composition and rendering identity goldens are unchanged.
+
+PROPS-2 approval (2026-09-21, Qt 6.8.3): the Properties panel loses its leading five-choice
+filter strip, its header search field, and every section's "..." menu (with Collapse all /
+Expand all); sections keep chevron, title, and Reset. Object and registry booleans render as
+left-aligned KSwitch controls instead of stretched checkboxes, the scroll body reserves an XS
+gutter only while overflowing, the anchor grid owns a two-line row so the Transform section no
+longer clips it, and panel margins, section spacing, and section body padding compensate area
+and row chrome so every visible band reads as the 6px inter-panel Gutter. Both references were
+regenerated with `--update-goldens` at DPR 1 and 1.5 and visually inspected. Before approval,
+the mean channel errors against the prior references were 1.2433 (DPR 1) and 1.190048
+(DPR 1.5), with changed fractions 0.00906337 and 0.00784703; the changed pixels are confined
+to the Properties panel and one node-card switch row, with composition pixels, viewer, and
+timeline unchanged. After approval the DPR 1 error is 0. Comparison tolerances and full-image
+coverage are unchanged; rendering identity goldens are unchanged.
