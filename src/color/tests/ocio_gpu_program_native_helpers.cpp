@@ -206,8 +206,9 @@ std::string buildWrapperGlsl(const bloom::render::OcioGpuProgramDesc& desc, cons
     // rewrites the body's texture() calls to it, keeping the generated transform body verbatim.
     const auto sampling = bloom::color::ocioGpuSamplingGlslFor(desc);
     out << sampling.preamble;
-    out << desc.shaderText << "\n";
+    out << (sampling.shaderBody.empty() ? desc.shaderText : sampling.shaderBody) << "\n";
     out << sampling.definitions;
+    out << bloom::color::ocioGpuPreciseDivisionGlsl();
     if (display) {
         out << quantizerGlsl();
     }
@@ -220,14 +221,15 @@ std::string buildWrapperGlsl(const bloom::render::OcioGpuProgramDesc& desc, cons
            "bloom_ocio_push.width));\n";
     out << "  vec4 p = imageLoad(bloom_ocio_input, c);\n";
     out << "  float a = p.a;\n";
-    out << "  vec3 s = (a != 0.0) ? p.rgb / a : vec3(0.0);\n";
+    out << "  vec3 s = (a != 0.0) ? vec3(bloom_ocio_cpu_div(p.r, a), bloom_ocio_cpu_div(p.g, a), "
+           "bloom_ocio_cpu_div(p.b, a)) : vec3(0.0);\n";
     out << "  vec4 t = " << desc.functionName << "(vec4(s, 1.0));\n";
     if (display) {
         out << "  uint r = bloom_ocio_quantize(t.r); uint g = bloom_ocio_quantize(t.g); uint b = "
                "bloom_ocio_quantize(t.b); uint aa = bloom_ocio_quantize(a);\n";
         out << "  bloom_ocio_output.words[index] = r | (g << 8) | (b << 16) | (aa << 24);\n";
     } else {
-        out << "  imageStore(bloom_ocio_output, c, vec4(t.rgb * a, a));\n";
+        out << "  imageStore(bloom_ocio_output, c, vec4(bloom_ocio_cpu_premul(t.rgb, a), a));\n";
     }
     out << "}\n";
     return out.str();

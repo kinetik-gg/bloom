@@ -27,7 +27,7 @@ inline constexpr std::string_view kOcioGpuExposureContrastSemanticsId =
     "bloom.color.ocio-process-exposure-contrast.v1";
 inline constexpr std::string_view kOcioGpuLut3dSemanticsId = "bloom.color.ocio-process-lut3d.v1";
 
-// Versioned precise-sampling and CPU-power-parity GLSL adapter. OCIO's generated body samples its
+// Versioned precise-sampling and CPU-math-parity GLSL adapter. OCIO's generated body samples its
 // LUT resources with the built-in `texture()` function, whose hardware linear filtering quantizes
 // the sub-texel weight on some devices (a real NVIDIA device reconstructs an 8-sample 1D LUT with
 // up to ~8e-5 absolute error against OCIO's CPU interpolation). OCIO's reflected `sampler` metadata
@@ -37,30 +37,40 @@ inline constexpr std::string_view kOcioGpuLut3dSemanticsId = "bloom.color.ocio-p
 // with `texelFetch` at full float precision, and a token-paste macro that rewrites the generated
 // body's `texture(sampler, coord)` calls to the matching function.
 //
-// The same adapter also reproduces the unchanged CPU oracle's fast-power arithmetic for programs
-// that contain an OCIO GammaOp. The pinned OpenColorIO CPU processor is built with
-// OPTIMIZATION_FAST_LOG_EXP_POW, so a GammaOp power is evaluated by OCIO's `ssePower` minimax
-// log2/exp2 polynomial (on the SSE2 and SSE2NEON builds), not by correctly rounded libm pow and not
-// by the GPU's hardware pow; the two differ by up to ~1.5e-5, beyond the strict 2e-6 RGBA32F CST
-// gate. Whether the linked OCIO actually takes that path is qualified at runtime from its own
-// default CPU processor, never guessed from the host architecture. When a GammaOp is detected the
-// adapter redirects the generated body's `pow` token, but only the `pow(vec4, vec4)` GammaOp
-// signature is specialized to `ssePower`; every other `pow` signature forwards to the generated
-// hardware pow, so a mixed GammaOp/other-power program keeps its other power calls unchanged.
+// The adapter also reproduces the unchanged CPU oracle's exact arithmetic for the OCIO ops whose
+// GPU and SSE-CPU paths diverge: a GammaOp's fast minimax power, a LogOp's `sseExp2(x*log2(base))`
+// anti-log decomposition, and a MatrixOp's SSE add order. Whether the linked OCIO uses those SSE
+// paths is qualified at runtime from its own default CPU processor, never guessed from the host
+// architecture. Specialization is per OCIO op region, keyed on the pinned OCIO's deterministic op
+// comments, so a program that mixes a GammaOp with an ExponentOp or a fixed-function op never has
+// its unrelated `pow` calls rewritten.
 //
-// The generated OCIO transform body stays byte-for-byte intact in both cases (only preprocessor
-// tokens are redirected), mixed nearest/linear programs are handled per sampler, and the same API
-// is what the production runtime wrapper must consume.
+// The generated OCIO transform body stays byte-for-byte intact in the extracted
+// render::OcioGpuProgramDesc (and therefore its shaderTextDigest/contentIdentity are preserved);
+// the specialization is a wrapper-level body override plus preprocessor redirection, mixed
+// nearest/linear programs are handled per sampler, and the same API is what the production runtime
+// wrapper must consume.
 inline constexpr std::string_view kOcioGpuPreciseSamplingVersion =
-    "bloom.color.ocio-gpu-sampling.v3";
+    "bloom.color.ocio-gpu-sampling.v5";
+
+// Portable correctly-rounded binary32 division GLSL helper (no float64). Some Vulkan devices do not
+// round `a / b` to nearest-even, which the wrapper's un-premultiply needs to match the unchanged
+// CPU oracle's scalar `pixel / alpha` exactly. The helper recomputes the exact residual with FMA
+// and folds it back; both the production runtime wrapper and the native oracle harness emit this
+// same definition and call `bloom_ocio_cpu_div`.
+[[nodiscard]] std::string_view ocioGpuPreciseDivisionGlsl() noexcept;
 struct OcioGpuSamplingGlsl final {
     // Emitted before the generated OCIO body: one forward declaration per texture plus the
-    // `texture` dispatch macro, and (when a GammaOp is present) the `pow` parity declarations and
-    // dispatch macro. Empty when no texture or GammaOp needs an adapter.
+    // `texture` dispatch macro, the CPU-parity helper declarations, and (for a GammaOp-only
+    // program) the `pow` parity declarations and dispatch macro.
     std::string preamble;
-    // Emitted after the generated OCIO body: the per-texture definitions and the CPU fast-power
+    // Emitted after the generated OCIO body: the per-texture definitions and the CPU-parity helper
     // definitions. Empty alongside preamble.
     std::string definitions;
+    // When non-empty, the caller MUST emit this body instead of the descriptor's `shaderText`. It
+    // is byte-identical to the generated body outside the identified OCIO op regions that were
+    // specialized. The descriptor itself (and its digest/content identity) is never modified.
+    std::string shaderBody;
 
     [[nodiscard]] bool dispatches() const noexcept { return !preamble.empty(); }
 };
