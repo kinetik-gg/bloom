@@ -50,7 +50,7 @@ void publishResidentJobDetail(const std::shared_ptr<PreviewDisplayServiceCore>& 
 [[nodiscard]] std::string executorFailureDetail(const GpuSceneExecutor& executor,
                                                 const std::uint64_t admittedBytes,
                                                 std::string_view prefix) {
-    const auto diagnostic = executor.diagnostic();
+    const auto& diagnostic = executor.diagnostic();
     const auto counters = executor.counters();
     std::string detail(prefix);
     if (!diagnostic.message.empty()) {
