@@ -14,6 +14,10 @@
 #include <string>
 #include <utility>
 
+namespace bloom::host {
+class GpuExportProvider;
+} // namespace bloom::host
+
 namespace bloom::scripting {
 
 struct RenderRequest final {
@@ -34,10 +38,11 @@ struct RenderResult final {
 
 class Render final {
   public:
-    [[nodiscard]] static RenderResult run(Session& session, runtime::TaskScheduler& scheduler,
-                                          const runtime::SnapshotCompiler& compiler,
-                                          RenderRequest request,
-                                          std::filesystem::path scratchDirectory = {});
+    [[nodiscard]] static RenderResult
+    run(Session& session, runtime::TaskScheduler& scheduler,
+        const runtime::SnapshotCompiler& compiler, RenderRequest request,
+        std::filesystem::path scratchDirectory = {},
+        std::shared_ptr<host::GpuExportProvider> gpuProvider = {});
 };
 
 } // namespace bloom::scripting

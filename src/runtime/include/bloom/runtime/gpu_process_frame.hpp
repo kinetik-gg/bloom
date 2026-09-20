@@ -169,6 +169,13 @@ class GpuProcessFrameEvaluator final {
     // Non-blocking. The destructor joins the owner worker.
     void beginShutdown() noexcept;
 
+    // Non-blocking. True once the owner worker has fully retired: it has left its request loop,
+    // destroyed the device/cache/executor generation on the owner thread, and the thread function
+    // has returned. A caller may release the evaluator once this is true without joining a live
+    // owner thread. False while bootstrap or request work is still in progress, and false before
+    // beginShutdown() has been observed by the owner loop.
+    [[nodiscard]] bool retirementComplete() const noexcept;
+
   private:
     struct Impl;
     explicit GpuProcessFrameEvaluator(std::unique_ptr<Impl> impl) noexcept;

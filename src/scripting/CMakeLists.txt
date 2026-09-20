@@ -67,6 +67,17 @@ if(BUILD_TESTING)
         COMMAND bloom_scripting_facade_test
         LABELS unit scripting host commands document
     )
+    # Render::run's injected-provider contract: an owner-provided GpuExportProvider is reused across
+    # renders and never retired by the call, while a locally created one is retired with proof.
+    add_executable(bloom_scripting_render_injected_provider_test
+                   tests/render_injected_provider_test.cpp)
+    target_link_libraries(bloom_scripting_render_injected_provider_test PRIVATE bloom_scripting)
+    bloom_enable_warnings(bloom_scripting_render_injected_provider_test)
+    bloom_add_test(
+        NAME bloom.scripting.render-injected-provider
+        COMMAND bloom_scripting_render_injected_provider_test
+        LABELS unit scripting host rendering
+    )
 endif()
 
 if(BLOOM_BUILD_PYTHON)

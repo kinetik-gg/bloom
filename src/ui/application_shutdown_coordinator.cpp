@@ -25,6 +25,9 @@ ApplicationShutdownCoordinator::ApplicationShutdownCoordinator(
     stuckShutdownDiagnosticTimer_.setSingleShot(true);
     connect(&stuckShutdownDiagnosticTimer_, &QTimer::timeout, this,
             &ApplicationShutdownCoordinator::logStillShuttingDownDiagnostic);
+    gpuRetirementPollTimer_.setInterval(5);
+    connect(&gpuRetirementPollTimer_, &QTimer::timeout, this,
+            &ApplicationShutdownCoordinator::pollGpuExportRetirement);
     connect(&taskUiBridge_, &TaskUiBridge::shutdownQuiescent, this, [this] {
         Q_ASSERT(QThread::currentThread() == thread());
         if (!shuttingDown_ || quiescencePublished_) {
@@ -43,6 +46,20 @@ bool ApplicationShutdownCoordinator::nativeSurfaceRetirementSatisfied() const no
 
 const std::string& ApplicationShutdownCoordinator::nativeSurfaceRefusalDiagnostic() const noexcept {
     return nativeSurfaceRefusalDiagnostic_;
+}
+
+bool ApplicationShutdownCoordinator::gpuExportRetirementSatisfied() const noexcept {
+    return gpuExportRetirementComplete_;
+}
+
+void ApplicationShutdownCoordinator::setGpuExportRetirement(
+    GpuRetirementBegin beginGpuRetirement, GpuRetirementComplete gpuRetirementComplete) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    Q_ASSERT(!shuttingDown_);
+    gpuRetirementBegin_ = std::move(beginGpuRetirement);
+    gpuRetirementComplete_ = std::move(gpuRetirementComplete);
+    // With no participant the GPU half is trivially satisfied; with one, completion starts false.
+    gpuExportRetirementComplete_ = !gpuRetirementComplete_;
 }
 
 void ApplicationShutdownCoordinator::setNativeSurfaceSource(NativeSurfaceSource source) {
@@ -68,11 +85,33 @@ void ApplicationShutdownCoordinator::beginShutdown() {
     // unresponsive.
     stuckShutdownDiagnosticTimer_.start(5'000);
     taskUiBridge_.beginShutdown();
+    // GPU final-render retirement is the third half of the contract: signal the evaluator owner
+    // (non-blocking) and then poll genuine completion from the UI event loop. The UI never blocks
+    // on the native owner; retirement completes asynchronously and only then is quiescence
+    // published.
+    if (gpuRetirementBegin_) {
+        gpuRetirementBegin_();
+        gpuRetirementPollTimer_.start();
+        pollGpuExportRetirement();
+    }
     // Native-surface retirement is the second half of the shutdown contract: task quiescence alone
     // is not enough. The service owner keeps pumping (the adapter's UI-thread timer) until the
     // owner publishes a genuine retirement; a refusal keeps the tree alive and shutdownQuiescent
     // un-emitted.
     beginNativeSurfaceRetirement();
+}
+
+void ApplicationShutdownCoordinator::pollGpuExportRetirement() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (quiescencePublished_ || gpuExportRetirementComplete_) {
+        gpuRetirementPollTimer_.stop();
+        return;
+    }
+    if (gpuRetirementComplete_ && gpuRetirementComplete_()) {
+        gpuExportRetirementComplete_ = true;
+        gpuRetirementPollTimer_.stop();
+        publishQuiescenceIfReady();
+    }
 }
 
 void ApplicationShutdownCoordinator::beginNativeSurfaceRetirement() {
@@ -118,7 +157,7 @@ void ApplicationShutdownCoordinator::publishQuiescenceIfReady() {
     if (!shuttingDown_ || quiescencePublished_) {
         return;
     }
-    if (!taskQuiescence_ || !surfaceRetirementComplete_) {
+    if (!taskQuiescence_ || !surfaceRetirementComplete_ || !gpuExportRetirementComplete_) {
         return;
     }
     quiescencePublished_ = true;

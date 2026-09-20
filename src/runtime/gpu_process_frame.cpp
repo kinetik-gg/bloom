@@ -157,6 +157,7 @@ struct GpuProcessFrameEvaluator::Impl final {
     bool initialized = false;
     std::atomic_bool gpuReady{false};
     std::atomic_bool stopRequested{false};
+    std::atomic_bool retired{false};
     // The owner worker's thread identity. `evaluate()` rejects a call made from the owner thread
     // (a reentrant request issued from inside a progress callback), which would otherwise deadlock
     // waiting on itself.
@@ -551,6 +552,9 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
     executor.reset();
     cache.reset();
     device.reset();
+    // Publish retirement last: a caller that observes this true may release the evaluator without
+    // joining a live owner thread; the thread function is about to return.
+    retired.store(true, std::memory_order_release);
 }
 
 GpuProcessFrameEvaluator::GpuProcessFrameEvaluator(std::unique_ptr<Impl> impl) noexcept
@@ -587,6 +591,8 @@ GpuProcessFrameEvaluator::create(const GpuProcessFrameEvaluatorOptions& options)
         impl->initialized = true;
         impl->availability = {GpuProcessFrameDiagnosticCode::Disabled,
                               "GPU process-frame evaluation is disabled"};
+        // No owner worker exists, so retirement is already complete.
+        impl->retired.store(true, std::memory_order_release);
     }
     {
         std::unique_lock lock(impl->mutex);
@@ -691,6 +697,10 @@ void GpuProcessFrameEvaluator::beginShutdown() noexcept {
     // Every queued request is resolved by the owner loop. The join is deliberately NOT here: safe
     // join belongs to controlled destruction (the caller owns this object's lifetime), and joining
     // from a request served by this same object would self-deadlock.
+}
+
+bool GpuProcessFrameEvaluator::retirementComplete() const noexcept {
+    return impl_ == nullptr || impl_->retired.load(std::memory_order_acquire);
 }
 
 } // namespace bloom::runtime

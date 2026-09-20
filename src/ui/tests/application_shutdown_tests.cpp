@@ -34,6 +34,7 @@
 #include <QTimer>
 #include <QtGlobal>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -852,6 +853,71 @@ void testRealApplicationQuit(Expectations& expectations, const bool dirty) {
 
 } // namespace
 
+// The GPU final-render retirement participant is part of the shutdown contract: the coordinator
+// signals it non-blocking at beginShutdown and then withholds shutdownQuiescent until its
+// completion predicate genuinely reports the evaluator owner retired, polling from the still-live
+// UI event loop. This drives that ordering with a deterministic fake so the UI never blocks and a
+// never-completing owner can never fake quiescence.
+void testGpuRetirementWithholdsQuiescenceUntilComplete(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = document::makeNewProject("GPU Retirement Shutdown Test", "Main",
+                                               core::RationalTime::fromInteger(10));
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+
+    runtime::NodeDefinitionRegistry nodeDefinitions;
+    expectations.expect(runtime::registerBuiltInNodeDefinitions(nodeDefinitions),
+                        "gpu-retirement: built-in node definitions register");
+    nodeDefinitions.freeze();
+    runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
+    runtime::CpuCompositionEvaluator cpuEvaluator;
+    runtime::CpuReferenceDisplayPreparer referenceDisplayPreparer;
+    runtime::QualifiedDisplayProcessorProvider qualifiedDisplayProcessorProvider;
+
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge taskUiBridge(scheduler, nullptr, 1ms);
+    ui::QualifiedDisplayProcessorBootstrap bootstrap(scheduler, taskUiBridge,
+                                                     qualifiedDisplayProcessorProvider);
+    ui::CompositionPreviewController previewController(
+        session, scheduler, taskUiBridge,
+        ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator, referenceDisplayPreparer,
+                                           qualifiedDisplayProcessorProvider));
+    ui::ApplicationShutdownCoordinator shutdown(previewController, taskUiBridge);
+
+    auto gpuBegun = std::make_shared<std::atomic_bool>(false);
+    auto gpuComplete = std::make_shared<std::atomic_bool>(false);
+    shutdown.setGpuExportRetirement(
+        [gpuBegun] { gpuBegun->store(true, std::memory_order_release); },
+        [gpuComplete] { return gpuComplete->load(std::memory_order_acquire); });
+
+    bool quiescent = false;
+    QObject::connect(&shutdown, &ui::ApplicationShutdownCoordinator::shutdownQuiescent, &shutdown,
+                     [&quiescent] { quiescent = true; });
+
+    expectations.expect(waitUntil([&scheduler] { return scheduler.isQuiescent(); }),
+                        "gpu-retirement: scheduler is idle before shutdown");
+    shutdown.beginShutdown();
+    expectations.expect(gpuBegun->load(std::memory_order_acquire),
+                        "gpu-retirement: the participant is signalled non-blocking");
+
+    // Pump the UI event loop for a bounded window with retirement still incomplete: the coordinator
+    // must keep running but must NOT publish quiescence.
+    const auto withheldUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+    while (!quiescent && std::chrono::steady_clock::now() < withheldUntil) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+    expectations.expect(!quiescent && !shutdown.gpuExportRetirementSatisfied(),
+                        "gpu-retirement: quiescence is withheld until retirement is proven");
+
+    gpuComplete->store(true, std::memory_order_release);
+    expectations.expect(waitUntil([&quiescent] { return quiescent; }),
+                        "gpu-retirement: async completion releases quiescence");
+    expectations.expect(shutdown.gpuExportRetirementSatisfied(),
+                        "gpu-retirement: the coordinator reports the GPU half satisfied");
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -865,6 +931,7 @@ int main(int argc, char** argv) {
     testShapeCloseWhilePreviewInFlight(expectations);
     testShapeCloseWhilePlaybackArmed(expectations);
     testShapeCloseAfterFrameExportCompletes(expectations);
+    testGpuRetirementWithholdsQuiescenceUntilComplete(expectations);
     testStuckShutdownDiagnosticLogsAfterFiveSeconds(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

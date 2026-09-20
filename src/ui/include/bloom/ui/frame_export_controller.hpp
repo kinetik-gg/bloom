@@ -4,6 +4,7 @@
 #include <bloom/core/sha256.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/host/frame_export_publication.hpp>
+#include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/output_analysis_attempt_runner.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
@@ -160,6 +161,7 @@ class FrameExportController final : public QObject {
         platform::StagedArtifactCoordinator& artifactCoordinator,
         std::filesystem::path scratchDirectory = {},
         runtime::QualifiedDisplayProcessorProvider* displayProcessorProvider = nullptr,
+        std::shared_ptr<host::GpuExportProvider> gpuExportProvider = nullptr,
         QObject* parent = nullptr);
     ~FrameExportController() override;
 
@@ -310,6 +312,13 @@ class FrameExportController final : public QObject {
     host::PublicationCoordinator& publicationCoordinator_;
     platform::StagedArtifactCoordinator& artifactCoordinator_;
     runtime::QualifiedDisplayProcessorProvider* displayProcessorProvider_ = nullptr;
+    // Application-lifetime GPU final-render provider. By default this controller constructs and
+    // owns one, bootstrapped once on the shared scheduler. The composition root may instead pass
+    // the SAME provider it registers with ApplicationShutdownCoordinator::setGpuExportRetirement(),
+    // so the app's shutdown ordering retains ownership until the evaluator owner has genuinely
+    // retired. Every single-frame and frame-range attempt shares it; the async attempt retains it,
+    // so retiring the controller never dangles an in-flight evaluation.
+    std::shared_ptr<host::GpuExportProvider> gpuExportProvider_;
     std::shared_ptr<output::ExportResourceLedgerV1> ledger_ =
         std::make_shared<output::ExportResourceLedgerV1>();
     std::filesystem::path scratchDirectory_;
