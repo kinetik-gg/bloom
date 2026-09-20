@@ -46,6 +46,7 @@ GpuOcioProgramPollResult GpuOcioProgram::poll() { return GpuOcioProgramPollResul
 std::shared_ptr<GpuImage> GpuOcioProgram::takeEffectOutput() noexcept { return {}; }
 GpuDisplayImage GpuOcioProgram::takeDisplayOutput() noexcept { return {}; }
 bool GpuOcioProgram::hasUnretiredSubmission() const noexcept { return false; }
+std::uint64_t GpuOcioProgram::retainedAllocationBytes() const noexcept { return 0; }
 std::uint64_t GpuOcioProgram::lastJobAllocationBytes() const noexcept { return 0; }
 void GpuOcioProgram::cancel() noexcept {}
 bool GpuOcioProgram::teardownDrainIncomplete() noexcept { return false; }

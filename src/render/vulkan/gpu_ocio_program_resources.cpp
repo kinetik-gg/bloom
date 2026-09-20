@@ -9,6 +9,7 @@
 #include <functional>
 #include <limits>
 #include <mutex>
+#include <new>
 #include <string>
 #include <thread>
 #include <utility>
@@ -307,8 +308,12 @@ uploadImage(vulkan_detail::DeviceAllocatorState& state,
         return UploadOutcome::Failed;
     }
     std::memcpy(mappedInfo.pMappedData, data, static_cast<std::size_t>(bytes));
-    static_cast<void>(vmaFlushAllocation(state.allocator, staging.allocation, 0,
-                                         static_cast<VkDeviceSize>(bytes)));
+    // Non-coherent host memory: the CPU writes must be flushed before the transfer can read them.
+    if (vmaFlushAllocation(state.allocator, staging.allocation, 0,
+                           static_cast<VkDeviceSize>(bytes)) != VK_SUCCESS) {
+        setReasonNoThrow(reason, "the LUT staging buffer could not be flushed");
+        return UploadOutcome::Failed;
+    }
 
     const std::uint64_t stagingBytes = static_cast<std::uint64_t>(mappedInfo.size);
     if (!fitsRemainingBudget(imageAllocationBytes, stagingBytes, hostScratchBytes,

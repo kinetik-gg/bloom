@@ -202,6 +202,9 @@ GpuDisplayImage GpuOcioProgram::takeDisplayOutput() noexcept {
 bool GpuOcioProgram::hasUnretiredSubmission() const noexcept {
     return impl_ != nullptr && impl_->queueSubmitted;
 }
+std::uint64_t GpuOcioProgram::retainedAllocationBytes() const noexcept {
+    return impl_ != nullptr ? impl_->retainedResourceBytes : 0;
+}
 std::uint64_t GpuOcioProgram::lastJobAllocationBytes() const noexcept {
     return impl_ != nullptr ? impl_->lastJobBytes : 0;
 }

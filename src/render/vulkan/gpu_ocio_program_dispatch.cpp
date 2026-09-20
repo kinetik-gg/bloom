@@ -128,13 +128,21 @@ void GpuOcioProgram::Impl::beginImpl(const bool display,
     }
     ocio_program_detail::writeImageDescriptor(ioSet, state, 0, inputImpl->view);
     std::memset(statusMapped, 0, static_cast<std::size_t>(ocio_program_detail::kStatusBytes));
-    static_cast<void>(
-        vmaFlushAllocation(state.allocator, status.allocation, 0,
-                           static_cast<VkDeviceSize>(ocio_program_detail::kStatusBytes)));
+    if (vmaFlushAllocation(state.allocator, status.allocation, 0,
+                           static_cast<VkDeviceSize>(ocio_program_detail::kStatusBytes)) !=
+        VK_SUCCESS) {
+        fail(GpuOcioProgramDiagnosticCode::AllocationFailed,
+             "the status buffer could not be flushed before submission");
+        return;
+    }
     if (desc.uniformBufferSize > 0) {
         std::memcpy(uniformMapped, values.data(), values.size());
-        static_cast<void>(vmaFlushAllocation(state.allocator, uniformBuffer.allocation, 0,
-                                             static_cast<VkDeviceSize>(values.size())));
+        if (vmaFlushAllocation(state.allocator, uniformBuffer.allocation, 0,
+                               static_cast<VkDeviceSize>(values.size())) != VK_SUCCESS) {
+            fail(GpuOcioProgramDiagnosticCode::AllocationFailed,
+                 "the uniform buffer could not be flushed before submission");
+            return;
+        }
     }
 
     const VkCommandBuffer raw = static_cast<VkCommandBuffer>(*commandBuffer);
@@ -261,9 +269,14 @@ void GpuOcioProgram::Impl::beginImpl(const bool display,
 }
 
 bool GpuOcioProgram::Impl::checkStatus() {
-    static_cast<void>(
-        vmaInvalidateAllocation(control->allocator, status.allocation, 0,
-                                static_cast<VkDeviceSize>(ocio_program_detail::kStatusBytes)));
+    if (vmaInvalidateAllocation(control->allocator, status.allocation, 0,
+                                static_cast<VkDeviceSize>(ocio_program_detail::kStatusBytes)) !=
+        VK_SUCCESS) {
+        jobDiagnostic = makeDiagnostic(GpuOcioProgramDiagnosticCode::DeviceLost,
+                                       "the status buffer could not be invalidated; refusing to "
+                                       "publish GPU output");
+        return false;
+    }
     std::uint32_t flags = 0;
     std::memcpy(&flags, statusMapped, sizeof(flags));
     if (flags == 0) {

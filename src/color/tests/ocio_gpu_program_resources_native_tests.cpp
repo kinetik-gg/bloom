@@ -355,6 +355,11 @@ void testAcesHdrDisplayLut(Expectations& expectations, GpuDevice& device,
     if (program == nullptr || !uploader) {
         return;
     }
+    const std::uint64_t retained = program->retainedAllocationBytes();
+    const std::uint64_t declaredLutBytes =
+        desc.program()->textures.front().samples.size() * sizeof(float);
+    expectations.expect(retained >= declaredLutBytes,
+                        "retainedAllocationBytes charges the actual persistent LUT allocation");
     constexpr std::uint32_t width = 4;
     constexpr std::uint32_t height = 3;
     const auto pixels = fixturePixels(width, height);
@@ -429,6 +434,8 @@ void testAcesHdrDisplayLut(Expectations& expectations, GpuDevice& device,
     expectations.expect(poll == bloom::render::GpuOcioProgramPollResult::Ready &&
                             program->takeDisplayOutput().isValid(),
                         "the warm LUT display reuses the retained resources");
+    expectations.expect(program->retainedAllocationBytes() == retained,
+                        "retainedAllocationBytes is stable across warm jobs");
 }
 
 void testExposureContrastUniforms(Expectations& expectations, GpuDevice& device,

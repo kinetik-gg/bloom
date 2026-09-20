@@ -109,6 +109,10 @@ class GpuOcioProgram final {
     [[nodiscard]] GpuDisplayImage takeDisplayOutput() noexcept;
 
     [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
+    // Actual VMA bytes of the persistent LUT textures + uniform buffer + status buffer owned by
+    // this program (allocator rounding included), for a program-cache byte charge. Distinct from
+    // lastJobAllocationBytes(), which is the transient per-job output charge. Owner-thread only.
+    [[nodiscard]] std::uint64_t retainedAllocationBytes() const noexcept;
     [[nodiscard]] std::uint64_t lastJobAllocationBytes() const noexcept;
 
     void cancel() noexcept;

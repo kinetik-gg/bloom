@@ -181,7 +181,7 @@ bool GpuOcioProgram::Impl::createOcioResources() {
         }
         uniformMapped = static_cast<std::uint8_t*>(uniformBuffer.info.pMappedData);
         std::uint64_t updated = 0;
-        if (!addChecked(retainedResourceBytes, uniformBuffer.bytes, updated) ||
+        if (!addChecked(retainedResourceBytes, uniformBuffer.info.size, updated) ||
             updated > budgets.maxOwnedBytes) {
             createDiagnostic = makeDiagnostic(GpuOcioProgramDiagnosticCode::OverBudget,
                                               "the retained OCIO resources exceed the budget");
@@ -206,7 +206,14 @@ bool GpuOcioProgram::Impl::createOcioResources() {
                                           "the status buffer is not host mapped");
         return false;
     }
-    retainedResourceBytes += status.bytes;
+    std::uint64_t statusUpdated = 0;
+    if (!addChecked(retainedResourceBytes, status.info.size, statusUpdated) ||
+        statusUpdated > budgets.maxOwnedBytes) {
+        createDiagnostic = makeDiagnostic(GpuOcioProgramDiagnosticCode::OverBudget,
+                                          "the retained OCIO resources exceed the budget");
+        return false;
+    }
+    retainedResourceBytes = statusUpdated;
     if (retainedResourceBytes > budgets.maxOwnedBytes) {
         createDiagnostic = makeDiagnostic(GpuOcioProgramDiagnosticCode::OverBudget,
                                           "the retained OCIO resources exceed the budget");
