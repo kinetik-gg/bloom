@@ -113,7 +113,7 @@ class GpuShaderCompiler final {
                                              GpuShaderDeadline deadline,
                                              const GpuShaderCancellation& cancel);
     [[nodiscard]] std::optional<render::CompiledGpuShader> lookupCache(const std::string& key);
-    void insertCache(std::string key, const render::CompiledGpuShader& artifact);
+    void insertCache(const std::string& key, const render::CompiledGpuShader& artifact);
     std::unique_ptr<State> state_;
 };
 

@@ -129,7 +129,7 @@ void freeQuarantinedSlotLocked(ProcessReadbackSlot& slot) noexcept {
 // signalled or the device is lost, in which case the resources are freed.
 [[nodiscard]] bool retireQuarantinedSlotLocked(ProcessReadbackSlot& slot) noexcept {
     if (slot.slotState != ProcessReadbackSlotState::Quarantined || slot.state == nullptr ||
-        slot.fence == vk::raii::Fence{nullptr}) {
+        static_cast<VkFence>(*slot.fence) == VK_NULL_HANDLE) {
         return false;
     }
     const VkFence rawFence = static_cast<VkFence>(*slot.fence);

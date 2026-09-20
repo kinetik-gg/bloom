@@ -355,7 +355,8 @@ std::optional<render::CompiledGpuShader> GpuShaderCompiler::lookupCache(const st
     return found->second;
 }
 
-void GpuShaderCompiler::insertCache(std::string key, const render::CompiledGpuShader& artifact) {
+void GpuShaderCompiler::insertCache(const std::string& key,
+                                    const render::CompiledGpuShader& artifact) {
     const std::size_t bytes = artifact.spirv.size();
     const std::lock_guard lock(state_->mutex);
     if (bytes > state_->maxCacheBytes)
