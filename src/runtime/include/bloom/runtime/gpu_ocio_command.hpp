@@ -62,16 +62,22 @@ struct GpuOcioCommandIdentityParts final {
     core::Sha256Digest programShaderTextDigest{};
     std::span<const std::byte> uniformSnapshot;
     core::Sha256Digest artifactDigest{};
+    // The versioned per-sampler precise-sampling adapter used to build the wrapper (e.g.
+    // color::kOcioGpuPreciseSamplingVersion). A sampling-semantics change must never reuse an
+    // older artifact, so it is part of the canonical identity.
+    std::string_view wrapperVersion;
 };
 
 // Canonical bytes are exactly:
 //   ASCII "BloomGpuOcioCommandIdentity\0"
-//   u16(1) || u8(encoding) || u32(width) || u32(height)
+//   u16(2) || u8(encoding) || u32(width) || u32(height)
 //   bytes32(programContentIdentity) || bytes32(programResourceDigest)
 //   bytes32(programShaderTextDigest)
 //   u64(uniformSnapshot.size) || exact uniformSnapshot bytes
 //   bytes32(artifactDigest)
-// u16/u32/u64 are unsigned big-endian. The digest is SHA-256 of those bytes.
+//   text(wrapperVersion)
+// u16/u32/u64 are unsigned big-endian; text is u32(byteCount) followed by UTF-8 bytes. The digest
+// is SHA-256 of those bytes.
 [[nodiscard]] core::Sha256Digest
 computeGpuOcioCommandIdentity(const GpuOcioCommandIdentityParts& parts) noexcept;
 
@@ -90,7 +96,8 @@ class PreparedGpuOcioCommand final {
     // entry point), the geometry, and the stage/encoding correspondence, then freezes the command.
     [[nodiscard]] static GpuOcioCommandResult prepare(render::OcioGpuProgramDesc program,
                                                       render::CompiledGpuShader artifact,
-                                                      GpuOcioCommandGeometry geometry);
+                                                      GpuOcioCommandGeometry geometry,
+                                                      std::string_view wrapperVersion);
 
     [[nodiscard]] const render::OcioGpuProgramDesc& program() const& noexcept { return program_; }
     [[nodiscard]] const render::OcioGpuProgramDesc& program() const&& = delete;
@@ -101,6 +108,8 @@ class PreparedGpuOcioCommand final {
     [[nodiscard]] const GpuOcioCommandGeometry& geometry() const&& = delete;
     [[nodiscard]] const core::Sha256Digest& identity() const& noexcept { return identity_; }
     [[nodiscard]] const core::Sha256Digest& identity() const&& = delete;
+    [[nodiscard]] std::string_view wrapperVersion() const& noexcept { return wrapperVersion_; }
+    [[nodiscard]] std::string_view wrapperVersion() const&& = delete;
     [[nodiscard]] std::span<const std::uint32_t> spirvWords() const& noexcept {
         return spirvWords_;
     }
@@ -115,7 +124,7 @@ class PreparedGpuOcioCommand final {
     PreparedGpuOcioCommand(render::OcioGpuProgramDesc program, render::CompiledGpuShader artifact,
                            GpuOcioOutputEncoding encoding, GpuOcioCommandGeometry geometry,
                            std::vector<std::uint32_t> spirvWords, core::Sha256Digest identity,
-                           std::uint64_t retainedBytes) noexcept;
+                           std::string wrapperVersion, std::uint64_t retainedBytes) noexcept;
 
     render::OcioGpuProgramDesc program_;
     render::CompiledGpuShader artifact_;
@@ -123,6 +132,7 @@ class PreparedGpuOcioCommand final {
     GpuOcioCommandGeometry geometry_;
     std::vector<std::uint32_t> spirvWords_;
     core::Sha256Digest identity_{};
+    std::string wrapperVersion_;
     std::uint64_t retainedBytes_ = 0;
 };
 

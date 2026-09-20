@@ -1,5 +1,7 @@
 #include <bloom/runtime/gpu_ocio_wrapper.hpp>
 
+#include <bloom/color/ocio_gpu_program.hpp>
+
 #include <span>
 #include <sstream>
 #include <string>
@@ -68,83 +70,109 @@ std::string_view gpuOcioWrapperErrorName(const GpuOcioWrapperError error) noexce
         return "invalid-function-name";
     case GpuOcioWrapperError::UnsupportedDescriptorSet:
         return "unsupported-descriptor-set";
+    case GpuOcioWrapperError::AllocationFailure:
+        return "allocation-failure";
     }
     return "unknown";
 }
 
 GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& program) noexcept {
-    if (program.shaderText.empty()) {
-        return failure(GpuOcioWrapperError::InvalidProgram);
-    }
-    if (!validIdentifier(program.functionName)) {
-        return failure(GpuOcioWrapperError::InvalidFunctionName);
-    }
-    if (program.descriptorSetIndex != 0) {
-        return failure(GpuOcioWrapperError::UnsupportedDescriptorSet);
-    }
-    const bool display = program.stage == render::OcioGpuProgramStage::DisplayPacking;
-    const bool effect = program.stage == render::OcioGpuProgramStage::ProcessEffect;
-    if (!display && !effect) {
-        return failure(GpuOcioWrapperError::UnsupportedStage);
-    }
+    try {
+        if (program.shaderText.empty()) {
+            return failure(GpuOcioWrapperError::InvalidProgram);
+        }
+        if (!validIdentifier(program.functionName)) {
+            return failure(GpuOcioWrapperError::InvalidFunctionName);
+        }
+        if (program.descriptorSetIndex != 0) {
+            return failure(GpuOcioWrapperError::UnsupportedDescriptorSet);
+        }
+        const bool display = program.stage == render::OcioGpuProgramStage::DisplayPacking;
+        const bool effect = program.stage == render::OcioGpuProgramStage::ProcessEffect;
+        if (!display && !effect) {
+            return failure(GpuOcioWrapperError::UnsupportedStage);
+        }
 
-    std::ostringstream out;
-    out << "#version 460\n";
-    out << "layout(local_size_x = " << kGpuOcioWrapperWorkgroupSize << ") in;\n";
-    out << "layout(set = 1, binding = 0, rgba32f) uniform readonly image2D bloom_ocio_input;\n";
-    if (display) {
-        out << "layout(set = 1, binding = 1, std430) buffer BloomOcioOutput { uint words[]; } "
-               "bloom_ocio_output;\n";
-    } else {
-        out << "layout(set = 1, binding = 1, rgba32f) uniform writeonly image2D "
-               "bloom_ocio_output;\n";
-    }
-    out << "layout(set = 1, binding = 2, std430) buffer BloomOcioStatus { uint flags[]; } "
-           "bloom_ocio_status;\n";
-    out << "layout(push_constant) uniform BloomOcioPush { uint pixelCount; uint width; uint "
-           "height; "
-           "} bloom_ocio_push;\n";
-    out << program.shaderText;
-    if (program.shaderText.back() != '\n') {
-        out << '\n';
-    }
-    if (display) {
-        out << kQuantizerGlsl;
-    }
-    out << "void main() {\n";
-    out << "  uint index = gl_GlobalInvocationID.x;\n";
-    out << "  if (index >= bloom_ocio_push.pixelCount) { return; }\n";
-    out << "  ivec2 c = ivec2(int(index % bloom_ocio_push.width), int(index / "
-           "bloom_ocio_push.width));\n";
-    out << "  vec4 p = imageLoad(bloom_ocio_input, c);\n";
-    out << "  float a = p.a;\n";
-    out << "  vec3 s = (a != 0.0) ? p.rgb / a : vec3(0.0);\n";
-    out << "  if (any(isnan(s)) || any(isinf(s))) { bloom_ocio_status.flags[0] = 1u; return; }\n";
-    out << "  vec4 t = " << program.functionName << "(vec4(s, 1.0));\n";
-    out << "  if (any(isnan(t.rgb)) || any(isinf(t.rgb))) { bloom_ocio_status.flags[0] = 1u; "
-           "return; }\n";
-    if (display) {
-        out << "  uint r = bloom_ocio_quantize(t.r);\n";
-        out << "  uint g = bloom_ocio_quantize(t.g);\n";
-        out << "  uint b = bloom_ocio_quantize(t.b);\n";
-        out << "  uint qa = bloom_ocio_quantize(a);\n";
-        out << "  bloom_ocio_output.words[index] = r | (g << 8) | (b << 16) | (qa << 24);\n";
-    } else {
-        out << "  imageStore(bloom_ocio_output, c, vec4(t.rgb * a, a));\n";
-    }
-    out << "}\n";
+        // Shared versioned per-sampler precise-sampling adapter. OCIO's generated body samples LUT
+        // resources with the built-in texture(), whose hardware filtering is not full precision;
+        // the adapter emits one texelFetch-based function per reflected sampler and rewrites the
+        // body's texture() calls to it while leaving the generated transform body byte-for-byte
+        // intact.
+        const auto sampling = color::ocioGpuSamplingGlslFor(program);
 
-    GpuOcioWrapperResult result;
-    result.source = out.str();
-    result.entryPoint = std::string(kGpuOcioWrapperEntryPoint);
-    const auto digest = core::Sha256Hasher::hash(
-        std::as_bytes(std::span<const char>(result.source.data(), result.source.size())));
-    if (!digest.has_value()) {
-        return failure(GpuOcioWrapperError::InvalidProgram);
+        std::ostringstream out;
+        out << "#version 460\n";
+        out << "layout(local_size_x = " << kGpuOcioWrapperWorkgroupSize << ") in;\n";
+        out << "layout(set = 1, binding = 0, rgba32f) uniform readonly image2D bloom_ocio_input;\n";
+        if (display) {
+            out << "layout(set = 1, binding = 1, std430) buffer BloomOcioOutput { uint words[]; } "
+                   "bloom_ocio_output;\n";
+        } else {
+            out << "layout(set = 1, binding = 1, rgba32f) uniform writeonly image2D "
+                   "bloom_ocio_output;\n";
+        }
+        out << "layout(set = 1, binding = 2, std430) buffer BloomOcioStatus { uint flags[]; } "
+               "bloom_ocio_status;\n";
+        out << "layout(push_constant) uniform BloomOcioPush { uint pixelCount; uint width; uint "
+               "height; "
+               "} bloom_ocio_push;\n";
+        out << sampling.preamble;
+        out << program.shaderText;
+        if (program.shaderText.back() != '\n') {
+            out << '\n';
+        }
+        out << sampling.definitions;
+        if (display) {
+            out << kQuantizerGlsl;
+        }
+        out << "void main() {\n";
+        out << "  uint index = gl_GlobalInvocationID.x;\n";
+        out << "  if (index >= bloom_ocio_push.pixelCount) { return; }\n";
+        out << "  ivec2 c = ivec2(int(index % bloom_ocio_push.width), int(index / "
+               "bloom_ocio_push.width));\n";
+        out << "  vec4 p = imageLoad(bloom_ocio_input, c);\n";
+        out << "  float a = p.a;\n";
+        if (effect) {
+            // Exact CPU image-effect semantics: an alpha-zero source pixel is copied through
+            // unchanged, including any hidden RGB, and is never un-premultiplied or transformed.
+            out << "  if (a == 0.0) { imageStore(bloom_ocio_output, c, p); return; }\n";
+            out << "  vec3 s = p.rgb / a;\n";
+        } else {
+            out << "  vec3 s = (a != 0.0) ? p.rgb / a : vec3(0.0);\n";
+        }
+        out << "  if (any(isnan(s)) || any(isinf(s))) { bloom_ocio_status.flags[0] = 1u; return; "
+               "}\n";
+        out << "  vec4 t = " << program.functionName << "(vec4(s, 1.0));\n";
+        out << "  if (any(isnan(t.rgb)) || any(isinf(t.rgb))) { bloom_ocio_status.flags[0] = 1u; "
+               "return; }\n";
+        if (display) {
+            out << "  uint r = bloom_ocio_quantize(t.r);\n";
+            out << "  uint g = bloom_ocio_quantize(t.g);\n";
+            out << "  uint b = bloom_ocio_quantize(t.b);\n";
+            out << "  uint qa = bloom_ocio_quantize(a);\n";
+            out << "  bloom_ocio_output.words[index] = r | (g << 8) | (b << 16) | (qa << 24);\n";
+        } else {
+            out << "  imageStore(bloom_ocio_output, c, vec4(t.rgb * a, a));\n";
+        }
+        out << "}\n";
+
+        GpuOcioWrapperResult result;
+        result.source = out.str();
+        result.entryPoint = std::string(kGpuOcioWrapperEntryPoint);
+        result.samplingVersion = std::string(color::kOcioGpuPreciseSamplingVersion);
+        const auto digest = core::Sha256Hasher::hash(
+            std::as_bytes(std::span<const char>(result.source.data(), result.source.size())));
+        if (!digest.has_value()) {
+            return failure(GpuOcioWrapperError::AllocationFailure);
+        }
+        result.sourceDigest = *digest;
+        result.error = GpuOcioWrapperError::None;
+        return result;
+    } catch (...) {
+        // This function is noexcept by contract; an allocation failure (or any other exception from
+        // the sampling adapter / string building) is reported as a typed error, never a terminate.
+        return failure(GpuOcioWrapperError::AllocationFailure);
     }
-    result.sourceDigest = *digest;
-    result.error = GpuOcioWrapperError::None;
-    return result;
 }
 
 } // namespace bloom::runtime
