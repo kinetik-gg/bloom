@@ -156,12 +156,12 @@ void expect(const bool condition, const std::string& label) {
 
 void testBudgetPlanIsBoundedAndAligned() {
     const auto aligned = bloom::ui::gpuResidentBudgetPlanFor(2ULL * kGib);
-    // Explicit 60/20/20 host partition of the artist's ceiling; no fixed device cap anymore.
+    // Explicit 50/20/30 host partition of the artist's ceiling; no fixed device cap anymore.
     expect(aligned.residentPoolBytes == 2ULL * kGib, "the pool is the configured ceiling");
-    expect(aligned.leaseBytes == (2ULL * kGib / 5ULL) * 3ULL, "the lease share is 3/5 of the pool");
+    expect(aligned.leaseBytes == 2ULL * kGib / 2ULL, "the lease share is 1/2 of the pool");
     expect(aligned.sceneCacheBytes == 2ULL * kGib / 5ULL, "the scene share is 1/5 of the pool");
     expect(aligned.requestBytes == 2ULL * kGib - aligned.leaseBytes - aligned.sceneCacheBytes,
-           "the request share is the remaining 1/5 of the pool");
+           "the request share is the remaining 3/10 of the pool");
     expect(aligned.leaseBytes > aligned.cacheBytes,
            "registry bytes add headroom for in-flight/visible leases");
     expect(aligned.leaseBytes >= aligned.cacheBytes,
