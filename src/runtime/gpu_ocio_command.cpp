@@ -97,6 +97,10 @@ std::string_view gpuOcioCommandErrorName(const GpuOcioCommandError error) noexce
         return "wrapper-version-mismatch";
     case GpuOcioCommandError::WrapperSourceDigestMismatch:
         return "wrapper-source-digest-mismatch";
+    case GpuOcioCommandError::ArtifactSourceMissing:
+        return "artifact-source-missing";
+    case GpuOcioCommandError::ArtifactSourceDigestMismatch:
+        return "artifact-source-digest-mismatch";
     }
     return "unknown";
 }
@@ -211,6 +215,15 @@ GpuOcioCommandResult PreparedGpuOcioCommand::prepare(render::OcioGpuProgramDesc 
     if (canonical.sourceDigest != binding.wrapperSourceDigest ||
         canonical.entryPoint != artifact.entryPoint) {
         return failure(GpuOcioCommandError::WrapperSourceDigestMismatch);
+    }
+    // The artifact's OWN source provenance must match the canonical wrapper. This does not trust
+    // the independently supplied binding: an artifact compiled from a different source (a stale or
+    // cross-source artifact) is refused here, before any native pipeline creation.
+    if (artifact.sourceDigest == core::Sha256Digest{}) {
+        return failure(GpuOcioCommandError::ArtifactSourceMissing);
+    }
+    if (artifact.sourceDigest != canonical.sourceDigest) {
+        return failure(GpuOcioCommandError::ArtifactSourceDigestMismatch);
     }
 
     std::vector<std::uint32_t> spirvWords(artifact.spirv.size() / sizeof(std::uint32_t));

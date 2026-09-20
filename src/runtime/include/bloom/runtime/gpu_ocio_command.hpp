@@ -60,6 +60,11 @@ enum class GpuOcioCommandError : std::uint8_t {
     // The binding's wrapper source digest does not match the canonical production wrapper for
     // (program, viewAdjust), i.e. the artifact is stale for this adjustment.
     WrapperSourceDigestMismatch,
+    // The compiled artifact carries no source provenance (zero source digest).
+    ArtifactSourceMissing,
+    // The compiled artifact's own source digest does not match the canonical production wrapper for
+    // (program, viewAdjust): the artifact was compiled from a different source.
+    ArtifactSourceDigestMismatch,
 };
 
 [[nodiscard]] std::string_view gpuOcioCommandErrorName(GpuOcioCommandError error) noexcept;
