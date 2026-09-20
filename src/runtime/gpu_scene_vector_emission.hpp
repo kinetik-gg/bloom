@@ -389,43 +389,121 @@ emitMergeCommand(const CompiledMerge& stack, const CompiledCompositionPlan& plan
     }
     outputWindowOf[index] = descriptor.dataWindow();
 
-    std::vector<GpuSceneCommandIndex> foregrounds;
-    OperationKey key;
-    key.add(std::string{"gpu-source-over-chain-v1"});
+    // Entries fold bottom-to-top exactly as the CPU evaluator folds them (it iterates its entries
+    // reversed), and an entry contributes its Layer Output's resolved blend mode only when a real
+    // Layer Output with a valid layer id is the direct input; every other input stays Normal. The
+    // resolved mode is READ here, never copied out of the plan, so a driven blend mode
+    // participates.
+    struct OrderedForeground final {
+        GpuSceneCommandIndex command = kInvalidGpuSceneCommand;
+        std::string key;
+        render::ImageWindow window;
+        core::BlendMode mode = core::BlendMode::Normal;
+    };
+    std::vector<OrderedForeground> ordered;
+    bool allNormal = true;
     for (auto entry = stack.entries.rbegin(); entry != stack.entries.rend(); ++entry) {
+        core::BlendMode mode = core::BlendMode::Normal;
         if (const auto* layerOutput =
                 std::get_if<CompiledLayerOutput>(&plan.operations()[entry->input.value()]);
             layerOutput != nullptr && entry->layerId.isValid()) {
             const auto blend = resolveParameter(*layerOutput, resolved);
-            if (!blend || *blend != core::BlendMode::Normal) {
-                return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::UnsupportedBlend,
-                                           "Only Normal merge entries are prepared"};
+            if (!blend) {
+                return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                                           "Layer blend mode could not be resolved"};
             }
+            mode = *blend;
         }
         const auto inner = commandForOperation[entry->input.value()];
         if (inner == kInvalidGpuSceneCommand) {
             continue;
         }
-        foregrounds.push_back(inner);
-        key.add(keyOf[entry->input.value()]);
+        allNormal = allNormal && mode == core::BlendMode::Normal;
+        const auto& entryWindow = outputWindowOf[entry->input.value()];
+        ordered.push_back(OrderedForeground{inner, keyOf[entry->input.value()],
+                                            entryWindow.value_or(descriptor.dataWindow()), mode});
     }
-    addWindowToKey(key, descriptor.dataWindow());
-    addWindowToKey(key, descriptor.displayWindow());
-    addPixelAspectToKey(key, descriptor.pixelAspect());
-    key.add(std::string{kGpuSourceOverSpirvSha256});
-    keyOf[index] = key.digest();
+
+    if (allNormal) {
+        // The optimized Normal path: one base transparent solid plus the retained SourceOverV1
+        // accumulation, preserving the pre-existing merge command and its semantic key.
+        std::vector<GpuSceneCommandIndex> foregrounds;
+        OperationKey key;
+        key.add(std::string{"gpu-source-over-chain-v1"});
+        for (const auto& entry : ordered) {
+            foregrounds.push_back(entry.command);
+            key.add(entry.key);
+        }
+        addWindowToKey(key, descriptor.dataWindow());
+        addWindowToKey(key, descriptor.displayWindow());
+        addPixelAspectToKey(key, descriptor.pixelAspect());
+        key.add(std::string{kGpuSourceOverSpirvSha256});
+        keyOf[index] = key.digest();
+        if (const auto error =
+                charge(descriptor.dataWindow().extent().width(),
+                       descriptor.dataWindow().extent().height(), sizeof(render::Rgba32f))) {
+            return error;
+        }
+        GpuSceneMergeCommand command{.sourceOperation = operationIndex,
+                                     .foregrounds = std::move(foregrounds),
+                                     .outputWindow = descriptor.dataWindow(),
+                                     .displayWindow = descriptor.displayWindow(),
+                                     .pixelAspect = descriptor.pixelAspect(),
+                                     .semanticKey = keyOf[index]};
+        commandForOperation[index] = emit(std::move(command));
+        return std::nullopt;
+    }
+
+    // A stack with any non-Normal entry folds with an explicit BlendV1 per entry over an
+    // accumulated destination. The base is a transparent solid over the whole merge window so the
+    // first (bottom) entry blends over the exact CPU fold its own accumulator started from. A
+    // Normal entry inside such a stack uses BlendV1's Normal arm, which is the retained source-over
+    // rule, so the whole fold is a faithful CPU reproduction for every mode.
+    OperationKey baseKey;
+    baseKey.add(std::string{"gpu-blend-base-v1"});
+    addWindowToKey(baseKey, descriptor.dataWindow());
+    addWindowToKey(baseKey, descriptor.displayWindow());
+    addPixelAspectToKey(baseKey, descriptor.pixelAspect());
+    baseKey.add(std::string{kGpuSolidSpirvSha256});
+    const std::string baseSemanticKey = baseKey.digest();
     if (const auto error =
             charge(descriptor.dataWindow().extent().width(),
                    descriptor.dataWindow().extent().height(), sizeof(render::Rgba32f))) {
         return error;
     }
-    GpuSceneMergeCommand command{.sourceOperation = operationIndex,
-                                 .foregrounds = std::move(foregrounds),
-                                 .outputWindow = descriptor.dataWindow(),
-                                 .displayWindow = descriptor.displayWindow(),
-                                 .pixelAspect = descriptor.pixelAspect(),
-                                 .semanticKey = keyOf[index]};
-    commandForOperation[index] = emit(std::move(command));
+    GpuSceneSolidCommand base{.sourceOperation = operationIndex,
+                              .pixel = render::Rgba32f::transparent(),
+                              .dataWindow = descriptor.dataWindow(),
+                              .displayWindow = descriptor.displayWindow(),
+                              .pixelAspect = descriptor.pixelAspect(),
+                              .semanticKey = baseSemanticKey};
+    GpuSceneCommandIndex accumulator = emit(std::move(base));
+    std::string accumulatorKey = baseSemanticKey;
+    for (const auto& entry : ordered) {
+        const auto blendKey = makeGpuSceneBlendSemanticKey(
+            entry.key, accumulatorKey, entry.mode, entry.window, descriptor.dataWindow(),
+            descriptor.pixelAspect(), std::string{kGpuBlendSpirvSha256});
+        if (const auto error =
+                charge(descriptor.dataWindow().extent().width(),
+                       descriptor.dataWindow().extent().height(), sizeof(render::Rgba32f))) {
+            return error;
+        }
+        GpuSceneBlendCommand blend{.sourceOperation = operationIndex,
+                                   .source = entry.command,
+                                   .destination = accumulator,
+                                   .sourceKey = entry.key,
+                                   .destinationKey = accumulatorKey,
+                                   .mode = entry.mode,
+                                   .sourceWindow = entry.window,
+                                   .outputWindow = descriptor.dataWindow(),
+                                   .pixelAspect = descriptor.pixelAspect(),
+                                   .artifactDigest = std::string{kGpuBlendSpirvSha256},
+                                   .semanticKey = blendKey};
+        accumulator = emit(std::move(blend));
+        accumulatorKey = blendKey;
+    }
+    keyOf[index] = accumulatorKey;
+    commandForOperation[index] = accumulator;
     return std::nullopt;
 }
 

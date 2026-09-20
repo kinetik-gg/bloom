@@ -14,6 +14,8 @@
 
 namespace {
 
+using bloom::runtime::GpuSceneAffineCommand;
+using bloom::runtime::GpuSceneBlendCommand;
 using bloom::runtime::GpuSceneMediaContext;
 using bloom::runtime::GpuSceneTranslationCommand;
 using bloom::runtime::GpuSceneUploadCommand;
@@ -67,8 +69,16 @@ void checkVideoParity(Expectations& expectations, const CpuCompositionEvaluator&
     expectations.expect(prepared.scene->mediaStatistics().videoSources == 1 &&
                             prepared.scene->mediaStatistics().videoConversions == 1,
                         label + ": exactly one video source was converted");
+    double hScale = 1.0;
+    double vScale = 1.0;
+    if (const auto* proxy = std::get_if<bloom::runtime::ProxyResolution>(&request.resolution)) {
+        hScale = static_cast<double>(proxy->extent.width()) /
+                 static_cast<double>(plan->format().width());
+        vScale = static_cast<double>(proxy->extent.height()) /
+                 static_cast<double>(plan->format().height());
+    }
     std::vector<std::shared_ptr<const Rgba32fImage>> images;
-    expectations.expect(replayScene(*prepared.scene, images), label + ": replays");
+    expectations.expect(replayScene(*prepared.scene, images, hScale, vScale), label + ": replays");
     const auto& replayed = images[prepared.scene->outputCommand()];
     expectations.expect(
         replayed != nullptr &&
@@ -272,29 +282,71 @@ void testVideoBypassMatrix(Expectations& expectations, const CpuCompositionEvalu
                         "an explicit bypass reconverts and never reads the prepared-upload cache");
 }
 
-// An unsupported layer/blend screen runs BEFORE any video selection or decode.
-void testUnsupportedVideoGraphScreensBeforeDecode(Expectations& expectations,
-                                                  const CpuCompositionEvaluator& evaluator,
-                                                  const std::filesystem::path& fixtures) {
+// Real affine and all-mode blend coverage on a decoded video source: rotation, nonuniform/signed
+// scale and anchor emit GpuAffine, and a non-Normal mode emits an explicit BlendV1 fold, each
+// bit-exact against the live CPU frame.
+void testVideoAffineAndBlend(Expectations& expectations, const CpuCompositionEvaluator& evaluator,
+                             const std::filesystem::path& fixtures) {
     const auto path = fixtures / "numbered-h264.mp4";
     if (!std::filesystem::is_regular_file(path)) {
         expectations.expect(false, "the H.264 fixture is present");
         return;
     }
     const auto asset = videoAsset(path, 24000);
-    auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
-    const CpuGpuSceneBuilder builder(nullptr, context);
-    const auto plan = videoPlan(
-        format(96, 64), asset,
-        LayerValues{.position = {48.3, 32.1}, .blendMode = bloom::core::BlendMode::Screen}, 24000);
-    const auto prepared = builder.build(plan, requestFor(*plan));
-    expectations.expect(!prepared &&
-                            prepared.diagnostic.code ==
-                                bloom::runtime::PreparedGpuSceneDiagnosticCode::UnsupportedBlend,
-                        "a non-Normal video graph is refused");
-    expectations.expect(prepared.diagnostic.mediaStatistics.videoSources == 0 &&
-                            prepared.diagnostic.mediaStatistics.videoConversions == 0,
-                        "no video was selected or decoded for the unsupported graph");
+    // Rotation + nonuniform scale + anchor: a raster affine placement.
+    {
+        const auto plan = videoPlan(format(96, 64), asset,
+                                    LayerValues{.position = {48.3, 32.1},
+                                                .anchor = {1.0, -0.5},
+                                                .scale = {1.5, 0.5},
+                                                .rotation = 30.0},
+                                    24000);
+        checkVideoParity(expectations, evaluator, plan, requestFor(*plan),
+                         "video rotated/nonuniform/anchor affine");
+        auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+        const CpuGpuSceneBuilder builder(nullptr, context);
+        const auto prepared = builder.build(plan, requestFor(*plan));
+        bool sawAffine = false;
+        if (prepared) {
+            for (const auto& command : prepared.scene->commands()) {
+                sawAffine = sawAffine ||
+                            std::holds_alternative<bloom::runtime::GpuSceneAffineCommand>(command);
+            }
+        }
+        expectations.expect(prepared.hasValue() && sawAffine,
+                            "a rotated video layer emits a real GpuAffine command");
+    }
+    // Every non-Normal mode folds through an explicit BlendV1.
+    {
+        using bloom::core::BlendMode;
+        const std::array modes{BlendMode::Add,       BlendMode::Multiply, BlendMode::Screen,
+                               BlendMode::Overlay,   BlendMode::Darken,   BlendMode::Lighten,
+                               BlendMode::Difference};
+        std::uint64_t idBase = 24100;
+        for (const auto mode : modes) {
+            const auto plan = videoPlan(
+                format(96, 64), asset,
+                LayerValues{.position = {48.3, 32.1}, .opacity = 0.8, .blendMode = mode}, idBase);
+            checkVideoParity(expectations, evaluator, plan, requestFor(*plan),
+                             "video blend mode " + std::to_string(static_cast<unsigned>(mode)));
+            idBase += 100;
+        }
+    }
+    // Signed scale + proxy on a non-square PAR.
+    {
+        const auto plan = videoPlan(
+            format(48, 32, pixelAspect(4, 3)), asset,
+            LayerValues{.position = {24.3, 15.7}, .scale = {-1.25, 0.75}, .rotation = -20.0},
+            24900);
+        const auto extent = bloom::render::ImageExtent::create(24, 16);
+        expectations.expect(static_cast<bool>(extent), "the signed/proxy video extent builds");
+        if (!extent) {
+            return;
+        }
+        auto request = requestFor(*plan);
+        request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+        checkVideoParity(expectations, evaluator, plan, request, "video signed/proxy affine");
+    }
 }
 
 void testVideoBudgetRefusal(Expectations& expectations, const std::filesystem::path& fixtures) {
@@ -344,7 +396,7 @@ int main(int argc, char** argv) {
         testProxyNonSquareParAndFractional(expectations, evaluator, fixtures);
         testVideoWarmReuse(expectations, evaluator, fixtures);
         testVideoBypassMatrix(expectations, evaluator, fixtures);
-        testUnsupportedVideoGraphScreensBeforeDecode(expectations, evaluator, fixtures);
+        testVideoAffineAndBlend(expectations, evaluator, fixtures);
         testVideoBudgetRefusal(expectations, fixtures);
         if (!expectations.ok()) {
             std::cerr << "FAIL: GPU media video scene preparation expectations failed\n";

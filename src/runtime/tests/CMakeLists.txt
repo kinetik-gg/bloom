@@ -841,3 +841,27 @@ if(TARGET bloom_render_gpu_scene_executor_fault)
         TIMEOUT 300
     )
 endif()
+# Native vertical for the blend-mode slice through the REAL production builder: a real compiled plan
+# -> CpuGpuSceneBuilder -> GpuSceneExecutor -> readback vs a live CpuCompositionEvaluator frame. The
+# proof-only fixture seam is NOT used, so this proves the builder's own all-8 blend emission.
+add_executable(bloom_runtime_gpu_scene_executor_blend_integration_test
+    gpu_scene_executor_blend_integration_native_tests.cpp
+)
+target_include_directories(
+    bloom_runtime_gpu_scene_executor_blend_integration_test
+    PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/render/tests"
+        "${PROJECT_SOURCE_DIR}/src/runtime"
+)
+target_link_libraries(
+    bloom_runtime_gpu_scene_executor_blend_integration_test
+    PRIVATE bloom_runtime_evaluator bloom_render
+)
+bloom_enable_warnings(bloom_runtime_gpu_scene_executor_blend_integration_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_scene_executor_blend_integration_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_scene_executor_blend_integration
+    COMMAND bloom_runtime_gpu_scene_executor_blend_integration_test
+    LABELS runtime unit gpu render
+    TIMEOUT 300
+)

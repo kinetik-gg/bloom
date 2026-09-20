@@ -22,17 +22,6 @@ namespace {
            std::holds_alternative<CompiledCompositionOutput>(operation);
 }
 
-// A leaf whose pixels a Layer Output can be built from: a direct solid or text (vector-coverage
-// path) or a media source (raster-translation path). Anything else feeding a Layer Output would
-// build a nested chain this slice deliberately does not approximate.
-[[nodiscard]] bool isLeafSource(const CompiledOperation& operation) noexcept {
-    return std::holds_alternative<CompiledSolid>(operation) ||
-           std::holds_alternative<CompiledText>(operation) ||
-           std::holds_alternative<CompiledShape>(operation) ||
-           std::holds_alternative<CompiledImageSource>(operation) ||
-           std::holds_alternative<CompiledVideoSource>(operation);
-}
-
 // Common tail shared by both upload leaves: derive bounds + window from the frozen image, charge
 // the resident bytes, and fill the result. Returns a failure if the upload produced no descriptor
 // or the allowance would be exceeded.
@@ -84,14 +73,13 @@ std::optional<GpuSceneLeafFailure> screenUnsupportedLayers(const CompiledComposi
         if (layer == nullptr) {
             continue;
         }
-        if (layer->parent) {
-            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
-                        "A parented layer is not prepared");
-        }
         if (request.time < layer->inPoint ||
             (layer->outPoint.has_value() && request.time >= *layer->outPoint)) {
             continue;
         }
+        // Resolve only to fail closed on a genuinely unevaluable layer before any media decode.
+        // Full affine, parent composition, non-Normal blends and generic (merge/layer) inputs are
+        // covered by the builder, so they are no longer screened here.
         const auto position = resolveParameter(layer->position, plan, resolved);
         const auto anchor = resolveParameter(layer->anchor, plan, resolved);
         const auto scale = resolveParameter(layer->scale, plan, resolved);
@@ -101,22 +89,6 @@ std::optional<GpuSceneLeafFailure> screenUnsupportedLayers(const CompiledComposi
         if (!position || !anchor || !scale || !rotation || !opacity || !blend) {
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                         "Layer parameters are not evaluable");
-        }
-        if (*blend != core::BlendMode::Normal) {
-            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedBlend,
-                        "Only Normal blending is prepared");
-        }
-        if (layer->input.value() >= operationCount ||
-            !isLeafSource(plan.operations()[layer->input.value()])) {
-            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
-                        "A layer fed by a non-source input is not prepared");
-        }
-        if (scale->value.x == 0.0 || scale->value.y == 0.0) {
-            continue;
-        }
-        if (scale->value.x != 1.0 || scale->value.y != 1.0 || rotation->value != 0.0) {
-            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
-                        "Only translation-only layers are prepared");
         }
     }
     return std::nullopt;
