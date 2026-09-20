@@ -1,3 +1,5 @@
+cmake_minimum_required(VERSION 3.25)
+
 # Unit probe for the explicit dynamic-loader floor and prefix resolution classifier. An unknown
 # soname must classify as unresolved (never silently treated as an operating-system library) and a
 # prefix-private soname must classify as private with its prefix path.
