@@ -50,7 +50,7 @@ bool createAndQualifyResidentRoute(
         return false;
     }
     try {
-        auto cache = GpuSceneCache::create(*core->device, core->options.residentSceneCacheBudgets);
+        auto cache = GpuSceneCache::create(*core->device, core->effectiveResidentSceneCacheBudgets);
         if (!cache) {
             publishResidentDetail(core,
                                   cache.diagnostic.message.empty()
@@ -206,10 +206,10 @@ bool residentStageIsEligible(const std::shared_ptr<PreviewDisplayServiceCore>& c
 
     // --- General display route ------------------------------------------------------------------
     // A stage that carries a per-request, off-UI-prepared OCIO DisplayRgba8 program takes the
-    // general display arm instead of the startup Neutral fast path. It is not subject to the Neutral
-    // identity pin or the fixed measured pixel interval: eligibility is governed by the actual
-    // device image limits, the exact prepared program, and the real byte budget. The scene is still
-    // produced by the shared GpuSceneExecutor.
+    // general display arm instead of the startup Neutral fast path. It is not subject to the
+    // Neutral identity pin or the fixed measured pixel interval: eligibility is governed by the
+    // actual device image limits, the exact prepared program, and the real byte budget. The scene
+    // is still produced by the shared GpuSceneExecutor.
     if (stage.gpuStage->hasGeneralDisplayProgram()) {
         const auto& program = *stage.gpuStage->displayProgram();
         if (program.command == nullptr || program.cpuOracle == nullptr) {
@@ -220,13 +220,14 @@ bool residentStageIsEligible(const std::shared_ptr<PreviewDisplayServiceCore>& c
             reason = "the stage display command is not a DisplayRgba8 program";
             return false;
         }
-        // The program must have been prepared for THIS request's project color identity (config URI,
-        // content revision, working space) and this display/view -- not merely the same names or
-        // geometry. This is the service's defense-in-depth check beside the stage's own validation.
-        const auto requestedBinding = gpuDisplayColorBindingForIntent(
-            stage.gpuStage->desiredIdentity().colorIntent,
-            stage.gpuStage->desiredIdentity().displayName,
-            stage.gpuStage->desiredIdentity().viewName);
+        // The program must have been prepared for THIS request's project color identity (config
+        // URI, content revision, working space) and this display/view -- not merely the same names
+        // or geometry. This is the service's defense-in-depth check beside the stage's own
+        // validation.
+        const auto requestedBinding =
+            gpuDisplayColorBindingForIntent(stage.gpuStage->desiredIdentity().colorIntent,
+                                            stage.gpuStage->desiredIdentity().displayName,
+                                            stage.gpuStage->desiredIdentity().viewName);
         if (!gpuDisplayProgramMatchesRequest(program, requestedBinding)) {
             reason = "the prepared display program does not match the request's project color "
                      "identity";
@@ -251,9 +252,8 @@ bool residentStageIsEligible(const std::shared_ptr<PreviewDisplayServiceCore>& c
         const std::uint64_t pixels = width * height;
         const std::uint64_t requestedBytes =
             pixels * sizeof(render::Rgba32f) + pixels * sizeof(render::Rgba8);
-        const std::uint64_t allowance = stage.pixelStorageByteLimit != 0
-                                            ? stage.pixelStorageByteLimit
-                                            : core->options.previewByteAllowance;
+        const std::uint64_t allowance =
+            stage.gpuByteAllowance != 0 ? stage.gpuByteAllowance : core->previewByteAllowance();
         if (allowance != 0 && requestedBytes > allowance) {
             reason = "the request byte allowance cannot hold the resident input and display";
             return false;
@@ -311,9 +311,8 @@ bool residentStageIsEligible(const std::shared_ptr<PreviewDisplayServiceCore>& c
     }
     const std::uint64_t requestedBytes =
         pixels * sizeof(render::Rgba32f) + pixels * sizeof(render::Rgba8);
-    const std::uint64_t allowance = stage.pixelStorageByteLimit != 0
-                                        ? stage.pixelStorageByteLimit
-                                        : core->options.previewByteAllowance;
+    const std::uint64_t allowance =
+        stage.gpuByteAllowance != 0 ? stage.gpuByteAllowance : core->previewByteAllowance();
     if (allowance != 0 && requestedBytes > allowance) {
         reason = "the request byte allowance cannot hold the resident input and display";
         return false;
@@ -327,9 +326,8 @@ bool residentExecutorBegin(const std::shared_ptr<PreviewDisplayServiceCore>& cor
         reason = "the resident executor is unavailable";
         return false;
     }
-    const std::uint64_t budget = stage.pixelStorageByteLimit != 0
-                                     ? stage.pixelStorageByteLimit
-                                     : core->options.previewByteAllowance;
+    const std::uint64_t budget =
+        stage.gpuByteAllowance != 0 ? stage.gpuByteAllowance : core->previewByteAllowance();
     const auto diagnostic = core->residentExecutor->begin(stage.gpuStage->scene(), budget);
     if (diagnostic.code != GpuSceneExecutorDiagnosticCode::None) {
         reason = diagnostic.message.empty() ? std::string("the resident scene begin was refused")
@@ -345,7 +343,8 @@ bool residentExecutorBegin(const std::shared_ptr<PreviewDisplayServiceCore>& cor
 
 bool residentDisplayHasUnretiredSubmission(
     const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
-    if (core->residentNativeActive != nullptr && residentStageIsGeneralDisplay(*core->residentNativeActive)) {
+    if (core->residentNativeActive != nullptr &&
+        residentStageIsGeneralDisplay(*core->residentNativeActive)) {
         return core->residentGeneralDisplay != nullptr &&
                core->residentGeneralDisplay->hasUnretiredSubmission();
     }
@@ -391,13 +390,12 @@ bool residentDisplayBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core
         reason = "the resident scene executor produced no output image";
         return false;
     }
-    const std::uint64_t budget = stage.pixelStorageByteLimit != 0
-                                     ? stage.pixelStorageByteLimit
-                                     : core->options.previewByteAllowance;
+    const std::uint64_t budget =
+        stage.gpuByteAllowance != 0 ? stage.gpuByteAllowance : core->previewByteAllowance();
 
     // General display: run the exact OCIO DisplayRgba8 program through the owned display arm. The
-    // arm reuses the producer's bounded native-program cache, so an unchanged display/view is a warm
-    // program hit and the scene output stays a resident RGBA32F image (no host roundtrip).
+    // arm reuses the producer's bounded native-program cache, so an unchanged display/view is a
+    // warm program hit and the scene output stays a resident RGBA32F image (no host roundtrip).
     if (stage.gpuStage != nullptr && stage.gpuStage->hasGeneralDisplayProgram()) {
         if (core->residentGeneralDisplay == nullptr) {
             auto created = GpuOcioDisplayArm::create(*core->device);
@@ -444,7 +442,8 @@ render::GpuResidentDisplayPollResult
 residentDisplayPoll(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
     // The active stage selects the display implementation; a general-display stage polls the OCIO
     // display arm, mapped into the same neutral poll vocabulary.
-    if (core->residentNativeActive != nullptr && residentStageIsGeneralDisplay(*core->residentNativeActive)) {
+    if (core->residentNativeActive != nullptr &&
+        residentStageIsGeneralDisplay(*core->residentNativeActive)) {
         return residentGeneralDisplayPoll(core);
     }
     if (core->residentDisplay == nullptr) {
@@ -509,8 +508,7 @@ residentFinishFrame(const std::shared_ptr<PreviewDisplayServiceCore>& core,
             reason = "the general display produced no valid image";
             return std::nullopt;
         }
-        auto sharedDisplay =
-            std::make_shared<const render::GpuDisplayImage>(std::move(*display));
+        auto sharedDisplay = std::make_shared<const render::GpuDisplayImage>(std::move(*display));
         GpuGeneralDisplayProductRequest request;
         request.identity = stage.gpuStage->desiredIdentity();
         request.processIdentity = stage.gpuStage->scene()->processIdentity();
@@ -518,9 +516,8 @@ residentFinishFrame(const std::shared_ptr<PreviewDisplayServiceCore>& core,
         request.bounds = stage.gpuStage->scene()->bounds();
         request.expectedDescriptor = stage.gpuStage->scene()->outputDescriptor();
         request.display = std::move(sharedDisplay);
-        request.pixelStorageByteLimit = stage.pixelStorageByteLimit != 0
-                                            ? stage.pixelStorageByteLimit
-                                            : core->options.previewByteAllowance;
+        request.pixelStorageByteLimit =
+            stage.gpuByteAllowance != 0 ? stage.gpuByteAllowance : core->previewByteAllowance();
         request.displayCommandIdentity = stage.gpuStage->displayProgram()->command->identity();
         std::string eligibilityReason;
         if (!gpuGeneralDisplayProductIsEligible(*core->device, *core->presentation->registry,
@@ -564,9 +561,8 @@ residentFinishFrame(const std::shared_ptr<PreviewDisplayServiceCore>& core,
     // per-request allowance separately), so the service charges the SAME per-request allowance the
     // scene was prepared under. Without this the product factory treats 0 as an exhausted budget
     // and refuses every resident frame.
-    request.pixelStorageByteLimit = stage.pixelStorageByteLimit != 0
-                                        ? stage.pixelStorageByteLimit
-                                        : core->options.previewByteAllowance;
+    request.pixelStorageByteLimit =
+        stage.gpuByteAllowance != 0 ? stage.gpuByteAllowance : core->previewByteAllowance();
     // Pre-validate with the authoritative eligibility check so a refusal is diagnosable (the
     // factory rechecks and publishes nothing on refusal). A registry budget/pin refusal leaves
     // every live lease and pin untouched; the pump collects released tokens and this request takes

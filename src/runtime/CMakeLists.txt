@@ -119,6 +119,8 @@ target_sources(
         gpu_preview_display_service.cpp
         gpu_preview_display_service_jobs.cpp
         gpu_preview_display_service_private.hpp
+        gpu_preview_resident_capacity.cpp
+        gpu_preview_resident_capacity_resolver.cpp
         gpu_preview_display_service_loop.hpp
         gpu_preview_display_service_presentation.cpp
         gpu_preview_display_service_presentation_private.hpp
@@ -174,6 +176,7 @@ target_sources(
             include/bloom/runtime/gpu_preview_display_product.hpp
             include/bloom/runtime/gpu_resident_preview_product.hpp
             include/bloom/runtime/gpu_preview_display_service.hpp
+            include/bloom/runtime/gpu_preview_resident_capacity.hpp
             include/bloom/runtime/gpu_presentation_coordinator.hpp
             include/bloom/runtime/gpu_resident_frame_lease.hpp
             include/bloom/runtime/gpu_scene_cache.hpp

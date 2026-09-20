@@ -65,9 +65,8 @@ void completeFailed(const std::shared_ptr<PreviewDisplayStageRecord>& stage,
     }
     const std::uint64_t inputBytes = pixels * sizeof(render::Rgba32f);
     const std::uint64_t readbackBytes = pixels * sizeof(render::Rgba8);
-    const std::uint64_t allowance = stage->pixelStorageByteLimit != 0
-                                        ? stage->pixelStorageByteLimit
-                                        : core->options.previewByteAllowance;
+    const std::uint64_t allowance =
+        stage->gpuByteAllowance != 0 ? stage->gpuByteAllowance : core->previewByteAllowance();
     return inputBytes <= core->options.nativeBudgets.maxInputBytes &&
            inputBytes + readbackBytes <= core->options.nativeBudgets.maxOwnedBytes &&
            (allowance == 0 || inputBytes + readbackBytes <= allowance);
@@ -252,6 +251,12 @@ void runGpuStartupImpl(const std::shared_ptr<PreviewDisplayServiceCore>& core, T
     }
     core->device = std::move(created.device);
 
+    // Resolve the real device allocation budget on this owner thread and clamp the configured
+    // resident route to one shared pool BEFORE the lease registry and scene cache are created, so
+    // no sub-budget can overcommit the device. Packed-only services skip this and keep their
+    // configured budgets unchanged.
+    resolveResidentCapacity(core);
+
     // Own the presentation generation on this same device and owner thread. When presentation mode
     // is Disabled or the capability is not Ready this returns a non-available record and the
     // compute/CPU path is completely unchanged. The immutable UI client and the actual shutdown
@@ -375,8 +380,9 @@ void startGpuPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>& core
     stage->owner = submission.owner;
     stage->groupId = submission.groupId;
     stage->sourceVersion = submission.sourceVersion;
-    stage->requestOwnedBytes = submission.pixelStorageByteLimit;
+    stage->requestOwnedBytes = submission.gpuByteAllowance;
     stage->pixelStorageByteLimit = submission.pixelStorageByteLimit;
+    stage->gpuByteAllowance = submission.gpuByteAllowance;
     stage->report = core->qualificationReport();
     if (submission.coalescingKey.has_value() && !submission.coalescingKey->empty()) {
         stage->childCoalescingKey = *submission.coalescingKey + ".cpu";
@@ -568,9 +574,8 @@ void processNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core
             return;
         }
         const auto& pixels = stage->stage->processFrame()->processImage().pixels();
-        const std::uint64_t allowance = stage->pixelStorageByteLimit != 0
-                                            ? stage->pixelStorageByteLimit
-                                            : core->options.previewByteAllowance;
+        const std::uint64_t allowance =
+            stage->gpuByteAllowance != 0 ? stage->gpuByteAllowance : core->previewByteAllowance();
         const auto diagnostic = core->display->begin(pixels, allowance);
         if (diagnostic.code == render::GpuNeutralDisplayDiagnosticCode::None) {
             stage->nativeDispatched = true;

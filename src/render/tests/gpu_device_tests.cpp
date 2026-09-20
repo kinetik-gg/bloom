@@ -13,6 +13,7 @@
 
 namespace {
 
+using bloom::render::GpuAllocationBudgetSource;
 using bloom::render::GpuBorrowedInstanceView;
 using bloom::render::GpuBorrowedSurface;
 using bloom::render::GpuBufferAllocation;
@@ -164,6 +165,26 @@ void testRealDeviceIfAvailable(ExpectationContext& expectations, const TestOptio
               << report.identity.api_version_minor << " compute_queue=" << report.compute_queue
               << " timeline=" << report.timeline_semaphore
               << " memory_bytes=" << report.device_memory_bytes << '\n';
+
+    // The owner-thread allocation budget is a distinct permission to plan allocations, not the
+    // summed DEVICE_LOCAL heap size in the capability report.
+    const auto allocationBudget = device.availableAllocationBudget();
+    expectations.expect(allocationBudget.source != GpuAllocationBudgetSource::Unavailable,
+                        "the device owner resolves a real allocation budget");
+    expectations.expect(allocationBudget.available_bytes <= allocationBudget.device_local_bytes,
+                        "the resolved available budget never exceeds DEVICE_LOCAL capacity");
+    expectations.expect(allocationBudget.device_local_bytes == report.device_memory_bytes,
+                        "the resolved budget carries the same DEVICE_LOCAL diagnostic total");
+    std::cout << "GPU allocation budget: source=" << static_cast<int>(allocationBudget.source)
+              << " available_bytes=" << allocationBudget.available_bytes << '\n';
+
+    // A non-owner thread must fail closed without touching the driver.
+    GpuAllocationBudgetSource foreignSource = GpuAllocationBudgetSource::MemoryBudget;
+    std::thread foreignQuery(
+        [&device, &foreignSource]() { foreignSource = device.availableAllocationBudget().source; });
+    foreignQuery.join();
+    expectations.expect(foreignSource == GpuAllocationBudgetSource::Unavailable,
+                        "a foreign-thread budget query returns Unavailable");
 
     expectations.expect(device.qualificationFor(GpuOperationId::SolidV1, GpuPrecision::Rgba32f) ==
                             GpuQualification::Unavailable,

@@ -361,6 +361,22 @@ bloom_add_test(
     TIMEOUT 120
 )
 
+# Capacity-aware resident preview admission policy. The pure cases need no device; the optional
+# native owner case creates one device and resolves its real allocation budget, then uses compact
+# arithmetic (no large allocations). --loader/--require-device are supplied by the local supervisor.
+add_executable(bloom_runtime_gpu_preview_resident_capacity_test
+    gpu_preview_resident_capacity_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_preview_resident_capacity_test
+    PRIVATE bloom_runtime_evaluator bloom_render)
+bloom_enable_warnings(bloom_runtime_gpu_preview_resident_capacity_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_preview_resident_capacity_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_preview_resident_capacity
+    COMMAND bloom_runtime_gpu_preview_resident_capacity_test
+    LABELS runtime unit gpu render
+    TIMEOUT 120
+)
+
 # CPU-side immutable GPU scene preparation (solid / translation-only / Normal merge / output). It
 # drives a genuine CpuCompositionEvaluator oracle and needs no loader and no device; it is a pure
 # CPU test that runs against the CPU stub too.

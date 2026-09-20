@@ -167,8 +167,9 @@ void startResidentPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>&
     stage->owner = submission.owner;
     stage->groupId = submission.groupId;
     stage->sourceVersion = submission.sourceVersion;
-    stage->requestOwnedBytes = submission.pixelStorageByteLimit;
+    stage->requestOwnedBytes = submission.gpuByteAllowance;
     stage->pixelStorageByteLimit = submission.pixelStorageByteLimit;
+    stage->gpuByteAllowance = submission.gpuByteAllowance;
     stage->resident = true;
     // Retained so a GPU-subset refusal or a resident native failure can take the full original CPU
     // path without re-asking the caller, using the same snapshot/identity/overrides.
@@ -358,8 +359,9 @@ void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>&
     if (!eligible || core->residentNativeReady.size() >= core->options.readyStageQueueCapacity) {
         core->counterCpuFallbacks.fetch_add(1, std::memory_order_relaxed);
         const std::string detail =
-            eligible ? std::string("the resident ready-stage queue is full")
-                     : (reason.empty() ? std::string("the resident stage was not eligible") : reason);
+            eligible
+                ? std::string("the resident ready-stage queue is full")
+                : (reason.empty() ? std::string("the resident stage was not eligible") : reason);
         {
             std::lock_guard lock(core->stateMutex);
             core->publishedResidentDetail = "resident stage ineligible: " + detail;
@@ -377,7 +379,8 @@ void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>&
 
 void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
     // The general display route needs only the scene executor; the Neutral fast path additionally
-    // requires the resident display (checked per-stage in residentStageIsEligible/residentDisplayBegin).
+    // requires the resident display (checked per-stage in
+    // residentStageIsEligible/residentDisplayBegin).
     if (!core->residentNativeReady.empty() &&
         (core->residentExecutor == nullptr || core->stopping.load(std::memory_order_acquire))) {
         while (!core->residentNativeReady.empty()) {

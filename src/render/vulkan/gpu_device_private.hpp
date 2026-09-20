@@ -108,6 +108,12 @@ struct DeviceAllocatorState final {
     std::uint32_t maxComputeWorkGroupCountX = 0;
     std::uint32_t maxComputeWorkGroupInvocations = 0;
     std::uint32_t maxComputeWorkGroupSizeX = 0;
+
+    // Resolved device allocation budget inputs. `deviceLocalBytes` is the summed DEVICE_LOCAL heap
+    // size and `memoryBudgetEnabled` is true only when VK_EXT_memory_budget was actually enabled
+    // and the VMA allocator was created with the matching budget flag.
+    std::uint64_t deviceLocalBytes = 0;
+    bool memoryBudgetEnabled = false;
 };
 
 } // namespace bloom::render::vulkan_detail

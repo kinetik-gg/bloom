@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -254,7 +255,11 @@ selectPhysicalDevice(const vk::raii::Instance& instance) {
             // or usable-budget claim (integrated GPUs share host memory, and drivers may migrate).
             if ((memoryProperties2.memoryProperties.memoryHeaps[heap].flags &
                  VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0U) {
-                deviceLocalBytes += memoryProperties2.memoryProperties.memoryHeaps[heap].size;
+                const std::uint64_t heapBytes =
+                    memoryProperties2.memoryProperties.memoryHeaps[heap].size;
+                const std::uint64_t sum = deviceLocalBytes + heapBytes;
+                deviceLocalBytes =
+                    sum < deviceLocalBytes ? std::numeric_limits<std::uint64_t>::max() : sum;
             }
         }
 
@@ -392,6 +397,11 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     }
     if (swapchainExtensionEnabled) {
         deviceExtensions.push_back(kSwapchainExtensionName);
+    }
+    // VK_EXT_memory_budget is a behavior-free query extension. Enable it only when the selected
+    // device advertises it so VMA can report a live heap budget instead of a nominal estimate.
+    if (selection->memoryBudgetSupported) {
+        deviceExtensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
     }
 
     // Presentation-retirement mechanisms. Prefer maintenance1 present fences; fall back to
@@ -561,6 +571,8 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     control->maxComputeWorkGroupInvocations =
         selection->properties.limits.maxComputeWorkGroupInvocations;
     control->maxComputeWorkGroupSizeX = selection->properties.limits.maxComputeWorkGroupSize[0];
+    control->deviceLocalBytes = selection->deviceMemoryBytes;
+    control->memoryBudgetEnabled = selection->memoryBudgetSupported;
 
     VmaVulkanFunctions vmaFunctions{};
     vmaFunctions.vkGetInstanceProcAddr = getInstanceProcAddr;
@@ -572,6 +584,11 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     allocatorInfo.instance = rawInstance;
     allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_2;
     allocatorInfo.pVulkanFunctions = &vmaFunctions;
+    // The budget flag is only valid with the extension actually enabled; VMA would otherwise
+    // report no budget. The fallback path below never requires it.
+    if (selection->memoryBudgetSupported) {
+        allocatorInfo.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
+    }
     if (vmaCreateAllocator(&allocatorInfo, &control->allocator) != VK_SUCCESS) {
         return {nullptr, diagnostic(GpuDiagnosticCode::AllocatorUnavailable,
                                     "the Vulkan Memory Allocator could not be initialized")};

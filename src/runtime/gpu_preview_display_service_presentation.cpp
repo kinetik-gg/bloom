@@ -161,7 +161,7 @@ createServicePresentation(const std::shared_ptr<PreviewDisplayServiceCore>& core
     }
     try {
         presentation->registry = GpuResidentFrameLeaseRegistry::create(
-            *core->device, core->options.residentLeaseBudgets);
+            *core->device, core->effectiveResidentLeaseBudgets);
         if (presentation->registry == nullptr) {
             presentation->detail = "the resident-frame lease registry could not be created";
             return presentation;
@@ -381,7 +381,7 @@ bool requestServicePresentationTestLease(const std::shared_ptr<PreviewDisplaySer
             if (foreign) {
                 if (core->testForeignRegistry == nullptr) {
                     core->testForeignRegistry = GpuResidentFrameLeaseRegistry::create(
-                        *core->device, core->options.residentLeaseBudgets);
+                        *core->device, core->effectiveResidentLeaseBudgets);
                 }
                 registry = core->testForeignRegistry.get();
             }

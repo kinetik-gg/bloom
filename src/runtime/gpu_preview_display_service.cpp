@@ -394,6 +394,10 @@ GpuPreviewDisplayService::GpuPreviewDisplayService(TaskScheduler& scheduler,
     core->options = std::move(options);
     core->stageFunction = std::move(stageFunction);
     core->fallback = std::move(displayFallback);
+    core->effectiveResidentLeaseBudgets = core->options.residentLeaseBudgets;
+    core->effectiveResidentSceneCacheBudgets = core->options.residentSceneCacheBudgets;
+    core->effectivePreviewByteAllowance.store(core->options.previewByteAllowance,
+                                              std::memory_order_relaxed);
     impl_->core = core;
 
     if (!core->options.enabled) {
@@ -452,6 +456,10 @@ GpuPreviewDisplayService::GpuPreviewDisplayService(TaskScheduler& scheduler,
     core->stageFunction = std::move(cpuStageFunction);
     core->gpuStageFunction = std::move(gpuStageFunction);
     core->fallback = std::move(displayFallback);
+    core->effectiveResidentLeaseBudgets = core->options.residentLeaseBudgets;
+    core->effectiveResidentSceneCacheBudgets = core->options.residentSceneCacheBudgets;
+    core->effectivePreviewByteAllowance.store(core->options.previewByteAllowance,
+                                              std::memory_order_relaxed);
     impl_->core = core;
 
     if (!core->options.enabled) {
@@ -528,6 +536,7 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
     result.presentationShutdown = core.publishedPresentationShutdown;
     result.residentQualification = core.publishedResidentQualification;
     result.residentDetail = core.publishedResidentDetail;
+    result.residentCapacityPlan = core.publishedResidentCapacityPlan;
     result.counters.residentGraphJobs =
         core.counterResidentGraphJobs.load(std::memory_order_relaxed);
     result.counters.nativeDispatches = core.counterNativeDispatches.load(std::memory_order_relaxed);
@@ -579,17 +588,23 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
         gpuMode = current.state == GpuPreviewDisplayServiceState::Ready && current.gpuAvailable &&
                   current.qualification != nullptr && current.qualification->eligible();
     }
-    const std::size_t allowance =
-        pixelStorageByteLimit != 0 ? pixelStorageByteLimit : core->options.previewByteAllowance;
+    // Two DISTINCT budgets. `pixelStorageByteLimit` is the caller's HOST pixel-storage ceiling for
+    // decoding and the CPU fallback and is never lowered here. The device stage admits the request
+    // with the host ceiling clamped down to the owner-resolved GPU request ceiling: a large host
+    // ceiling is clamped, never treated as an oversize GPU request. A zero device ceiling (or zero
+    // host ceiling) is zero device admission, which honestly takes the CPU path.
+    const std::size_t gpuAllowance = static_cast<std::size_t>(
+        gpuResidentRequestBudget(static_cast<std::uint64_t>(pixelStorageByteLimit),
+                                 static_cast<std::uint64_t>(core->previewByteAllowance())));
     // In resident mode the per-request stage decides between the general display program (which may
     // be a non-default display/view and a non-neutral ViewAdjust), the startup Neutral fast path,
     // and the CPU fallback. The submit gate therefore must NOT preempt a non-neutral request: doing
     // so would re-introduce the old neutral-only gate and silently drop every prepared general
     // display program. The packed (non-resident) arm keeps the neutral requirement.
     const bool neutralRequired = !residentMode;
-    if (!gpuMode || pixelStorageByteLimit == 0 || allowance > core->options.previewByteAllowance ||
+    if (!gpuMode || gpuAllowance == 0 ||
         (neutralRequired && !detail::gpuPreviewDisplayRequestIsNeutral(identity))) {
-        // Reference/unavailable/disabled, oversize admission, or a packed non-neutral request:
+        // Reference/unavailable/disabled, no device admission, or a packed non-neutral request:
         // ordinary CPU task before any stage work on the held reservation. For the resident arm an
         // unavailable presentation generation takes this honest CPU fallback.
         return submitCpuRootReserved(core, std::move(request), snapshot, identity,
@@ -607,13 +622,13 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
     }
 
     detail::PreviewStageSubmission stageSubmission(
-        snapshot, identity, pixelStorageByteLimit, overrides, request.priority, request.owner,
-        request.groupId, request.sourceVersion, request.coalescingKey);
+        snapshot, identity, pixelStorageByteLimit, gpuAllowance, overrides, request.priority,
+        request.owner, request.groupId, request.sourceVersion, request.coalescingKey);
     TaskRequest cpuRequest = request;
     try {
         auto submission = core->scheduler->submitGpu<PreviewPreparationResultHandle>(
             std::move(request), core->generation,
-            GpuTaskAdmission{.queuedCommandBytes = 0, .requestOwnedBytes = allowance},
+            GpuTaskAdmission{.queuedCommandBytes = 0, .requestOwnedBytes = gpuAllowance},
             [core, residentMode, stageSubmission = std::move(stageSubmission)](
                 TaskContext& context,
                 GpuTaskCompletion<PreviewPreparationResultHandle> completion) mutable {

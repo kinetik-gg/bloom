@@ -1,9 +1,9 @@
 #include <algorithm>
 #include <bloom/host/gpu_export_provider.hpp>
-#include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
@@ -49,8 +49,8 @@
 #include <QSettings>
 #include <QTimer>
 
-#include <memory>
 #include <filesystem>
+#include <memory>
 
 int main(int argc, char* argv[]) {
     QApplication application(argc, argv);
@@ -231,8 +231,9 @@ int main(int argc, char* argv[]) {
     // The ONE shared runtime OCIO context resolver. It is INERT to construct (no hash/fs/OCIO/
     // process work); the packaged glslangValidator/spirv-val paths come from the application's OWN
     // packaging macros (never PATH, never a manual setup) and are qualified lazily on the GPU-scene
-    // CPU worker. The same resolver supplies the builder's effect/media/ACES context AND the general
-    // display program's preparer, so there is exactly one tool qualification and one program cache.
+    // CPU worker. The same resolver supplies the builder's effect/media/ACES context AND the
+    // general display program's preparer, so there is exactly one tool qualification and one
+    // program cache.
     std::shared_ptr<bloom::runtime::GpuOcioContextResolver> gpuOcioContextResolver =
         std::make_shared<bloom::runtime::GpuOcioContextResolver>();
 #if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
@@ -369,6 +370,10 @@ int main(int argc, char* argv[]) {
     bloom::ui::GpuViewerBootstrap gpuViewerBootstrap(
         taskScheduler, gpuPreviewDisplayOptions.loaderPath.string(),
         primaryScreen != nullptr ? primaryScreen->devicePixelRatio() : 1.0);
+    // The bootstrap installs the owner-resolved capacity plan through the poll below. Binding the
+    // shared frame cache is inert (no device query); until the owner resolves the device budget the
+    // configured sublimits installed above remain in force.
+    gpuViewerBootstrap.bindResidentCache(*previewFrameCache);
     bloom::ui::ViewerGpuDependencies viewerGpuDependencies = gpuViewerBootstrap.dependencies();
     bloom::ui::EditorRegistry editorRegistry;
     // Jobs is deliberately NOT registered (task F1, item F6). An editor in this registry is an

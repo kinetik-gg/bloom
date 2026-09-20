@@ -47,9 +47,9 @@ int main(const int argc, char** argv) {
         std::cout << "SKIP: the ACES built-in is unavailable\n";
         return kSkipExit;
     }
-    auto acesResolution = bloom::color::resolveOcioBuiltIn(
-        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri,
-        *acesRevision, "ACEScg");
+    auto acesResolution =
+        bloom::color::resolveOcioBuiltIn(bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
+                                         bloom::color::kAcesCgV1ConfigUri, *acesRevision, "ACEScg");
     auto aces = std::move(acesResolution).takeResolved();
     if (!aces.has_value()) {
         std::cout << "SKIP: the ACES built-in does not resolve\n";
@@ -84,14 +84,12 @@ int main(const int argc, char** argv) {
     ocioRequest.toolPackage.bundleRelative = true;
 #endif
 #ifdef BLOOM_GPU_TOOLS_GLSLANG_STAGED_SHA256
-    ocioRequest.toolPackage.glslangStagedDigest =
-        bloom::core::Sha256Digest::fromLowercaseHex(
-            std::string_view{BLOOM_GPU_TOOLS_GLSLANG_STAGED_SHA256}.substr(7));
+    ocioRequest.toolPackage.glslangStagedDigest = bloom::core::Sha256Digest::fromLowercaseHex(
+        std::string_view{BLOOM_GPU_TOOLS_GLSLANG_STAGED_SHA256}.substr(7));
 #endif
 #ifdef BLOOM_GPU_TOOLS_SPIRV_VAL_STAGED_SHA256
-    ocioRequest.toolPackage.spirvValStagedDigest =
-        bloom::core::Sha256Digest::fromLowercaseHex(
-            std::string_view{BLOOM_GPU_TOOLS_SPIRV_VAL_STAGED_SHA256}.substr(7));
+    ocioRequest.toolPackage.spirvValStagedDigest = bloom::core::Sha256Digest::fromLowercaseHex(
+        std::string_view{BLOOM_GPU_TOOLS_SPIRV_VAL_STAGED_SHA256}.substr(7));
 #endif
     auto programService = std::make_shared<const GpuDisplayProgramService>(
         std::make_shared<GpuOcioContextResolver>(std::move(ocioRequest)));
@@ -117,10 +115,7 @@ int main(const int argc, char** argv) {
         serviceOptions(options.loaderPath));
 
     const bool terminal = waitUntil(
-        [&] {
-            return service.status().state != GpuPreviewDisplayServiceState::Initializing;
-        },
-        90s);
+        [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; }, 90s);
     const auto status = service.status();
     const bool residentReady =
         terminal && status.state == GpuPreviewDisplayServiceState::Ready &&
@@ -161,10 +156,9 @@ int main(const int argc, char** argv) {
     }();
 
     // --- Acceptance (1): ordinary DEFAULT Neutral above the retired 4K ceiling ---------------
-    const auto neutralIdentity =
-        makeIdentity(*neutralPlan, 1, {}, {}, ViewAdjust{});
-    auto neutralSubmission =
-        service.submit(TaskRequest("general neutral", owner), snapshot, neutralIdentity, kBudget, {});
+    const auto neutralIdentity = makeIdentity(*neutralPlan, 1, {}, {}, ViewAdjust{});
+    auto neutralSubmission = service.submit(TaskRequest("general neutral", owner), snapshot,
+                                            neutralIdentity, kBudget, {});
     expectations.expect(neutralSubmission.status == TaskSubmissionStatus::Accepted,
                         "the >4K default Neutral general request was admitted");
     const auto neutralResult = awaitResult(neutralSubmission.handle);
@@ -174,16 +168,16 @@ int main(const int argc, char** argv) {
         std::cerr << "neutral >4K general request did not produce a resident frame: "
                   << service.status().residentDetail << '\n';
     }
-    expectations.expect(neutralResident,
-                        "the >4K default Neutral request produced a resident GpuResident frame at the "
-                        "actual service (old 4K/pixel-interval gate gone)");
+    expectations.expect(
+        neutralResident,
+        "the >4K default Neutral request produced a resident GpuResident frame at the "
+        "actual service (old 4K/pixel-interval gate gone)");
     expectations.expect(
         bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess::generalDisplayActive(*core),
         "the service took the prepared general display arm for the default Neutral request");
-    expectations.expect(
-        neutralFrame != nullptr && neutralFrame->residentFrame() != nullptr &&
-            neutralFrame->residentFrame()->lease().isValid(),
-        "the general frame carries a valid resident lease");
+    expectations.expect(neutralFrame != nullptr && neutralFrame->residentFrame() != nullptr &&
+                            neutralFrame->residentFrame()->lease().isValid(),
+                        "the general frame carries a valid resident lease");
     expectations.expect(
         bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess::generalDisplayIdentity(*core) !=
             bloom::core::Sha256Digest{},
@@ -191,8 +185,9 @@ int main(const int argc, char** argv) {
     const auto afterNeutral = service.status().counters;
     expectations.expect(afterNeutral.fullFrameReadbacks == 0U,
                         "the resident general route performed no full-frame readback");
-    expectations.expect(afterNeutral.displayStatusReads >= 1U,
-                        "the general display invalidated its status word (a real display dispatch)");
+    expectations.expect(
+        afterNeutral.displayStatusReads >= 1U,
+        "the general display invalidated its status word (a real display dispatch)");
 
     // --- Acceptance (2): non-default ACES, cold/warm, display-only change -------------------
     const ViewAdjust adjustA{.exposure = 1.0, .gamma = 0.8};
@@ -213,8 +208,8 @@ int main(const int argc, char** argv) {
         std::cerr << "non-default adjusted request did not produce a resident frame: "
                   << service.status().residentDetail << '\n';
     }
-    expectations.expect(coldResident,
-                        "the non-default display + adjustment produced a resident GpuResident frame");
+    expectations.expect(
+        coldResident, "the non-default display + adjustment produced a resident GpuResident frame");
     expectations.expect(coldFrame != nullptr && coldFrame->residentFrame() != nullptr &&
                             coldFrame->residentFrame()->lease().isValid(),
                         "the cold adjusted frame carries a valid resident lease");
@@ -246,11 +241,39 @@ int main(const int argc, char** argv) {
             identityACommand,
         "the warm request retained the exact display command identity");
 
+    // Regression: the controller passes the HOST pixel-storage allowance from settings, which may
+    // be far larger than the effective GPU request ceiling. That host ceiling is the
+    // decode/CPU-fallback limit and must NEVER force the GPU to the CPU; the device stage clamps to
+    // the GPU share.
+    const auto beforeLargeHost = service.status().counters;
+    const std::uint64_t largeHostLimit = 64ULL * kBudget;
+    const auto largeHostIdentity =
+        makeIdentity(*neutralPlan, 7, acesDisplay, acesView, adjustA, acesIntent);
+    auto largeHostSubmission = service.submit(TaskRequest("general large host ceiling", owner),
+                                              snapshot, largeHostIdentity, largeHostLimit, {});
+    expectations.expect(largeHostSubmission.status == TaskSubmissionStatus::Accepted,
+                        "a request whose host ceiling exceeds the GPU budget was admitted");
+    const auto largeHostResult = awaitResult(largeHostSubmission.handle);
+    std::shared_ptr<const bloom::runtime::PreparedPreviewFrame> largeHostFrame;
+    if (!isResidentPrepared(largeHostResult, 7, largeHostFrame)) {
+        std::cerr << "large host ceiling did not produce a resident frame: "
+                  << service.status().residentDetail << '\n';
+    }
+    expectations.expect(largeHostFrame != nullptr && largeHostFrame->residentFrame() != nullptr &&
+                            largeHostFrame->residentFrame()->lease().isValid(),
+                        "a large host ceiling still produced a resident GpuResident lease");
+    const auto afterLargeHost = service.status().counters;
+    expectations.expect(afterLargeHost.residentGraphJobs > beforeLargeHost.residentGraphJobs,
+                        "a large host ceiling still admitted a GPU graph job");
+    expectations.expect(afterLargeHost.cpuFallbacks == beforeLargeHost.cpuFallbacks,
+                        "a large host ceiling did NOT force a CPU fallback");
+    expectations.expect(afterLargeHost.fullFrameReadbacks == 0U,
+                        "the large-host-ceiling resident frame performed no full-frame readback");
+
     // Display-only change: same process scene, a different adjustment -> the process output is
     // retained and only the DisplayRgba8 command identity changes.
-    auto changeSubmission =
-        service.submit(TaskRequest("general aces display-only", owner), snapshot, identityB, kBudget,
-                       {});
+    auto changeSubmission = service.submit(TaskRequest("general aces display-only", owner),
+                                           snapshot, identityB, kBudget, {});
     expectations.expect(changeSubmission.status == TaskSubmissionStatus::Accepted,
                         "the display-only change request was admitted");
     const auto changeResult = awaitResult(changeSubmission.handle);
@@ -260,8 +283,9 @@ int main(const int argc, char** argv) {
     const auto afterChange = service.status().counters;
     expectations.expect(afterChange.gpuCacheHits > afterWarm.gpuCacheHits,
                         "the display-only change retained the process output (scene cache hit)");
-    expectations.expect(afterChange.nativeDispatches == afterWarm.nativeDispatches,
-                        "the display-only change performed zero additional native scene operations");
+    expectations.expect(
+        afterChange.nativeDispatches == afterWarm.nativeDispatches,
+        "the display-only change performed zero additional native scene operations");
     expectations.expect(
         bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess::generalDisplayIdentity(*core) !=
             identityACommand,
@@ -270,13 +294,10 @@ int main(const int argc, char** argv) {
                         "the whole general service run performed no full-frame readback");
 
     service.beginShutdown();
-    expectations.expect(waitUntil(
-                            [&] {
-                                return service.status().state ==
-                                       GpuPreviewDisplayServiceState::Stopped;
-                            },
-                            60s),
-                        "the general service owner drained and stopped");
+    expectations.expect(
+        waitUntil([&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; },
+                  60s),
+        "the general service owner drained and stopped");
     scheduler.beginShutdown();
     expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }, 30s),
                         "the scheduler reached quiescence");
@@ -289,14 +310,12 @@ int main(const int argc, char** argv) {
         GpuPreviewDisplayServiceOptions forcedOptions = serviceOptions(options.loaderPath);
         forcedOptions.residentQualificationBudgets.maxImageBytes = 1;
         GpuPreviewDisplayService forcedService(
-            forcedScheduler,
-            generalStageFunction(neutralPlan, builder, programService, processor),
+            forcedScheduler, generalStageFunction(neutralPlan, builder, programService, processor),
             generalCpuStageFunction(neutralPlan, processor, evaluator), generalFallback(processor),
             forcedOptions);
         const bool forcedTerminal = waitUntil(
             [&] {
-                return forcedService.status().state !=
-                       GpuPreviewDisplayServiceState::Initializing;
+                return forcedService.status().state != GpuPreviewDisplayServiceState::Initializing;
             },
             90s);
         const auto forcedStatus = forcedService.status();
@@ -313,8 +332,8 @@ int main(const int argc, char** argv) {
             bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess::coreOf(forcedService);
         if (forcedCore != nullptr && forcedStatus.state == GpuPreviewDisplayServiceState::Ready &&
             forcedStatus.presentationClient != nullptr) {
-            auto forcedSubmission = forcedService.submit(
-                TaskRequest("forced neutral 4k", owner), snapshot, neutralIdentity, kBudget, {});
+            auto forcedSubmission = forcedService.submit(TaskRequest("forced neutral 4k", owner),
+                                                         snapshot, neutralIdentity, kBudget, {});
             const auto forcedResult = awaitResult(forcedSubmission.handle);
             std::shared_ptr<const bloom::runtime::PreparedPreviewFrame> forcedFrame;
             expectations.expect(
@@ -339,9 +358,10 @@ int main(const int argc, char** argv) {
     }
 
     if (expectations.failures() == 0) {
-        std::cout << "PASS: default >4K Neutral general arm at the service; non-default adjusted "
-                     "cold/warm general frames; process output retained across a display-only change; "
-                     "zero full-frame readback\n";
+        std::cout
+            << "PASS: default >4K Neutral general arm at the service; non-default adjusted "
+               "cold/warm general frames; process output retained across a display-only change; "
+               "zero full-frame readback\n";
         return 0;
     }
     std::cerr << expectations.failures() << " general display service expectation(s) failed\n";

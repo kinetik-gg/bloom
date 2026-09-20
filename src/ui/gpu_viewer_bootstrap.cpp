@@ -14,53 +14,25 @@ namespace bloom::ui {
 
 namespace {
 
-constexpr std::uint64_t kMebibyte = 1024ULL * 1024ULL;
-
-// The GPU-resident subset of the UI cache is bounded conservatively and independently of how large
-// the RAM cache is: a big RAM budget is not evidence of usable VRAM.
-constexpr std::uint64_t kResidentCacheMinBytes = 256ULL * kMebibyte;
-constexpr std::uint64_t kResidentCacheMaxBytes = 1024ULL * kMebibyte;
-constexpr std::size_t kResidentCacheMinEntries = 32;
-constexpr std::size_t kResidentCacheMaxEntries = 256;
-// A conservative nominal resident frame for turning a byte sublimit into an entry sublimit. A 1080p
-// packed RGBA8 frame is about 8 MiB. This is a bound, not a claim about any composition extent.
-constexpr std::uint64_t kNominalResidentFrameBytes = 8ULL * kMebibyte;
-// The registry cap is the cache sublimit plus bounded headroom for leases that are in flight or
-// currently presented but not yet cached. The absolute ceiling is conservative: it never scales
-// with the RAM cache budget.
-constexpr std::uint64_t kLeaseByteHeadroomCap = 256ULL * kMebibyte;
-constexpr std::uint64_t kLeaseBudgetMaxBytes = 2ULL * 1024ULL * kMebibyte;
-constexpr std::size_t kLeaseEntryHeadroomMin = 8;
-constexpr std::size_t kLeaseEntryHeadroomMax = 64;
-constexpr std::size_t kLeaseEntriesMax = 4096;
-constexpr std::uint64_t kSceneCacheMaxBytes = 512ULL * kMebibyte;
+GpuResidentBudgetPlan budgetPlanFrom(const runtime::GpuResidentCapacityPlan& plan) noexcept {
+    return GpuResidentBudgetPlan{.residentPoolBytes = plan.poolBytes,
+                                 .cacheBytes = plan.cacheBytes,
+                                 .cacheEntries = static_cast<std::size_t>(plan.cacheEntries),
+                                 .leaseBytes = plan.leaseBytes,
+                                 .leaseEntries = static_cast<std::size_t>(plan.leaseEntries),
+                                 .sceneCacheBytes = plan.sceneCacheBytes,
+                                 .requestBytes = plan.requestBytes};
+}
 
 } // namespace
 
 GpuResidentBudgetPlan
 gpuResidentBudgetPlanFor(const std::size_t previewFrameCacheByteBudget) noexcept {
-    const std::uint64_t budget = static_cast<std::uint64_t>(previewFrameCacheByteBudget);
-    // Halve the RAM cache for the resident subset and clamp conservatively. No intermediate product
-    // can overflow: every division happens before any addition, and the added headroom is bounded.
-    const std::uint64_t cacheBytes =
-        std::clamp(budget / std::uint64_t{2}, kResidentCacheMinBytes, kResidentCacheMaxBytes);
-    const std::uint64_t rawEntries = cacheBytes / kNominalResidentFrameBytes;
-    const std::size_t cacheEntries = static_cast<std::size_t>(
-        std::clamp(rawEntries, static_cast<std::uint64_t>(kResidentCacheMinEntries),
-                   static_cast<std::uint64_t>(kResidentCacheMaxEntries)));
-    const std::uint64_t byteHeadroom =
-        std::min(cacheBytes / std::uint64_t{4}, kLeaseByteHeadroomCap);
-    const std::uint64_t leaseBytes = std::min(cacheBytes + byteHeadroom, kLeaseBudgetMaxBytes);
-    const std::size_t entryHeadroom =
-        std::clamp(cacheEntries / 8, kLeaseEntryHeadroomMin, kLeaseEntryHeadroomMax);
-    const std::size_t leaseEntries = std::min(cacheEntries + entryHeadroom, kLeaseEntriesMax);
-    const std::uint64_t sceneCacheBytes =
-        std::min(cacheBytes / std::uint64_t{2}, kSceneCacheMaxBytes);
-    return GpuResidentBudgetPlan{.cacheBytes = cacheBytes,
-                                 .cacheEntries = cacheEntries,
-                                 .leaseBytes = leaseBytes,
-                                 .leaseEntries = leaseEntries,
-                                 .sceneCacheBytes = sceneCacheBytes};
+    // Pure host-configured partition of the artist's explicit ceiling. No fixed device ceiling is
+    // imposed here: the owner resolves the real device budget and clamps this plan through the
+    // existing status poll. A zero budget stays zero.
+    return budgetPlanFrom(runtime::gpuResidentCapacityPlanConfigured(
+        static_cast<std::uint64_t>(previewFrameCacheByteBudget)));
 }
 
 void applyGpuResidentBudgetPlan(runtime::GpuPreviewDisplayServiceOptions& options,
@@ -68,11 +40,21 @@ void applyGpuResidentBudgetPlan(runtime::GpuPreviewDisplayServiceOptions& option
     options.residentLeaseBudgets.maxBytes = plan.leaseBytes;
     options.residentLeaseBudgets.maxEntries = plan.leaseEntries;
     options.residentSceneCacheBudgets.maxRetainedBytes = plan.sceneCacheBytes;
+    // Share the request headroom with the same pool: only ever lower the configured allowance.
+    if (plan.requestBytes > 0 && plan.requestBytes < options.previewByteAllowance) {
+        options.previewByteAllowance = static_cast<std::size_t>(plan.requestBytes);
+    }
 }
 
 void applyGpuResidentCacheLimits(PreviewFrameCache& cache,
                                  const GpuResidentBudgetPlan& plan) noexcept {
     cache.setGpuResidentLimits(static_cast<std::size_t>(plan.cacheBytes), plan.cacheEntries);
+}
+
+void applyGpuResidentCacheLimits(PreviewFrameCache& cache,
+                                 const runtime::GpuResidentCapacityPlan& plan) noexcept {
+    cache.setGpuResidentLimits(static_cast<std::size_t>(plan.cacheBytes),
+                               static_cast<std::size_t>(plan.cacheEntries));
 }
 
 bool shouldRequestWaylandPresentation(const bool bundledNativeLoader,
@@ -103,13 +85,12 @@ runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
     const runtime::SnapshotCompiler& compiler, const runtime::CpuCompositionEvaluator& evaluator,
     const runtime::QualifiedDisplayProcessorProvider& qualifiedProcessorProvider,
     std::shared_ptr<runtime::GpuSceneCoverageCache> coverageCache,
-    std::shared_ptr<runtime::GpuPreparedUploadCache> uploadCache,
-    CompiledPlanCacheHandle planCache,
+    std::shared_ptr<runtime::GpuPreparedUploadCache> uploadCache, CompiledPlanCacheHandle planCache,
     std::shared_ptr<runtime::GpuOcioContextResolver> ocioContextResolver) {
     // The one general-display service is created ONCE and consumes the shared resolver, so the
     // display program uses the exact same shared GpuOcioProgramPreparer as the scene builder.
-    auto displayProgramService = std::make_shared<const runtime::GpuDisplayProgramService>(
-        ocioContextResolver);
+    auto displayProgramService =
+        std::make_shared<const runtime::GpuDisplayProgramService>(ocioContextResolver);
     return [&compiler, &evaluator, &qualifiedProcessorProvider,
             coverageCache = std::move(coverageCache), uploadCache = std::move(uploadCache),
             planCache = std::move(planCache), ocioContextResolver = std::move(ocioContextResolver),
@@ -118,25 +99,25 @@ runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
                const runtime::PreviewRequestIdentity& desiredIdentity,
                const std::size_t pixelStorageByteLimit,
                const std::vector<runtime::SnapshotParameterOverride>& interactionOverride,
-               runtime::TaskContext& context) -> runtime::TaskResult<
-                   runtime::PreviewGpuSceneStageOutcomeHandle> {
+               runtime::TaskContext& context)
+               -> runtime::TaskResult<runtime::PreviewGpuSceneStageOutcomeHandle> {
         using Result = runtime::TaskResult<runtime::PreviewGpuSceneStageOutcomeHandle>;
         // The local builder owns the copied media context for exactly this invocation. The
         // evaluator's getters are internally locked, so a concurrent Open/SaveAs base-directory
         // update is observed as a whole, never as a torn path.
         auto mediaContext = gpuSceneMediaContextFor(evaluator, uploadCache);
-        // Off-UI shared-tool resolution. The one resolver is idempotent: the first request qualifies
-        // the packaged tools and every later/concurrent request reuses the same context + preparer.
-        // A failed resolve leaves the builder's fail-closed default context so effects/media/ACES
-        // transforms refuse (Unsupported) and the request takes the CPU path with a reason.
+        // Off-UI shared-tool resolution. The one resolver is idempotent: the first request
+        // qualifies the packaged tools and every later/concurrent request reuses the same context +
+        // preparer. A failed resolve leaves the builder's fail-closed default context so
+        // effects/media/ACES transforms refuse (Unsupported) and the request takes the CPU path
+        // with a reason.
         runtime::GpuSceneOcioContext ocioContext;
         if (ocioContextResolver != nullptr) {
             runtime::GpuOcioCancellation cancel = [&context] {
                 return context.isCancellationRequested();
             };
             auto resolved = ocioContextResolver->resolve(cancel);
-            if (!resolved.hasValue() &&
-                resolved.error == runtime::GpuOcioContextError::Cancelled) {
+            if (!resolved.hasValue() && resolved.error == runtime::GpuOcioContextError::Cancelled) {
                 return Result::cancelled();
             }
             if (resolved.hasValue()) {
@@ -145,9 +126,8 @@ runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
         }
         const runtime::CpuGpuSceneBuilder builder(coverageCache, std::move(mediaContext),
                                                   std::move(ocioContext));
-        auto stage = makeCompositionPreviewGpuSceneStage(compiler, builder,
-                                                         qualifiedProcessorProvider, planCache,
-                                                         displayProgramService);
+        auto stage = makeCompositionPreviewGpuSceneStage(
+            compiler, builder, qualifiedProcessorProvider, planCache, displayProgramService);
         return stage(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride,
                      context);
     };
@@ -157,6 +137,11 @@ GpuViewerBootstrap::GpuViewerBootstrap(runtime::TaskScheduler& scheduler,
                                        std::string vulkanLoaderPath, const double devicePixelRatio)
     : scheduler_(&scheduler), loaderPath_(std::move(vulkanLoaderPath)),
       devicePixelRatio_(devicePixelRatio) {}
+
+void GpuViewerBootstrap::bindResidentCache(PreviewFrameCache& cache) noexcept {
+    const std::lock_guard lock(mutex_);
+    residentCache_ = &cache;
+}
 
 void GpuViewerBootstrap::refreshFromStatus(const runtime::GpuPreviewDisplayServiceStatus& status) {
     std::shared_ptr<runtime::GpuPresentationClient> next;
@@ -172,6 +157,16 @@ void GpuViewerBootstrap::refreshFromStatus(const runtime::GpuPreviewDisplayServi
         active_ = client_ != nullptr;
         if (changed) {
             ++publicationCount_;
+        }
+        // Install exactly the owner-resolved plan. A configured host-only plan or the default
+        // (unresolved) status is ignored; a resolved plan is applied even when it is the
+        // conservative unknown-device fallback or a known-zero device that yields no resident
+        // subset, so a stale configured limit never survives a genuine owner resolution.
+        const bool published = status.residentCapacityPlan.resolved;
+        if (residentCache_ != nullptr && published &&
+            status.residentCapacityPlan != appliedResidentPlan_) {
+            applyGpuResidentCacheLimits(*residentCache_, status.residentCapacityPlan);
+            appliedResidentPlan_ = status.residentCapacityPlan;
         }
         sink = sink_;
     }

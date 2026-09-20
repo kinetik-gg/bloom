@@ -23,6 +23,7 @@
 #include <bloom/render/gpu_resident_display.hpp>
 #include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/runtime/gpu_presentation_coordinator.hpp>
+#include <bloom/runtime/gpu_preview_resident_capacity.hpp>
 #include <bloom/runtime/gpu_resident_frame_lease.hpp>
 #include <bloom/runtime/gpu_resident_preview_qualification.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
@@ -172,6 +173,11 @@ struct GpuPreviewDisplayServiceStatus final {
     // report's own eligible()/eligibleFor() — not the packed report — decides resident selection.
     std::shared_ptr<const GpuResidentPreviewQualificationReport> residentQualification;
     std::string residentDetail;
+    // Immutable, owner-resolved resident-route capacity and its shared partition. Default
+    // constructed (Unknown/all-zero) until the owner resolves it after device creation; the UI
+    // installs the resolved cache sublimit through the EXISTING status poll and never queries a
+    // device itself.
+    GpuResidentCapacityPlan residentCapacityPlan;
     GpuPreviewDisplayServiceCounters counters;
 
     // Presentation capability of this service generation. NotRequested for the default Disabled
