@@ -143,7 +143,7 @@ struct GpuSceneNestedResult final {
 // fail the build rather than let a splice silently skip remapping or resident-byte accounting for a
 // new input-bearing command.
 template <typename> inline constexpr bool kNestedCommandUnhandled = false;
-static_assert(std::variant_size_v<GpuSceneCommand> == 9,
+static_assert(std::variant_size_v<GpuSceneCommand> == 10,
               "GpuSceneCommand gained an alternative; add its nested reference remapping and "
               "resident-byte accounting to gpu_scene_nested");
 
@@ -156,10 +156,12 @@ inline void offsetNestedCommandReferences(GpuSceneCommand& command,
             using T = std::decay_t<decltype(item)>;
             if constexpr (std::is_same_v<T, GpuSceneTranslationCommand> ||
                           std::is_same_v<T, GpuSceneAffineCommand> ||
-                          std::is_same_v<T, GpuSceneOcioEffectCommand>) {
-                // The OCIO ProcessEffect is input-bearing: its resident input is the upstream
-                // command, so the splice must remap that dependency exactly like an affine or
-                // translation. Its immutable program identity/metadata is copied unchanged.
+                          std::is_same_v<T, GpuSceneOcioEffectCommand> ||
+                          std::is_same_v<T, GpuScenePointResampleCommand>) {
+                // The OCIO ProcessEffect and the point-resample gather are input-bearing: their
+                // resident input is the upstream command, so the splice must remap that dependency
+                // exactly like an affine or translation. Their immutable program/scale metadata is
+                // copied unchanged.
                 if (item.input != kInvalidGpuSceneCommand) {
                     item.input = static_cast<GpuSceneCommandIndex>(item.input + base);
                 }
@@ -235,6 +237,8 @@ inline void addWindowBytes(std::uint64_t& total, const render::ImageWindow windo
                         total = bytes > maximum - total ? maximum : total + bytes;
                     }
                 } else if constexpr (std::is_same_v<T, GpuSceneUploadCommand>) {
+                    // A frozen host upload image: the one retained RGBA32F allocation. The
+                    // point-resample proxy output and the OCIO effect output are GPU-transient.
                     nested_detail::addWindowBytes(total, item.descriptor.dataWindow());
                 } else if constexpr (std::is_same_v<T, GpuSceneSolidCommand> ||
                                      std::is_same_v<T, GpuSceneTranslationCommand> ||
@@ -242,10 +246,12 @@ inline void addWindowBytes(std::uint64_t& total, const render::ImageWindow windo
                                      std::is_same_v<T, GpuSceneMergeCommand> ||
                                      std::is_same_v<T, GpuSceneBlendCommand> ||
                                      std::is_same_v<T, GpuSceneCompositionOutputCommand> ||
-                                     std::is_same_v<T, GpuSceneOcioEffectCommand>) {
+                                     std::is_same_v<T, GpuSceneOcioEffectCommand> ||
+                                     std::is_same_v<T, GpuScenePointResampleCommand>) {
                     // GPU-transient output: allocated at executor time under the live-pin ledger,
-                    // not retained by scene preparation. The OCIO effect's program resources are
-                    // accounted by the executor/cache ledger, not this allowance.
+                    // not retained by scene preparation. The OCIO effect's program resources and
+                    // the point-resample axis metadata are accounted by the executor/cache ledger,
+                    // not this allowance.
                 } else {
                     static_assert(kNestedCommandUnhandled<T>,
                                   "GpuSceneCommand gained an alternative; classify its retained "

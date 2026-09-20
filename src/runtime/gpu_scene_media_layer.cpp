@@ -30,12 +30,17 @@ finishUploadLeaf(const MediaUploadOutcome& outcome, GpuSceneUploadLeafResult& re
                                                            : outcome.failure};
     }
     const auto descriptor = *outcome.image->descriptor();
-    const auto window = descriptor.dataWindow();
-    result.bounds.local = boundsForWindow(window, hScale, vScale);
+    // The layer transform samples the PROXY image the media source publishes, exactly as the CPU
+    // evaluator does: under a fractional proxy the leaf's output window is the point-resample
+    // output, not the full-resolution raw upload. At unit scale the two are identical.
+    const auto leafWindow = outcome.resample.has_value() ? outcome.resample->output.dataWindow()
+                                                         : descriptor.dataWindow();
+    result.bounds.local = boundsForWindow(leafWindow, hScale, vScale);
     result.bounds.output = result.bounds.local;
-    result.outputWindow = window;
-    if (const auto error = chargeBytes(window.extent().width(), window.extent().height(),
-                                       sizeof(render::Rgba32f))) {
+    result.outputWindow = leafWindow;
+    if (const auto error =
+            chargeBytes(descriptor.dataWindow().extent().width(),
+                        descriptor.dataWindow().extent().height(), sizeof(render::Rgba32f))) {
         return error;
     }
     result.image = outcome.image;
@@ -44,6 +49,7 @@ finishUploadLeaf(const MediaUploadOutcome& outcome, GpuSceneUploadLeafResult& re
     result.uploadSemanticKey =
         outcome.uploadSemanticKey.empty() ? outcome.semanticKey : outcome.uploadSemanticKey;
     result.program = outcome.program;
+    result.resample = outcome.resample;
     return std::nullopt;
 }
 

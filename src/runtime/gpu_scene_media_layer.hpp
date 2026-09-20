@@ -55,6 +55,9 @@ struct GpuSceneUploadLeafResult final {
     // A real input->working OCIO ProcessEffect command to emit over the upload, or null for an
     // exact-identity transform.
     std::shared_ptr<const PreparedGpuOcioCommand> program;
+    // A PointResampleV1 gather from the full-resolution upload to the proxy output when the source
+    // is under a fractional proxy (only set alongside a non-null program). Null at unit scale.
+    std::optional<MediaResamplePlan> resample;
     std::optional<render::ImageWindow> outputWindow;
     EvaluatedOperationBounds bounds;
 };
@@ -100,24 +103,62 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
                                  .image = std::move(leaf.image),
                                  .descriptor = *leaf.descriptor,
                                  .semanticKey = uploadKey};
-    const GpuSceneCommandIndex uploadIndex = emit(std::move(upload));
+    GpuSceneCommandIndex current = emit(std::move(upload));
+    std::string currentKey = uploadKey;
+    // A proxied leaf (identity or non-identity) keeps the full-resolution upload and gathers the
+    // proxy on the GPU; a non-identity transform then runs the OCIO CST over that proxy geometry.
+    // The resample is emitted independently of whether an OCIO program is present. The resample
+    // output is charged (it is resident alongside the input for the duration of the gather until
+    // the input pin is consumed by the next step).
+    if (leaf.resample.has_value()) {
+        const auto extent = leaf.resample->output.dataWindow().extent();
+        if (const auto error = charge(extent.width(), extent.height(), sizeof(render::Rgba32f))) {
+            return error;
+        }
+        GpuScenePointResampleCommand resample{.index = kInvalidGpuSceneCommand,
+                                              .sourceOperation = operationIndex,
+                                              .input = current,
+                                              .inputKey = currentKey,
+                                              .sourceWindow = leaf.descriptor->dataWindow(),
+                                              .outputWindow = leaf.resample->output.dataWindow(),
+                                              .displayWindow =
+                                                  leaf.resample->output.displayWindow(),
+                                              .horizontalScale = leaf.resample->horizontalScale,
+                                              .verticalScale = leaf.resample->verticalScale,
+                                              .pixelAspect = leaf.resample->output.pixelAspect(),
+                                              .semanticKey = {}};
+        resample.semanticKey = makeGpuScenePointResampleSemanticKey(
+            resample.inputKey, resample.sourceWindow, resample.outputWindow, resample.displayWindow,
+            resample.horizontalScale, resample.verticalScale, resample.pixelAspect,
+            "point-resample-v1");
+        currentKey = resample.semanticKey;
+        current = emit(std::move(resample));
+    }
     if (leaf.program == nullptr) {
-        command = uploadIndex;
-        semanticKey = uploadKey;
+        command = current;
+        semanticKey = currentKey;
         return std::nullopt;
     }
-    const auto extent = leaf.descriptor->dataWindow().extent();
+    const auto ocioWindow = leaf.resample.has_value() ? leaf.resample->output.dataWindow()
+                                                      : leaf.descriptor->dataWindow();
+    // The OCIO display window is the resample output display when a resample precedes it (the
+    // resample publishes a new display window), otherwise the upload's own display window.
+    const auto ocioDisplay = leaf.resample.has_value() ? leaf.resample->output.displayWindow()
+                                                       : leaf.descriptor->displayWindow();
+    const auto ocioAspect = leaf.resample.has_value() ? leaf.resample->output.pixelAspect()
+                                                      : leaf.descriptor->pixelAspect();
+    const auto extent = ocioWindow.extent();
     if (const auto error = charge(extent.width(), extent.height(), sizeof(render::Rgba32f))) {
         return error;
     }
     GpuSceneOcioEffectCommand ocio{.index = kInvalidGpuSceneCommand,
                                    .sourceOperation = operationIndex,
-                                   .input = uploadIndex,
-                                   .inputKey = uploadKey,
+                                   .input = current,
+                                   .inputKey = currentKey,
                                    .program = std::move(leaf.program),
-                                   .outputWindow = leaf.descriptor->dataWindow(),
-                                   .displayWindow = leaf.descriptor->displayWindow(),
-                                   .pixelAspect = leaf.descriptor->pixelAspect(),
+                                   .outputWindow = ocioWindow,
+                                   .displayWindow = ocioDisplay,
+                                   .pixelAspect = ocioAspect,
                                    .semanticKey = {}};
     ocio.semanticKey = makeGpuSceneOcioEffectSemanticKey(ocio.inputKey, ocio.program->identity(),
                                                          ocio.outputWindow, ocio.pixelAspect);
@@ -126,9 +167,48 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
     return std::nullopt;
 }
 
+// Build one ImageSource or VideoSource colour leaf and emit its scene commands, filling the
+// builder's per-operation outputs. Defined here so the builder orchestrator's image and video
+// blocks share one call site. The remaining media bytes are charged by the leaf helpers through
+// `charge`.
+template <typename Emit, typename ChargeRetained, typename ChargeTransient>
+[[nodiscard]] std::optional<GpuSceneLeafFailure> buildAndEmitMediaLeaf(
+    const CompiledOperation& operation, const OperationIndex operationIndex,
+    const EvaluationRequest& request, const CompiledCompositionPlan& plan,
+    const ResolvedEvaluation& resolved, const GpuSceneMediaContext& context,
+    const GpuSceneOcioContext& ocioContext, const std::uint64_t pixelBudget, const double hScale,
+    const double vScale, ChargeRetained&& chargeRetained, ChargeTransient&& chargeTransient,
+    const CancellationToken& cancellation, GpuSceneMediaStatistics& statistics, Emit&& emit,
+    std::optional<render::ImageWindow>& outputWindow, GpuSceneCommandIndex& command,
+    std::string& semanticKey, GpuSceneUploadLeafResult& leaf) {
+    // The RAW upload is a host-resident allocation and is charged against the retained-byte
+    // allowance; the point-resample and OCIO outputs are GPU-transient and charged through the
+    // transient charge (which is a no-op under main's host-only accounting, since the executor's
+    // live-pin ledger bounds GPU residency).
+    std::optional<GpuSceneLeafFailure> built;
+    if (const auto* image = std::get_if<CompiledImageSource>(&operation)) {
+        built =
+            buildImageColorLeaf(*image, request, plan, resolved, context, ocioContext, pixelBudget,
+                                hScale, vScale, chargeRetained, cancellation, statistics, leaf);
+    } else if (const auto* video = std::get_if<CompiledVideoSource>(&operation)) {
+        built =
+            buildVideoColorLeaf(*video, request, plan, resolved, context, ocioContext, pixelBudget,
+                                hScale, vScale, chargeRetained, cancellation, statistics, leaf);
+    } else {
+        return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                                   "a media leaf was requested for a non-media operation"};
+    }
+    if (built.has_value()) {
+        return built;
+    }
+    outputWindow = leaf.outputWindow;
+    return emitMediaLeafCommands(operationIndex, leaf, chargeTransient, emit, command, semanticKey);
+}
+
 // The bounded GPU colour split leaves. They call prepareImageColorLeaf()/prepareVideoColorLeaf(),
-// so a non-identity transform yields a RAW full-source upload plus a real input->working OCIO
-// command; an exact-identity transform yields the unchanged connected upload with a null program.
+// so a fractional proxy yields a full-source RAW upload plus a native PointResampleV1 command
+// (identity or not), and a non-identity transform additionally yields a real input->working OCIO
+// command. An identity transform emits no OCIO program but still uses the native proxy gather.
 [[nodiscard]] std::optional<GpuSceneLeafFailure>
 buildImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest& request,
                     const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,

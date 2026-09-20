@@ -31,6 +31,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace bloom::render {
@@ -49,11 +50,24 @@ namespace bloom::runtime::detail {
 // `uploadSemanticKey`; otherwise `semanticKey` is the OCIO effect identity over the upload key and
 // the program. `image` always carries the command's resident pixels (converted for the connected
 // path, raw for the split path).
+//
+// A non-identity split leaf under a fractional proxy carries `resample`: the raw upload stays at
+// the FULL source dimensions and a PointResampleV1 command gathers it to the proxy output window
+// before the OCIO transform runs. `resample.output` is the proxy descriptor (its display window and
+// pixel aspect come from the composition), and `program`'s geometry is the proxy window, not the
+// source.
+struct MediaResamplePlan final {
+    render::Rgba32fImageDescriptor output;
+    double horizontalScale = 1.0;
+    double verticalScale = 1.0;
+};
+
 struct MediaUploadOutcome final {
     std::shared_ptr<const render::Rgba32fImage> image;
     std::string semanticKey;
     std::string uploadSemanticKey;
     std::shared_ptr<const PreparedGpuOcioCommand> program;
+    std::optional<MediaResamplePlan> resample;
     bool cancelled = false;
     bool cacheHit = false;
     bool converted = false;

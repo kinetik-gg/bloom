@@ -84,6 +84,8 @@ constexpr std::string_view kAcesAlternateWorking = "ACES2065-1";
 constexpr std::string_view kAcesTextureInput = "sRGB - Texture";
 [[maybe_unused]] constexpr int kSkipExit = 77;
 
+[[nodiscard]] bloom::runtime::CancellationToken makeCancelledToken();
+
 struct Fixture final {
     std::filesystem::path directory;
     std::filesystem::path path;
@@ -114,6 +116,17 @@ struct Fixture final {
     for (const auto& command : scene.commands()) {
         if (const auto* ocio = std::get_if<GpuSceneOcioEffectCommand>(&command)) {
             return ocio;
+        }
+    }
+    return nullptr;
+}
+
+[[nodiscard]] const bloom::runtime::GpuScenePointResampleCommand*
+firstResample(const PreparedGpuScene& scene) {
+    for (const auto& command : scene.commands()) {
+        if (const auto* resample =
+                std::get_if<bloom::runtime::GpuScenePointResampleCommand>(&command)) {
+            return resample;
         }
     }
     return nullptr;
@@ -242,6 +255,285 @@ void testColdBuilderToExecutor(Expectations& expectations, bloom::render::GpuDev
         expectations.expect(run.ready, "warm: the executor serves the cached scene");
         expectations.expect(counters.outputCacheHits >= 1, "warm: the unchanged output is a hit");
     }
+}
+
+// A proxied non-identity still: a full-resolution raw upload plus a GPU point-resample to the proxy
+// window plus the OCIO transform over that window, compared to the CPU oracle at 2e-6. Asserts the
+// exact command sequence, the small-proxy output window, a positive point-resample dispatch on a
+// cold build, and zero additional resample/OCIO dispatch on the warm cached run.
+void testProxiedStill(Expectations& expectations, bloom::render::GpuDevice& device,
+                      const CpuCompositionEvaluator& evaluator, const Fixture& fixture,
+                      const GpuSceneOcioContext& ocioContext) {
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    auto executor = GpuSceneExecutor::create(device, *cache.cache, GpuSceneExecutorBudgets{});
+    expectations.expect(cache.hasValue() && executor.hasValue(), "proxy: cache and executor host");
+    if (!cache || !executor) {
+        return;
+    }
+    const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
+    const auto plan = mediaPlan(format(9, 6), fixture.asset,
+                                LayerValues{.position = {4.5, 3.0}, .opacity = 0.9}, 4600);
+    // A 6x4 proxy over a 9x6 composition: non-unit vertical/horizontal scales.
+    const auto extent = bloom::render::ImageExtent::create(6, 4);
+    expectations.expect(static_cast<bool>(extent), "proxy: the proxy extent builds");
+    if (!extent) {
+        return;
+    }
+    auto request = acesRequest(*plan, kAcesWorking);
+    request.resolution = ProxyResolution{*extent.value()};
+
+    const auto prepared = builder.build(plan, request);
+    expectations.expect(prepared.hasValue(), "proxy: prepares");
+    if (!prepared) {
+        return;
+    }
+    const auto* upload = firstUpload(*prepared.scene);
+    const auto* resample = firstResample(*prepared.scene);
+    const auto* ocio = firstOcio(*prepared.scene);
+    expectations.expect(upload != nullptr && resample != nullptr && ocio != nullptr,
+                        "proxy: emits upload -> point-resample -> OCIO");
+    if (upload == nullptr || resample == nullptr || ocio == nullptr) {
+        return;
+    }
+    // The raw upload stays at the FULL source dimensions (3x2) even under a 6x4 proxy.
+    const auto sourceWindow = ImageWindow::create(0, 0, 3, 2);
+    expectations.expect(sourceWindow && upload->descriptor.dataWindow() == *sourceWindow.value(),
+                        "proxy: the raw upload keeps the full source dimensions");
+    // The proxy output is max(1, ceil(3 * 6/9)) x max(1, ceil(2 * 4/6)) = 2 x 2.
+    const auto proxyWindow = ImageWindow::create(0, 0, 2, 2);
+    expectations.expect(proxyWindow && resample->outputWindow == *proxyWindow.value(),
+                        "proxy: the resample output is the CPU proxy window");
+    expectations.expect(resample->inputKey == upload->semanticKey &&
+                            resample->sourceWindow == upload->descriptor.dataWindow() &&
+                            resample->horizontalScale > 0.0 && resample->horizontalScale < 1.0 &&
+                            resample->verticalScale > 0.0 && resample->verticalScale < 1.0,
+                        "proxy: the resample consumes the full-resolution upload at fractional "
+                        "scales");
+
+    // A changed proxy is a different resample/output but must NOT re-decode: the raw upload
+    // identity is independent of the proxy scales and display descriptor.
+    {
+        const auto otherExtent = bloom::render::ImageExtent::create(3, 2);
+        if (otherExtent) {
+            auto otherRequest = acesRequest(*plan, kAcesWorking);
+            otherRequest.resolution = ProxyResolution{*otherExtent.value()};
+            const auto otherPrepared = builder.build(plan, otherRequest);
+            const auto* otherUpload = otherPrepared ? firstUpload(*otherPrepared.scene) : nullptr;
+            const auto* otherResample =
+                otherPrepared ? firstResample(*otherPrepared.scene) : nullptr;
+            expectations.expect(
+                otherPrepared && otherUpload != nullptr && otherResample != nullptr &&
+                    otherUpload->semanticKey == upload->semanticKey &&
+                    otherPrepared.scene->mediaStatistics().uploadCacheHits == 1 &&
+                    otherPrepared.scene->mediaStatistics().uploadCacheMisses == 0 &&
+                    otherPrepared.scene->mediaStatistics().imageConversions == 0 &&
+                    otherResample->semanticKey != resample->semanticKey,
+                "proxy: a changed proxy reuses the decoded raw upload without a re-decode");
+        }
+    }
+    expectations.expect(ocio->inputKey == resample->semanticKey &&
+                            ocio->outputWindow == resample->outputWindow,
+                        "proxy: the OCIO transform runs over the proxy window");
+
+    auto oracleRequest = request;
+    oracleRequest.bypassOperationCache = true;
+    const auto frame = evaluator.evaluate(plan, oracleRequest, {});
+    expectations.expect(frame.frame() != nullptr, "proxy: the CPU oracle evaluates");
+    if (frame.frame() == nullptr) {
+        return;
+    }
+    expectations.expect(prepared.scene->outputDescriptor() ==
+                            *frame.frame()->processImage().descriptor(),
+                        "proxy: output descriptor matches the CPU frame");
+
+    const auto run = runScene(*executor.executor, prepared.scene, kSceneBudget);
+    if (!run.ready) {
+        std::cerr << "proxy: executor diagnostic code="
+                  << static_cast<int>(executor.executor->diagnostic().code)
+                  << " message=" << executor.executor->diagnostic().message << '\n';
+    }
+    expectations.expect(run.ready, "proxy: the executor reaches Ready");
+    if (!run.ready || run.image == nullptr) {
+        return;
+    }
+    const auto counters = executor.executor->counters();
+    expectations.expect(counters.pointResampleDispatches >= 1,
+                        "proxy: the cold build dispatched a GPU point-resample");
+    expectations.expect(counters.ocioEffectDispatches >= 1,
+                        "proxy: the OCIO transform was dispatched on the GPU");
+    const auto readback = bloom::render::readbackResidentImage(*run.image, kReadbackBudget);
+    expectations.expect(readback.hasValue(), "proxy: the output reads back for the oracle");
+    if (!readback) {
+        return;
+    }
+    const auto& cpuImage = frame.frame()->processImage();
+    expectations.expect(readback.pixels.size() == cpuImage.pixels().size(),
+                        "proxy: the pixel count matches the CPU frame");
+    if (readback.pixels.size() != cpuImage.pixels().size()) {
+        return;
+    }
+    expectations.expect(pixelsClose(readback.pixels, cpuImage.pixels()),
+                        "proxy: every pixel is within the 2e-6 process gate");
+    // Alpha is carried through both the exact nearest gather and the OCIO CST unchanged, so it must
+    // match the CPU oracle bit for bit (not merely within a tolerance).
+    {
+        bool alphaExact = true;
+        for (std::size_t i = 0; i < readback.pixels.size(); ++i) {
+            if (readback.pixels[i].alpha() != cpuImage.pixels()[i].alpha()) {
+                alphaExact = false;
+                break;
+            }
+        }
+        expectations.expect(alphaExact, "proxy: every alpha lane is exactly the CPU oracle's");
+    }
+    // No host per-pixel resampling: the only resampling command is the dispatched GPU
+    // PointResampleV1, and the raw upload that feeds it is the full-resolution source.
+    expectations.expect(prepared.scene->mediaStatistics().ocioCommandPreparations == 1 &&
+                            counters.pointResampleDispatches == 1 &&
+                            counters.ocioEffectDispatches == 1,
+                        "proxy: exactly one GPU point-resample and one GPU OCIO dispatch ran");
+
+    // Warm: the same scene is served from the content cache with zero additional dispatches.
+    const auto warmPrepared = builder.build(plan, request);
+    const auto warm = runScene(*executor.executor, warmPrepared.scene, kSceneBudget);
+    expectations.expect(warm.ready, "proxy: the warm scene serves from cache");
+    const auto warmCounters = executor.executor->counters();
+    expectations.expect(warmCounters.pointResampleDispatches == counters.pointResampleDispatches &&
+                            warmCounters.ocioEffectDispatches == counters.ocioEffectDispatches,
+                        "proxy: a warm scene performs zero additional resample/OCIO dispatches");
+
+    // Tiny budget: a proxy scene whose full-resolution upload is larger than the budget is refused
+    // at begin without any native work, and the executor stays reusable.
+    const auto tightPrepared = builder.build(plan, request);
+    const auto tight = executor.executor->begin(tightPrepared.scene, 1);
+    expectations.expect(tight.code == GpuSceneExecutorDiagnosticCode::OverBudget,
+                        "proxy: a one-byte budget is refused");
+    expectations.expect(executor.executor->state() ==
+                            bloom::runtime::GpuSceneExecutorJobState::Idle,
+                        "proxy: the budget refusal leaves the executor idle");
+}
+
+// An identity (input colour space == working colour space) proxied still under a configured GPU
+// colour context: no OCIO program is prepared, but the full-resolution raw upload still goes
+// through the native PointResampleV1 gather. This is the identity/no-OCIO proxy path the split must
+// not leave on the CPU.
+void testProxiedIdentityStill(Expectations& expectations, bloom::render::GpuDevice& device,
+                              const CpuCompositionEvaluator& evaluator, const Fixture& fixture,
+                              const GpuSceneOcioContext& ocioContext) {
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    auto executor = GpuSceneExecutor::create(device, *cache.cache, GpuSceneExecutorBudgets{});
+    expectations.expect(cache.hasValue() && executor.hasValue(),
+                        "identity proxy: cache and executor host");
+    if (!cache || !executor) {
+        return;
+    }
+    const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
+    document::AssetRecord asset = fixture.asset;
+    // Explicit input == working space: the resolved transform is exact identity, so no OCIO command
+    // is emitted even though a preparer is configured.
+    asset.interpretation.inputColorSpaceId = std::string{kAcesWorking};
+    const auto plan =
+        mediaPlan(format(9, 6), asset, LayerValues{.position = {4.5, 3.0}, .opacity = 0.9}, 4750);
+    const auto extent = bloom::render::ImageExtent::create(6, 4);
+    expectations.expect(static_cast<bool>(extent), "identity proxy: extent builds");
+    if (!extent) {
+        return;
+    }
+    auto request = acesRequest(*plan, kAcesWorking);
+    request.resolution = ProxyResolution{*extent.value()};
+
+    const auto prepared = builder.build(plan, request);
+    expectations.expect(prepared.hasValue(), "identity proxy: prepares");
+    if (!prepared) {
+        return;
+    }
+    const auto* upload = firstUpload(*prepared.scene);
+    const auto* resample = firstResample(*prepared.scene);
+    const auto* ocio = firstOcio(*prepared.scene);
+    expectations.expect(upload != nullptr && resample != nullptr && ocio == nullptr,
+                        "identity proxy: full-source upload + native point-resample, no OCIO");
+    if (upload == nullptr || resample == nullptr || ocio != nullptr) {
+        return;
+    }
+    const auto sourceWindow = ImageWindow::create(0, 0, 3, 2);
+    expectations.expect(sourceWindow && upload->descriptor.dataWindow() == *sourceWindow.value(),
+                        "identity proxy: the raw upload keeps the full source dimensions");
+    const auto proxyWindow = ImageWindow::create(0, 0, 2, 2);
+    expectations.expect(proxyWindow && resample->outputWindow == *proxyWindow.value(),
+                        "identity proxy: the resample output is the CPU proxy window");
+    expectations.expect(resample->inputKey == upload->semanticKey &&
+                            resample->displayWindow ==
+                                prepared.scene->outputDescriptor().displayWindow(),
+                        "identity proxy: the resample carries the composition display window");
+
+    auto oracleRequest = request;
+    oracleRequest.bypassOperationCache = true;
+    const auto frame = evaluator.evaluate(plan, oracleRequest, {});
+    expectations.expect(frame.frame() != nullptr, "identity proxy: the CPU oracle evaluates");
+    if (frame.frame() == nullptr) {
+        return;
+    }
+    expectations.expect(prepared.scene->outputDescriptor() ==
+                            *frame.frame()->processImage().descriptor(),
+                        "identity proxy: output descriptor matches the CPU frame");
+
+    const auto run = runScene(*executor.executor, prepared.scene, kSceneBudget);
+    expectations.expect(run.ready, "identity proxy: the executor reaches Ready");
+    if (!run.ready || run.image == nullptr) {
+        return;
+    }
+    const auto counters = executor.executor->counters();
+    expectations.expect(counters.pointResampleDispatches == 1 && counters.ocioEffectDispatches == 0,
+                        "identity proxy: exactly one GPU point-resample, zero OCIO dispatches");
+    const auto readback = bloom::render::readbackResidentImage(*run.image, kReadbackBudget);
+    expectations.expect(readback.hasValue(), "identity proxy: the output reads back");
+    if (!readback) {
+        return;
+    }
+    const auto& cpuImage = frame.frame()->processImage();
+    expectations.expect(readback.pixels.size() == cpuImage.pixels().size() &&
+                            pixelsClose(readback.pixels, cpuImage.pixels()),
+                        "identity proxy: every pixel is within the 2e-6 process gate");
+    {
+        bool alphaExact = true;
+        for (std::size_t i = 0; i < readback.pixels.size() && i < cpuImage.pixels().size(); ++i) {
+            if (readback.pixels[i].alpha() != cpuImage.pixels()[i].alpha()) {
+                alphaExact = false;
+                break;
+            }
+        }
+        expectations.expect(alphaExact, "identity proxy: every alpha lane is exactly the CPU's");
+    }
+
+    const auto warmPrepared = builder.build(plan, request);
+    const auto warm = runScene(*executor.executor, warmPrepared.scene, kSceneBudget);
+    const auto warmCounters = executor.executor->counters();
+    expectations.expect(
+        warm.ready && warmCounters.pointResampleDispatches == counters.pointResampleDispatches,
+        "identity proxy: a warm scene performs zero additional resample dispatches");
+}
+
+void testProxyCancellation(Expectations& expectations, const CpuCompositionEvaluator& evaluator,
+                           const Fixture& fixture, const GpuSceneOcioContext& ocioContext) {
+    const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
+    const auto plan = mediaPlan(format(9, 6), fixture.asset,
+                                LayerValues{.position = {4.5, 3.0}, .opacity = 0.9}, 4700);
+    const auto extent = bloom::render::ImageExtent::create(6, 4);
+    if (!extent) {
+        return;
+    }
+    auto request = acesRequest(*plan, kAcesWorking);
+    request.resolution = ProxyResolution{*extent.value()};
+    const auto token = makeCancelledToken();
+    expectations.expect(token.isCancellationRequested(), "proxy cancel: the token is cancelled");
+    const auto prepared = builder.build(plan, request, token);
+    expectations.expect(prepared.diagnostic.code ==
+                                bloom::runtime::PreparedGpuSceneDiagnosticCode::Cancelled &&
+                            !prepared.hasValue(),
+                        "proxy cancel: a pre-cancelled request publishes no scene");
 }
 
 void testChangedWorkingSpaceReusesDecode(Expectations& expectations,
@@ -391,6 +683,93 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
                                 warm.scene->mediaStatistics().videoConversions == 0,
                             tag + ": the decoded video frame is reused without a re-decode");
 
+        // A proxied video frame: the raw upload stays full-resolution, and the GPU gathers the
+        // proxy before the OCIO transform. The CPU proxy oracle is the unchanged evaluator frame.
+        const auto proxyExtent =
+            bloom::render::ImageExtent::create((static_cast<std::uint64_t>(asset.width) + 1) / 2,
+                                               (static_cast<std::uint64_t>(asset.height) + 1) / 2);
+        expectations.expect(static_cast<bool>(proxyExtent), tag + ": proxy extent builds");
+        if (proxyExtent) {
+            auto proxyRequest = acesRequest(*plan, kAcesWorking);
+            proxyRequest.resolution = ProxyResolution{*proxyExtent.value()};
+            const auto proxyPrepared = builder.build(plan, proxyRequest);
+            const auto* proxyUpload = proxyPrepared ? firstUpload(*proxyPrepared.scene) : nullptr;
+            const auto* proxyResample =
+                proxyPrepared ? firstResample(*proxyPrepared.scene) : nullptr;
+            const auto* proxyOcio = proxyPrepared ? firstOcio(*proxyPrepared.scene) : nullptr;
+            expectations.expect(proxyUpload != nullptr && proxyResample != nullptr &&
+                                    proxyOcio != nullptr,
+                                tag + ": a proxied frame emits upload -> point-resample -> OCIO");
+            if (proxyUpload != nullptr && proxyResample != nullptr && proxyOcio != nullptr) {
+                const auto sourceWindow = ImageWindow::create(0, 0, asset.width, asset.height);
+                expectations.expect(
+                    sourceWindow && proxyUpload->descriptor.dataWindow() == *sourceWindow.value(),
+                    tag + ": the proxied raw upload keeps the full frame dimensions");
+                expectations.expect(proxyOcio->outputWindow == proxyResample->outputWindow,
+                                    tag + ": the proxied OCIO runs over the proxy window");
+                auto proxyOracle = proxyRequest;
+                proxyOracle.bypassOperationCache = true;
+                const auto proxyFrame = evaluator.evaluate(plan, proxyOracle, {});
+                const auto proxyRun =
+                    runScene(*executor.executor, proxyPrepared.scene, kSceneBudget);
+                expectations.expect(proxyRun.ready, tag + ": the proxied frame completes");
+                if (proxyFrame.frame() != nullptr && proxyRun.ready && proxyRun.image != nullptr) {
+                    const auto proxyReadback =
+                        bloom::render::readbackResidentImage(*proxyRun.image, kReadbackBudget);
+                    expectations.expect(
+                        proxyReadback.hasValue() &&
+                            proxyReadback.pixels.size() ==
+                                proxyFrame.frame()->processImage().pixels().size() &&
+                            pixelsClose(proxyReadback.pixels,
+                                        proxyFrame.frame()->processImage().pixels()),
+                        tag + ": the proxied frame matches the CPU oracle at 2e-6");
+                }
+            }
+        }
+
+        // An identity (input == working) proxied video frame: no OCIO program, but the full-source
+        // raw upload still goes through the native PointResampleV1 gather.
+        if (proxyExtent) {
+            document::AssetRecord identityAsset = asset;
+            identityAsset.interpretation.inputColorSpaceId = std::string{kAcesWorking};
+            const auto identityPlan =
+                videoPlan(format(asset.width, asset.height), identityAsset, centre, idBase + 4);
+            auto identityRequest = acesRequest(*identityPlan, kAcesWorking);
+            identityRequest.resolution = ProxyResolution{*proxyExtent.value()};
+            const auto identityPrepared = builder.build(identityPlan, identityRequest);
+            const auto* identityUpload =
+                identityPrepared ? firstUpload(*identityPrepared.scene) : nullptr;
+            const auto* identityResample =
+                identityPrepared ? firstResample(*identityPrepared.scene) : nullptr;
+            const auto* identityOcio =
+                identityPrepared ? firstOcio(*identityPrepared.scene) : nullptr;
+            expectations.expect(identityUpload != nullptr && identityResample != nullptr &&
+                                    identityOcio == nullptr,
+                                tag + ": an identity proxied frame emits upload + resample, no "
+                                      "OCIO");
+            if (identityPrepared && identityUpload != nullptr && identityResample != nullptr) {
+                auto identityOracle = identityRequest;
+                identityOracle.bypassOperationCache = true;
+                const auto identityFrame = evaluator.evaluate(identityPlan, identityOracle, {});
+                const auto identityRun =
+                    runScene(*executor.executor, identityPrepared.scene, kSceneBudget);
+                expectations.expect(identityRun.ready,
+                                    tag + ": the identity proxied frame completes");
+                if (identityFrame.frame() != nullptr && identityRun.ready &&
+                    identityRun.image != nullptr) {
+                    const auto identityReadback =
+                        bloom::render::readbackResidentImage(*identityRun.image, kReadbackBudget);
+                    expectations.expect(
+                        identityReadback.hasValue() &&
+                            identityReadback.pixels.size() ==
+                                identityFrame.frame()->processImage().pixels().size() &&
+                            pixelsClose(identityReadback.pixels,
+                                        identityFrame.frame()->processImage().pixels()),
+                        tag + ": the identity proxied frame matches the CPU oracle at 2e-6");
+                }
+            }
+        }
+
         document::AssetRecord reuseAsset = asset;
         reuseAsset.interpretation.inputColorSpaceId = std::string{kAcesTextureInput};
         const auto reusePlan =
@@ -539,6 +918,7 @@ int main(const int argc, char** argv) {
 
         testChangedWorkingSpaceReusesDecode(expectations, evaluator, fixture, ocioContext);
         testMissingAndCorruptMedia(expectations, fixture, ocioContext);
+        testProxyCancellation(expectations, evaluator, fixture, ocioContext);
         testVideoCancellation(expectations, options.fixtures, ocioContext);
 
         bloom::render::GpuDeviceCreationOptions createOptions;
@@ -554,9 +934,10 @@ int main(const int argc, char** argv) {
         } else {
             testColdBuilderToExecutor(expectations, *device.device, evaluator, fixture,
                                       ocioContext);
+            testProxiedStill(expectations, *device.device, evaluator, fixture, ocioContext);
+            testProxiedIdentityStill(expectations, *device.device, evaluator, fixture, ocioContext);
             testRealVideoColour(expectations, *device.device, evaluator, options.fixtures,
                                 ocioContext);
-            (void)0;
         }
 
         if (!expectations.ok()) {

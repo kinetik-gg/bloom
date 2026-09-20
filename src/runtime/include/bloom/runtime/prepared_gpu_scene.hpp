@@ -293,10 +293,45 @@ struct GpuSceneOcioEffectCommand final {
     std::string semanticKey;
 };
 
+// One PointResampleV1 nearest-neighbour gather of a resident input into a proxy output. It is the
+// exact CPU media-image proxy mapping (src/runtime/image_source.cpp evaluateImageSource): the
+// output data window is (0, 0, max(1, ceil(sourceWidth*horizontalScale)), max(1, ceil(sourceHeight*
+// verticalScale))), the output display window and pixel aspect are preserved from the input, and
+// the selected source index is min(extent - 1, (uint32)(x / scale)) evaluated in binary64. This is
+// the accepted native primitive that lets a proxied non-identity media source keep its
+// full-resolution raw upload and run the input->working OCIO transform on the GPU at the proxy
+// geometry.
+struct GpuScenePointResampleCommand final {
+    GpuSceneCommandIndex index = kInvalidGpuSceneCommand;
+    OperationIndex sourceOperation = OperationIndex::fromRaw(0);
+    GpuSceneCommandIndex input = kInvalidGpuSceneCommand;
+    // The input's own semantic key, carried explicitly so the executor canonicalizes the effective
+    // key from fields rather than trusting a producer-supplied combined key.
+    std::string inputKey;
+    // The input data window (source-local layout) and the derived proxy output data window.
+    render::ImageWindow sourceWindow;
+    render::ImageWindow outputWindow;
+    // The output display window. The proxy resample publishes a NEW image whose display window is
+    // the composition/proxy display, which is NOT necessarily the full-resolution upload's display
+    // window (a source frame larger than the composition proxy would otherwise inherit an
+    // oversized display). Carried explicitly so the executor validates and reports the exact
+    // geometry.
+    render::ImageWindow displayWindow;
+    // The resolved proxy scales, in (0, 1].
+    double horizontalScale = 1.0;
+    double verticalScale = 1.0;
+    // Output pixel aspect (inherited from the input).
+    core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
+    // Diagnostics/back-compat only: the executor NEVER uses this for a cache lookup or insertion;
+    // it recomputes the effective key from the fields above.
+    std::string semanticKey;
+};
+
 using GpuSceneCommand =
     std::variant<GpuSceneSolidCommand, GpuSceneTranslationCommand, GpuSceneCoverageSolidCommand,
                  GpuSceneUploadCommand, GpuSceneMergeCommand, GpuSceneCompositionOutputCommand,
-                 GpuSceneAffineCommand, GpuSceneBlendCommand, GpuSceneOcioEffectCommand>;
+                 GpuSceneAffineCommand, GpuSceneBlendCommand, GpuSceneOcioEffectCommand,
+                 GpuScenePointResampleCommand>;
 
 // Canonical, construction-time semantic key builders. Producer code (the scene builder / graph
 // worker) must call these rather than hand-format a key, so two independent producers agree and a
@@ -389,6 +424,30 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
     key.append(std::to_string(static_cast<unsigned>(mode)));
     gpu_scene_key_detail::appendSemanticWindow(key, sourceWindow);
     gpu_scene_key_detail::appendSemanticWindow(key, outputWindow);
+    gpu_scene_key_detail::appendSemanticPixelAspect(key, pixelAspect);
+    key.append("|artifact=");
+    key.append(artifactDigest);
+    return key;
+}
+
+// Effective scene key for one PointResampleV1 command. The input command key, the source data
+// window, the output data window, the output pixel aspect, both proxy scales, and the single
+// PointResampleV1 artifact token are folded in, so two resamples over different geometry or scales
+// never share an output.
+[[nodiscard]] inline std::string makeGpuScenePointResampleSemanticKey(
+    const std::string& inputKey, const render::ImageWindow& sourceWindow,
+    const render::ImageWindow& outputWindow, const render::ImageWindow& displayWindow,
+    const double horizontalScale, const double verticalScale,
+    const core::PixelAspectRatio& pixelAspect, const std::string& artifactDigest) {
+    std::string key = "point-resample-v1|in=";
+    key.append(inputKey);
+    gpu_scene_key_detail::appendSemanticWindow(key, sourceWindow);
+    gpu_scene_key_detail::appendSemanticWindow(key, outputWindow);
+    gpu_scene_key_detail::appendSemanticWindow(key, displayWindow);
+    key.append("|sx=");
+    gpu_scene_key_detail::appendSemanticDouble(key, horizontalScale);
+    key.append("|sy=");
+    gpu_scene_key_detail::appendSemanticDouble(key, verticalScale);
     gpu_scene_key_detail::appendSemanticPixelAspect(key, pixelAspect);
     key.append("|artifact=");
     key.append(artifactDigest);

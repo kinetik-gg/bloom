@@ -112,6 +112,7 @@ using bloom::runtime::GpuSceneCommandIndex;
 using bloom::runtime::GpuSceneCompositionOutputCommand;
 using bloom::runtime::GpuSceneExecutor;
 using bloom::runtime::GpuSceneExecutorDiagnosticCode;
+using bloom::runtime::GpuSceneExecutorJobState;
 using bloom::runtime::GpuSceneExecutorPollResult;
 using bloom::runtime::GpuSceneFixtureBuilder;
 using bloom::runtime::GpuSceneMergeCommand;
@@ -473,7 +474,10 @@ void testSpliceAndNative(Expectations& expectations, GpuDevice* device,
     }
 
     // CPU splice proof: non-zero base, remapped OCIO input, unchanged program identity/metadata,
-    // and exact resident-byte accounting that includes the OCIO output window.
+    // and exact HOST-RETAINED byte accounting. Scene preparation retains only host allocations (the
+    // frozen upload image); the OCIO effect output and the child composition output are
+    // GPU-transient, allocated at executor time under the executor's live-pin budget, and are
+    // deliberately NOT charged to the preparation allowance.
     std::uint64_t chargedBytes = 0;
     bloom::runtime::PreparedGpuSceneDiagnosticCode failure =
         bloom::runtime::PreparedGpuSceneDiagnosticCode::None;
@@ -497,10 +501,14 @@ void testSpliceAndNative(Expectations& expectations, GpuDevice* device,
         expectations.expect(ocio->semanticKey == fixture.ocioKey,
                             "the OCIO command metadata/semantic key is unchanged by the splice");
     }
-    const std::uint64_t expectedResident =
-        windowBytes(fixture.data) * 3; // upload + OCIO output + child composition output
-    expectations.expect(chargedBytes == expectedResident,
-                        "the splice charges the child resident bytes including the OCIO output");
+    // Only the frozen upload image is host-retained; the two RGBA32F command outputs are not.
+    const std::uint64_t retainedUploadBytes = windowBytes(fixture.data);
+    const std::uint64_t expectedResident = retainedUploadBytes;
+    expectations.expect(
+        chargedBytes == expectedResident,
+        "the splice charges only the frozen host upload, not the GPU-transient OCIO/child outputs");
+    expectations.expect(chargedBytes != retainedUploadBytes * 3,
+                        "the OCIO output and child composition output are not host-charged");
 
     // A tight allowance must refuse before the parent publishes anything.
     std::uint64_t tightCharged = 0;
@@ -531,6 +539,14 @@ void testSpliceAndNative(Expectations& expectations, GpuDevice* device,
         return;
     }
     GpuSceneExecutor& executor = *executorResult.executor;
+    // The GPU-transient OCIO/child outputs are bounded by the EXECUTOR's request byte budget, not
+    // the preparation allowance. A budget of one byte cannot cover the largest native step, so
+    // begin() refuses with OverBudget without any Vulkan work and leaves the executor reusable.
+    const auto tightBegin = executor.begin(*spliced, 1);
+    expectations.expect(tightBegin.code == GpuSceneExecutorDiagnosticCode::OverBudget,
+                        "the executor budget bounds the nested OCIO output allocation");
+    expectations.expect(executor.state() == GpuSceneExecutorJobState::Idle,
+                        "the executor budget refusal leaves the executor idle");
     const auto begun = executor.begin(*spliced, kBudget);
     expectations.expect(begun.code == GpuSceneExecutorDiagnosticCode::None,
                         "the spliced parent/child scene begins");

@@ -315,41 +315,23 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             continue;
         }
 
-        if (const auto* image = std::get_if<CompiledImageSource>(&operation)) {
+        if (std::holds_alternative<CompiledImageSource>(operation) ||
+            std::holds_alternative<CompiledVideoSource>(operation)) {
+            // The RAW upload is host-retained (charged against `retainedBytes`); the point-resample
+            // and OCIO outputs are GPU-transient and charged through `chargeTransient` (a no-op
+            // under main's host-only accounting, where the executor's live-pin ledger bounds GPU
+            // residency).
             const auto remainingBudget = allowance > retainedBytes ? allowance - retainedBytes : 0;
             detail::GpuSceneUploadLeafResult leaf;
-            const auto error = detail::buildImageColorLeaf(
-                *image, request, *plan, resolved, mediaContext_, ocioContext_, remainingBudget,
-                hScale, vScale, chargeRetained, cancellation, mediaStatistics, leaf);
+            const auto error = detail::buildAndEmitMediaLeaf(
+                operation, operationIndex, request, *plan, resolved, mediaContext_, ocioContext_,
+                remainingBudget, hScale, vScale, chargeRetained, chargeTransient, cancellation,
+                mediaStatistics, emit, outputWindowOf[index], commandForOperation[index],
+                keyOf[index], leaf);
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
             }
             bounds[index] = leaf.bounds;
-            outputWindowOf[index] = leaf.outputWindow;
-            if (const auto emitError =
-                    detail::emitMediaLeafCommands(operationIndex, leaf, chargeTransient, emit,
-                                                  commandForOperation[index], keyOf[index])) {
-                return failed(emitError->code, emitError->message, mediaStatistics);
-            }
-            continue;
-        }
-
-        if (const auto* video = std::get_if<CompiledVideoSource>(&operation)) {
-            const auto remainingBudget = allowance > retainedBytes ? allowance - retainedBytes : 0;
-            detail::GpuSceneUploadLeafResult leaf;
-            const auto error = detail::buildVideoColorLeaf(
-                *video, request, *plan, resolved, mediaContext_, ocioContext_, remainingBudget,
-                hScale, vScale, chargeRetained, cancellation, mediaStatistics, leaf);
-            if (error) {
-                return failed(error->code, error->message, mediaStatistics);
-            }
-            bounds[index] = leaf.bounds;
-            outputWindowOf[index] = leaf.outputWindow;
-            if (const auto emitError =
-                    detail::emitMediaLeafCommands(operationIndex, leaf, chargeTransient, emit,
-                                                  commandForOperation[index], keyOf[index])) {
-                return failed(emitError->code, emitError->message, mediaStatistics);
-            }
             continue;
         }
 

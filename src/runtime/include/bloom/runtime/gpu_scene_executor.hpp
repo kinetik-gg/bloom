@@ -138,6 +138,9 @@ struct GpuSceneExecutorCounters final {
     // One OCIO ProcessEffect dispatch. A warm scene whose OCIO command output is already cached
     // runs zero of these.
     std::uint64_t ocioEffectDispatches = 0;
+    // One PointResampleV1 dispatch. A warm scene whose resample output is already cached runs zero
+    // of these.
+    std::uint64_t pointResampleDispatches = 0;
     // Bounded OCIO native-program cache: creations, warm reuses, evictions, and refusals.
     std::uint64_t ocioProgramCreations = 0;
     std::uint64_t ocioProgramReuses = 0;
