@@ -57,6 +57,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QPointer>
 #include <QRegion>
 #include <QResizeEvent>
 #include <QScrollArea>
@@ -2334,19 +2335,31 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
 }
 
 void ViewerEditor::paintViewerContent(QPainter& painter) {
-    // During a cover snapshot the last valid CPU frame is drawn explicitly (never the resident arm,
-    // whose CPU span is empty and whose native child is excluded from this pixmap anyway).
-    const PreparedPreviewFrameHandle displayedFrame =
-        coverSnapshotInProgress_
-            ? (cpuFallbackFrame_ != nullptr ? cpuFallbackFrame_ : lastCpuFrame_)
-            : paintableCpuFrame();
+    // During a cover snapshot the pixmap must show the CURRENT state, never a stale frame. When the
+    // current frame is the resident arm it has no CPU pixels, so the last valid CPU fallback / last
+    // displayed CPU frame is the honest image. When it is not (including the composition-less blank
+    // state, where displayedFrame() is null), paint exactly that current frame: a blank state stays
+    // blank (canvas background + invitation) instead of flashing the previous composition behind
+    // the still-mapped native container.
+    PreparedPreviewFrameHandle cpuFrame;
+    if (coverSnapshotInProgress_) {
+        const auto current = displayedFrame();
+        if (current != nullptr &&
+            current->provenance().provider == runtime::PreviewDisplayProvider::GpuResident) {
+            cpuFrame = cpuFallbackFrame_ != nullptr ? cpuFallbackFrame_ : lastCpuFrame_;
+        } else {
+            cpuFrame = current;
+        }
+    } else {
+        cpuFrame = paintableCpuFrame();
+    }
     const QRectF frame = canvasRect();
-    if (displayedFrame != nullptr) {
+    if (cpuFrame != nullptr) {
         // displayBufferView() normalizes both display-product alternatives (reference and
         // qualified) to the same packed-RGBA8 shape -- the viewer draws pixels identically either
         // way; isOcioQualified is only ever read for the status bar's color-state chip, never to
         // change how pixels are drawn.
-        const auto bufferView = displayedFrame->displayBufferView();
+        const auto bufferView = cpuFrame->displayBufferView();
         if (bufferView.has_value()) {
             const auto extent = bufferView->displayWindow.extent();
             const auto& layout = bufferView->layout;
@@ -2355,7 +2368,7 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                 layout.rowStrideBytes <=
                     static_cast<std::size_t>(std::numeric_limits<qsizetype>::max())) {
                 const auto pixels = bufferView->pixels;
-                // displayedFrame owns the immutable bytes for this entire paint. The const-data
+                // cpuFrame owns the immutable bytes for this entire paint. The const-data
                 // QImage constructor borrows them, so presentation does not copy or convert a
                 // full frame on the UI thread.
                 const QImage image(
@@ -2368,9 +2381,9 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                     // in channelView_, so a repaint -- or a playback tick that re-presents the same
                     // frame -- never re-walks the buffer. Nothing downstream of this paint sees it.
                     if (channel_ != ViewerChannel::Rgba &&
-                        (channelViewFrame_ != displayedFrame || channelViewChannel_ != channel_)) {
+                        (channelViewFrame_ != cpuFrame || channelViewChannel_ != channel_)) {
                         channelView_ = remapChannels(image, channel_);
-                        channelViewFrame_ = displayedFrame;
+                        channelViewFrame_ = cpuFrame;
                         channelViewChannel_ = channel_;
                     }
                     const QImage& shownImage =
@@ -2392,8 +2405,8 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                         if (descriptor && session_.composition()) {
                             const ViewerMapping mapping{
                                 displayRect, session_.composition()->format(),
-                                displayedFrame->desiredIdentity().resolution,
-                                bufferView->pixelAspect, *descriptor.value()};
+                                cpuFrame->desiredIdentity().resolution, bufferView->pixelAspect,
+                                *descriptor.value()};
                             painter.save();
                             painter.setClipRect(contentRect());
                             paintViewerOverlays(
@@ -3032,5 +3045,6 @@ void ViewerEditor::contextMenuEvent(QContextMenuEvent* event) {
 #include "viewer_tools_path.ipp"
 
 #include "viewer_editor_gpu.ipp"
+#include "viewer_editor_gpu_retire.ipp"
 
 } // namespace bloom::ui

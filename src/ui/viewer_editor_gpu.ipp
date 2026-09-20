@@ -205,20 +205,44 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequestForTest() {
 }
 
 void ViewerEditor::updateGpuResidentPresentation() {
+    if (gpuPresentationUpdating_) {
+        // Re-entrant request from a controller callback during the outer update: drop it. The outer
+        // call already owns the coherent surface/geometry transition. This is defensive only -- the
+        // reported repaint/OOM depth was never established -- and never weakens a safety gate.
+        return;
+    }
+    gpuPresentationUpdating_ = true;
+    updateGpuResidentPresentationBody();
+    gpuPresentationUpdating_ = false;
+}
+
+void ViewerEditor::updateGpuResidentPresentationBody() {
     if (gpuResident_ == nullptr) {
         return;
     }
     const auto frame = displayedFrame();
+    if (gpuNativeRetirePending_) {
+        // A retire-before-unmap is in flight for a live target. Until it genuinely succeeds the
+        // container must stay mapped and the cover must stay raised; never hide, never present.
+        return;
+    }
     if (frame == nullptr ||
         frame->provenance().provider != runtime::PreviewDisplayProvider::GpuResident) {
         residentActive_ = false;
+        if (gpuResident_->hasLiveTarget()) {
+            // A live target must be retired asynchronously BEFORE the container is hidden:
+            // unmapping the window-container child can silently replace/destroy the VkSurfaceKHR
+            // and latch the presenter into its terminal Retained state, refusing every later
+            // present. The cover keeps the last native image hidden while the surface stays mapped.
+            requestResidentNativeRetire();
+            return;
+        }
+        // Nothing native is live: hiding the container mutates no surface. Expose the host's own
+        // CPU paint, never a permanently visible cover.
         if (gpuContainer_ != nullptr) {
             gpuContainer_->hide();
         }
-        // No resident frame: expose the host's own CPU paint, never a permanently visible cover.
-        if (gpuResident_ != nullptr) {
-            gpuResident_->concealCpuCover();
-        }
+        gpuResident_->concealCpuCover();
         gpuPresentedFrame_ = frame;
         gpuPresentedTransform_ = transform_;
         return;
@@ -233,12 +257,13 @@ void ViewerEditor::updateGpuResidentPresentation() {
     }
     const bool intended = gpuResident_->present(*frame, request);
     if (!intended) {
-        // Refusal / unsupported / stale lease: keep or restore the CPU paint and hide the native
-        // container. Never claim a blank activation.
+        // Refusal / unsupported / stale lease: keep or restore the CPU paint. Never claim a blank
+        // activation. Do NOT hide the container here: the target is still live, and unmapping the
+        // window-container child can silently replace/destroy the surface. Raise the current CPU
+        // cover so no stale native frame is exposed while the target stays mapped and safe to
+        // retire later.
         residentActive_ = false;
-        if (gpuContainer_ != nullptr) {
-            gpuContainer_->hide();
-        }
+        gpuResident_->revealCpuCover(contentRect().toRect());
         return;
     }
     if (QWidget* container = gpuResident_->container(); container != nullptr) {
@@ -456,37 +481,6 @@ void ViewerEditor::forwardGpuInput(const ViewerGpuInputEvent& event) {
 
 bool ViewerEditor::hasLiveNativeTarget() const {
     return gpuResident_ != nullptr && gpuResident_->hasLiveTarget();
-}
-
-EditorNativeSurface::PrepareOutcome
-ViewerEditor::prepareNativeSurfaceMutation(const std::uint64_t generation,
-                                           PrepareCallback completion) {
-    if (gpuResident_ == nullptr) {
-        if (completion) {
-            completion(generation, PrepareResult{true, "no native surface implementation"});
-        }
-        return EditorNativeSurface::PrepareOutcome::NoLiveTarget;
-    }
-    return gpuResident_->prepareForMutation(generation, completion);
-}
-
-void ViewerEditor::resumeNativeSurfaceAfterMutation() {
-    if (gpuResident_ != nullptr) {
-        gpuResident_->resumeAfterMutation();
-        residentActive_ = false;
-        gpuPresentedFrame_.reset();
-        cpuFallbackFrame_.reset();
-        cpuFallbackIdentity_.reset();
-        cpuFallbackFailedIdentity_.reset();
-        if (cpuFallbackTask_.has_value()) {
-            cpuFallbackTask_->cancel();
-            cpuFallbackTask_.reset();
-        }
-        if (gpuContainer_ != nullptr) {
-            gpuContainer_->hide();
-            gpuContainer_ = nullptr;
-        }
-    }
 }
 
 std::string ViewerEditor::nativeSurfaceDiagnostic() const {

@@ -35,6 +35,7 @@
 #include <QPicture>
 #include <QPixmap>
 #include <QPointF>
+#include <QRect>
 #include <QRectF>
 #include <QSizeF>
 
@@ -140,6 +141,12 @@ class ViewerGpuResidentController final {
     // Hides the native CPU cover so the host's own CPU paint (or no frame) is
     // exposed. Safe when no cover exists; never destroys or reparents a surface.
     void concealCpuCover();
+    // Raises the native CPU cover with the host's CURRENT CPU paint (a fresh snapshot) above the
+    // still-mapped native container. This is what lets a live target stay mapped while it retires:
+    // the opaque cover hides the last native child and no stale frame can flash, and the container
+    // is never hidden, reparented, or destroyed here. Safe when no snapshot callback is configured
+    // (no-op) and when no cover exists yet.
+    void revealCpuCover(const QRect& containerRect);
     [[nodiscard]] bool cpuCoverVisibleForTest() const noexcept;
     // Fired whenever the presenter's state changed since the previous poll
     // (attach ack, retire, refusal), so the host can re-evaluate whether to

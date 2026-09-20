@@ -405,6 +405,15 @@ void ViewerGpuResidentController::concealCpuCover() {
     impl_->hideCover();
 }
 
+void ViewerGpuResidentController::revealCpuCover(const QRect& containerRect) {
+    // Keep the cover required while the transition is in flight, then raise it. ensureCover()
+    // snapshots only on the hidden->visible transition, so a steady reveal never re-rasterizes the
+    // CPU image, while the first raise after a present-ack conceal always captures the CURRENT
+    // paint (a blank/no-frame state stays blank rather than flashing the previous native frame).
+    impl_->coverRequired = true;
+    impl_->ensureCover(containerRect);
+}
+
 bool ViewerGpuResidentController::cpuCoverVisibleForTest() const noexcept {
     return impl_->cover != nullptr && impl_->cover->isVisible();
 }

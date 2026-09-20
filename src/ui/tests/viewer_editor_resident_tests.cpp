@@ -288,6 +288,52 @@ void testViewerEditorResidentGateIsInertAndKeepsCpuPaint(Expectations& expectati
     expectations.expect(pressFilter.presses == 1,
                         "forwarded native input runs receiver event filters, not just the handler");
 
+    // 8. The blank-retire coordination contract, device-free (the live path is the native
+    // fixture). An external prepareNativeSurfaceMutation completion must never be delivered inline
+    // from the presenter/controller callback stack; it is queued and generation-guarded.
+    bool externalCalledInline = false;
+    const auto externalOutcome = viewer.prepareNativeSurfaceMutation(
+        30, [&](const std::uint64_t generation, const ui::EditorNativeSurface::PrepareResult&) {
+            expectations.expect(generation == 30, "the external generation is echoed");
+            externalCalledInline = true;
+        });
+    expectations.expect(externalOutcome == ui::EditorNativeSurface::PrepareOutcome::NoLiveTarget,
+                        "with no live target the host may mutate synchronously");
+    expectations.expect(!externalCalledInline,
+                        "the external completion is queued, never invoked inline");
+    QApplication::processEvents();
+    expectations.expect(externalCalledInline,
+                        "the queued external completion is delivered after the call returns");
+
+    // 9. While an internal blank retirement owns the presenter's retire slot, a host request folds
+    // into it (RetirePending) and is answered later with the truthful result; a second concurrent
+    // request is refused explicitly rather than coalesced or answered as safe.
+    viewer.simulateNativeRetireInFlightForTest();
+    bool foldedCalled = false;
+    bool foldedSafe = false;
+    const auto folded = viewer.prepareNativeSurfaceMutation(
+        40, [&](const std::uint64_t generation, const ui::EditorNativeSurface::PrepareResult& r) {
+            expectations.expect(generation == 40, "the folded generation is echoed");
+            foldedCalled = true;
+            foldedSafe = r.safeToMutate;
+        });
+    expectations.expect(folded == ui::EditorNativeSurface::PrepareOutcome::RetirePending,
+                        "the host request folds into the in-flight internal retirement");
+    expectations.expect(!foldedCalled, "the folded completion is never delivered inline");
+    bool secondCalled = false;
+    const auto second = viewer.prepareNativeSurfaceMutation(
+        41, [&](const std::uint64_t, const ui::EditorNativeSurface::PrepareResult&) {
+            secondCalled = true;
+        });
+    expectations.expect(second == ui::EditorNativeSurface::PrepareOutcome::Refused,
+                        "a second concurrent host request is refused explicitly");
+    expectations.expect(!secondCalled, "the refused request is never answered as safe");
+    viewer.finishSimulatedNativeRetireForTest(true, "simulated retire");
+    expectations.expect(foldedCalled && foldedSafe,
+                        "the folded completion is delivered once with the truthful safe result");
+    expectations.expect(!secondCalled, "the refused request stays unanswered");
+    QApplication::processEvents();
+
     controller.beginShutdown();
     bridge.beginShutdown();
     (void)waitUntil([&] { return scheduler.isQuiescent(); });
@@ -391,6 +437,47 @@ void testCompositionFrameChromePaintsWithoutADevice(Expectations& expectations) 
                         "an empty invitation paints no interior ink over the composition");
 }
 
+void testViewerEditorBlankCoverIsOpaqueCurrentCpuPaint(Expectations& expectations) {
+    // The native CPU cover raised during a blank/no-frame retirement must be the CURRENT CPU paint
+    // (the opaque canvas background), never a transparent or stale image. This is the device-free
+    // half of the blank-retire behavior; the live retire itself is covered by the native fixtures.
+    document::Document blankDocument(document::Project(document::ProjectId::fromRaw(7), "Blank"));
+    commands::CommandStack blankCommands(blankDocument);
+    ui::CompositionSession session(blankDocument, blankCommands, document::CompositionId{});
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+
+    runtime::NodeDefinitionRegistry definitions;
+    expectations.expect(runtime::registerBuiltInNodeDefinitions(definitions),
+                        "the fixture registers built-in node definitions");
+    definitions.freeze();
+    runtime::SnapshotCompiler compiler(definitions);
+    const runtime::CpuCompositionEvaluator evaluator;
+    const runtime::CpuReferenceDisplayPreparer displayPreparer;
+    runtime::QualifiedDisplayProcessorProvider qualifiedProvider;
+    auto pipeline =
+        ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer, qualifiedProvider);
+    ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline);
+    ui::ViewerEditor viewer(session, controller);
+    viewer.resize(320, 240);
+    viewer.show();
+    QApplication::processEvents();
+
+    expectations.expect(viewer.displayedFrameForTest() == nullptr,
+                        "a composition-less document has no displayed frame");
+    const QPixmap cover = viewer.renderCpuCoverSnapshotForTest();
+    expectations.expect(!cover.isNull(), "the blank-state cover snapshot renders");
+    if (!cover.isNull()) {
+        const QImage image = cover.toImage();
+        expectations.expect(image.pixelColor(image.width() / 2, image.height() / 2).alpha() > 0,
+                            "the blank-state cover is opaque current paint, not transparent");
+    }
+
+    controller.beginShutdown();
+    bridge.beginShutdown();
+    (void)waitUntil([&] { return scheduler.isQuiescent(); });
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -399,6 +486,7 @@ int main(int argc, char** argv) {
     testViewerEditorResidentGateIsInertAndKeepsCpuPaint(expectations);
     testResidentFrameGeometryResolvesTheSameMappingDescriptor(expectations);
     testCompositionFrameChromePaintsWithoutADevice(expectations);
+    testViewerEditorBlankCoverIsOpaqueCurrentCpuPaint(expectations);
     if (expectations.failures() == 0) {
         std::cout << "PASS: actual ViewerEditor resident integration (CPU/inert gate)\n";
         return 0;
