@@ -5,14 +5,17 @@
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/video/audio.hpp>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <string_view>
 #include <thread>
 #include <unistd.h>
 using namespace bloom;
@@ -189,7 +192,50 @@ void verify(const host::SequenceExportResultV1& r, const std::filesystem::path& 
     std::cout << path.filename() << " frames=" << qc.frameCount << " samples=" << qc.audioSamples
               << " max=" << qc.maximumError << " mean=" << qc.meanError << '\n';
 }
-void tests(const std::filesystem::path& directory) {
+// GPU video/range proof: the real sequence runner drives the real per-frame output attempts with
+// the real provider attached, and the surfaced result must show actual GPU evaluation with positive
+// native dispatches and exactly one final readback per GPU-evaluated frame. Skips (NOTE) when no
+// loader is configured; `--require-device` turns an absent device into a failure.
+void testGpuVideoProvenance(Fixture& f, const std::filesystem::path& directory,
+                            const bool requireDevice) {
+    const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER");
+    if (loader == nullptr || *loader == '\0') {
+        if (requireDevice)
+            throw std::runtime_error("--require-device needs BLOOM_TEST_VULKAN_LOADER");
+        std::cout << "NOTE: BLOOM_TEST_VULKAN_LOADER unset; skipping GPU video provenance\n";
+        return;
+    }
+    auto provider = host::GpuExportProvider::create([&] {
+        runtime::GpuProcessFrameEvaluatorOptions options;
+        options.enabled = true;
+        options.loaderPath = std::filesystem::path(loader);
+        return options;
+    }());
+    provider->prepare(f.scheduler);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (!provider->prepared() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    check(provider->prepared(), "GPU video: provider bootstrap terminals");
+    if (!provider->deviceAvailable()) {
+        if (requireDevice)
+            throw std::runtime_error("GPU video: required device unavailable");
+        std::cout << "NOTE: no compatible Vulkan device; skipping GPU video provenance\n";
+        return;
+    }
+    const auto path = directory / "gpu-motion.mov";
+    auto request = f.request(path, output::OutputPresetV1::ProResMovV1);
+    request.gpuProvider = provider;
+    const auto result = f.run(std::move(request));
+    verify(result, path, true);
+    check(result.gpuEvaluatedFrames > 0, "GPU video: at least one frame evaluated on the GPU");
+    check(result.gpuNativeDispatches > 0, "GPU video: positive native dispatches");
+    check(result.gpuReadbacks == result.gpuEvaluatedFrames,
+          "GPU video: exactly one final readback per GPU-evaluated frame");
+    std::cout << "GPU video frames=" << result.gpuEvaluatedFrames
+              << " dispatches=" << result.gpuNativeDispatches
+              << " readbacks=" << result.gpuReadbacks << '\n';
+}
+void tests(const std::filesystem::path& directory, const bool requireDevice) {
     std::filesystem::remove_all(directory);
     std::filesystem::create_directories(directory);
     Fixture f(directory);
@@ -262,12 +308,14 @@ void tests(const std::filesystem::path& directory) {
     const auto refused = f.run(std::move(oversized));
     check(refused.failure && refused.failure->reason == media::provider::Error::Oversized,
           "frame queue budget enforced");
+    testGpuVideoProvenance(f, directory, requireDevice);
 }
 } // namespace
 int main(int argc, char** argv) {
     try {
-        check(argc == 2, "fixture directory");
-        tests(argv[1]);
+        check(argc == 2 || argc == 3, "fixture directory [--require-device]");
+        const bool requireDevice = argc == 3 && std::string_view(argv[2]) == "--require-device";
+        tests(argv[1], requireDevice);
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;

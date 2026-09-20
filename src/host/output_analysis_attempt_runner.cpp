@@ -6,6 +6,7 @@
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
 
+#include <chrono>
 #include <new>
 #include <type_traits>
 #include <utility>
@@ -173,11 +174,19 @@ enum class BuildFailureKindV1 : std::uint8_t {
     AttemptBuild,
 };
 
+// The successful Evaluating/Identifying/Analyzing product, heap-shared as one handle so the task
+// result stays within TaskResultValue's 4-pointer cap even though the retained native provenance
+// carries the full counter set.
+struct BuildProductV1 final {
+    std::shared_ptr<const output::OutputAnalysisAttemptV1> attempt;
+    OutputAnalysisAttemptGpuProvenanceV1 gpuProvenance;
+};
+
 struct BuildOutcomeV1 final {
     bool succeeded = false;
     BuildFailureKindV1 failureKind = BuildFailureKindV1::None;
     std::uint8_t rawCode = 0;
-    std::shared_ptr<const output::OutputAnalysisAttemptV1> attempt = nullptr;
+    std::shared_ptr<const BuildProductV1> product = nullptr;
 };
 static_assert(runtime::TaskResultValue<BuildOutcomeV1>);
 
@@ -211,9 +220,11 @@ translateBuildFailure(const BuildOutcomeV1& outcome) noexcept {
 } // namespace
 
 OutputAnalysisAttemptOutcomeV1 OutputAnalysisAttemptOutcomeV1::completed(
-    std::shared_ptr<const output::OutputAnalysisAttemptV1> attempt) noexcept {
+    std::shared_ptr<const output::OutputAnalysisAttemptV1> attempt,
+    std::optional<OutputAnalysisAttemptGpuProvenanceV1> gpuProvenance) noexcept {
     OutputAnalysisAttemptOutcomeV1 outcome;
     outcome.attempt_ = std::move(attempt);
+    outcome.gpuProvenance_ = std::move(gpuProvenance);
     return outcome;
 }
 
@@ -234,8 +245,18 @@ struct OutputAnalysisAttemptRunnerState final {
     OutputAnalysisAttemptStageV1 stage = OutputAnalysisAttemptStageV1::Resolving;
     runtime::TaskHandle<ResolvingOutcomeV1> resolvingHandle;
     std::optional<runtime::TaskHandle<BuildOutcomeV1>> buildHandle;
+    // Set once Resolving succeeds and cleared when the Cpu evaluation task is submitted. While it
+    // is set, the runner may be deferring on the GPU provider's lazy bootstrap.
+    std::shared_ptr<const ResolvedAttemptInputsV1> resolvedInputs;
+    std::optional<std::chrono::steady_clock::time_point> gpuGateDeadline;
     bool completed = false;
 };
+
+// Bounded deferral for the GPU provider's lazy bootstrap. The gate is owner-driven: tryComplete()
+// simply reports "not yet" while the provider boots and the authoring surface's existing poll
+// loop re-drives it. A provider that never reaches a terminal state cannot wedge an export
+// forever, so after this bound the evaluation proceeds and the truthful CPU fallback runs.
+constexpr auto kGpuBootstrapDeferralLimit = std::chrono::seconds(5);
 
 } // namespace detail
 
@@ -281,41 +302,64 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
     }
 
     if (!state_->buildHandle.has_value()) {
-        // Still waiting on / just reached the Resolving stage.
-        auto taken = state_->resolvingHandle.tryTakeResult();
-        if (!taken.has_value()) {
-            return std::nullopt;
-        }
-        if (taken->state() == runtime::TaskState::Cancelled) {
-            state_->completed = true;
-            return OutputAnalysisAttemptOutcomeV1::failure(
-                {OutputAnalysisAttemptStageV1::Resolving, true, std::monostate{}});
-        }
-        if (taken->state() != runtime::TaskState::Succeeded || !taken->value().has_value() ||
-            !taken->value()->succeeded) {
-            state_->completed = true;
-            if (taken->value().has_value() && taken->value()->colorStageFailed) {
-                return OutputAnalysisAttemptOutcomeV1::failure(
-                    {OutputAnalysisAttemptStageV1::ColorPreparing, false, std::monostate{}});
+        if (state_->resolvedInputs == nullptr) {
+            // Still waiting on / just reached the Resolving stage.
+            auto taken = state_->resolvingHandle.tryTakeResult();
+            if (!taken.has_value()) {
+                return std::nullopt;
             }
-            const auto error = taken->value().has_value() ? taken->value()->error
-                                                          : platform::StagedArtifactError::None;
-            return OutputAnalysisAttemptOutcomeV1::failure(
-                {OutputAnalysisAttemptStageV1::Resolving, false, error});
+            if (taken->state() == runtime::TaskState::Cancelled) {
+                state_->completed = true;
+                return OutputAnalysisAttemptOutcomeV1::failure(
+                    {OutputAnalysisAttemptStageV1::Resolving, true, std::monostate{}});
+            }
+            if (taken->state() != runtime::TaskState::Succeeded || !taken->value().has_value() ||
+                !taken->value()->succeeded) {
+                state_->completed = true;
+                if (taken->value().has_value() && taken->value()->colorStageFailed) {
+                    return OutputAnalysisAttemptOutcomeV1::failure(
+                        {OutputAnalysisAttemptStageV1::ColorPreparing, false, std::monostate{}});
+                }
+                const auto error = taken->value().has_value() ? taken->value()->error
+                                                              : platform::StagedArtifactError::None;
+                return OutputAnalysisAttemptOutcomeV1::failure(
+                    {OutputAnalysisAttemptStageV1::Resolving, false, error});
+            }
+            // Resolving succeeded: retain its typed result (the target, and for PNG the retained
+            // display products) until the evaluation stage is actually submitted -- possibly after
+            // a bounded GPU-bootstrap deferral -- then consume it directly into the next task's
+            // closure, never a wait/get/join.
+            state_->resolvedInputs = taken->value()->resolved;
+            if (state_->resolvedInputs == nullptr) {
+                state_->completed = true;
+                return OutputAnalysisAttemptOutcomeV1::failure(
+                    {OutputAnalysisAttemptStageV1::Resolving, false, std::monostate{}});
+            }
         }
 
-        // Resolving succeeded: submit the Cpu stage, consuming its typed result (the retained
-        // target, and for PNG the retained display products) directly into the next task's closure
-        // -- never a wait/get/join.
-        auto resolved = taken->value()->resolved;
-        if (resolved == nullptr) {
-            state_->completed = true;
-            return OutputAnalysisAttemptOutcomeV1::failure(
-                {OutputAnalysisAttemptStageV1::Resolving, false, std::monostate{}});
+        // GPU bootstrap gate: defer the evaluation stage until the provider's lazy bootstrap is
+        // terminal, so the first real export on a supported device is genuinely GPU instead of a
+        // CPU fallback that raced the bootstrap. This is owner-driven -- tryComplete() simply
+        // reports "not yet" and the authoring surface's existing poll loop re-drives it -- so no
+        // worker is blocked and no CPU task is submitted while waiting. The bound keeps a wedged
+        // provider from stalling an export forever.
+        const auto& provider = state_->request.gpuProvider;
+        if (provider != nullptr && !provider->prepared()) {
+            if (!state_->gpuGateDeadline.has_value()) {
+                state_->gpuGateDeadline =
+                    std::chrono::steady_clock::now() + detail::kGpuBootstrapDeferralLimit;
+            }
+            if (std::chrono::steady_clock::now() < *state_->gpuGateDeadline) {
+                return std::nullopt;
+            }
         }
+
+        auto resolved = std::move(state_->resolvedInputs);
+        state_->resolvedInputs.reset();
+        state_->gpuGateDeadline.reset();
         const auto preset = state_->request.preset;
         auto* ledger = state_->ledger;
-        auto* gpuEvaluator = state_->request.gpuEvaluator;
+        auto gpuProvider = state_->request.gpuProvider; // shared ownership travels with the task
         auto plan = state_->request.plan;
         auto evaluation = state_->request.evaluation;
 
@@ -325,7 +369,8 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
         auto submission = state_->scheduler->submit<BuildOutcomeV1>(
             std::move(cpuRequest),
             [plan = std::move(plan), evaluation, resolved, preset, ledger,
-             gpuEvaluator](runtime::TaskContext& context) -> runtime::TaskResult<BuildOutcomeV1> {
+             gpuProvider = std::move(gpuProvider)](
+                runtime::TaskContext& context) -> runtime::TaskResult<BuildOutcomeV1> {
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
                 }
@@ -334,14 +379,24 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                     {.phase = "Evaluating", .subphase = "", .completed = 0, .total = std::nullopt});
                 // GPU final-render bridge: when an available device and a prepared-GPU-subset scene
                 // exist, evaluate through the genuine native scene executor and read the final
-                // RGBA32F back exactly once. An unavailable device or a scene outside the subset
-                // falls through to the CPU reference evaluator on the same snapshot/identity.
+                // RGBA32F back exactly once. An unavailable device, a disabled provider, or a
+                // scene outside the subset falls through to the CPU reference evaluator on the
+                // same snapshot/identity. The typed native provenance/counters are retained for
+                // diagnostics; they never alter the analysis or the approval digest.
+                OutputAnalysisAttemptGpuProvenanceV1 gpuProvenance;
                 std::shared_ptr<const runtime::ProcessFrame> evaluatedFrame;
-                if (gpuEvaluator != nullptr && gpuEvaluator->gpuAvailable()) {
-                    auto gpuOutcome =
-                        gpuEvaluator->evaluate(plan, evaluation, context.cancellation());
-                    if (gpuOutcome.status == runtime::GpuProcessFrameStatus::Evaluated) {
-                        evaluatedFrame = gpuOutcome.frame;
+                if (gpuProvider != nullptr) {
+                    auto evaluator = gpuProvider->evaluator();
+                    if (evaluator != nullptr) {
+                        auto gpuOutcome =
+                            evaluator->evaluate(plan, evaluation, context.cancellation());
+                        gpuProvenance.status = gpuOutcome.status;
+                        gpuProvenance.counters = gpuOutcome.counters;
+                        if (gpuOutcome.status == runtime::GpuProcessFrameStatus::Evaluated) {
+                            evaluatedFrame = gpuOutcome.frame;
+                        }
+                    } else {
+                        gpuProvenance.status = runtime::GpuProcessFrameStatus::DeviceUnavailable;
                     }
                 }
                 if (evaluatedFrame == nullptr) {
@@ -445,7 +500,9 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                          .rawCode = static_cast<std::uint8_t>(buildResult.error())});
                 }
                 return runtime::TaskResult<BuildOutcomeV1>::succeeded(
-                    {.succeeded = true, .attempt = buildResult.attempt()});
+                    {.succeeded = true,
+                     .product = std::make_shared<const BuildProductV1>(
+                         BuildProductV1{buildResult.attempt(), gpuProvenance})});
             });
 
         if (!submission.accepted()) {
@@ -466,15 +523,16 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
         return OutputAnalysisAttemptOutcomeV1::failure(
             {OutputAnalysisAttemptStageV1::Evaluating, true, std::monostate{}});
     }
+    const auto& product = taken->value()->product;
     if (taken->state() != runtime::TaskState::Succeeded || !taken->value().has_value() ||
-        !taken->value()->succeeded || taken->value()->attempt == nullptr) {
+        !taken->value()->succeeded || product == nullptr || product->attempt == nullptr) {
         if (taken->value().has_value()) {
             return OutputAnalysisAttemptOutcomeV1::failure(translateBuildFailure(*taken->value()));
         }
         return OutputAnalysisAttemptOutcomeV1::failure(
             {OutputAnalysisAttemptStageV1::Analyzing, false, std::monostate{}});
     }
-    return OutputAnalysisAttemptOutcomeV1::completed(taken->value()->attempt);
+    return OutputAnalysisAttemptOutcomeV1::completed(product->attempt, product->gpuProvenance);
 }
 
 OutputAnalysisAttemptRunnerResultV1::OutputAnalysisAttemptRunnerResultV1(
@@ -511,6 +569,8 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
             .stage = OutputAnalysisAttemptStageV1::Resolving,
             .resolvingHandle = {},
             .buildHandle = std::nullopt,
+            .resolvedInputs = nullptr,
+            .gpuGateDeadline = std::nullopt,
             .completed = false,
         });
 
