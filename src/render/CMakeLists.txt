@@ -541,7 +541,9 @@ endif()
 # pinned here, the manifest must bind that source digest, and, when the locked glslangValidator/
 # spirv-val are present, configure recompiles it and confirms the SPIR-V digest embedded in
 # blend_portable_spirv.inc. Runtime code never compiles or loads a shader. The deterministic
-# regeneration path is tools/gpu-shaders/embed_blend_spirv.py.
+# regeneration path is the standalone tools/gpu-shaders project: its
+# bloom_gpu_blend_spirv_generator (embed_blend_spirv.cpp) writes the checked-in .inc and manifest
+# pins and its bloom_gpu_blend_spirv_verify target --checks and regenerates every blend family.
 set(BLOOM_BLEND_PORTABLE_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_portable.comp")
 set(BLOOM_BLEND_PORTABLE_MANIFEST
     "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_portable.manifest")
