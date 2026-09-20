@@ -31,6 +31,13 @@ namespace bloom::runtime {
 inline constexpr std::string_view kGpuOcioWrapperEntryPoint = "main";
 inline constexpr std::uint32_t kGpuOcioWrapperWorkgroupSize = 64;
 
+// Semantic version of the Bloom wrapper interface (descriptor layout, precise-sampling adapter
+// usage, ViewAdjust emission, and the capacity-safe 2D invocation flattening). Distinct from the
+// sampling-adapter version: a change to any of those semantics must never reuse an artifact
+// compiled by an older wrapper. Folded into the prepared command identity (see the wrapper
+// source digest and this version).
+inline constexpr std::string_view kGpuOcioWrapperVersion = "bloom-ocio-wrapper-v2-dispatch2d";
+
 enum class GpuOcioWrapperError : std::uint8_t {
     None,
     InvalidProgram,
@@ -55,6 +62,10 @@ struct GpuOcioWrapperResult final {
     // (color::kOcioGpuPreciseSamplingVersion). Folded into the prepared command identity so a
     // sampling-semantics change can never reuse an older artifact.
     std::string samplingVersion;
+    // The wrapper semantic version (kGpuOcioWrapperVersion). Folded alongside samplingVersion and
+    // the source digest into the prepared command identity so a wrapper-semantics change (including
+    // the 2D dispatch flattening) can never reuse an older artifact.
+    std::string wrapperVersion;
     core::Sha256Digest sourceDigest{};
     GpuOcioWrapperError error = GpuOcioWrapperError::None;
 
@@ -78,6 +89,12 @@ struct GpuOcioWrapperResult final {
 //    adjustment emits no adjust code, so neutral wrappers are unchanged. A non-neutral adjustment
 //    on the ProcessEffect arm is refused (UnsupportedViewAdjust) and an invalid adjustment is
 //    refused (InvalidViewAdjust);
+//  * the wrapper flattens a capacity-bounded 2D dispatch into the linear pixel index:
+//    index = gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * gl_WorkGroupSize.x) +
+//    gl_GlobalInvocationID.x, with the pixelCount guard discarding the tail. A geometry that fits
+//    is dispatched 1D (groupsY == 1) and is byte-for-byte the previous mapping. This keeps
+//    `ceil(pixelCount / workGroupSizeX)` from exceeding maxComputeWorkGroupCount[0] for images
+//    above ~4.19M pixels;
 //  * non-finite straight input or non-finite OCIO output raises the status word and writes no pixel
 //    so the native consumer fails the frame rather than publishing a non-finite value.
 [[nodiscard]] GpuOcioWrapperResult

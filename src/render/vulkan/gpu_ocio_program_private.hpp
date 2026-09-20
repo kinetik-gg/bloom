@@ -9,6 +9,7 @@
 
 #include "gpu_device_private.hpp"
 #include "gpu_image_private.hpp"
+#include "gpu_ocio_program_dispatch_plan.hpp"
 #include "gpu_resident_display_private.hpp"
 
 #include <atomic>
@@ -148,6 +149,10 @@ struct GpuOcioProgram::Impl final {
     std::shared_ptr<vulkan_detail::DeviceAllocatorState> control;
     GpuOcioProgramBudgets budgets;
     std::uint32_t expectedGeneration = 0;
+    // Effective maxComputeWorkGroupCount[0..1] for dispatch planning: the caller's override when
+    // set, otherwise the queried device limit. Owner-thread immutable after create().
+    std::uint32_t maxWorkGroupCountX = 0;
+    std::uint32_t maxWorkGroupCountY = 0;
     OcioGpuProgramDesc desc;
     std::vector<std::uint32_t> spirv;
     GpuOcioProgramCancellation cancellation;

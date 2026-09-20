@@ -72,6 +72,12 @@ struct GpuOcioProgramDiagnostic final {
 struct GpuOcioProgramBudgets final {
     std::uint64_t maxOwnedBytes = 512ULL * 1024ULL * 1024ULL;
     std::uint64_t maxLutBytes = 256ULL * 1024ULL * 1024ULL;
+    // Optional override of the effective maxComputeWorkGroupCount[0..1] used by capacity-safe
+    // dispatch planning. Zero (the default) selects the queried device limit, so production
+    // callers leave these zero. A nonzero value lets a qualification or test caller force the
+    // bounded 2D grid (e.g. the conformant 65535 X limit) on a device that reports a larger X.
+    std::uint32_t maxWorkGroupCountX = 0;
+    std::uint32_t maxWorkGroupCountY = 0;
 };
 
 struct GpuOcioProgramCreateResult;
