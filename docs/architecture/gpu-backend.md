@@ -326,7 +326,15 @@ status poll, then hands every current and future `ViewerEditor` a typed `ViewerG
 `ViewerEditor` presents the
 resident arm through `ViewerGpuResidentController`, which owns the same-request CPU fallback, the
 native CPU cover, and off-thread overlay rasterization, and forwards native window input back through
-the real event handlers. The RAM preview controller fills its range with a bounded two-deep pipeline
+the real event handlers. The embedded window's logical geometry belongs to its Qt window container;
+device-pixel extents are passed separately to the presentation service. The native CPU cover lives
+under a dedicated non-native widget parent, with native ancestor creation disabled before the cover
+becomes native, so Qt's sibling promotion cannot convert the surrounding editor panels into native
+windows. A blank frame or project replacement retires the previous target before unmounting it;
+completion is queued onto the UI event loop before destroying the presenter. Resizing retains a
+pending presentation of the current frame until the new extent is ready, and an older acknowledgement
+cannot complete that pending presentation.
+The RAM preview controller fills its range with a bounded two-deep pipeline
 so the next frame's CPU preparation overlaps the previous frame's display stage, with the
 pixels-identity duplicate guard, out-of-order collection, cancel-all, and no cross-frame coalescing
 key.
