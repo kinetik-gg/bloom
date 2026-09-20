@@ -21,11 +21,17 @@
 // the actual resolved pixels depend on it (through a curve or a value-graph driver, both resolved
 // by the real preflight).
 //
-// If any reachable operation is outside the subset -- text/shape/media/effects, a parented,
-// rotated, or scaled layer, a non-Normal blend, ROI, or a non-linear-rec709 color intent --
-// preparation fails closed with Unsupported and no commands, so the caller can take the existing
-// CPU path. Animated and driven parameters are supported because they are resolved by the real
-// preflight, never assumed.
+// A request ROI is resolved exactly as the CPU evaluator resolves it: its process image descriptor
+// data window is the requested ROI (validated by the same shared preflight), while every command
+// keeps its native source/output window -- a media upload stays full resolution -- and only the
+// terminal Composition Output is clipped to the ROI. An ROI edit therefore reuses all unchanged
+// upstream content and re-dispatches one clipped command. A transform still samples the full input
+// at the ROI edge, and an out-of-resolution ROI is refused by preflight.
+//
+// If any reachable operation is outside the subset, or a non-linear-rec709 working space reaches an
+// operation without verified working-space semantics, preparation fails closed with Unsupported and
+// no commands, so the caller can take the existing CPU path. Animated and driven parameters are
+// supported because they are resolved by the real preflight, never assumed.
 
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>

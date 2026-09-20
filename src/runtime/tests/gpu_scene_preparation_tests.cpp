@@ -442,19 +442,28 @@ void testBudgetRefusal(Expectations& expectations) {
 
 #include "gpu_scene_coverage_budget_tests.ipp"
 
-void testUnsupported(Expectations& expectations) {
+void testUnsupported(Expectations& expectations, const CpuCompositionEvaluator& evaluator) {
     const CpuGpuSceneBuilder builder;
     const auto solidPlan = twoLayerPlan(format(8, 8), LayerValues{}, LayerValues{}, 8.0, 8.0, 5000);
 
-    // ROI.
+    // A request ROI is resolved by the CPU evaluator, so the prepared scene must match it exactly:
+    // identity, bounds, the ROI process descriptor, and every replayed pixel.
     {
         auto request = requestFor(*solidPlan);
-        const auto roiWindow = ImageWindow::create(0, 0, 4, 4);
+        const auto roiWindow = ImageWindow::create(1, 1, 4, 4);
+        request.roi = *roiWindow.value();
+        checkParity(expectations, evaluator, solidPlan, request, "region of interest");
+    }
+    // An out-of-resolution ROI is refused by the shared preflight before any work, exactly as the
+    // CPU evaluator refuses it; it is never silently widened to the full frame.
+    {
+        auto request = requestFor(*solidPlan);
+        const auto roiWindow = ImageWindow::create(-1, 0, 1, 1);
         request.roi = *roiWindow.value();
         const auto prepared = builder.build(solidPlan, request);
         expectations.expect(!prepared && prepared.diagnostic.code ==
-                                             PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
-                            "ROI is refused before any work");
+                                             PreparedGpuSceneDiagnosticCode::PreflightFailure,
+                            "an out-of-resolution ROI is refused before any work");
     }
     // A non-lin_rec709_scene working space is admitted for the colour-agnostic operations: a solid
     // applies no working-space transform (the CPU reference only premultiplies the authored value),
@@ -628,7 +637,7 @@ int main() {
         testShapeCoverage(expectations, evaluator);
         testBlendModes(expectations, evaluator);
         testAffineAndParent(expectations, evaluator);
-        testUnsupported(expectations);
+        testUnsupported(expectations, evaluator);
         if (!expectations.ok()) {
             std::cerr << "FAIL: GPU scene preparation expectations failed\n";
             return 1;

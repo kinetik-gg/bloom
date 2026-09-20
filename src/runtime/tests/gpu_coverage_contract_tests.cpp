@@ -110,6 +110,26 @@ runBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>&
     return result;
 }
 
+// Runs the production builder with an explicit request (for the ROI feature axis, whose request
+// carries a region of interest). The genuine prepared scene is retained for the native acceptance
+// pass, which evaluates the CPU oracle with the same ROI and checks the native descriptor.
+[[nodiscard]] FixtureRun
+runBuilderWithRequest(const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan,
+                      const bloom::runtime::EvaluationRequest& request) {
+    const CpuGpuSceneBuilder builder(nullptr, {}, bloom::gpu_coverage_ocio::context());
+    FixtureRun result;
+    const auto prepared = builder.build(plan, request);
+    if (prepared) {
+        result.prepared = true;
+        result.frames.push_back(FrameRun{plan, request, {}, prepared.scene});
+        result.evidence =
+            "prepared " + std::to_string(prepared.scene->commands().size()) + " commands";
+        return result;
+    }
+    result.evidence = codeName(prepared.diagnostic.code) + ": " + prepared.diagnostic.message;
+    return result;
+}
+
 [[nodiscard]] FixtureRun
 runMediaBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan,
                 const bloom::runtime::CpuCompositionEvaluator& evaluator,
@@ -344,6 +364,23 @@ displayProofRunner(const bool customView) {
     add("feature.layer.generic_input", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime GpuSceneExecutor graph tests",
         [] { return runBuilder(layerOnLayerPlan(104000)); });
+    // The request ROI axis: a nonzero-origin region smaller than the composition. The production
+    // builder must clip the terminal output to the ROI while keeping every native source/output
+    // window, and the native gate must execute the real GPU scene and match the CPU oracle's
+    // ROI-sized process image. The dedicated ROI suites own the vector/affine/nested/media proofs.
+    add("feature.roi", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime GpuSceneExecutor ROI native tests", [] {
+            const auto plan = basePlan();
+            const auto window = bloom::render::ImageWindow::create(3, 2, 5, 6);
+            if (!window) {
+                FixtureRun result;
+                result.evidence = "the ROI fixture window is invalid";
+                return result;
+            }
+            auto request = requestFor(*plan);
+            request.roi = *window.value();
+            return runBuilderWithRequest(plan, request);
+        });
     // Working-space colour conversion is a pixel transformation: a mixed solid/text/media/effect
     // ACEScg composition prepared by the production builder with the shared OCIO context, then
     // executed and compared to the unchanged CPU evaluator at 2e-6. The owner is this gate's

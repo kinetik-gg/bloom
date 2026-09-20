@@ -227,6 +227,13 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
     out.push_back(GpuFeatureCoverageEntry{
         "feature.layer.generic_input", "layer fed by a non-source input (graph compositing)",
         GpuCoverageDisposition::Required, "src/runtime GpuSceneExecutor graph tests"});
+    // A request ROI is a required route: the prepared GPU scene must clip its native output to the
+    // requested data window exactly as the CPU evaluator does, keep every native source/output
+    // window and pixel aspect, and never fall back to a whole-frame CPU render. The genuine fixture
+    // and its negative missed-GPU detection live in the ROI suites and the coverage gate.
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.roi", "request region-of-interest GPU composition",
+        GpuCoverageDisposition::Required, "src/runtime GpuSceneExecutor ROI native tests"});
     // Colour conversion into the working space is a pixel transformation, never host I/O. Decode
     // and decompression are preparation; the conversion itself must have a GPU implementation.
     out.push_back(GpuFeatureCoverageEntry{

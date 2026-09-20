@@ -61,6 +61,11 @@ struct NativeFixtureOutcome final {
     // that ran zero native OCIO dispatch is a CPU whole-frame render in disguise.
     bool ocioRequired = false;
     std::uint64_t ocioColdDispatches = 0;
+    // Set when the request carried a region of interest and the prepared scene silently widened (or
+    // otherwise failed to match) the requested process data window. An ROI request answered with a
+    // whole-frame output is a missed GPU ROI, never a pass.
+    bool roiRequired = false;
+    bool roiDropped = false;
     std::string evidence;
 };
 
@@ -83,6 +88,9 @@ struct NativeFixtureOutcome final {
     }
     if (outcome.ocioRequired && outcome.ocioColdDispatches == 0) {
         return "MISSED_GPU: zero native OCIO effect dispatch for a colour-transform scene";
+    }
+    if (outcome.roiRequired && outcome.roiDropped) {
+        return "MISSED_GPU: the request ROI was silently dropped";
     }
     if (outcome.warmDispatches != 0) {
         return "MISSED_GPU: warm rerun dispatched native work";
@@ -131,15 +139,37 @@ struct NativeFixtureOutcome final {
     ocioMissing.familyDispatches = 3;
     ocioMissing.warmCacheHits = 1;
     ocioMissing.ocioRequired = true;
+    // An ROI request whose prepared scene dropped the ROI and produced a whole-frame output is a
+    // missed GPU ROI even when the pixels happen to match a full-frame render.
+    NativeFixtureOutcome roiDropped;
+    roiDropped.ran = true;
+    roiDropped.coldDispatches = 3;
+    roiDropped.familyDispatches = 3;
+    roiDropped.warmCacheHits = 1;
+    roiDropped.roiRequired = true;
+    roiDropped.roiDropped = true;
+    // An ROI that the unchanged CPU oracle legitimately clips (a request region that reaches past
+    // the resolved process window) is NOT a dropped ROI: the prepared output matches the oracle's
+    // clipped data window, so the gate must accept it. This is the no-false-positive control for
+    // the dropped-ROI rejection above.
+    NativeFixtureOutcome roiCroppedToOracle;
+    roiCroppedToOracle.ran = true;
+    roiCroppedToOracle.coldDispatches = 3;
+    roiCroppedToOracle.familyDispatches = 3;
+    roiCroppedToOracle.warmCacheHits = 1;
+    roiCroppedToOracle.roiRequired = true;
+    roiCroppedToOracle.roiDropped = false;
     if (!rejects(zeroDispatch) || !rejects(cpuFallback) || !rejects(coverageMissing) ||
-        !rejects(ocioMissing) || rejects(genuine)) {
+        !rejects(ocioMissing) || !rejects(roiDropped) || rejects(genuine) ||
+        rejects(roiCroppedToOracle)) {
         evidence = "missed-GPU detection failed for zero-dispatch, CPU-fallback, missing "
-                   "coverage-dispatch, or missing OCIO-dispatch fixtures";
+                   "coverage-dispatch, missing OCIO-dispatch, or dropped-ROI fixtures, or rejected "
+                   "a legitimately oracle-clipped ROI";
         return false;
     }
-    evidence =
-        "zero-dispatch, CPU-fallback, missing coverage-dispatch, and missing OCIO-dispatch "
-        "fixtures are MISSED_GPU; a real dispatch is not";
+    evidence = "zero-dispatch, CPU-fallback, missing coverage-dispatch, missing OCIO-dispatch, and "
+               "dropped-ROI fixtures are MISSED_GPU; a real dispatch and an oracle-clipped ROI are "
+               "not";
     return true;
 }
 
@@ -292,7 +322,6 @@ runNativeFixture(bloom::render::GpuDevice& device,
             outcome.ocioRequired = true;
         }
     }
-
     auto oracleRequest = request;
     oracleRequest.bypassOperationCache = true;
     const auto frame = oracle.evaluate(plan, oracleRequest, {});
@@ -301,6 +330,18 @@ runNativeFixture(bloom::render::GpuDevice& device,
         return outcome;
     }
     const auto& cpuImage = frame.frame()->processImage();
+    // The expectation is the UNCHANGED CPU oracle's process descriptor, never the raw request
+    // region. The oracle resolves an ROI into the process data window (clipped to the resolved
+    // process window), so a legitimate clipped ROI is not a dropped ROI; a prepared scene that
+    // widened the ROI to the whole frame no longer matches the oracle data window and is.
+    outcome.roiRequired = request.roi.has_value();
+    outcome.roiDropped =
+        outcome.roiRequired &&
+        scene->outputDescriptor().dataWindow() != cpuImage.descriptor()->dataWindow();
+    if (outcome.roiDropped) {
+        outcome.evidence = "MISSED_GPU: the request ROI was silently dropped by the prepared scene";
+        return outcome;
+    }
     if (scene->outputDescriptor() != *cpuImage.descriptor()) {
         outcome.evidence = "prepared output descriptor differs from the CPU oracle";
         return outcome;

@@ -102,10 +102,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                       "Compiled plan semantics are unsupported");
     }
     if (request.quality != EvaluationQuality::Reference ||
-        request.colorIntent.workingColorSpaceId.find('\0') != std::string_view::npos ||
-        request.roi) {
+        request.colorIntent.workingColorSpaceId.find('\0') != std::string_view::npos) {
         return failed(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
-                      "Only Reference quality and no ROI are prepared");
+                      "Only Reference quality is prepared");
     }
     // The non-media prepared subset (solid pixels, vector coverage, image effects) assumes
     // lin_rec709_scene pixel semantics, so a different working space is refused for it. A

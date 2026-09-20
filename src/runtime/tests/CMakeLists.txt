@@ -1468,6 +1468,85 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
+# CPU-side ROI parity for prepared GPU scenes. A genuine ROI request is driven through the REAL
+# production CpuGpuSceneBuilder and every process pixel is compared against the unchanged CPU
+# evaluator by replaying the prepared commands with the existing CPU primitives. It also proves the
+# unchanged intermediate semantic keys stay stable across an ROI edit while only the clipped output
+# command is cold. Pure CPU: no loader, no device.
+add_executable(bloom_runtime_gpu_roi_scene_preparation_test
+    gpu_roi_scene_preparation_tests.cpp)
+target_include_directories(bloom_runtime_gpu_roi_scene_preparation_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_gpu_roi_scene_preparation_test
+    PRIVATE bloom_runtime_evaluator bloom_render)
+bloom_enable_warnings(bloom_runtime_gpu_roi_scene_preparation_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_roi_scene_preparation_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_roi_scene_preparation
+    COMMAND bloom_runtime_gpu_roi_scene_preparation_test
+    LABELS runtime unit gpu render
+    TIMEOUT 300
+)
+
+# Real native ROI parity: the production builder -> production executor -> readback path on a real
+# device, checked against the unchanged CPU evaluator for solid/vector/affine/nested scenes with
+# nonzero-origin and transparent ROIs. Cold must dispatch, the warm rerun must hit the cache with
+# zero dispatch, and an ROI edit must re-dispatch only the clipped output command. Without a device
+# it skips honestly (exit 77); --require-device makes an unavailable device a failure.
+add_executable(bloom_runtime_gpu_roi_scene_native_test gpu_roi_scene_native_tests.cpp
+    gpu_roi_scene_fixture_support.hpp)
+target_include_directories(bloom_runtime_gpu_roi_scene_native_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_gpu_roi_scene_native_test
+    PRIVATE bloom_runtime_evaluator bloom_render)
+bloom_enable_warnings(bloom_runtime_gpu_roi_scene_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_roi_scene_native_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_roi_scene_native
+    COMMAND bloom_runtime_gpu_roi_scene_native_test
+    LABELS runtime native gpu render
+    TIMEOUT 600
+)
+set_tests_properties(bloom.runtime.gpu_roi_scene_native PROPERTIES SKIP_RETURN_CODE 77)
+
+# Real native media + colour-transform ROI: a real AP0 EXR through the production media pipeline
+# and a real input->working OCIO ProcessEffect, clipped to a requested ROI and compared against the
+# unchanged CPU evaluator. The raw upload keeps the full source dimensions, so an unchanged source
+# is reused across an ROI edit and only the clipped output re-dispatches. Needs the pinned shader
+# tools; without them it skips, and without a device it skips unless --require-device.
+add_executable(bloom_runtime_gpu_roi_media_color_native_test
+    gpu_roi_media_color_native_tests.cpp)
+target_include_directories(bloom_runtime_gpu_roi_media_color_native_test
+    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS}
+            "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_gpu_roi_media_color_native_test
+    PRIVATE bloom_runtime_evaluator bloom_render bloom_media_image bloom_media_video
+            bloom_media_cache bloom_color bloom_color_ocio OpenEXR::OpenEXR)
+find_program(bloom_roi_media_color_glslang_validator
+    NAMES glslangValidator
+    HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
+    NO_DEFAULT_PATH)
+find_program(bloom_roi_media_color_spirv_val
+    NAMES spirv-val
+    HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
+    NO_DEFAULT_PATH)
+if(bloom_roi_media_color_glslang_validator AND bloom_roi_media_color_spirv_val)
+    get_filename_component(bloom_roi_media_color_tools_dir
+        "${bloom_roi_media_color_glslang_validator}" DIRECTORY)
+    target_compile_definitions(bloom_runtime_gpu_roi_media_color_native_test PRIVATE
+        "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_roi_media_color_tools_dir}\"")
+endif()
+bloom_enable_warnings(bloom_runtime_gpu_roi_media_color_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_roi_media_color_native_test)
+target_compile_options(bloom_runtime_gpu_roi_media_color_native_test PRIVATE -Wno-unused-function)
+bloom_add_test(
+    NAME bloom.runtime.gpu_roi_media_color_native
+    COMMAND bloom_runtime_gpu_roi_media_color_native_test
+    LABELS runtime native gpu render media color
+    TIMEOUT 600
+)
+set_tests_properties(bloom.runtime.gpu_roi_media_color_native PROPERTIES SKIP_RETURN_CODE 77)
+
 # Runtime GPU output-colour stage: one prepared OCIO command dispatched, then the exact process
 # RGBA32F payload plus the encoded output read back in ONE combined submission and compared against
 # the unchanged CPU OCIO oracle (2e-6 / one RGBA8 code, exact alpha and process bits). The identity
