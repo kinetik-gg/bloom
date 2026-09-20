@@ -1148,8 +1148,7 @@ void testUnconnectedCompositionOutputIsTransparent(Expectations& expectations) {
     // existing empty-image path, and the CPU reference produces a transparent composition.
     auto disconnectedOptions = singleLayerOptions();
     disconnectedOptions.omitOutputEdge = true;
-    const auto disconnected =
-        compile(makeProject(std::move(disconnectedOptions)), registry);
+    const auto disconnected = compile(makeProject(std::move(disconnectedOptions)), registry);
     expectations.expect(
         disconnected.status == runtime::SnapshotCompileStatus::Compiled,
         "a disconnected Composition Output compiles instead of failing the topology");
@@ -1162,11 +1161,10 @@ void testUnconnectedCompositionOutputIsTransparent(Expectations& expectations) {
     if (disconnected.plan != nullptr && disconnected.plan->operations().size() >= 2 &&
         disconnected.plan->output().value() < disconnected.plan->operations().size()) {
         const auto& operations = disconnected.plan->operations();
-        const auto* output =
-            std::get_if<runtime::CompiledCompositionOutput>(&operations[disconnected.plan->output().value()]);
+        const auto* output = std::get_if<runtime::CompiledCompositionOutput>(
+            &operations[disconnected.plan->output().value()]);
         const bool emptyInput =
-            output != nullptr &&
-            output->input.value() < operations.size() &&
+            output != nullptr && output->input.value() < operations.size() &&
             std::holds_alternative<runtime::CompiledMerge>(operations[output->input.value()]) &&
             std::get<runtime::CompiledMerge>(operations[output->input.value()]).entries.empty();
         expectations.expect(emptyInput,
@@ -1187,9 +1185,8 @@ void testUnconnectedCompositionOutputIsTransparent(Expectations& expectations) {
                             "the disconnected composition still renders a reference frame");
         if (frame != nullptr) {
             const auto pixels = frame->processImage().pixels();
-            expectations.expect(
-                !pixels.empty() && pixels.front() == render::Rgba32f::transparent(),
-                "the disconnected composition's reference output is transparent");
+            expectations.expect(!pixels.empty() && pixels.front() == render::Rgba32f::transparent(),
+                                "the disconnected composition's reference output is transparent");
         }
     }
 

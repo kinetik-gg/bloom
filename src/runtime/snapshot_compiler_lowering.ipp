@@ -311,8 +311,8 @@ lower(const std::vector<document::NodeId>& order) {
         const auto* outputEdge = fixedInputEdge(nodeId, document::kCompositionOutputInputPort);
         // An unconnected composition output draws nothing, whether or not it is muted. Like a Layer
         // Output with no content ("added but not yet fed"), a disconnected output is an ordinary
-        // edit state: the whole composition renders transparent rather than failing the compile on a
-        // required input and leaving the previous frame on screen.
+        // edit state: the whole composition renders transparent rather than failing the compile on
+        // a required input and leaving the previous frame on screen.
         if (definition->second->lowering == runtime::NodeLoweringKind::CompositionOutput &&
             (outputEdge == nullptr || emptyImages_.contains(outputEdge->source.nodeId))) {
             const auto empty = runtime::OperationIndex::fromRaw(operations.size());
@@ -400,9 +400,10 @@ lower(const std::vector<document::NodeId>& order) {
         const auto* startBinding = findParameterBinding(audioSource, "startFrame");
         const auto* assetText = parameterConstant<std::string>(assetBinding);
         const auto* startFrame = parameterConstant<std::int64_t>(startBinding);
-        const auto level = audioSource.typeId == "bloom.video-source" && assetBinding
-            ? std::optional(runtime::CompiledScalarParameter{assetBinding->parameterId,1.0})
-            : compiledScalarParameter(findParameterBinding(audioSource, "level"));
+        const auto level =
+            audioSource.typeId == "bloom.video-source" && assetBinding
+                ? std::optional(runtime::CompiledScalarParameter{assetBinding->parameterId, 1.0})
+                : compiledScalarParameter(findParameterBinding(audioSource, "level"));
         std::uint64_t assetRaw = 0;
         if (assetText == nullptr || startFrame == nullptr || !level || assetText->empty() ||
             std::from_chars(assetText->data(), assetText->data() + assetText->size(), assetRaw)
@@ -452,7 +453,8 @@ lower(const std::vector<document::NodeId>& order) {
                  boundary->solo, boundary->inPoint, boundary->endPoint(composition_->duration())});
             return true;
         }
-        if (audioSource == nullptr || (audioSource->typeId != document::kAudioSourceNodeType && audioSource->typeId != "bloom.video-source")) {
+        if (audioSource == nullptr || (audioSource->typeId != document::kAudioSourceNodeType &&
+                                       audioSource->typeId != "bloom.video-source")) {
             addTopologyFailure(layerAudioEdgeIterator->source.nodeId,
                                "Audio layer does not have an audio source.");
             return false;
@@ -502,7 +504,8 @@ lower(const std::vector<document::NodeId>& order) {
             {*source, !isMuted(feedNodeId), false, {}, composition_->duration()});
         return mix;
     }
-    if (feed != nullptr && (feed->typeId == document::kAudioSourceNodeType || feed->typeId == "bloom.video-source")) {
+    if (feed != nullptr &&
+        (feed->typeId == document::kAudioSourceNodeType || feed->typeId == "bloom.video-source")) {
         // An audio source wired straight into the output plays whole, from the composition start.
         const auto sourceIndex = appendSource(*feed);
         if (!sourceIndex)
@@ -645,21 +648,29 @@ lowerImageEffect(const document::NodeRecord& node,
         const auto* to = parameterConstant<std::string>(findParameterBinding(node, "to"));
         const auto* bypass = parameterConstant<bool>(findParameterBinding(node, "bypass"));
         if (from && to && bypass)
-            return runtime::CompiledImageEffect{node.id, *input, runtime::CstKernel{*from, *to}, *bypass};
+            return runtime::CompiledImageEffect{node.id, *input, runtime::CstKernel{*from, *to},
+                                                *bypass};
     }
     if (node.typeId == "bloom.ocio-file-transform") {
         const auto* lut = parameterConstant<std::int64_t>(findParameterBinding(node, "lut"));
-        const auto* interpolation = parameterConstant<std::int64_t>(findParameterBinding(node, "interpolation"));
-        const auto* direction = parameterConstant<std::int64_t>(findParameterBinding(node, "direction"));
-        const auto* space = parameterConstant<std::string>(findParameterBinding(node, "processSpace"));
+        const auto* interpolation =
+            parameterConstant<std::int64_t>(findParameterBinding(node, "interpolation"));
+        const auto* direction =
+            parameterConstant<std::int64_t>(findParameterBinding(node, "direction"));
+        const auto* space =
+            parameterConstant<std::string>(findParameterBinding(node, "processSpace"));
         const auto* bypass = parameterConstant<bool>(findParameterBinding(node, "bypass"));
         const auto* look = parameterConstant<bool>(findParameterBinding(node, "look"));
         if (lut && *lut >= 0 && interpolation && direction && space && bypass && look) {
             const auto id = document::AssetId::fromRaw(static_cast<std::uint64_t>(*lut));
             const auto* asset = request_.snapshot.project().findAsset(id);
-            return runtime::CompiledImageEffect{node.id, *input,
+            return runtime::CompiledImageEffect{
+                node.id, *input,
                 runtime::FileTransformKernel{id, *interpolation, *direction, *space,
-                    asset && asset->kind == document::AssetKind::Lut ? std::optional{*asset} : std::nullopt}, *bypass, *look};
+                                             asset && asset->kind == document::AssetKind::Lut
+                                                 ? std::optional{*asset}
+                                                 : std::nullopt},
+                *bypass, *look};
         }
     }
     addTopologyFailure(node.id, "Image effect kernel or parameters are unsupported.");
@@ -685,10 +696,9 @@ lowerImageSource(const document::NodeRecord& node) {
         parsed.ec == std::errc{} && parsed.ptr == asset->data() + asset->size()
             ? request_.snapshot.project().findAsset(document::AssetId::fromRaw(raw))
             : nullptr;
-    return runtime::CompiledImageSource{node.id, record ? std::optional{*record} : std::nullopt,
-                                        *start, *loop, *space,
-                                        inputSpace == nullptr ? std::string{} : *inputSpace,
-                                        *premultiply};
+    return runtime::CompiledImageSource{
+        node.id, record ? std::optional{*record} : std::nullopt,      *start,      *loop,
+        *space,  inputSpace == nullptr ? std::string{} : *inputSpace, *premultiply};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -709,9 +719,9 @@ lowerVideoSource(const document::NodeRecord& node) {
         parsed.ec == std::errc{} && parsed.ptr == asset->data() + asset->size()
             ? request_.snapshot.project().findAsset(document::AssetId::fromRaw(raw))
             : nullptr;
-    return runtime::CompiledVideoSource{node.id, record ? std::optional{*record} : std::nullopt,
-                                        *start, *loop, *space,
-                                        inputSpace == nullptr ? std::string{} : *inputSpace};
+    return runtime::CompiledVideoSource{
+        node.id, record ? std::optional{*record} : std::nullopt,     *start, *loop,
+        *space,  inputSpace == nullptr ? std::string{} : *inputSpace};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -790,8 +800,7 @@ lowerText(const document::NodeRecord& node) {
             "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
             "97ad806f526e41546d46365bb3a393145f75b7b1568913db74549ad8b8dba872",
             "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3"};
-        return core::Sha256Digest::fromLowercaseHex(
-            digests[static_cast<std::size_t>(candidate)]);
+        return core::Sha256Digest::fromLowercaseHex(digests[static_cast<std::size_t>(candidate)]);
     };
     const auto useEmbedded = [&](const render::EmbeddedFace candidate,
                                  const document::AssetId assetId = {}) {
@@ -802,30 +811,33 @@ lowerText(const document::NodeRecord& node) {
     if (fontBinding != nullptr) {
         if (storedFont != nullptr) {
             if (*storedFont < 0 || *storedFont >= kTextFontChoiceCount) {
-                fontWarning("The legacy embedded face value is outside the supported range; DejaVu Sans was used.");
+                fontWarning("The legacy embedded face value is outside the supported range; DejaVu "
+                            "Sans was used.");
             } else {
                 useEmbedded(static_cast<render::EmbeddedFace>(*storedFont));
             }
         } else if (const auto* reference = parameterConstant<std::string>(fontBinding)) {
             std::uint64_t rawId = 0;
-            const auto parsedId = std::from_chars(reference->data(), reference->data() + reference->size(), rawId);
-            const auto* asset = parsedId.ec == std::errc{} &&
-                                        parsedId.ptr == reference->data() + reference->size()
-                                    ? request_.snapshot.project().findAsset(
-                                          document::AssetId::fromRaw(rawId))
-                                    : nullptr;
+            const auto parsedId =
+                std::from_chars(reference->data(), reference->data() + reference->size(), rawId);
+            const auto* asset =
+                parsedId.ec == std::errc{} && parsedId.ptr == reference->data() + reference->size()
+                    ? request_.snapshot.project().findAsset(document::AssetId::fromRaw(rawId))
+                    : nullptr;
             if (asset == nullptr || asset->kind != document::AssetKind::Font) {
                 fontWarning("The font reference does not name a Font asset; DejaVu Sans was used.");
             } else {
                 fontAssetId = asset->id;
                 if (asset->locator.portability == "builtin") {
                     if (asset->fontIndex >= kTextFontChoiceCount) {
-                        fontWarning("The embedded Font asset face index is invalid; DejaVu Sans was used.");
+                        fontWarning(
+                            "The embedded Font asset face index is invalid; DejaVu Sans was used.");
                     } else {
                         const auto candidate = static_cast<render::EmbeddedFace>(asset->fontIndex);
                         if (embeddedDigest(candidate).value_or(core::Sha256Digest{}) !=
                             asset->contentDigest) {
-                            fontWarning("The embedded Font asset digest changed; DejaVu Sans was used.");
+                            fontWarning(
+                                "The embedded Font asset digest changed; DejaVu Sans was used.");
                         } else {
                             useEmbedded(candidate, asset->id);
                         }
@@ -836,7 +848,8 @@ lowerText(const document::NodeRecord& node) {
                     std::error_code error;
                     const auto sizeOnDisk = std::filesystem::file_size(asset->locator.path, error);
                     if (error || sizeOnDisk == 0 || sizeOnDisk > kMaximumFontBytes) {
-                        fontWarning("The system font file is missing or exceeds the compile-time size limit; DejaVu Sans was used.");
+                        fontWarning("The system font file is missing or exceeds the compile-time "
+                                    "size limit; DejaVu Sans was used.");
                     } else {
                         try {
                             auto bytes = std::make_shared<std::vector<std::uint8_t>>(
@@ -844,18 +857,19 @@ lowerText(const document::NodeRecord& node) {
                             std::ifstream input(asset->locator.path, std::ios::binary);
                             input.read(reinterpret_cast<char*>(bytes->data()),
                                        static_cast<std::streamsize>(bytes->size()));
-                            const auto digest = input
-                                                    ? core::Sha256Hasher::hash(
-                                                          std::as_bytes(std::span(*bytes)))
-                                                    : std::nullopt;
+                            const auto digest =
+                                input ? core::Sha256Hasher::hash(std::as_bytes(std::span(*bytes)))
+                                      : std::nullopt;
                             if (!input || !digest.has_value() || *digest != asset->contentDigest) {
-                                fontWarning("The system font file is missing or its digest changed; DejaVu Sans was used.");
+                                fontWarning("The system font file is missing or its digest "
+                                            "changed; DejaVu Sans was used.");
                             } else {
                                 font = render::ExternalFontFile{std::move(bytes), *digest,
-                                                                 asset->fontIndex};
+                                                                asset->fontIndex};
                             }
                         } catch (const std::bad_alloc&) {
-                            fontWarning("The system font could not be loaded within the compile memory budget; DejaVu Sans was used.");
+                            fontWarning("The system font could not be loaded within the compile "
+                                        "memory budget; DejaVu Sans was used.");
                         }
                     }
                 }
@@ -892,7 +906,8 @@ lowerText(const document::NodeRecord& node) {
         layout.drivenAlignment = drivenAlignment;
         const auto* boxBinding = findParameterBinding(node, kTextBoxParameterRole);
         const auto* wrapBinding = findParameterBinding(node, kTextWrapParameterRole);
-        const auto* verticalBinding = findParameterBinding(node, kTextVerticalAlignmentParameterRole);
+        const auto* verticalBinding =
+            findParameterBinding(node, kTextVerticalAlignmentParameterRole);
         const auto* anchorBinding = findParameterBinding(node, kTextAnchorModeParameterRole);
         const auto* overflowBinding = findParameterBinding(node, kTextOverflowParameterRole);
         if (boxBinding != nullptr) {
