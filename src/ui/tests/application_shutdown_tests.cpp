@@ -1,6 +1,9 @@
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/operations.hpp>
+#include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
@@ -789,9 +792,27 @@ void testRealApplicationQuit(Expectations& expectations, const bool dirty) {
     ui::ProjectHost projectHost(scheduler);
     const auto [document, commands] = projectHost.liveDocumentAndStack();
     ui::CompositionSession session(*document, *commands, projectHost.lowestCompositionId());
-    if (dirty)
+    if (dirty) {
+        // Explicit seed opt-in: startup is now blank, so author the composition this dirty-path
+        // fixture needs through the ordinary command path before adding a layer to it.
+        commands::Transaction seed("Seed shutdown fixture composition",
+                                   session.snapshot().revision());
+        seed.emplace<commands::AddComposition>("Main", document::CompositionFormat{},
+                                               core::RationalTime::fromInteger(10));
+        const auto seeded = session.executeTransaction(std::move(seed));
+        const auto seededId =
+            seeded.succeeded()
+                ? seeded.outputId<document::CompositionId>(commands::kAddCompositionOutput)
+                : std::nullopt;
+        if (seededId.has_value())
+            (void)session.setComposition(*seededId);
         (void)session.addSolidLayer("Unsaved", core::Color4d{1, 0, 0, 1});
+    }
     ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    // Mirror the production application, where the colour bootstrap submits a BlockingIo task at
+    // startup and wakes this bridge well before shutdown. The never-started-bridge ordering is
+    // covered separately by testBlankApplicationQuitsWithNeverStartedBridge().
+    bridge.start();
     ui::CompositionPreviewController controller(
         session, scheduler, bridge,
         [](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
@@ -846,6 +867,66 @@ void testRealApplicationQuit(Expectations& expectations, const bool dirty) {
     expectations.expect(decisions == (dirty ? 2 : 0) && scheduler.isQuiescent() &&
                             !window.isVisible(),
                         "final Qt close neither prompts again nor exits before workers finish");
+    application->removeEventFilter(&shutdown);
+    application->setQuitOnLastWindowClosed(oldQuitOnClose);
+    window.hide();
+}
+
+// Regression for blank, task-free startup: a TaskUiBridge that has NEVER been started (no preview,
+// asset, or colour-bootstrap work has ever been submitted) quiesces synchronously the instant
+// beginShutdown() asks it to, before native-surface retirement is known. The coordinator must still
+// publish shutdownQuiescent exactly once and the application must still quit.
+void testBlankApplicationQuitsWithNeverStartedBridge(Expectations& expectations) {
+    using namespace bloom;
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::ProjectHost projectHost(scheduler);
+    const auto [document, commands] = projectHost.liveDocumentAndStack();
+    ui::CompositionSession session(*document, *commands, projectHost.lowestCompositionId());
+    expectations.expect(session.composition() == nullptr,
+                        "never-started bridge: the blank fixture genuinely has no composition");
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    // Deliberately NOT bridge.start(): exercising the never-started bridge is the point.
+    ui::CompositionPreviewController controller(
+        session, scheduler, bridge,
+        [](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
+           const std::vector<runtime::SnapshotParameterOverride>&, runtime::TaskContext&) {
+            return runtime::TaskResult<ui::PreviewPreparationResultHandle>::cancelled();
+        });
+    ui::ApplicationShutdownCoordinator shutdown(controller, bridge);
+    auto* application = qApp;
+    const bool oldQuitOnClose = application->quitOnLastWindowClosed();
+    application->setQuitOnLastWindowClosed(false);
+    application->installEventFilter(&shutdown);
+    ui::EditorRegistry registry;
+    runtime::NodeDefinitionRegistry definitions;
+    definitions.freeze();
+    runtime::SnapshotCompiler compiler(definitions);
+    ui::FrameExportController exporter(session, scheduler, bridge, compiler,
+                                       projectHost.publicationCoordinator(),
+                                       projectHost.artifactCoordinator());
+    ui::MainWindow window(registry, session, projectHost, exporter);
+    QObject::connect(&window, &ui::MainWindow::shutdownRequested, &shutdown,
+                     &ui::ApplicationShutdownCoordinator::beginShutdown);
+    QObject::connect(&shutdown, &ui::ApplicationShutdownCoordinator::shutdownQuiescent, &window,
+                     &ui::MainWindow::completeShutdown);
+    QObject::connect(&shutdown, &ui::ApplicationShutdownCoordinator::shutdownQuiescent, application,
+                     &QApplication::quit);
+    bool timedOut = false;
+    QTimer watchdog;
+    watchdog.setSingleShot(true);
+    QObject::connect(&watchdog, &QTimer::timeout, application, [&] {
+        timedOut = true;
+        QCoreApplication::exit(1);
+    });
+    window.show();
+    QTimer::singleShot(0, &window, [&] { window.findChild<QAction*>("quitAction")->trigger(); });
+    watchdog.start(2000);
+    const int result = application->exec();
+    watchdog.stop();
+    expectations.expect(!timedOut && result == 0,
+                        "a blank application whose bridge was never started still quits cleanly");
+    expectations.expect(!window.isVisible() && scheduler.isQuiescent(),
+                        "the blank quit closes the window and leaves no outstanding work");
     application->removeEventFilter(&shutdown);
     application->setQuitOnLastWindowClosed(oldQuitOnClose);
     window.hide();
@@ -924,6 +1005,7 @@ int main(int argc, char** argv) {
     Expectations expectations;
     testRealApplicationQuit(expectations, true);
     testRealApplicationQuit(expectations, false);
+    testBlankApplicationQuitsWithNeverStartedBridge(expectations);
     testShutdownAndCloseRouting(expectations);
     testFileMenuQuitRoutesThroughShutdown(expectations);
     testIdleApplicationQuitsOnClose(expectations);

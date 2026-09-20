@@ -27,6 +27,7 @@ namespace bloom::runtime::detail {
            std::holds_alternative<CompiledShape>(operation) ||
            std::holds_alternative<CompiledImageSource>(operation) ||
            std::holds_alternative<CompiledVideoSource>(operation) ||
+           std::holds_alternative<CompiledImageEffect>(operation) ||
            std::holds_alternative<CompiledLayerOutput>(operation) ||
            std::holds_alternative<CompiledMerge>(operation) ||
            std::holds_alternative<CompiledCompositionOutput>(operation) ||

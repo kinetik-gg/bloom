@@ -219,6 +219,48 @@ void testNewProjectBaselineAndSnapshots(Expectations& expectations,
                         "decoded snapshot access returns immutable project truth");
 }
 
+void testBlankNewProjectIsEmptyAndValid(Expectations& expectations,
+                                        ProjectSessionIdentitySource& identitySource) {
+    // File > New and application startup go through createNewBlank(): a valid, editable, clean
+    // empty document with NO composition and no placeholder/undo entry staged for one.
+    auto created = ProjectSession::createNewBlank(identitySource, "Untitled");
+    expectations.expect(static_cast<bool>(created), "a blank new project is a valid new document");
+    if (!created) {
+        return;
+    }
+    auto session = std::move(created).takeSession();
+    const auto state = session.stateSnapshot();
+    expectations.expect(state.valid &&
+                            state.contentKind == ProjectSessionContentKind::DecodedDocument &&
+                            state.editability == DecodedProjectEditability::Editable,
+                        "a blank project is decoded and editable");
+    expectations.expect(
+        !state.dirty.value_or(true) && state.historySize == 0 && !state.canUndo && !state.canRedo,
+        "a blank new project starts clean with zero history (no staged undo entry)");
+    expectations.expect(session.colorSettings() != nullptr,
+                        "a blank project still carries its Bloom Neutral color settings");
+    const auto snapshot = session.decodedSnapshot();
+    expectations.expect(snapshot && snapshot.snapshot().project().compositions().empty(),
+                        "a blank project has no composition at all");
+    // Empty project is a genuinely valid document: its recovery/save capture succeeds even before a
+    // composition exists.
+    expectations.expect(static_cast<bool>(session.captureRecoveryInput()),
+                        "an empty project still captures a valid recovery/save input");
+
+    // The explicit seeded overload is preserved for unrelated callers (fixtures/headless
+    // scripting).
+    auto seededResult = ProjectSession::createNew(identitySource, newProjectRequest());
+    expectations.expect(static_cast<bool>(seededResult),
+                        "the explicit seeded createNew() still succeeds");
+    if (seededResult) {
+        auto seeded = std::move(seededResult).takeSession();
+        const auto seededSnapshot = seeded.decodedSnapshot();
+        expectations.expect(seededSnapshot &&
+                                seededSnapshot.snapshot().project().compositions().size() == 1,
+                            "the seeded createNew() still installs exactly one composition");
+    }
+}
+
 void testIdentitySourceAndExactExhaustion(Expectations& expectations) {
     ProjectSessionIdentitySource identitySource;
     auto firstResult = ProjectSession::createNew(identitySource, newProjectRequest());
@@ -1193,6 +1235,7 @@ int main() {
         testOpenIntentBindsExactContent(expectations);
         testGenerationExhaustionBoundaries(expectations);
         testNewProjectBaselineAndSnapshots(expectations, identitySource);
+        testBlankNewProjectIsEmptyAndValid(expectations, identitySource);
         testNodeCommandDirtyParity(expectations, identitySource);
         testDirtySavepointBranching(expectations, identitySource);
         testSavepointPathAuthority(expectations);

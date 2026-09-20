@@ -82,13 +82,18 @@ class Expectations final {
     return program;
 }
 
-[[nodiscard]] CompiledGpuShader syntheticArtifact() {
+[[nodiscard]] CompiledGpuShader syntheticArtifact(const OcioGpuProgramDesc& program,
+                                                  const ViewAdjust adjust = {}) {
+    // A synthetic artifact whose source provenance is the exact canonical production wrapper for
+    // (program, adjust), as a real compiler-produced artifact would carry.
+    const auto wrapper = bloom::runtime::buildGpuOcioWrapperGlsl(program, adjust);
     CompiledGpuShader artifact;
     artifact.spirv = {0x03, 0x02, 0x23, 0x07};
-    artifact.entryPoint = "main";
+    artifact.entryPoint = wrapper.entryPoint;
     artifact.targetEnvironment = "vulkan1.2";
     artifact.stage = GpuShaderStage::Compute;
     artifact.spirvDigest = *Sha256Hasher::hash(std::as_bytes(std::span(artifact.spirv)));
+    artifact.sourceDigest = wrapper.sourceDigest;
     return artifact;
 }
 
@@ -187,7 +192,7 @@ void testWrapper(Expectations& expectations) {
 
 void testIdentity(Expectations& expectations) {
     const auto program = syntheticProgram(OcioGpuProgramStage::ProcessEffect);
-    const auto artifact = syntheticArtifact();
+    const auto artifact = syntheticArtifact(program);
     const std::vector<std::byte> uniforms{std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};
     const GpuOcioCommandIdentityParts base{
         .encoding = GpuOcioOutputEncoding::FinalRgba32f,
@@ -242,8 +247,8 @@ void testPreparedCommand(Expectations& expectations) {
     const GpuOcioCommandGeometry geometry{4, 3};
     const auto effectProgram = syntheticProgram(OcioGpuProgramStage::ProcessEffect);
     const auto displayProgram = syntheticProgram(OcioGpuProgramStage::DisplayPacking);
-    auto effect = PreparedGpuOcioCommand::prepare(effectProgram, syntheticArtifact(), geometry,
-                                                  syntheticBinding(effectProgram));
+    auto effect = PreparedGpuOcioCommand::prepare(effectProgram, syntheticArtifact(effectProgram),
+                                                  geometry, syntheticBinding(effectProgram));
     expectations.expect(effect.hasValue(), "an effect command prepares");
     if (effect) {
         expectations.expect(effect.command->encoding() == GpuOcioOutputEncoding::FinalRgba32f,
@@ -256,9 +261,12 @@ void testPreparedCommand(Expectations& expectations) {
                             "the prepared command accounts its retained bytes");
         expectations.expect(effect.command->viewAdjust().neutral(),
                             "a process command carries a neutral adjustment");
+        expectations.expect(effect.command->artifact().sourceDigest != Sha256Digest{},
+                            "the prepared command retains the artifact source provenance");
     }
-    auto display = PreparedGpuOcioCommand::prepare(displayProgram, syntheticArtifact(), geometry,
-                                                   syntheticBinding(displayProgram));
+    auto display =
+        PreparedGpuOcioCommand::prepare(displayProgram, syntheticArtifact(displayProgram), geometry,
+                                        syntheticBinding(displayProgram));
     expectations.expect(display.hasValue(), "a display command prepares");
     if (display && effect) {
         expectations.expect(display.command->encoding() == GpuOcioOutputEncoding::DisplayRgba8,
@@ -269,8 +277,9 @@ void testPreparedCommand(Expectations& expectations) {
                             "a neutral display command carries a neutral adjustment");
     }
     const ViewAdjust adjusted{.exposure = 1.25, .gamma = 0.8};
-    const auto adjustedDisplay = PreparedGpuOcioCommand::prepare(
-        displayProgram, syntheticArtifact(), geometry, syntheticBinding(displayProgram, adjusted));
+    const auto adjustedDisplay =
+        PreparedGpuOcioCommand::prepare(displayProgram, syntheticArtifact(displayProgram, adjusted),
+                                        geometry, syntheticBinding(displayProgram, adjusted));
     expectations.expect(adjustedDisplay.hasValue() &&
                             adjustedDisplay.command->viewAdjust() == adjusted,
                         "the display command exposes its exact bound adjustment");
@@ -278,14 +287,15 @@ void testPreparedCommand(Expectations& expectations) {
         expectations.expect(adjustedDisplay.command->identity() != display.command->identity(),
                             "a changed adjustment changes the display command identity");
     }
-    expectations.expect(PreparedGpuOcioCommand::prepare(effectProgram, syntheticArtifact(),
-                                                        geometry,
-                                                        syntheticBinding(effectProgram, adjusted))
-                                .error == GpuOcioCommandError::UnsupportedViewAdjust,
-                        "a non-neutral adjustment on the ProcessEffect arm is refused");
+    expectations.expect(
+        PreparedGpuOcioCommand::prepare(effectProgram, syntheticArtifact(effectProgram, adjusted),
+                                        geometry, syntheticBinding(effectProgram, adjusted))
+                .error == GpuOcioCommandError::UnsupportedViewAdjust,
+        "a non-neutral adjustment on the ProcessEffect arm is refused");
     expectations.expect(
         PreparedGpuOcioCommand::prepare(
-            displayProgram, syntheticArtifact(), geometry,
+            displayProgram,
+            syntheticArtifact(displayProgram, ViewAdjust{.exposure = 0.0, .gamma = 0.0}), geometry,
             syntheticBinding(displayProgram, ViewAdjust{.exposure = 0.0, .gamma = 0.0}))
                 .error == GpuOcioCommandError::InvalidViewAdjust,
         "an out-of-domain adjustment is refused");
@@ -294,35 +304,54 @@ void testPreparedCommand(Expectations& expectations) {
     // (program, viewAdjust).
     auto staleGamma = syntheticBinding(displayProgram, ViewAdjust{.exposure = 1.25, .gamma = 0.8});
     staleGamma.viewAdjust = ViewAdjust{.exposure = 1.25, .gamma = 0.9};
-    expectations.expect(
-        PreparedGpuOcioCommand::prepare(displayProgram, syntheticArtifact(), geometry, staleGamma)
-                .error == GpuOcioCommandError::WrapperSourceDigestMismatch,
-        "a stale artifact claiming a changed gamma is refused");
+    expectations.expect(PreparedGpuOcioCommand::prepare(
+                            displayProgram, syntheticArtifact(displayProgram), geometry, staleGamma)
+                                .error == GpuOcioCommandError::WrapperSourceDigestMismatch,
+                        "a stale artifact claiming a changed gamma is refused");
     auto tamperedDigest = syntheticBinding(displayProgram, adjusted);
     tamperedDigest.wrapperSourceDigest = digestOf("tampered-wrapper-source");
-    expectations.expect(PreparedGpuOcioCommand::prepare(displayProgram, syntheticArtifact(),
+    expectations.expect(PreparedGpuOcioCommand::prepare(displayProgram,
+                                                        syntheticArtifact(displayProgram, adjusted),
                                                         geometry, tamperedDigest)
                                 .error == GpuOcioCommandError::WrapperSourceDigestMismatch,
                         "a tampered wrapper source digest is refused");
     auto wrongVersion = syntheticBinding(displayProgram, adjusted);
     wrongVersion.wrapperVersion = "bloom.color.ocio-gpu-sampling.v0";
-    expectations.expect(
-        PreparedGpuOcioCommand::prepare(displayProgram, syntheticArtifact(), geometry, wrongVersion)
-                .error == GpuOcioCommandError::WrapperVersionMismatch,
-        "a wrong wrapper version is refused");
+    expectations.expect(PreparedGpuOcioCommand::prepare(displayProgram,
+                                                        syntheticArtifact(displayProgram, adjusted),
+                                                        geometry, wrongVersion)
+                                .error == GpuOcioCommandError::WrapperVersionMismatch,
+                        "a wrong wrapper version is refused");
 
-    expectations.expect(PreparedGpuOcioCommand::prepare(effectProgram, syntheticArtifact(),
-                                                        GpuOcioCommandGeometry{0, 3},
-                                                        syntheticBinding(effectProgram))
+    // Artifact provenance: the compiled artifact's own source digest must match the canonical
+    // wrapper, independently of the supplied binding.
+    auto zeroSource = syntheticArtifact(displayProgram, adjusted);
+    zeroSource.sourceDigest = {};
+    expectations.expect(PreparedGpuOcioCommand::prepare(displayProgram, zeroSource, geometry,
+                                                        syntheticBinding(displayProgram, adjusted))
+                                .error == GpuOcioCommandError::ArtifactSourceMissing,
+                        "an artifact with no source provenance is refused");
+    const ViewAdjust other{.exposure = 1.25, .gamma = 0.9};
+    // The artifact was produced from the wrapper for `adjusted`, but the otherwise-canonical
+    // binding is for `other`: the artifact's own source digest exposes the cross-source mismatch.
+    expectations.expect(
+        PreparedGpuOcioCommand::prepare(displayProgram, syntheticArtifact(displayProgram, adjusted),
+                                        geometry, syntheticBinding(displayProgram, other))
+                .error == GpuOcioCommandError::ArtifactSourceDigestMismatch,
+        "a cross-source artifact with a canonical binding is refused");
+
+    expectations.expect(PreparedGpuOcioCommand::prepare(
+                            effectProgram, syntheticArtifact(effectProgram),
+                            GpuOcioCommandGeometry{0, 3}, syntheticBinding(effectProgram))
                                 .error == GpuOcioCommandError::InvalidGeometry,
                         "an empty geometry is refused");
-    auto badDigest = syntheticArtifact();
+    auto badDigest = syntheticArtifact(effectProgram);
     badDigest.spirvDigest = digestOf("wrong");
     expectations.expect(PreparedGpuOcioCommand::prepare(effectProgram, badDigest, geometry,
                                                         syntheticBinding(effectProgram))
                                 .error == GpuOcioCommandError::ArtifactDigestMismatch,
                         "a mismatched artifact digest is refused");
-    auto emptyArtifact = syntheticArtifact();
+    auto emptyArtifact = syntheticArtifact(effectProgram);
     emptyArtifact.spirv.clear();
     expectations.expect(PreparedGpuOcioCommand::prepare(effectProgram, emptyArtifact, geometry,
                                                         syntheticBinding(effectProgram))
@@ -330,18 +359,19 @@ void testPreparedCommand(Expectations& expectations) {
                         "an empty artifact is refused");
     auto invalidProgram = syntheticProgram(OcioGpuProgramStage::ProcessEffect);
     invalidProgram.semanticsId.clear();
-    expectations.expect(PreparedGpuOcioCommand::prepare(invalidProgram, syntheticArtifact(),
-                                                        geometry, syntheticBinding(invalidProgram))
+    expectations.expect(PreparedGpuOcioCommand::prepare(invalidProgram,
+                                                        syntheticArtifact(invalidProgram), geometry,
+                                                        syntheticBinding(invalidProgram))
                                 .error == GpuOcioCommandError::InvalidProgram,
                         "an invalid descriptor is refused");
     auto mismatchedUniforms = syntheticProgram(OcioGpuProgramStage::ProcessEffect);
     mismatchedUniforms.uniformBufferSize = 16;
     mismatchedUniforms.uniformBufferData.assign(4, std::byte{0});
-    expectations.expect(PreparedGpuOcioCommand::prepare(mismatchedUniforms, syntheticArtifact(),
-                                                        geometry,
-                                                        syntheticBinding(mismatchedUniforms))
-                                .error == GpuOcioCommandError::UniformSnapshotMismatch,
-                        "a mismatched uniform snapshot is refused");
+    expectations.expect(
+        PreparedGpuOcioCommand::prepare(mismatchedUniforms, syntheticArtifact(mismatchedUniforms),
+                                        geometry, syntheticBinding(mismatchedUniforms))
+                .error == GpuOcioCommandError::UniformSnapshotMismatch,
+        "a mismatched uniform snapshot is refused");
 }
 
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
@@ -520,6 +550,33 @@ void testPreparer(Expectations& expectations,
     }
     expectations.expect(concurrentCounters.evictions == 0,
                         "a duplicate same-key miss never evicts");
+
+    // Real compiler-produced cross-source artifact: an artifact compiled for adjustment A must be
+    // refused when paired with the canonical binding for adjustment B, before any native work.
+    GpuOcioTransformSpec displaySpec;
+    displaySpec.kind = GpuOcioTransformKind::Display;
+    displaySpec.display = std::string(neutral.displayName());
+    displaySpec.view = std::string(neutral.viewName());
+    displaySpec.viewAdjust = ViewAdjust{.exposure = 0.5, .gamma = 1.0};
+    const auto displayA = preparer.prepare(neutral, displaySpec, geometry, options);
+    displaySpec.viewAdjust = ViewAdjust{.exposure = 0.5, .gamma = 1.2};
+    const auto displayB = preparer.prepare(neutral, displaySpec, geometry, options);
+    expectations.expect(displayA.hasValue() && displayB.hasValue(),
+                        "two real display commands prepare for the cross-source regression");
+    if (displayA && displayB) {
+        expectations.expect(displayA.command->artifact().sourceDigest !=
+                                displayB.command->artifact().sourceDigest,
+                            "the two real artifacts carry distinct source provenance");
+        const auto canonicalWrapperB = bloom::runtime::buildGpuOcioWrapperGlsl(
+            displayB.command->program(), displaySpec.viewAdjust);
+        const auto crossResult = PreparedGpuOcioCommand::prepare(
+            displayB.command->program(), displayA.command->artifact(), geometry,
+            GpuOcioCommandSourceBinding{.wrapperVersion = canonicalWrapperB.samplingVersion,
+                                        .wrapperSourceDigest = canonicalWrapperB.sourceDigest,
+                                        .viewAdjust = displaySpec.viewAdjust});
+        expectations.expect(crossResult.error == GpuOcioCommandError::ArtifactSourceDigestMismatch,
+                            "a real cross-source artifact is refused before native work");
+    }
 }
 #endif
 

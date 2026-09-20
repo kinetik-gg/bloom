@@ -104,9 +104,12 @@ wall-clock timer.
 
 The narrow v0 image pipeline may parse user PNG/JPEG files in process through the pinned,
 private stb_image adapter. This exception does not accept the proposed broad provider design.
-The maximum dimension is 16384, pixel budget 16777216, file-size cap 64 MiB, parser allocation
-cap 256 MiB, and process-image budget 256 MiB. Scans are bounded to 100000 entries and a
-100000-frame span. Hostile fixtures exercise malformed/truncated files and excessive dimensions.
+There is no fixed whole-file, per-axis or total-pixel ceiling. Geometry is bounded by the codec's
+representable window and integer overflow checks; the encoded file is streamed (no whole-file cap);
+parser temporary memory is thread-local and scoped to the request; and decoded RGBA32F storage plus
+bounded decode scratch is admitted against the caller's explicit `pixelBudget` (default 268435456
+bytes) before any large allocation. Scans are bounded to 100000 entries and a 100000-frame span.
+Hostile fixtures exercise malformed/truncated files and overflowing/oversized windows.
 These limits bound resources but do not isolate memory corruption. A bounded decoder call is
 not interruptible; cancellation is checked before/after it and within conversion and scans.
 All I/O, hashing, scanning, decode and proxy work executes off the UI thread with diagnostics,

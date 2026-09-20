@@ -99,6 +99,13 @@ void ApplicationShutdownCoordinator::beginShutdown() {
     // owner publishes a genuine retirement; a refusal keeps the tree alive and shutdownQuiescent
     // un-emitted.
     beginNativeSurfaceRetirement();
+    // Re-check once here: a task-free application (blank startup, no preview/asset work yet) has a
+    // never-started TaskUiBridge, and beginShutdown() can quiesce it synchronously during the
+    // taskUiBridge_.beginShutdown() call above -- BEFORE surfaceRetirementComplete_ is known. That
+    // synchronous quiescence must still publish exactly once, so the final state is re-evaluated
+    // after both halves are settled. Idempotent: quiescencePublished_ guards a duplicate emission,
+    // and a pending/refused native retirement leaves surfaceRetirementComplete_ false.
+    publishQuiescenceIfReady();
 }
 
 void ApplicationShutdownCoordinator::pollGpuExportRetirement() {
@@ -162,7 +169,12 @@ void ApplicationShutdownCoordinator::publishQuiescenceIfReady() {
     }
     quiescencePublished_ = true;
     stuckShutdownDiagnosticTimer_.stop();
-    emit shutdownQuiescent();
+    // Publish through the event loop rather than re-entrantly. A task-free application (blank
+    // startup whose TaskUiBridge was never started) can reach task quiescence synchronously inside
+    // beginShutdown(), which itself may run inside the window's close event; emitting directly
+    // would re-enter close/quit handling before that event returns. Queuing keeps exactly one
+    // publication while letting the current event finish.
+    QTimer::singleShot(0, this, [this] { emit shutdownQuiescent(); });
 }
 
 void ApplicationShutdownCoordinator::logStillShuttingDownDiagnostic() const {

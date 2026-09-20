@@ -18,6 +18,17 @@ constexpr EdgeId kInitialOutputEdgeId = EdgeId::fromRaw(1);
 
 } // namespace
 
+NewProject makeNewProject(std::string projectName) {
+    if (!isValidHumanFacingName(projectName)) {
+        throw std::invalid_argument("New project name is invalid");
+    }
+    Project project(kInitialProjectId, std::move(projectName));
+    if (!project.validate().ok()) {
+        throw std::logic_error("Could not create a valid blank Bloom project");
+    }
+    return {std::move(project), CompositionId{}};
+}
+
 NewProject makeNewProject(std::string projectName, std::string compositionName,
                           const core::RationalTime duration, const CompositionFormat format) {
     if (!isValidHumanFacingName(projectName) || !isValidHumanFacingName(compositionName)) {

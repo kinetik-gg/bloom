@@ -45,11 +45,11 @@ Platforms without the process backend expose an unavailable preset with its reas
 
 | Bound | v0 value |
 | --- | --- |
-| Encoded file | 64 MiB |
-| Either dimension | 16,384 pixels |
-| Pixel count | 16,777,216 |
-| Decoder allocator live bytes | 256 MiB per thread |
-| Float image storage | 256 MiB per image, also subject to request budget |
+| Encoded file | streamed in bounded chunks; no whole-file cap |
+| Either dimension | codec-representable window (stb per-axis `STBI_MAX_DIMENSIONS` = 2^24); no fixed image ceiling |
+| Pixel count | codec sample-count limits; no fixed image ceiling |
+| Decoder allocator live bytes | thread-local, scoped to the request pixel budget (default 256 MiB) |
+| Float image storage | admitted against the request pixel budget (default 256 MiB), including bounded decode scratch |
 | Directory entries and sequence span | 100,000 each |
 | Decoded image LRU | 1 GiB per evaluator cache |
 | UI thumbnail cache | 512 RGBA8 images, at most 64 × 64 (8 MiB) |
@@ -593,17 +593,21 @@ The five records in `include/bloom/media/provider/contract.hpp` are frozen as fo
   `NoDeterminismClaim` is restricted to the explicitly limited Preview path in this slice.
   Component registration never registers or qualifies a pipeline automatically.
 
-The numeric v1 budgets below instantiate the resource categories described by this document;
-previous image limits are retained where applicable. Stricter qualified providers may reject
-requests within these ceilings. Expanding a ceiling requires a reviewed profile/protocol change.
+The numeric v1 budgets below instantiate the resource categories described by this document.
+Stricter qualified providers may reject requests within these ceilings. Expanding a ceiling requires
+a reviewed profile/protocol change. The in-process still-image decoder is governed separately and
+explicitly: its geometry is bounded only by the codec's representable window and integer overflow
+checks, the encoded file is streamed with no whole-file cap, and decoded RGBA32F storage plus
+bounded decode scratch must fit the caller's explicit `pixelBudget` (default 268435456 bytes)
+before any large allocation. Codec/device constraints, not an absolute image ceiling, are the limit.
 
 | Resource | v1 ceiling |
 | --- | --- |
 | UTF-8 string | 4096 bytes |
 | Streams, declarations, pipeline steps, registry entries | 256 each |
 | CPU planes | 4, with exact plane count/layout for each supported format |
-| Dimension / pixels | 16384 per dimension / 16777216 pixels |
-| CPU-plane storage including row padding | 256 MiB per product |
+| Dimension / pixels | codec-representable window and sample-count limits; no fixed image ceiling |
+| CPU-plane storage including row padding | explicit caller `pixelBudget` for the in-process image decoder (default 256 MiB) |
 | Wire frame excluding its length prefix | 257 MiB |
 | Audio | 64 named channels, 65536 samples per channel, 384000 Hz |
 | Default worker address space / open descriptors | 2 GiB / 64; core dumps disabled |

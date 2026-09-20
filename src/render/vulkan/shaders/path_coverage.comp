@@ -1,0 +1,71 @@
+#version 460
+// Bloom vector-path coverage producer. Offline-generated/embedded; do not edit at runtime.
+//
+// Operation: GpuPathCoverage (vector path coverage). The host has already resolved the immutable
+// PathRasterCoverageGeometry: for every output row and every one of the four sub-scanlines it lists
+// the inclusive sample-index spans where the 4x4 centre sample is covered. The shader performs NO
+// floating-point work and NO Float64/Int64 work: it computes, per pixel, how many of its four x
+// sample positions fall inside the row's spans (integer overlap only), then applies the exact CPU
+// quantization (count * 255 + 8) / 16. Four coverage bytes are packed little-endian per uint word.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// (offset, count) into BloomPathSpans for each (row * 4 + sy) sub-scanline.
+layout(set = 0, binding = 0, std430) readonly buffer BloomPathRanges {
+    uvec2 bloom_path_ranges[];
+};
+
+// Inclusive sample-index spans (first, last) within one row; sample index = pixel * 4 + sx.
+layout(set = 0, binding = 1, std430) readonly buffer BloomPathSpans {
+    uvec2 bloom_path_spans[];
+};
+
+// Packed little-endian R8 coverage: word = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24).
+layout(set = 0, binding = 2, std430) writeonly buffer BloomPathMask {
+    uint bloom_path_mask[];
+};
+
+layout(push_constant) uniform BloomPathPushConstants {
+    uint width;   // data-window width in pixels
+    uint height;  // data-window height in pixels
+    uint groupsX; // workgroups per row of the flattened 2D dispatch grid
+} bloom_path_push;
+
+void main()
+{
+    const uint pixelCount = bloom_path_push.width * bloom_path_push.height;
+    const uint wordCount = (pixelCount + 3u) >> 2u;
+    // Flatten the 2D workgroup grid: one invocation per packed uint word. The grid is dispatched as
+    // (groupsX, ceil(wordGroups / groupsX)) so a capacity-valid large geometry is never refused by a
+    // 1D grid limit; all arithmetic stays unsigned integer.
+    const uint group = gl_WorkGroupID.y * bloom_path_push.groupsX + gl_WorkGroupID.x;
+    const uint word = group * 256u + gl_LocalInvocationID.x;
+    if (word >= wordCount) {
+        return;
+    }
+    uint packed = 0u;
+    for (uint byte = 0u; byte < 4u; ++byte) {
+        const uint pixel = (word << 2u) + byte;
+        if (pixel >= pixelCount) {
+            break;
+        }
+        const uint row = pixel / bloom_path_push.width;
+        const uint px = pixel % bloom_path_push.width;
+        const uint lo = px << 2u;
+        const uint hi = lo + 3u;
+        uint count = 0u;
+        for (uint sy = 0u; sy < 4u; ++sy) {
+            const uvec2 range = bloom_path_ranges[(row << 2u) + sy];
+            for (uint i = 0u; i < range.y; ++i) {
+                const uvec2 span = bloom_path_spans[range.x + i];
+                const uint first = max(span.x, lo);
+                const uint last = min(span.y, hi);
+                if (first <= last) {
+                    count += last - first + 1u;
+                }
+            }
+        }
+        const uint coverage = (count * 255u + 8u) / 16u;
+        packed |= coverage << (byte << 3u);
+    }
+    bloom_path_mask[word] = packed;
+}

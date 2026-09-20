@@ -32,6 +32,19 @@ bloom_enable_warnings(bloom_render_path_raster_test)
 bloom_enable_strict_floating_point(bloom_render_path_raster_test)
 bloom_add_test(NAME bloom.render.path_raster COMMAND bloom_render_path_raster_test LABELS unit primitives)
 
+# CPU-only exactness test for PathRasterCoverageGeometry: reconstructs the uint8 mask from the
+# integer sample spans with exactly the GPU shader's arithmetic and asserts byte-identity to
+# coverageRow over every shape, rule, stroke, clip, transform, proxy and adversarial case. No device.
+add_executable(bloom_render_gpu_path_coverage_geometry_test gpu_path_coverage_geometry_tests.cpp)
+target_link_libraries(bloom_render_gpu_path_coverage_geometry_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_gpu_path_coverage_geometry_test)
+bloom_enable_strict_floating_point(bloom_render_gpu_path_coverage_geometry_test)
+bloom_add_test(
+    NAME bloom.render.gpu_path_coverage_geometry
+    COMMAND bloom_render_gpu_path_coverage_geometry_test
+    LABELS unit gpu render
+)
+
 # The GPU device test compiles and passes identically against the Vulkan bootstrap or the CPU stub:
 # the real probe runs only when a compatible device is present, and a hardware-free image prints an
 # explicit skip while the forced-missing-loader checks still exercise the portable API.
@@ -85,6 +98,28 @@ bloom_add_test(
     NAME bloom.render.gpu_solid_covered
     COMMAND bloom_render_gpu_solid_covered_test
     LABELS unit gpu render
+)
+
+# GpuPathCoverage native producer test. Builds the immutable scanline geometry from the real CPU
+# PathRaster and asserts the resident mask readback is byte-identical to the unchanged
+# coverageRow for the shape/transform/stroke/fill-rule/clip/adversarial matrix. It also proves one
+# resident coverage -> GpuSolid covered fill -> native output chain. Compiles against the CPU stub
+# as well; a hardware-free build prints an explicit skip and --require-device fails closed.
+add_executable(bloom_render_gpu_path_coverage_test
+    gpu_path_coverage_tests.cpp
+    gpu_path_coverage_fault_seam.cpp)
+target_link_libraries(bloom_render_gpu_path_coverage_test PRIVATE bloom_render)
+target_include_directories(bloom_render_gpu_path_coverage_test
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+target_compile_definitions(bloom_render_gpu_path_coverage_test
+    PRIVATE "BLOOM_PATH_COVERAGE_SPV_SHA256=\"f5aff832e47c64e42c95d0ae10429a5434e28566ccc1eb8d8c8d33e456bf2a4a\"")
+bloom_enable_warnings(bloom_render_gpu_path_coverage_test)
+bloom_enable_strict_floating_point(bloom_render_gpu_path_coverage_test)
+bloom_add_test(
+    NAME bloom.render.gpu_path_coverage
+    COMMAND bloom_render_gpu_path_coverage_test
+    LABELS unit gpu render
+    TIMEOUT 300
 )
 
 # Host RGBA32F -> resident GpuImage upload test (staged host copy; no shader).
@@ -335,6 +370,71 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     )
 endif()
 
+# CPU-only kernel-prep and host-metadata test for PointResampleV1: hashes the embedded SPIR-V array
+# against its pinned digest and derives every axis-map expectation from an independent
+# re-implementation of the media-image-proxy CPU oracle. It never dispatches a GPU and registers
+# unconditionally, so it also runs in a CPU-stub build.
+add_executable(bloom_render_gpu_point_resample_kernel_test gpu_point_resample_kernel_tests.cpp)
+target_link_libraries(bloom_render_gpu_point_resample_kernel_test PRIVATE bloom_render)
+target_include_directories(bloom_render_gpu_point_resample_kernel_test
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+target_compile_definitions(bloom_render_gpu_point_resample_kernel_test
+    PRIVATE
+        "BLOOM_POINT_RESAMPLE_SPV_SHA256=\"4c053f341d4c23b84cf1717ef3d2a523347ae84f9e7638dd3c75410c9eeaa4a6\"")
+bloom_enable_warnings(bloom_render_gpu_point_resample_kernel_test)
+bloom_enable_strict_floating_point(bloom_render_gpu_point_resample_kernel_test)
+bloom_add_test(
+    NAME bloom.render.gpu_point_resample_kernel
+    COMMAND bloom_render_gpu_point_resample_kernel_test
+    LABELS unit gpu render
+)
+
+# Real-device native PointResampleV1 proof (upload -> point resample) with the media-image-proxy
+# CPU oracle as reference. It compiles the private Vulkan header via the composite support header,
+# so the target exists only where the Vulkan backend is built; it skips cleanly without a device and
+# --require-device fails closed.
+if(BLOOM_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_render_gpu_point_resample_test gpu_point_resample_native_tests.cpp)
+    target_link_libraries(bloom_render_gpu_point_resample_test PRIVATE bloom_render)
+    target_include_directories(bloom_render_gpu_point_resample_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan" "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/include/vulkan")
+        target_include_directories(bloom_render_gpu_point_resample_test
+            SYSTEM PRIVATE "${BLOOM_DEPENDENCY_PREFIX}/include")
+    endif()
+    target_compile_definitions(bloom_render_gpu_point_resample_test
+        PRIVATE
+            "BLOOM_POINT_RESAMPLE_SPV_SHA256=\"4c053f341d4c23b84cf1717ef3d2a523347ae84f9e7638dd3c75410c9eeaa4a6\""
+            BLOOM_POINT_RESAMPLE_NATIVE_TEST=1
+            BLOOM_RENDER_TEST_VULKAN_BACKEND=1)
+    bloom_enable_warnings(bloom_render_gpu_point_resample_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_point_resample_test)
+    bloom_add_test(
+        NAME bloom.render.gpu_point_resample
+        COMMAND bloom_render_gpu_point_resample_test
+        LABELS unit gpu render
+    )
+
+    # Deterministic lifecycle/boundedness fault tests for the PointResampleV1 reservation. Links the
+    # test-only fault library; production targets never link it.
+    add_executable(bloom_render_gpu_point_resample_fault_test gpu_point_resample_fault_tests.cpp)
+    target_link_libraries(bloom_render_gpu_point_resample_fault_test
+        PRIVATE bloom_render_point_resample_test_faults bloom_render)
+    target_include_directories(bloom_render_gpu_point_resample_fault_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan" "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/include/vulkan")
+        target_include_directories(bloom_render_gpu_point_resample_fault_test
+            SYSTEM PRIVATE "${BLOOM_DEPENDENCY_PREFIX}/include")
+    endif()
+    bloom_enable_warnings(bloom_render_gpu_point_resample_fault_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_point_resample_fault_test)
+    bloom_add_test(
+        NAME bloom.render.gpu_point_resample_fault
+        COMMAND bloom_render_gpu_point_resample_fault_test
+        LABELS unit gpu render
+    )
+endif()
+
 # Pure CPU present-image test: the corrected fragment composition (display-space checkerboard,
 # destination/source mapping, channel remap per texel BEFORE the filter, premultiplied bilinear
 # filtering of the straight RGBA8 source, premultiplied overlay) reproduced on the CPU, plus the
@@ -388,6 +488,9 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid_covered.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_path_coverage.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_path_coverage_lifecycle.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_path_coverage_resources.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite_resources.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_upload.cpp"

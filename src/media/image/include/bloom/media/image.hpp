@@ -12,9 +12,10 @@
 #include <vector>
 
 namespace bloom::media {
-inline constexpr std::uint32_t kMaxImageDimension = 16384;
-inline constexpr std::uint64_t kMaxImagePixels = 16777216;
-inline constexpr std::size_t kMaxImageFileBytes = 67108864;
+// Default decode request budget. This is a benign default for callers that do not pass their own
+// budget. Decoded storage and the decoder's peak working set are admitted against the explicit
+// caller-supplied pixelBudget; there is no separate absolute byte, pixel, or dimension ceiling.
+// Geometry is bounded only by the codec's own representable window and by overflow/index checks.
 inline constexpr std::size_t kMaxImageStorageBytes = 268435456;
 inline constexpr std::size_t kMaxSequenceEntries = 100000;
 using CancelImageWork = std::function<bool()>;

@@ -206,7 +206,7 @@ target_link_libraries(bloom_composition_preview_controller_test PRIVATE bloom_ui
 target_link_libraries(bloom_composition_preview_cpu_stage_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_preview_gpu_scene_stage_test PRIVATE bloom_ui)
 target_include_directories(bloom_composition_preview_gpu_scene_stage_test
-    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/tests")
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
 target_link_libraries(bloom_gpu_preview_submitter_test PRIVATE bloom_ui)
 target_link_libraries(bloom_gpu_preview_app_test PRIVATE bloom_ui bloom_runtime_evaluator)
 # bloom_ui_gpu_presentation_target_test adopts the borrowed VkInstance through Qt's public
@@ -788,6 +788,28 @@ bloom_add_test(
     COMMAND bloom_assets_editor_test
     LABELS ui integration assets
     TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+add_executable(bloom_project_host_empty_test project_host_empty_tests.cpp)
+target_link_libraries(bloom_project_host_empty_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_project_host_empty_test)
+bloom_add_test(
+    NAME bloom.ui.project-host-empty
+    COMMAND bloom_project_host_empty_test
+    LABELS ui integration
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+add_executable(bloom_composition_duration_test composition_duration_tests.cpp)
+target_link_libraries(bloom_composition_duration_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_composition_duration_test)
+bloom_add_test(
+    NAME bloom.ui.composition-duration
+    COMMAND bloom_composition_duration_test
+    LABELS ui integration
+    TIMEOUT 60
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 

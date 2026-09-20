@@ -27,24 +27,39 @@ inline constexpr std::string_view kOcioGpuExposureContrastSemanticsId =
     "bloom.color.ocio-process-exposure-contrast.v1";
 inline constexpr std::string_view kOcioGpuLut3dSemanticsId = "bloom.color.ocio-process-lut3d.v1";
 
-// Versioned per-sampler precise-sampling GLSL adapter. OCIO's generated body samples its LUT
-// resources with the built-in `texture()` function, whose hardware linear filtering quantizes the
-// sub-texel weight on some devices (a real NVIDIA device reconstructs an 8-sample 1D LUT with up to
-// ~8e-5 absolute error against OCIO's CPU interpolation). OCIO's reflected `sampler` metadata names
-// each texture's sampler and its expected filtering (linear for 1D/2D LUTs; nearest for the 3D
-// tetrahedral body, which samples exact texel centers and weights in the shader). This adapter
+// Versioned precise-sampling and CPU-power-parity GLSL adapter. OCIO's generated body samples its
+// LUT resources with the built-in `texture()` function, whose hardware linear filtering quantizes
+// the sub-texel weight on some devices (a real NVIDIA device reconstructs an 8-sample 1D LUT with
+// up to ~8e-5 absolute error against OCIO's CPU interpolation). OCIO's reflected `sampler` metadata
+// names each texture's sampler and its expected filtering (linear for 1D/2D LUTs; nearest for the
+// 3D tetrahedral body, which samples exact texel centers and weights in the shader). The adapter
 // generates one GLSL function per reflected texture that reproduces that texture's own semantics
 // with `texelFetch` at full float precision, and a token-paste macro that rewrites the generated
-// body's `texture(sampler, coord)` calls to the matching function. The generated OCIO transform
-// body stays byte-for-byte intact, mixed nearest/linear programs are handled per sampler, and the
-// same API is what the production runtime wrapper must consume.
+// body's `texture(sampler, coord)` calls to the matching function.
+//
+// The same adapter also reproduces the unchanged CPU oracle's fast-power arithmetic for programs
+// that contain an OCIO GammaOp. The pinned OpenColorIO CPU processor is built with
+// OPTIMIZATION_FAST_LOG_EXP_POW, so a GammaOp power is evaluated by OCIO's `ssePower` minimax
+// log2/exp2 polynomial (on the SSE2 and SSE2NEON builds), not by correctly rounded libm pow and not
+// by the GPU's hardware pow; the two differ by up to ~1.5e-5, beyond the strict 2e-6 RGBA32F CST
+// gate. Whether the linked OCIO actually takes that path is qualified at runtime from its own
+// default CPU processor, never guessed from the host architecture. When a GammaOp is detected the
+// adapter redirects the generated body's `pow` token, but only the `pow(vec4, vec4)` GammaOp
+// signature is specialized to `ssePower`; every other `pow` signature forwards to the generated
+// hardware pow, so a mixed GammaOp/other-power program keeps its other power calls unchanged.
+//
+// The generated OCIO transform body stays byte-for-byte intact in both cases (only preprocessor
+// tokens are redirected), mixed nearest/linear programs are handled per sampler, and the same API
+// is what the production runtime wrapper must consume.
 inline constexpr std::string_view kOcioGpuPreciseSamplingVersion =
-    "bloom.color.ocio-gpu-sampling.v2";
+    "bloom.color.ocio-gpu-sampling.v3";
 struct OcioGpuSamplingGlsl final {
     // Emitted before the generated OCIO body: one forward declaration per texture plus the
-    // `texture` dispatch macro. Empty when no texture needs (or can safely receive) an adapter.
+    // `texture` dispatch macro, and (when a GammaOp is present) the `pow` parity declarations and
+    // dispatch macro. Empty when no texture or GammaOp needs an adapter.
     std::string preamble;
-    // Emitted after the generated OCIO body: the per-texture definitions. Empty alongside preamble.
+    // Emitted after the generated OCIO body: the per-texture definitions and the CPU fast-power
+    // definitions. Empty alongside preamble.
     std::string definitions;
 
     [[nodiscard]] bool dispatches() const noexcept { return !preamble.empty(); }

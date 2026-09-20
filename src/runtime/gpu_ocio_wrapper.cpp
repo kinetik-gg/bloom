@@ -176,7 +176,13 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
             out << viewAdjustGlsl(viewAdjust);
         }
         out << "void main() {\n";
-        out << "  uint index = gl_GlobalInvocationID.x;\n";
+        // Capacity-safe 2D flattening: strideX is the exact X invocation extent of the dispatch
+        // (groupsX * 64), so a 1D dispatch (groupsY == 1) reduces to the previous
+        // gl_GlobalInvocationID.x mapping, while a bounded 2D grid never exceeds the device's
+        // maxComputeWorkGroupCount[0]. The pixelCount guard discards the tail row.
+        out << "  const uint bloom_ocio_stride_x = gl_NumWorkGroups.x * gl_WorkGroupSize.x;\n";
+        out << "  uint index = gl_GlobalInvocationID.y * bloom_ocio_stride_x + "
+               "gl_GlobalInvocationID.x;\n";
         out << "  if (index >= bloom_ocio_push.pixelCount) { return; }\n";
         out << "  ivec2 c = ivec2(int(index % bloom_ocio_push.width), int(index / "
                "bloom_ocio_push.width));\n";
@@ -218,6 +224,7 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
         result.source = out.str();
         result.entryPoint = std::string(kGpuOcioWrapperEntryPoint);
         result.samplingVersion = std::string(color::kOcioGpuPreciseSamplingVersion);
+        result.wrapperVersion = std::string(kGpuOcioWrapperVersion);
         const auto digest = core::Sha256Hasher::hash(
             std::as_bytes(std::span<const char>(result.source.data(), result.source.size())));
         if (!digest.has_value()) {

@@ -2,7 +2,7 @@
 
 Status: canonical
 
-Updated: 2026-09-13
+Updated: 2026-09-20
 
 This directory is Bloom's current source of truth. Historical notes outside this repository may
 provide research or rationale, but they are not binding until adopted here.
@@ -18,7 +18,8 @@ provide research or rationale, but they are not binding until adopted here.
    policy.
 4. [`ux/compositing-workspace.md`](ux/compositing-workspace.md) — the UI sketch as an interaction
    contract; [`ux/visual-language.md`](ux/visual-language.md) — iconography and typography;
-   [`ux/interaction-model.md`](ux/interaction-model.md) — the keyboard and pointer bindings.
+   [`ux/interaction-model.md`](ux/interaction-model.md) — the keyboard and pointer bindings,
+   including blank-project startup and the New Composition duration units.
 5. [`architecture/overview.md`](architecture/overview.md) — boundaries, state ownership, and
    dependency direction.
 6. [`architecture/module-system.md`](architecture/module-system.md),

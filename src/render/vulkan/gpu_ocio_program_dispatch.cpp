@@ -76,6 +76,19 @@ void GpuOcioProgram::Impl::beginImpl(const bool display,
         fail(GpuOcioProgramDiagnosticCode::InvalidArgument, "the pixel count is invalid");
         return;
     }
+    // Plan a capacity-safe 2D dispatch before any allocation or work. A geometry the device's
+    // maxComputeWorkGroupCount cannot cover, or one whose flattened uint32 index would wrap, is
+    // refused here rather than submitted as an out-of-range dispatch. No artificial pixel ceiling:
+    // the only refusals are real device capacity and index representability.
+    const auto dispatchPlan = ocio_program_detail::planOcioDispatch(
+        pixelCount, ocio_program_detail::kWorkgroupSizeX, maxWorkGroupCountX, maxWorkGroupCountY);
+    if (!dispatchPlan.valid()) {
+        fail(dispatchPlan.error == ocio_program_detail::OcioDispatchPlanError::DeviceCapacity
+                 ? GpuOcioProgramDiagnosticCode::Unsupported
+                 : GpuOcioProgramDiagnosticCode::InvalidArgument,
+             "the geometry cannot be covered by a capacity-safe compute dispatch");
+        return;
+    }
     const std::span<const std::byte> values =
         uniformBytes.empty() ? std::span<const std::byte>(desc.uniformBufferData) : uniformBytes;
     if (values.size() != desc.uniformBufferSize) {
@@ -243,11 +256,11 @@ void GpuOcioProgram::Impl::beginImpl(const bool display,
                              inputImpl->height};
     dispatcher->vkCmdPushConstants(raw, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
                                    &push);
-    dispatcher->vkCmdDispatch(
-        raw,
-        static_cast<std::uint32_t>((pixelCount + ocio_program_detail::kWorkgroupSizeX - 1ULL) /
-                                   ocio_program_detail::kWorkgroupSizeX),
-        1, 1);
+    // Capacity-safe 2D grid: the wrapper flattens gl_GlobalInvocationID.y * (groupsX *
+    // workGroupSizeX) + gl_GlobalInvocationID.x back to the linear pixel index and discards the
+    // tail with its own pixelCount guard. When the work already fits, groupsY == 1 and this is the
+    // exact previous 1D dispatch.
+    dispatcher->vkCmdDispatch(raw, dispatchPlan.groupsX, dispatchPlan.groupsY, 1);
 
     if (display) {
         VkBufferMemoryBarrier packedBarrier{};

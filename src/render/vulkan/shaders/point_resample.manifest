@@ -1,0 +1,70 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "generator": "tools/gpu-shaders compile/validate/embed recipe (reused, not reimplemented)",
+  "generatorRevision": 1,
+  "operation": "PointResampleV1",
+  "entrypoint": "main",
+  "shader": {
+    "language": "GLSL_460",
+    "stage": "compute",
+    "sha256": "9cad004e3e4a28f282c2ca6c0f088c42cc6d7bec8c9dba9d0e727ecf365705b8",
+    "spirvSha256": "4c053f341d4c23b84cf1717ef3d2a523347ae84f9e7638dd3c75410c9eeaa4a6",
+    "localSizeX": 256,
+    "localSizeY": 1,
+    "localSizeZ": 1
+  },
+  "bindings": [
+    {
+      "set": 0,
+      "binding": 0,
+      "kind": "storage-image",
+      "access": "readonly",
+      "format": "rgba32f",
+      "role": "premultiplied-lin_rec709_scene-source"
+    },
+    {
+      "set": 0,
+      "binding": 1,
+      "kind": "storage-image",
+      "access": "writeonly",
+      "format": "rgba32f",
+      "role": "premultiplied-lin_rec709_scene-output"
+    },
+    {
+      "set": 0,
+      "binding": 2,
+      "kind": "storage-buffer",
+      "access": "readonly",
+      "element": "int",
+      "role": "host-prepared-data-window-relative-source-axis-indices",
+      "layout": "sourceX[outputWidth] then sourceY[outputHeight], row-major axis maps"
+    }
+  ],
+  "pushConstant": {
+    "byteCount": 8,
+    "fields": [
+      {
+        "name": "outputWidth",
+        "type": "uint32"
+      },
+      {
+        "name": "outputHeight",
+        "type": "uint32"
+      }
+    ]
+  },
+  "hostDerivation": {
+    "axisMaps": "preparePointResampleAxisMaps(sourceWidth, sourceHeight, outputWidth, outputHeight, horizontalScale, verticalScale): for every output column x compute min(sourceWidth-1, (uint32)(double(x)/horizontalScale)) and for every output row y compute min(sourceHeight-1, (uint32)(double(y)/verticalScale)), the exact media-image-proxy CPU oracle arithmetic; the two independent maps total O(outputWidth + outputHeight) int32 values and no per-pixel RGBA is generated or sampled on the host",
+    "outputWindow": "max(1, ceil(sourceWidth*horizontalScale)) x max(1, ceil(sourceHeight*verticalScale)), origin (0, 0); the display window and pixel aspect are preserved from the composition descriptor",
+    "checked": "the output pixel space is flattened row-major into 256-wide workgroups; the host dispatches (groupsX, groupsY) with groupsX clamped to maxComputeWorkGroupCount[0] and the remainder carried in Y, so a frame whose X workgroup count exceeds the physical X limit is still dispatched. The host preflights scales, output geometry, device limits, the image/metadata byte budget, and the workgroup-grid capacity before allocating"
+  },
+  "contracts": {
+    "numeric": "bit-exact against the media-image-proxy CPU oracle (src/runtime/image_source.cpp evaluateImageSource); the kernel is a pure rgba32f imageLoad/imageStore with no arithmetic, so every source bit including non-finite, subnormal, negative, HDR, and alpha is preserved exactly",
+    "sampleConvention": "the kernel gathers the host-prepared per-output-axis source indices; it never re-derives the double division and needs no shaderFloat64, so large-coordinate precision matches the CPU oracle",
+    "alphaAndHdr": "alpha, negative, and HDR lanes are copied unchanged; no colour transform, no unpremultiply, no clamp",
+    "sourceOrigin": "indices are data-window-relative; a nonzero or negative source data-window origin does not change the mapping, exactly as the CPU oracle indexes relative to the data window",
+    "errorPolicy": "no error-flag buffer and no status rejection: the operation is a bit copy, so it cannot introduce a non-finite or subnormal value the CPU oracle would not also copy",
+    "metadataBudget": "the axis-map array is O(outputWidth + outputHeight) int32 against maxMetadataBytes and the per-call byteBudget; it is coordinate metadata only, never CPU-generated RGBA",
+    "cpuFallback": "an invalid scale/geometry, a device-limit or budget refusal, a foreign device, or a wrong thread fails closed with an explicit diagnostic; no silent CPU substitution"
+  }
+}
