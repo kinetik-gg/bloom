@@ -330,6 +330,9 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite_resources.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_upload.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_upload_resources.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_affine.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_affine_resources.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_blend.cpp"
     )
     target_include_directories(bloom_render_gpu_scene_executor_fault PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/../include"

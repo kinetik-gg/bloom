@@ -21,6 +21,12 @@
 #include <bloom/runtime/gpu_scene_executor.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
+#include "gpu_affine_blend_executor_fault_fixtures.hpp"
+
+#ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+#include "gpu_scene_executor_fault_injection.hpp"
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -31,34 +37,6 @@
 #include <utility>
 #include <vector>
 
-namespace bloom::runtime {
-
-// Proof-only fixture seam: can call the private PreparedGpuScene constructor. Defined only in the
-// test translation unit, so production code cannot construct a mutable scene this way.
-struct GpuSceneFixtureBuilder final {
-    [[nodiscard]] static std::shared_ptr<const PreparedGpuScene>
-    make(std::vector<GpuSceneCommand> commands, const GpuSceneCommandIndex output,
-         const render::Rgba32fImageDescriptor outputDescriptor) {
-        ProcessFrameIdentity identity{
-            .plan = nullptr,
-            .time = {},
-            .output = OperationIndex::fromRaw(0),
-            .resolution = {},
-            .quality = EvaluationQuality::Reference,
-            .colorIntent = EvaluationColorIntent::LinearRec709Scene,
-            .provider = EvaluationProvider::CpuReference,
-            .evaluatorSemanticsVersion = 0,
-            .animationSamplingSemanticsVersion = 0,
-            .imagePrimitiveSemanticsVersion = 0,
-            .roi = std::nullopt,
-            .bypassLookNodes = false,
-        };
-        return std::shared_ptr<const PreparedGpuScene>(new PreparedGpuScene(
-            std::move(commands), {}, output, std::move(identity), {}, outputDescriptor, {}));
-    }
-};
-
-} // namespace bloom::runtime
 
 namespace {
 
@@ -395,6 +373,198 @@ void runBlendMatrix(Expectations& expectations, GpuDevice& device, GpuSceneCache
     }
 }
 
+void runAffineInvalidationAndCancel(Expectations& expectations, GpuDevice& device,
+                                    GpuSceneCache& cache) {
+    const auto sourceWindow = window(5, -1, 20, 14);
+    const auto display = sourceWindow;
+    const auto aspect = PixelAspectRatio::square();
+    auto image = makeImage(sourceWindow, display, aspect, denseHdrPixels(20, 14));
+    expectations.expect(image.has_value(), "affine-inval: source builds");
+    if (!image) {
+        return;
+    }
+    auto source = std::make_shared<const Rgba32fImage>(std::move(*image));
+    const auto outputWindow = window(-32, -32, 64, 64);
+    const auto m1 = LayerMatrix::authored({3.0, 1.0}, {0.5, 0.5}, {1.25, 0.8}, 20.0);
+    const auto m2 = LayerMatrix::authored({3.0, 1.0}, {0.5, 0.5}, {1.5, 0.8}, 20.0);
+    const auto m3 = LayerMatrix::authored({3.0, 1.0}, {0.5, 0.5}, {1.75, 0.8}, 20.0);
+    const auto makeScene = [&](const LayerMatrix& matrix, const std::string& suffix) {
+        GpuSceneAffineCommand affine{.index = 1,
+                                     .sourceOperation = OperationIndex::fromRaw(0),
+                                     .input = 0,
+                                     .inputKey = "inv-src",
+                                     .sourceWindow = sourceWindow,
+                                     .outputWindow = outputWindow,
+                                     .matrix = toGpuAffineMatrix(matrix, sourceWindow),
+                                     .opacity = 1.0F,
+                                     .pixelAspect = aspect,
+                                     .semanticKey = "advisory-" + suffix};
+        std::vector<GpuSceneCommand> commands;
+        commands.emplace_back(uploadCommand(0, source, "inv-src"));
+        commands.emplace_back(affine);
+        commands.emplace_back(
+            outputCommand(2, 1, outputWindow, display, aspect, "inv-out-" + suffix));
+        return GpuSceneFixtureBuilder::make(std::move(commands), 2,
+                                            descriptorFor(outputWindow, display, aspect));
+    };
+    const auto sceneA = makeScene(m1, "a");
+    const auto sceneB = makeScene(m2, "b");
+    const auto sceneC = makeScene(m3, "c");
+
+    auto executor = GpuSceneExecutor::create(device, cache);
+    expectations.expect(executor.hasValue(), "affine-inval: executor creates");
+    if (!executor) {
+        return;
+    }
+    const std::uint64_t budget = 64ULL * 1024ULL * 1024ULL;
+    const auto first = runScene(*executor.executor, sceneA, budget, false);
+    expectations.expect(first.pollResult == GpuSceneExecutorPollResult::Ready,
+                        "affine-inval: scene A ready");
+    auto counters = executor.executor->counters();
+    const auto uploadsAfterA = counters.uploads;
+    const auto affineAfterA = counters.affineDispatches;
+
+    const auto second = runScene(*executor.executor, sceneB, budget, false);
+    expectations.expect(second.pollResult == GpuSceneExecutorPollResult::Ready,
+                        "affine-inval: scene B ready");
+    counters = executor.executor->counters();
+    expectations.expect(counters.uploads == uploadsAfterA,
+                        "affine-inval: changed matrix preserves upstream upload cache");
+    expectations.expect(counters.affineDispatches == affineAfterA + 1,
+                        "affine-inval: changed matrix dirties only the affine descendant");
+
+    // sceneC re-dispatches affine; the upload is cached, so affine is the very next step and one
+    // poll leaves it genuinely in flight.
+    const auto beforeCancel = executor.executor->counters().affineDispatches;
+    const auto begin = executor.executor->begin(sceneC, budget);
+    expectations.expect(begin.code == GpuSceneExecutorDiagnosticCode::None,
+                        "affine-cancel: begin accepted");
+    const auto firstPoll = executor.executor->poll();
+    expectations.expect(firstPoll == GpuSceneExecutorPollResult::Pending,
+                        "affine-cancel: affine is in flight after one poll");
+    if (firstPoll == GpuSceneExecutorPollResult::Pending) {
+        expectations.expect(executor.executor->counters().affineDispatches == beforeCancel + 1,
+                            "affine-cancel: positive affine dispatch before cancel");
+        executor.executor->cancel();
+        auto finalPoll = executor.executor->poll();
+        while (finalPoll == GpuSceneExecutorPollResult::Pending) {
+            finalPoll = executor.executor->poll();
+        }
+        expectations.expect(finalPoll == GpuSceneExecutorPollResult::Failure &&
+                                executor.executor->diagnostic().code ==
+                                    GpuSceneExecutorDiagnosticCode::Cancelled,
+                            "affine-cancel: cancelled mid-native");
+        expectations.expect(executor.executor->image() == nullptr,
+                            "affine-cancel: no output published");
+        const auto rerunBefore = executor.executor->counters().affineDispatches;
+        const auto rerun = runScene(*executor.executor, sceneC, budget, false);
+        expectations.expect(rerun.pollResult == GpuSceneExecutorPollResult::Ready,
+                            "affine-cancel: rerun ready");
+        expectations.expect(executor.executor->counters().affineDispatches == rerunBefore + 1,
+                            "affine-cancel: cancelled job left no cache reuse");
+    } else {
+        static_cast<void>(executor.executor->takeImage());
+    }
+}
+
+void runBlendInvalidationAndCancel(Expectations& expectations, GpuDevice& device,
+                                   GpuSceneCache& cache) {
+    const auto geometry = window(0, 0, 16, 12);
+    const auto aspect = PixelAspectRatio::square();
+    auto sourceImage = makeImage(geometry, geometry, aspect, blendPixels(16, 12, true));
+    auto destImage = makeImage(geometry, geometry, aspect, blendPixels(16, 12, false));
+    expectations.expect(sourceImage.has_value() && destImage.has_value(),
+                        "blend-inval: fixtures build");
+    if (!sourceImage || !destImage) {
+        return;
+    }
+    auto source = std::make_shared<const Rgba32fImage>(std::move(*sourceImage));
+    auto destination = std::make_shared<const Rgba32fImage>(std::move(*destImage));
+    const auto makeScene = [&](const BlendMode mode, const std::string& suffix) {
+        const GpuSceneBlendCommand blend{.index = 2,
+                                         .sourceOperation = OperationIndex::fromRaw(0),
+                                         .source = 0,
+                                         .destination = 1,
+                                         .sourceKey = "bi-src",
+                                         .destinationKey = "bi-dst",
+                                         .mode = mode,
+                                         .sourceWindow = geometry,
+                                         .outputWindow = geometry,
+                                         .pixelAspect = aspect,
+                                         .artifactDigest = "adversarially-wrong-digest",
+                                         .semanticKey = "advisory-" + suffix};
+        std::vector<GpuSceneCommand> commands;
+        commands.emplace_back(uploadCommand(0, source, "bi-src"));
+        commands.emplace_back(uploadCommand(1, destination, "bi-dst"));
+        commands.emplace_back(blend);
+        commands.emplace_back(
+            outputCommand(3, 2, geometry, geometry, aspect, "bi-out-" + suffix));
+        return GpuSceneFixtureBuilder::make(std::move(commands), 3,
+                                            descriptorFor(geometry, geometry, aspect));
+    };
+    const auto sceneA = makeScene(BlendMode::Normal, "a");
+    const auto sceneB = makeScene(BlendMode::Add, "b");
+    const auto sceneC = makeScene(BlendMode::Multiply, "c");
+
+    auto executor = GpuSceneExecutor::create(device, cache);
+    expectations.expect(executor.hasValue(), "blend-inval: executor creates");
+    if (!executor) {
+        return;
+    }
+    const std::uint64_t budget = 64ULL * 1024ULL * 1024ULL;
+    const auto first = runScene(*executor.executor, sceneA, budget, false);
+    expectations.expect(first.pollResult == GpuSceneExecutorPollResult::Ready,
+                        "blend-inval: scene A ready");
+    auto counters = executor.executor->counters();
+    const auto uploadsAfterA = counters.uploads;
+    const auto blendAfterA = counters.blendDispatches;
+
+    const auto second = runScene(*executor.executor, sceneB, budget, false);
+    expectations.expect(second.pollResult == GpuSceneExecutorPollResult::Ready,
+                        "blend-inval: scene B ready");
+    counters = executor.executor->counters();
+    expectations.expect(counters.uploads == uploadsAfterA,
+                        "blend-inval: changed mode preserves upstream upload cache");
+    expectations.expect(counters.blendDispatches == blendAfterA + 1,
+                        "blend-inval: changed mode dirties only the blend descendant");
+
+    const auto beforeCancel = executor.executor->counters().blendDispatches;
+    const auto begin = executor.executor->begin(sceneC, budget);
+    expectations.expect(begin.code == GpuSceneExecutorDiagnosticCode::None,
+                        "blend-cancel: begin accepted");
+    const auto firstPoll = executor.executor->poll();
+    expectations.expect(firstPoll == GpuSceneExecutorPollResult::Pending,
+                        "blend-cancel: blend is in flight after one poll");
+    if (firstPoll == GpuSceneExecutorPollResult::Pending) {
+        expectations.expect(executor.executor->counters().blendDispatches == beforeCancel + 1,
+                            "blend-cancel: positive blend dispatch before cancel");
+        executor.executor->cancel();
+        auto finalPoll = executor.executor->poll();
+        while (finalPoll == GpuSceneExecutorPollResult::Pending) {
+            finalPoll = executor.executor->poll();
+        }
+        expectations.expect(finalPoll == GpuSceneExecutorPollResult::Failure &&
+                                executor.executor->diagnostic().code ==
+                                    GpuSceneExecutorDiagnosticCode::Cancelled,
+                            "blend-cancel: cancelled mid-native");
+        expectations.expect(executor.executor->image() == nullptr,
+                            "blend-cancel: no output published");
+        const auto rerunBefore = executor.executor->counters().blendDispatches;
+        const auto rerun = runScene(*executor.executor, sceneC, budget, false);
+        expectations.expect(rerun.pollResult == GpuSceneExecutorPollResult::Ready,
+                            "blend-cancel: rerun ready");
+        expectations.expect(executor.executor->counters().blendDispatches == rerunBefore + 1,
+                            "blend-cancel: cancelled job left no cache reuse");
+    } else {
+        static_cast<void>(executor.executor->takeImage());
+    }
+}
+
+
+#ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+using bloom::render::gpu_scene_executor_fault::PollFault;
+#endif
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -422,8 +592,29 @@ int main(int argc, char** argv) {
         if (!cache) {
             return 1;
         }
+        // A second device instance mints a distinct ownership epoch even on the same physical GPU;
+        // the executor must refuse a cache bound to it before touching any native resource.
+        auto foreign = GpuDevice::create(createOptions);
+        if (foreign) {
+            auto foreignCache = GpuSceneCache::create(*foreign.device, GpuSceneCacheBudgets{});
+            expectations.expect(foreignCache.hasValue(), "foreign: cache creates");
+            if (foreignCache) {
+                auto refused = GpuSceneExecutor::create(*device.device, *foreignCache.cache);
+                expectations.expect(!refused.hasValue(),
+                                    "foreign: executor refuses a foreign-device cache");
+                expectations.expect(
+                    refused.diagnostic.code == GpuSceneExecutorDiagnosticCode::InvalidArgument,
+                    "foreign: refusal is InvalidArgument");
+            }
+        }
         runAffine(expectations, *device.device, *cache.cache);
         runBlendMatrix(expectations, *device.device, *cache.cache);
+        runAffineInvalidationAndCancel(expectations, *device.device, *cache.cache);
+        runBlendInvalidationAndCancel(expectations, *device.device, *cache.cache);
+        bloom::runtime::tests::affine_blend_fault::runAffineFaults(expectations, *device.device,
+                                                                       *cache.cache);
+        bloom::runtime::tests::affine_blend_fault::runBlendFaults(expectations, *device.device,
+                                                                      *cache.cache);
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " executor affine/blend expectation(s) failed\n";
             return 1;

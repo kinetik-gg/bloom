@@ -2,6 +2,7 @@
 
 #include "gpu_blend_private.hpp"
 
+
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -568,6 +569,11 @@ GpuBlendPollResult GpuBlend::poll() {
     if (!impl.onOwnerThread()) {
         return GpuBlendPollResult::WrongThread;
     }
+#ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+    if (const auto fault = impl.injectedPollFault()) {
+        return *fault;
+    }
+#endif
     if (impl.jobState == GpuBlendJobState::Ready) {
         return GpuBlendPollResult::Ready;
     }

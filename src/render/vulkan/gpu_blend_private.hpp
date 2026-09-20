@@ -17,7 +17,12 @@
 #include "shaders/blend_f64_spirv.inc"
 #include "shaders/blend_spirv.inc"
 
+#ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+#include "gpu_scene_executor_fault_injection.hpp"
+#endif
+
 #include <atomic>
+#include <optional>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -90,6 +95,40 @@ struct GpuBlend::Impl final {
     std::atomic<bool> discardRequested{false};
     GpuBlendDiagnostic jobDiagnostic;
     GpuBlendDiagnostic createDiagnostic;
+#ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+    // TEST-ONLY. Compiles only in the fault closure; production builds never see the hook. It lives
+    // here so the production translation unit stays within the line budget with identical semantics
+    // to the composite poll hook.
+    [[nodiscard]] std::optional<GpuBlendPollResult> injectedPollFault() {
+        const auto injected = gpu_scene_executor_fault::take();
+        if (injected == gpu_scene_executor_fault::PollFault::None) {
+            return std::nullopt;
+        }
+        if (injected == gpu_scene_executor_fault::PollFault::StallPending) {
+            return GpuBlendPollResult::Pending;
+        }
+        if (injected == gpu_scene_executor_fault::PollFault::DeviceLost) {
+            const VkFence faultFence = static_cast<VkFence>(*fence);
+            const VkResult faultWait = control->device.getDispatcher()->vkWaitForFences(
+                static_cast<VkDevice>(*control->device), 1, &faultFence, VK_TRUE, 1'000'000'000ULL);
+            if (faultWait == VK_SUCCESS) {
+                deviceLost = true;
+                queueSubmitted = false;
+                fail(GpuBlendDiagnosticCode::DeviceLost,
+                     "injected device loss after proven retirement");
+            } else {
+                fail(GpuBlendDiagnosticCode::DeviceUnavailable,
+                     "injected device loss could not prove fence retirement; the submission is "
+                     "retained");
+            }
+            return GpuBlendPollResult::Failure;
+        }
+        fail(GpuBlendDiagnosticCode::DeviceUnavailable,
+             "injected unknown fence status; the submission is not retired");
+        return GpuBlendPollResult::Failure;
+    }
+#endif
+
 };
 
 } // namespace bloom::render

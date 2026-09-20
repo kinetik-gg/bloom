@@ -711,3 +711,33 @@ bloom_add_test(
     LABELS runtime unit gpu render
     TIMEOUT 300
 )
+
+# Test-only fault variant of the affine/blend executor parity proof. It compiles the same TU under
+# the proof-only macro and links the fault-instrumented native closure, which now also includes
+# gpu_affine/gpu_blend. Only this variant exercises affine/blend stalled/unknown-fence/device-loss
+# retirement; the default target stays fault-free.
+if(TARGET bloom_render_gpu_scene_executor_fault)
+    add_executable(bloom_runtime_gpu_affine_blend_executor_fault_test
+        gpu_affine_blend_executor_native_tests.cpp
+    )
+    target_compile_definitions(bloom_runtime_gpu_affine_blend_executor_fault_test
+        PRIVATE BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION)
+    target_include_directories(
+        bloom_runtime_gpu_affine_blend_executor_fault_test
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/src/render/tests"
+            "${PROJECT_SOURCE_DIR}/src/runtime"
+    )
+    target_link_libraries(
+        bloom_runtime_gpu_affine_blend_executor_fault_test
+        PRIVATE bloom_render_gpu_scene_executor_fault bloom_runtime_evaluator bloom_render
+    )
+    bloom_enable_warnings(bloom_runtime_gpu_affine_blend_executor_fault_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_affine_blend_executor_fault_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_affine_blend_executor_fault
+        COMMAND bloom_runtime_gpu_affine_blend_executor_fault_test
+        LABELS runtime unit gpu render
+        TIMEOUT 300
+    )
+endif()
