@@ -19,10 +19,12 @@
 #include "gpu_coverage_native_support.hpp"
 #include "gpu_coverage_route_proof_support.hpp"
 #include "gpu_coverage_video_support.hpp"
+#include "gpu_route_proof_io.hpp"
 
 #include <bloom/document/graph.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/runtime/gpu_coverage_contract.hpp>
+#include <bloom/runtime/gpu_coverage_route_proof_contract.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
@@ -322,8 +324,8 @@ runMediaBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionP
 
 // Mutation proof for the node registry: a new node type sharing an existing lowering must gain its
 // own required id, with no fixture, so it cannot silently reuse another node's fixture.
-[[nodiscard]] int runNativeAcceptance(const std::filesystem::path& loader,
-                                      const bool requireDevice) {
+[[nodiscard]] int runNativeAcceptance(const std::filesystem::path& loader, const bool requireDevice,
+                                      const std::filesystem::path& routeProofDirectory) {
     bloom::render::GpuDeviceCreationOptions options;
     options.loader_path = loader;
     auto device = bloom::render::GpuDevice::create(options);
@@ -338,15 +340,56 @@ runMediaBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionP
         return 77;
     }
     const auto list = fixtures();
+    // Genuine route proofs are produced by the real harnesses and handed off through the run-scoped
+    // directory. No proof is invented here: when the directory or nonce is absent, or a harness did
+    // not run, every route stays MISSING.
+    std::string routeNonce;
+    std::string routeProofUnavailable;
+    std::vector<bloom::gpu_route_proof_io::RouteProofLoadResult> routeProofs;
+    if (!routeProofDirectory.empty()) {
+        if (bloom::gpu_route_proof_io::readRunNonce(routeProofDirectory, routeNonce) !=
+            bloom::gpu_route_proof_io::RouteProofIoStatus::Ok) {
+            routeProofUnavailable = "no fresh run nonce in " + routeProofDirectory.string();
+        } else {
+            routeProofs =
+                bloom::gpu_route_proof_io::readKnownRouteProofs(routeProofDirectory, routeNonce);
+        }
+    }
+    const auto findRouteProof = [&routeProofs](const std::string& id) {
+        for (const auto& result : routeProofs) {
+            if (result.routeId == id) {
+                return &result;
+            }
+        }
+        return static_cast<const bloom::gpu_route_proof_io::RouteProofLoadResult*>(nullptr);
+    };
     std::size_t passed = 0;
     std::size_t failed = 0;
     std::size_t missing = 0;
     for (const auto& id : requiredCoverageIds()) {
-        // Routes are only absent until their real production harness is integrated; this executor
-        // helper must never be relabelled as a viewer/RAM/export route proof.
+        // Routes are covered only by a genuine proof from their real harness; this executor helper
+        // is never relabelled as a viewer/RAM/export route proof.
         if (id.rfind("route.", 0) == 0) {
-            std::cerr << "MISSING(native-route) " << id << " (owner " << routeOwner(id) << ")\n";
-            ++missing;
+            if (routeProofDirectory.empty()) {
+                std::cerr << "MISSING(native-route) " << id << " (owner " << routeOwner(id)
+                          << ")\n";
+                ++missing;
+                continue;
+            }
+            const auto* proof = findRouteProof(id);
+            if (proof != nullptr && proof->accepted) {
+                std::cout << "PASS(route-proof) " << id << ": nonce " << routeNonce << ", frames "
+                          << proof->proof.verifiedFrames << ", submissions "
+                          << proof->proof.readbackSubmissions << ", payloads "
+                          << proof->proof.payloads << ", bytes " << proof->proof.transferredBytes
+                          << '\n';
+                ++passed;
+            } else {
+                std::cerr << "MISSING(route-proof) " << id << ": "
+                          << (proof == nullptr ? routeProofUnavailable : proof->detail)
+                          << " (owner " << routeOwner(id) << ")\n";
+                ++missing;
+            }
             continue;
         }
         const auto* fixture = findFixture(list, id);
@@ -427,6 +470,7 @@ int main(int argc, char** argv) {
     bool requireDevice = false;
     bool nativeAcceptance = false;
     std::filesystem::path loader;
+    std::filesystem::path routeProofDirectory;
     for (int i = 1; i < argc; ++i) {
         const std::string_view argument{argv[i]};
         if (argument == "--require-device") {
@@ -437,10 +481,12 @@ int main(int argc, char** argv) {
             loader = argv[++i];
         } else if (argument == "--media-fixtures" && i + 1 < argc) {
             bloom::gpu_coverage_video::mediaFixturesDirectory() = argv[++i];
+        } else if (argument == "--route-proof-dir" && i + 1 < argc) {
+            routeProofDirectory = argv[++i];
         }
     }
     if (nativeAcceptance || requireDevice) {
-        return runNativeAcceptance(loader, requireDevice);
+        return runNativeAcceptance(loader, requireDevice, routeProofDirectory);
     }
 
     const auto list = fixtures();

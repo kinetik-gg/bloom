@@ -289,8 +289,12 @@ enum class GpuCoverageContractIssue : std::uint8_t {
     RouteProofMissingProvenance,
     // The proof recorded zero actual native dispatches: a CPU whole-frame fallback, not a GPU pass.
     RouteProofNoNativeDispatch,
-    // The proof recorded more full-frame readbacks than its route policy allows.
+    // The proof recorded no verified frame, so it demonstrates no real per-frame run.
+    RouteProofNoVerifiedFrame,
+    // The proof recorded more final readback submissions/payloads than its route policy allows.
     RouteProofExcessReadback,
+    // A final-render proof omitted the explicit transferred-byte evidence.
+    RouteProofMissingTransferredBytes,
 };
 
 struct GpuCoverageContractDiagnostic final {
@@ -298,137 +302,10 @@ struct GpuCoverageContractDiagnostic final {
     std::string detail;
 };
 
-// The closed set of production harnesses that can prove one render route. A route can only be
-// proven by the harness that owns it; a generic "verified" flag or a bare bool cannot stand in.
-enum class GpuRouteHarnessKind : std::uint8_t {
-    None = 0,
-    ViewerPreview,
-    RamPreview,
-    StillFrameExport,
-    SequenceRangeExport,
-    VideoExport,
-    HeadlessScripted,
-};
-
-[[nodiscard]] constexpr std::string_view
-gpuRouteHarnessRouteId(const GpuRouteHarnessKind harness) noexcept {
-    switch (harness) {
-    case GpuRouteHarnessKind::ViewerPreview:
-        return "route.preview.viewer";
-    case GpuRouteHarnessKind::RamPreview:
-        return "route.preview.ram_preview";
-    case GpuRouteHarnessKind::StillFrameExport:
-        return "route.export.still_frame";
-    case GpuRouteHarnessKind::SequenceRangeExport:
-        return "route.export.sequence_range";
-    case GpuRouteHarnessKind::VideoExport:
-        return "route.export.video";
-    case GpuRouteHarnessKind::HeadlessScripted:
-        return "route.export.headless_scripted";
-    case GpuRouteHarnessKind::None:
-        return {};
-    }
-    return {};
-}
-
-// Preview routes are readback-free by construction; only a final-render route may read the single
-// composited image back at the codec/file boundary.
-[[nodiscard]] constexpr bool gpuRouteAllowsFinalReadback(const std::string_view routeId) noexcept {
-    return routeId == "route.export.still_frame" || routeId == "route.export.sequence_range" ||
-           routeId == "route.export.video" || routeId == "route.export.headless_scripted";
-}
-
-// The typed proof an externally executed production route must publish. Every field is real
-// provenance captured from the genuine run -- the production process identity digest, the actual
-// device ownership epoch, the real native dispatch count, the bounded full-frame readback count,
-// and a captured evidence digest. It is deliberately structured so a bool or a generic fake cannot
-// satisfy it, and no proof is registered in this repository today: every route stays MISSING until
-// its real harness publishes one.
-struct GpuRouteExecutionProof final {
-    std::string routeId;
-    GpuRouteHarnessKind harness = GpuRouteHarnessKind::None;
-    std::string processIdentityDigest;
-    std::string deviceOwnershipEpoch;
-    std::uint64_t nativeDispatches = 0;
-    std::uint64_t fullFrameReadbacks = 0;
-    std::string evidenceDigest;
-};
-
-[[nodiscard]] inline std::vector<GpuCoverageContractDiagnostic>
-validateGpuRouteExecutionProof(const GpuRouteExecutionProof& proof) {
-    std::vector<GpuCoverageContractDiagnostic> issues;
-    if (proof.routeId.empty() || proof.harness == GpuRouteHarnessKind::None) {
-        issues.push_back({GpuCoverageContractIssue::RouteProofEmptyOrGeneric,
-                          "a route proof has no route id or harness kind"});
-        return issues;
-    }
-    bool known = false;
-    for (const auto& route : gpuRenderRouteCoverage()) {
-        known = known || route.id == proof.routeId;
-    }
-    if (!known) {
-        issues.push_back({GpuCoverageContractIssue::RouteProofUnknownRoute,
-                          "route proof names an unknown route '" + proof.routeId + "'"});
-        return issues;
-    }
-    if (gpuRouteHarnessRouteId(proof.harness) != proof.routeId) {
-        issues.push_back(
-            {GpuCoverageContractIssue::RouteProofHarnessMismatch,
-             "route proof for '" + proof.routeId + "' was produced by a different harness"});
-    }
-    if (proof.processIdentityDigest.empty() || proof.deviceOwnershipEpoch.empty() ||
-        proof.evidenceDigest.empty()) {
-        issues.push_back({GpuCoverageContractIssue::RouteProofMissingProvenance,
-                          "route proof for '" + proof.routeId +
-                              "' omits the production identity, device epoch, or evidence digest"});
-    }
-    if (proof.nativeDispatches == 0) {
-        issues.push_back(
-            {GpuCoverageContractIssue::RouteProofNoNativeDispatch,
-             "route proof for '" + proof.routeId +
-                 "' recorded zero native dispatches (a CPU fallback is not a GPU pass)"});
-    }
-    const bool readbackAllowed = gpuRouteAllowsFinalReadback(proof.routeId);
-    if ((!readbackAllowed && proof.fullFrameReadbacks != 0) ||
-        (readbackAllowed && proof.fullFrameReadbacks > 1)) {
-        issues.push_back(
-            {GpuCoverageContractIssue::RouteProofExcessReadback,
-             "route proof for '" + proof.routeId + "' exceeds its full-frame readback policy"});
-    }
-    return issues;
-}
-
-// The sink a real, externally executed route harness publishes into. A proof is retained only when
-// it validates; an empty/generic or fake proof is rejected by name. The gate reads this sink and
-// keeps every route MISSING while it is empty.
-class GpuRouteProofSink final {
-  public:
-    [[nodiscard]] GpuCoverageContractIssue publish(const GpuRouteExecutionProof& proof) {
-        const auto issues = validateGpuRouteExecutionProof(proof);
-        if (!issues.empty()) {
-            return issues.front().issue;
-        }
-        proofs_.push_back(proof);
-        return GpuCoverageContractIssue::None;
-    }
-
-    [[nodiscard]] const std::vector<GpuRouteExecutionProof>& proofs() const noexcept {
-        return proofs_;
-    }
-
-    [[nodiscard]] const GpuRouteExecutionProof*
-    find(const std::string_view routeId) const noexcept {
-        for (const auto& proof : proofs_) {
-            if (proof.routeId == routeId) {
-                return &proof;
-            }
-        }
-        return nullptr;
-    }
-
-  private:
-    std::vector<GpuRouteExecutionProof> proofs_;
-};
+// The typed render-route proof contract (harness kinds, GpuRouteExecutionProof, validation, and the
+// sink) lives in gpu_coverage_route_proof_contract.hpp, which includes this header. It is kept
+// separate so this classifier header stays bounded and consumers that do not need route proofs do
+// not pull them in.
 
 // The narrow, already-approved host-preparation steps. These are not whole-frame pixel-rendering
 // opt-outs; the rendering operation itself remains Required above. Each entry names the accepted

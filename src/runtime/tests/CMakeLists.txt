@@ -429,11 +429,17 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(BLOOM_GPU_COVERAGE_MEDIA_FIXTURES "${PROJECT_BINARY_DIR}/apps/bloom-media-worker/fixtures")
 endif()
 
+# Route-proof handoff. The setup fixture creates a fresh run nonce in this build-owned directory and
+# clears ONLY the six known proof files. Genuine harnesses publish their own proofs; the native gate
+# consumes only proofs whose nonce and schema match, so an absent or stale proof keeps the route RED.
+set(BLOOM_GPU_ROUTE_PROOF_DIR "${PROJECT_BINARY_DIR}/gpu-route-proofs")
+
 add_executable(bloom_runtime_gpu_coverage_contract_test gpu_coverage_contract_tests.cpp)
 target_link_libraries(bloom_runtime_gpu_coverage_contract_test
     PRIVATE bloom_runtime_evaluator bloom_render bloom_media_video OpenEXR::OpenEXR)
 target_include_directories(bloom_runtime_gpu_coverage_contract_test
-    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS}
+            "${PROJECT_SOURCE_DIR}/tests/support")
 # apps/bloom-media-worker is added after src/runtime, so a TARGET guard here would be false at
 # configure time; mirror the video-scene-preparation tests and take the real worker + fixture
 # generator as build-order dependencies on the platform that defines them.
@@ -463,6 +469,7 @@ bloom_add_test(
     NAME bloom.runtime.gpu_coverage_native_acceptance
     COMMAND bloom_runtime_gpu_coverage_contract_test --native-acceptance
             --media-fixtures "${BLOOM_GPU_COVERAGE_MEDIA_FIXTURES}"
+            --route-proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}"
     LABELS runtime native gpu contract
     TIMEOUT 600
 )
@@ -470,14 +477,56 @@ set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
     PROPERTIES SKIP_RETURN_CODE 77)
 
 # The generated video fixtures are owned by the media worker's `media3` setup, exactly like the
-# existing video-scene-preparation tests. Registering the dependency here means the coverage gate
-# runs the real generated media without a caller-supplied directory.
+# existing video-scene-preparation tests. The route-proof setup fixture is separate and always
+# required by the native gate; it publishes no proof, only a fresh nonce.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set_tests_properties(
-        bloom.runtime.gpu_coverage_contract
-        bloom.runtime.gpu_coverage_native_acceptance
-        PROPERTIES FIXTURES_REQUIRED media3)
+    set_tests_properties(bloom.runtime.gpu_coverage_contract PROPERTIES FIXTURES_REQUIRED media3)
+    set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
+        PROPERTIES FIXTURES_REQUIRED "media3;gpu_route_proofs")
+else()
+    set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
+        PROPERTIES FIXTURES_REQUIRED gpu_route_proofs)
 endif()
+
+# Route-proof handoff tests. Both targets include the Qt-free shared codec from tests/support through
+# an explicit PRIVATE include directory; they link no product library, so no dependency is rebuilt.
+# The setup test is the CTest fixture that creates the fresh nonce and clears only the six known
+# proof files. The codec test uses clearly synthetic, unit-only proofs in a private temp directory;
+# none of them is ever published as route acceptance.
+set(BLOOM_GPU_ROUTE_PROOF_TEST_INCLUDES
+    "${PROJECT_SOURCE_DIR}/tests/support"
+    "${PROJECT_SOURCE_DIR}/src/runtime/include"
+    "${PROJECT_SOURCE_DIR}/src/core/include"
+    "${PROJECT_SOURCE_DIR}/src/document/include"
+    "${PROJECT_SOURCE_DIR}/src/render/include")
+
+add_executable(bloom_runtime_gpu_coverage_route_proof_setup_test
+    gpu_coverage_route_proof_setup_tests.cpp)
+target_include_directories(bloom_runtime_gpu_coverage_route_proof_setup_test
+    PRIVATE ${BLOOM_GPU_ROUTE_PROOF_TEST_INCLUDES})
+target_compile_features(bloom_runtime_gpu_coverage_route_proof_setup_test PRIVATE cxx_std_20)
+bloom_enable_warnings(bloom_runtime_gpu_coverage_route_proof_setup_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_coverage_route_proof_setup
+    COMMAND bloom_runtime_gpu_coverage_route_proof_setup_test "${BLOOM_GPU_ROUTE_PROOF_DIR}"
+    LABELS runtime unit contract
+    TIMEOUT 60
+)
+set_tests_properties(bloom.runtime.gpu_coverage_route_proof_setup
+    PROPERTIES FIXTURES_SETUP gpu_route_proofs)
+
+add_executable(bloom_runtime_gpu_coverage_route_proof_io_test
+    gpu_coverage_route_proof_io_tests.cpp)
+target_include_directories(bloom_runtime_gpu_coverage_route_proof_io_test
+    PRIVATE ${BLOOM_GPU_ROUTE_PROOF_TEST_INCLUDES})
+target_compile_features(bloom_runtime_gpu_coverage_route_proof_io_test PRIVATE cxx_std_20)
+bloom_enable_warnings(bloom_runtime_gpu_coverage_route_proof_io_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_coverage_route_proof_io
+    COMMAND bloom_runtime_gpu_coverage_route_proof_io_test
+    LABELS runtime unit contract
+    TIMEOUT 60
+)
 
 # Mutation proof: each way a new pixel operation/effect/feature can be introduced without
 # classification must fail to compile, and each must fail on its expected reason. All probe targets

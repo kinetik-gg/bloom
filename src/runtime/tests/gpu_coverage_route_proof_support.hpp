@@ -1,14 +1,14 @@
 #pragma once
 
 // Private route-proof support for the bounded GPU coverage contract test. It proves the typed
-// route-proof sink rejects every generic or boolean-shaped fake. It never publishes a fabricated
-// "real" proof: no genuine route harness exists in this tree yet, so every route stays MISSING
-// until one does. Blend and affine are now real production builder fixtures, so no standalone
-// executor evidence is reported here any more.
+// route-proof sink rejects every generic, type-invalid, stale-shaped, or policy-violating fake. It
+// never publishes a fabricated "real" proof: no genuine route harness exists in this tree yet, so
+// every route stays MISSING until one does.
 
-#include <bloom/runtime/gpu_coverage_contract.hpp>
+#include <bloom/runtime/gpu_coverage_route_proof_contract.hpp>
 
 #include <iostream>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -16,18 +16,43 @@
 
 namespace bloom::gpu_coverage_route_proof {
 
+// Clearly synthetic, canonical 64-character lowercase SHA-256 digests, used only as unit data.
+inline constexpr std::string_view kUnitFrameDigest =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+inline constexpr std::string_view kUnitEvidenceDigest =
+    "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+
+// A shape-valid PREVIEW proof used only as a mutation base: every field below is synthetic unit
+// data, never route acceptance. Each negative case perturbs exactly one field so the expected
+// rejection reason is unambiguous.
 [[nodiscard]] inline bloom::runtime::GpuRouteExecutionProof representativeRouteProof() {
     return bloom::runtime::GpuRouteExecutionProof{
         .routeId = "route.preview.viewer",
         .harness = bloom::runtime::GpuRouteHarnessKind::ViewerPreview,
-        .processIdentityDigest = "process-digest",
-        .deviceOwnershipEpoch = "device-epoch",
+        .processIdentityDigest = std::string{kUnitFrameDigest},
+        .deviceOwnershipEpoch = "12345",
         .nativeDispatches = 4,
-        .fullFrameReadbacks = 0,
-        .evidenceDigest = "evidence-digest"};
+        .verifiedFrames = 1,
+        .readbackSubmissions = 0,
+        .payloads = 0,
+        .transferredBytes = 0,
+        .evidenceDigest = std::string{kUnitEvidenceDigest}};
 }
 
-// Proves the route sink rejects every generic/boolean-shaped fake and never retains one.
+// A shape-valid combined-export base: one verified frame, one final submission, two payloads.
+[[nodiscard]] inline bloom::runtime::GpuRouteExecutionProof representativeExportProof() {
+    auto proof = representativeRouteProof();
+    proof.routeId = "route.export.video";
+    proof.harness = bloom::runtime::GpuRouteHarnessKind::VideoExport;
+    proof.readbackSubmissions = 1;
+    proof.payloads = 2;
+    proof.transferredBytes = 4096;
+    return proof;
+}
+
+// Proves the route sink rejects every generic/boolean-shaped, type-invalid, or policy-violating
+// fake and never retains one. A two-payload combined export is accepted by the validator's
+// arithmetic but is never published here; this helper only asserts rejections.
 inline void routeProofSinkRejectsFakes(std::vector<std::string>& failures) {
     using bloom::runtime::GpuCoverageContractIssue;
     bloom::runtime::GpuRouteProofSink sink;
@@ -53,18 +78,70 @@ inline void routeProofSinkRejectsFakes(std::vector<std::string>& failures) {
     noProvenance.evidenceDigest.clear();
     expectReject(std::move(noProvenance), GpuCoverageContractIssue::RouteProofMissingProvenance,
                  "missing evidence digest");
+    auto shortDigest = representativeRouteProof();
+    shortDigest.processIdentityDigest = "not-a-sha256";
+    expectReject(std::move(shortDigest), GpuCoverageContractIssue::RouteProofMissingProvenance,
+                 "non-canonical frame digest");
+    auto uppercaseDigest = representativeRouteProof();
+    uppercaseDigest.evidenceDigest =
+        "FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210";
+    expectReject(std::move(uppercaseDigest), GpuCoverageContractIssue::RouteProofMissingProvenance,
+                 "uppercase evidence digest");
+    auto zeroEpoch = representativeRouteProof();
+    zeroEpoch.deviceOwnershipEpoch = "0000";
+    expectReject(std::move(zeroEpoch), GpuCoverageContractIssue::RouteProofMissingProvenance,
+                 "zero device epoch");
+    auto alphaEpoch = representativeRouteProof();
+    alphaEpoch.deviceOwnershipEpoch = "abc";
+    expectReject(std::move(alphaEpoch), GpuCoverageContractIssue::RouteProofMissingProvenance,
+                 "non-decimal device epoch");
+    auto negativeEpoch = representativeRouteProof();
+    negativeEpoch.deviceOwnershipEpoch = "-1";
+    expectReject(std::move(negativeEpoch), GpuCoverageContractIssue::RouteProofMissingProvenance,
+                 "negative device epoch");
     auto noDispatch = representativeRouteProof();
     noDispatch.nativeDispatches = 0;
     expectReject(std::move(noDispatch), GpuCoverageContractIssue::RouteProofNoNativeDispatch,
-                 "zero native dispatch");
-    auto excessReadback = representativeRouteProof();
-    excessReadback.fullFrameReadbacks = 1;
-    expectReject(std::move(excessReadback), GpuCoverageContractIssue::RouteProofExcessReadback,
-                 "preview full-frame readback");
+                 "zero cold native dispatch");
+    auto noFrame = representativeRouteProof();
+    noFrame.verifiedFrames = 0;
+    expectReject(std::move(noFrame), GpuCoverageContractIssue::RouteProofNoVerifiedFrame,
+                 "no verified frame");
+    auto previewReadback = representativeRouteProof();
+    previewReadback.readbackSubmissions = 1;
+    expectReject(std::move(previewReadback), GpuCoverageContractIssue::RouteProofExcessReadback,
+                 "preview readback submission");
+    auto tooManyPayloads = representativeExportProof();
+    tooManyPayloads.payloads = 3; // > two payloads per verified frame
+    expectReject(std::move(tooManyPayloads), GpuCoverageContractIssue::RouteProofExcessReadback,
+                 "export three payloads for one frame");
+    auto tooManySubmissions = representativeExportProof();
+    tooManySubmissions.readbackSubmissions = 2; // > one submission per verified frame
+    expectReject(std::move(tooManySubmissions), GpuCoverageContractIssue::RouteProofExcessReadback,
+                 "export two submissions for one frame");
+    auto fewerPayloads = representativeExportProof();
+    fewerPayloads.verifiedFrames = 2;
+    fewerPayloads.readbackSubmissions = 2;
+    fewerPayloads.payloads = 1; // fewer payloads than submissions is impossible
+    expectReject(std::move(fewerPayloads), GpuCoverageContractIssue::RouteProofExcessReadback,
+                 "export fewer payloads than submissions");
+    auto overflowPayloads = representativeExportProof();
+    overflowPayloads.payloads = std::numeric_limits<std::uint64_t>::max();
+    expectReject(std::move(overflowPayloads), GpuCoverageContractIssue::RouteProofExcessReadback,
+                 "export payloads at UINT64_MAX");
+    auto overflowSubmissions = representativeExportProof();
+    overflowSubmissions.readbackSubmissions = std::numeric_limits<std::uint64_t>::max();
+    expectReject(std::move(overflowSubmissions), GpuCoverageContractIssue::RouteProofExcessReadback,
+                 "export submissions at UINT64_MAX");
+    auto noBytes = representativeExportProof();
+    noBytes.transferredBytes = 0;
+    expectReject(std::move(noBytes), GpuCoverageContractIssue::RouteProofMissingTransferredBytes,
+                 "export without transferred bytes");
     if (!sink.proofs().empty()) {
         failures.push_back("route-proof sink retained a rejected proof");
     }
-    std::cout << "NEGATIVE route-proof: six generic/fake proofs rejected; sink retains none\n";
+    std::cout << "NEGATIVE route-proof: eighteen generic/fake/type-invalid/policy proofs rejected; "
+                 "sink retains none\n";
 }
 
 } // namespace bloom::gpu_coverage_route_proof
