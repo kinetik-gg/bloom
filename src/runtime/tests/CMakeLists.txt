@@ -1122,3 +1122,29 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
     set_tests_properties(bloom.runtime.gpu_ocio_file_transform
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+# Native acceptance for the exact runtime::ViewAdjust post-display exposure/gamma in the production
+# OCIO DisplayPacking wrapper: real display programs for >=2 display/view pairs with non-neutral
+# boundary adjustments, executed on the device and compared against the unchanged CPU display
+# processor + ViewAdjust::fromEncoded oracle (<=1 RGBA8 code, exact alpha), with warm program reuse
+# and process-command isolation. Requires the Vulkan backend and the pinned tools.
+if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_gpu_ocio_view_adjust_test
+        gpu_ocio_view_adjust_native_tests.cpp)
+    target_link_libraries(bloom_runtime_gpu_ocio_view_adjust_test
+        PRIVATE bloom_runtime_evaluator bloom_render)
+    if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
+        target_compile_definitions(bloom_runtime_gpu_ocio_view_adjust_test PRIVATE
+            "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+    endif()
+    bloom_enable_warnings(bloom_runtime_gpu_ocio_view_adjust_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_ocio_view_adjust_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_ocio_view_adjust
+        COMMAND bloom_runtime_gpu_ocio_view_adjust_test
+        LABELS runtime unit gpu color
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.runtime.gpu_ocio_view_adjust
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()

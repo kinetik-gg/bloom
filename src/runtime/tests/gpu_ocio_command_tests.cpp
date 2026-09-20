@@ -38,6 +38,7 @@ using bloom::render::OcioGpuProgramStage;
 using bloom::runtime::GpuOcioCommandError;
 using bloom::runtime::GpuOcioCommandGeometry;
 using bloom::runtime::GpuOcioCommandIdentityParts;
+using bloom::runtime::GpuOcioCommandSourceBinding;
 using bloom::runtime::GpuOcioCompileOptions;
 using bloom::runtime::GpuOcioOutputEncoding;
 using bloom::runtime::GpuOcioPreparationError;
@@ -46,6 +47,7 @@ using bloom::runtime::GpuOcioTransformKind;
 using bloom::runtime::GpuOcioTransformSpec;
 using bloom::runtime::GpuOcioWrapperError;
 using bloom::runtime::PreparedGpuOcioCommand;
+using bloom::runtime::ViewAdjust;
 
 class Expectations final {
   public:
@@ -90,6 +92,14 @@ class Expectations final {
     return artifact;
 }
 
+[[nodiscard]] GpuOcioCommandSourceBinding syntheticBinding(const ViewAdjust adjust = {}) {
+    GpuOcioCommandSourceBinding binding;
+    binding.wrapperVersion = "test-sampling-v1";
+    binding.wrapperSourceDigest = digestOf("test-wrapper-source");
+    binding.viewAdjust = adjust;
+    return binding;
+}
+
 [[nodiscard]] bool contains(const std::string& text, const std::string_view needle) {
     return text.find(needle) != std::string::npos;
 }
@@ -132,6 +142,28 @@ void testWrapper(Expectations& expectations) {
                         "the display wrapper packs the RGBA8 word");
     expectations.expect(!contains(display.source, "imageStore(bloom_ocio_output, c, p)"),
                         "the display wrapper keeps its distinct alpha-zero display semantics");
+    expectations.expect(!contains(display.source, "bloom_ocio_view_adjust"),
+                        "a neutral display wrapper emits no adjustment code");
+
+    const ViewAdjust adjust{.exposure = 1.5, .gamma = 0.9};
+    const auto adjusted = bloom::runtime::buildGpuOcioWrapperGlsl(
+        syntheticProgram(OcioGpuProgramStage::DisplayPacking), adjust);
+    expectations.expect(adjusted.succeeded(), "an adjusted display wrapper builds");
+    expectations.expect(contains(adjusted.source, "bloom_ocio_view_adjust(t.r)"),
+                        "the adjusted display wrapper applies the post-display adjustment");
+    expectations.expect(contains(adjusted.source, "exp2(exposure)"),
+                        "the adjustment applies exposure on the linear display light");
+    expectations.expect(adjusted.sourceDigest != display.sourceDigest,
+                        "the adjustment changes the wrapper source digest");
+    expectations.expect(bloom::runtime::buildGpuOcioWrapperGlsl(
+                            syntheticProgram(OcioGpuProgramStage::ProcessEffect), adjust)
+                                .error == GpuOcioWrapperError::UnsupportedViewAdjust,
+                        "a non-neutral adjustment on the ProcessEffect wrapper is refused");
+    expectations.expect(bloom::runtime::buildGpuOcioWrapperGlsl(
+                            syntheticProgram(OcioGpuProgramStage::DisplayPacking),
+                            ViewAdjust{.exposure = 0.0, .gamma = 0.0})
+                                .error == GpuOcioWrapperError::InvalidViewAdjust,
+                        "an out-of-domain adjustment is refused by the wrapper");
 
     auto badFunction = syntheticProgram(OcioGpuProgramStage::ProcessEffect);
     badFunction.functionName = "bad-name";
@@ -163,6 +195,8 @@ void testIdentity(Expectations& expectations) {
         .uniformSnapshot = uniforms,
         .artifactDigest = artifact.spirvDigest,
         .wrapperVersion = "test-sampling-v1",
+        .wrapperSourceDigest = digestOf("test-wrapper-source"),
+        .viewAdjust = ViewAdjust{},
     };
     const auto identity = bloom::runtime::computeGpuOcioCommandIdentity(base);
     expectations.expect(identity != Sha256Digest{}, "the identity is non-empty");
@@ -187,14 +221,25 @@ void testIdentity(Expectations& expectations) {
     other.artifactDigest = program.resourceDigest;
     expectations.expect(bloom::runtime::computeGpuOcioCommandIdentity(other) != identity,
                         "the artifact digest changes the identity");
+    other = base;
+    other.wrapperSourceDigest = digestOf("other-wrapper-source");
+    expectations.expect(bloom::runtime::computeGpuOcioCommandIdentity(other) != identity,
+                        "the wrapper source digest changes the identity");
+    other = base;
+    other.viewAdjust = ViewAdjust{.exposure = 1.0, .gamma = 1.0};
+    expectations.expect(bloom::runtime::computeGpuOcioCommandIdentity(other) != identity,
+                        "the view adjustment changes the identity");
+    other = base;
+    other.viewAdjust = ViewAdjust{.exposure = 0.0, .gamma = 2.0};
+    expectations.expect(bloom::runtime::computeGpuOcioCommandIdentity(other) != identity,
+                        "the view gamma changes the identity");
 }
 
 void testPreparedCommand(Expectations& expectations) {
-    constexpr std::string_view kWrapper = "test-sampling-v1";
     const GpuOcioCommandGeometry geometry{4, 3};
     auto effect =
         PreparedGpuOcioCommand::prepare(syntheticProgram(OcioGpuProgramStage::ProcessEffect),
-                                        syntheticArtifact(), geometry, kWrapper);
+                                        syntheticArtifact(), geometry, syntheticBinding());
     expectations.expect(effect.hasValue(), "an effect command prepares");
     if (effect) {
         expectations.expect(effect.command->encoding() == GpuOcioOutputEncoding::FinalRgba32f,
@@ -208,47 +253,73 @@ void testPreparedCommand(Expectations& expectations) {
     }
     auto display =
         PreparedGpuOcioCommand::prepare(syntheticProgram(OcioGpuProgramStage::DisplayPacking),
-                                        syntheticArtifact(), geometry, kWrapper);
+                                        syntheticArtifact(), geometry, syntheticBinding());
     expectations.expect(display.hasValue(), "a display command prepares");
     if (display && effect) {
         expectations.expect(display.command->encoding() == GpuOcioOutputEncoding::DisplayRgba8,
                             "the display command is DisplayRgba8");
         expectations.expect(display.command->identity() != effect.command->identity(),
                             "FinalRgba32f and DisplayRgba8 identities stay distinct");
+        expectations.expect(display.command->viewAdjust().neutral(),
+                            "a neutral display command carries a neutral adjustment");
+        expectations.expect(effect.command->viewAdjust().neutral(),
+                            "a process command carries a neutral adjustment");
     }
-
+    const ViewAdjust adjusted{.exposure = 1.25, .gamma = 0.8};
+    const auto adjustedDisplay =
+        PreparedGpuOcioCommand::prepare(syntheticProgram(OcioGpuProgramStage::DisplayPacking),
+                                        syntheticArtifact(), geometry, syntheticBinding(adjusted));
+    expectations.expect(adjustedDisplay.hasValue() &&
+                            adjustedDisplay.command->viewAdjust() == adjusted,
+                        "the display command exposes its exact bound adjustment");
+    if (adjustedDisplay && display) {
+        expectations.expect(adjustedDisplay.command->identity() != display.command->identity(),
+                            "a changed adjustment changes the display command identity");
+    }
     expectations.expect(
         PreparedGpuOcioCommand::prepare(syntheticProgram(OcioGpuProgramStage::ProcessEffect),
-                                        syntheticArtifact(), GpuOcioCommandGeometry{0, 3}, kWrapper)
-                .error == GpuOcioCommandError::InvalidGeometry,
-        "an empty geometry is refused");
+                                        syntheticArtifact(), geometry, syntheticBinding(adjusted))
+                .error == GpuOcioCommandError::UnsupportedViewAdjust,
+        "a non-neutral adjustment on the ProcessEffect arm is refused");
+    expectations.expect(
+        PreparedGpuOcioCommand::prepare(syntheticProgram(OcioGpuProgramStage::DisplayPacking),
+                                        syntheticArtifact(), geometry,
+                                        syntheticBinding(ViewAdjust{.exposure = 0.0, .gamma = 0.0}))
+                .error == GpuOcioCommandError::InvalidViewAdjust,
+        "an out-of-domain adjustment is refused");
+
+    expectations.expect(PreparedGpuOcioCommand::prepare(
+                            syntheticProgram(OcioGpuProgramStage::ProcessEffect),
+                            syntheticArtifact(), GpuOcioCommandGeometry{0, 3}, syntheticBinding())
+                                .error == GpuOcioCommandError::InvalidGeometry,
+                        "an empty geometry is refused");
     auto badDigest = syntheticArtifact();
     badDigest.spirvDigest = digestOf("wrong");
     expectations.expect(
         PreparedGpuOcioCommand::prepare(syntheticProgram(OcioGpuProgramStage::ProcessEffect),
-                                        badDigest, geometry, kWrapper)
+                                        badDigest, geometry, syntheticBinding())
                 .error == GpuOcioCommandError::ArtifactDigestMismatch,
         "a mismatched artifact digest is refused");
     auto emptyArtifact = syntheticArtifact();
     emptyArtifact.spirv.clear();
     expectations.expect(
         PreparedGpuOcioCommand::prepare(syntheticProgram(OcioGpuProgramStage::ProcessEffect),
-                                        emptyArtifact, geometry, kWrapper)
+                                        emptyArtifact, geometry, syntheticBinding())
                 .error == GpuOcioCommandError::InvalidArtifact,
         "an empty artifact is refused");
     auto invalidProgram = syntheticProgram(OcioGpuProgramStage::ProcessEffect);
     invalidProgram.semanticsId.clear();
-    expectations.expect(
-        PreparedGpuOcioCommand::prepare(invalidProgram, syntheticArtifact(), geometry, kWrapper)
-                .error == GpuOcioCommandError::InvalidProgram,
-        "an invalid descriptor is refused");
+    expectations.expect(PreparedGpuOcioCommand::prepare(invalidProgram, syntheticArtifact(),
+                                                        geometry, syntheticBinding())
+                                .error == GpuOcioCommandError::InvalidProgram,
+                        "an invalid descriptor is refused");
     auto mismatchedUniforms = syntheticProgram(OcioGpuProgramStage::ProcessEffect);
     mismatchedUniforms.uniformBufferSize = 16;
     mismatchedUniforms.uniformBufferData.assign(4, std::byte{0});
-    expectations.expect(
-        PreparedGpuOcioCommand::prepare(mismatchedUniforms, syntheticArtifact(), geometry, kWrapper)
-                .error == GpuOcioCommandError::UniformSnapshotMismatch,
-        "a mismatched uniform snapshot is refused");
+    expectations.expect(PreparedGpuOcioCommand::prepare(mismatchedUniforms, syntheticArtifact(),
+                                                        geometry, syntheticBinding())
+                                .error == GpuOcioCommandError::UniformSnapshotMismatch,
+                        "a mismatched uniform snapshot is refused");
 }
 
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR

@@ -68,6 +68,8 @@ void appendF64(std::vector<std::byte>& bytes, const double value) {
     }
     appendText(bytes, transform.processSpaceId);
     appendText(bytes, transform.workingSpaceId);
+    appendF64(bytes, transform.viewAdjust.exposure);
+    appendF64(bytes, transform.viewAdjust.gamma);
     appendU64(bytes, geometry.width);
     appendU64(bytes, geometry.height);
     const auto revision = config.expectedRevision().bytes();
@@ -203,6 +205,14 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
     if (transform.kind == GpuOcioTransformKind::FileTransform && transform.lutFile == nullptr) {
         return failure(GpuOcioPreparationError::InvalidRequest, "the LUT resource is missing");
     }
+    if (!transform.viewAdjust.valid()) {
+        return failure(GpuOcioPreparationError::InvalidRequest,
+                       "the view adjustment is non-finite or out of domain");
+    }
+    if (transform.kind != GpuOcioTransformKind::Display && !transform.viewAdjust.neutral()) {
+        return failure(GpuOcioPreparationError::InvalidRequest,
+                       "a non-neutral view adjustment is only valid for the display kind");
+    }
     if (cancel && cancel()) {
         return failure(GpuOcioPreparationError::CompileCancelled, "cancelled before extraction");
     }
@@ -252,7 +262,7 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
     if (!program.has_value()) {
         return failure(GpuOcioPreparationError::ExtractionFailed, "the extracted program is empty");
     }
-    const auto wrapper = buildGpuOcioWrapperGlsl(*program);
+    const auto wrapper = buildGpuOcioWrapperGlsl(*program, transform.viewAdjust);
     if (!wrapper.succeeded()) {
         return failure(GpuOcioPreparationError::WrapperFailed,
                        std::string(gpuOcioWrapperErrorName(wrapper.error)));
@@ -295,8 +305,11 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
         ++impl_->counters.compiles;
     }
 
-    auto commandResult = PreparedGpuOcioCommand::prepare(std::move(*program), *compiled.artifact,
-                                                         geometry, wrapper.samplingVersion);
+    auto commandResult = PreparedGpuOcioCommand::prepare(
+        std::move(*program), *compiled.artifact, geometry,
+        GpuOcioCommandSourceBinding{.wrapperVersion = wrapper.samplingVersion,
+                                    .wrapperSourceDigest = wrapper.sourceDigest,
+                                    .viewAdjust = transform.viewAdjust});
     if (!commandResult.hasValue()) {
         return failure(GpuOcioPreparationError::CommandInvalid,
                        std::string(gpuOcioCommandErrorName(commandResult.error)));

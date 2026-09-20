@@ -2,6 +2,7 @@
 
 #include <bloom/color/ocio_gpu_program.hpp>
 
+#include <charconv>
 #include <span>
 #include <sstream>
 #include <string>
@@ -72,11 +73,50 @@ std::string_view gpuOcioWrapperErrorName(const GpuOcioWrapperError error) noexce
         return "unsupported-descriptor-set";
     case GpuOcioWrapperError::AllocationFailure:
         return "allocation-failure";
+    case GpuOcioWrapperError::InvalidViewAdjust:
+        return "invalid-view-adjust";
+    case GpuOcioWrapperError::UnsupportedViewAdjust:
+        return "unsupported-view-adjust";
     }
     return "unknown";
 }
 
-GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& program) noexcept {
+// Exact GLSL replica of runtime::ViewAdjust::fromEncoded (the qualified-path post-display
+// exposure/gamma from view_adjust.cpp): exposure acts on the decoded linear display light, gamma
+// acts on the re-encoded value, and the result is clamped before the byte quantizer. The CPU
+// reference is unchanged; the shader evaluates it in binary32 against the OCIO display output.
+[[nodiscard]] std::string viewAdjustGlsl(const ViewAdjust& adjust) {
+    const auto literal = [](const double value) {
+        char buffer[40];
+        const auto result =
+            std::to_chars(buffer, buffer + sizeof(buffer), value, std::chars_format::general);
+        return std::string(buffer, static_cast<std::size_t>(result.ptr - buffer));
+    };
+    std::string glsl =
+        "\nfloat bloom_ocio_view_adjust(float value)\n{\n"
+        "  const float exposure = " +
+        literal(adjust.exposure) +
+        ";\n"
+        "  const float gamma = " +
+        literal(adjust.gamma) +
+        ";\n"
+        "  if (exposure == 0.0) {\n"
+        "    float clamped = clamp(value, 0.0, 1.0);\n"
+        "    return (gamma == 1.0) ? clamped : pow(clamped, 1.0 / gamma);\n"
+        "  }\n"
+        "  float linear = (value <= 0.04045) ? value / 12.92 : pow((value + 0.055) / 1.055, "
+        "2.4);\n"
+        "  float lit = linear * exp2(exposure);\n"
+        "  float encoded = (lit <= 0.0031308) ? 12.92 * lit : 1.055 * pow(lit, 1.0 / 2.4) - "
+        "0.055;\n"
+        "  float clamped = clamp(encoded, 0.0, 1.0);\n"
+        "  return (gamma == 1.0) ? clamped : pow(clamped, 1.0 / gamma);\n"
+        "}\n";
+    return glsl;
+}
+
+GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& program,
+                                             const ViewAdjust viewAdjust) noexcept {
     try {
         if (program.shaderText.empty()) {
             return failure(GpuOcioWrapperError::InvalidProgram);
@@ -87,11 +127,18 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
         if (program.descriptorSetIndex != 0) {
             return failure(GpuOcioWrapperError::UnsupportedDescriptorSet);
         }
+        if (!viewAdjust.valid()) {
+            return failure(GpuOcioWrapperError::InvalidViewAdjust);
+        }
         const bool display = program.stage == render::OcioGpuProgramStage::DisplayPacking;
         const bool effect = program.stage == render::OcioGpuProgramStage::ProcessEffect;
         if (!display && !effect) {
             return failure(GpuOcioWrapperError::UnsupportedStage);
         }
+        if (effect && !viewAdjust.neutral()) {
+            return failure(GpuOcioWrapperError::UnsupportedViewAdjust);
+        }
+        const bool adjusted = display && !viewAdjust.neutral();
 
         // Shared versioned per-sampler precise-sampling adapter. OCIO's generated body samples LUT
         // resources with the built-in texture(), whose hardware filtering is not full precision;
@@ -125,6 +172,9 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
         if (display) {
             out << kQuantizerGlsl;
         }
+        if (adjusted) {
+            out << viewAdjustGlsl(viewAdjust);
+        }
         out << "void main() {\n";
         out << "  uint index = gl_GlobalInvocationID.x;\n";
         out << "  if (index >= bloom_ocio_push.pixelCount) { return; }\n";
@@ -146,9 +196,17 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
         out << "  if (any(isnan(t.rgb)) || any(isinf(t.rgb))) { bloom_ocio_status.flags[0] = 1u; "
                "return; }\n";
         if (display) {
-            out << "  uint r = bloom_ocio_quantize(t.r);\n";
-            out << "  uint g = bloom_ocio_quantize(t.g);\n";
-            out << "  uint b = bloom_ocio_quantize(t.b);\n";
+            if (adjusted) {
+                out << "  vec3 adjusted = vec3(bloom_ocio_view_adjust(t.r), "
+                       "bloom_ocio_view_adjust(t.g), bloom_ocio_view_adjust(t.b));\n";
+                out << "  uint r = bloom_ocio_quantize(adjusted.r);\n";
+                out << "  uint g = bloom_ocio_quantize(adjusted.g);\n";
+                out << "  uint b = bloom_ocio_quantize(adjusted.b);\n";
+            } else {
+                out << "  uint r = bloom_ocio_quantize(t.r);\n";
+                out << "  uint g = bloom_ocio_quantize(t.g);\n";
+                out << "  uint b = bloom_ocio_quantize(t.b);\n";
+            }
             out << "  uint qa = bloom_ocio_quantize(a);\n";
             out << "  bloom_ocio_output.words[index] = r | (g << 8) | (b << 16) | (qa << 24);\n";
         } else {
