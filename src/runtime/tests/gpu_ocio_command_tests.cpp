@@ -5,6 +5,7 @@
 // still run.
 
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_gpu_program.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/render/gpu_shader_artifact.hpp>
 #include <bloom/render/ocio_gpu_program.hpp>
@@ -12,13 +13,18 @@
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/runtime/gpu_ocio_wrapper.hpp>
 
+#include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <latch>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -107,7 +113,12 @@ void testWrapper(Expectations& expectations) {
                         "the wrapper raises the status word on a non-finite value");
     expectations.expect(contains(effect.source, "bloom_ocio_transform(vec4(s, 1.0))"),
                         "the wrapper calls the extracted OCIO function on straight RGB");
+    expectations.expect(contains(effect.source, "if (a == 0.0) { imageStore(bloom_ocio_output, c, "
+                                                "p); return; }"),
+                        "the effect wrapper copies an alpha-zero pixel through unchanged");
     expectations.expect(effect.entryPoint == "main", "the entry point is main");
+    expectations.expect(effect.samplingVersion == bloom::color::kOcioGpuPreciseSamplingVersion,
+                        "the wrapper records the shared precise-sampling version");
     expectations.expect(effect.sourceDigest == digestOf(effect.source),
                         "the wrapper source digest is exact");
 
@@ -119,6 +130,8 @@ void testWrapper(Expectations& expectations) {
     expectations.expect(contains(display.source, "words[index] = r | (g << 8) | (b << 16) | "
                                                  "(qa << 24);"),
                         "the display wrapper packs the RGBA8 word");
+    expectations.expect(!contains(display.source, "imageStore(bloom_ocio_output, c, p)"),
+                        "the display wrapper keeps its distinct alpha-zero display semantics");
 
     auto badFunction = syntheticProgram(OcioGpuProgramStage::ProcessEffect);
     badFunction.functionName = "bad-name";
@@ -149,6 +162,7 @@ void testIdentity(Expectations& expectations) {
         .programShaderTextDigest = program.shaderTextDigest,
         .uniformSnapshot = uniforms,
         .artifactDigest = artifact.spirvDigest,
+        .wrapperVersion = "test-sampling-v1",
     };
     const auto identity = bloom::runtime::computeGpuOcioCommandIdentity(base);
     expectations.expect(identity != Sha256Digest{}, "the identity is non-empty");
@@ -176,9 +190,11 @@ void testIdentity(Expectations& expectations) {
 }
 
 void testPreparedCommand(Expectations& expectations) {
+    constexpr std::string_view kWrapper = "test-sampling-v1";
     const GpuOcioCommandGeometry geometry{4, 3};
-    auto effect = PreparedGpuOcioCommand::prepare(
-        syntheticProgram(OcioGpuProgramStage::ProcessEffect), syntheticArtifact(), geometry);
+    auto effect =
+        PreparedGpuOcioCommand::prepare(syntheticProgram(OcioGpuProgramStage::ProcessEffect),
+                                        syntheticArtifact(), geometry, kWrapper);
     expectations.expect(effect.hasValue(), "an effect command prepares");
     if (effect) {
         expectations.expect(effect.command->encoding() == GpuOcioOutputEncoding::FinalRgba32f,
@@ -190,8 +206,9 @@ void testPreparedCommand(Expectations& expectations) {
         expectations.expect(effect.command->retainedBytes() >= 4,
                             "the prepared command accounts its retained bytes");
     }
-    auto display = PreparedGpuOcioCommand::prepare(
-        syntheticProgram(OcioGpuProgramStage::DisplayPacking), syntheticArtifact(), geometry);
+    auto display =
+        PreparedGpuOcioCommand::prepare(syntheticProgram(OcioGpuProgramStage::DisplayPacking),
+                                        syntheticArtifact(), geometry, kWrapper);
     expectations.expect(display.hasValue(), "a display command prepares");
     if (display && effect) {
         expectations.expect(display.command->encoding() == GpuOcioOutputEncoding::DisplayRgba8,
@@ -202,35 +219,35 @@ void testPreparedCommand(Expectations& expectations) {
 
     expectations.expect(
         PreparedGpuOcioCommand::prepare(syntheticProgram(OcioGpuProgramStage::ProcessEffect),
-                                        syntheticArtifact(), GpuOcioCommandGeometry{0, 3})
+                                        syntheticArtifact(), GpuOcioCommandGeometry{0, 3}, kWrapper)
                 .error == GpuOcioCommandError::InvalidGeometry,
         "an empty geometry is refused");
     auto badDigest = syntheticArtifact();
     badDigest.spirvDigest = digestOf("wrong");
     expectations.expect(
         PreparedGpuOcioCommand::prepare(syntheticProgram(OcioGpuProgramStage::ProcessEffect),
-                                        badDigest, geometry)
+                                        badDigest, geometry, kWrapper)
                 .error == GpuOcioCommandError::ArtifactDigestMismatch,
         "a mismatched artifact digest is refused");
     auto emptyArtifact = syntheticArtifact();
     emptyArtifact.spirv.clear();
     expectations.expect(
         PreparedGpuOcioCommand::prepare(syntheticProgram(OcioGpuProgramStage::ProcessEffect),
-                                        emptyArtifact, geometry)
+                                        emptyArtifact, geometry, kWrapper)
                 .error == GpuOcioCommandError::InvalidArtifact,
         "an empty artifact is refused");
     auto invalidProgram = syntheticProgram(OcioGpuProgramStage::ProcessEffect);
     invalidProgram.semanticsId.clear();
     expectations.expect(
-        PreparedGpuOcioCommand::prepare(invalidProgram, syntheticArtifact(), geometry).error ==
-            GpuOcioCommandError::InvalidProgram,
+        PreparedGpuOcioCommand::prepare(invalidProgram, syntheticArtifact(), geometry, kWrapper)
+                .error == GpuOcioCommandError::InvalidProgram,
         "an invalid descriptor is refused");
     auto mismatchedUniforms = syntheticProgram(OcioGpuProgramStage::ProcessEffect);
     mismatchedUniforms.uniformBufferSize = 16;
     mismatchedUniforms.uniformBufferData.assign(4, std::byte{0});
     expectations.expect(
-        PreparedGpuOcioCommand::prepare(mismatchedUniforms, syntheticArtifact(), geometry).error ==
-            GpuOcioCommandError::UniformSnapshotMismatch,
+        PreparedGpuOcioCommand::prepare(mismatchedUniforms, syntheticArtifact(), geometry, kWrapper)
+                .error == GpuOcioCommandError::UniformSnapshotMismatch,
         "a mismatched uniform snapshot is refused");
 }
 
@@ -316,6 +333,100 @@ void testPreparer(Expectations& expectations,
     const auto boundedCounters = bounded.counters();
     expectations.expect(boundedCounters.cacheEntries == 1 && boundedCounters.evictions == 1,
                         "the preparation cache is bounded and evicts");
+
+    // Zero/oversized limit and zero-deadline arguments are refused consistently, before any cache
+    // hit can bypass them.
+    auto zeroSource = options;
+    zeroSource.maxSourceBytes = 0;
+    expectations.expect(preparer.prepare(cstConfig, cst, geometry, zeroSource).error ==
+                            GpuOcioPreparationError::InvalidRequest,
+                        "a zero source-byte limit is refused");
+    auto zeroSpirv = options;
+    zeroSpirv.maxSpirvBytes = 0;
+    expectations.expect(preparer.prepare(cstConfig, cst, geometry, zeroSpirv).error ==
+                            GpuOcioPreparationError::InvalidRequest,
+                        "a zero SPIR-V limit is refused");
+    auto zeroDeadline = options;
+    zeroDeadline.deadline = std::chrono::milliseconds::zero();
+    expectations.expect(preparer.prepare(cstConfig, cst, geometry, zeroDeadline).error ==
+                            GpuOcioPreparationError::InvalidRequest,
+                        "a non-positive deadline is refused");
+    auto raised = options;
+    raised.maxSpirvBytes = 128ULL * 1024ULL * 1024ULL;
+    expectations.expect(preparer.prepare(cstConfig, cst, geometry, raised).error ==
+                            GpuOcioPreparationError::InvalidRequest,
+                        "a limit above the hard ceiling is refused");
+
+    // Warm stricter limit: a lower per-call SPIR-V ceiling is a distinct key, so it must NOT reuse
+    // the cached artifact; the compile is re-run and fails its own ceiling.
+    const std::size_t artifactBytes = first.command->artifact().spirv.size();
+    const std::uint64_t bytesBeforeStrict = preparer.counters().cacheBytes;
+    auto strict = options;
+    strict.maxSpirvBytes = artifactBytes > 0 ? artifactBytes - 1 : 0;
+    const auto strictResult = preparer.prepare(cstConfig, cst, geometry, strict);
+    expectations.expect(strictResult.error == GpuOcioPreparationError::CompileFailed &&
+                            strictResult.command == nullptr,
+                        "a stricter SPIR-V limit never reuses the larger cached artifact");
+    expectations.expect(preparer.counters().cacheBytes == bytesBeforeStrict,
+                        "a refused stricter request retains no bytes");
+    expectations.expect(preparer.prepare(cstConfig, cst, geometry, options).hasValue(),
+                        "the original cached command survives a refused stricter request");
+
+    // Cancellation before publication retains nothing.
+    GpuOcioProgramPreparer cancelled;
+    const GpuOcioCommandGeometry cancelGeometry{7, 4};
+    expectations.expect(
+        cancelled.prepare(cstConfig, cst, cancelGeometry, options, []() { return true; }).error ==
+            GpuOcioPreparationError::CompileCancelled,
+        "a cancelled prepare is refused");
+    expectations.expect(cancelled.counters().cacheEntries == 0,
+                        "a cancelled prepare retains no command");
+    const auto afterCancel = cancelled.prepare(cstConfig, cst, cancelGeometry, options);
+    expectations.expect(afterCancel.hasValue() && cancelled.counters().cacheEntries == 1,
+                        "a later request still prepares after a cancelled one");
+
+    // Deterministic concurrent same-key regression: all threads return the same canonical command,
+    // the cache holds exactly one entry, and its byte charge equals that one command's retained
+    // bytes (no double charge, no unnecessary eviction).
+    GpuOcioProgramPreparer concurrent;
+    const GpuOcioCommandGeometry concurrentGeometry{6, 5};
+    constexpr int kThreads = 8;
+    std::array<std::shared_ptr<const PreparedGpuOcioCommand>, kThreads> results{};
+    std::latch start{1};
+    std::vector<std::thread> workers;
+    workers.reserve(kThreads);
+    for (int index = 0; index < kThreads; ++index) {
+        workers.emplace_back([&, index]() {
+            start.wait();
+            auto result = concurrent.prepare(cstConfig, cst, concurrentGeometry, options);
+            results[static_cast<std::size_t>(index)] = std::move(result.command);
+        });
+    }
+    start.count_down();
+    for (auto& worker : workers) {
+        worker.join();
+    }
+    std::size_t nullResults = 0;
+    const auto* canonical = results[0].get();
+    for (const auto& result : results) {
+        if (result == nullptr) {
+            ++nullResults;
+        }
+    }
+    expectations.expect(nullResults == 0, "every concurrent same-key prepare succeeds");
+    for (const auto& result : results) {
+        expectations.expect(result.get() == canonical,
+                            "every concurrent same-key prepare returns the canonical command");
+    }
+    const auto concurrentCounters = concurrent.counters();
+    expectations.expect(concurrentCounters.cacheEntries == 1,
+                        "the concurrent same-key cache holds exactly one entry");
+    if (canonical != nullptr) {
+        expectations.expect(concurrentCounters.cacheBytes == canonical->retainedBytes(),
+                            "the concurrent same-key byte charge equals the one retained command");
+    }
+    expectations.expect(concurrentCounters.evictions == 0,
+                        "a duplicate same-key miss never evicts");
 }
 #endif
 

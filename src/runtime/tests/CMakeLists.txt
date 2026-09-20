@@ -1059,3 +1059,28 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
     set_tests_properties(bloom.runtime.gpu_nested_ocio
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+# Strict native proof for the production wrapper's FileTransform arm: a real .cube LUT read through
+# color::readLutFile, extracted through the isolated bloom-color-worker, wrapped with the shared
+# precise-sampling adapter, and executed on the device with the unchanged isolated CPU FileTransform
+# processor as the 2e-6 oracle. Requires the Vulkan backend and the pinned tools.
+if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_gpu_ocio_file_transform_test
+        gpu_ocio_file_transform_native_tests.cpp)
+    target_link_libraries(bloom_runtime_gpu_ocio_file_transform_test
+        PRIVATE bloom_runtime_evaluator bloom_render)
+    if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
+        target_compile_definitions(bloom_runtime_gpu_ocio_file_transform_test PRIVATE
+            "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+    endif()
+    bloom_enable_warnings(bloom_runtime_gpu_ocio_file_transform_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_ocio_file_transform_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_ocio_file_transform
+        COMMAND bloom_runtime_gpu_ocio_file_transform_test
+        LABELS runtime unit gpu color
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.runtime.gpu_ocio_file_transform
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()

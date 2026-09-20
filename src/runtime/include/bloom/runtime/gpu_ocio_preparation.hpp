@@ -15,6 +15,7 @@
 // InvalidRequest/CompileFailed refusal.
 
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/runtime/gpu_ocio_command.hpp>
 
 #include <chrono>
@@ -34,6 +35,12 @@ enum class GpuOcioTransformKind : std::uint8_t {
     // OCIO dynamic exposure/contrast. The accepted "view adjust" fixture: the extracted program
     // carries real OCIO uniforms whose values are part of the command's immutable snapshot.
     ExposureContrast = 3,
+    // Isolated file-transform extraction. The exact LUT bytes and their content digest come from a
+    // color::LutFile produced by color::readLutFile; the isolated bloom-color-worker rebuilds the
+    // OCIO FileTransform processor with the requested interpolation/direction. The LUT digest,
+    // format, interpolation, direction, and process/working space ids are part of the content
+    // identity and the preparer warm key.
+    FileTransform = 4,
 };
 
 struct GpuOcioTransformSpec final {
@@ -44,6 +51,13 @@ struct GpuOcioTransformSpec final {
     std::string view;
     double exposure = 0.0;
     double contrast = 1.0;
+    // FileTransform only. The shared, immutable LUT resource handle; the reservation keeps the
+    // exact opened bytes alive for the whole extraction. Null is an InvalidRequest refusal.
+    std::shared_ptr<const color::LutFile> lutFile;
+    color::LutInterpolation interpolation = color::LutInterpolation::Best;
+    color::LutDirection direction = color::LutDirection::Forward;
+    std::string processSpaceId;
+    std::string workingSpaceId;
 };
 
 // Explicitly injected compiler configuration. `glslangValidatorPath` and `spirvValPath` must be
@@ -57,6 +71,12 @@ struct GpuOcioCompileOptions final {
     std::uint64_t maxDiagnosticBytes = 16ULL * 1024ULL;
     std::chrono::milliseconds deadline{10000};
 };
+
+// Self-contained validation of an injected options value. Mirrors color::GpuShaderCompiler's own
+// hard ceilings and non-positive-deadline refusal so a warm cache hit can never bypass the checks a
+// cold compile would enforce. `hardSourceBytes`/`hardSpirvBytes`/`hardDiagnosticBytes` are the
+// compiler's fixed ceilings; the caller may lower them but not raise them.
+[[nodiscard]] bool validGpuOcioCompileOptions(const GpuOcioCompileOptions& options) noexcept;
 
 enum class GpuOcioPreparationError : std::uint8_t {
     None,
