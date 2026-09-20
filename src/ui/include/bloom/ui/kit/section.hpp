@@ -14,14 +14,14 @@ class KButton;
 
 // The Kinetik collapsible section (task PROPS-1, deliverable 1).
 //
-// One header row -- [chevron][Title Case title][spring][Reset]["..." menu] -- above one collapsible
+// One header row -- [chevron][Title Case title][spring][Reset] -- above one collapsible
 // body. Everything a panel wants to group goes into bodyLayout(); the section itself never knows
 // what a row is, which is why this lives in the kit rather than in properties_editor.cpp: the
 // Properties panel is its first consumer, not its owner.
 //
 // Title case, not the uppercase `editorSectionTitle` treatment the panel used before: a section
-// header here carries controls of its own (Reset, the menu, the chevron), so it reads as a row of
-// chrome rather than as a typographic divider, and uppercase micro-type next to two buttons reads
+// header here carries a control of its own (Reset, plus the chevron), so it reads as a row of
+// chrome rather than as a typographic divider, and uppercase micro-type next to a button reads
 // as shouting.
 //
 // Collapsed state persists only when setPersistenceKey() names a QSettings key. The kit
@@ -56,11 +56,13 @@ class KSection final : public QWidget {
     void setResetEnabled(bool enabled);
     [[nodiscard]] bool isResetEnabled() const noexcept;
 
+    // Overrides the body's inner padding (default SectionPadding). Properties uses the
+    // inter-panel Gutter so its content density matches the workspace around it.
+    void setBodyPadding(int padding);
+
   Q_SIGNALS:
     void collapsedChanged(bool collapsed);
     void resetRequested();
-    void collapseAllRequested();
-    void expandAllRequested();
 
   protected:
     void paintEvent(QPaintEvent* event) override;
@@ -68,13 +70,11 @@ class KSection final : public QWidget {
 
   private:
     void applyCollapsedState();
-    void showSectionMenu();
 
     QWidget* header_ = nullptr;
     KButton* chevron_ = nullptr;
     QLabel* title_ = nullptr;
     KButton* reset_ = nullptr;
-    KButton* menu_ = nullptr;
     QWidget* body_ = nullptr;
     QVBoxLayout* bodyLayout_ = nullptr;
     QString persistenceKey_;

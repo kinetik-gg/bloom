@@ -30,11 +30,9 @@ namespace kit {
 class KButton;
 class KColorChip;
 class KDropdown;
-class KIconToggle;
 class KSection;
 class KSlider;
 class KSwitch;
-class KToolColumn;
 } // namespace kit
 
 class PropertiesEditor final : public QWidget, public EditorChromeProvider {
@@ -53,11 +51,6 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     void configureRegistryRows();
     void configureUpstream();
     void configureDrivenRows();
-    void buildFilterStrip();
-    void updateFilterAvailability();
-    void selectFilter(const QString& group, bool persist);
-    [[nodiscard]] bool filterGroupAvailable(const QString& group) const;
-    [[nodiscard]] bool sectionMatchesFilter(const kit::KSection* section) const;
     // Task DRIVE-1: this panel reads the session's resolved driven values rather than
     // running an evaluator of its own; the connection is made once.
     bool drivenValuesConnected_ = false;
@@ -65,10 +58,6 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     QString upstreamSignature_;
     std::vector<PropertiesRegistryRow*> upstreamRows_;
     void filterRows();
-    QString filterGroup_;
-    kit::KToolColumn* filterStrip_ = nullptr;
-    std::array<kit::KIconToggle*, 5> filterToggles_{};
-    QLineEdit* search_ = nullptr;
     std::vector<PropertiesRegistryRow*> registryRows_;
     QWidget* registryPanel_ = nullptr;
     QString registrySignature_;
@@ -98,9 +87,8 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     void commitOpacityFromControls();
     void commitRotationFromControls();
 
-    // Registers a section with the panel's own Collapse all / Expand all and per-section Reset.
+    // Registers a section with the panel for per-section Reset.
     void adoptSection(kit::KSection* section, std::vector<std::string_view> resetRoles);
-    void setAllSectionsCollapsed(bool collapsed);
     void resetRoles(const std::vector<std::string_view>& roles);
 
     void configurePosition();
@@ -133,8 +121,7 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     // and its "Nothing selected" placeholder text entirely -- section headers are the only
     // grouping left, so there is no selectionLabel_ member any more.
     QWidget* selectionSection_ = nullptr;
-    // Every kit::KSection this panel owns, in the order it shows them. The panel, not the section,
-    // answers Collapse all / Expand all: a section knows only itself.
+    // Every kit::KSection this panel owns, in the order it shows them.
     std::vector<kit::KSection*> sections_;
 
     kit::KSwitch* layerVisible_ = nullptr;

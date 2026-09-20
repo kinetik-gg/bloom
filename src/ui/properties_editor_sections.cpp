@@ -30,6 +30,7 @@
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
@@ -85,7 +86,7 @@ std::optional<document::LayerId> contextualLayerId(const CompositionSession& ses
 constexpr double kPracticallyUnbounded = 1'000'000.0;
 
 kit::KSwitch* makeToggle(QWidget* parent, const QString& objectName, const QString& accessible) {
-    auto* toggle = new kit::KCheckBox(parent);
+    auto* toggle = new kit::KSwitch(parent);
     toggle->setObjectName(objectName);
     toggle->setAccessibleName(accessible);
     return toggle;
@@ -306,7 +307,11 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
                                               document::AnimationComponent::Y, anchorY_, body)},
                body));
     anchorGrid_ = new PropertiesAnchorGrid(session_, body);
-    addRow(rows, body, makeRowLabel(tr("Anchor Point"), body), nullptr, anchorGrid_);
+    // The 3x3 grid is fixed at three dot pitches tall, well above one 28px property row.
+    // A two-line row owns enough height so the section never clips its last dot row.
+    if (auto* anchorGridRow = qobject_cast<kit::KPropertyRow*>(
+            addRow(rows, body, makeRowLabel(tr("Anchor Point"), body), nullptr, anchorGrid_)))
+        anchorGridRow->setLineCount(2);
 }
 
 void PropertiesEditor::buildSolidSection(QVBoxLayout* layout) {
