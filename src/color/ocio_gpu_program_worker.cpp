@@ -19,6 +19,7 @@ namespace bloom::color::detail {
 namespace {
 using Clock = std::chrono::steady_clock;
 
+#ifdef __linux__
 [[nodiscard]] LutError processError(const platform::ProcessFailure failure) {
     switch (failure.code) {
     case platform::ProcessError::Unavailable:
@@ -38,7 +39,6 @@ using Clock = std::chrono::steady_clock;
     return LutError::HelperProtocolViolation;
 }
 
-#ifdef __linux__
 [[nodiscard]] std::string workerPath() {
     std::error_code error;
     const auto executable = std::filesystem::read_symlink("/proc/self/exe", error);

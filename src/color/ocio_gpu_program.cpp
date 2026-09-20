@@ -213,6 +213,8 @@ render::OcioGpuProgramResult buildOcioGpuProgramForFileTransform(
         }
 #ifndef __linux__
         // No confinement/process-supervision primitive: never parse LUT bytes in-process.
+        (void)limits;
+        (void)cancellation;
         return render::OcioGpuProgramResult::failure(
             render::OcioGpuProgramError::ExternalLutBoundaryRequired);
 #else

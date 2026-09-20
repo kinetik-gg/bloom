@@ -102,6 +102,7 @@ void expectGpuDisplayCommandRefused(
                             std::filesystem::exists(target),
                         "gpu command refusal: the honest CPU fallback publishes the PNG");
 }
+#endif
 
 // A command prepared for the SAME geometry but a WRONG transform (a process-effect CST rather than
 // the resolved display transform) must be refused. The runner accepts a supplied command only when
@@ -205,7 +206,6 @@ void testGpuCrossRevisionCommandRefused(Expectations& expectations) {
     static_cast<void>(expectations);
 #endif
 }
-#endif
 
 // A stale/mismatched GPU display command (prepared for the wrong geometry) is refused, never
 // silently used: the evaluator's combined readback rejects the geometry binding and the attempt
