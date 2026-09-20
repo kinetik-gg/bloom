@@ -65,6 +65,12 @@ uploadImage(bloom::render::GpuImageUpload& uploader, std::uint32_t width, std::u
 [[nodiscard]] std::optional<std::shared_ptr<bloom::render::GpuOcioProgram>>
 makeProgram(bloom::render::GpuDevice& device, bloom::render::OcioGpuProgramDesc desc);
 
+// Bounded, non-busy completion wait for one native OCIO job. Polls with a short sleep and never
+// loops without a finite attempt ceiling; a job that does not retire reports a failure instead of
+// hanging. This is the shared wait for new tests (existing tests keep their own loops).
+[[nodiscard]] bloom::render::GpuOcioProgramPollResult
+awaitOcioCompletion(bloom::render::GpuOcioProgram& program, Expectations& expectations);
+
 [[nodiscard]] std::uint8_t quantize(double value);
 
 // Test entry points, one per focused translation unit.
@@ -74,5 +80,10 @@ void testDisplay(Expectations& expectations, bloom::render::GpuDevice& device,
                  const ResolvedBloomNeutralConfig& resolved);
 void testFileTransform(Expectations& expectations, bloom::render::GpuDevice& device,
                        const ResolvedBloomNeutralConfig& resolved);
+// Geometry grow/shrink across jobs on one program, strict parity, budget refusal + recovery, and
+// the actual-allocation accessor for both arms.
+void testGeometryAndBudgetLifecycle(Expectations& expectations, bloom::render::GpuDevice& device,
+                                    const ResolvedBloomNeutralConfig& neutral,
+                                    const ResolvedBloomNeutralConfig& aces);
 
 } // namespace bloom::color::ocio_gpu_native_test

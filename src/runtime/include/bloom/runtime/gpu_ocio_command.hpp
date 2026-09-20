@@ -14,6 +14,7 @@
 #include <bloom/core/sha256.hpp>
 #include <bloom/render/gpu_shader_artifact.hpp>
 #include <bloom/render/ocio_gpu_program.hpp>
+#include <bloom/runtime/view_adjust.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -50,6 +51,20 @@ enum class GpuOcioCommandError : std::uint8_t {
     ArtifactDigestMismatch,
     StageEncodingMismatch,
     UniformSnapshotMismatch,
+    InvalidViewAdjust,
+    // A non-neutral adjustment was supplied for a non-display (ProcessEffect) command.
+    UnsupportedViewAdjust,
+    // The binding's wrapper version does not match the canonical production wrapper for
+    // (program, viewAdjust).
+    WrapperVersionMismatch,
+    // The binding's wrapper source digest does not match the canonical production wrapper for
+    // (program, viewAdjust), i.e. the artifact is stale for this adjustment.
+    WrapperSourceDigestMismatch,
+    // The compiled artifact carries no source provenance (zero source digest).
+    ArtifactSourceMissing,
+    // The compiled artifact's own source digest does not match the canonical production wrapper for
+    // (program, viewAdjust): the artifact was compiled from a different source.
+    ArtifactSourceDigestMismatch,
 };
 
 [[nodiscard]] std::string_view gpuOcioCommandErrorName(GpuOcioCommandError error) noexcept;
@@ -66,20 +81,35 @@ struct GpuOcioCommandIdentityParts final {
     // color::kOcioGpuPreciseSamplingVersion). A sampling-semantics change must never reuse an
     // older artifact, so it is part of the canonical identity.
     std::string_view wrapperVersion;
+    // The exact generated wrapper source digest. Binding it means a change to the wrapper structure
+    // or its baked constants (including the view adjustment) can never reuse an older artifact.
+    core::Sha256Digest wrapperSourceDigest{};
+    // The display post-process adjustment. Its exact exposure/gamma are folded in, so a changed
+    // adjustment is a different display command. A ProcessEffect command carries a neutral value
+    // and its identity is unaffected by any display adjustment.
+    ViewAdjust viewAdjust{};
 };
 
 // Canonical bytes are exactly:
 //   ASCII "BloomGpuOcioCommandIdentity\0"
-//   u16(2) || u8(encoding) || u32(width) || u32(height)
+//   u16(3) || u8(encoding) || u32(width) || u32(height)
 //   bytes32(programContentIdentity) || bytes32(programResourceDigest)
 //   bytes32(programShaderTextDigest)
 //   u64(uniformSnapshot.size) || exact uniformSnapshot bytes
 //   bytes32(artifactDigest)
-//   text(wrapperVersion)
-// u16/u32/u64 are unsigned big-endian; text is u32(byteCount) followed by UTF-8 bytes. The digest
-// is SHA-256 of those bytes.
+//   text(wrapperVersion) || bytes32(wrapperSourceDigest)
+//   f64(viewAdjust.exposure) || f64(viewAdjust.gamma)
+// u16/u32/u64 are unsigned big-endian; text is u32(byteCount) followed by UTF-8 bytes; f64 is the
+// IEEE-754 big-endian bit pattern. The digest is SHA-256 of those bytes.
 [[nodiscard]] core::Sha256Digest
 computeGpuOcioCommandIdentity(const GpuOcioCommandIdentityParts& parts) noexcept;
+
+// Immutable wrapper/source facts bound into the command at preparation time.
+struct GpuOcioCommandSourceBinding final {
+    std::string wrapperVersion;
+    core::Sha256Digest wrapperSourceDigest{};
+    ViewAdjust viewAdjust{};
+};
 
 class PreparedGpuOcioCommand;
 struct GpuOcioCommandResult;
@@ -97,7 +127,7 @@ class PreparedGpuOcioCommand final {
     [[nodiscard]] static GpuOcioCommandResult prepare(render::OcioGpuProgramDesc program,
                                                       render::CompiledGpuShader artifact,
                                                       GpuOcioCommandGeometry geometry,
-                                                      std::string_view wrapperVersion);
+                                                      GpuOcioCommandSourceBinding binding);
 
     [[nodiscard]] const render::OcioGpuProgramDesc& program() const& noexcept { return program_; }
     [[nodiscard]] const render::OcioGpuProgramDesc& program() const&& = delete;
@@ -110,6 +140,13 @@ class PreparedGpuOcioCommand final {
     [[nodiscard]] const core::Sha256Digest& identity() const&& = delete;
     [[nodiscard]] std::string_view wrapperVersion() const& noexcept { return wrapperVersion_; }
     [[nodiscard]] std::string_view wrapperVersion() const&& = delete;
+    [[nodiscard]] const core::Sha256Digest& wrapperSourceDigest() const& noexcept {
+        return wrapperSourceDigest_;
+    }
+    [[nodiscard]] const core::Sha256Digest& wrapperSourceDigest() const&& = delete;
+    // The exact display post-process adjustment bound into this command; neutral for ProcessEffect.
+    [[nodiscard]] const ViewAdjust& viewAdjust() const& noexcept { return viewAdjust_; }
+    [[nodiscard]] const ViewAdjust& viewAdjust() const&& = delete;
     [[nodiscard]] std::span<const std::uint32_t> spirvWords() const& noexcept {
         return spirvWords_;
     }
@@ -124,7 +161,8 @@ class PreparedGpuOcioCommand final {
     PreparedGpuOcioCommand(render::OcioGpuProgramDesc program, render::CompiledGpuShader artifact,
                            GpuOcioOutputEncoding encoding, GpuOcioCommandGeometry geometry,
                            std::vector<std::uint32_t> spirvWords, core::Sha256Digest identity,
-                           std::string wrapperVersion, std::uint64_t retainedBytes) noexcept;
+                           std::string wrapperVersion, core::Sha256Digest wrapperSourceDigest,
+                           ViewAdjust viewAdjust, std::uint64_t retainedBytes) noexcept;
 
     render::OcioGpuProgramDesc program_;
     render::CompiledGpuShader artifact_;
@@ -133,6 +171,8 @@ class PreparedGpuOcioCommand final {
     std::vector<std::uint32_t> spirvWords_;
     core::Sha256Digest identity_{};
     std::string wrapperVersion_;
+    core::Sha256Digest wrapperSourceDigest_{};
+    ViewAdjust viewAdjust_{};
     std::uint64_t retainedBytes_ = 0;
 };
 

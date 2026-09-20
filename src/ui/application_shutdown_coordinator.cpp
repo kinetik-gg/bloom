@@ -25,6 +25,9 @@ ApplicationShutdownCoordinator::ApplicationShutdownCoordinator(
     stuckShutdownDiagnosticTimer_.setSingleShot(true);
     connect(&stuckShutdownDiagnosticTimer_, &QTimer::timeout, this,
             &ApplicationShutdownCoordinator::logStillShuttingDownDiagnostic);
+    gpuRetirementPollTimer_.setInterval(5);
+    connect(&gpuRetirementPollTimer_, &QTimer::timeout, this,
+            &ApplicationShutdownCoordinator::pollGpuExportRetirement);
     connect(&taskUiBridge_, &TaskUiBridge::shutdownQuiescent, this, [this] {
         Q_ASSERT(QThread::currentThread() == thread());
         if (!shuttingDown_ || quiescencePublished_) {
@@ -43,6 +46,20 @@ bool ApplicationShutdownCoordinator::nativeSurfaceRetirementSatisfied() const no
 
 const std::string& ApplicationShutdownCoordinator::nativeSurfaceRefusalDiagnostic() const noexcept {
     return nativeSurfaceRefusalDiagnostic_;
+}
+
+bool ApplicationShutdownCoordinator::gpuExportRetirementSatisfied() const noexcept {
+    return gpuExportRetirementComplete_;
+}
+
+void ApplicationShutdownCoordinator::setGpuExportRetirement(
+    GpuRetirementBegin beginGpuRetirement, GpuRetirementComplete gpuRetirementComplete) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    Q_ASSERT(!shuttingDown_);
+    gpuRetirementBegin_ = std::move(beginGpuRetirement);
+    gpuRetirementComplete_ = std::move(gpuRetirementComplete);
+    // With no participant the GPU half is trivially satisfied; with one, completion starts false.
+    gpuExportRetirementComplete_ = !gpuRetirementComplete_;
 }
 
 void ApplicationShutdownCoordinator::setNativeSurfaceSource(NativeSurfaceSource source) {
@@ -68,11 +85,40 @@ void ApplicationShutdownCoordinator::beginShutdown() {
     // unresponsive.
     stuckShutdownDiagnosticTimer_.start(5'000);
     taskUiBridge_.beginShutdown();
+    // GPU final-render retirement is the third half of the contract: signal the evaluator owner
+    // (non-blocking) and then poll genuine completion from the UI event loop. The UI never blocks
+    // on the native owner; retirement completes asynchronously and only then is quiescence
+    // published.
+    if (gpuRetirementBegin_) {
+        gpuRetirementBegin_();
+        gpuRetirementPollTimer_.start();
+        pollGpuExportRetirement();
+    }
     // Native-surface retirement is the second half of the shutdown contract: task quiescence alone
     // is not enough. The service owner keeps pumping (the adapter's UI-thread timer) until the
     // owner publishes a genuine retirement; a refusal keeps the tree alive and shutdownQuiescent
     // un-emitted.
     beginNativeSurfaceRetirement();
+    // Re-check once here: a task-free application (blank startup, no preview/asset work yet) has a
+    // never-started TaskUiBridge, and beginShutdown() can quiesce it synchronously during the
+    // taskUiBridge_.beginShutdown() call above -- BEFORE surfaceRetirementComplete_ is known. That
+    // synchronous quiescence must still publish exactly once, so the final state is re-evaluated
+    // after both halves are settled. Idempotent: quiescencePublished_ guards a duplicate emission,
+    // and a pending/refused native retirement leaves surfaceRetirementComplete_ false.
+    publishQuiescenceIfReady();
+}
+
+void ApplicationShutdownCoordinator::pollGpuExportRetirement() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (quiescencePublished_ || gpuExportRetirementComplete_) {
+        gpuRetirementPollTimer_.stop();
+        return;
+    }
+    if (gpuRetirementComplete_ && gpuRetirementComplete_()) {
+        gpuExportRetirementComplete_ = true;
+        gpuRetirementPollTimer_.stop();
+        publishQuiescenceIfReady();
+    }
 }
 
 void ApplicationShutdownCoordinator::beginNativeSurfaceRetirement() {
@@ -118,12 +164,17 @@ void ApplicationShutdownCoordinator::publishQuiescenceIfReady() {
     if (!shuttingDown_ || quiescencePublished_) {
         return;
     }
-    if (!taskQuiescence_ || !surfaceRetirementComplete_) {
+    if (!taskQuiescence_ || !surfaceRetirementComplete_ || !gpuExportRetirementComplete_) {
         return;
     }
     quiescencePublished_ = true;
     stuckShutdownDiagnosticTimer_.stop();
-    emit shutdownQuiescent();
+    // Publish through the event loop rather than re-entrantly. A task-free application (blank
+    // startup whose TaskUiBridge was never started) can reach task quiescence synchronously inside
+    // beginShutdown(), which itself may run inside the window's close event; emitting directly
+    // would re-enter close/quit handling before that event returns. Queuing keeps exactly one
+    // publication while letting the current event finish.
+    QTimer::singleShot(0, this, [this] { emit shutdownQuiescent(); });
 }
 
 void ApplicationShutdownCoordinator::logStillShuttingDownDiagnostic() const {

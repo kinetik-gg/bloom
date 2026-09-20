@@ -541,7 +541,9 @@ endif()
 # pinned here, the manifest must bind that source digest, and, when the locked glslangValidator/
 # spirv-val are present, configure recompiles it and confirms the SPIR-V digest embedded in
 # blend_portable_spirv.inc. Runtime code never compiles or loads a shader. The deterministic
-# regeneration path is tools/gpu-shaders/embed_blend_spirv.py.
+# regeneration path is the standalone tools/gpu-shaders project: its
+# bloom_gpu_blend_spirv_generator (embed_blend_spirv.cpp) writes the checked-in .inc and manifest
+# pins and its bloom_gpu_blend_spirv_verify target --checks and regenerates every blend family.
 set(BLOOM_BLEND_PORTABLE_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_portable.comp")
 set(BLOOM_BLEND_PORTABLE_MANIFEST
     "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_portable.manifest")
@@ -841,6 +843,7 @@ target_sources(
             include/bloom/render/gpu_image_upload.hpp
             include/bloom/render/gpu_neutral_display.hpp
             include/bloom/render/gpu_ocio_program.hpp
+            include/bloom/render/gpu_output_color_readback.hpp
             include/bloom/render/gpu_present_image.hpp
             include/bloom/render/ocio_gpu_program.hpp
             include/bloom/render/gpu_presentation_target.hpp
@@ -884,6 +887,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_ocio_program_dispatch.cpp
         vulkan/gpu_ocio_program_private.hpp
         vulkan/gpu_ocio_program_resources.cpp
+        vulkan/gpu_output_color_readback.cpp
         vulkan/gpu_present_image.cpp
         vulkan/gpu_present_image_private.hpp
         vulkan/gpu_present_image_resources.cpp
@@ -934,6 +938,7 @@ else()
                                      gpu_composite_stub.cpp gpu_device_stub.cpp
                                      gpu_image_upload_stub.cpp gpu_neutral_display_stub.cpp
                                      gpu_ocio_program_stub.cpp
+                                     gpu_output_color_readback_stub.cpp
                                      gpu_present_image_stub.cpp gpu_presentation_target_stub.cpp
                                      gpu_process_readback_stub.cpp gpu_resident_display_stub.cpp
                                      gpu_solid_stub.cpp)
@@ -969,6 +974,14 @@ if(BUILD_TESTING)
         target_include_directories(bloom_render_ocio_test_faults PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/vulkan")
         bloom_enable_warnings(bloom_render_ocio_test_faults)
+
+        # Same pattern for the combined output-colour readback fault seam.
+        add_library(bloom_render_output_color_readback_test_faults STATIC
+            vulkan/gpu_output_color_readback_fault_test.cpp)
+        target_compile_features(bloom_render_output_color_readback_test_faults PUBLIC cxx_std_20)
+        target_include_directories(bloom_render_output_color_readback_test_faults PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/vulkan")
+        bloom_enable_warnings(bloom_render_output_color_readback_test_faults)
     endif()
     add_subdirectory(tests)
 endif()

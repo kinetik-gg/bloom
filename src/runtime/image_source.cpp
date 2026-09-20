@@ -171,10 +171,15 @@ evaluateImageSource(const ImageSourceSelection& selected,
         // and an explicit Disabled bypass decodes without consulting either cache.
         auto* const decodeDiskCache =
             memoryAccess == ImageSourceMemoryCacheAccess::ReadWrite ? diskCache : nullptr;
+        // `budget` is the already-validated caller request allowance (the evaluator and the media
+        // split both pass a budget derived from `request.pixelStorageByteLimit`). It is honored as
+        // given so a large real source can use the caller's real budget instead of being clamped to
+        // the 256 MiB default; the decoder still enforces its own structural ceilings. No
+        // artificial min() is applied here.
         auto decoded = media::cache::decodeThroughDiskCache(
             selected.path, selected.interpretation, selected.digest, selected.diskCacheKey,
             decodeDiskCache, /*writeAsync=*/true, [&] { return cancel.isCancellationRequested(); },
-            {}, std::min(budget, media::kMaxImageStorageBytes), selected.inputProcessor);
+            {}, budget, selected.inputProcessor);
         if (!decoded.value.has_value())
             return {{}, decoded.diagnostic, decoded.cancelled};
         image = std::move(*decoded.value);

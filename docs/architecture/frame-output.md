@@ -16,7 +16,21 @@ export command's preset choice) are implemented. MEDIA-4 enables TIFF through th
 and adds ProRes MOV, DNxHR MXF and PCM WAV composition export. The supervised external-config
 helper and non-built-in locator kinds remain pending color-side work.
 
-Updated: 2026-09-17
+The GPU final-render route is now wired through ONE application-owned, cheap-to-construct
+`bloom::host::GpuExportProvider`: every existing output-analysis caller (desktop frame export,
+frame-range/video sequence export, headless scripting, and MCP) shares the same lazily bootstrapped
+`runtime::GpuProcessFrameEvaluator`, and the async attempt retains the provider so an in-flight
+evaluation never borrows a UI-owned object. The attempt graph defers its Evaluating stage until the
+provider's off-thread bootstrap is terminal, so the first export on a supported device is genuinely
+GPU rather than a CPU fallback that raced the bootstrap. A completed attempt records native
+provenance and counters (status, native dispatches, exactly one final RGBA32F readback) for
+diagnostics only; this never enters the report, the approval digest, or the resource ledger. The CPU
+reference evaluator remains the correctness oracle and the explicit `Disabled`/unavailable fallback,
+unsupported scenes stay typed `UnsupportedGpuSubset`, and no operation qualification is changed.
+Provider/evaluator teardown is always handed to a scheduled worker, never joined on the caller or UI
+thread. `docs/architecture/gpu-backend.md` remains the owning document for GPU qualification policy.
+
+Updated: 2026-09-20
 
 ## Working-Space Output Contract
 

@@ -18,8 +18,10 @@
 #include <bloom/render/gpu_resident_display.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/render/image_types.hpp>
+#include <bloom/render/ocio_gpu_program.hpp>
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/runtime/gpu_ocio_program_executor.hpp>
+#include <bloom/runtime/gpu_ocio_wrapper.hpp>
 
 #include "ocio_gpu_program_fault.hpp"
 
@@ -261,6 +263,29 @@ void testCst(Expectations& expectations, GpuDevice& device, GpuOcioProgramPrepar
     }
     expectations.expect(mismatches == 0, "every CST pixel is within 2e-6 of the CPU oracle");
 
+    // Exact CPU image-effect semantics for an alpha-zero source pixel: the effect arm copies the
+    // original premultiplied pixel through unchanged (bit-exact), never transforming or
+    // un-premultiplying it. The fixture's zero-alpha pixels are canonical (RGB +0), which is the
+    // only representable form through Rgba32f::fromPremultiplied; the hidden-RGB case is covered by
+    // the wrapper source-semantics assertion in the CPU command test.
+    std::size_t zeroAlphaMismatches = 0;
+    std::size_t zeroAlphaCount = 0;
+    for (std::size_t index = 0; index < pixels.size(); ++index) {
+        const auto& p = pixels[index];
+        if (p.alpha() != 0.0F) {
+            continue;
+        }
+        ++zeroAlphaCount;
+        const auto& gpu = readback.pixels[index];
+        if (gpu.red() != p.red() || gpu.green() != p.green() || gpu.blue() != p.blue() ||
+            gpu.alpha() != p.alpha()) {
+            ++zeroAlphaMismatches;
+        }
+    }
+    expectations.expect(zeroAlphaCount > 0, "the CST fixture exercises alpha-zero pixels");
+    expectations.expect(zeroAlphaMismatches == 0,
+                        "an alpha-zero effect pixel is copied through bit-exactly");
+
     const auto countersBefore = executor.executor->counters();
     const auto preparerBefore = preparer.counters();
     const auto warm = executor.executor->begin(prepared.command, input, {}, kBudget);
@@ -496,6 +521,22 @@ void testUploadFaultRetirement(Expectations& expectations, GpuDevice& device,
 int main(int argc, char** argv) {
     const bool requireDevice = parseRequireDevice(argc, argv);
     Expectations expectations;
+    // Production-wrapper contract: the capacity-safe 2D flattening and the semantic version that
+    // invalidates an older artifact. This needs no device or compiler and always runs.
+    {
+        bloom::render::OcioGpuProgramDesc probe;
+        probe.shaderText = "vec4 bloom_ocio_probe(vec4 v) { return v; }\n";
+        probe.functionName = "bloom_ocio_probe";
+        probe.semanticsId = "bloom.test.ocio-wrapper-probe.v1";
+        probe.stage = bloom::render::OcioGpuProgramStage::ProcessEffect;
+        const auto wrapper = bloom::runtime::buildGpuOcioWrapperGlsl(probe);
+        expectations.expect(wrapper.succeeded(), "the production OCIO wrapper builds");
+        expectations.expect(wrapper.wrapperVersion == bloom::runtime::kGpuOcioWrapperVersion,
+                            "the production OCIO wrapper reports its semantic version");
+        expectations.expect(wrapper.source.find("gl_GlobalInvocationID.y * bloom_ocio_stride_x") !=
+                                std::string::npos,
+                            "the production OCIO wrapper flattens a capacity-safe 2D dispatch");
+    }
 #ifndef BLOOM_GPUSHADER_TOOLS_DIR
     std::cout << "SKIP: BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
     return kSkipExit;

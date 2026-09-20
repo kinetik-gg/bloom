@@ -1,5 +1,6 @@
 #include <bloom/host/frame_export_publication.hpp>
 
+#include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/output_analysis_attempt_runner.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/output/flat_exr_reopen_verifier.hpp>
@@ -25,6 +26,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -1369,10 +1371,196 @@ void testPngColorPreparingCancellationPublishesNothing(Expectations& expectation
                         "nothing");
 }
 
+// Native GPU-composited publication parity. Requires a real loader/device
+// (BLOOM_TEST_VULKAN_LOADER, an absolute path) and skips otherwise unless --require-device is
+// passed. It builds a CPU reference attempt and GPU attempts over the identical plan/request,
+// proves the retained process images agree within the frozen 2e-6 finite-component tolerance with
+// exact alpha, then publishes the GPU attempt as EXR and both attempts as PNG, independently
+// reopen-verifying the EXR and independently decoding both PNGs to compare the RGBA8 bytes (RGB
+// within one code, alpha exact) against the unchanged CPU reference.
+void testGpuCompositedExportParity(Expectations& expectations, const bool requireDevice) {
+    const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER");
+    if (loader == nullptr || *loader == '\0') {
+        if (requireDevice) {
+            expectations.expect(
+                false, "gpu parity: --require-device needs BLOOM_TEST_VULKAN_LOADER absolute");
+        } else {
+            std::cout << "NOTE: BLOOM_TEST_VULKAN_LOADER unset; skipping GPU publication parity\n";
+        }
+        return;
+    }
+    ExportFixture fixture;
+    if (!fixture.setUp(expectations, "gpu parity: fixture is available")) {
+        return;
+    }
+    runtime::GpuProcessFrameEvaluatorOptions options;
+    options.enabled = true;
+    options.loaderPath = std::filesystem::path(loader);
+    auto provider = host::GpuExportProvider::create(options);
+    provider->prepare(fixture.scheduler());
+    const auto bootstrapDeadline = std::chrono::steady_clock::now() + 30s;
+    while (!provider->prepared() && std::chrono::steady_clock::now() < bootstrapDeadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    if (!provider->deviceAvailable()) {
+        expectations.expect(!requireDevice, "gpu parity: a device is required");
+        std::cout << "NOTE: no compatible Vulkan device; skipping GPU publication parity\n";
+        return;
+    }
+
+    const auto buildAttempt =
+        [&](const std::filesystem::path& target, const output::OutputPresetV1 preset,
+            const std::shared_ptr<host::GpuExportProvider>& gpu,
+            std::shared_ptr<const output::OutputAnalysisAttemptV1>& attempt,
+            std::optional<host::OutputAnalysisAttemptGpuProvenanceV1>& provenance) -> bool {
+        auto request = attemptRequestFor(target, preset);
+        request.gpuProvider = gpu;
+        auto begin = host::beginOutputAnalysisAttemptV1(fixture.scheduler(), fixture.artifacts(),
+                                                        fixture.ledger(), std::move(request));
+        if (!begin) {
+            return false;
+        }
+        auto runner = std::move(begin).takeHandle();
+        const auto deadline = std::chrono::steady_clock::now() + 30s;
+        while (std::chrono::steady_clock::now() < deadline) {
+            auto outcome = runner.tryComplete();
+            if (!outcome.has_value()) {
+                std::this_thread::sleep_for(1ms);
+                continue;
+            }
+            if (!*outcome) {
+                return false;
+            }
+            attempt = outcome->attempt();
+            provenance = outcome->gpuProvenance();
+            return attempt != nullptr;
+        }
+        return false;
+    };
+    const auto publish = [&](const std::shared_ptr<const output::OutputAnalysisAttemptV1>& attempt,
+                             const std::filesystem::path& target) -> bool {
+        auto approval = host::approveFrameExportV1(fixture.coordinator(), attempt,
+                                                   requireDigest(attempt, expectations));
+        if (!approval) {
+            return false;
+        }
+        auto run = beginExportRun(fixture.scheduler(), fixture.artifacts(),
+                                  std::move(approval).takeRequest(), fixture.path());
+        if (!run.has_value()) {
+            return false;
+        }
+        auto resultOpt = awaitExportRun(*run);
+        return resultOpt.has_value() && static_cast<bool>(*resultOpt) &&
+               resultOpt->publication() != nullptr &&
+               resultOpt->publication()->outcome ==
+                   platform::StagedArtifactPublicationOutcome::Published &&
+               std::filesystem::exists(target);
+    };
+
+    std::shared_ptr<const output::OutputAnalysisAttemptV1> cpuAttempt;
+    std::shared_ptr<const output::OutputAnalysisAttemptV1> gpuExrAttempt;
+    std::shared_ptr<const output::OutputAnalysisAttemptV1> gpuPngAttempt;
+    std::optional<host::OutputAnalysisAttemptGpuProvenanceV1> cpuProvenance;
+    std::optional<host::OutputAnalysisAttemptGpuProvenanceV1> gpuExrProvenance;
+    std::optional<host::OutputAnalysisAttemptGpuProvenanceV1> gpuPngProvenance;
+    const auto cpuPngTarget = fixture.path() / "parity-cpu.png";
+    const auto gpuExrTarget = fixture.path() / "parity-gpu.exr";
+    const auto gpuPngTarget = fixture.path() / "parity-gpu.png";
+    if (!buildAttempt(cpuPngTarget, output::OutputPresetV1::PngRgba8SrgbV1, nullptr, cpuAttempt,
+                      cpuProvenance) ||
+        !buildAttempt(gpuExrTarget, output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
+                      provider, gpuExrAttempt, gpuExrProvenance) ||
+        !buildAttempt(gpuPngTarget, output::OutputPresetV1::PngRgba8SrgbV1, provider, gpuPngAttempt,
+                      gpuPngProvenance)) {
+        expectations.expect(false, "gpu parity: the CPU/GPU attempts complete");
+        return;
+    }
+    expectations.expect(
+        gpuExrAttempt->frame()->identity().provider == runtime::EvaluationProvider::GpuResident &&
+            gpuPngAttempt->frame()->identity().provider == runtime::EvaluationProvider::GpuResident,
+        "gpu parity: both GPU attempts retain GpuResident provenance");
+    expectations.expect(gpuExrProvenance.has_value() && gpuExrProvenance->gpuEvaluated() &&
+                            gpuExrProvenance->counters.readbacks == 1 &&
+                            gpuPngProvenance.has_value() && gpuPngProvenance->gpuEvaluated() &&
+                            gpuPngProvenance->counters.readbacks == 1,
+                        "gpu parity: both GPU attempts performed exactly one final readback");
+
+    // Process parity against the unchanged CPU final reference: finite-component absolute/relative
+    // 2e-6, alpha exact.
+    const auto& cpuPixels = cpuAttempt->frame()->processImage().pixels();
+    const auto& gpuPixels = gpuExrAttempt->frame()->processImage().pixels();
+    constexpr float kTolerance = 2e-6F;
+    bool processParity = cpuPixels.size() == gpuPixels.size();
+    if (processParity) {
+        for (std::size_t index = 0; index < cpuPixels.size() && processParity; ++index) {
+            const auto& cpuPixel = cpuPixels[index];
+            const auto& gpuPixel = gpuPixels[index];
+            if (cpuPixel.alpha() != gpuPixel.alpha()) {
+                processParity = false;
+                break;
+            }
+            for (std::size_t component = 0; component < 3; ++component) {
+                const auto a = cpuPixel.components()[component];
+                const auto b = gpuPixel.components()[component];
+                const auto difference = std::abs(a - b);
+                if (difference > kTolerance &&
+                    difference > kTolerance * std::max(std::abs(a), std::abs(b))) {
+                    processParity = false;
+                    break;
+                }
+            }
+        }
+    }
+    expectations.expect(processParity,
+                        "gpu parity: GPU process pixels match the CPU reference within 2e-6 with "
+                        "exact alpha");
+
+    expectations.expect(publish(gpuExrAttempt, gpuExrTarget),
+                        "gpu parity: the GPU-composited EXR publishes");
+    const output::FlatExrRgba32fLinRec709SceneReopenVerifierV1 exrVerifier;
+    const auto exrVerify = exrVerifier.verify(gpuExrTarget, gpuExrAttempt->processIdentity(),
+                                              gpuExrAttempt->report(), {});
+    expectations.expect(exrVerify.status() == output::FlatExrVerifyStatusV1::Verified,
+                        "gpu parity: the GPU-composited EXR independently reopen-verifies pixels "
+                        "and descriptors");
+
+    expectations.expect(publish(cpuAttempt, cpuPngTarget) && publish(gpuPngAttempt, gpuPngTarget),
+                        "gpu parity: both PNGs publish");
+    const auto cpuDecoded = independentlyDecodePng(cpuPngTarget);
+    const auto gpuDecoded = independentlyDecodePng(gpuPngTarget);
+    expectations.expect(cpuDecoded.ok && gpuDecoded.ok && cpuDecoded.width == gpuDecoded.width &&
+                            cpuDecoded.height == gpuDecoded.height &&
+                            cpuDecoded.rgba.size() == gpuDecoded.rgba.size(),
+                        "gpu parity: both PNGs independently decode with matching descriptors");
+    bool pngParity =
+        cpuDecoded.ok && gpuDecoded.ok && cpuDecoded.rgba.size() == gpuDecoded.rgba.size();
+    if (pngParity) {
+        for (std::size_t index = 0; index < cpuDecoded.rgba.size(); ++index) {
+            const int difference = std::abs(static_cast<int>(cpuDecoded.rgba[index]) -
+                                            static_cast<int>(gpuDecoded.rgba[index]));
+            const bool alpha = index % 4U == 3U;
+            if ((alpha && difference != 0) || (!alpha && difference > 1)) {
+                pngParity = false;
+                break;
+            }
+        }
+    }
+    expectations.expect(pngParity,
+                        "gpu parity: GPU-composited PNG pixels match the CPU reference within one "
+                        "code with exact alpha");
+    static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+}
+
 } // namespace
 
-int main() {
+int main(const int argc, char** argv) {
     Expectations expectations;
+    bool requireDevice = false;
+    for (int index = 1; index < argc; ++index) {
+        if (std::string_view(argv[index]) == "--require-device") {
+            requireDevice = true;
+        }
+    }
     try {
         testDigestMismatchRejected(expectations);
         testIntentRegisteredExactlyOnce(expectations);
@@ -1390,6 +1578,7 @@ int main() {
         testBothPresetsExportFromTheSameFixture(expectations);
         testPngPreparedBytesLimitExceededIsTyped(expectations);
         testPngColorPreparingCancellationPublishesNothing(expectations);
+        testGpuCompositedExportParity(expectations, requireDevice);
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return EXIT_FAILURE;

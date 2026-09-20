@@ -6,6 +6,10 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/commands/operations.hpp>
+#include <bloom/commands/transaction.hpp>
+#include <bloom/core/rational_time.hpp>
+#include <bloom/document/composition_settings.hpp>
 #include <bloom/document/node_layout.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
@@ -62,6 +66,24 @@ struct WindowFixture {
         if (!runtime::registerBuiltInNodeDefinitions(definitions))
             throw std::runtime_error("Node definitions failed");
         definitions.freeze();
+        // Explicit seed opt-in (File > New and application startup now begin blank, with no
+        // composition). This fixture authors a real sample graph, so it creates the one composition
+        // it needs through the ordinary command path a user's first New Composition would use --
+        // production never auto-seeds. Tests that need the genuine blank startup build their own
+        // ProjectHost rather than this fixture.
+        if (session.composition() == nullptr) {
+            const auto duration = core::RationalTime::fromInteger(10);
+            commands::Transaction seed("Seed fixture composition", session.snapshot().revision());
+            seed.emplace<commands::AddComposition>("Composition 1", document::CompositionFormat{},
+                                                   duration);
+            const auto seeded = session.executeTransaction(std::move(seed));
+            const auto seededId =
+                seeded.succeeded()
+                    ? seeded.outputId<document::CompositionId>(commands::kAddCompositionOutput)
+                    : std::nullopt;
+            if (!seededId.has_value() || !session.setComposition(*seededId))
+                throw std::runtime_error("Fixture composition seed failed");
+        }
         assets = std::make_unique<AssetController>(session, projectHost, scheduler, bridge);
         if (author)
             author(*this);

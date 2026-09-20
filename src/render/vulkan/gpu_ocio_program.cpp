@@ -460,10 +460,19 @@ GpuOcioProgramCreateResult GpuOcioProgram::create(GpuDevice& device, OcioGpuProg
                 makeDiagnostic(GpuOcioProgramDiagnosticCode::InvalidArgument,
                                "the immutable uniform snapshot does not match the UBO size")};
     }
+    VkPhysicalDeviceProperties deviceLimits{};
+    state->physicalDevice.getDispatcher()->vkGetPhysicalDeviceProperties(
+        static_cast<VkPhysicalDevice>(*state->physicalDevice), &deviceLimits);
     auto impl = std::make_unique<Impl>();
     impl->control = state;
     impl->owner = state->owner;
     impl->budgets = budgets;
+    // A caller-supplied cap may only lower the real device limit; it can never authorize a
+    // vkCmdDispatch above maxComputeWorkGroupCount. Zero selects the physical limit.
+    impl->maxWorkGroupCountX = ocio_program_detail::effectiveWorkGroupCount(
+        budgets.maxWorkGroupCountX, deviceLimits.limits.maxComputeWorkGroupCount[0]);
+    impl->maxWorkGroupCountY = ocio_program_detail::effectiveWorkGroupCount(
+        budgets.maxWorkGroupCountY, deviceLimits.limits.maxComputeWorkGroupCount[1]);
     impl->expectedGeneration = static_cast<std::uint32_t>(device.ownershipEpoch());
     impl->desc = std::move(program);
     impl->spirv.assign(spirv.begin(), spirv.end());

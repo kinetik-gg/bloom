@@ -229,6 +229,47 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         COMMAND bloom_render_gpu_process_readback_test
         LABELS unit gpu render export
     )
+
+    # Production combined output-colour readback: ONE submission carrying two distinct payloads
+    # (process RGBA32F + encoded RGBA32F effect or RGBA8 display), process-only identity, pre-submit
+    # budget refusal, and cancellation retirement.
+    add_executable(bloom_render_gpu_output_color_readback_test
+        gpu_output_color_readback_tests.cpp)
+    target_link_libraries(bloom_render_gpu_output_color_readback_test PRIVATE bloom_render)
+    target_include_directories(bloom_render_gpu_output_color_readback_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan" "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/include/vulkan")
+        target_include_directories(bloom_render_gpu_output_color_readback_test
+            SYSTEM PRIVATE "${BLOOM_DEPENDENCY_PREFIX}/include")
+    endif()
+    bloom_enable_warnings(bloom_render_gpu_output_color_readback_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_output_color_readback_test)
+    bloom_add_test(
+        NAME bloom.render.gpu_output_color_readback
+        COMMAND bloom_render_gpu_output_color_readback_test
+        LABELS unit gpu render export color
+    )
+
+    # Deterministic fault injection for the combined readback reservation: forced allocation
+    # failure, forced submit failure, forced fence timeout (bounded quarantine + refusal +
+    # recovery), and foreign-thread destruction retention.
+    add_executable(bloom_render_gpu_output_color_readback_fault_test
+        gpu_output_color_readback_fault_tests.cpp)
+    target_link_libraries(bloom_render_gpu_output_color_readback_fault_test
+        PRIVATE bloom_render_output_color_readback_test_faults bloom_render)
+    target_include_directories(bloom_render_gpu_output_color_readback_fault_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan" "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/include/vulkan")
+        target_include_directories(bloom_render_gpu_output_color_readback_fault_test
+            SYSTEM PRIVATE "${BLOOM_DEPENDENCY_PREFIX}/include")
+    endif()
+    bloom_enable_warnings(bloom_render_gpu_output_color_readback_fault_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_output_color_readback_fault_test)
+    bloom_add_test(
+        NAME bloom.render.gpu_output_color_readback_fault
+        COMMAND bloom_render_gpu_output_color_readback_fault_test
+        LABELS unit gpu render export color
+    )
 endif()
 
 # CPU-only kernel-prep and host-metadata test for AffineBilinearV1: hashes the embedded SPIR-V array

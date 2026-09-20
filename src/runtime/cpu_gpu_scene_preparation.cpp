@@ -5,6 +5,7 @@
 #include "gpu_scene_layer_emission.hpp"
 #include "gpu_scene_media_layer.hpp"
 #include "gpu_scene_nested.hpp"
+#include "gpu_scene_preparation_builders.hpp"
 #include "gpu_scene_preparation_private.hpp"
 #include "gpu_scene_vector_emission.hpp"
 
@@ -48,7 +49,9 @@ struct GpuSceneVectorChain final {
 // Operations whose pixels are colour-space agnostic: their values are resolved through the exact
 // configured input->working OCIO transform (or are blend/geometry logic over already-resolved
 // pixels), so they are correct under any resolvable working space. The lin_rec709_scene-specific
-// operations (solid pixel, vector coverage, view adjust) are deliberately absent.
+// operations (solid pixel, vector coverage, view adjust) are deliberately absent. Used only to keep
+// a non-neutral working space honest: it is admitted for exactly these media scenes and refused for
+// every scene that also carries a lin_rec709-specific operation.
 [[nodiscard]] bool isMediaSafeOperation(const CompiledOperation& operation) noexcept {
     return std::holds_alternative<CompiledImageSource>(operation) ||
            std::holds_alternative<CompiledVideoSource>(operation) ||
@@ -57,18 +60,6 @@ struct GpuSceneVectorChain final {
            std::holds_alternative<CompiledMerge>(operation) ||
            std::holds_alternative<CompiledCompositionSource>(operation) ||
            std::holds_alternative<CompiledCompositionOutput>(operation);
-}
-
-[[nodiscard]] bool isSubsetOperation(const CompiledOperation& operation) noexcept {
-    return std::holds_alternative<CompiledSolid>(operation) ||
-           std::holds_alternative<CompiledText>(operation) ||
-           std::holds_alternative<CompiledShape>(operation) ||
-           std::holds_alternative<CompiledImageSource>(operation) ||
-           std::holds_alternative<CompiledVideoSource>(operation) ||
-           std::holds_alternative<CompiledLayerOutput>(operation) ||
-           std::holds_alternative<CompiledMerge>(operation) ||
-           std::holds_alternative<CompiledCompositionOutput>(operation) ||
-           std::holds_alternative<CompiledCompositionSource>(operation);
 }
 
 } // namespace
@@ -110,7 +101,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     // lin_rec709_scene pixel semantics, so a different working space is refused for it. A
     // media-only scene carries no such operation: its pixels are resolved through the exact
     // configured input->working OCIO transform, so an ACES scene-linear working space (or any other
-    // resolvable one) is prepared. The check runs after reachability below.
+    // resolvable one) is prepared. The reachable-subset check runs below.
     const bool neutralWorkingSpace =
         request.colorIntent.workingColorSpaceId == kLinearRec709SceneColorSpaceId;
     if (plan->operations().empty() || request.output.value() >= plan->operations().size() ||
@@ -125,52 +116,22 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     }
 
     const std::size_t operationCount = plan->operations().size();
-    std::vector<bool> reachable(operationCount, false);
-    std::vector<std::size_t> pending{request.output.value()};
-    while (!pending.empty()) {
-        const auto index = pending.back();
-        pending.pop_back();
-        if (index >= operationCount) {
-            return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                          "Plan references an invalid operation");
-        }
-        if (reachable[index]) {
-            continue;
-        }
-        reachable[index] = true;
-        detail::forEachInput(plan->operations()[index], [&pending](const OperationIndex input) {
-            pending.push_back(input.value());
-        });
-        // A parent is not a pixel input, but the child's composed matrix needs the parent's matrix,
-        // so the parent subtree is part of what this build must resolve. The preflight still
-        // rejects a parent that is not an earlier Layer Output.
-        if (const auto* layer = std::get_if<CompiledLayerOutput>(&plan->operations()[index]);
-            layer && layer->parent && layer->parent->value() < operationCount) {
-            pending.push_back(layer->parent->value());
-        }
+    // The reachable-operation subset classifier is extracted to gpu_scene_preparation_builders.hpp.
+    std::vector<bool> reachable;
+    if (const auto error = detail::computeReachablePreparedOperations(*plan, request.output.value(),
+                                                                      cancellation, reachable)) {
+        return failed(error->code, error->message);
     }
-    for (std::size_t index = 0; index < operationCount; ++index) {
-        if (!reachable[index]) {
-            continue;
-        }
-        const auto& operation = plan->operations()[index];
-        if (!isSubsetOperation(operation)) {
-            return failed(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
-                          "A reachable operation is outside the prepared subset");
-        }
-        // A composition source is inside the prepared subset only when it names a present,
-        // compatible child plan. A source that does not is refused exactly as it was before nested
-        // compositions were prepared at all, before any resolution or child build.
-        if (const auto* source = std::get_if<CompiledCompositionSource>(&operation);
-            source != nullptr && !detail::nestedCompositionChainIsSupported(*source, *plan)) {
-            return failed(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
-                          "A composition source without a supported nested plan is outside the "
-                          "prepared subset");
-        }
-        if (!neutralWorkingSpace && !isMediaSafeOperation(operation)) {
-            return failed(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
-                          "A non-lin_rec709_scene working space is prepared only for media-only "
-                          "scenes");
+    // A non-neutral working space is honest only for the media-safe subset. A scene that also
+    // reaches a lin_rec709_scene-specific operation (solid pixel, vector coverage, view adjust)
+    // still refuses a non-neutral working space rather than mis-colouring it.
+    if (!neutralWorkingSpace) {
+        for (std::size_t index = 0; index < operationCount; ++index) {
+            if (reachable[index] && !isMediaSafeOperation(plan->operations()[index])) {
+                return failed(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
+                              "A non-lin_rec709_scene working space is prepared only for "
+                              "media-only scenes");
+            }
         }
     }
 
@@ -440,7 +401,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             detail::GpuSceneNestedResult nested;
             const auto error = detail::prepareNestedComposition(
                 *source, *plan, request, resolved, hScale, vScale, detail::nestedCompositionDepth(),
-                allowance > chargedBytes ? allowance - chargedBytes : 0, cancellation,
+                allowance, chargedBytes, cancellation,
                 [this](const std::shared_ptr<const CompiledCompositionPlan>& childPlan,
                        const EvaluationRequest& childRequest, const CancellationToken& cancel) {
                     return build(childPlan, childRequest, cancel);
@@ -448,18 +409,6 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 commands, nested);
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
-            }
-            if (!nested.outputWindow.has_value()) {
-                return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                              "the nested composition published no output window", mediaStatistics);
-            }
-            if (nested.residentBytes != 0) {
-                if (chargedBytes > allowance || nested.residentBytes > allowance - chargedBytes) {
-                    return failed(PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
-                                  "Prepared scene exceeds the request pixel allowance",
-                                  mediaStatistics);
-                }
-                chargedBytes += nested.residentBytes;
             }
             bounds[index] = nested.bounds;
             outputWindowOf[index] = *nested.outputWindow;

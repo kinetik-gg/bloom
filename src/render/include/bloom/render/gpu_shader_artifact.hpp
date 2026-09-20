@@ -28,6 +28,12 @@ struct GpuShaderToolIdentity {
 struct CompiledGpuShader {
     std::vector<std::uint8_t> spirv;
     core::Sha256Digest spirvDigest{};
+    // Exact SHA-256 of the complete GLSL source bytes that produced this artifact, set by the
+    // compiler (or a compiler-cache result). A runtime consumer can bind an artifact to the exact
+    // source it was compiled from instead of trusting an independently supplied digest. Zero means
+    // the artifact carries no source provenance (a legacy/hand-built artifact) and must be refused
+    // by a consumer that requires provenance.
+    core::Sha256Digest sourceDigest{};
     std::string entryPoint;
     std::string targetEnvironment;
     GpuShaderStage stage = GpuShaderStage::Compute;
