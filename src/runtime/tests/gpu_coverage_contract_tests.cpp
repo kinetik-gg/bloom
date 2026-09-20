@@ -3,13 +3,15 @@
 // pixel operation that only reaches Unsupported is reported by name as a hole. A requirement with
 // no genuine fixture is a missing-fixture failure, never a pass.
 //
-// The native acceptance path is a distinct CTest (`--native-acceptance`): with a device it reports
-// the Missing native fixtures and fails; without a device it exits 77 (CTest SKIP). With
-// `--require-device` an unavailable device is a hard failure. It never returns a passing status it
-// did not earn.
-//
-// This gate is EXPECTED RED until the required production fixtures exist. It is the gate that
-// later integration turns green without weakening the contract or adding opt-outs.
+// This is a strict acceptance gate, not an expected-RED report. On the CPU path every Required
+// operation/effect/feature/node-type id must have a fixture the production builder genuinely
+// prepares. On the native path (`--native-acceptance`, a distinct CTest) every such fixture must
+// genuinely execute on a real device and match the unchanged CPU oracle, and every Required render
+// route must carry a fresh, run-nonce-matched genuine proof from its owning harness. Without a
+// device the native CTest SKIPs (exit 77); `--require-device` makes an unavailable device a hard
+// failure. The gate never passes a requirement it did not earn and never adds an opt-out to turn a
+// hole green. "Green" means every Required id was genuinely prepared or genuinely executed on the
+// hardware present in this run; it is not a claim that every platform or GPU has been qualified.
 
 #include "gpu_coverage_contract_plans.hpp"
 #include "gpu_coverage_display_support.hpp"
@@ -17,6 +19,7 @@
 #include "gpu_coverage_gate_support.hpp"
 #include "gpu_coverage_media_support.hpp"
 #include "gpu_coverage_mutation_support.hpp"
+#include "gpu_coverage_native_acceptance.hpp"
 #include "gpu_coverage_native_support.hpp"
 #include "gpu_coverage_ocio_support.hpp"
 #include "gpu_coverage_route_proof_support.hpp"
@@ -449,160 +452,6 @@ displayProofRunner(const bool customView) {
     return list;
 }
 
-// Mutation proof for the node registry: a new node type sharing an existing lowering must gain its
-// own required id, with no fixture, so it cannot silently reuse another node's fixture.
-[[nodiscard]] int runNativeAcceptance(const std::filesystem::path& loader, const bool requireDevice,
-                                      const std::filesystem::path& routeProofDirectory) {
-    bloom::render::GpuDeviceCreationOptions options;
-    options.loader_path = loader;
-    auto device = bloom::render::GpuDevice::create(options);
-    if (!device) {
-        if (requireDevice) {
-            std::cerr << "FAIL: --require-device was requested but no native GPU device is "
-                         "available: "
-                      << device.diagnostic.message << '\n';
-            return 1;
-        }
-        std::cerr << "SKIP: no native GPU device available: " << device.diagnostic.message << '\n';
-        return 77;
-    }
-    const auto list = fixtures();
-    // Genuine route proofs are produced by the real harnesses and handed off through the run-scoped
-    // directory. No proof is invented here: when the directory or nonce is absent, or a harness did
-    // not run, every route stays MISSING.
-    std::string routeNonce;
-    std::string routeProofUnavailable;
-    std::vector<bloom::gpu_route_proof_io::RouteProofLoadResult> routeProofs;
-    if (!routeProofDirectory.empty()) {
-        if (bloom::gpu_route_proof_io::readRunNonce(routeProofDirectory, routeNonce) !=
-            bloom::gpu_route_proof_io::RouteProofIoStatus::Ok) {
-            routeProofUnavailable = "no fresh run nonce in " + routeProofDirectory.string();
-        } else {
-            routeProofs =
-                bloom::gpu_route_proof_io::readKnownRouteProofs(routeProofDirectory, routeNonce);
-        }
-    }
-    const auto findRouteProof = [&routeProofs](const std::string& id) {
-        for (const auto& result : routeProofs) {
-            if (result.routeId == id) {
-                return &result;
-            }
-        }
-        return static_cast<const bloom::gpu_route_proof_io::RouteProofLoadResult*>(nullptr);
-    };
-    std::size_t passed = 0;
-    std::size_t failed = 0;
-    std::size_t missing = 0;
-    for (const auto& id : requiredCoverageIds()) {
-        // Routes are covered only by a genuine proof from their real harness; this executor helper
-        // is never relabelled as a viewer/RAM/export route proof.
-        if (id.rfind("route.", 0) == 0) {
-            if (routeProofDirectory.empty()) {
-                std::cerr << "MISSING(native-route) " << id << " (owner " << routeOwner(id)
-                          << ")\n";
-                ++missing;
-                continue;
-            }
-            const auto* proof = findRouteProof(id);
-            if (proof != nullptr && proof->accepted) {
-                std::cout << "PASS(route-proof) " << id << ": nonce " << routeNonce << ", frames "
-                          << proof->proof.verifiedFrames << ", submissions "
-                          << proof->proof.readbackSubmissions << ", payloads "
-                          << proof->proof.payloads << ", bytes " << proof->proof.transferredBytes
-                          << '\n';
-                ++passed;
-            } else {
-                std::cerr << "MISSING(route-proof) " << id << ": "
-                          << (proof == nullptr ? routeProofUnavailable : proof->detail)
-                          << " (owner " << routeOwner(id) << ")\n";
-                ++missing;
-            }
-            continue;
-        }
-        const auto* fixture = findFixture(list, id);
-        if (fixture == nullptr) {
-            std::cerr << "MISSING(no-fixture) " << id << '\n';
-            ++missing;
-            continue;
-        }
-        if (fixture->criterion == GpuCoverageFixtureCriterion::NativeRequired) {
-            if (!fixture->nativeProof) {
-                std::cerr << "MISSING(native-only) " << id << " (owner " << fixture->owner << ")\n";
-                ++missing;
-                continue;
-            }
-            std::string evidence;
-            const auto ocioContext = bloom::gpu_coverage_ocio::context();
-            if (fixture->nativeProof(*device.device, ocioContext, evidence)) {
-                std::cout << "PASS " << id << ": " << evidence << '\n';
-                ++passed;
-            } else {
-                std::cerr << "FAIL " << id << ": " << evidence << '\n';
-                ++failed;
-            }
-            continue;
-        }
-        const auto run = fixture->run();
-        if (!run.prepared || run.frames.empty()) {
-            std::cerr << "FAIL(no-gpu-prep) " << id << ": " << run.evidence << '\n';
-            ++failed;
-            continue;
-        }
-        bool allFrames = true;
-        std::string frameEvidence;
-        for (const auto& frame : run.frames) {
-            const bloom::runtime::CpuCompositionEvaluator evaluator;
-            if (!frame.baseDirectory.empty()) {
-                evaluator.setAssetBaseDirectory(frame.baseDirectory);
-            }
-            const auto outcome = bloom::gpu_coverage_native::runNativeFixture(
-                *device.device, evaluator, frame.plan, frame.request, frame.scene);
-            if (!outcome.passed) {
-                allFrames = false;
-                frameEvidence = outcome.evidence;
-                break;
-            }
-            frameEvidence = outcome.evidence;
-        }
-        if (allFrames) {
-            std::cout << "PASS " << id << ": " << frameEvidence << '\n';
-            ++passed;
-        } else {
-            std::cerr << "FAIL " << id << ": " << frameEvidence << '\n';
-            ++failed;
-        }
-    }
-    // Dedicated nested proof: the per-fixture run above checks cold/warm parity, but the child
-    // branch reuse across a single-branch edit is proven here through the same production builder
-    // and executor, on two parent scenes whose children differ in one branch only.
-    {
-        const auto plans = nestedBranchReusePlans();
-        const bloom::runtime::CpuGpuSceneBuilder builder;
-        const auto requestA = requestFor(*plans.planA);
-        const auto requestB = requestFor(*plans.planB);
-        const auto preparedA = builder.build(plans.planA, requestA);
-        const auto preparedB = builder.build(plans.planB, requestB);
-        std::string evidence;
-        const bloom::runtime::CpuCompositionEvaluator evaluator;
-        if (!preparedA || !preparedB) {
-            std::cerr << "FAIL nested-branch-reuse: both parent scenes must prepare\n";
-            ++failed;
-        } else if (!bloom::gpu_coverage_native::runNestedBranchReuse(
-                       *device.device, evaluator, plans.planA, requestA, preparedA.scene,
-                       plans.planB, requestB, preparedB.scene, evidence)) {
-            std::cerr << "FAIL nested-branch-reuse: " << evidence << '\n';
-            ++failed;
-        } else {
-            std::cout << "PASS nested-branch-reuse: " << evidence << '\n';
-            ++passed;
-        }
-    }
-
-    std::cout << "\nNATIVE coverage: " << passed << " pass, " << failed << " fail, " << missing
-              << " missing\n";
-    return (failed == 0 && missing == 0) ? 0 : 1;
-}
-
 } // namespace
 
 int main(int argc, char** argv) {
@@ -625,7 +474,8 @@ int main(int argc, char** argv) {
         }
     }
     if (nativeAcceptance || requireDevice) {
-        return runNativeAcceptance(loader, requireDevice, routeProofDirectory);
+        return bloom::gpu_coverage_gate::runNativeAcceptance(fixtures(), loader, requireDevice,
+                                                             routeProofDirectory);
     }
 
     const auto list = fixtures();
