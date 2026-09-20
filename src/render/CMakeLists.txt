@@ -730,6 +730,7 @@ target_sources(
         gpu_affine_host.cpp
         image.cpp
         image_types.cpp
+        ocio_gpu_program.cpp
         text_glyph_source.hpp
         text_raster.cpp
         path_raster.cpp
@@ -747,7 +748,9 @@ target_sources(
             include/bloom/render/gpu_image.hpp
             include/bloom/render/gpu_image_upload.hpp
             include/bloom/render/gpu_neutral_display.hpp
+            include/bloom/render/gpu_ocio_program.hpp
             include/bloom/render/gpu_present_image.hpp
+            include/bloom/render/ocio_gpu_program.hpp
             include/bloom/render/gpu_presentation_target.hpp
             include/bloom/render/gpu_presentation_types.hpp
             include/bloom/render/gpu_resident_display.hpp
@@ -783,6 +786,11 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_neutral_display.cpp
         vulkan/gpu_neutral_display_private.hpp
         vulkan/gpu_neutral_display_resources.cpp
+        vulkan/gpu_ocio_program.cpp
+        vulkan/gpu_ocio_program_api.cpp
+        vulkan/gpu_ocio_program_dispatch.cpp
+        vulkan/gpu_ocio_program_private.hpp
+        vulkan/gpu_ocio_program_resources.cpp
         vulkan/gpu_present_image.cpp
         vulkan/gpu_present_image_private.hpp
         vulkan/gpu_present_image_resources.cpp
@@ -828,6 +836,7 @@ else()
     target_sources(bloom_render PRIVATE gpu_affine_stub.cpp gpu_blend_stub.cpp
                                      gpu_composite_stub.cpp gpu_device_stub.cpp
                                      gpu_image_upload_stub.cpp gpu_neutral_display_stub.cpp
+                                     gpu_ocio_program_stub.cpp
                                      gpu_present_image_stub.cpp gpu_presentation_target_stub.cpp
                                      gpu_resident_display_stub.cpp gpu_solid_stub.cpp)
 endif()
