@@ -304,7 +304,7 @@ class ViewerEditor final : public QWidget,
     // generation, so the unsafe-clear / safe-preserve / stale contract is testable without a
     // presenter.
     void finishSimulatedExternalRetireForTest(std::uint64_t hostGeneration, bool safeToMutate,
-                                              PrepareCallback completion,
+                                              const PrepareCallback& completion,
                                               const std::string& diagnostic = {});
     [[nodiscard]] std::uint64_t hostMutationGenerationForTest() const noexcept;
     // Test-only: the resident present request the viewer would submit for the current transform,

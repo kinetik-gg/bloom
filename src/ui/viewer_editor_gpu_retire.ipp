@@ -271,7 +271,7 @@ void ViewerEditor::simulateExternalRetireInFlightForTest() {
 
 void ViewerEditor::finishSimulatedExternalRetireForTest(const std::uint64_t hostGeneration,
                                                         const bool safeToMutate,
-                                                        PrepareCallback completion,
+                                                        const PrepareCallback& completion,
                                                         const std::string& diagnostic) {
     // Drives the exact body the queued external completion runs (onExternalNativeRetireResult), so
     // the unsafe-clear / safe-preserve / stale-generation contract is testable without a presenter.
