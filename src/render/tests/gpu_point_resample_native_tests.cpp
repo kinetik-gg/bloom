@@ -11,6 +11,7 @@
 #include <bloom/render/gpu_point_resample.hpp>
 
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -234,6 +235,65 @@ void testGeometryParity(Expectations& expectations, GpuDevice& device) {
     }
 }
 
+// Records the honest per-request cost of the current design: no warm native cache, so the shader
+// pipeline, descriptor set, command pool/buffer, and fence are created per begin(). This is a
+// measurement, not an assertion.
+void testPerRequestCost(Expectations& expectations, GpuDevice& device) {
+    constexpr std::uint32_t kWidth = 64;
+    constexpr std::uint32_t kHeight = 32;
+    constexpr int kIterations = 25;
+    auto resampler = GpuPointResample::create(device);
+    auto uploader = bloom::render::GpuImageUpload::create(device);
+    if (!resampler || !uploader) {
+        expectations.expect(false, "cost: hosts created");
+        return;
+    }
+    const ImageWindow sourceWindow = window(0, 0, kWidth, kHeight);
+    auto sourceImage = makeImage(sourceWindow, sourceWindow, PixelAspectRatio::square(),
+                                 hdrAlphaPixels(kWidth, kHeight));
+    if (!sourceImage) {
+        expectations.expect(false, "cost: source built");
+        return;
+    }
+    auto sourceResident =
+        upload(*uploader.upload, std::make_shared<const Rgba32fImage>(std::move(*sourceImage)));
+    if (!sourceResident) {
+        expectations.expect(false, "cost: source uploaded");
+        return;
+    }
+    auto source = std::make_shared<const GpuImage>(std::move(*sourceResident));
+    const auto aspect = PixelAspectRatio::square();
+    const ImageWindow displayWindow = window(0, 0, kWidth, kHeight);
+    const auto output = outputDescriptor(kWidth, kHeight, displayWindow, aspect);
+    if (!output) {
+        expectations.expect(false, "cost: output descriptor built");
+        return;
+    }
+    const GpuPointResampleRequest request{source, *output, 1.0, 1.0};
+    const auto start = std::chrono::steady_clock::now();
+    for (int iteration = 0; iteration < kIterations; ++iteration) {
+        if (resampler.resampler->begin(request, kBudget).code !=
+            GpuPointResampleDiagnosticCode::None) {
+            expectations.expect(false, "cost: begin accepted");
+            return;
+        }
+        GpuPointResamplePollResult poll = GpuPointResamplePollResult::Pending;
+        while (poll == GpuPointResamplePollResult::Pending) {
+            poll = resampler.resampler->poll();
+        }
+        if (poll != GpuPointResamplePollResult::Ready) {
+            expectations.expect(false, "cost: job completed");
+            return;
+        }
+        static_cast<void>(resampler.resampler->take());
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    const auto micros =
+        std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count() / kIterations;
+    std::cout << "point-resample per-request begin->Ready->take (no warm native cache): " << micros
+              << " us over " << kIterations << " iterations\n";
+}
+
 void testOwnershipRejectionsAndCancellation(Expectations& expectations, GpuDevice& device) {
     auto resampler = GpuPointResample::create(device);
     auto uploader = bloom::render::GpuImageUpload::create(device);
@@ -303,6 +363,7 @@ void testOwnershipRejectionsAndCancellation(Expectations& expectations, GpuDevic
         expectations.expect(poll == GpuPointResamplePollResult::Ready, "the job completes");
         expectations.expect(!resampler.resampler->hasUnretiredSubmission(),
                             "a retired job reports no unretired submission");
+        static_cast<void>(resampler.resampler->take());
     }
 
     // A poll from a foreign thread must fail closed and leave the pending job retireable on the
@@ -322,6 +383,7 @@ void testOwnershipRejectionsAndCancellation(Expectations& expectations, GpuDevic
         }
         expectations.expect(poll == GpuPointResamplePollResult::Ready,
                             "the owner thread still retires the poll-gate job");
+        static_cast<void>(resampler.resampler->take());
     }
 
     // Cancellation: begin, cancel, then poll to retirement reports Cancelled.
@@ -485,6 +547,7 @@ int main(int argc, char** argv) {
         }
         expectations.expect(device.device->state() == GpuDeviceState::Ready, "the device is Ready");
         testGeometryParity(expectations, *device.device);
+        testPerRequestCost(expectations, *device.device);
         testOwnershipRejectionsAndCancellation(expectations, *device.device);
         testBudgetRecoveryAndLimits(expectations, *device.device);
         if (expectations.failures() != 0) {

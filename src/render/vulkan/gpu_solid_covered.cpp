@@ -1,6 +1,9 @@
 #include "gpu_solid_private.hpp"
 
+#include "gpu_path_coverage_private.hpp"
+
 #include <bloom/render/cpu_image_primitives.hpp>
+#include <bloom/render/gpu_path_coverage.hpp>
 
 #include "shaders/solid_covered_spirv.inc"
 
@@ -10,6 +13,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -249,14 +253,12 @@ bool GpuSolid::Impl::createCoveredPipeline() {
     return true;
 }
 
-GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
-                                          const std::span<const std::uint8_t> coverage,
-                                          const float opacity, const std::uint64_t byteBudget) {
-    if (impl_ == nullptr) {
-        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
-                                  "the SolidV1 pipeline is not initialized");
-    }
-    Impl& impl = *impl_;
+GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
+    const GpuSolidParameters& base, const std::span<const std::uint8_t> hostCoverage,
+    const float opacity, const std::uint64_t byteBudget, const VkBuffer residentMaskBuffer,
+    const std::uint64_t residentMaskBytes, std::shared_ptr<void> residentOwner) {
+    Impl& impl = *this;
+    const bool usingResident = residentMaskBuffer != VK_NULL_HANDLE;
     if (!impl.onOwnerThread()) {
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::WrongThread,
                                   "beginCovered must run on the device owner thread");
@@ -279,7 +281,7 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
                                   "the data window is empty");
     }
     const std::uint64_t pixels = static_cast<std::uint64_t>(width) * height;
-    if (coverage.size() != pixels) {
+    if (!usingResident && hostCoverage.size() != pixels) {
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::InvalidArgument,
                                   "the coverage byte count must equal width*height");
     }
@@ -297,6 +299,10 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
                                   "the resident image exceeds the requested byte budget");
     }
     const std::uint64_t maskBytes = ((pixels + 3ULL) / 4ULL) * 4ULL;
+    if (usingResident && residentMaskBytes != maskBytes) {
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::InvalidArgument,
+                                  "the resident coverage mask does not match the data window");
+    }
     const std::uint64_t retained = imageBytes + maskBytes + kPaletteBytes;
     if (retained < imageBytes || retained > byteBudget) {
         return gpuSolidDiagnostic(
@@ -363,18 +369,26 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
                                   "the covered palette buffer could not be allocated");
     }
-    if (!createHostStorageBuffer(*impl.control, maskBytes, impl.coveredMask)) {
-        impl.coveredPalette.release();
-        impl.releaseResident();
-        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
-                                  "the covered mask buffer could not be allocated");
+    if (usingResident) {
+        // Bind the producer's already-resident packed mask directly. The shared
+        // owner keeps it alive until this submission's fence is proved retired; no
+        // host read or re-upload happens.
+        impl.coveredMask.buffer = residentMaskBuffer;
+        impl.coveredMask.bytes = residentMaskBytes;
+        impl.coveredMask.armed = false;
+        impl.coveredMask.owner = std::move(residentOwner);
+    } else {
+        if (!createHostStorageBuffer(*impl.control, maskBytes, impl.coveredMask)) {
+            impl.coveredPalette.release();
+            impl.releaseResident();
+            return gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
+                                      "the covered mask buffer could not be allocated");
+        }
     }
 
     VmaAllocationInfo paletteInfo{};
-    VmaAllocationInfo maskInfo{};
     vmaGetAllocationInfo(impl.control->allocator, impl.coveredPalette.allocation, &paletteInfo);
-    vmaGetAllocationInfo(impl.control->allocator, impl.coveredMask.allocation, &maskInfo);
-    if (paletteInfo.pMappedData == nullptr || maskInfo.pMappedData == nullptr) {
+    if (paletteInfo.pMappedData == nullptr) {
         impl.coveredPalette.release();
         impl.coveredMask.release();
         impl.releaseResident();
@@ -382,13 +396,24 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
                                   "a covered input buffer could not be mapped");
     }
     std::memcpy(paletteInfo.pMappedData, palette.data(), static_cast<std::size_t>(kPaletteBytes));
-    packCoverageLittleEndian(
-        coverage, std::span<std::uint8_t>(static_cast<std::uint8_t*>(maskInfo.pMappedData),
-                                          static_cast<std::size_t>(maskBytes)));
+    if (!usingResident) {
+        VmaAllocationInfo maskInfo{};
+        vmaGetAllocationInfo(impl.control->allocator, impl.coveredMask.allocation, &maskInfo);
+        if (maskInfo.pMappedData == nullptr) {
+            impl.coveredPalette.release();
+            impl.coveredMask.release();
+            impl.releaseResident();
+            return gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
+                                      "a covered input buffer could not be mapped");
+        }
+        packCoverageLittleEndian(
+            hostCoverage, std::span<std::uint8_t>(static_cast<std::uint8_t*>(maskInfo.pMappedData),
+                                                  static_cast<std::size_t>(maskBytes)));
+    }
     if (vmaFlushAllocation(impl.control->allocator, impl.coveredPalette.allocation, 0,
                            VK_WHOLE_SIZE) != VK_SUCCESS ||
-        vmaFlushAllocation(impl.control->allocator, impl.coveredMask.allocation, 0,
-                           VK_WHOLE_SIZE) != VK_SUCCESS) {
+        (!usingResident && vmaFlushAllocation(impl.control->allocator, impl.coveredMask.allocation, 0,
+                                         VK_WHOLE_SIZE) != VK_SUCCESS)) {
         impl.coveredPalette.release();
         impl.coveredMask.release();
         impl.releaseResident();
@@ -401,7 +426,8 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
     const std::uint64_t actualPalette =
         actualAllocationBytes(*impl.control, impl.coveredPalette.allocation);
     const std::uint64_t actualMask =
-        actualAllocationBytes(*impl.control, impl.coveredMask.allocation);
+        usingResident ? residentMaskBytes
+                 : actualAllocationBytes(*impl.control, impl.coveredMask.allocation);
     const std::uint64_t actualRetained = actualImage + actualPalette + actualMask;
     if (actualImage > impl.budgets.maxImageBytes || actualRetained < actualImage ||
         actualRetained > byteBudget) {
@@ -487,9 +513,14 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
                                      nullptr, 1, &toGeneral);
 
     std::array<VkBufferMemoryBarrier, 2> inputBarriers{};
+    const VkAccessFlags inputSourceAccess =
+        VK_ACCESS_HOST_WRITE_BIT | (usingResident ? VK_ACCESS_SHADER_WRITE_BIT : 0U);
+    const VkPipelineStageFlags inputSourceStage =
+        VK_PIPELINE_STAGE_HOST_BIT |
+        (usingResident ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : static_cast<VkPipelineStageFlags>(0U));
     for (std::size_t index = 0; index < inputBarriers.size(); ++index) {
         inputBarriers[index].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        inputBarriers[index].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+        inputBarriers[index].srcAccessMask = inputSourceAccess;
         inputBarriers[index].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         inputBarriers[index].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         inputBarriers[index].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -498,7 +529,7 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
     }
     inputBarriers[0].buffer = impl.coveredPalette.buffer;
     inputBarriers[1].buffer = impl.coveredMask.buffer;
-    dispatcher->vkCmdPipelineBarrier(rawCommandBuffer, VK_PIPELINE_STAGE_HOST_BIT,
+    dispatcher->vkCmdPipelineBarrier(rawCommandBuffer, inputSourceStage,
                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
                                      static_cast<std::uint32_t>(inputBarriers.size()),
                                      inputBarriers.data(), 0, nullptr);
@@ -560,6 +591,61 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
     impl.jobState = GpuSolidJobState::Pending;
     impl.jobDiagnostic = GpuSolidDiagnostic{};
     return {};
+}
+
+GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters& base,
+                                          const std::span<const std::uint8_t> coverage,
+                                          const float opacity, const std::uint64_t byteBudget) {
+    if (impl_ == nullptr) {
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
+                                  "the SolidV1 pipeline is not initialized");
+    }
+    return impl_->beginCoveredJob(base, coverage, opacity, byteBudget, VK_NULL_HANDLE, 0, nullptr);
+}
+
+GpuSolidDiagnostic GpuSolid::beginCoveredResident(const GpuSolidParameters& base,
+                                                  const GpuPathCoverage& coverage,
+                                                  const float opacity,
+                                                  const std::uint64_t byteBudget) {
+    if (impl_ == nullptr) {
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
+                                  "the SolidV1 pipeline is not initialized");
+    }
+    // Owner first: never read the producer's state or mask from a foreign thread.
+    if (!impl_->onOwnerThread()) {
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::WrongThread,
+                                  "beginCoveredResident must run on the device owner thread");
+    }
+    if (impl_->deviceLost) {
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceLost,
+                                  "the device was lost; this generation must not be reused");
+    }
+    auto mask = gpuPathCoverageMask(coverage);
+    if (mask == nullptr || mask->state == nullptr || mask->buffer == VK_NULL_HANDLE) {
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::InvalidArgument,
+                                  "the resident coverage exposes no mask buffer");
+    }
+    // Exact device and generation identity, then readiness and dimensions. Dimensions alone would
+    // allow binding a foreign-device VkBuffer.
+    if (mask->state != impl_->control) {
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::InvalidArgument,
+                                  "the resident coverage belongs to a different device");
+    }
+    if (mask->generation != impl_->expectedGeneration) {
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::InvalidArgument,
+                                  "the resident coverage belongs to a stale device generation");
+    }
+    if (coverage.state() != GpuPathCoverageJobState::Ready) {
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::InvalidArgument,
+                                  "resident coverage must be Ready before it is consumed");
+    }
+    if (mask->width != base.dataWindow.extent().width() ||
+        mask->height != base.dataWindow.extent().height()) {
+        return gpuSolidDiagnostic(GpuSolidDiagnosticCode::InvalidArgument,
+                                  "the resident coverage does not match the data window");
+    }
+    return impl_->beginCoveredJob(base, {}, opacity, byteBudget, mask->buffer, mask->bytes,
+                                  std::static_pointer_cast<void>(mask));
 }
 
 } // namespace bloom::render

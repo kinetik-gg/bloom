@@ -206,7 +206,7 @@ target_link_libraries(bloom_composition_preview_controller_test PRIVATE bloom_ui
 target_link_libraries(bloom_composition_preview_cpu_stage_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_preview_gpu_scene_stage_test PRIVATE bloom_ui)
 target_include_directories(bloom_composition_preview_gpu_scene_stage_test
-    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/tests")
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
 target_link_libraries(bloom_gpu_preview_submitter_test PRIVATE bloom_ui)
 target_link_libraries(bloom_gpu_preview_app_test PRIVATE bloom_ui bloom_runtime_evaluator)
 # bloom_ui_gpu_presentation_target_test adopts the borrowed VkInstance through Qt's public

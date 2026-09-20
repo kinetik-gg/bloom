@@ -250,6 +250,81 @@ else()
         "solid.comp digest is still enforced.")
 endif()
 
+# --- Fixed GpuPathCoverage shader: source pin and regeneration check -----------------------------
+#
+# Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe (no new
+# generator, and the portable variant is checked to declare no Float64/Int64). The checked-in .comp is
+# pinned here, the manifest must bind that source digest, and, when the locked
+# glslangValidator/spirv-val are present, configure recompiles it and confirms the SPIR-V digest
+# embedded in path_coverage_spirv.inc. Runtime code never compiles or loads a shader.
+set(BLOOM_PATH_COVERAGE_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/path_coverage.comp")
+set(BLOOM_PATH_COVERAGE_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/path_coverage.manifest")
+set(BLOOM_PATH_COVERAGE_INC "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/path_coverage_spirv.inc")
+set(BLOOM_PATH_COVERAGE_COMP_SHA256
+    "5dd4e2486ddea9750b6755997c77816cce7c3b4ef83a6ce1a5d59fb21c932219")
+set(BLOOM_PATH_COVERAGE_SPV_SHA256
+    "f5aff832e47c64e42c95d0ae10429a5434e28566ccc1eb8d8c8d33e456bf2a4a")
+
+file(SHA256 "${BLOOM_PATH_COVERAGE_COMP}" bloom_path_coverage_comp_sha256)
+if(NOT bloom_path_coverage_comp_sha256 STREQUAL BLOOM_PATH_COVERAGE_COMP_SHA256)
+    message(FATAL_ERROR
+        "path_coverage.comp SHA-256 mismatch: measured ${bloom_path_coverage_comp_sha256}, pinned "
+        "${BLOOM_PATH_COVERAGE_COMP_SHA256}. Regenerate only through the tools/gpu-shaders recipe and "
+        "update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_PATH_COVERAGE_MANIFEST}" bloom_path_coverage_manifest_text)
+if(NOT bloom_path_coverage_manifest_text MATCHES "${BLOOM_PATH_COVERAGE_COMP_SHA256}")
+    message(FATAL_ERROR "path_coverage.manifest does not bind the pinned path_coverage.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_path_coverage_generated_spv "${CMAKE_CURRENT_BINARY_DIR}/path_coverage.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_PATH_COVERAGE_COMP}" -o "${bloom_path_coverage_generated_spv}"
+        RESULT_VARIABLE bloom_path_coverage_glslang_result)
+    if(NOT bloom_path_coverage_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile path_coverage.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2 "${bloom_path_coverage_generated_spv}"
+        RESULT_VARIABLE bloom_path_coverage_spirv_val_result)
+    if(NOT bloom_path_coverage_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated GpuPathCoverage SPIR-V.")
+    endif()
+    if(BLOOM_SPIRV_DIS)
+        set(bloom_path_coverage_generated_spvasm
+            "${CMAKE_CURRENT_BINARY_DIR}/path_coverage.generated.spvasm")
+        execute_process(
+            COMMAND "${BLOOM_SPIRV_DIS}" "${bloom_path_coverage_generated_spv}" -o
+                    "${bloom_path_coverage_generated_spvasm}"
+            RESULT_VARIABLE bloom_path_coverage_spirv_dis_result)
+        if(NOT bloom_path_coverage_spirv_dis_result EQUAL 0)
+            message(FATAL_ERROR "spirv-dis failed to disassemble the GpuPathCoverage SPIR-V.")
+        endif()
+        file(READ "${bloom_path_coverage_generated_spvasm}" bloom_path_coverage_spvasm_text)
+        if(bloom_path_coverage_spvasm_text MATCHES "OpCapability Float64" OR
+           bloom_path_coverage_spvasm_text MATCHES "OpCapability Int64" OR
+           bloom_path_coverage_spvasm_text MATCHES "OpTypeFloat 64" OR
+           bloom_path_coverage_spvasm_text MATCHES "OpTypeInt 64")
+            message(FATAL_ERROR
+                "the GpuPathCoverage SPIR-V declares a forbidden Float64/Int64 capability or type; "
+                "the coverage kernel must stay pure integer sample counting.")
+        endif()
+    endif()
+    file(SHA256 "${bloom_path_coverage_generated_spv}" bloom_path_coverage_spv_sha256)
+    if(NOT bloom_path_coverage_spv_sha256 STREQUAL BLOOM_PATH_COVERAGE_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated GpuPathCoverage SPIR-V SHA-256 ${bloom_path_coverage_spv_sha256} does not "
+            "match the embedded ${BLOOM_PATH_COVERAGE_SPV_SHA256}; the checked-in .comp and "
+            "path_coverage_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: path_coverage.comp regenerated and SPIR-V-validated "
+        "(${bloom_path_coverage_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "path_coverage.comp digest is still enforced.")
+endif()
+
 # --- Fixed TranslationOpacityBilinearV1 shader: source pin and regeneration check ----------------
 #
 # Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe. The checked-in
@@ -925,6 +1000,7 @@ target_sources(
             include/bloom/render/gpu_neutral_display.hpp
             include/bloom/render/gpu_ocio_program.hpp
             include/bloom/render/gpu_output_color_readback.hpp
+            include/bloom/render/gpu_path_coverage.hpp
             include/bloom/render/gpu_present_image.hpp
             include/bloom/render/ocio_gpu_program.hpp
             include/bloom/render/gpu_presentation_target.hpp
@@ -986,6 +1062,14 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_solid.cpp
         vulkan/gpu_solid_covered.cpp
         vulkan/gpu_solid_private.hpp
+        vulkan/gpu_path_coverage.cpp
+        vulkan/gpu_path_coverage_lifecycle.cpp
+        vulkan/gpu_path_coverage_resources.cpp
+        vulkan/gpu_path_coverage_fault.hpp
+        vulkan/gpu_path_coverage_private.hpp
+        vulkan/shaders/path_coverage.comp
+        vulkan/shaders/path_coverage.manifest
+        vulkan/shaders/path_coverage_spirv.inc
         vulkan/shaders/neutral_display.comp
         vulkan/shaders/neutral_display.manifest
         vulkan/shaders/neutral_display_spirv.inc
@@ -1030,7 +1114,7 @@ else()
                                      gpu_output_color_readback_stub.cpp
                                      gpu_present_image_stub.cpp gpu_presentation_target_stub.cpp
                                      gpu_process_readback_stub.cpp gpu_resident_display_stub.cpp
-                                     gpu_solid_stub.cpp)
+                                     gpu_solid_stub.cpp gpu_path_coverage_stub.cpp)
 endif()
 
 target_compile_features(bloom_render PUBLIC cxx_std_20)

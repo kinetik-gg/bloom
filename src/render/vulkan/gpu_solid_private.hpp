@@ -43,6 +43,7 @@ struct GpuSolidUploadBuffer final {
             allocation = other.allocation;
             bytes = other.bytes;
             armed = other.armed;
+            owner = std::move(other.owner);
             other.state = nullptr;
             other.buffer = VK_NULL_HANDLE;
             other.allocation = VK_NULL_HANDLE;
@@ -62,6 +63,7 @@ struct GpuSolidUploadBuffer final {
         allocation = VK_NULL_HANDLE;
         bytes = 0;
         armed = false;
+        owner.reset();
     }
 
     vulkan_detail::DeviceAllocatorState* state = nullptr;
@@ -69,6 +71,10 @@ struct GpuSolidUploadBuffer final {
     VmaAllocation allocation = VK_NULL_HANDLE;
     std::uint64_t bytes = 0;
     bool armed = false;
+    // For the resident-coverage path this co-owns the producer's mask buffer so
+    // it can never be freed while this submission still references it. Null for
+    // the ordinary host-uploaded coverage.
+    std::shared_ptr<void> owner;
 };
 
 // CoveredSolidV1 pipeline resources. Created lazily on the first beginCovered on
@@ -113,6 +119,14 @@ struct GpuSolid::Impl final {
     // Builds the CoveredSolidV1 shader module, descriptor layout, pipeline
     // layout, pipeline, descriptor pool, and descriptor set.
     [[nodiscard]] bool createCoveredPipeline();
+    // Shared implementation of the covered fill. `hostCoverage` is non-empty for
+    // the ordinary path and the CPU float mask is uploaded; otherwise the
+    // already-resident `residentMaskBuffer` (owned by `residentOwner`) is bound
+    // directly with no host roundtrip.
+    [[nodiscard]] GpuSolidDiagnostic
+    beginCoveredJob(const GpuSolidParameters& base, std::span<const std::uint8_t> hostCoverage,
+                    float opacity, std::uint64_t byteBudget, VkBuffer residentMaskBuffer,
+                    std::uint64_t residentMaskBytes, std::shared_ptr<void> residentOwner);
     // Bounded owner-thread drain. Returns true when the submission is proved
     // retired.
     [[nodiscard]] bool drainAndRetire() noexcept;

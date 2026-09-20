@@ -1122,6 +1122,50 @@ bloom_add_test(
     TIMEOUT 300
 )
 
+# Bounded shared runtime OCIO context resolver (bloom/runtime/gpu_ocio_context.hpp). The focused
+# vectors use the REAL tools staged beside this test executable by bloom_package_gpu_shader_tools
+# (the same packaging the desktop/CLI/MCP targets use) through the same BLOOM_GPU_TOOLS_* compile
+# definitions; there are no fake tool paths. A build without qualified tools still runs the
+# typed-refusal (CPU-fallback) vectors.
+add_executable(bloom_runtime_gpu_ocio_context_test gpu_ocio_context_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_ocio_context_test
+    PRIVATE bloom_runtime_evaluator bloom_color_gpu_shader)
+target_compile_definitions(bloom_runtime_gpu_ocio_context_test PRIVATE
+    "BLOOM_GPU_OCIO_CONTEXT_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_ocio_context_test>\"")
+bloom_enable_warnings(bloom_runtime_gpu_ocio_context_test)
+include(BloomGpuShaderTools)
+bloom_package_gpu_shader_tools(bloom_runtime_gpu_ocio_context_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_ocio_context
+    COMMAND bloom_runtime_gpu_ocio_context_test
+    LABELS runtime unit gpu color
+    TIMEOUT 300
+)
+
+# CPU-side image-effect scene preparation: identity/bypass/look aliasing, the missing-LUT CPU
+# refusal passthrough, the fail-closed non-identity CST, and the fail-closed real file transform.
+# With the pinned tools it also prepares a genuine GPU OCIO ProcessEffect command and materializes a
+# text leaf input as an accepted coverage command. No device and no loader are required.
+add_executable(bloom_runtime_gpu_scene_effect_preparation_test
+    gpu_scene_effect_preparation_tests.cpp)
+target_include_directories(bloom_runtime_gpu_scene_effect_preparation_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_gpu_scene_effect_preparation_test
+    PRIVATE bloom_runtime_evaluator bloom_render)
+if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
+    target_compile_definitions(bloom_runtime_gpu_scene_effect_preparation_test PRIVATE
+        "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+endif()
+bloom_enable_warnings(bloom_runtime_gpu_scene_effect_preparation_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_scene_effect_preparation_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_scene_effect_preparation
+    COMMAND bloom_runtime_gpu_scene_effect_preparation_test
+    LABELS runtime unit gpu color
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_scene_effect_preparation PROPERTIES SKIP_RETURN_CODE 77)
+
 # Native acceptance for the runtime OCIO executor: real extracted/compiled OCIO CST + display +
 # view-adjust programs dispatched through the owner-thread executor and compared against the actual
 # unchanged CPU OCIO oracle, with warm zero-compile/zero-upload, invalidation, cancellation, and an
@@ -1150,6 +1194,32 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
+# Producer/executor isolation of the nonlinear CST precision gate: the neutral config's
+# process -> sRGB-texture GammaOp CST run through the real GpuOcioProgramPreparer +
+# GpuOcioProgramExecutor and compared against the unchanged CpuColorSpaceProcessor at 2e-6 with
+# byte-exact alpha, over negative/HDR/translucent/alpha-zero/threshold endpoints and a deterministic
+# random grid. Requires the Vulkan backend and the pinned tools.
+if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_gpu_ocio_precision_test
+        gpu_ocio_precision_native_tests.cpp)
+    target_link_libraries(bloom_runtime_gpu_ocio_precision_test
+        PRIVATE bloom_runtime_evaluator bloom_render)
+    if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
+        target_compile_definitions(bloom_runtime_gpu_ocio_precision_test PRIVATE
+            "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+    endif()
+    bloom_enable_warnings(bloom_runtime_gpu_ocio_precision_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_ocio_precision_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_ocio_precision
+        COMMAND bloom_runtime_gpu_ocio_precision_test
+        LABELS runtime unit gpu color
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.runtime.gpu_ocio_precision
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 # Production GpuSceneExecutor driving an OCIO ProcessEffect scene command end to end: solid +
 # upload -> OCIO CST effect -> merge -> composition output, compared against the unchanged CPU OCIO
 # oracle plus the CPU source-over primitive, with warm zero-dispatch, dirty-effect-only invalidation,
@@ -1172,6 +1242,65 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
         TIMEOUT 300
     )
     set_tests_properties(bloom.runtime.gpu_ocio_scene_executor
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+# Real native parity for the PRODUCTION builder's image-effect commands: a compiled plan with a
+# non-identity CST effect (and, on Linux, a real isolated FileTransform) is prepared by the real
+# CpuGpuSceneBuilder, executed by the production GpuSceneExecutor, and compared against the
+# unchanged CpuCompositionEvaluator oracle under the strict 2e-6 abs-or-rel gate with exact alpha and
+# the CPU process descriptor. Cold/dispatch, warm zero-dispatch, and a changed-upstream reuse are
+# asserted. Requires the Vulkan backend and the pinned tools; skips cleanly otherwise.
+if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_gpu_scene_effect_native_test
+        gpu_scene_effect_native_tests.cpp)
+    target_include_directories(bloom_runtime_gpu_scene_effect_native_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+    target_link_libraries(bloom_runtime_gpu_scene_effect_native_test
+        PRIVATE bloom_runtime_evaluator bloom_render)
+    if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
+        target_compile_definitions(bloom_runtime_gpu_scene_effect_native_test PRIVATE
+            "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+    endif()
+    bloom_enable_warnings(bloom_runtime_gpu_scene_effect_native_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_scene_effect_native_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_scene_effect_native
+        COMMAND bloom_runtime_gpu_scene_effect_native_test
+        LABELS runtime native gpu color
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.runtime.gpu_scene_effect_native
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+# Real native acceptance for arbitrary resolved scene-linear working spaces (ACEScg): a mixed
+# solid + text + media + CST + non-Normal blend composition is prepared by the production builder
+# and executed, then compared against the unchanged CPU evaluator at the strict 2e-6 gate with exact
+# alpha and the CPU process descriptor. Changed working space and changed solid colour identity
+# invalidation are asserted. Requires the Vulkan backend and the pinned tools.
+if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_gpu_scene_effect_working_space_native_test
+        gpu_scene_effect_working_space_native_tests.cpp)
+    target_include_directories(bloom_runtime_gpu_scene_effect_working_space_native_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+    target_link_libraries(bloom_runtime_gpu_scene_effect_working_space_native_test
+        PRIVATE bloom_runtime_evaluator bloom_render OpenEXR::OpenEXR)
+    target_include_directories(bloom_runtime_gpu_scene_effect_working_space_native_test
+        PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
+        target_compile_definitions(bloom_runtime_gpu_scene_effect_working_space_native_test PRIVATE
+            "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+    endif()
+    bloom_enable_warnings(bloom_runtime_gpu_scene_effect_working_space_native_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_scene_effect_working_space_native_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_scene_effect_working_space_native
+        COMMAND bloom_runtime_gpu_scene_effect_working_space_native_test
+        LABELS runtime native gpu color
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.runtime.gpu_scene_effect_working_space_native
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 

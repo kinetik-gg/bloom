@@ -74,7 +74,22 @@ with no media decode on the GPU thread; `GpuComposite` runs `TranslationOpacityB
 `SourceOverV1`, each writing a new resident image; `GpuResidentDisplay` copies a resident RGBA32F
 image device-to-device through the embedded Bloom Neutral V1 shader into a resident packed RGBA8
 image, reading back only the 4-byte status word; `GpuNeutralDisplay` runs the fixed `OcioDisplayV1`
-compute operation. Every shipped shader is an offline artifact under `tools/gpu-shaders`, pinned by
+compute operation. `GpuPathCoverage` is the vector coverage producer: the CPU builds the immutable
+`PathRasterCoverageGeometry` (bounded integer scanline sample spans, O(edges x rows), with no
+per-pixel mask and the exact `coverageRow` boundary comparison preserved through a bounded binary
+search over the real quarter-sample positions), and one pure-integer compute dispatch turns those
+spans into the exact 8-bit coverage mask `PathRaster::coverageRow` produces, retained device-resident
+as a packed little-endian R8 storage buffer. `GpuSolid::beginCoveredResident` then binds that resident
+buffer directly for the covered fill, with no download or re-upload; the coverage buffer is
+co-owned until the consuming submission is proved retired, and the consume path validates owner
+thread, exact device identity, and generation before readiness or dimensions. In-flight submissions
+are serialized by one process-wide bounded reservation claimed before any native allocation: a
+proven retirement returns it, an unproven one moves the exact submission into an owner-only
+quarantine, and admission is refused while occupied. The dispatch is a flattened 2D grid bounded by
+the real device workgroup-count limits, so a capacity-valid large geometry is not refused by a 1D
+grid. The kernel requires no Float64/Int64 capability, and a configure-time disassembly rejects
+either. Every shipped shader is an offline
+artifact under `tools/gpu-shaders`, pinned by
 SHA-256 with a manifest binding and a configure-time `glslangValidator`/`spirv-val` regeneration check
 against the embedded SPIR-V digest, so the source -> SPIR-V -> embedded-array relationship is closed
 and no runtime code loads or compiles a shader. All primitives share one bounded policy: owner-thread
@@ -150,6 +165,8 @@ transformation that is never an opt-out. Per-pixel vector coverage rasterization
 `CoveredSolidV1` fill from a host-built mask does not satisfy the Required
 `feature.geometry.vector_coverage` axis, which needs a native GPU coverage producer with real
 device provenance and dispatch counters.
+The resident `GpuPathCoverage` producer performs this rasterization from bounded CPU scanline
+geometry; scene integration must retain its device provenance and dispatch counters.
 
 Preview and final rendering are both required. Interactive viewer preview, RAM preview fill and
 playback, still-frame export, sequence/range export, video export, and headless/scripted render are
