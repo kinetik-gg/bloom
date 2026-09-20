@@ -4,6 +4,7 @@
 #include "gpu_scene_coverage.hpp"
 #include "gpu_scene_layer_emission.hpp"
 #include "gpu_scene_media_layer.hpp"
+#include "gpu_scene_nested.hpp"
 #include "gpu_scene_preparation_private.hpp"
 #include "gpu_scene_vector_emission.hpp"
 
@@ -52,7 +53,8 @@ struct GpuSceneVectorChain final {
            std::holds_alternative<CompiledVideoSource>(operation) ||
            std::holds_alternative<CompiledLayerOutput>(operation) ||
            std::holds_alternative<CompiledMerge>(operation) ||
-           std::holds_alternative<CompiledCompositionOutput>(operation);
+           std::holds_alternative<CompiledCompositionOutput>(operation) ||
+           std::holds_alternative<CompiledCompositionSource>(operation);
 }
 
 } // namespace
@@ -135,6 +137,15 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         if (!isSubsetOperation(operation)) {
             return failed(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                           "A reachable operation is outside the prepared subset");
+        }
+        // A composition source is inside the prepared subset only when it names a present,
+        // compatible child plan. A source that does not is refused exactly as it was before nested
+        // compositions were prepared at all, before any resolution or child build.
+        if (const auto* source = std::get_if<CompiledCompositionSource>(&operation);
+            source != nullptr && !detail::nestedCompositionChainIsSupported(*source, *plan)) {
+            return failed(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                          "A composition source without a supported nested plan is outside the "
+                          "prepared subset");
         }
     }
 
@@ -396,6 +407,43 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                                           .descriptor = *leaf.descriptor,
                                           .semanticKey = leaf.semanticKey};
             commandForOperation[index] = emit(std::move(command));
+            continue;
+        }
+
+        if (const auto* source = std::get_if<CompiledCompositionSource>(&operation)) {
+            // A nested composition is prepared by recursively building the CHILD plan with this
+            // same production builder and splicing its genuine GPU commands into this list. The
+            // child's terminal Composition Output command is aliased as this operation's image; the
+            // child's content-addressed command keys are preserved, so an unrelated child edit
+            // still reuses every untouched branch. No finished child frame is ever CPU-uploaded.
+            detail::GpuSceneNestedResult nested;
+            const auto error = detail::prepareNestedComposition(
+                *source, *plan, request, resolved, hScale, vScale, detail::nestedCompositionDepth(),
+                allowance > chargedBytes ? allowance - chargedBytes : 0, cancellation,
+                [this](const std::shared_ptr<const CompiledCompositionPlan>& childPlan,
+                       const EvaluationRequest& childRequest, const CancellationToken& cancel) {
+                    return build(childPlan, childRequest, cancel);
+                },
+                commands, nested);
+            if (error) {
+                return failed(error->code, error->message, mediaStatistics);
+            }
+            if (!nested.outputWindow.has_value()) {
+                return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                              "the nested composition published no output window", mediaStatistics);
+            }
+            if (nested.residentBytes != 0) {
+                if (chargedBytes > allowance || nested.residentBytes > allowance - chargedBytes) {
+                    return failed(PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
+                                  "Prepared scene exceeds the request pixel allowance",
+                                  mediaStatistics);
+                }
+                chargedBytes += nested.residentBytes;
+            }
+            bounds[index] = nested.bounds;
+            outputWindowOf[index] = *nested.outputWindow;
+            keyOf[index] = nested.outputKey;
+            commandForOperation[index] = nested.outputCommand;
             continue;
         }
 

@@ -79,6 +79,8 @@ target_sources(
         cpu_composition_evaluator.cpp
         cpu_composition_resolution.hpp
         cpu_gpu_scene_preparation.cpp
+        gpu_scene_nested.cpp
+        gpu_scene_nested.hpp
         gpu_scene_preparation_private.hpp
         gpu_scene_preparation_common.hpp
         gpu_scene_coverage.cpp

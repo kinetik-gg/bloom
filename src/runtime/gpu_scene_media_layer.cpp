@@ -2,6 +2,7 @@
 
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
+#include "gpu_scene_nested.hpp"
 
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/render/image.hpp>
@@ -19,7 +20,8 @@ namespace {
            std::holds_alternative<CompiledVideoSource>(operation) ||
            std::holds_alternative<CompiledLayerOutput>(operation) ||
            std::holds_alternative<CompiledMerge>(operation) ||
-           std::holds_alternative<CompiledCompositionOutput>(operation);
+           std::holds_alternative<CompiledCompositionOutput>(operation) ||
+           std::holds_alternative<CompiledCompositionSource>(operation);
 }
 
 // Common tail shared by both upload leaves: derive bounds + window from the frozen image, charge
@@ -68,6 +70,15 @@ std::optional<GpuSceneLeafFailure> screenUnsupportedLayers(const CompiledComposi
         if (!isSubsetOperation(plan.operations()[index])) {
             return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                         "A reachable operation is outside the prepared subset");
+        }
+        // A composition source is classified into the subset only when its REAL nested chain is
+        // present, acyclic, and within the depth ceiling. The child's own operations are screened
+        // when that child is built, so an unsupported child still fails closed.
+        if (const auto* source = std::get_if<CompiledCompositionSource>(&plan.operations()[index]);
+            source != nullptr && !nestedCompositionChainIsSupported(*source, plan)) {
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                        "A composition source without a supported nested plan is outside the "
+                        "prepared subset");
         }
         const auto* layer = std::get_if<CompiledLayerOutput>(&plan.operations()[index]);
         if (layer == nullptr) {

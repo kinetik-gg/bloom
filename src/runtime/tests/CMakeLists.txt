@@ -375,6 +375,41 @@ bloom_add_test(
     TIMEOUT 300
 )
 
+# CompiledCompositionSource nested compositions prepared by the production builder: genuine child
+# GPU commands spliced into the parent command list, checked bit-for-bit against the unchanged CPU
+# evaluator oracle. Pure CPU: no loader, no device.
+add_executable(bloom_runtime_gpu_nested_scene_preparation_test
+    gpu_nested_scene_preparation_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_nested_scene_preparation_test
+    PRIVATE bloom_runtime_evaluator bloom_render)
+bloom_enable_warnings(bloom_runtime_gpu_nested_scene_preparation_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_nested_scene_preparation_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_nested_scene_preparation
+    COMMAND bloom_runtime_gpu_nested_scene_preparation_test
+    LABELS runtime unit gpu render
+    TIMEOUT 300
+)
+
+# Real native parity for nested compositions: production builder -> production executor ->
+# readback vs the CPU evaluator, with positive cold dispatch, warm zero dispatch, and an unrelated
+# cached child branch preserved across a single-branch edit. Skips honestly (exit 77) without a
+# device; --require-device makes an unavailable device a failure.
+add_executable(bloom_runtime_gpu_nested_scene_native_test gpu_nested_scene_native_tests.cpp)
+target_include_directories(bloom_runtime_gpu_nested_scene_native_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_gpu_nested_scene_native_test
+    PRIVATE bloom_runtime_evaluator bloom_render)
+bloom_enable_warnings(bloom_runtime_gpu_nested_scene_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_nested_scene_native_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_nested_scene_native
+    COMMAND bloom_runtime_gpu_nested_scene_native_test
+    LABELS runtime native gpu render
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_nested_scene_native PROPERTIES SKIP_RETURN_CODE 77)
+
 # Bounded GPU coverage contract gate. It enumerates every CompiledOperation/ImageEffectKernel
 # alternative, feature axis, render route, and built-in pixel node type from the same contract,
 # drives the REAL production CpuGpuSceneBuilder over one genuine fixture per required id, and
