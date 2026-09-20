@@ -451,25 +451,38 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
             color[index] = 2;
             return {};
         }
-        for (std::size_t i = 0; i < merge->foregrounds.size(); ++i) {
-            if (const auto plan = planCommand(merge->foregrounds[i], color);
-                plan.code != GpuSceneExecutorDiagnosticCode::None) {
-                return plan;
-            }
-            if (i == 0) {
-                steps.push_back(std::move(base));
-            }
+        // Build the per-foreground source-over step in a single-use helper, and emit the chain
+        // explicitly: plan the first foreground, then the single-use accumulator, then its
+        // source-over, then plan and composite each remaining foreground in turn. `base` is moved
+        // exactly once, outside every loop, while the emitted order and the DAG accounting stay
+        // identical to the interleaved order the live-pin bound depends on.
+        const auto planForeground = [this, &color](const GpuSceneCommandIndex foreground) {
+            return planCommand(foreground, color);
+        };
+        const auto makeSourceOver = [&merge, index](const std::size_t foregroundIndex) {
             GpuSceneExecutorStep step;
             step.kind = GpuSceneExecutorStepKind::SourceOver;
             step.command = index;
-            step.input = merge->foregrounds[i];
+            step.input = merge->foregrounds[foregroundIndex];
             step.destination = kInvalidGpuSceneCommand; // the current accumulator at `index`
-            const bool last = i + 1 == merge->foregrounds.size();
-            step.cacheOnComplete = last;
-            if (last) {
+            step.cacheOnComplete = foregroundIndex + 1 == merge->foregrounds.size();
+            if (step.cacheOnComplete) {
                 step.cacheKey = merge->semanticKey;
             }
-            steps.push_back(std::move(step));
+            return step;
+        };
+        if (const auto plan = planForeground(merge->foregrounds.front());
+            plan.code != GpuSceneExecutorDiagnosticCode::None) {
+            return plan;
+        }
+        steps.push_back(std::move(base));
+        steps.push_back(makeSourceOver(0));
+        for (std::size_t i = 1; i < merge->foregrounds.size(); ++i) {
+            if (const auto plan = planForeground(merge->foregrounds[i]);
+                plan.code != GpuSceneExecutorDiagnosticCode::None) {
+                return plan;
+            }
+            steps.push_back(makeSourceOver(i));
         }
         color[index] = 2;
         return {};
