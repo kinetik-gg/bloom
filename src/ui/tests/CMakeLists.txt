@@ -1187,6 +1187,9 @@ endif()
 # build has them (BLOOM_UI_VULKAN_AVAILABLE, src/ui/CMakeLists.txt). The runtime coordinator's
 # Vulkan-free port/bounds gates live in src/runtime/tests. Without a pinned loader argument the
 # fixtures skip cleanly; the supervisor passes --loader (and --require-device for the native runs).
+# Each fixture also runs a pre-QApplication native Wayland environment gate
+# (gpu_native_test_environment.hpp) and returns the CTest skip code 77 when no compositor is
+# reachable, so a headless runner reports Skipped instead of crashing inside Qt's platform plugin.
 if(BLOOM_UI_VULKAN_AVAILABLE)
     add_executable(bloom_ui_gpu_presentation_coordinator_test
         gpu_presentation_coordinator_tests.cpp)
@@ -1259,6 +1262,16 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         COMMAND bloom_ui_viewer_gpu_presenter_native_test ${bloom_ui_vulkan_loader_args}
         LABELS ui integration gpu presentation TIMEOUT 300
         ENVIRONMENT "QT_QPA_PLATFORM=wayland"
+    )
+    # The five fixtures above share the pre-QApplication native Wayland environment gate and exit
+    # with 77 when it is unavailable; register that code as a skip so CTest lists them as Skipped.
+    set_tests_properties(
+        bloom.ui.gpu_presentation_coordinator
+        bloom.ui.gpu_preview_display_service_presentation
+        bloom.ui.gpu_preview_display_service_resident
+        bloom.ui.viewer_gpu_presenter
+        bloom.ui.viewer_gpu_presenter_native
+        PROPERTIES SKIP_RETURN_CODE 77
     )
 endif()
 

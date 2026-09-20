@@ -27,6 +27,7 @@
 #include <bloom/runtime/gpu_resident_frame_lease.hpp>
 
 #include "gpu_borrowed_instance.hpp"
+#include "gpu_native_test_environment.hpp"
 
 #include <QGuiApplication>
 #include <QTimer>
@@ -241,6 +242,11 @@ int main(int argc, char** argv) {
     const TestOptions options = parseOptions(argc, argv);
     if (!options.valid) {
         return 2;
+    }
+    const bloom::ui::test::NativeWaylandEnvironment native_environment =
+        bloom::ui::test::NativeWaylandEnvironment::inspect();
+    if (!native_environment.available()) {
+        return native_environment.exitStatus(options.require_device);
     }
     QGuiApplication application(argc, argv);
     if (options.loader_path.empty()) {

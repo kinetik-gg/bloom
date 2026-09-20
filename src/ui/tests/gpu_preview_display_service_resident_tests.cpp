@@ -20,6 +20,7 @@
 #include "gpu_preview_display_service_private.hpp"
 
 #include "gpu_borrowed_instance.hpp"
+#include "gpu_native_test_environment.hpp"
 
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
@@ -330,6 +331,10 @@ int runTests(int argc, char** argv) {
     const TestOptions options = parseOptions(argc, argv);
     if (!options.valid) {
         return 2;
+    }
+    const auto native_environment = bloom::ui::test::NativeWaylandEnvironment::inspect();
+    if (!native_environment.available()) {
+        return native_environment.exitStatus(options.require_device);
     }
     QGuiApplication application(argc, argv);
     if (options.loader_path.empty()) {

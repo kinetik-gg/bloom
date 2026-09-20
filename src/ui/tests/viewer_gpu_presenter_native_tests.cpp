@@ -34,6 +34,9 @@
 #include <bloom/runtime/gpu_resident_frame_lease.hpp>
 #include <bloom/ui/viewer_gpu_presenter.hpp>
 
+#include "gpu_native_test_environment.hpp"
+#include "viewer_gpu_presenter_native_test_support.hpp"
+
 #include <QApplication>
 #include <QEventLoop>
 #include <QPoint>
@@ -94,8 +97,7 @@ using bloom::runtime::GpuResidentFrameLeaseRegistry;
 using bloom::ui::ViewerGpuInputEvent;
 using bloom::ui::ViewerGpuInputKind;
 using bloom::ui::ViewerGpuPresenter;
-
-constexpr std::uint64_t kBudget = std::uint64_t{1} << 32;
+using bloom::ui::test::produceFixtureDisplay;
 
 struct TestOptions final {
     std::filesystem::path loader_path;
@@ -175,57 +177,6 @@ struct Shared final {
     GpuResidentFrameLease lease;
 };
 
-[[nodiscard]] std::optional<ImageWindow> makeWindow(const std::int64_t x, const std::int64_t y,
-                                                    const std::uint64_t width,
-                                                    const std::uint64_t height) {
-    const auto created = ImageWindow::create(x, y, width, height);
-    return created ? std::optional(*created.value()) : std::nullopt;
-}
-
-[[nodiscard]] std::shared_ptr<const GpuDisplayImage>
-produceDisplay(GpuSolid& solid, GpuResidentDisplay& display, Expectations& expectations) {
-    const auto dataWindow = makeWindow(0, 0, 16, 8);
-    const auto displayWindow = makeWindow(-2, 3, 16, 8);
-    const auto aspect = PixelAspectRatio::create(4, 3);
-    const auto pixel =
-        bloom::render::solidPixelFromStraightLinearRec709Scene(Color4d{0.25, 0.5, 0.75, 1.0});
-    if (!pixel || !dataWindow || !displayWindow || !aspect) {
-        expectations.expect(false, "the solid primitive and geometry build");
-        return nullptr;
-    }
-    const auto solidBegin = solid.begin(
-        GpuSolidParameters{*pixel.value(), *dataWindow, *displayWindow, *aspect}, kBudget);
-    if (solidBegin.code != GpuSolidDiagnosticCode::None) {
-        expectations.expect(false, "the solid begin is accepted: " + solidBegin.message);
-        return nullptr;
-    }
-    GpuSolidPollResult solidPoll = GpuSolidPollResult::Pending;
-    while (solidPoll == GpuSolidPollResult::Pending) {
-        solidPoll = solid.poll();
-    }
-    if (solidPoll != GpuSolidPollResult::Ready) {
-        expectations.expect(false, "the solid job completes");
-        return nullptr;
-    }
-    auto input = std::make_shared<const GpuImage>(solid.takeImage());
-    const auto displayBegin = display.begin(input, kBudget);
-    if (displayBegin.code != GpuResidentDisplayDiagnosticCode::None) {
-        expectations.expect(false, "the resident display begin is accepted");
-        return nullptr;
-    }
-    GpuResidentDisplayPollResult displayPoll = GpuResidentDisplayPollResult::Pending;
-    while (displayPoll == GpuResidentDisplayPollResult::Pending) {
-        displayPoll = display.poll();
-    }
-    if (displayPoll != GpuResidentDisplayPollResult::Ready) {
-        expectations.expect(false, "the resident display job completes");
-        return nullptr;
-    }
-    auto image = std::make_shared<const GpuDisplayImage>(display.takeImage());
-    expectations.expect(image->isValid(), "the resident display image is valid");
-    return image->isValid() ? image : nullptr;
-}
-
 void ownerMain(Shared& shared, const TestOptions& options, Expectations& expectations) {
     GpuDeviceCreationOptions creation;
     creation.loader_path = options.loader_path;
@@ -299,7 +250,7 @@ void ownerMain(Shared& shared, const TestOptions& options, Expectations& expecta
             acknowledged = true;
             break;
         case Cmd::ProduceLease: {
-            auto image = produceDisplay(*solid, *display, expectations);
+            auto image = produceFixtureDisplay(*solid, *display, expectations);
             GpuResidentFrameLease leaseValue;
             if (image != nullptr) {
                 auto published = registry->publish(std::move(image));
@@ -373,6 +324,10 @@ int main(int argc, char** argv) {
     if (!options.valid) {
         return 2;
     }
+    const auto native_environment = bloom::ui::test::NativeWaylandEnvironment::inspect();
+    if (!native_environment.available()) {
+        return native_environment.exitStatus(options.require_device);
+    }
     QApplication application(argc, argv);
     if (options.loader_path.empty()) {
         std::cout << "SKIP: --loader <libvulkan.so.1> is required\n";
@@ -417,8 +372,13 @@ int main(int argc, char** argv) {
             10'000);
     };
     const auto waitActive = [&](ViewerGpuPresenter& presenter, const int timeout) {
-        return waitUntil([&] { return presenter.state() == ViewerGpuPresenter::State::Active; },
-                         timeout);
+        const bool active = waitUntil(
+            [&] { return presenter.state() == ViewerGpuPresenter::State::Active; }, timeout);
+        if (!active) {
+            std::cerr << "DIAG: viewer never became Active: "
+                      << bloom::ui::test::describeViewerGpuPresenter(presenter) << '\n';
+        }
+        return active;
     };
     const auto makeParams = [](const std::uint32_t width, const std::uint32_t height) {
         GpuPresentImageParams params;
@@ -457,9 +417,13 @@ int main(int argc, char** argv) {
     auto presenter = std::make_unique<ViewerGpuPresenter>(client, config);
     bool ready = false;
     presenter->setReadyCallback([&](const bool value, const std::string&) { ready = value; });
+    // Parent the container before the window is exposed, exactly as the production controller does
+    // through setContainerParent(); the attach path requires a genuinely exposed QWindow.
+    presenter->setContainerParent(&host);
     expectations.expect(presenter->initialize(), "the real viewer initializes");
     expectations.expect(presenter->container() != nullptr, "the real viewer has a container");
     layout->addWidget(presenter->container());
+    presenter->container()->show();
     expectations.expect(waitActive(*presenter, 15'000), "the real viewer becomes Active");
     expectations.expect(ready, "the ready callback reported readiness");
     expectations.expect(presenter->attached(), "the real viewer attached a target");
@@ -577,10 +541,21 @@ int main(int argc, char** argv) {
                         "the surface stays safe after the approved reparent");
     presenter.reset();
 
-    // 6. Reattachment after approved retirement gets a fresh target id and sequence.
+    // 6. Reattachment after approved retirement gets a fresh target id and sequence on the SAME
+    //    host/layout (the stable GPU target across panel replacement the product contract exists
+    //    for). The previous target is already proven retired and safe to destroy above, so the host
+    //    may change visibility now. Hiding the host before the new native child is created and
+    //    showing it again makes the compositor map host and child together, so the new QWindow is
+    //    actually exposed for the attach path.
+    host.hide();
     auto reattached = std::make_unique<ViewerGpuPresenter>(client, config);
+    reattached->setContainerParent(&host);
     expectations.expect(reattached->initialize(), "the reattached viewer initializes");
     layout->addWidget(reattached->container());
+    reattached->container()->show();
+    host.show();
+    host.raise();
+    host.activateWindow();
     expectations.expect(waitActive(*reattached, 15'000), "the reattached viewer becomes Active");
     expectations.expect(reattached->targetId() != firstTarget,
                         "reattachment creates a fresh target id");
@@ -601,10 +576,14 @@ int main(int argc, char** argv) {
     auto* layoutB = new QVBoxLayout(&hostB);
     hostA.show();
     hostB.show();
+    viewerA->setContainerParent(&hostA);
+    viewerB->setContainerParent(&hostB);
     expectations.expect(viewerA->initialize() && viewerB->initialize(),
                         "both independent viewers initialize");
     layoutA->addWidget(viewerA->container());
     layoutB->addWidget(viewerB->container());
+    viewerA->container()->show();
+    viewerB->container()->show();
     expectations.expect(waitActive(*viewerA, 15'000) && waitActive(*viewerB, 15'000),
                         "both independent viewers become Active");
     expectations.expect(viewerA->present(lease, makeParams(320U, 240U), nullptr) &&
@@ -652,9 +631,19 @@ int main(int argc, char** argv) {
     // 9. Repeated retire/reattach beyond maxRetainedTargets (3): forget() must release each
     //    terminal record, or the fourth attach would be refused as TooManyTargets.
     for (int cycle = 0; cycle < 6; ++cycle) {
+        // Same stable host/layout across every detach/reattach cycle, exactly as step 6. Each
+        // previous cycle target is proven retired/Gone before the next viewer starts, so the
+        // hide-before-create / show-with-child lifecycle is safe and keeps the new native child
+        // exposed on the reused top-level.
+        host.hide();
         auto viewer = std::make_unique<ViewerGpuPresenter>(client, config);
+        viewer->setContainerParent(&host);
         expectations.expect(viewer->initialize(), "cycle viewer initializes");
         layout->addWidget(viewer->container());
+        viewer->container()->show();
+        host.show();
+        host.raise();
+        host.activateWindow();
         expectations.expect(waitActive(*viewer, 15'000), "cycle viewer becomes Active");
         const GpuPresentationTargetId id = viewer->targetId();
         expectations.expect(viewer->present(lease, makeParams(320U, 240U), nullptr),
