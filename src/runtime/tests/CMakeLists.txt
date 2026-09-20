@@ -1322,11 +1322,12 @@ endif()
 # device it prints an explicit skip (exit 77) and --require-device fails closed.
 if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
     add_executable(bloom_runtime_gpu_preview_display_service_general_test
-        gpu_preview_display_service_general_tests.cpp)
+        gpu_preview_display_service_general_tests.cpp
+        gpu_preview_display_service_general_fixture.ipp)
     target_include_directories(bloom_runtime_gpu_preview_display_service_general_test
-        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
     target_link_libraries(bloom_runtime_gpu_preview_display_service_general_test
-        PRIVATE bloom_runtime_evaluator bloom_render)
+        PRIVATE bloom_runtime_evaluator bloom_render OpenEXR::OpenEXR)
     # The shared OCIO context resolver consumes the REAL tools staged beside this test executable by
     # bloom_package_gpu_shader_tools (the same packaging the app uses); the test builds its request
     # from the executable-relative BLOOM_GPU_TOOLS_* definitions, never a manually injected path.

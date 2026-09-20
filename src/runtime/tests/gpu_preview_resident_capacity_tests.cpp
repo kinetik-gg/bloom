@@ -7,6 +7,7 @@
 // a compact arithmetic simulation (no 24 large GPU allocations, no simultaneous worker pressure).
 
 #include <bloom/render/gpu_device.hpp>
+#include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/runtime/gpu_preview_resident_capacity.hpp>
 
 #include <cstdint>
@@ -130,6 +131,22 @@ void testOverflowSaturation() {
 
 // The portable fallback must itself be bounded; a rounded-up estimate can never exceed the caller's
 // invariant. Tested directly even where the exact 128-bit path is compiled in.
+// Deterministic default for the scheduler's aggregate GPU request-owned ceiling. Pure: no ledger,
+// no device, no resource dependence.
+void testSchedulerRequestCapacityDefault() {
+    using bloom::runtime::defaultGpuRequestOwnedByteCapacityFor;
+    expect(defaultGpuRequestOwnedByteCapacityFor(8ULL * kGib, 4ULL * kGib) == 4ULL * kGib,
+           "a positive operation-cache split is the default aggregate ceiling");
+    expect(defaultGpuRequestOwnedByteCapacityFor(8ULL * kGib, 0) == 8ULL * kGib,
+           "a zero operation-cache split falls back to the usable host budget");
+    expect(defaultGpuRequestOwnedByteCapacityFor(8ULL * kGib, 16ULL * kGib) == 8ULL * kGib,
+           "the default is clamped to the usable host budget");
+    expect(defaultGpuRequestOwnedByteCapacityFor(0, 0) > 0,
+           "an unknown/low-memory host still yields a valid positive default");
+    expect(defaultGpuRequestOwnedByteCapacityFor(0, 4ULL * kGib) > 0,
+           "a zero usable budget still yields a valid positive default");
+}
+
 void testPortableScaledShareClamped() {
     using bloom::runtime::gpu_resident_capacity_detail::scaledShareClamped;
     const std::uint64_t huge = std::numeric_limits<std::uint64_t>::max();
@@ -266,6 +283,7 @@ int main(int argc, char** argv) {
     testConfiguredPartition();
     testCapacityClamp();
     testOverflowSaturation();
+    testSchedulerRequestCapacityDefault();
     testPortableScaledShareClamped();
     testAllocationBudgetMapping();
     testSixKRetention();

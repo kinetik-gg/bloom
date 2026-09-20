@@ -18,6 +18,8 @@
 
 #include "gpu_preview_display_service_general_support.hpp"
 
+#include "gpu_preview_display_service_general_fixture.ipp"
+
 int main(const int argc, char** argv) {
     const TestOptions options = parseOptions(argc, argv);
     if (!options.valid) {
@@ -357,11 +359,291 @@ int main(const int argc, char** argv) {
                             "forced-gate: the scheduler reached quiescence");
     }
 
+    // Production-default scheduler regression: `TaskSchedulerConfig::defaults()` with NO bespoke
+    // gpuRequestOwnedByteCapacity must admit a full-resolution 6000x4000 resident request whose
+    // resolved GPU budget exceeds the retired fixed 1 GiB ceiling. The host submit limit is far
+    // larger than the GPU share and must not force the CPU. Run as a separate fixture so the
+    // default scheduler config, not a test override, is the thing under test.
+    {
+        constexpr std::size_t kGib = std::size_t{1} << 30U;
+        auto bigPlan = makePlan(6000U, 4000U);
+
+        TaskScheduler defaultScheduler(TaskSchedulerConfig::defaults());
+        GpuPreviewDisplayServiceOptions defaultOptions = serviceOptions(options.loaderPath);
+        defaultOptions.residentLeaseBudgets.maxBytes = 4ULL * kGib;
+        defaultOptions.residentSceneCacheBudgets.maxRetainedBytes = 4ULL * kGib;
+        defaultOptions.residentExecutorBudgets.maxImageBytes = 2ULL * kGib;
+        defaultOptions.residentExecutorBudgets.maxOcioRetainedProgramBytes = 2ULL * kGib;
+        defaultOptions.residentExecutorBudgets.maxOcioOwnedBytesPerProgram = 2ULL * kGib;
+        defaultOptions.previewByteAllowance = 2ULL * kGib;
+        GpuPreviewDisplayService defaultService(
+            defaultScheduler, generalStageFunction(bigPlan, builder, programService, processor),
+            generalCpuStageFunction(bigPlan, processor, evaluator), generalFallback(processor),
+            defaultOptions);
+
+        const bool defaultTerminal = waitUntil(
+            [&] {
+                return defaultService.status().state != GpuPreviewDisplayServiceState::Initializing;
+            },
+            120s);
+        const auto defaultStatus = defaultService.status();
+        const bool defaultReady = defaultTerminal &&
+                                  defaultStatus.state == GpuPreviewDisplayServiceState::Ready &&
+                                  defaultStatus.presentationClient != nullptr &&
+                                  defaultStatus.presentationAvailability ==
+                                      bloom::render::GpuPresentationAvailability::Ready;
+        if (!defaultReady) {
+            expectations.expect(
+                !options.requireDevice,
+                "default-scheduler: the resident route must be Ready when required");
+            std::cout << "SKIP: default-scheduler resident route unavailable: "
+                      << defaultStatus.residentDetail << " / " << defaultStatus.presentationDetail
+                      << '\n';
+        } else {
+            expectations.expect(
+                defaultStatus.residentCapacityPlan.requestBytes > kGib,
+                "default-scheduler: the resolved GPU request budget exceeds the old "
+                "fixed 1 GiB ceiling");
+            const auto bigIdentity = makeIdentity(*bigPlan, 1, {}, {}, ViewAdjust{});
+            const std::uint64_t hostLimit = 64ULL * kGib;
+            auto bigSubmission = defaultService.submit(TaskRequest("default scheduler 6k", owner),
+                                                       snapshot, bigIdentity, hostLimit, {});
+            expectations.expect(bigSubmission.status == TaskSubmissionStatus::Accepted,
+                                "default-scheduler: the 6K request was admitted under defaults()");
+            const auto bigResult = awaitResult(bigSubmission.handle, 120s);
+            std::shared_ptr<const bloom::runtime::PreparedPreviewFrame> bigFrame;
+            if (!isResidentPrepared(bigResult, 1, bigFrame)) {
+                std::cerr << "default-scheduler 6K did not produce a resident frame: "
+                          << defaultService.status().residentDetail << '\n';
+            }
+            expectations.expect(bigFrame != nullptr && bigFrame->residentFrame() != nullptr &&
+                                    bigFrame->residentFrame()->lease().isValid(),
+                                "default-scheduler: the 6K request produced a resident GpuResident "
+                                "lease");
+            const auto afterBig = defaultService.status().counters;
+            expectations.expect(afterBig.residentGraphJobs > 0U,
+                                "default-scheduler: a positive GPU graph-job count");
+            expectations.expect(afterBig.gpuAdmissionRefusals == 0U,
+                                "default-scheduler: no bounded-admission refusal");
+            expectations.expect(afterBig.cpuFallbacks == 0U,
+                                "default-scheduler: the 6K request did NOT fall back to the CPU");
+
+            const auto defaultWarmIdentity = makeIdentity(*bigPlan, 2, {}, {}, ViewAdjust{});
+            auto defaultWarmSubmission =
+                defaultService.submit(TaskRequest("default scheduler 6k warm", owner), snapshot,
+                                      defaultWarmIdentity, hostLimit, {});
+            const auto defaultWarmResult = awaitResult(defaultWarmSubmission.handle, 120s);
+            std::shared_ptr<const bloom::runtime::PreparedPreviewFrame> defaultWarmFrame;
+            expectations.expect(isResidentPrepared(defaultWarmResult, 2, defaultWarmFrame),
+                                "default-scheduler: the warm 6K request produced a resident frame");
+            const auto afterBigWarm = defaultService.status().counters;
+            expectations.expect(afterBigWarm.gpuCacheHits > afterBig.gpuCacheHits,
+                                "default-scheduler: the warm 6K request reused the retained scene");
+        }
+        defaultService.beginShutdown();
+        static_cast<void>(waitUntil(
+            [&] { return defaultService.status().state == GpuPreviewDisplayServiceState::Stopped; },
+            60s));
+        defaultScheduler.beginShutdown();
+        static_cast<void>(waitUntil([&] { return defaultScheduler.isQuiescent(); }, 30s));
+    }
+
+    // Production graph + production capacity options + production-DEFAULT scheduler: a full
+    // 4608x3164 EXR source over a 6000x4000 solid + text composition must take the actual GPU
+    // resident route with positive native dispatches, ZERO CPU fallback and ZERO admission refusal,
+    // then reuse the retained scene on an identical warm request. The capacity options come from
+    // the same ledger-derived split gpu_preview_app uses, not ad hoc values.
+    {
+        namespace runtime = bloom::runtime;
+        const auto mediaDirectory = makeUniqueProductionMediaDirectory();
+        std::filesystem::create_directories(mediaDirectory);
+        const auto exrPath = mediaDirectory / "production_4608x3164.exr";
+        writeProductionLargeExr(exrPath, 4608, 3164);
+        const auto mediaAsset = productionImageAsset(exrPath, 7001);
+        auto mediaEvaluator = std::make_shared<CpuCompositionEvaluator>();
+        mediaEvaluator->setAssetBaseDirectory(mediaDirectory);
+        auto mediaContext = runtime::GpuSceneMediaContext::fromEvaluator(*mediaEvaluator);
+        mediaContext.assetBaseDirectory = mediaDirectory;
+        auto mediaBuilder = std::make_shared<CpuGpuSceneBuilder>(nullptr, std::move(mediaContext));
+        auto mediaPlan = makeProductionMediaTextPlan(format(6000U, 4000U), mediaAsset, 8000);
+
+        TaskScheduler productionScheduler(TaskSchedulerConfig::defaults());
+        GpuPreviewDisplayServiceOptions productionOptions = serviceOptions(options.loaderPath);
+        const auto ledgerAllocation = runtime::processMemoryBudgetLedger().allocate();
+        const auto configuredPlan = runtime::gpuResidentCapacityPlanConfigured(
+            ledgerAllocation.previewFrameCacheByteBudget);
+        // Capacity options exactly as gpu_preview_app derives them: the configured resident plan
+        // from the ledger preview budget, and the PRODUCTION executor image ceiling (the test
+        // harness's ad hoc 256 MiB cap is deliberately replaced with the app's ledger-derived
+        // default).
+        productionOptions.residentLeaseBudgets.maxBytes = configuredPlan.leaseBytes;
+        productionOptions.residentSceneCacheBudgets.maxRetainedBytes =
+            configuredPlan.sceneCacheBytes;
+        productionOptions.previewByteAllowance = configuredPlan.requestBytes;
+        productionOptions.residentExecutorBudgets = runtime::GpuSceneExecutorBudgets{};
+        GpuPreviewDisplayService productionService(
+            productionScheduler,
+            generalStageFunction(mediaPlan, mediaBuilder, programService, processor),
+            generalCpuStageFunction(mediaPlan, processor, mediaEvaluator),
+            generalFallback(processor), productionOptions);
+
+        const bool productionTerminal = waitUntil(
+            [&] {
+                return productionService.status().state !=
+                       GpuPreviewDisplayServiceState::Initializing;
+            },
+            120s);
+        const auto productionStatus = productionService.status();
+        const bool productionReady =
+            productionTerminal && productionStatus.state == GpuPreviewDisplayServiceState::Ready &&
+            productionStatus.presentationClient != nullptr &&
+            productionStatus.presentationAvailability ==
+                bloom::render::GpuPresentationAvailability::Ready;
+        if (!productionReady) {
+            expectations.expect(!options.requireDevice,
+                                "production: the resident route must be Ready when required");
+            std::cout << "SKIP: production resident route unavailable: "
+                      << productionStatus.residentDetail << '\n';
+        } else {
+            const auto productionIdentity = makeIdentity(*mediaPlan, 1, {}, {}, ViewAdjust{});
+            const std::uint64_t hostLimit = 64ULL * (std::size_t{1} << 30U);
+            auto productionSubmission =
+                productionService.submit(TaskRequest("production media text 6k", owner), snapshot,
+                                         productionIdentity, hostLimit, {});
+            expectations.expect(productionSubmission.status == TaskSubmissionStatus::Accepted,
+                                "production: the media+text 6K request was admitted");
+            const auto productionResult = awaitResult(productionSubmission.handle, 180s);
+            std::shared_ptr<const bloom::runtime::PreparedPreviewFrame> productionFrame;
+            if (!isResidentPrepared(productionResult, 1, productionFrame)) {
+                const auto diag = productionService.status();
+                std::cerr << "production media+text 6K did not produce a resident frame: detail='"
+                          << diag.residentDetail
+                          << "' requestBytes=" << diag.residentCapacityPlan.requestBytes
+                          << " nativeDispatches=" << diag.counters.nativeDispatches
+                          << " graphJobs=" << diag.counters.residentGraphJobs
+                          << " completions=" << diag.counters.residentCompletions
+                          << " failures=" << diag.counters.residentFailures
+                          << " cacheHits=" << diag.counters.gpuCacheHits
+                          << " cacheMisses=" << diag.counters.gpuCacheMisses
+                          << " cpuFallbacks=" << diag.counters.cpuFallbacks
+                          << " admissionRefusals=" << diag.counters.gpuAdmissionRefusals << '\n';
+            }
+            expectations.expect(productionFrame != nullptr &&
+                                    productionFrame->residentFrame() != nullptr &&
+                                    productionFrame->residentFrame()->lease().isValid(),
+                                "production: the media+text 6K request produced a genuine resident "
+                                "GpuResident lease");
+            const auto afterProduction = productionService.status().counters;
+            expectations.expect(afterProduction.nativeDispatches > 0U,
+                                "production: the media+text 6K request performed real native GPU "
+                                "dispatches");
+            expectations.expect(afterProduction.gpuAdmissionRefusals == 0U,
+                                "production: no bounded-admission refusal under defaults()");
+            expectations.expect(
+                afterProduction.cpuFallbacks == 0U,
+                "production: the media+text 6K request did NOT fall back to the CPU");
+
+            std::cout << "PHASE production-cold requestBytes="
+                      << productionStatus.residentCapacityPlan.requestBytes
+                      << " nativeDispatches=" << afterProduction.nativeDispatches
+                      << " graphJobs=" << afterProduction.residentGraphJobs
+                      << " completions=" << afterProduction.residentCompletions
+                      << " failures=" << afterProduction.residentFailures
+                      << " cacheHits=" << afterProduction.gpuCacheHits
+                      << " cacheMisses=" << afterProduction.gpuCacheMisses
+                      << " cpuFallbacks=" << afterProduction.cpuFallbacks
+                      << " admissionRefusals=" << afterProduction.gpuAdmissionRefusals << '\n';
+
+            const auto productionWarmIdentity = makeIdentity(*mediaPlan, 2, {}, {}, ViewAdjust{});
+            auto productionWarmSubmission =
+                productionService.submit(TaskRequest("production media text 6k warm", owner),
+                                         snapshot, productionWarmIdentity, hostLimit, {});
+            const auto productionWarmResult = awaitResult(productionWarmSubmission.handle, 180s);
+            std::shared_ptr<const bloom::runtime::PreparedPreviewFrame> productionWarmFrame;
+            expectations.expect(isResidentPrepared(productionWarmResult, 2, productionWarmFrame),
+                                "production: the warm media+text 6K request produced a resident "
+                                "frame");
+            const auto afterProductionWarm = productionService.status().counters;
+            expectations.expect(
+                afterProductionWarm.gpuCacheHits > afterProduction.gpuCacheHits,
+                "production: the warm media+text request reused the retained scene");
+            expectations.expect(afterProductionWarm.nativeDispatches ==
+                                    afterProduction.nativeDispatches,
+                                "production: the warm media+text request performed zero additional "
+                                "native dispatches");
+            expectations.expect(afterProductionWarm.cpuFallbacks == afterProduction.cpuFallbacks,
+                                "production: the warm media+text request did not fall back to the "
+                                "CPU");
+            std::cout << "PHASE production-warm nativeDispatches="
+                      << afterProductionWarm.nativeDispatches
+                      << " cacheHits=" << afterProductionWarm.gpuCacheHits
+                      << " cpuFallbacks=" << afterProductionWarm.cpuFallbacks
+                      << " admissionRefusals=" << afterProductionWarm.gpuAdmissionRefusals << '\n';
+        }
+        productionService.beginShutdown();
+        static_cast<void>(waitUntil(
+            [&] {
+                return productionService.status().state == GpuPreviewDisplayServiceState::Stopped;
+            },
+            60s));
+        productionScheduler.beginShutdown();
+        static_cast<void>(waitUntil([&] { return productionScheduler.isQuiescent(); }, 30s));
+        std::error_code ignoredCleanup;
+        std::filesystem::remove_all(mediaDirectory, ignoredCleanup);
+    }
+
+    // Explicit small scheduler capacity is an INTENTIONAL refusal: the service must record the
+    // bounded-admission refusal and take the honest CPU path, never silently substitute a GPU
+    // frame.
+    {
+        TaskSchedulerConfig refusalConfig = schedulerConfig();
+        refusalConfig.gpuRequestOwnedByteCapacity = 1; // one byte: every real request is refused
+        TaskScheduler refusalScheduler(refusalConfig);
+        GpuPreviewDisplayService refusalService(
+            refusalScheduler, generalStageFunction(neutralPlan, builder, programService, processor),
+            generalCpuStageFunction(neutralPlan, processor, evaluator), generalFallback(processor),
+            serviceOptions(options.loaderPath));
+        const bool refusalTerminal = waitUntil(
+            [&] {
+                return refusalService.status().state != GpuPreviewDisplayServiceState::Initializing;
+            },
+            90s);
+        const auto refusalStatus = refusalService.status();
+        if (refusalTerminal && refusalStatus.state == GpuPreviewDisplayServiceState::Ready &&
+            refusalStatus.presentationClient != nullptr) {
+            const auto beforeRefusal = refusalStatus.counters;
+            const auto refusalIdentity = makeIdentity(*neutralPlan, 1, {}, {}, ViewAdjust{});
+            auto refusalSubmission = refusalService.submit(TaskRequest("explicit refusal", owner),
+                                                           snapshot, refusalIdentity, kBudget, {});
+            const auto refusalResult = awaitResult(refusalSubmission.handle, 60s);
+            const auto afterRefusal = refusalService.status().counters;
+            expectations.expect(afterRefusal.gpuAdmissionRefusals >
+                                    beforeRefusal.gpuAdmissionRefusals,
+                                "explicit refusal: the admission refusal counter incremented");
+            std::shared_ptr<const bloom::runtime::PreparedPreviewFrame> refusalFrame;
+            expectations.expect(
+                !isResidentPrepared(refusalResult, 1, refusalFrame) && refusalResult.has_value() &&
+                    refusalResult->state() == TaskState::Succeeded,
+                "explicit refusal: the honest CPU path completed with no fabricated "
+                "GPU frame");
+        }
+        refusalService.beginShutdown();
+        static_cast<void>(waitUntil(
+            [&] { return refusalService.status().state == GpuPreviewDisplayServiceState::Stopped; },
+            60s));
+        refusalScheduler.beginShutdown();
+        static_cast<void>(waitUntil([&] { return refusalScheduler.isQuiescent(); }, 30s));
+    }
+
     if (expectations.failures() == 0) {
         std::cout
             << "PASS: default >4K Neutral general arm at the service; non-default adjusted "
                "cold/warm general frames; process output retained across a display-only change; "
-               "zero full-frame readback\n";
+               "zero full-frame readback; production-default scheduler admits a 6K resident "
+               "request "
+               "with zero admission refusal; media+text 6K production graph dispatches natively "
+               "with "
+               "zero CPU fallback; explicit small capacity refuses honestly\n";
         return 0;
     }
     std::cerr << expectations.failures() << " general display service expectation(s) failed\n";
