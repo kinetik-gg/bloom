@@ -613,6 +613,11 @@ GpuAffinePollResult GpuAffine::poll() {
     if (!impl.onOwnerThread()) {
         return GpuAffinePollResult::WrongThread;
     }
+#ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+    if (const auto fault = impl.injectedPollFault()) {
+        return *fault;
+    }
+#endif
     if (impl.jobState == GpuAffineJobState::Ready) {
         return GpuAffinePollResult::Ready;
     }

@@ -103,6 +103,22 @@ const GpuBlendDiagnostic& GpuBlend::diagnostic() const noexcept {
     }
     return impl_->jobDiagnostic;
 }
+std::string_view gpuBlendShaderIdentity(const core::BlendMode mode,
+                                        const bool float64Selected) noexcept {
+    if (mode == core::BlendMode::Normal || mode == core::BlendMode::Add) {
+        return "blend-v1-f32";
+    }
+    return float64Selected ? std::string_view{"blend-v1-f64"}
+                           : std::string_view{"blend-v1-f32-portable"};
+}
+
+std::string_view GpuBlend::shaderIdentity(const core::BlendMode mode) const noexcept {
+    if (impl_ == nullptr) {
+        return {};
+    }
+    return gpuBlendShaderIdentity(mode, impl_->generalUsesF64);
+}
+
 bool GpuBlend::isBoundTo(GpuDevice& device) const noexcept {
     if (impl_ == nullptr || !impl_->onOwnerThread()) {
         return false;
@@ -154,18 +170,27 @@ bool GpuBlend::Impl::createPipeline() {
         createDiagnostic = makeDiagnostic(GpuBlendDiagnosticCode::ShaderRejected, reason);
         return false;
     }
+    // The portable compensated-Float32 kernel needs no Float64 capability and no 64-bit integer
+    // type, so it is built unconditionally and backs the six general modes on every device that
+    // lacks the exact Float64 companion.
+    if (!createCompositePipeline(*control, vulkan_detail::kBlendPortableSpirvCode,
+                                 vulkan_detail::kBlendPortableSpirvByteCount, kBlendBindings,
+                                 kBlendBindingCount, kBlendPushBytes, reason, pipelinePortable)) {
+        createDiagnostic = makeDiagnostic(GpuBlendDiagnosticCode::ShaderRejected, reason);
+        return false;
+    }
     // The exact Float64 companion is built only when the device advertised and enabled the core
-    // shaderFloat64 feature. The SPIR-V requires that capability, so it must not be created
-    // otherwise. If the device claims support but rejects the pipeline, creation fails closed
-    // rather than silently losing the exactness the general modes need.
-    if (control->shaderFloat64) {
+    // shaderFloat64 feature AND the caller's policy allows it. The SPIR-V requires that capability,
+    // so it must not be created otherwise. If the device claims support but rejects the pipeline,
+    // creation fails closed rather than silently losing the exactness the general modes need.
+    if (control->shaderFloat64 && policy == GpuBlendKernelPolicy::Auto) {
         if (!createCompositePipeline(*control, vulkan_detail::kBlendF64SpirvCode,
                                      vulkan_detail::kBlendF64SpirvByteCount, kBlendBindings,
                                      kBlendBindingCount, kBlendPushBytes, reason, pipelineF64)) {
             createDiagnostic = makeDiagnostic(GpuBlendDiagnosticCode::ShaderRejected, reason);
             return false;
         }
-        f64Available = true;
+        generalUsesF64 = true;
     }
 
     const std::array poolSizes{vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 3},
@@ -238,7 +263,12 @@ bool GpuBlend::Impl::createPipeline() {
     return true;
 }
 
-GpuBlendCreateResult GpuBlend::create(GpuDevice& device, const GpuBlendBudgets& budgets) {
+GpuBlendCreateResult GpuBlend::create(GpuDevice& device, const GpuBlendBudgets& budgets,
+                                      const GpuBlendKernelPolicy policy) {
+    if (policy != GpuBlendKernelPolicy::Auto && policy != GpuBlendKernelPolicy::PortableFloat32) {
+        return {nullptr, makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
+                                        "the blend kernel policy is not a known value")};
+    }
     if (budgets.maxImageBytes == 0 || budgets.maxImageBytes > kMaxImageBytes ||
         budgets.maxMetadataBytes == 0 || budgets.maxMetadataBytes > kMaxMetadataBytes) {
         return {nullptr, makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
@@ -266,6 +296,7 @@ GpuBlendCreateResult GpuBlend::create(GpuDevice& device, const GpuBlendBudgets& 
     impl->owner = std::this_thread::get_id();
     impl->control = std::move(control);
     impl->budgets = budgets;
+    impl->policy = policy;
     impl->expectedGeneration = impl->control->generation;
     if (!impl->createPipeline()) {
         return {nullptr, impl->createDiagnostic};
@@ -378,18 +409,14 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
     }
 
     // Normal is the exact retained fma source-over and Add is the exact premultiplied sum, so both
-    // stay on the Float32 kernel. The six general separable modes divide by alpha and can cancel
-    // large HDR operands to a near-zero result, which needs the Float64 kernel to hold the 2e-6
-    // gate. Without shaderFloat64 those modes report Unsupported and the caller keeps the CPU
-    // reference path rather than publishing Float32 pixels outside tolerance.
-    const bool needsF64 =
+    // stay on the exact Float32 kernel. The six general separable modes use the exact Float64
+    // companion when it was selected, and the compensated-Float32 portable kernel otherwise; both
+    // hold the documented 2e-6 absolute-or-relative gate, so no device is left on the CPU path.
+    const bool generalMode =
         parameters.mode != core::BlendMode::Normal && parameters.mode != core::BlendMode::Add;
-    if (needsF64 && !impl.f64Available) {
-        return makeDiagnostic(GpuBlendDiagnosticCode::Unsupported,
-                              "this device does not support shaderFloat64; the general blend modes "
-                              "need the CPU reference path");
-    }
-    const CompositePipeline& selected = needsF64 ? impl.pipelineF64 : impl.pipeline;
+    const CompositePipeline& selected =
+        generalMode ? (impl.generalUsesF64 ? impl.pipelineF64 : impl.pipelinePortable)
+                    : impl.pipeline;
 
     impl.clearJob();
     const std::uint32_t zeroFlag = 0;
@@ -568,6 +595,11 @@ GpuBlendPollResult GpuBlend::poll() {
     if (!impl.onOwnerThread()) {
         return GpuBlendPollResult::WrongThread;
     }
+#ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+    if (const auto fault = impl.injectedPollFault()) {
+        return *fault;
+    }
+#endif
     if (impl.jobState == GpuBlendJobState::Ready) {
         return GpuBlendPollResult::Ready;
     }

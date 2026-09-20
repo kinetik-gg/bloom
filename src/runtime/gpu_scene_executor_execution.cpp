@@ -25,6 +25,7 @@ using gpu_scene_executor_detail::makeDiagnostic;
 using gpu_scene_executor_detail::mapAffine;
 using gpu_scene_executor_detail::mapBlend;
 using gpu_scene_executor_detail::mapComposite;
+using gpu_scene_executor_detail::mapOcio;
 using gpu_scene_executor_detail::mapSolid;
 using gpu_scene_executor_detail::mapUpload;
 using gpu_scene_executor_detail::NativePoll;
@@ -102,7 +103,7 @@ bool GpuSceneExecutor::Impl::hasUnretiredNative() const noexcept {
     const bool affineUnretired = affine != nullptr && affine->hasUnretiredSubmission();
     const bool blendUnretired = blend != nullptr && blend->hasUnretiredSubmission();
     return solidUnretired || compositeUnretired || uploadUnretired || affineUnretired ||
-           blendUnretired;
+           blendUnretired || ocioProgramsUnretired();
 }
 
 std::uint64_t GpuSceneExecutor::Impl::remainingBudget() const noexcept {
@@ -222,6 +223,8 @@ void GpuSceneExecutor::Impl::advanceDrain() noexcept {
         static_cast<void>(affine->poll());
     } else if (nativeKind == NativeKind::Blend && blend != nullptr) {
         static_cast<void>(blend->poll());
+    } else if (nativeKind == NativeKind::Ocio) {
+        drainOcioPrograms();
     }
     if (!hasUnretiredNative()) {
         nativeInFlight = false;
@@ -360,6 +363,13 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
         ++counters.blendDispatches;
         break;
     }
+    case GpuSceneExecutorStepKind::OcioEffect: {
+        const auto ocioDiagnostic = startOcioStep(step);
+        if (ocioDiagnostic.code != GpuSceneExecutorDiagnosticCode::None) {
+            return ocioDiagnostic;
+        }
+        break;
+    }
     }
     ++counters.dispatches;
     if (step.kind == GpuSceneExecutorStepKind::Solid ||
@@ -371,6 +381,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
         nativeKind = NativeKind::Affine;
     } else if (step.kind == GpuSceneExecutorStepKind::Blend) {
         nativeKind = NativeKind::Blend;
+    } else if (step.kind == GpuSceneExecutorStepKind::OcioEffect) {
+        nativeKind = NativeKind::Ocio;
     } else {
         nativeKind = NativeKind::Composite;
     }
@@ -389,6 +401,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::finishNative(render::GpuImage
         : nativeKind == NativeKind::Upload ? upload->lastJobAllocationBytes()
         : nativeKind == NativeKind::Affine ? affine->lastJobAllocationBytes()
         : nativeKind == NativeKind::Blend  ? blend->lastJobAllocationBytes()
+        : nativeKind == NativeKind::Ocio   ? nativeOcioLastJobBytes
                                            : composite->lastJobAllocationBytes();
     nativeKind = NativeKind::None;
     nativeInFlight = false;
@@ -466,6 +479,14 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::completeNative() {
     if (nativeKind == NativeKind::Blend) {
         return finishNative(blend->takeImage());
     }
+    if (nativeKind == NativeKind::Ocio) {
+        auto output = takeOcioOutput();
+        if (!output.has_value()) {
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                  "an OCIO effect operation produced no image");
+        }
+        return finishNative(std::move(*output));
+    }
     return finishNative(composite->takeImage());
 }
 
@@ -479,6 +500,9 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
         status = mapAffine(affine->poll());
     } else if (nativeKind == NativeKind::Blend) {
         status = mapBlend(blend->poll());
+    } else if (nativeKind == NativeKind::Ocio) {
+        status =
+            nativeOcioProgram != nullptr ? mapOcio(nativeOcioProgram->poll()) : NativePoll::Failure;
     } else {
         status = mapComposite(composite->poll());
     }
@@ -500,6 +524,10 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
                 affine->cancel();
             } else if (nativeKind == NativeKind::Blend) {
                 blend->cancel();
+            } else if (nativeKind == NativeKind::Ocio) {
+                if (nativeOcioProgram != nullptr) {
+                    nativeOcioProgram->cancel();
+                }
             } else {
                 composite->cancel();
             }
@@ -521,10 +549,16 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
                 static_cast<void>(affine->takeImage());
             } else if (nativeKind == NativeKind::Blend) {
                 static_cast<void>(blend->takeImage());
+            } else if (nativeKind == NativeKind::Ocio) {
+                if (nativeOcioProgram != nullptr) {
+                    static_cast<void>(nativeOcioProgram->takeEffectOutput());
+                }
             } else {
                 static_cast<void>(composite->takeImage());
             }
             nativeKind = NativeKind::None;
+            nativeOcioProgram = nullptr;
+            nativeOcioLastJobBytes = 0;
             nativeInFlight = false;
             ++counters.nativeJobCancellations;
             fail(GpuSceneExecutorDiagnosticCode::Cancelled,
@@ -546,6 +580,40 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
     }
     // Failure: only a PROVEN fence retirement may release resources. A device loss is proven (the
     // native sets its submission not-outstanding); otherwise the native accessor decides.
+    if (nativeKind == NativeKind::Ocio) {
+        const auto ocioCode = nativeOcioProgram != nullptr
+                                  ? nativeOcioProgram->diagnostic().code
+                                  : render::GpuOcioProgramDiagnosticCode::DeviceUnavailable;
+        if (ocioCode == render::GpuOcioProgramDiagnosticCode::DeviceLost) {
+            deviceLost = true;
+            nativeInFlight = false;
+            nativeKind = NativeKind::None;
+            nativeOcioProgram = nullptr;
+            ++counters.nativeJobFailures;
+            fail(GpuSceneExecutorDiagnosticCode::DeviceLost,
+                 "the device generation was lost while polling", false);
+            return GpuSceneExecutorPollResult::Failure;
+        }
+        if (!hasUnretiredNative()) {
+            nativeInFlight = false;
+            nativeKind = NativeKind::None;
+            nativeOcioProgram = nullptr;
+            if (ocioCode == render::GpuOcioProgramDiagnosticCode::Cancelled) {
+                ++counters.nativeJobCancellations;
+                fail(GpuSceneExecutorDiagnosticCode::Cancelled,
+                     "the OCIO effect job was cancelled after a proven retirement", false);
+                return GpuSceneExecutorPollResult::Failure;
+            }
+            ++counters.nativeJobFailures;
+            fail(GpuSceneExecutorDiagnosticCode::DispatchRefused,
+                 "the OCIO effect job failed after a proven retirement", false);
+            return GpuSceneExecutorPollResult::Failure;
+        }
+        ++counters.nativeJobFailures;
+        fail(GpuSceneExecutorDiagnosticCode::NativeUnproven,
+             "an OCIO failure did not prove fence retirement; owner drain is required", true);
+        return GpuSceneExecutorPollResult::Failure;
+    }
     const bool deviceLostNow =
         nativeKind == NativeKind::Solid    ? solidDeviceLost(solid->diagnostic())
         : nativeKind == NativeKind::Upload ? uploadDeviceLost(upload->diagnostic())
@@ -569,12 +637,10 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
             : nativeKind == NativeKind::Blend  ? blendCancelled(blend->diagnostic())
                                                : compositeCancelled(composite->diagnostic());
         const bool statusRejected =
-            nativeKind == NativeKind::Composite
-                ? compositeStatusRejected(composite->diagnostic())
-            : nativeKind == NativeKind::Affine
-                ? affineStatusRejected(affine->diagnostic())
-            : nativeKind == NativeKind::Blend ? blendStatusRejected(blend->diagnostic())
-                                              : false;
+            nativeKind == NativeKind::Composite ? compositeStatusRejected(composite->diagnostic())
+            : nativeKind == NativeKind::Affine  ? affineStatusRejected(affine->diagnostic())
+            : nativeKind == NativeKind::Blend   ? blendStatusRejected(blend->diagnostic())
+                                                : false;
         nativeInFlight = false;
         nativeKind = NativeKind::None;
         if (wasCancelled) {
@@ -608,6 +674,7 @@ GpuSceneExecutor::Impl::~Impl() {
     // resources for as long as the submission may reference them. Only after the pipelines are gone
     // does ordinary member destruction release the executor's own metadata and pins. No separate
     // global registry, leak list, or allocation from this noexcept destructor is used.
+    ocioPrograms.clear();
     upload.reset();
     affine.reset();
     blend.reset();

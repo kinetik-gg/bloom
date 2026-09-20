@@ -2,6 +2,7 @@
 
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
+#include "gpu_scene_preparation_builders.hpp"
 
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/render/image.hpp>
@@ -10,28 +11,6 @@
 
 namespace bloom::runtime::detail {
 namespace {
-
-[[nodiscard]] bool isSubsetOperation(const CompiledOperation& operation) noexcept {
-    return std::holds_alternative<CompiledSolid>(operation) ||
-           std::holds_alternative<CompiledText>(operation) ||
-           std::holds_alternative<CompiledShape>(operation) ||
-           std::holds_alternative<CompiledImageSource>(operation) ||
-           std::holds_alternative<CompiledVideoSource>(operation) ||
-           std::holds_alternative<CompiledLayerOutput>(operation) ||
-           std::holds_alternative<CompiledMerge>(operation) ||
-           std::holds_alternative<CompiledCompositionOutput>(operation);
-}
-
-// A leaf whose pixels a Layer Output can be built from: a direct solid or text (vector-coverage
-// path) or a media source (raster-translation path). Anything else feeding a Layer Output would
-// build a nested chain this slice deliberately does not approximate.
-[[nodiscard]] bool isLeafSource(const CompiledOperation& operation) noexcept {
-    return std::holds_alternative<CompiledSolid>(operation) ||
-           std::holds_alternative<CompiledText>(operation) ||
-           std::holds_alternative<CompiledShape>(operation) ||
-           std::holds_alternative<CompiledImageSource>(operation) ||
-           std::holds_alternative<CompiledVideoSource>(operation);
-}
 
 // Common tail shared by both upload leaves: derive bounds + window from the frozen image, charge
 // the resident bytes, and fill the result. Returns a failure if the upload produced no descriptor
@@ -72,26 +51,44 @@ std::optional<GpuSceneLeafFailure> screenUnsupportedLayers(const CompiledComposi
                                                            const ResolvedEvaluation& resolved,
                                                            const CancellationToken& cancellation) {
     const std::size_t operationCount = plan.operations().size();
+    // One classifier per plan so a child plan several sources reference is classified once.
+    NestedCompositionChainClassifier nestedClassifier;
     for (std::size_t index = 0; index < operationCount; ++index) {
         if (cancellation.isCancellationRequested()) {
             return fail(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
         }
-        if (!isSubsetOperation(plan.operations()[index])) {
+        if (!isGpuSceneSubsetOperation(plan.operations()[index])) {
             return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                         "A reachable operation is outside the prepared subset");
+        }
+        // A composition source is classified into the subset only when its REAL nested chain is
+        // present, acyclic, within the depth ceiling, and inside the bounded cancellation-aware
+        // scan. The child's own operations are screened when that child is built, so an unsupported
+        // child still fails closed.
+        if (const auto* source =
+                std::get_if<CompiledCompositionSource>(&plan.operations()[index])) {
+            switch (nestedClassifier.classify(*source, plan, cancellation)) {
+            case NestedCompositionClassification::Supported:
+                break;
+            case NestedCompositionClassification::Cancelled:
+                return fail(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
+            case NestedCompositionClassification::Unsupported:
+                return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                            "A composition source without a supported nested plan is outside the "
+                            "prepared subset");
+            }
         }
         const auto* layer = std::get_if<CompiledLayerOutput>(&plan.operations()[index]);
         if (layer == nullptr) {
             continue;
         }
-        if (layer->parent) {
-            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
-                        "A parented layer is not prepared");
-        }
         if (request.time < layer->inPoint ||
             (layer->outPoint.has_value() && request.time >= *layer->outPoint)) {
             continue;
         }
+        // Resolve only to fail closed on a genuinely unevaluable layer before any media decode.
+        // Full affine, parent composition, non-Normal blends and generic (merge/layer) inputs are
+        // covered by the builder, so they are no longer screened here.
         const auto position = resolveParameter(layer->position, plan, resolved);
         const auto anchor = resolveParameter(layer->anchor, plan, resolved);
         const auto scale = resolveParameter(layer->scale, plan, resolved);
@@ -101,22 +98,6 @@ std::optional<GpuSceneLeafFailure> screenUnsupportedLayers(const CompiledComposi
         if (!position || !anchor || !scale || !rotation || !opacity || !blend) {
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                         "Layer parameters are not evaluable");
-        }
-        if (*blend != core::BlendMode::Normal) {
-            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedBlend,
-                        "Only Normal blending is prepared");
-        }
-        if (layer->input.value() >= operationCount ||
-            !isLeafSource(plan.operations()[layer->input.value()])) {
-            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
-                        "A layer fed by a non-source input is not prepared");
-        }
-        if (scale->value.x == 0.0 || scale->value.y == 0.0) {
-            continue;
-        }
-        if (scale->value.x != 1.0 || scale->value.y != 1.0 || rotation->value != 0.0) {
-            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
-                        "Only translation-only layers are prepared");
         }
     }
     return std::nullopt;

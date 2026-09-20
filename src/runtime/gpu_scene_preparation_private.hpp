@@ -30,6 +30,13 @@ inline constexpr std::string_view kGpuSourceOverSpirvSha256 =
     "2aea19b4e3620e9e99f09f7f0e22f97822119ea798b44a1077179c4fc58194ee";
 inline constexpr std::string_view kGpuCoveredSolidSpirvSha256 =
     "3d54bcb0b9394b381df9f271cdfd05af4cb2f80620ba142227fec53ba26e1a9b";
+// The BlendV1 f32/universal artifact digest. Advisory only in the command key: the executor
+// canonicalizes the effective f32/f64 pin from the explicit mode and the device capability, so a
+// stale producer value can never bless another shader's cached output.
+inline constexpr std::string_view kGpuBlendSpirvSha256 =
+    "4b9cc2009f9a1fcbdc05558bbbbb9e9aeb7573a4fc88a8127e25e22bc6c208f8";
+inline constexpr std::string_view kGpuAffineSpirvSha256 =
+    "ee28424e6b4b7d3c4e437f6ce438f75c7dfbf57e78b2a06b1e4aed1cb71f9373";
 
 } // namespace bloom::runtime::detail
 

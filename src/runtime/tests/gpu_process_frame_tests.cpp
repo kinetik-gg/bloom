@@ -2,21 +2,20 @@
 //
 // It drives the REAL path: a real CompiledCompositionPlan -> CpuGpuSceneBuilder ->
 // GpuSceneExecutor on a dedicated owner worker -> the production GpuProcessReadback -> a genuine
-// ProcessFrame with EvaluationProvider::GpuResident. It compares the final process image and the
-// canonical process-frame semantic identity against the CPU reference evaluator, proves the final
-// RGBA32F readback happened exactly once, and proves an unchanged warm scene recomputes no native
-// dispatch. Without a loader/device it prints an explicit SKIP unless --require-device is passed.
+// ProcessFrame with EvaluationProvider::GpuResident. It compares the final process image against
+// the CPU reference evaluator, proves the final RGBA32F readback happened exactly once, and proves
+// an unchanged warm scene recomputes no native dispatch. The canonical output semantic identity
+// (which needs bloom::output) is proven separately in bloom.host. Without a loader/device it prints
+// an explicit SKIP unless --require-device is passed.
 
 #include "gpu_media_executor_test_support.hpp"
 #include "gpu_scene_executor_test_support.hpp"
 
 #include <bloom/core/color.hpp>
-#include <bloom/output/process_frame_semantic_identity.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
-#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -324,27 +323,9 @@ int run(int argc, char** argv) {
         pixelsClose(first.frame->processImage().pixels(), cpuFrame->processImage().pixels()),
         "the GPU process image matches the CPU oracle within tolerance");
 
-    // The canonical semantic identity is derived from the exact process pixels plus the closed
-    // identity fields; a bit-equal GPU frame must produce the same canonical bytes.
-    const bloom::output::ProcessFrameSemanticIdentityV1Preparer preparer;
-    const auto cpuIdentity = preparer.prepare(cpuFrame, {});
-    const auto gpuIdentity = preparer.prepare(first.frame, {});
-    expectations.expect(
-        cpuIdentity.status() ==
-                bloom::output::ProcessFrameSemanticIdentityPreparationStatus::Prepared &&
-            gpuIdentity.status() ==
-                bloom::output::ProcessFrameSemanticIdentityPreparationStatus::Prepared,
-        "both frames prepare a semantic identity");
-    if (cpuIdentity.identity() != nullptr && gpuIdentity.identity() != nullptr) {
-        const auto cpuBytes = cpuIdentity.identity()->canonicalBytes();
-        const auto gpuBytes = gpuIdentity.identity()->canonicalBytes();
-        expectations.expect(cpuBytes.size() == gpuBytes.size() &&
-                                std::equal(cpuBytes.begin(), cpuBytes.end(), gpuBytes.begin()),
-                            "the GPU frame's canonical identity bytes equal the CPU oracle");
-        expectations.expect(cpuIdentity.identity()->processPixelDigest() ==
-                                gpuIdentity.identity()->processPixelDigest(),
-                            "the GPU process-pixel digest equals the CPU oracle");
-    }
+    // The canonical output semantic identity (canonical bytes + process-pixel digest equality with
+    // the CPU oracle) is proven in bloom.host -- the runtime module cannot depend on bloom::output,
+    // even in tests. See src/host/tests/gpu_process_frame_identity_tests.cpp.
 
     // Warm path: the same scene served by the content cache performs no new native dispatch, but
     // still needs the one final readback for the CPU output adapter.

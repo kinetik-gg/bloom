@@ -85,8 +85,16 @@ void checkMediaParity(Expectations& expectations, const CpuCompositionEvaluator&
     expectations.expect(prepared.scene->mediaStatistics().imageSources == 1 &&
                             prepared.scene->mediaStatistics().imageConversions == 1,
                         label + ": exactly one image source was converted");
+    double hScale = 1.0;
+    double vScale = 1.0;
+    if (const auto* proxy = std::get_if<bloom::runtime::ProxyResolution>(&request.resolution)) {
+        hScale = static_cast<double>(proxy->extent.width()) /
+                 static_cast<double>(plan->format().width());
+        vScale = static_cast<double>(proxy->extent.height()) /
+                 static_cast<double>(plan->format().height());
+    }
     std::vector<std::shared_ptr<const Rgba32fImage>> images;
-    expectations.expect(replayScene(*prepared.scene, images), label + ": replays");
+    expectations.expect(replayScene(*prepared.scene, images, hScale, vScale), label + ": replays");
     const auto& replayed = images[prepared.scene->outputCommand()];
     expectations.expect(
         replayed != nullptr &&
@@ -251,37 +259,36 @@ void testChangedFrameAndBypass(Expectations& expectations, const CpuCompositionE
                         "an explicit bypass recalculates a distinct source image");
 }
 
-void testUnsupportedMediaGraph(Expectations& expectations, const MediaFixture& fixture) {
-    // A non-Normal media layer is reachable; the screen pass must refuse the whole graph BEFORE any
-    // media selection or decode. The counters are per-build and reported on the failure diagnostic,
-    // so they must stay at zero.
-    auto context = GpuSceneMediaContext::fromEvaluator(CpuCompositionEvaluator{});
-    context.assetBaseDirectory = fixture.directory;
-    const CpuGpuSceneBuilder builder(nullptr, context);
-    const auto plan = mediaPlan(
-        format(8, 8), fixture.asset,
-        LayerValues{.position = {4.3, 3.1}, .blendMode = bloom::core::BlendMode::Screen}, 1800);
-    const auto prepared = builder.build(plan, requestFor(*plan));
-    expectations.expect(!prepared &&
-                            prepared.diagnostic.code ==
-                                bloom::runtime::PreparedGpuSceneDiagnosticCode::UnsupportedBlend,
-                        "a non-Normal media graph is refused");
-    const auto& refused = prepared.diagnostic.mediaStatistics;
-    expectations.expect(refused.imageSources == 0 && refused.imageConversions == 0 &&
-                            refused.uploadCacheMisses == 0,
-                        "no media was selected or decoded for the unsupported graph");
-
-    // A rotated media layer is likewise refused before any media work.
-    const auto rotated = mediaPlan(format(8, 8), fixture.asset,
-                                   LayerValues{.position = {4.3, 3.1}, .rotation = 30.0}, 1900);
-    const auto rotatedPrepared = builder.build(rotated, requestFor(*rotated));
-    expectations.expect(
-        !rotatedPrepared &&
-            rotatedPrepared.diagnostic.code ==
-                bloom::runtime::PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
-        "a rotated media layer is refused");
-    expectations.expect(rotatedPrepared.diagnostic.mediaStatistics.imageSources == 0,
-                        "a rotated media layer selects no media");
+void testAffineAndBlendMedia(Expectations& expectations, const CpuCompositionEvaluator& evaluator,
+                             const MediaFixture& fixture) {
+    // A non-Normal media layer now folds through an explicit BlendV1 with the resolved mode.
+    {
+        const auto plan = mediaPlan(
+            format(8, 8), fixture.asset,
+            LayerValues{.position = {4.3, 3.1}, .blendMode = bloom::core::BlendMode::Screen}, 1800);
+        checkMediaParity(expectations, evaluator, plan, requestFor(*plan),
+                         "non-Normal media blend");
+    }
+    // Rotation + nonuniform scale emit the accepted GpuAffine command and match the CPU raster.
+    {
+        const auto plan = mediaPlan(
+            format(8, 8), fixture.asset,
+            LayerValues{.position = {4.3, 3.1}, .scale = {1.5, 0.5}, .rotation = 30.0}, 1900);
+        checkMediaParity(expectations, evaluator, plan, requestFor(*plan), "rotated media affine");
+    }
+    // Signed scale with a nonzero anchor, proxy resolution and a non-square PAR.
+    {
+        const auto plan = mediaPlan(format(9, 6, pixelAspect(4, 3)), fixture.asset,
+                                    LayerValues{.position = {4.5, 3.0},
+                                                .anchor = {1.0, -0.5},
+                                                .scale = {-1.25, 0.75},
+                                                .rotation = -20.0},
+                                    1950);
+        const auto extent = bloom::render::ImageExtent::create(6, 4);
+        auto request = requestFor(*plan);
+        request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+        checkMediaParity(expectations, evaluator, plan, request, "signed/anchor media proxy");
+    }
 }
 
 void testBudgetRefusal(Expectations& expectations, const MediaFixture& fixture) {
@@ -640,7 +647,7 @@ int main() {
         testSourceKeyExcludesIdsAndRevision(expectations, evaluator, fixture);
         testPerRequestStatisticsAreLocal(expectations, evaluator, fixture);
         testGestureCacheNeverTouchesDisk(expectations, evaluator, fixture);
-        testUnsupportedMediaGraph(expectations, fixture);
+        testAffineAndBlendMedia(expectations, evaluator, fixture);
         testBudgetRefusal(expectations, fixture);
 
         {

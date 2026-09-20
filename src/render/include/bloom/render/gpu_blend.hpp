@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace bloom::render {
 
@@ -71,6 +72,26 @@ struct GpuBlendBudgets final {
     std::uint64_t maxMetadataBytes = 16ULL * 1024ULL * 1024ULL;
 };
 
+// Selects the kernel for the six general separable modes. `Auto` uses the exact Float64 companion
+// when the device advertised and enabled the core shaderFloat64 feature, and otherwise the portable
+// compensated-Float32 kernel; Normal and Add always use the exact Float32 kernel. `PortableFloat32`
+// forces the portable kernel even on a Float64-capable device. This is a narrow production option
+// policy, not a capability claim: it never advertises a feature the device does not have, and a
+// caller that forces the portable kernel simply declines the Float64 companion.
+enum class GpuBlendKernelPolicy : std::uint8_t {
+    Auto,
+    PortableFloat32,
+};
+
+// Canonical, render-owned BlendV1 shader artifact identity. `float64Selected` is the ACTUAL
+// general-mode pipeline selection: the device's shaderFloat64 capability combined with the caller's
+// kernel policy, never a capability claim by itself. Normal and Add always map to the exact Float32
+// kernel; the six general modes map to the exact Float64 companion when selected and to the
+// portable compensated-Float32 kernel otherwise. The executor derives its blend cache key from
+// this, so a capability or policy change can never serve a wrongly keyed image.
+[[nodiscard]] std::string_view gpuBlendShaderIdentity(core::BlendMode mode,
+                                                      bool float64Selected) noexcept;
+
 struct GpuBlendCreateResult;
 
 class GpuBlend final {
@@ -81,10 +102,19 @@ class GpuBlend final {
     GpuBlend& operator=(GpuBlend&& other) noexcept;
     ~GpuBlend();
 
-    // Builds the cached pipeline, layout, descriptor set, command pool, and fence once, on the
-    // device owner thread. Wrong thread returns WrongThread.
-    [[nodiscard]] static GpuBlendCreateResult create(GpuDevice& device,
-                                                     const GpuBlendBudgets& budgets = {});
+    // Builds the cached pipeline(s), layout, descriptor set, command pool, and fence once, on the
+    // device owner thread. Wrong thread returns WrongThread. `policy` chooses the general-mode
+    // kernel; the portable Float32 kernel is built whenever it may be selected.
+    [[nodiscard]] static GpuBlendCreateResult
+    create(GpuDevice& device, const GpuBlendBudgets& budgets = {},
+           GpuBlendKernelPolicy policy = GpuBlendKernelPolicy::Auto);
+
+    // The actual shader artifact identity this pipeline selects for `mode`: Normal and Add are
+    // "blend-v1-f32"; the six general modes are "blend-v1-f64" when the Float64 companion was built
+    // and selected, and "blend-v1-f32-portable" otherwise. The executor folds this into its blend
+    // semantic key, so a device capability or kernel-policy change can never serve a wrongly keyed
+    // cached image. The empty view is returned for an uninitialized pipeline.
+    [[nodiscard]] std::string_view shaderIdentity(core::BlendMode mode) const noexcept;
 
     [[nodiscard]] GpuBlendJobState state() const noexcept;
     [[nodiscard]] const GpuBlendDiagnostic& diagnostic() const noexcept;

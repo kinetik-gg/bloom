@@ -25,8 +25,13 @@
 #define BLOOM_BLEND_F64_SPV_SHA256                                                                 \
     "a910e190a05875c22f16d1571dea9e05496b32d5a588ede8cc8d95520ea7dbcf"
 #endif
+#ifndef BLOOM_BLEND_PORTABLE_SPV_SHA256
+#define BLOOM_BLEND_PORTABLE_SPV_SHA256                                                            \
+    "41c0272525b19c8dd43439244411b078e6c2936926fd8456c33fabf60cf68841"
+#endif
 
 #include "shaders/blend_f64_spirv.inc"
+#include "shaders/blend_portable_spirv.inc"
 #include "shaders/blend_spirv.inc"
 
 #include <array>
@@ -197,8 +202,117 @@ struct Pixel final {
     return composited;
 }
 
+// Host emulation of the portable compensated-Float32 kernel (blend_portable.comp): error-free
+// double-float (hi + lo) two-sum and two-product with an explicit fma, mirroring the shader
+// exactly.
+struct Df final {
+    float hi = 0.0F;
+    float lo = 0.0F;
+};
+
+[[nodiscard]] Df dfValue(const float value) noexcept { return {value, 0.0F}; }
+
+void dfTwoSum(const float a, const float b, float& sum, float& error) noexcept {
+    sum = a + b;
+    const float virtualB = sum - a;
+    error = (a - (sum - virtualB)) + (b - virtualB);
+}
+
+void dfTwoProd(const float a, const float b, float& product, float& error) noexcept {
+    product = a * b;
+    error = std::fma(a, b, -product);
+}
+
+[[nodiscard]] Df dfAdd(const Df a, const Df b) noexcept {
+    float sum = 0.0F;
+    float error = 0.0F;
+    dfTwoSum(a.hi, b.hi, sum, error);
+    error += a.lo + b.lo;
+    dfTwoSum(sum, error, sum, error);
+    return {sum, error};
+}
+
+[[nodiscard]] Df dfSub(const Df a, const Df b) noexcept { return dfAdd(a, {-b.hi, -b.lo}); }
+
+[[nodiscard]] Df dfMul(const Df a, const Df b) noexcept {
+    float product = 0.0F;
+    float error = 0.0F;
+    dfTwoProd(a.hi, b.hi, product, error);
+    error += a.hi * b.lo + a.lo * b.hi;
+    dfTwoSum(product, error, product, error);
+    return {product, error};
+}
+
+[[nodiscard]] Df dfDiv(const Df numerator, const Df denominator) noexcept {
+    const float quotient = numerator.hi / denominator.hi;
+    const Df remainder = dfSub(numerator, dfMul(dfValue(quotient), denominator));
+    const float correction = remainder.hi / denominator.hi;
+    return dfAdd(dfValue(quotient), dfValue(correction));
+}
+
+[[nodiscard]] float dfToFloat(const Df value) noexcept { return value.hi + value.lo; }
+
+[[nodiscard]] Df portableSeparable(const std::uint32_t mode, const Df backdrop,
+                                   const Df source) noexcept {
+    switch (mode) {
+    case 2:
+        return dfMul(backdrop, source);
+    case 3:
+        return dfSub(dfAdd(backdrop, source), dfMul(backdrop, source));
+    case 4:
+        return backdrop.hi <= 0.5F
+                   ? dfMul(dfMul(dfValue(2.0F), backdrop), source)
+                   : dfSub(dfValue(1.0F),
+                           dfMul(dfMul(dfValue(2.0F), dfSub(dfValue(1.0F), backdrop)),
+                                 dfSub(dfValue(1.0F), source)));
+    case 5:
+        return backdrop.hi <= source.hi ? backdrop : source;
+    case 6:
+        return backdrop.hi >= source.hi ? backdrop : source;
+    case 7: {
+        const Df difference = dfSub(backdrop, source);
+        const bool negative =
+            difference.hi < 0.0F || (difference.hi == 0.0F && difference.lo < 0.0F);
+        return negative ? Df{-difference.hi, -difference.lo} : difference;
+    }
+    default:
+        return source;
+    }
+}
+
+[[nodiscard]] Pixel shaderBlendPortable(const std::uint32_t mode, const Pixel source,
+                                        const Pixel backdrop) noexcept {
+    if (source.a == 0.0F) {
+        return backdrop;
+    }
+    if (backdrop.a == 0.0F) {
+        return source;
+    }
+    const Df sourceAlpha = dfValue(source.a);
+    const Df backdropAlpha = dfValue(backdrop.a);
+    const Df inverseSourceAlpha = dfSub(dfValue(1.0F), sourceAlpha);
+    const Df inverseBackdropAlpha = dfSub(dfValue(1.0F), backdropAlpha);
+    const std::array<float, 3> sourceChannels{source.r, source.g, source.b};
+    const std::array<float, 3> backdropChannels{backdrop.r, backdrop.g, backdrop.b};
+    std::array<float, 3> channels{};
+    for (std::size_t channel = 0; channel < channels.size(); ++channel) {
+        const Df straightSource = dfDiv(dfValue(sourceChannels[channel]), sourceAlpha);
+        const Df straightBackdrop = dfDiv(dfValue(backdropChannels[channel]), backdropAlpha);
+        const Df blended = portableSeparable(mode, straightBackdrop, straightSource);
+        const Df sourceWeighted = dfMul(dfMul(sourceAlpha, inverseBackdropAlpha), straightSource);
+        const Df blendWeighted = dfMul(dfMul(sourceAlpha, backdropAlpha), blended);
+        const Df backdropWeighted =
+            dfMul(dfMul(inverseSourceAlpha, backdropAlpha), straightBackdrop);
+        channels[channel] =
+            dfToFloat(dfAdd(dfAdd(sourceWeighted, blendWeighted), backdropWeighted));
+    }
+    return {channels[0], channels[1], channels[2],
+            std::fma(inverseSourceAlpha.hi, backdropAlpha.hi, sourceAlpha.hi)};
+}
+
 // The kernel pipeline the operation actually selects for a mode: Normal and Add stay on the Float32
-// blend.comp (both exact), and the six general separable modes use the Float64 blend_f64.comp.
+// blend.comp (both exact), and the six general separable modes use the Float64 blend_f64.comp when
+// the device supports it and the portable compensated-Float32 kernel otherwise.
 [[nodiscard]] Pixel kernelEmulation(const std::uint32_t mode, const Pixel source,
                                     const Pixel backdrop) noexcept {
     if (mode == 0U || mode == 1U) {
@@ -257,6 +371,15 @@ void testEmbeddedPins(Expectations& expectations) {
                         "the embedded BlendV1 Float64 SPIR-V array hashes to its pinned digest");
     expectations.expect(std::string_view(vd::kBlendF64SpirvDigest) == BLOOM_BLEND_F64_SPV_SHA256,
                         "the blend Float64 .inc digest comment matches the pinned digest");
+    static_assert(vd::kBlendPortableSpirvWordCount * 4U == vd::kBlendPortableSpirvByteCount,
+                  "blend portable SPIR-V word count must cover the byte count");
+    expectations.expect(spirvArrayMatches(vd::kBlendPortableSpirvCode,
+                                          vd::kBlendPortableSpirvByteCount,
+                                          BLOOM_BLEND_PORTABLE_SPV_SHA256),
+                        "the embedded portable BlendV1 SPIR-V array hashes to its pinned digest");
+    expectations.expect(std::string_view(vd::kBlendPortableSpirvDigest) ==
+                            BLOOM_BLEND_PORTABLE_SPV_SHA256,
+                        "the blend portable .inc digest comment matches the pinned digest");
 }
 
 struct Fixture final {
@@ -403,6 +526,74 @@ void testDenseHdrAgainstOracle(Expectations& expectations) {
                             std::to_string(checked) + ")");
 }
 
+// The portable kernel must hold the same 2e-6 gate as the Float64 companion across the dense HDR,
+// tiny-alpha, and cancellation field, and stay bit-exact at the exact endpoints.
+void testPortableDenseAgainstOracle(Expectations& expectations) {
+    const auto dense = denseHdrFixtures();
+    std::size_t checked = 0;
+    std::size_t mismatches = 0;
+    std::string firstFailure;
+    for (std::uint32_t modeValue = 2; modeValue <= 7; ++modeValue) {
+        for (const auto& fixture : dense) {
+            const auto source = makePixel(fixture.source);
+            const auto backdrop = makePixel(fixture.destination);
+            if (!source || !backdrop) {
+                continue;
+            }
+            std::vector<Rgba32f> cpuSource{*source};
+            std::vector<Rgba32f> cpuDestination{*backdrop};
+            const auto status = bloom::render::blendLinearRec709SceneRow(
+                bloom::core::kBlendModes[modeValue], cpuSource, cpuDestination);
+            if (status.has_value()) {
+                continue;
+            }
+            ++checked;
+            const auto expected = rawPixel(cpuDestination.front());
+            const auto actual = shaderBlendPortable(modeValue, fixture.source, fixture.destination);
+            if (!(closeEnough(actual.r, expected.r) && closeEnough(actual.g, expected.g) &&
+                  closeEnough(actual.b, expected.b) && closeEnough(actual.a, expected.a))) {
+                ++mismatches;
+                if (firstFailure.empty()) {
+                    firstFailure = fixture.name + " mode " + std::to_string(modeValue);
+                }
+            }
+        }
+    }
+    expectations.expect(checked >= 5000,
+                        "the portable dense HDR field checks at least 5000 combinations");
+    if (mismatches != 0) {
+        std::cerr << "first portable dense mismatch: " << firstFailure << '\n';
+    }
+    expectations.expect(mismatches == 0,
+                        "the portable Float32 formula matches the CPU oracle on all dense HDR/"
+                        "alpha/cancellation fixtures within 2e-6 abs-or-rel (" +
+                            std::to_string(mismatches) + " mismatches of " +
+                            std::to_string(checked) + ")");
+
+    for (const auto& mode : bloom::core::kBlendModes) {
+        const auto modeValue = static_cast<std::uint32_t>(bloom::core::blendModeStoredValue(mode));
+        for (const auto& fixture : fixtures()) {
+            const auto source = makePixel(fixture.source);
+            const auto backdrop = makePixel(fixture.destination);
+            if (!source || !backdrop) {
+                continue;
+            }
+            std::vector<Rgba32f> cpuSource{*source};
+            std::vector<Rgba32f> cpuDestination{*backdrop};
+            static_cast<void>(
+                bloom::render::blendLinearRec709SceneRow(mode, cpuSource, cpuDestination));
+            const auto expected = rawPixel(cpuDestination.front());
+            const auto actual = shaderBlendPortable(modeValue, fixture.source, fixture.destination);
+            const bool endpoint = fixture.source.a == 0.0F || fixture.destination.a == 0.0F;
+            if (endpoint) {
+                expectations.expect(actual.r == expected.r && actual.g == expected.g &&
+                                        actual.b == expected.b && actual.a == expected.a,
+                                    fixture.name + ": portable endpoint is bit-exact");
+            }
+        }
+    }
+}
+
 void testRejectsUnknownStoredValues(Expectations& expectations) {
     expectations.expect(!bloom::core::blendModeFromStoredValue(8).has_value(),
                         "an unknown stored blend mode is rejected, not folded to Normal");
@@ -421,6 +612,7 @@ int main() {
         testEmbeddedPins(expectations);
         testFormulaAgainstOracle(expectations);
         testDenseHdrAgainstOracle(expectations);
+        testPortableDenseAgainstOracle(expectations);
         testRejectsUnknownStoredValues(expectations);
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';

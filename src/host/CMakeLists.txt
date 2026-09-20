@@ -239,6 +239,25 @@ if(BUILD_TESTING)
             LABELS unit host output persistence
         )
 
+        # Host-side integration proof that a real GPU-provenance ProcessFrame produces the same
+        # canonical output semantic identity as the CPU oracle. It links the runtime evaluator and
+        # the runtime GPU test-support headers (reused fixture builders), keeping the output-identity
+        # assertion in bloom.host where the bloom_output dependency is legal. Same loader/
+        # --require-device contract as the runtime GPU fixture.
+        add_executable(bloom_host_gpu_process_frame_identity_test
+                       tests/gpu_process_frame_identity_tests.cpp)
+        target_include_directories(bloom_host_gpu_process_frame_identity_test
+            PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/tests")
+        target_link_libraries(bloom_host_gpu_process_frame_identity_test
+            PRIVATE bloom_host bloom_runtime_evaluator bloom_render)
+        bloom_enable_warnings(bloom_host_gpu_process_frame_identity_test)
+        bloom_enable_strict_floating_point(bloom_host_gpu_process_frame_identity_test)
+        bloom_add_test(
+            NAME bloom.host.gpu-process-frame-identity
+            COMMAND bloom_host_gpu_process_frame_identity_test
+            LABELS unit host output gpu render export
+        )
+
         # Task F2 (issue #101): drives approveFrameExportV1()/executeExportPublication() against
         # the same real platform::StagedArtifactCoordinator + PublicationCoordinator save/copy
         # already prove.

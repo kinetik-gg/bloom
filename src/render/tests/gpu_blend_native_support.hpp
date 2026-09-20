@@ -57,4 +57,8 @@ blendPixels(const std::uint32_t width, const std::uint32_t height, const bool so
 // The cold/warm benchmark lives in its own translation unit; declared here for the test driver.
 void runBlendBenchmark(Expectations& expectations, GpuDevice& device);
 
+// The forced-portable Float32 proof lives in its own translation unit; declared here for the
+// driver.
+void runPortableBlendTests(Expectations& expectations, GpuDevice& device);
+
 } // namespace bloom::render::blend_proof

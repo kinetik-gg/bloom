@@ -12,6 +12,7 @@
 #include <bloom/render/gpu_affine.hpp>
 #include <bloom/render/gpu_blend.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
+#include <bloom/render/gpu_ocio_program.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -43,6 +45,10 @@ enum class GpuSceneExecutorStepKind : std::uint8_t {
     SourceOver,  // GpuComposite::beginSourceOver: one merge layer.
     Affine,      // GpuAffine::beginAffineMatrix: a general composed affine placement.
     Blend,       // GpuBlend::beginBlend: one explicit two-input blend mode.
+    // GpuOcioProgram::beginEffect: one OCIO ProcessEffect transform over a resident RGBA32F input.
+    // The immutable PreparedGpuOcioCommand carries the extracted descriptor and compiled artifact;
+    // the executor retains one native program per command identity across warm frames.
+    OcioEffect,
 };
 
 // One native step. `command` is the scene command this step completes (kInvalid for an intermediate
@@ -83,6 +89,11 @@ struct GpuSceneExecutorStep final {
     float affineOpacity = 1.0F;
     // Blend: `input` is the foreground source, `destination` the backdrop.
     core::BlendMode blendMode = core::kDefaultBlendMode;
+    // OCIO ProcessEffect: the immutable prepared command (descriptor + artifact + identity).
+    // `input` is the resident RGBA32F source; the output window/display window/pixel aspect are
+    // `outputWindow` plus the scene command's preserved display geometry (carried through the scene
+    // command, not duplicated here).
+    std::shared_ptr<const PreparedGpuOcioCommand> ocioCommand;
 };
 
 namespace gpu_scene_executor_detail {
@@ -142,21 +153,14 @@ inline const std::string kEmptyCommandKey;
     if (const auto* blend = std::get_if<GpuSceneBlendCommand>(&command)) {
         return blend->semanticKey;
     }
+    if (const auto* ocio = std::get_if<GpuSceneOcioEffectCommand>(&command)) {
+        return ocio->semanticKey;
+    }
     return kEmptyCommandKey;
 }
 
 // The single AffineBilinearV1 artifact token. Affine has one shader, so its effective pin is fixed.
 inline const std::string kAffineArtifactToken = "affine-bilinear-v1";
-
-// The native selection rule, mirroring gpu_blend.cpp exactly: Normal and Add always use the Float32
-// kernel; the six general separable modes need the Float64 companion and are refused by the native
-// op when the device lacks shaderFloat64. The effective pin is therefore a pure function of `mode`,
-// so a producer-supplied digest can never point the cache at another shader's output.
-[[nodiscard]] inline const std::string& effectiveBlendArtifactToken(const core::BlendMode mode) {
-    static const std::string f32 = "blend-v1-f32";
-    static const std::string f64 = "blend-v1-f64";
-    return (mode == core::BlendMode::Normal || mode == core::BlendMode::Add) ? f32 : f64;
-}
 
 [[nodiscard]] inline bool affineFieldsFinite(const GpuSceneAffineCommand& affine) noexcept {
     return std::isfinite(affine.matrix.a) && std::isfinite(affine.matrix.b) &&
@@ -165,24 +169,31 @@ inline const std::string kAffineArtifactToken = "affine-bilinear-v1";
            std::isfinite(affine.opacity);
 }
 
-// Effective, executor-owned semantic key. Affine and blend are RECOMPUTED from their declared
-// fields and the actual device selection rule; a producer-supplied semanticKey or artifactDigest is
-// never trusted for a lookup or an insertion. Empty means the command is not keyable (malformed);
-// the caller refuses it rather than silently using a weaker key.
+// Effective, executor-owned semantic key for every command except blend. Affine is RECOMPUTED from
+// its declared fields; a producer-supplied semanticKey is never trusted for a lookup or an
+// insertion. Blend commands are keyed by the planner's authoritative overload, which alone knows
+// the actual selected pipeline; they must not reach this fallback, so an empty result is returned
+// for a blend rather than its advisory key. Empty also means the command is not keyable
+// (malformed); the caller refuses it rather than silently using a weaker key.
 [[nodiscard]] inline std::string effectiveCommandKey(const GpuSceneCommand& command) {
     if (const auto* affine = std::get_if<GpuSceneAffineCommand>(&command)) {
         if (!affineFieldsFinite(*affine)) {
             return {};
         }
-        return makeGpuSceneAffineSemanticKey(affine->inputKey, affine->sourceWindow,
-                                             affine->matrix, affine->opacity, affine->outputWindow,
+        return makeGpuSceneAffineSemanticKey(affine->inputKey, affine->sourceWindow, affine->matrix,
+                                             affine->opacity, affine->outputWindow,
                                              affine->pixelAspect, kAffineArtifactToken);
     }
-    if (const auto* blend = std::get_if<GpuSceneBlendCommand>(&command)) {
-        return makeGpuSceneBlendSemanticKey(blend->sourceKey, blend->destinationKey, blend->mode,
-                                            blend->sourceWindow, blend->outputWindow,
-                                            blend->pixelAspect,
-                                            effectiveBlendArtifactToken(blend->mode));
+    if (std::get_if<GpuSceneBlendCommand>(&command) != nullptr) {
+        return {};
+    }
+    if (const auto* ocio = std::get_if<GpuSceneOcioEffectCommand>(&command)) {
+        if (ocio->program == nullptr ||
+            ocio->program->encoding() != GpuOcioOutputEncoding::FinalRgba32f) {
+            return {};
+        }
+        return makeGpuSceneOcioEffectSemanticKey(ocio->inputKey, ocio->program->identity(),
+                                                 ocio->outputWindow, ocio->pixelAspect);
     }
     return commandKey(command);
 }
@@ -195,10 +206,10 @@ inline const std::string kAffineArtifactToken = "affine-bilinear-v1";
 // Full descriptor match for a produced image against a scene command. A translation's display
 // window and pixel aspect are preserved from its resolved input image, so that input is passed when
 // it is known.
-[[nodiscard]] inline bool descriptorMatches(const GpuSceneCommand& command,
-                                            const render::GpuImage& image,
-                                            const render::GpuImage* translationInput,
-                                            const render::GpuImage* backdropInput = nullptr) noexcept {
+[[nodiscard]] inline bool
+descriptorMatches(const GpuSceneCommand& command, const render::GpuImage& image,
+                  const render::GpuImage* translationInput,
+                  const render::GpuImage* backdropInput = nullptr) noexcept {
     if (const auto* solid = std::get_if<GpuSceneSolidCommand>(&command)) {
         return windowsEqual(image.dataWindow(), solid->dataWindow) &&
                windowsEqual(image.displayWindow(), solid->displayWindow) &&
@@ -254,6 +265,15 @@ inline const std::string kAffineArtifactToken = "affine-bilinear-v1";
         }
         return true;
     }
+    if (const auto* ocio = std::get_if<GpuSceneOcioEffectCommand>(&command)) {
+        // The native OCIO effect output propagates the input's data/display window and pixel
+        // aspect, so the executor validates the produced descriptor against the command's full
+        // output geometry. The program geometry is additionally enforced by the planner against the
+        // input.
+        return windowsEqual(image.dataWindow(), ocio->outputWindow) &&
+               windowsEqual(image.displayWindow(), ocio->displayWindow) &&
+               image.pixelAspect() == ocio->pixelAspect;
+    }
     return false;
 }
 
@@ -300,6 +320,8 @@ expectedDescriptorOf(const PreparedGpuScene& scene, const GpuSceneCommandIndex i
                 }
                 return SceneDescriptorInfo{item.outputWindow, backdrop->display,
                                            backdrop->pixelAspect};
+            } else if constexpr (std::is_same_v<T, GpuSceneOcioEffectCommand>) {
+                return SceneDescriptorInfo{item.outputWindow, item.displayWindow, item.pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneCompositionOutputCommand> ||
                                  std::is_same_v<T, GpuSceneSolidCommand>) {
                 return SceneDescriptorInfo{item.dataWindow, item.displayWindow, item.pixelAspect};
@@ -412,6 +434,28 @@ diagnosticFromBlend(const render::GpuBlendDiagnostic& diagnostic) {
     return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DispatchRefused, diagnostic.message);
 }
 
+[[nodiscard]] inline GpuSceneExecutorDiagnostic
+diagnosticFromOcio(const render::GpuOcioProgramDiagnostic& diagnostic) {
+    switch (diagnostic.code) {
+    case render::GpuOcioProgramDiagnosticCode::OverBudget:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::OverBudget, diagnostic.message);
+    case render::GpuOcioProgramDiagnosticCode::DeviceLost:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceLost, diagnostic.message);
+    case render::GpuOcioProgramDiagnosticCode::WrongThread:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::WrongThread, diagnostic.message);
+    case render::GpuOcioProgramDiagnosticCode::DeviceUnavailable:
+    case render::GpuOcioProgramDiagnosticCode::AllocationFailed:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
+                              diagnostic.message);
+    case render::GpuOcioProgramDiagnosticCode::Unsupported:
+    case render::GpuOcioProgramDiagnosticCode::ShaderRejected:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::Unsupported, diagnostic.message);
+    default:
+        break;
+    }
+    return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DispatchRefused, diagnostic.message);
+}
+
 enum class NativePoll : std::uint8_t { Pending, Ready, Failure, WrongThread };
 
 [[nodiscard]] inline NativePoll mapSolid(const render::GpuSolidPollResult result) noexcept {
@@ -484,6 +528,18 @@ enum class NativePoll : std::uint8_t { Pending, Ready, Failure, WrongThread };
     return NativePoll::Failure;
 }
 
+[[nodiscard]] inline NativePoll mapOcio(const render::GpuOcioProgramPollResult result) noexcept {
+    switch (result) {
+    case render::GpuOcioProgramPollResult::Pending:
+        return NativePoll::Pending;
+    case render::GpuOcioProgramPollResult::Ready:
+        return NativePoll::Ready;
+    case render::GpuOcioProgramPollResult::Failure:
+        break;
+    }
+    return NativePoll::Failure;
+}
+
 } // namespace gpu_scene_executor_detail
 
 struct GpuSceneExecutor::Impl final {
@@ -529,8 +585,13 @@ struct GpuSceneExecutor::Impl final {
     // the op's own actual retained bytes to this.
     std::uint64_t liveBytesAtDispatch = 0;
 
-    enum class NativeKind : std::uint8_t { None, Solid, Composite, Upload, Affine, Blend };
+    enum class NativeKind : std::uint8_t { None, Solid, Composite, Upload, Affine, Blend, Ocio };
     NativeKind nativeKind = NativeKind::None;
+    // In-flight OCIO program (borrowed from `ocioPrograms`; the map outlives the job).
+    render::GpuOcioProgram* nativeOcioProgram = nullptr;
+    // The in-flight OCIO job's transient allocation bytes, captured before the output is taken so
+    // the during-op peak ledger still sees it.
+    std::uint64_t nativeOcioLastJobBytes = 0;
     bool nativeInFlight = false;
     bool cancelRequested = false;
     bool cancelIssued = false;
@@ -559,6 +620,26 @@ struct GpuSceneExecutor::Impl final {
     [[nodiscard]] GpuSceneExecutorDiagnostic finishNative(render::GpuImage produced);
     [[nodiscard]] GpuSceneExecutorDiagnostic completeNative();
     [[nodiscard]] GpuSceneExecutorPollResult pollNative();
+
+    // OCIO-specific execution, kept in gpu_scene_executor_ocio.cpp so this translation unit stays
+    // cohesive. `acquireOcioProgram` returns the retained native program for the command identity,
+    // creating it on a cold identity and charging its ACTUAL retained allocation bytes.
+    [[nodiscard]] render::GpuOcioProgram* acquireOcioProgram(const PreparedGpuOcioCommand& command);
+    [[nodiscard]] GpuSceneExecutorDiagnostic startOcioStep(const GpuSceneExecutorStep& step);
+    [[nodiscard]] std::optional<render::GpuImage> takeOcioOutput();
+    [[nodiscard]] bool ocioProgramsUnretired() const noexcept;
+    void drainOcioPrograms() noexcept;
+    // Set by acquireOcioProgram on failure; startOcioStep returns it.
+    GpuSceneExecutorDiagnostic ocioAcquireDiagnostic;
+
+    struct OcioProgramEntry final {
+        std::unique_ptr<render::GpuOcioProgram> program;
+        std::uint64_t retainedBytes = 0;
+        std::uint64_t serial = 0;
+    };
+    std::map<core::Sha256Digest, OcioProgramEntry> ocioPrograms;
+    std::uint64_t ocioProgramBytes = 0;
+    std::uint64_t ocioProgramSerial = 0;
 };
 
 } // namespace bloom::runtime

@@ -5,6 +5,8 @@
 //
 // A missing device is an explicit SKIP (exit 77) unless --require-device is passed.
 
+#include "ocio_gpu_program_native_helpers.hpp"
+
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/color/ocio_gpu_program.hpp>
@@ -13,278 +15,24 @@
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
 #include <bloom/render/gpu_ocio_program.hpp>
-#include <bloom/render/image.hpp>
-#include <bloom/render/image_types.hpp>
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
-#include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <iterator>
-#include <memory>
-#include <optional>
-#include <random>
 #include <span>
-#include <sstream>
-#include <string>
-#include <string_view>
-#include <vector>
 
-namespace {
+namespace bloom::color::ocio_gpu_native_test {
 
 using bloom::render::GpuDevice;
 using bloom::render::GpuDeviceCreationOptions;
 using bloom::render::GpuDeviceState;
 using bloom::render::GpuDisplayImage;
-using bloom::render::GpuImage;
 using bloom::render::GpuImageUpload;
-using bloom::render::GpuImageUploadDiagnosticCode;
-using bloom::render::GpuImageUploadPollResult;
-using bloom::render::GpuOcioProgram;
 using bloom::render::GpuOcioProgramDiagnosticCode;
 using bloom::render::GpuOcioProgramPollResult;
-using bloom::render::OcioGpuProgramDesc;
-using bloom::render::Rgba32f;
-using bloom::render::Rgba32fImage;
-using bloom::render::Rgba32fImageBuilder;
-using bloom::render::Rgba32fImageDescriptor;
-
-constexpr std::uint64_t kBudget = std::uint64_t{1} << 32;
-constexpr int kSkipExit = 77;
-
-class Expectations final {
-  public:
-    void expect(const bool condition, const std::string_view message) {
-        if (condition) {
-            return;
-        }
-        ++failures_;
-        std::cerr << "FAILED: " << message << '\n';
-    }
-    [[nodiscard]] int failures() const noexcept { return failures_; }
-
-  private:
-    int failures_ = 0;
-};
-
-[[nodiscard]] bool parseRequireDevice(const int argc, char** argv) {
-    for (int index = 1; index < argc; ++index) {
-        if (std::string_view(argv[index]) == "--require-device") {
-            return true;
-        }
-    }
-    return false;
-}
-
-[[nodiscard]] std::shared_ptr<const GpuImage> uploadImage(GpuImageUpload& uploader,
-                                                          const std::uint32_t width,
-                                                          const std::uint32_t height,
-                                                          const std::vector<Rgba32f>& pixels) {
-    const auto windowResult = bloom::render::ImageWindow::create(0, 0, width, height);
-    if (!windowResult) {
-        return nullptr;
-    }
-    const auto descriptor = Rgba32fImageDescriptor::create(
-        *windowResult.value(), *windowResult.value(), bloom::core::PixelAspectRatio::square());
-    if (!descriptor || descriptor.value()->layout().pixelCount != pixels.size()) {
-        return nullptr;
-    }
-    auto builder = Rgba32fImageBuilder::create(*descriptor.value(), kBudget);
-    if (!builder) {
-        return nullptr;
-    }
-    for (std::uint32_t y = 0; y < height; ++y) {
-        const auto row = builder.value()->row(y);
-        if (!row) {
-            return nullptr;
-        }
-        for (std::uint32_t x = 0; x < width; ++x) {
-            (*row.value())[x] = pixels[static_cast<std::size_t>(y) * width + x];
-        }
-    }
-    auto frozen = std::move(*builder.value()).freeze();
-    if (!frozen) {
-        return nullptr;
-    }
-    auto source = std::make_shared<const Rgba32fImage>(std::move(*frozen.value()));
-    if (uploader.begin({source}, kBudget).code !=
-        bloom::render::GpuImageUploadDiagnosticCode::None) {
-        return nullptr;
-    }
-    auto poll = GpuImageUploadPollResult::Pending;
-    while (poll == GpuImageUploadPollResult::Pending) {
-        poll = uploader.poll();
-    }
-    if (poll != GpuImageUploadPollResult::Ready) {
-        return nullptr;
-    }
-    return std::make_shared<GpuImage>(uploader.takeImage());
-}
-
-[[nodiscard]] const char* quantizerGlsl() {
-    return R"(
-uint bloom_ocio_quantize(float value)
-{
-    if (!(value > 0.0)) { return 0u; }
-    if (value >= 1.0) { return 255u; }
-    if (value < 0.001) { return 0u; }
-    int exponent = 0;
-    float significand = frexp(value, exponent);
-    uint mantissa = uint(significand * 16777216.0);
-    uint scaled = mantissa * 255u;
-    int shift = 24 - exponent;
-    if (shift >= 33) { return 0u; }
-    if (shift == 32) { return (scaled >= 0x80000000u) ? 1u : 0u; }
-    uint quotient = scaled >> uint(shift);
-    uint remainder = scaled & ((1u << uint(shift)) - 1u);
-    uint roundBit = 1u << uint(shift - 1);
-    return quotient + ((remainder >= roundBit) ? 1u : 0u);
-}
-)";
-}
-
-[[nodiscard]] std::string buildWrapperGlsl(const OcioGpuProgramDesc& desc, const bool display) {
-    std::ostringstream out;
-    out << "#version 460\n";
-    out << "layout(local_size_x = 64) in;\n";
-    out << "layout(set = 1, binding = 0, rgba32f) uniform readonly image2D bloom_ocio_input;\n";
-    if (display) {
-        out << "layout(set = 1, binding = 1, std430) buffer BloomOcioOutput { uint words[]; } "
-               "bloom_ocio_output;\n";
-    } else {
-        out << "layout(set = 1, binding = 1, rgba32f) uniform writeonly image2D "
-               "bloom_ocio_output;\n";
-    }
-    out << "layout(set = 1, binding = 2, std430) buffer BloomOcioStatus { uint flags[]; } "
-           "bloom_ocio_status;\n";
-    out << "layout(push_constant) uniform BloomOcioPush { uint pixelCount; uint width; uint "
-           "height; "
-           "} bloom_ocio_push;\n";
-    out << desc.shaderText << "\n";
-    if (display) {
-        out << quantizerGlsl();
-    }
-    out << "void main() {\n";
-    out << "  uint index = gl_GlobalInvocationID.x;\n";
-    out << "  if (index >= bloom_ocio_push.pixelCount) { return; }\n";
-    out << "  ivec2 c = ivec2(int(index % bloom_ocio_push.width), int(index / "
-           "bloom_ocio_push.width));\n";
-    out << "  vec4 p = imageLoad(bloom_ocio_input, c);\n";
-    out << "  float a = p.a;\n";
-    out << "  vec3 s = (a != 0.0) ? p.rgb / a : vec3(0.0);\n";
-    out << "  vec4 t = " << desc.functionName << "(vec4(s, 1.0));\n";
-    if (display) {
-        out << "  uint r = bloom_ocio_quantize(t.r); uint g = bloom_ocio_quantize(t.g); uint b = "
-               "bloom_ocio_quantize(t.b); uint aa = bloom_ocio_quantize(a);\n";
-        out << "  bloom_ocio_output.words[index] = r | (g << 8) | (b << 16) | (aa << 24);\n";
-    } else {
-        out << "  imageStore(bloom_ocio_output, c, vec4(t.rgb * a, a));\n";
-    }
-    out << "}\n";
-    return out.str();
-}
-
-[[nodiscard]] std::optional<std::vector<std::uint32_t>> compileGlsl(const std::string& glsl) {
-#ifdef BLOOM_GPUSHADER_TOOLS_DIR
-    const std::filesystem::path tools{BLOOM_GPUSHADER_TOOLS_DIR};
-    const std::filesystem::path glslang = tools / "glslangValidator";
-    const std::filesystem::path spirvVal = tools / "spirv-val";
-    if (!std::filesystem::exists(glslang) || !std::filesystem::exists(spirvVal)) {
-        return std::nullopt;
-    }
-    static std::atomic<std::uint64_t> fixtureCounter{0};
-    const auto base = std::filesystem::temp_directory_path() /
-                      ("bloom_ocio_fixture_" + std::to_string(std::random_device{}()) + "_" +
-                       std::to_string(fixtureCounter.fetch_add(1)));
-    std::error_code directoryError;
-    std::filesystem::create_directories(base, directoryError);
-    const auto sourcePath = (base / "wrapper.comp").string();
-    const auto spvPath = (base / "wrapper.spv").string();
-    {
-        std::ofstream source(sourcePath, std::ios::binary | std::ios::trunc);
-        source << glsl;
-        if (!source) {
-            return std::nullopt;
-        }
-    }
-    const std::string compile = "\"" + glslang.string() + "\" --target-env vulkan1.2 -V \"" +
-                                sourcePath + "\" -o \"" + spvPath + "\"";
-    if (std::system(compile.c_str()) != 0) {
-        std::cerr << "glslangValidator rejected the complete OCIO wrapper program\n";
-        return std::nullopt;
-    }
-    const std::string validate =
-        "\"" + spirvVal.string() + "\" --target-env vulkan1.2 \"" + spvPath + "\"";
-    if (std::system(validate.c_str()) != 0) {
-        std::cerr << "spirv-val rejected the compiled OCIO wrapper program\n";
-        return std::nullopt;
-    }
-    std::ifstream module(spvPath, std::ios::binary);
-    if (!module) {
-        return std::nullopt;
-    }
-    const std::vector<char> bytes((std::istreambuf_iterator<char>(module)),
-                                  std::istreambuf_iterator<char>());
-    if (bytes.size() % sizeof(std::uint32_t) != 0) {
-        return std::nullopt;
-    }
-    std::vector<std::uint32_t> words(bytes.size() / sizeof(std::uint32_t));
-    std::memcpy(words.data(), bytes.data(), bytes.size());
-    std::error_code ignored;
-    std::filesystem::remove_all(base, ignored);
-    return words;
-#else
-    static_cast<void>(glsl);
-    return std::nullopt;
-#endif
-}
-
-[[nodiscard]] std::optional<std::shared_ptr<GpuOcioProgram>> makeProgram(GpuDevice& device,
-                                                                         OcioGpuProgramDesc desc) {
-    const bool display = desc.stage == bloom::render::OcioGpuProgramStage::DisplayPacking;
-    auto spirv = compileGlsl(buildWrapperGlsl(desc, display));
-    if (!spirv.has_value()) {
-        return std::nullopt;
-    }
-    auto created = GpuOcioProgram::create(device, std::move(desc), *spirv, {});
-    if (!created) {
-        std::cerr << "GpuOcioProgram::create failed: " << created.diagnostic.message << '\n';
-        return std::nullopt;
-    }
-    return std::shared_ptr<GpuOcioProgram>(std::move(created.program));
-}
-
-[[nodiscard]] std::uint8_t quantize(const double value) {
-    return static_cast<std::uint8_t>(std::floor(std::clamp(value, 0.0, 1.0) * 255.0 + 0.5));
-}
-
-// Premultiplied fixture: HDR, a negative channel, translucent alpha, and an exact zero-alpha pixel.
-[[nodiscard]] std::vector<Rgba32f> fixturePixels(const std::uint32_t width,
-                                                 const std::uint32_t height) {
-    std::vector<Rgba32f> pixels(static_cast<std::size_t>(width) * height, Rgba32f::transparent());
-    for (std::uint32_t y = 0; y < height; ++y) {
-        for (std::uint32_t x = 0; x < width; ++x) {
-            const float fx = static_cast<float>(x) / static_cast<float>(width);
-            const float fy = static_cast<float>(y) / static_cast<float>(height);
-            const float alpha = ((x + y) % 3 == 0) ? 0.0F : 0.25F + 0.5F * fx;
-            const float r = (1.6F + fx) * alpha;
-            const float g = (-0.2F + fy) * alpha;
-            const float b = (0.125F + 2.0F * fx) * alpha;
-            const auto value = Rgba32f::fromPremultiplied(r, g, b, alpha);
-            if (value) {
-                pixels[static_cast<std::size_t>(y) * width + x] = *value.value();
-            }
-        }
-    }
-    return pixels;
-}
 
 void testEffectCst(Expectations& expectations, GpuDevice& device,
                    const bloom::color::ResolvedBloomNeutralConfig& resolved) {
@@ -468,7 +216,183 @@ void testDisplay(Expectations& expectations, GpuDevice& device,
     expectations.expect(alphaMismatches == 0, "display alpha is byte-exact against the CPU oracle");
 }
 
-} // namespace
+void testGeometryAndBudgetLifecycle(Expectations& expectations, GpuDevice& device,
+                                    const bloom::color::ResolvedBloomNeutralConfig& neutral,
+                                    const bloom::color::ResolvedBloomNeutralConfig& aces) {
+    // The packed display buffer is persistent per program; a geometry change must grow OR shrink it
+    // only after the previous submission retires, and every job must still match the CPU oracle.
+    auto desc = bloom::color::buildOcioGpuProgramForDisplay(neutral, neutral.displayName(),
+                                                            neutral.viewName());
+    expectations.expect(desc.succeeded(), "the geometry lifecycle display program extracts");
+    if (!desc.succeeded()) {
+        return;
+    }
+    auto program = makeProgram(device, *desc.program());
+    auto uploader = GpuImageUpload::create(device);
+    expectations.expect(program != nullptr && uploader.hasValue(),
+                        "the geometry lifecycle program hosts");
+    if (program == nullptr || !uploader) {
+        return;
+    }
+    const auto handle = bloom::color::buildBloomNeutralCpuDisplayProcessor(neutral);
+    const auto* const processor = handle.handle();
+    expectations.expect(processor != nullptr,
+                        "the geometry lifecycle CPU display processor prepares");
+    if (processor == nullptr) {
+        return;
+    }
+
+    std::uint64_t smallJobBytes = 0;
+    std::uint64_t largeJobBytes = 0;
+    const auto runDisplay = [&](const std::uint32_t width, const std::uint32_t height,
+                                const bool recordSmall, const bool recordLarge) {
+        const auto pixels = fixturePixels(width, height);
+        const auto input = uploadImage(*uploader.upload, width, height, pixels);
+        expectations.expect(input != nullptr, "a geometry lifecycle input uploads");
+        if (input == nullptr) {
+            return;
+        }
+        const auto accepted = (*program)->beginDisplay(input, {}, kBudget);
+        expectations.expect(accepted.code == GpuOcioProgramDiagnosticCode::None,
+                            "a geometry lifecycle begin is accepted");
+        if (accepted.code != GpuOcioProgramDiagnosticCode::None) {
+            return;
+        }
+        const auto poll = awaitOcioCompletion(**program, expectations);
+        expectations.expect(poll == GpuOcioProgramPollResult::Ready,
+                            "a geometry lifecycle dispatch completes");
+        if (poll != GpuOcioProgramPollResult::Ready) {
+            return;
+        }
+        const std::uint64_t jobBytes = (*program)->lastJobAllocationBytes();
+        // The accessor must be nonzero and cover at least the RGBA8 output image bytes for the
+        // current geometry (it also includes the packed buffer).
+        expectations.expect(
+            jobBytes > 0 && jobBytes >= static_cast<std::uint64_t>(width) * height * 4U,
+            "the display accessor reports the current packed and output bytes");
+        if (recordSmall) {
+            smallJobBytes = jobBytes;
+        }
+        if (recordLarge) {
+            largeJobBytes = jobBytes;
+        }
+        GpuDisplayImage output = (*program)->takeDisplayOutput();
+        expectations.expect(output.isValid(), "a geometry lifecycle display output is published");
+        if (!output.isValid()) {
+            return;
+        }
+        const auto readback = bloom::render::readbackResidentDisplayImage(output, kBudget);
+        expectations.expect(readback.hasValue(), "a geometry lifecycle display output reads back");
+        if (!readback) {
+            return;
+        }
+        std::size_t mismatches = 0;
+        for (std::size_t index = 0; index < pixels.size(); ++index) {
+            const auto& p = pixels[index];
+            std::array<float, 3> straight{0.0F, 0.0F, 0.0F};
+            if (p.alpha() != 0.0F) {
+                straight = {p.red() / p.alpha(), p.green() / p.alpha(), p.blue() / p.alpha()};
+            }
+            const auto display = processor->referenceToDisplayLinear(
+                bloom::core::Color4d{static_cast<double>(straight[0]),
+                                     static_cast<double>(straight[1]),
+                                     static_cast<double>(straight[2]), 1.0});
+            if (!display.has_value()) {
+                ++mismatches;
+                continue;
+            }
+            const auto& gpu = readback.pixels[index];
+            if (std::abs(static_cast<int>(gpu.red) - quantize(display->red)) > 1 ||
+                std::abs(static_cast<int>(gpu.green) - quantize(display->green)) > 1 ||
+                std::abs(static_cast<int>(gpu.blue) - quantize(display->blue)) > 1 ||
+                gpu.alpha != quantize(static_cast<double>(p.alpha()))) {
+                ++mismatches;
+            }
+        }
+        expectations.expect(mismatches == 0,
+                            "the geometry lifecycle display matches the CPU oracle");
+    };
+    runDisplay(3, 2, true, false);
+    runDisplay(128, 64, false, true);
+    runDisplay(3, 2, false, false);
+    expectations.expect(largeJobBytes > smallJobBytes,
+                        "the large geometry reports more packed/output bytes than the small one");
+    // Without the shrink the stale large packed allocation would keep the reported bytes near the
+    // large geometry; the repeated small geometry must return close to the first small job.
+    expectations.expect((*program)->lastJobAllocationBytes() <= smallJobBytes + 4096U,
+                        "the packed buffer shrinks back for the repeated small geometry");
+
+    // A budget smaller than the packed/output bytes is refused before publication; the same program
+    // then accepts and completes a valid request.
+    {
+        const auto pixels = fixturePixels(3, 2);
+        const auto input = uploadImage(*uploader.upload, 3, 2, pixels);
+        expectations.expect(input != nullptr, "the budget refusal input uploads");
+        if (input != nullptr) {
+            const auto refused = (*program)->beginDisplay(input, {}, 1);
+            expectations.expect(refused.code == GpuOcioProgramDiagnosticCode::OverBudget,
+                                "a display budget below the output is refused");
+            const auto recovered = (*program)->beginDisplay(input, {}, kBudget);
+            expectations.expect(recovered.code == GpuOcioProgramDiagnosticCode::None,
+                                "a valid display request recovers after the refusal");
+            if (recovered.code == GpuOcioProgramDiagnosticCode::None) {
+                const auto poll = awaitOcioCompletion(**program, expectations);
+                expectations.expect(poll == GpuOcioProgramPollResult::Ready &&
+                                        (*program)->takeDisplayOutput().isValid(),
+                                    "the recovered display request publishes");
+            }
+        }
+    }
+
+    // The effect arm owns a full-frame RGBA32F output; byteBudget must cover its actual bytes.
+    auto cst = bloom::color::buildOcioGpuProgramForCst(aces, "ACES2065-1", "ACEScg");
+    expectations.expect(cst.succeeded(), "the geometry lifecycle CST program extracts");
+    if (!cst.succeeded()) {
+        return;
+    }
+    auto effectProgram = makeProgram(device, *cst.program());
+    expectations.expect(effectProgram != nullptr, "the geometry lifecycle CST program hosts");
+    if (effectProgram == nullptr) {
+        return;
+    }
+    constexpr std::uint32_t effectWidth = 4;
+    constexpr std::uint32_t effectHeight = 3;
+    const auto effectPixels = fixturePixels(effectWidth, effectHeight);
+    const auto effectInput =
+        uploadImage(*uploader.upload, effectWidth, effectHeight, effectPixels);
+    expectations.expect(effectInput != nullptr, "the effect lifecycle input uploads");
+    if (effectInput != nullptr) {
+        const std::uint64_t outputBytes = static_cast<std::uint64_t>(effectWidth) * effectHeight *
+                                          sizeof(bloom::render::Rgba32f);
+        const auto refused = (*effectProgram)->beginEffect(effectInput, {}, outputBytes - 1U);
+        expectations.expect(refused.code == GpuOcioProgramDiagnosticCode::OverBudget,
+                            "an effect budget below the RGBA32F output is refused");
+        const auto recovered = (*effectProgram)->beginEffect(effectInput, {}, kBudget);
+        expectations.expect(recovered.code == GpuOcioProgramDiagnosticCode::None,
+                            "a valid effect request recovers after the refusal");
+        if (recovered.code == GpuOcioProgramDiagnosticCode::None) {
+            const auto poll = awaitOcioCompletion(**effectProgram, expectations);
+            expectations.expect(poll == GpuOcioProgramPollResult::Ready,
+                                "the effect lifecycle dispatch completes");
+            if (poll == GpuOcioProgramPollResult::Ready) {
+                const std::uint64_t jobBytes = (*effectProgram)->lastJobAllocationBytes();
+                expectations.expect(jobBytes > 0 && jobBytes >= outputBytes,
+                                    "the effect accessor reports the current output bytes");
+                expectations.expect((*effectProgram)->takeEffectOutput() != nullptr,
+                                    "the effect lifecycle output publishes");
+            }
+        }
+    }
+}
+
+} // namespace bloom::color::ocio_gpu_native_test
+
+using bloom::color::ocio_gpu_native_test::Expectations;
+using bloom::color::ocio_gpu_native_test::kSkipExit;
+using bloom::color::ocio_gpu_native_test::parseRequireDevice;
+using bloom::render::GpuDevice;
+using bloom::render::GpuDeviceCreationOptions;
+using bloom::render::GpuDeviceState;
 
 int main(int argc, char** argv) {
     const bool requireDevice = parseRequireDevice(argc, argv);
@@ -511,6 +435,8 @@ int main(int argc, char** argv) {
     expectations.expect(device.device->state() == GpuDeviceState::Ready, "the device is Ready");
     testEffectCst(expectations, *device.device, *aces);
     testDisplay(expectations, *device.device, *neutral);
+    testGeometryAndBudgetLifecycle(expectations, *device.device, *neutral, *aces);
+    bloom::color::ocio_gpu_native_test::testFileTransform(expectations, *device.device, *neutral);
 
     if (expectations.failures() != 0) {
         std::cerr << expectations.failures() << " OCIO GPU program native expectation(s) failed\n";

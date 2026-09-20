@@ -43,11 +43,13 @@ target_sources(
         gpu_shader_compiler.cpp
         gpu_shader_compiler_process.cpp
         gpu_shader_compiler_process.hpp
+        gpu_shader_tool_resolver.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
             include/bloom/color/gpu_shader_compiler.hpp
+            include/bloom/color/gpu_shader_tool_resolver.hpp
 )
 
 target_compile_features(bloom_color_gpu_shader PUBLIC cxx_std_20)
@@ -92,6 +94,20 @@ if(BUILD_TESTING)
         ENVIRONMENT ${bloom_gpu_shader_test_environment}
     )
     set_tests_properties(bloom.color.gpu-shader-compiler PROPERTIES SKIP_RETURN_CODE 77)
+
+    add_executable(
+        bloom_color_gpu_shader_tool_resolver_test
+        tests/gpu_shader_tool_resolver_tests.cpp
+    )
+    target_link_libraries(bloom_color_gpu_shader_tool_resolver_test PRIVATE bloom_color_gpu_shader)
+    bloom_enable_warnings(bloom_color_gpu_shader_tool_resolver_test)
+    bloom_add_test(
+        NAME bloom.color.gpu-shader-tool-resolver
+        COMMAND bloom_color_gpu_shader_tool_resolver_test
+        LABELS unit color gpu
+        ENVIRONMENT ${bloom_gpu_shader_test_environment}
+    )
+    set_tests_properties(bloom.color.gpu-shader-tool-resolver PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # bloom_color_ocio (issue #95): the in-process Bloom Neutral CPU display processor adapter.
@@ -143,6 +159,14 @@ target_sources(
         ocio_cpu_input_processor.cpp
         ocio_cpu_display_frame.cpp
         ocio_gpu_program.cpp
+        ocio_gpu_program_extract.cpp
+        ocio_gpu_program_extract.hpp
+        ocio_gpu_program_serialize.cpp
+        ocio_gpu_program_serialize.hpp
+        ocio_gpu_program_sampling.cpp
+        ocio_gpu_program_transport.hpp
+        ocio_gpu_program_worker.cpp
+        ocio_gpu_program_worker.hpp
         ocio_internal.hpp
     PUBLIC
         FILE_SET HEADERS
@@ -267,10 +291,13 @@ target_link_libraries(bloom_color_video PUBLIC bloom_core)
 bloom_enable_warnings(bloom_color_video)
 bloom_enable_strict_floating_point(bloom_color_video)
 
-# External LUT parsing and execution never enter the host process.
-add_executable(bloom-color-worker lut_worker.cpp lut_file.cpp)
+# External LUT parsing and execution never enter the host process. The worker shares the trusted
+# OCIO shader-reflection codec with the host so neither duplicates the extraction logic; it only
+# ever links OCIO and the portable render value header, never a native device.
+add_executable(bloom-color-worker lut_worker.cpp lut_file.cpp ocio_gpu_program_extract.cpp
+    ocio_gpu_program_serialize.cpp)
 target_link_libraries(bloom-color-worker PRIVATE bloom_core bloom_platform_process OpenColorIO::OpenColorIO)
-target_include_directories(bloom-color-worker PRIVATE include)
+target_include_directories(bloom-color-worker PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}/../render/include")
 bloom_enable_warnings(bloom-color-worker)
 bloom_enable_strict_floating_point(bloom-color-worker)
 target_link_libraries(bloom_color_ocio PRIVATE bloom_platform_process)
@@ -294,8 +321,11 @@ if(BUILD_TESTING)
         NAMES spirv-val
         HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
         NO_DEFAULT_PATH)
-    add_executable(bloom_color_ocio_gpu_program_test tests/ocio_gpu_program_tests.cpp)
+    add_executable(bloom_color_ocio_gpu_program_test
+        tests/ocio_gpu_program_tests.cpp
+        tests/ocio_gpu_program_transport_tests.cpp)
     target_link_libraries(bloom_color_ocio_gpu_program_test PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)
+    target_include_directories(bloom_color_ocio_gpu_program_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_definitions(bloom_color_ocio_gpu_program_test PRIVATE
         "BLOOM_OCIO_GPU_WRAPPER_FIXTURE=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/ocio_gpu_wrapper_fixture.comp\"")
     if(bloom_ocio_gpu_glslang_validator AND bloom_ocio_gpu_spirv_val)
@@ -313,7 +343,10 @@ if(BUILD_TESTING)
     # Native GpuOcioProgram proof. Compiles the complete wrapper+OCIO GLSL with the pinned tools
     # off the device owner thread, then runs the real Vulkan pipeline and compares against the real
     # CPU colour processors. Skips explicitly (77) when no compatible device is present.
-    add_executable(bloom_color_ocio_gpu_program_native_test tests/ocio_gpu_program_native_tests.cpp)
+    add_executable(bloom_color_ocio_gpu_program_native_test
+        tests/ocio_gpu_program_native_tests.cpp
+        tests/ocio_gpu_program_native_helpers.cpp
+        tests/ocio_gpu_program_native_file_transform_tests.cpp)
     target_link_libraries(bloom_color_ocio_gpu_program_native_test PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)
     if(bloom_ocio_gpu_glslang_validator AND bloom_ocio_gpu_spirv_val)
         target_compile_definitions(bloom_color_ocio_gpu_program_native_test PRIVATE
@@ -325,15 +358,23 @@ if(BUILD_TESTING)
         COMMAND bloom_color_ocio_gpu_program_native_test
         TIMEOUT 300
         LABELS unit color ocio gpu)
+    # The test exits 77 when no compatible device is present; report that as a skip, not a pass.
+    set_tests_properties(bloom.color.ocio-gpu-program-native PROPERTIES SKIP_RETURN_CODE 77)
 
-    add_executable(bloom_color_ocio_gpu_program_resources_native_test
-        tests/ocio_gpu_program_resources_native_tests.cpp)
-    target_link_libraries(bloom_color_ocio_gpu_program_resources_native_test PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)
-    target_include_directories(bloom_color_ocio_gpu_program_resources_native_test
-        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../render")
-    if(bloom_ocio_gpu_glslang_validator AND bloom_ocio_gpu_spirv_val)
-        target_compile_definitions(bloom_color_ocio_gpu_program_resources_native_test PRIVATE
-            "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_ocio_gpu_tools_dir}\"")
+    # The resource/lifecycle native tests exercise the real Vulkan backend and the test-only fault
+    # setters; register them only when bloom_render compiled the real backend. A CPU-stub build
+    # still builds and runs the extraction and no-resource native tests (which skip explicitly).
+    if(BLOOM_RENDER_VULKAN_AVAILABLE)
+        add_executable(bloom_color_ocio_gpu_program_resources_native_test
+            tests/ocio_gpu_program_resources_native_tests.cpp)
+        target_link_libraries(bloom_color_ocio_gpu_program_resources_native_test PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)
+        target_include_directories(bloom_color_ocio_gpu_program_resources_native_test
+            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../render")
+        target_link_libraries(bloom_color_ocio_gpu_program_resources_native_test
+            PRIVATE bloom_render_ocio_test_faults)
+        if(bloom_ocio_gpu_glslang_validator AND bloom_ocio_gpu_spirv_val)
+            target_compile_definitions(bloom_color_ocio_gpu_program_resources_native_test PRIVATE
+                "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_ocio_gpu_tools_dir}\"")
     endif()
     bloom_enable_warnings(bloom_color_ocio_gpu_program_resources_native_test)
     bloom_add_test(
@@ -341,12 +382,16 @@ if(BUILD_TESTING)
         COMMAND bloom_color_ocio_gpu_program_resources_native_test
         TIMEOUT 300
         LABELS unit color ocio gpu)
+    set_tests_properties(bloom.color.ocio-gpu-program-resources-native PROPERTIES
+        SKIP_RETURN_CODE 77)
 
     add_executable(bloom_color_ocio_gpu_program_lifecycle_native_test
         tests/ocio_gpu_program_lifecycle_native_tests.cpp)
     target_link_libraries(bloom_color_ocio_gpu_program_lifecycle_native_test PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)
     target_include_directories(bloom_color_ocio_gpu_program_lifecycle_native_test
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../render")
+    target_link_libraries(bloom_color_ocio_gpu_program_lifecycle_native_test
+        PRIVATE bloom_render_ocio_test_faults)
     if(bloom_ocio_gpu_glslang_validator AND bloom_ocio_gpu_spirv_val)
         target_compile_definitions(bloom_color_ocio_gpu_program_lifecycle_native_test PRIVATE
             "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_ocio_gpu_tools_dir}\"")
@@ -357,4 +402,7 @@ if(BUILD_TESTING)
         COMMAND bloom_color_ocio_gpu_program_lifecycle_native_test
         TIMEOUT 300
         LABELS unit color ocio gpu)
+    set_tests_properties(bloom.color.ocio-gpu-program-lifecycle-native PROPERTIES
+        SKIP_RETURN_CODE 77)
+    endif()
 endif()

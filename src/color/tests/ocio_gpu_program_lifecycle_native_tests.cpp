@@ -36,6 +36,7 @@
 #include <random>
 #include <span>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -387,6 +388,138 @@ void testCancellationDuringResourceInit(Expectations& expectations, GpuDevice& d
                         "a valid create succeeds after the cancelled upload retires");
 }
 
+[[nodiscard]] std::uint8_t lifecycleQuantize(const double value) {
+    return static_cast<std::uint8_t>(std::floor(std::clamp(value, 0.0, 1.0) * 255.0 + 0.5));
+}
+
+void testCancelRetryWithoutHelper(Expectations& expectations, GpuDevice& device,
+                                  const bloom::color::ResolvedBloomNeutralConfig& aces) {
+    const std::string_view display = "Rec.2100-PQ - Display";
+    const std::string_view view = "ACES 1.1 - HDR Video (1000 nits & Rec.2020 lim)";
+    auto desc = bloom::color::buildOcioGpuProgramForDisplay(aces, display, view);
+    if (!desc.succeeded()) {
+        expectations.expect(false, "the cancel/retry fixture extracts");
+        return;
+    }
+    auto spirv = compileGlsl(buildWrapperGlsl(*desc.program(), true));
+    if (!spirv.has_value()) {
+        expectations.expect(false, "the cancel/retry fixture compiles");
+        return;
+    }
+    // (a) Deterministic post-submit cancellation; then retry WITHOUT the test retirement helper, so
+    // production's same-owner reservation must retire the quarantine once the fence proves it.
+    bloom::render::ocio_program_detail::setUploadFenceOverrideForTest(
+        bloom::render::ocio_program_detail::UploadFenceOverride::CancelAfterSubmit);
+    auto cancelled = GpuOcioProgram::create(device, *desc.program(), *spirv, {});
+    expectations.expect(!cancelled && cancelled.diagnostic.code ==
+                                          bloom::render::GpuOcioProgramDiagnosticCode::Cancelled,
+                        "post-submit cancellation publishes no program");
+    expectations.expect(bloom::render::ocio_program_detail::uploadQuarantineOccupiedForTest(),
+                        "the cancelled upload retains its resources");
+    bloom::render::ocio_program_detail::setUploadFenceOverrideForTest(
+        bloom::render::ocio_program_detail::UploadFenceOverride::None);
+    // (b) A foreign thread must not retire or destroy the quarantine.
+    std::thread foreign(
+        [&]() { bloom::render::ocio_program_detail::retireUploadQuarantineForTest(); });
+    foreign.join();
+    expectations.expect(bloom::render::ocio_program_detail::uploadQuarantineOccupiedForTest(),
+                        "a foreign-thread retire does not touch the quarantine");
+
+    std::shared_ptr<GpuOcioProgram> program;
+    for (int attempt = 0; attempt < 200 && program == nullptr; ++attempt) {
+        auto created = GpuOcioProgram::create(device, *desc.program(), *spirv, {});
+        if (created) {
+            program = std::shared_ptr<GpuOcioProgram>(std::move(created.program));
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    expectations.expect(program != nullptr,
+                        "a retry create succeeds after production retires the cancelled upload");
+    if (program != nullptr) {
+        auto uploader = GpuImageUpload::create(device);
+        const auto pixels = fixturePixels(4, 3);
+        const auto input = uploader ? uploadImage(*uploader.upload, 4, 3, pixels) : nullptr;
+        if (input != nullptr) {
+            const auto accepted = program->beginDisplay(input, {}, kBudget);
+            auto poll = program->poll();
+            while (poll == bloom::render::GpuOcioProgramPollResult::Pending) {
+                poll = program->poll();
+            }
+            auto output = program->takeDisplayOutput();
+            const auto readback = output.isValid()
+                                      ? bloom::render::readbackResidentDisplayImage(output, kBudget)
+                                      : bloom::render::GpuDisplayImageReadback{};
+            const auto handle = bloom::color::buildCpuDisplayProcessorForView(aces, display, view);
+            const auto* const processor = handle.handle();
+            expectations.expect(accepted.code ==
+                                        bloom::render::GpuOcioProgramDiagnosticCode::None &&
+                                    poll == bloom::render::GpuOcioProgramPollResult::Ready &&
+                                    readback.hasValue() && processor != nullptr,
+                                "the retried program executes end to end");
+            if (readback.hasValue() && processor != nullptr) {
+                std::size_t mismatches = 0;
+                for (std::size_t index = 0; index < pixels.size(); ++index) {
+                    const auto& p = pixels[index];
+                    std::array<double, 3> straight{0.0, 0.0, 0.0};
+                    if (p.alpha() != 0.0F) {
+                        const double alpha = static_cast<double>(p.alpha());
+                        straight = {static_cast<double>(p.red()) / alpha,
+                                    static_cast<double>(p.green()) / alpha,
+                                    static_cast<double>(p.blue()) / alpha};
+                    }
+                    const auto displayValue = processor->referenceToDisplayLinear(
+                        bloom::core::Color4d{straight[0], straight[1], straight[2], 1.0});
+                    if (!displayValue.has_value()) {
+                        ++mismatches;
+                        continue;
+                    }
+                    const auto& gpu = readback.pixels[index];
+                    if (std::abs(static_cast<int>(gpu.red) - lifecycleQuantize(displayValue->red)) >
+                            1 ||
+                        std::abs(static_cast<int>(gpu.green) -
+                                 lifecycleQuantize(displayValue->green)) > 1 ||
+                        std::abs(static_cast<int>(gpu.blue) -
+                                 lifecycleQuantize(displayValue->blue)) > 1 ||
+                        gpu.alpha != lifecycleQuantize(static_cast<double>(p.alpha()))) {
+                        ++mismatches;
+                    }
+                }
+                expectations.expect(mismatches == 0, "the retried program matches the CPU oracle");
+            }
+        } else {
+            expectations.expect(false, "the retry parity input uploads");
+        }
+    }
+
+    // (c) Throwing cancellation callback AFTER submission: no unwind may destroy live resources.
+    int calls = 0;
+    bloom::render::GpuOcioProgramCancellation throwing = [&calls]() -> bool {
+        ++calls;
+        if (calls >= 5) {
+            throw std::runtime_error("cancellation callback threw");
+        }
+        return false;
+    };
+    auto threw = GpuOcioProgram::create(device, *desc.program(), *spirv, {}, throwing);
+    expectations.expect(!threw && threw.diagnostic.code ==
+                                      bloom::render::GpuOcioProgramDiagnosticCode::Cancelled,
+                        "a throwing post-submit callback is treated as cancellation");
+    expectations.expect(bloom::render::ocio_program_detail::uploadQuarantineOccupiedForTest(),
+                        "a throwing callback still retains resources");
+    std::shared_ptr<GpuOcioProgram> retried;
+    for (int attempt = 0; attempt < 200 && retried == nullptr; ++attempt) {
+        auto created = GpuOcioProgram::create(device, *desc.program(), *spirv, {});
+        if (created) {
+            retried = std::shared_ptr<GpuOcioProgram>(std::move(created.program));
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    expectations.expect(retried != nullptr,
+                        "a retry create succeeds after a throwing-callback cancellation");
+}
+
 void testUnprovenUploadQuarantine(Expectations& expectations, GpuDevice& device,
                                   const bloom::color::ResolvedBloomNeutralConfig& aces) {
     const std::string_view display = "Rec.2100-PQ - Display";
@@ -507,6 +640,7 @@ int main(int argc, char** argv) {
     testBudgetsAndOwnership(expectations, *device.device, *neutral);
     testCreateTimeBudgets(expectations, *device.device, *aces);
     testCancellationDuringResourceInit(expectations, *device.device, *aces);
+    testCancelRetryWithoutHelper(expectations, *device.device, *aces);
     testUnprovenUploadQuarantine(expectations, *device.device, *aces);
     if (expectations.failures() != 0) {
         std::cerr << expectations.failures() << " lifecycle native expectation(s) failed\n";

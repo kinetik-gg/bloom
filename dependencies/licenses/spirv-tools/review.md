@@ -10,10 +10,13 @@ Reviewed: 2026-09-19
 
 ## Reached Scope And Minimization
 
-- This is **build-only tooling**: the offline validator `spirv-val`. No end-user runtime artifact
-  ships from this component, so the lock records `linkage: executable` with an **empty
-  `shippingRoles`** array (schema 1.3's build-only form). The libraries and CMake package the
-  upstream build also installs into the dependency prefix are build support, not shipped files.
+- Distribution review: the offline validator `spirv-val` ships as the runtime GPU shader-validation
+  tool beside the desktop, CLI, and MCP executables under the private `bloom-gpu-tools/` directory,
+  so the lock records `linkage: executable` with `shippingRoles: ["executable", "license"]`
+  (schema 1.3's shipping form). The staged binary travels with the Apache-2.0 text and this review,
+  plus a generated inventory binding the executable digest to `bin/spirv-val` in the qualified
+  prefix. The build-only libraries and CMake package the upstream build also installs into the
+  prefix remain build support, not shipped runtime files.
 - Recipe options (`dependencies/superbuild/projects/spirv-tools.cmake`):
 
 | CMake option | Value | Justification |

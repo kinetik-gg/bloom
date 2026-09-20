@@ -1,7 +1,7 @@
+#include "ocio_gpu_program_test_support.hpp"
+
 #include <bloom/color/ocio_gpu_program.hpp>
 
-#include <bloom/color/bloom_neutral_builtin.hpp>
-#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/render/ocio_gpu_program.hpp>
 
@@ -11,52 +11,23 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace {
 
-class Expectations final {
-  public:
-    void expect(const bool condition, const std::string_view message) {
-        if (condition) {
-            return;
-        }
-        ++failures_;
-        std::cerr << "FAILED: " << message << '\n';
-    }
-
-    [[nodiscard]] int failures() const noexcept { return failures_; }
-
-  private:
-    int failures_ = 0;
-};
-
 using bloom::color::OcioBuiltInRegistryOutcome;
 using bloom::color::OcioConfigLocatorKind;
+using bloom::color::gpu_program_test::acesConfig;
+using bloom::color::gpu_program_test::Expectations;
+using bloom::color::gpu_program_test::neutralConfig;
 using bloom::render::OcioGpuProgramDesc;
 using bloom::render::OcioGpuProgramError;
 using bloom::render::OcioGpuProgramLimits;
-
-[[nodiscard]] bloom::color::OcioBuiltInResolutionResult neutralConfig() {
-    return bloom::color::resolveBloomNeutralV1BuiltIn(OcioConfigLocatorKind::BloomBuiltIn,
-                                                      bloom::color::kBloomNeutralV1ConfigUri,
-                                                      bloom::color::kBloomNeutralV1ConfigDigest);
-}
-
-[[nodiscard]] bloom::color::OcioBuiltInResolutionResult acesConfig() {
-    const auto revision = bloom::color::ocioBuiltInContentRevision(
-        OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
-    if (!revision.has_value()) {
-        return bloom::color::resolveOcioBuiltIn(
-            OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri,
-            bloom::color::kBloomNeutralV1ConfigDigest, "ACEScg");
-    }
-    return bloom::color::resolveOcioBuiltIn(OcioConfigLocatorKind::BloomBuiltIn,
-                                            bloom::color::kAcesCgV1ConfigUri, *revision, "ACEScg");
-}
 
 [[nodiscard]] bloom::render::OcioGpuProgramResult
 firstDisplayProgramWithTexture(const bloom::color::ResolvedBloomNeutralConfig& resolved) {
@@ -292,26 +263,274 @@ void testResourceAndIdentityMutations(Expectations& expectations) {
     }
 }
 
-void testFileTransformBoundary(Expectations& expectations) {
-    auto resolution = neutralConfig();
-    auto resolved = std::move(resolution).takeResolved();
-    if (!resolved.has_value()) {
+// --- File-transform LUT fixtures, written to a scratch directory at runtime. -------------------
+
+void writeCube1d(const std::filesystem::path& path) {
+    std::ofstream file(path);
+    file << "LUT_1D_SIZE 8\n";
+    for (int index = 0; index < 8; ++index) {
+        const float value = static_cast<float>(index) / 7.0F;
+        file << value << ' ' << value * value << ' ' << 0.5F * value << '\n';
+    }
+}
+
+void writeCube3d(const std::filesystem::path& path) {
+    std::ofstream file(path);
+    file << "LUT_3D_SIZE 3\n";
+    for (int b = 0; b < 3; ++b) {
+        for (int g = 0; g < 3; ++g) {
+            for (int r = 0; r < 3; ++r) {
+                const float red = static_cast<float>(r) / 2.0F;
+                const float green = static_cast<float>(g) / 2.0F;
+                const float blue = static_cast<float>(b) / 2.0F;
+                file << red << ' ' << green * green << ' ' << blue << '\n';
+            }
+        }
+    }
+}
+
+void writeClf(const std::filesystem::path& path) {
+    std::ofstream file(path);
+    file << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            "<ProcessList id=\"identity\" compCLFversion=\"3\">\n"
+            "<Matrix inBitDepth=\"32f\" outBitDepth=\"32f\"><Array dim=\"3 3\">1 0 0 0 1 0 0 0 "
+            "1</Array></Matrix>\n"
+            "</ProcessList>\n";
+}
+
+void writeSpi1d(const std::filesystem::path& path) {
+    std::ofstream file(path);
+    file << "Version 1\nFrom 0 1\nLength 4\nComponents 3\n{\n0 0 0\n0.3333 0.1111 0.1667\n0.6667 "
+            "0.4444 0.3333\n1 1 0.5\n}\n";
+}
+
+void writeSpi3d(const std::filesystem::path& path) {
+    std::ofstream file(path);
+    file << "SPILUT 1.0\n3 3\n2 2 2\n";
+    for (int r = 0; r < 2; ++r) {
+        for (int g = 0; g < 2; ++g) {
+            for (int b = 0; b < 2; ++b) {
+                const std::string triple =
+                    std::to_string(r) + " " + std::to_string(g) + " " + std::to_string(b);
+                file << r << ' ' << g << ' ' << b << ' ' << triple << '\n';
+            }
+        }
+    }
+}
+
+#ifdef __linux__
+// On a qualified Linux host each supported format must reach the isolated helper and return a real,
+// accepted program. A non-Linux build must not parse in-process and returns the typed boundary.
+void testFileTransformExtraction(Expectations& expectations,
+                                 const bloom::color::ResolvedBloomNeutralConfig& resolved,
+                                 const std::filesystem::path& root) {
+    using bloom::color::LutDirection;
+    using bloom::color::LutInterpolation;
+    const auto process = std::string(resolved.processColorSpaceId());
+    const auto working = process;
+
+    struct FormatCase final {
+        const char* name;
+        void (*write)(const std::filesystem::path&);
+        std::uint32_t format;
+        bool threeD;
+    };
+    const std::array cases{
+        FormatCase{"curve1d.cube", &writeCube1d, 1, false},
+        FormatCase{"volume3d.cube", &writeCube3d, 1, true},
+        FormatCase{"identity.clf", &writeClf, 2, false},
+        FormatCase{"curve1d.spi1d", &writeSpi1d, 3, false},
+        FormatCase{"volume3d.spi3d", &writeSpi3d, 4, true},
+    };
+    for (const auto& testCase : cases) {
+        const auto path = root / testCase.name;
+        testCase.write(path);
+        const auto file = bloom::color::readLutFile(path);
+        expectations.expect(file.error == bloom::color::LutError::None,
+                            std::string("LUT fixture passes preflight: ") + testCase.name);
+        if (file.error != bloom::color::LutError::None) {
+            continue;
+        }
+        expectations.expect(file.format == testCase.format,
+                            std::string("LUT fixture format is derived: ") + testCase.name);
+        const auto program = bloom::color::buildOcioGpuProgramForFileTransform(
+            resolved, file, LutInterpolation::Best, LutDirection::Forward, process, working);
+        if (!program.succeeded()) {
+            std::cerr << "  file-transform " << testCase.name
+                      << " error=" << bloom::render::ocioGpuProgramErrorName(program.error())
+                      << '\n';
+        }
+        expectations.expect(program.succeeded(),
+                            std::string("FileTransform GPU program extracts: ") + testCase.name);
+        if (program.program() == nullptr) {
+            continue;
+        }
+        const auto& desc = *program.program();
+        expectations.expect(desc.stage == bloom::render::OcioGpuProgramStage::ProcessEffect &&
+                                desc.semanticsId == bloom::color::kOcioGpuFileTransformSemanticsId,
+                            "the FileTransform program carries the process-effect semantics id");
+        expectations.expect(bloom::render::validateOcioGpuProgram(desc, {}) ==
+                                OcioGpuProgramError::None,
+                            "the FileTransform program satisfies the default resource limits");
+        expectations.expect(desc.contentIdentity != bloom::core::Sha256Digest{} &&
+                                desc.shaderTextDigest ==
+                                    bloom::render::computeOcioGpuShaderTextDigest(desc.shaderText),
+                            "the FileTransform content identity and shader digest are genuine");
+        if (testCase.threeD) {
+            const bool has3d =
+                std::any_of(desc.textures.begin(), desc.textures.end(), [](const auto& texture) {
+                    return texture.dimensions == bloom::render::OcioGpuTextureDimensions::ThreeD &&
+                           texture.edgeLength >= 2 && !texture.samples.empty();
+                });
+            expectations.expect(has3d,
+                                std::string("3D LUT resource is preserved: ") + testCase.name);
+        }
+        const auto again = bloom::color::buildOcioGpuProgramForFileTransform(
+            resolved, file, LutInterpolation::Best, LutDirection::Forward, process, working);
+        expectations.expect(again.succeeded() && again.program() != nullptr &&
+                                again.program()->contentIdentity == desc.contentIdentity,
+                            std::string("FileTransform extraction is deterministic: ") +
+                                testCase.name);
+    }
+
+    const auto cubePath = root / "volume3d.cube";
+    const auto cube = bloom::color::readLutFile(cubePath);
+    if (cube.error != bloom::color::LutError::None) {
+        expectations.expect(false, "the 3D cube fixture is available for mutation coverage");
         return;
     }
-    bloom::core::Sha256Digest::Bytes digestBytes{};
-    digestBytes[0] = 1U;
-    const auto digest = bloom::core::Sha256Digest::fromBytes(digestBytes);
-    const auto boundary = bloom::color::buildOcioGpuProgramForFileTransform(
-        *resolved, "lin_rec709_scene", digest, 3, bloom::color::LutInterpolation::Tetrahedral,
-        bloom::color::LutDirection::Forward, "lin_rec709_scene");
-    expectations.expect(boundary.error() == OcioGpuProgramError::ExternalLutBoundaryRequired,
-                        "a file transform is refused in-process at the explicit LUT boundary");
-    const auto invalid = bloom::color::buildOcioGpuProgramForFileTransform(
-        *resolved, "lin_rec709_scene", digest, 9, bloom::color::LutInterpolation::Linear,
-        bloom::color::LutDirection::Forward, "lin_rec709_scene");
-    expectations.expect(invalid.error() == OcioGpuProgramError::InvalidRequest,
-                        "an unsupported LUT format is an invalid request");
+    // Inverse direction is a distinct, real OCIO GPU program.
+    {
+        const auto forward = bloom::color::buildOcioGpuProgramForFileTransform(
+            resolved, cube, LutInterpolation::Tetrahedral, LutDirection::Forward, process, working);
+        const auto inverse = bloom::color::buildOcioGpuProgramForFileTransform(
+            resolved, cube, LutInterpolation::Tetrahedral, LutDirection::Inverse, process, working);
+        if (!inverse.succeeded() || inverse.program() == nullptr) {
+            std::cerr << "  inverse file-transform error="
+                      << bloom::render::ocioGpuProgramErrorName(inverse.error()) << '\n';
+        }
+        expectations.expect(forward.succeeded() && inverse.succeeded(),
+                            "forward and inverse FileTransforms both extract");
+        if (forward.program() != nullptr && inverse.program() != nullptr) {
+            expectations.expect(forward.program()->contentIdentity !=
+                                    inverse.program()->contentIdentity,
+                                "the inverse direction mutates the content identity");
+        }
+    }
+    // Interpolation participates in the content identity.
+    {
+        const auto linear = bloom::color::buildOcioGpuProgramForFileTransform(
+            resolved, cube, LutInterpolation::Linear, LutDirection::Forward, process, working);
+        const auto tetrahedral = bloom::color::buildOcioGpuProgramForFileTransform(
+            resolved, cube, LutInterpolation::Tetrahedral, LutDirection::Forward, process, working);
+        expectations.expect(linear.succeeded() && tetrahedral.succeeded(),
+                            "linear and tetrahedral FileTransforms both extract");
+        if (linear.program() != nullptr && tetrahedral.program() != nullptr) {
+            expectations.expect(linear.program()->contentIdentity !=
+                                    tetrahedral.program()->contentIdentity,
+                                "the interpolation choice mutates the content identity");
+        }
+    }
+    // Working-color semantics: a different valid non-data space changes the identity; an unknown id
+    // is refused against the exact config.
+    {
+        const auto other =
+            std::find_if(resolved.colorSpaces().begin(), resolved.colorSpaces().end(),
+                         [&](const auto& space) { return space.id != process; });
+        if (other != resolved.colorSpaces().end()) {
+            const auto changed = bloom::color::buildOcioGpuProgramForFileTransform(
+                resolved, cube, LutInterpolation::Tetrahedral, LutDirection::Forward, other->id,
+                process);
+            const auto baseline = bloom::color::buildOcioGpuProgramForFileTransform(
+                resolved, cube, LutInterpolation::Tetrahedral, LutDirection::Forward, process,
+                process);
+            expectations.expect(changed.succeeded() && baseline.succeeded() &&
+                                    changed.program() != nullptr && baseline.program() != nullptr &&
+                                    changed.program()->contentIdentity !=
+                                        baseline.program()->contentIdentity,
+                                "the process/working-space semantics mutate the content identity");
+        }
+        const auto unknown = bloom::color::buildOcioGpuProgramForFileTransform(
+            resolved, cube, LutInterpolation::Tetrahedral, LutDirection::Forward, "No Such Space",
+            process);
+        expectations.expect(unknown.error() == OcioGpuProgramError::UnsupportedColorSpace,
+                            "an unknown process space is a typed refusal");
+    }
+    // Changed digest, malformed LUT, oversize LUT, cancellation, and a genuine helper failure.
+    {
+        auto changed = cube;
+        bloom::core::Sha256Digest::Bytes changedBytes{};
+        std::copy(changed.digest.bytes().begin(), changed.digest.bytes().end(),
+                  changedBytes.begin());
+        changedBytes[0] = static_cast<std::uint8_t>(changedBytes[0] ^ 0xffU);
+        changed.digest = bloom::core::Sha256Digest::fromBytes(changedBytes);
+        expectations.expect(
+            bloom::color::buildOcioGpuProgramForFileTransform(
+                resolved, changed, LutInterpolation::Best, LutDirection::Forward, process, working)
+                    .error() == OcioGpuProgramError::InvalidRequest,
+            "a changed LUT digest is refused before IPC");
+
+        auto malformed = cube;
+        const std::string junk = "LUT_3D_SIZE 2\n0 0 0\n";
+        const auto junkBytes = std::as_bytes(std::span(junk.data(), junk.size()));
+        malformed.bytes.assign(junkBytes.begin(), junkBytes.end());
+        const auto malformedDigest = bloom::core::Sha256Hasher::hash(malformed.bytes);
+        malformed.digest = *malformedDigest;
+        expectations.expect(bloom::color::buildOcioGpuProgramForFileTransform(
+                                resolved, malformed, LutInterpolation::Best, LutDirection::Forward,
+                                process, working)
+                                    .error() == OcioGpuProgramError::UnsupportedResourceForm,
+                            "a malformed LUT is a typed refusal");
+
+        auto oversized = cube;
+        oversized.bytes.resize(bloom::color::kMaximumLutBytes + 1);
+        expectations.expect(bloom::color::buildOcioGpuProgramForFileTransform(
+                                resolved, oversized, LutInterpolation::Best, LutDirection::Forward,
+                                process, working)
+                                    .error() == OcioGpuProgramError::ResourceLimitExceeded,
+                            "an oversized LUT is refused before allocation");
+
+        expectations.expect(bloom::color::buildOcioGpuProgramForFileTransform(
+                                resolved, cube, LutInterpolation::Best, LutDirection::Forward,
+                                process, working, {},
+                                [] {
+                                    return true;
+                                }).error() == OcioGpuProgramError::Cancelled,
+                            "cancellation before IPC is a typed Cancelled failure");
+
+        // A CLF whose ProcessList opens but is not a valid OCIO document passes the host's cheap
+        // structural preflight and fails inside the isolated OCIO parser: a real helper failure.
+        const auto brokenPath = root / "broken.clf";
+        {
+            std::ofstream file(brokenPath);
+            file << "<ProcessList>";
+        }
+        const auto broken = bloom::color::readLutFile(brokenPath);
+        expectations.expect(broken.error == bloom::color::LutError::None,
+                            "the broken CLF reaches the isolated parser");
+        const auto refusal = bloom::color::buildOcioGpuProgramForFileTransform(
+            resolved, broken, LutInterpolation::Best, LutDirection::Forward, process, working);
+        expectations.expect(refusal.error() == OcioGpuProgramError::UnsupportedResourceForm,
+                            "a helper parse failure stays a typed non-opted-out refusal");
+    }
+    // A truly unsupported extension never becomes a LUT.
+    {
+        const auto notLut = root / "not-a-lut.txt";
+        {
+            std::ofstream file(notLut);
+            file << "LUT_3D_SIZE 2\n0 0 0\n";
+        }
+        const auto unknown = bloom::color::readLutFile(notLut);
+        expectations.expect(unknown.error == bloom::color::LutError::UnsupportedFormat,
+                            "an unsupported extension is not admitted as a LUT");
+        expectations.expect(
+            bloom::color::buildOcioGpuProgramForFileTransform(
+                resolved, unknown, LutInterpolation::Best, LutDirection::Forward, process, working)
+                    .error() == OcioGpuProgramError::UnsupportedResourceForm,
+            "the unsupported LUT stays a typed failure, not a blanket opt-out");
+    }
 }
+#endif
 
 void testWrapperFixtureCompiles(Expectations& expectations) {
 #if defined(BLOOM_OCIO_GPU_WRAPPER_FIXTURE) && defined(BLOOM_GPUSHADER_TOOLS_DIR)
@@ -338,6 +557,7 @@ void testWrapperFixtureCompiles(Expectations& expectations) {
     std::error_code ignored;
     std::filesystem::remove(spv, ignored);
 #else
+    static_cast<void>(expectations);
     std::cout << "SKIP: pinned glslang/spirv-val fixture paths not configured\n";
 #endif
 }
@@ -350,7 +570,21 @@ int main() {
     testAcesCstExtraction(expectations);
     testAcesDisplayExtraction(expectations);
     testResourceAndIdentityMutations(expectations);
-    testFileTransformBoundary(expectations);
+    bloom::color::gpu_program_test::testSerializationRoundTrip(expectations);
+    bloom::color::gpu_program_test::testPerSamplerSamplingAdapter(expectations);
+#ifdef __linux__
+    auto resolution = neutralConfig();
+    auto neutral = std::move(resolution).takeResolved();
+    if (!neutral.has_value()) {
+        expectations.expect(false, "the Bloom Neutral built-in resolves for file transforms");
+    } else {
+        const auto root = std::filesystem::current_path() / "color3-ocio-gpu-lut-fixtures";
+        std::filesystem::create_directories(root);
+        testFileTransformExtraction(expectations, *neutral, root);
+        std::error_code ignored;
+        std::filesystem::remove_all(root, ignored);
+    }
+#endif
     testWrapperFixtureCompiles(expectations);
     if (expectations.failures() != 0) {
         std::cerr << expectations.failures() << " OCIO GPU program expectation(s) failed\n";

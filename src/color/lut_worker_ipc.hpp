@@ -3,12 +3,21 @@
 #ifdef __linux__
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <sys/socket.h>
 #include <sys/un.h>
 
 namespace bloom::color::detail {
+// Monotonic per-process generation for the abstract descriptor socket name. Shared so two callers
+// in one process (CPU processor preparation and GPU program extraction) can never collide on a
+// name.
+inline std::uint64_t nextLutGeneration() noexcept {
+    static std::atomic<std::uint64_t> generations{0};
+    return ++generations;
+}
 inline sockaddr_un lutSocketAddress(const std::uint64_t pid, const std::uint64_t generation) {
     sockaddr_un address{};
     address.sun_family = AF_UNIX;

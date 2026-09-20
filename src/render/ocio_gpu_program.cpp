@@ -80,6 +80,8 @@ std::string_view ocioGpuProgramErrorName(const OcioGpuProgramError error) noexce
         return "unsupported-resource-form";
     case OcioGpuProgramError::ExternalLutBoundaryRequired:
         return "external-lut-boundary-required";
+    case OcioGpuProgramError::Cancelled:
+        return "cancelled";
     }
     return "unknown";
 }
@@ -163,6 +165,11 @@ OcioGpuProgramError validateOcioGpuProgram(const OcioGpuProgramDesc& program,
     }
     if (program.shaderText.size() > limits.maxShaderBytes) {
         return OcioGpuProgramError::ResourceLimitExceeded;
+    }
+    // The immutable UBO snapshot is exactly `uniformBufferSize` bytes; a mismatch means the
+    // descriptor was assembled (or transported) inconsistently and must not be uploaded.
+    if (program.uniformBufferData.size() != program.uniformBufferSize) {
+        return OcioGpuProgramError::UnsupportedResourceForm;
     }
     if (program.textures.size() > limits.maxTextures ||
         program.uniforms.size() > limits.maxUniforms ||

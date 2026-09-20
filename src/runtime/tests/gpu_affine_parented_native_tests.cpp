@@ -13,7 +13,7 @@
 
 #include <bloom/render/gpu_affine.hpp>
 
-#include "../layer_parent_transform.hpp"
+#include "layer_parent_transform.hpp"
 
 #include <cmath>
 #include <cstdint>

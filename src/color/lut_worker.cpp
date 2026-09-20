@@ -1,8 +1,11 @@
 #include "lut_preflight.hpp"
 #include "lut_worker_ipc.hpp"
 #include "lut_worker_protocol.hpp"
+#include "ocio_gpu_program_extract.hpp"
+#include "ocio_gpu_program_serialize.hpp"
 #include <OpenColorIO/OpenColorIO.h>
 #include <algorithm>
+#include <bloom/color/ocio_gpu_program.hpp>
 #include <bloom/platform/process_supervisor.hpp>
 #include <cmath>
 #include <iostream>
@@ -118,6 +121,81 @@ LutError build(const detail::LutPacket& message, OCIO::ConstCPUProcessorRcPtr& c
     }
 }
 
+// Reflects the executable OCIO GPU program for one FileTransform into the sealed output resource.
+// The LUT is parsed only here, behind the same Landlock/seccomp confinement and structural
+// preflight as the CPU path; the host revalidates the transported payload before accepting it.
+LutError extractGpuProgram(const detail::LutPacket& message, const int descriptorSocket,
+                           std::uint64_t& programBytes) {
+    programBytes = 0;
+    const auto request = detail::LutGpuProgramRequest::decode(message);
+    if (!request.lutBytes || request.lutBytes > kMaximumLutBytes || request.lutFormat < 1 ||
+        request.lutFormat > 4 || request.interpolation > 2 || request.direction > 1 ||
+        request.programExtent == 0 || request.programExtent > detail::kMaximumGpuProgramBytes) {
+        return LutError::HelperProtocolViolation;
+    }
+    const auto descriptors = detail::receiveDescriptors(descriptorSocket, 2);
+    detail::LutFd input(descriptors[0]), output(descriptors[1]);
+    if (input.get() < 0 || output.get() < 0 ||
+        !detail::validSharedFile(input.get(), request.lutInode, request.lutBytes, true) ||
+        !detail::validSharedFile(output.get(), request.programInode, request.programExtent,
+                                 false)) {
+        return LutError::HelperProtocolViolation;
+    }
+    if (!confine()) {
+        return LutError::HelperUnavailable;
+    }
+    try {
+        std::vector<std::byte> bytes(static_cast<std::size_t>(request.lutBytes));
+        if (::lseek(input.get(), 0, SEEK_SET) != 0 || !detail::readFd(input.get(), bytes)) {
+            return LutError::HelperProtocolViolation;
+        }
+        const auto checked = detail::preflightLut(
+            std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()),
+            static_cast<std::uint32_t>(request.lutFormat), {}, nullptr);
+        if (checked != LutError::None) {
+            return checked;
+        }
+        auto transform = OCIO::FileTransform::Create();
+        const auto path = "/proc/self/fd/" + std::to_string(input.get());
+        transform->setSrc(path.c_str());
+        constexpr std::array interpolation{OCIO::INTERP_LINEAR, OCIO::INTERP_TETRAHEDRAL,
+                                           OCIO::INTERP_BEST};
+        transform->setInterpolation(interpolation[request.interpolation]);
+        transform->setDirection(request.direction == 0 ? OCIO::TRANSFORM_DIR_FORWARD
+                                                       : OCIO::TRANSFORM_DIR_INVERSE);
+        const auto processor = OCIO::Config::CreateRaw()->getProcessor(transform);
+        const auto group = processor->createGroupTransform();
+        for (int index = 0; index < group->getNumTransforms(); ++index) {
+            const auto& operation = group->getTransform(index);
+            const auto* lut = dynamic_cast<const OCIO::Lut3DTransform*>(operation.get());
+            if (lut && lut->getGridSize() > kMaximumLut3dEdge) {
+                return LutError::EdgeTooLarge;
+            }
+        }
+        auto extracted = bloom::color::detail::extractOcioGpuProgram(
+            processor, bloom::render::OcioGpuProgramStage::ProcessEffect,
+            bloom::color::kOcioGpuFileTransformSemanticsId, {});
+        if (!extracted.succeeded() || extracted.reflected() == nullptr) {
+            return LutError::TransformBuildFailed;
+        }
+        auto serialized = bloom::color::detail::serializeOcioGpuProgram(*extracted.reflected(),
+                                                                        request.programExtent);
+        if (!serialized) {
+            return LutError::FileTooLarge;
+        }
+        if (::lseek(output.get(), 0, SEEK_SET) != 0 ||
+            !detail::writeFd(output.get(), std::span<const std::byte>(*serialized))) {
+            return LutError::HelperProtocolViolation;
+        }
+        programBytes = serialized->size();
+        return LutError::None;
+    } catch (const std::bad_alloc&) {
+        return LutError::HelperMemoryLimit;
+    } catch (const std::exception&) {
+        return LutError::MalformedFile;
+    }
+}
+
 class Mapping final {
   public:
     Mapping(const int descriptor, const std::size_t size, const int protection)
@@ -192,18 +270,23 @@ int main() {
                 message[1] != detail::kLutProtocolVersion || message[3] != ++nonce)
                 return 1;
             LutError error = LutError::HelperProtocolViolation;
-            if (message[2] == 0 && nonce == 1) {
+            std::uint64_t payload = 0;
+            if (message[2] == detail::kLutCommandHello && nonce == 1) {
                 const auto address = detail::lutSocketAddress(message[5], message[6]);
                 error = ::connect(descriptorSocket.get(),
                                   reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == 0
                             ? LutError::None
                             : LutError::HelperUnavailable;
-            } else if (message[2] == 1 && nonce == 2)
+            } else if (message[2] == detail::kLutCommandBuildCpu && nonce == 2) {
                 error = build(message, cpu, descriptorSocket.get(), identity);
-            else if (message[2] == 2 && nonce > 2)
+                payload = cpu && (identity || cpu->isIdentity()) ? 1 : 0;
+            } else if (message[2] == detail::kLutCommandApplySlab && nonce > 2) {
                 error = applySlab(message, cpu, descriptorSocket.get(), identity);
+            } else if (message[2] == detail::kLutCommandExtractGpuProgram && nonce == 2) {
+                error = extractGpuProgram(message, descriptorSocket.get(), payload);
+            }
             message[5] = static_cast<std::uint64_t>(error);
-            message[6] = cpu && (identity || cpu->isIdentity()) ? 1 : 0;
+            message[6] = payload;
             if (!detail::writeFd(STDOUT_FILENO, std::as_bytes(std::span(message))))
                 return 1;
             if (error != LutError::None)

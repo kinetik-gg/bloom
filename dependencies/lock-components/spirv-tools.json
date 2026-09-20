@@ -10,7 +10,7 @@
     "provenancePolicy": "not-published",
     "provenanceReview": {
       "path": "dependencies/licenses/spirv-tools/provenance.md",
-      "sha256": "sha256:c74163ade27b76b0643a4cd4959b0617d704d9abcc20653f3c75010a6869f784"
+      "sha256": "sha256:d231d0f932f46f75c4dfdd514f58f4d879162c7c036a7d5b074e3268fa91c1c0"
     },
     "provenance": []
   },
@@ -32,7 +32,7 @@
     "modified": false,
     "reviewRecord": {
       "path": "dependencies/licenses/spirv-tools/review.md",
-      "sha256": "sha256:002175565736c6d60199a7149666d1769a0b4e5f833be5b4890ea862b8ccee94"
+      "sha256": "sha256:78cac9b78dda59731f9c83bb505ee776e3cc9c94affb378a2d5dbc5e5ea45966"
     },
     "reviewedAt": "2026-09-19"
   },
@@ -75,7 +75,10 @@
       "capabilities": [
         "bloom.capability.spirv-tools"
       ],
-      "shippingRoles": [],
+      "shippingRoles": [
+        "executable",
+        "license"
+      ],
       "conformanceFixtureSets": []
     }
   ],

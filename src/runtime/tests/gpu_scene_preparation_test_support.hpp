@@ -20,6 +20,8 @@
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
+#include "layer_parent_transform.hpp"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -79,7 +81,8 @@ class Expectations final {
     std::size_t failures_ = 0;
 };
 
-[[nodiscard]] std::string firstMismatch(const Rgba32fImage& replayed, const Rgba32fImage& cpu) {
+[[maybe_unused, nodiscard]] std::string firstMismatch(const Rgba32fImage& replayed,
+                                                      const Rgba32fImage& cpu) {
     if (replayed.pixels().size() != cpu.pixels().size()) {
         return "size " + std::to_string(replayed.pixels().size()) + " vs " +
                std::to_string(cpu.pixels().size());
@@ -131,8 +134,8 @@ format(const std::uint32_t width, const std::uint32_t height,
 
 // Checked constructors for the canonical test fixture values. These keep every call site free of an
 // unchecked optional dereference while preserving the fail-fast behaviour on an invalid fixture.
-[[nodiscard]] bloom::core::PixelAspectRatio pixelAspect(const std::uint64_t numerator,
-                                                        const std::uint64_t denominator) {
+[[maybe_unused, nodiscard]] bloom::core::PixelAspectRatio
+pixelAspect(const std::uint64_t numerator, const std::uint64_t denominator) {
     const auto value = bloom::core::PixelAspectRatio::create(numerator, denominator);
     if (!value.has_value()) {
         throw std::logic_error("test pixel aspect must be valid");
@@ -140,8 +143,8 @@ format(const std::uint32_t width, const std::uint32_t height,
     return *value;
 }
 
-[[nodiscard]] RationalTime rationalTime(const std::int64_t numerator,
-                                        const std::int64_t denominator) {
+[[maybe_unused, nodiscard]] RationalTime rationalTime(const std::int64_t numerator,
+                                                      const std::int64_t denominator) {
     const auto value = RationalTime::create(numerator, denominator);
     if (!value.has_value()) {
         throw std::logic_error("test rational time must be valid");
@@ -347,8 +350,9 @@ shapePlan(const CompositionFormat compositionFormat, const LayerValues values,
     return std::make_shared<const Rgba32fImage>(std::move(*frozen.value()));
 }
 
-[[nodiscard]] bool replayScene(const PreparedGpuScene& scene,
-                               std::vector<std::shared_ptr<const Rgba32fImage>>& images) {
+[[maybe_unused, nodiscard]] bool
+replayScene(const PreparedGpuScene& scene, std::vector<std::shared_ptr<const Rgba32fImage>>& images,
+            const double hScale = 1.0, const double vScale = 1.0) {
     constexpr std::size_t kBudget = 1U << 28U;
     images.assign(scene.commands().size(), nullptr);
     for (const auto& command : scene.commands()) {
@@ -513,6 +517,128 @@ shapePlan(const CompositionFormat compositionFormat, const LayerValues values,
                 }
             }
             images[merge->index] = freeze(*builder.value());
+            continue;
+        }
+        if (const auto* affine = std::get_if<bloom::runtime::GpuSceneAffineCommand>(&command)) {
+            const auto* input = images[affine->input].get();
+            if (input == nullptr) {
+                return false;
+            }
+            const auto view = input->view();
+            if (!view) {
+                return false;
+            }
+            const auto descriptor = Rgba32fImageDescriptor::create(
+                affine->outputWindow, input->descriptor()->displayWindow(),
+                input->descriptor()->pixelAspect());
+            if (!descriptor) {
+                return false;
+            }
+            auto builder =
+                Rgba32fImageBuilder::create(*descriptor.value(), kBudget, Rgba32f::transparent());
+            if (!builder) {
+                return false;
+            }
+            // Recover the AUTHOR-space LayerMatrix from the device-space GpuAffine matrix and
+            // replay with the exact CPU oracle the evaluator's parented raster arm uses.
+            const auto& g = affine->matrix;
+            const double b = g.b * (vScale / hScale);
+            const double c = g.c * (hScale / vScale);
+            const double ox = static_cast<double>(affine->sourceWindow.originX()) + 0.5;
+            const double oy = static_cast<double>(affine->sourceWindow.originY()) + 0.5;
+            const double mx = (g.tx - g.a * ox - g.b * oy + 0.5) / hScale;
+            const double my = (g.ty - g.c * ox - g.d * oy + 0.5) / vScale;
+            bloom::runtime::detail::LayerMatrix matrix{g.a, b, c, g.d, mx, my};
+            bloom::runtime::detail::ParentedLayerTransform parented(
+                matrix, affine->sourceWindow, hScale, vScale, affine->opacity);
+            for (std::int64_t y = affine->outputWindow.originY();
+                 y < affine->outputWindow.maxYExclusive(); ++y) {
+                auto row = builder.value()->row(y);
+                if (!row) {
+                    return false;
+                }
+                if (const auto status =
+                        parented.row(*view.value(), affine->outputWindow, y, *row.value())) {
+                    (void)status;
+                    return false;
+                }
+            }
+            images[affine->index] = freeze(*builder.value());
+            continue;
+        }
+        if (const auto* blend = std::get_if<bloom::runtime::GpuSceneBlendCommand>(&command)) {
+            const auto* source = images[blend->source].get();
+            const auto* destination = images[blend->destination].get();
+            if (source == nullptr || destination == nullptr) {
+                return false;
+            }
+            const auto sourceView = source->view();
+            const auto destinationView = destination->view();
+            if (!sourceView || !destinationView) {
+                return false;
+            }
+            const auto descriptor = Rgba32fImageDescriptor::create(
+                blend->outputWindow, destination->descriptor()->displayWindow(),
+                destination->descriptor()->pixelAspect());
+            if (!descriptor) {
+                return false;
+            }
+            auto builder =
+                Rgba32fImageBuilder::create(*descriptor.value(), kBudget, Rgba32f::transparent());
+            if (!builder) {
+                return false;
+            }
+            const auto outputWindow = blend->outputWindow;
+            const auto destinationWindow = destination->descriptor()->dataWindow();
+            const auto firstColumn = std::max(destinationWindow.originX(), outputWindow.originX());
+            const auto lastColumn =
+                std::min(destinationWindow.maxXExclusive(), outputWindow.maxXExclusive());
+            const auto firstRow = std::max(destinationWindow.originY(), outputWindow.originY());
+            const auto lastRow =
+                std::min(destinationWindow.maxYExclusive(), outputWindow.maxYExclusive());
+            if (lastColumn > firstColumn && lastRow > firstRow) {
+                const auto count = static_cast<std::size_t>(lastColumn - firstColumn);
+                const auto destinationOffset = firstColumn - destinationWindow.originX();
+                const auto outputOffset = firstColumn - outputWindow.originX();
+                for (std::int64_t y = firstRow; y < lastRow; ++y) {
+                    auto destinationRow = destinationView.value()->row(y);
+                    auto outputRow = builder.value()->row(y);
+                    if (!destinationRow || !outputRow) {
+                        return false;
+                    }
+                    std::copy_n(destinationRow.value()->begin() + destinationOffset, count,
+                                outputRow.value()->begin() + outputOffset);
+                }
+            }
+            const auto sourceWindow = source->descriptor()->dataWindow();
+            const auto blendFirstColumn = std::max(sourceWindow.originX(), outputWindow.originX());
+            const auto blendLastColumn =
+                std::min(sourceWindow.maxXExclusive(), outputWindow.maxXExclusive());
+            const auto blendFirstRow = std::max(sourceWindow.originY(), outputWindow.originY());
+            const auto blendLastRow =
+                std::min(sourceWindow.maxYExclusive(), outputWindow.maxYExclusive());
+            if (blendLastColumn > blendFirstColumn && blendLastRow > blendFirstRow) {
+                const auto count = static_cast<std::size_t>(blendLastColumn - blendFirstColumn);
+                const auto sourceOffset = blendFirstColumn - sourceWindow.originX();
+                const auto outputOffset = blendFirstColumn - outputWindow.originX();
+                for (std::int64_t y = blendFirstRow; y < blendLastRow; ++y) {
+                    auto sourceRow = sourceView.value()->row(y);
+                    auto outputRow = builder.value()->row(y);
+                    if (!sourceRow || !outputRow) {
+                        return false;
+                    }
+                    if (const auto status = bloom::render::blendLinearRec709SceneRow(
+                            blend->mode,
+                            sourceRow.value()->subspan(static_cast<std::size_t>(sourceOffset),
+                                                       count),
+                            outputRow.value()->subspan(static_cast<std::size_t>(outputOffset),
+                                                       count))) {
+                        (void)status;
+                        return false;
+                    }
+                }
+            }
+            images[blend->index] = freeze(*builder.value());
             continue;
         }
         if (const auto* output =

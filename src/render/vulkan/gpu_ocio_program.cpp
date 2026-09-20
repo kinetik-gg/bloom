@@ -20,14 +20,37 @@ struct BloomOcioPush final {
 };
 static_assert(sizeof(BloomOcioPush) == 12);
 
+// Portable unsigned checked arithmetic (no compiler builtins), so MSVC/Windows builds compile
+// unchanged. `out` is only written when the operation cannot overflow.
 [[nodiscard]] bool addChecked(const std::uint64_t a, const std::uint64_t b,
                               std::uint64_t& out) noexcept {
-    return !__builtin_add_overflow(a, b, &out);
+    if (a > std::numeric_limits<std::uint64_t>::max() - b) {
+        return false;
+    }
+    out = a + b;
+    return true;
 }
 [[nodiscard]] bool mulChecked(const std::uint64_t a, const std::uint64_t b,
                               std::uint64_t& out) noexcept {
-    return !__builtin_mul_overflow(a, b, &out);
+    if (a != 0 && b > std::numeric_limits<std::uint64_t>::max() / a) {
+        return false;
+    }
+    out = a * b;
+    return true;
 }
+[[nodiscard]] bool cancellationRequested(const GpuOcioProgramCancellation& cancellation) noexcept {
+    if (!cancellation) {
+        return false;
+    }
+    try {
+        return cancellation();
+    } catch (...) {
+        // A throwing callback is treated as a cancellation request; after submission this retains
+        // resources instead of unwinding into a destructive path.
+        return true;
+    }
+}
+
 [[nodiscard]] bool texelCount(const OcioGpuTextureDesc& texture, std::uint64_t& out) noexcept {
     switch (texture.dimensions) {
     case OcioGpuTextureDimensions::OneD:
@@ -66,7 +89,7 @@ bool GpuOcioProgram::Impl::createOcioResources() {
     std::uint64_t lutBytes = 0;
     retainedResourceBytes = 0;
     for (const auto& texture : desc.textures) {
-        if (cancellation && cancellation()) {
+        if (cancellationRequested(cancellation)) {
             createDiagnostic = makeDiagnostic(GpuOcioProgramDiagnosticCode::Cancelled,
                                               "OCIO GPU program creation was cancelled");
             return false;
@@ -158,7 +181,7 @@ bool GpuOcioProgram::Impl::createOcioResources() {
         }
         uniformMapped = static_cast<std::uint8_t*>(uniformBuffer.info.pMappedData);
         std::uint64_t updated = 0;
-        if (!addChecked(retainedResourceBytes, uniformBuffer.bytes, updated) ||
+        if (!addChecked(retainedResourceBytes, uniformBuffer.info.size, updated) ||
             updated > budgets.maxOwnedBytes) {
             createDiagnostic = makeDiagnostic(GpuOcioProgramDiagnosticCode::OverBudget,
                                               "the retained OCIO resources exceed the budget");
@@ -183,7 +206,14 @@ bool GpuOcioProgram::Impl::createOcioResources() {
                                           "the status buffer is not host mapped");
         return false;
     }
-    retainedResourceBytes += status.bytes;
+    std::uint64_t statusUpdated = 0;
+    if (!addChecked(retainedResourceBytes, status.info.size, statusUpdated) ||
+        statusUpdated > budgets.maxOwnedBytes) {
+        createDiagnostic = makeDiagnostic(GpuOcioProgramDiagnosticCode::OverBudget,
+                                          "the retained OCIO resources exceed the budget");
+        return false;
+    }
+    retainedResourceBytes = statusUpdated;
     if (retainedResourceBytes > budgets.maxOwnedBytes) {
         createDiagnostic = makeDiagnostic(GpuOcioProgramDiagnosticCode::OverBudget,
                                           "the retained OCIO resources exceed the budget");

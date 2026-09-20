@@ -29,5 +29,7 @@ Reviewed: 2026-09-19
 
 ## Status
 
-- NOT QUALIFIED. Acquisition provenance only. No production prefix manifest exists. This is a
-  build-only compiler tool; no end-user runtime artifact ships from it.
+- NOT QUALIFIED. Acquisition provenance only. No production prefix manifest exists. The compiler
+  tool now ships as the runtime GPU colour-compilation backend staged under `bloom-gpu-tools/`; the
+  lock records its shipping roles and every staged binary is digest-bound to this acquisition by the
+  generated inventory.

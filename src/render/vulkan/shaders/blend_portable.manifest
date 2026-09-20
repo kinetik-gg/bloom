@@ -1,0 +1,90 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "generator": "tools/gpu-shaders/embed_blend_spirv.cpp (compile/validate/embed, no runtime shader load)",
+  "generatorRevision": 1,
+  "operation": "BlendV1Portable",
+  "entrypoint": "main",
+  "shader": {
+    "language": "GLSL_460",
+    "stage": "compute",
+    "sha256": "7b9234c2d33ccdf5cbcab8f7c8502542d6a35ed9e0740e850a1694c9f3bbad0d",
+    "spirvSha256": "41c0272525b19c8dd43439244411b078e6c2936926fd8456c33fabf60cf68841",
+    "localSizeX": 256,
+    "localSizeY": 1,
+    "localSizeZ": 1
+  },
+  "capabilities": {
+    "requiresShaderFloat64": false,
+    "requiresInt64": false,
+    "required": ["Shader"],
+    "forbidden": ["Float64", "Int64"]
+  },
+  "bindings": [
+    {
+      "set": 0,
+      "binding": 0,
+      "kind": "storage-image",
+      "access": "readonly",
+      "format": "rgba32f",
+      "role": "premultiplied-lin_rec709_scene-foreground"
+    },
+    {
+      "set": 0,
+      "binding": 1,
+      "kind": "storage-image",
+      "access": "readonly",
+      "format": "rgba32f",
+      "role": "premultiplied-lin_rec709_scene-backdrop"
+    },
+    {
+      "set": 0,
+      "binding": 2,
+      "kind": "storage-image",
+      "access": "writeonly",
+      "format": "rgba32f",
+      "role": "premultiplied-lin_rec709_scene-output"
+    },
+    {
+      "set": 0,
+      "binding": 3,
+      "kind": "storage-buffer",
+      "access": "readwrite",
+      "element": "uint",
+      "role": "error-flag",
+      "bits": {
+        "inputNonFinite": 1,
+        "resultNonFinite": 2,
+        "inputSubnormal": 4
+      }
+    }
+  ],
+  "pushConstant": {
+    "byteCount": 28,
+    "fields": [
+      { "name": "destWidth", "type": "uint32" },
+      { "name": "destHeight", "type": "uint32" },
+      { "name": "sourceWidth", "type": "uint32" },
+      { "name": "sourceHeight", "type": "uint32" },
+      { "name": "sourceOffsetX", "type": "int32" },
+      { "name": "sourceOffsetY", "type": "int32" },
+      { "name": "mode", "type": "uint32" }
+    ]
+  },
+  "hostDerivation": {
+    "order": "source is the foreground blended OVER the read-only destination backdrop, matching blendLinearRec709SceneRow(mode, source, destination)",
+    "offsets": "sourceOffset = destinationDataWindow.origin - sourceDataWindow.origin (componentwise); sourceLocal = destLocal + sourceOffset",
+    "windows": "destWidth/Height and sourceWidth/Height are data-window extents",
+    "mode": "mode is core::BlendMode's stored integer (Normal=0 .. Difference=7), the same durable mapping the CPU oracle switches on; only the six general modes reach this kernel",
+    "checked": "dispatch ceil(destWidth*destHeight/256); host preflights the same overflow/budget the CPU primitive checks"
+  },
+  "contracts": {
+    "numeric": "per-finite-component abs-or-rel 2e-6 against render::blendLinearRec709SceneRow for the six general core::BlendMode values; never bit-exact by claim except at the exact endpoints",
+    "arithmetic": "Float32 double-float (hi+lo) straight-alpha division, separable blend, and W3C source-over fold using error-free two-sum and two-product with explicit fma, rounded once to Float32 exactly as the CPU oracle; requires no core shaderFloat64 and no 64-bit integer type",
+    "order": "fixed source-over-backdrop; the destination is read-only and a separate output image is written, so the caller's destination is never mutated",
+    "outOfBounds": "a source tap outside the source data window is transparent black, which leaves the backdrop unchanged -- the CPU oracle's transparent aligned pixel",
+    "nonFinitePolicy": "non-finite input sets bit0, nonzero subnormal input sets bit2, a non-finite result sets bit1; on any error the backdrop pixel is written and the consumer must not publish while flags[0] != 0",
+    "cpuFallback": "non-finite/subnormal domains stay on the CPU reference path; no silent substitution",
+    "offsets": "sourceOffset = destinationDataWindow.origin - sourceDataWindow.origin; sourceLocal = destLocal + sourceOffset (the exact CPU oracle mapping)",
+    "modes": "Multiply=2, Screen=3, Overlay=4, Darken=5, Lighten=6, Difference=7; unknown stored values are rejected by the host before dispatch"
+  }
+}
