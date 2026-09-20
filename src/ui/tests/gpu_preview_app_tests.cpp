@@ -279,7 +279,11 @@ void testControllerGpuPathAndParity(Expectations& expectations, const Options& o
         ui::makeCompositionPreviewPipeline(fixture.compiler, fixture.evaluator,
                                            fixture.referencePreparer, fixture.provider,
                                            fixture.planCache),
-        {.colorIntent = session.colorIntent(), .displayName = {}, .viewName = {}, .showLook = true},
+        {.colorIntent = session.colorIntent(),
+         .displayName = {},
+         .viewName = {},
+         .showLook = true,
+         .pixelStorageByteLimit = kBudget},
         frameCache, nullptr, serviceSubmitter(service, serviceCalls));
     expectations.expect(waitUntil([&] { return isReady(controller); }),
                         "the foreground frame is ready through the real service");
@@ -443,7 +447,11 @@ void testMissingLoaderCpuFallback(Expectations& expectations) {
         ui::makeCompositionPreviewPipeline(fixture.compiler, fixture.evaluator,
                                            fixture.referencePreparer, fixture.provider,
                                            fixture.planCache),
-        {.colorIntent = session.colorIntent(), .displayName = {}, .viewName = {}, .showLook = true},
+        {.colorIntent = session.colorIntent(),
+         .displayName = {},
+         .viewName = {},
+         .showLook = true,
+         .pixelStorageByteLimit = kBudget},
         std::make_shared<ui::PreviewFrameCache>(), nullptr,
         serviceSubmitter(service, serviceCalls));
     expectations.expect(waitUntil([&] { return isReady(controller); }),

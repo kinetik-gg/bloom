@@ -562,7 +562,7 @@ add_executable(bloom_runtime_gpu_media_scene_preparation_test
 target_link_libraries(bloom_runtime_gpu_media_scene_preparation_test
     PRIVATE bloom_runtime_evaluator bloom_render OpenEXR::OpenEXR)
 target_include_directories(bloom_runtime_gpu_media_scene_preparation_test
-    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS} ${PROJECT_SOURCE_DIR}/src/runtime)
 bloom_enable_warnings(bloom_runtime_gpu_media_scene_preparation_test)
 bloom_enable_strict_floating_point(bloom_runtime_gpu_media_scene_preparation_test)
 bloom_add_test(

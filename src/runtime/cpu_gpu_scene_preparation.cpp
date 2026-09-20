@@ -221,14 +221,18 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         return index;
     };
 
-    // Concurrently-held budget: every prepared command's resident output PLUS each unique coverage
-    // raster (shared_ptr identity counts once, so a cache alias is not double charged) must fit the
-    // request's pixel allowance. Overflow-checked with subtraction-only comparators. The coverage
-    // cache's own retained-byte budget is separate ownership accounting and is not charged here.
+    // The prepared scene RETAINS only host allocations: the frozen upload images and the coverage
+    // rasters. Every other command (solid, translation, affine, blend, merge, composition output)
+    // is a window + transform description whose RGBA32F output is allocated at executor time under
+    // the executor's own LIVE-pin budget. Summing those mutually exclusive output lifetimes into
+    // one per-request total refuses graphs the executor -- and the CPU reference -- can actually
+    // run (for example a 4608x3164 source over an FHD solid and text). Only the retained host set
+    // is bounded here; GPU residency is bounded by GpuSceneExecutor::begin(scene, budget), which
+    // takes the honest CPU fallback on refusal. Overflow-checked with subtraction-only comparators.
     const std::uint64_t allowance = request.pixelStorageByteLimit;
-    std::uint64_t chargedBytes = 0;
+    std::uint64_t retainedBytes = 0;
     std::unordered_set<const void*> countedCoverage;
-    const auto charge =
+    const auto chargeRetained =
         [&](const std::uint64_t width, const std::uint64_t height,
             const std::uint64_t bytesPerPixel) -> std::optional<detail::GpuSceneLeafFailure> {
         if (width == 0 || height == 0) {
@@ -242,12 +246,17 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
                 "Prepared command size overflows"};
         }
-        if (chargedBytes > allowance || *bytes > allowance - chargedBytes) {
+        if (retainedBytes > allowance || *bytes > allowance - retainedBytes) {
             return detail::GpuSceneLeafFailure{
                 PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
                 "Prepared scene exceeds the request pixel allowance"};
         }
-        chargedBytes += *bytes;
+        retainedBytes += *bytes;
+        return std::nullopt;
+    };
+    // GPU-transient outputs are not summed here; the executor's live-pin ledger bounds them.
+    const auto chargeTransient = [](const std::uint64_t, const std::uint64_t,
+                                    const std::uint64_t) -> std::optional<detail::GpuSceneLeafFailure> {
         return std::nullopt;
     };
     const auto chargeCoverage =
@@ -257,7 +266,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         if (coverage == nullptr || !countedCoverage.insert(coverage.get()).second) {
             return std::nullopt;
         }
-        return charge(width, height, sizeof(std::uint8_t));
+        return chargeRetained(width, height, sizeof(std::uint8_t));
     };
 
     for (std::size_t index = 0; index < operationCount; ++index) {
@@ -331,8 +340,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             key.add(std::string{detail::kGpuSolidSpirvSha256});
             keyOf[index] = key.digest();
 
-            if (const auto error = charge(solidWindow.extent().width(),
-                                          solidWindow.extent().height(), sizeof(render::Rgba32f))) {
+            if (const auto error = chargeTransient(solidWindow.extent().width(),
+                                                   solidWindow.extent().height(),
+                                                   sizeof(render::Rgba32f))) {
                 return failed(error->code, error->message);
             }
             GpuSceneSolidCommand command{.sourceOperation = operationIndex,
@@ -363,11 +373,11 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         }
 
         if (const auto* image = std::get_if<CompiledImageSource>(&operation)) {
-            const auto remainingBudget = allowance > chargedBytes ? allowance - chargedBytes : 0;
+            const auto remainingBudget = allowance > retainedBytes ? allowance - retainedBytes : 0;
             detail::GpuSceneUploadLeafResult leaf;
             const auto error = detail::buildImageUploadLeaf(
                 *image, request, *plan, resolved, mediaContext_, remainingBudget, hScale, vScale,
-                charge, cancellation, mediaStatistics, leaf);
+                chargeRetained, cancellation, mediaStatistics, leaf);
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
             }
@@ -387,11 +397,11 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         }
 
         if (const auto* video = std::get_if<CompiledVideoSource>(&operation)) {
-            const auto remainingBudget = allowance > chargedBytes ? allowance - chargedBytes : 0;
+            const auto remainingBudget = allowance > retainedBytes ? allowance - retainedBytes : 0;
             detail::GpuSceneUploadLeafResult leaf;
             const auto error = detail::buildVideoUploadLeaf(
                 *video, request, *plan, resolved, mediaContext_, remainingBudget, hScale, vScale,
-                charge, cancellation, mediaStatistics, leaf);
+                chargeRetained, cancellation, mediaStatistics, leaf);
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
             }
@@ -419,7 +429,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             detail::GpuSceneNestedResult nested;
             const auto error = detail::prepareNestedComposition(
                 *source, *plan, request, resolved, hScale, vScale, detail::nestedCompositionDepth(),
-                allowance > chargedBytes ? allowance - chargedBytes : 0, cancellation,
+                allowance > retainedBytes ? allowance - retainedBytes : 0, cancellation,
                 [this](const std::shared_ptr<const CompiledCompositionPlan>& childPlan,
                        const EvaluationRequest& childRequest, const CancellationToken& cancel) {
                     return build(childPlan, childRequest, cancel);
@@ -433,12 +443,12 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                               "the nested composition published no output window", mediaStatistics);
             }
             if (nested.residentBytes != 0) {
-                if (chargedBytes > allowance || nested.residentBytes > allowance - chargedBytes) {
+                if (retainedBytes > allowance || nested.residentBytes > allowance - retainedBytes) {
                     return failed(PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
                                   "Prepared scene exceeds the request pixel allowance",
                                   mediaStatistics);
                 }
-                chargedBytes += nested.residentBytes;
+                retainedBytes += nested.residentBytes;
             }
             bounds[index] = nested.bounds;
             outputWindowOf[index] = *nested.outputWindow;
@@ -620,7 +630,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     if (const auto error = detail::emitTranslationOpacityCommand(
                             inputIndex, keyOf[inputIndexValue], sourceWindow, *layerWindow,
                             delta->first, delta->second, opacity->value, fullPixelAspect,
-                            operationIndex, charge, emit, commandForOperation[index],
+                            operationIndex, chargeTransient, emit, commandForOperation[index],
                             keyOf[index])) {
                         return failed(error->code, error->message);
                     }
@@ -635,8 +645,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                         leafOperation, *plan, resolved, chainMatrix, *layerWindow,
                         fullDisplayWindow, fullPixelAspect, hScale, vScale,
                         inputVec->opacity * opacity->value, leafPath && nativeGrid, allowance,
-                        operationIndex, transformValue, coverageCache_, cancellation, emit, charge,
-                        chargeCoverage, composedIndex, semanticKey, consumedTextLeaf,
+                        operationIndex, transformValue, coverageCache_, cancellation, emit,
+                        chargeTransient, chargeCoverage, composedIndex, semanticKey, consumedTextLeaf,
                         consumedShapeLeaf)) {
                     return failed(error->code, error->message);
                 }
@@ -657,7 +667,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     if (const auto error = detail::emitTranslationOpacityCommand(
                             inputIndex, keyOf[inputIndexValue], sourceWindow, *layerWindow,
                             delta->first, delta->second, opacity->value, fullPixelAspect,
-                            operationIndex, charge, emit, commandForOperation[index],
+                            operationIndex, chargeTransient, emit, commandForOperation[index],
                             keyOf[index])) {
                         return failed(error->code, error->message);
                     }
@@ -666,7 +676,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             }
             if (const auto error = detail::emitAffineLayerCommand(
                     inputIndex, keyOf[inputIndexValue], sourceWindow, *layerWindow, composed,
-                    hScale, vScale, opacity->value, fullPixelAspect, operationIndex, charge, emit,
+                    hScale, vScale, opacity->value, fullPixelAspect, operationIndex, chargeTransient, emit,
                     commandForOperation[index], keyOf[index])) {
                 return failed(error->code, error->message);
             }
@@ -676,7 +686,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         if (const auto* stack = std::get_if<CompiledMerge>(&operation)) {
             if (const auto error = detail::emitMergeCommand(*stack, *plan, resolved, index, bounds,
                                                             outputWindowOf, commandForOperation,
-                                                            keyOf, operationIndex, emit, charge)) {
+                                                            keyOf, operationIndex, emit,
+                                                            chargeTransient)) {
                 return failed(error->code, error->message);
             }
             continue;
@@ -693,9 +704,10 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             detail::addPixelAspectToKey(key, resolved.imageDescriptor.pixelAspect());
             keyOf[index] = key.digest();
 
-            if (const auto error = charge(resolved.imageDescriptor.dataWindow().extent().width(),
-                                          resolved.imageDescriptor.dataWindow().extent().height(),
-                                          sizeof(render::Rgba32f))) {
+            if (const auto error = chargeTransient(
+                    resolved.imageDescriptor.dataWindow().extent().width(),
+                    resolved.imageDescriptor.dataWindow().extent().height(),
+                    sizeof(render::Rgba32f))) {
                 return failed(error->code, error->message);
             }
             GpuSceneCompositionOutputCommand command{

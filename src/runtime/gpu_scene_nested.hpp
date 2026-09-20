@@ -153,9 +153,10 @@ inline void addWindowBytes(std::uint64_t& total, const render::ImageWindow windo
 
 } // namespace nested_detail
 
-// Conservative resident-byte total for a spliced child scene: every command's published RGBA32F
-// window plus each unique coverage raster once. It mirrors the builder's own charge accounting and
-// is only used to keep the combined parent+child preparation inside one allowance.
+// Retained host-byte total for a spliced child scene: the frozen upload images plus each unique
+// coverage raster once. It deliberately does NOT sum the RGBA32F command outputs, which are
+// allocated at executor time under the executor's own live-pin budget; counting their mutually
+// exclusive lifetimes here would re-introduce the artificial per-frame refusal the builder fixed.
 [[nodiscard]] inline std::uint64_t nestedSceneResidentBytes(const PreparedGpuScene& scene) {
     std::uint64_t total = 0;
     std::unordered_set<const void*> countedCoverage;
@@ -163,10 +164,7 @@ inline void addWindowBytes(std::uint64_t& total, const render::ImageWindow windo
         std::visit(
             [&total, &countedCoverage](const auto& item) {
                 using T = std::decay_t<decltype(item)>;
-                if constexpr (std::is_same_v<T, GpuSceneSolidCommand>) {
-                    nested_detail::addWindowBytes(total, item.dataWindow);
-                } else if constexpr (std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
-                    nested_detail::addWindowBytes(total, item.outputWindow);
+                if constexpr (std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
                     if (item.coverage != nullptr &&
                         countedCoverage.insert(item.coverage.get()).second) {
                         const auto maximum = std::numeric_limits<std::uint64_t>::max();
@@ -175,16 +173,6 @@ inline void addWindowBytes(std::uint64_t& total, const render::ImageWindow windo
                     }
                 } else if constexpr (std::is_same_v<T, GpuSceneUploadCommand>) {
                     nested_detail::addWindowBytes(total, item.descriptor.dataWindow());
-                } else if constexpr (std::is_same_v<T, GpuSceneTranslationCommand>) {
-                    nested_detail::addWindowBytes(total, item.outputWindow);
-                } else if constexpr (std::is_same_v<T, GpuSceneAffineCommand>) {
-                    nested_detail::addWindowBytes(total, item.outputWindow);
-                } else if constexpr (std::is_same_v<T, GpuSceneMergeCommand>) {
-                    nested_detail::addWindowBytes(total, item.outputWindow);
-                } else if constexpr (std::is_same_v<T, GpuSceneBlendCommand>) {
-                    nested_detail::addWindowBytes(total, item.outputWindow);
-                } else if constexpr (std::is_same_v<T, GpuSceneCompositionOutputCommand>) {
-                    nested_detail::addWindowBytes(total, item.dataWindow);
                 }
             },
             command);

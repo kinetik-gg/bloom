@@ -1,11 +1,13 @@
 #include "gpu_media_scene_preparation_test_support.hpp"
 
 #include <bloom/media/cache/media_disk_cache.hpp>
+#include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <limits>
 #include <mutex>
 #include <thread>
 
@@ -53,6 +55,98 @@ struct MediaFixture final {
     writeExrRgba(fixture.path, 3, 2, signedHdrPixels());
     fixture.asset = imageAsset(fixture.path, "signed_hdr", 900);
     return fixture;
+}
+
+// Writes a large RGBA EXR from one interleaved 16-bytes-per-pixel buffer (about 233 MB for
+// 4608x3164), avoiding the four separate float staging vectors the small fixture writer uses. The
+// reported user media is a 4608x3164 compressed EXR; this reproduces the same decoded extent and
+// the same converted RGBA32F source size without depending on the share.
+void writeLargeExrRgba(const std::filesystem::path& path, const int width, const int height) {
+    const Imath::Box2i window(Imath::V2i(0, 0), Imath::V2i(width - 1, height - 1));
+    Imf::Header header(window, window);
+    header.insert("chromaticities", Imf::ChromaticitiesAttribute(Imf::Chromaticities()));
+    header.insert("alphaAssociation", Imf::StringAttribute("premultiplied"));
+    header.channels().insert("R", Imf::Channel(Imf::FLOAT));
+    header.channels().insert("G", Imf::Channel(Imf::FLOAT));
+    header.channels().insert("B", Imf::Channel(Imf::FLOAT));
+    header.channels().insert("A", Imf::Channel(Imf::FLOAT));
+    std::vector<ExrPixel> pixels(static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            ExrPixel& pixel =
+                pixels[static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+                       static_cast<std::size_t>(x)];
+            pixel = ExrPixel{static_cast<float>(x) / static_cast<float>(width),
+                             static_cast<float>(y) / static_cast<float>(height), 0.25F, 1.0F};
+        }
+    }
+    const auto pixelStride = static_cast<std::size_t>(sizeof(ExrPixel));
+    const auto rowStride = static_cast<std::size_t>(width) * sizeof(ExrPixel);
+    auto* base = reinterpret_cast<char*>(pixels.data());
+    Imf::FrameBuffer frameBuffer;
+    frameBuffer.insert("R", Imf::Slice(Imf::FLOAT, base + 0 * sizeof(float), pixelStride, rowStride));
+    frameBuffer.insert("G", Imf::Slice(Imf::FLOAT, base + 1 * sizeof(float), pixelStride, rowStride));
+    frameBuffer.insert("B", Imf::Slice(Imf::FLOAT, base + 2 * sizeof(float), pixelStride, rowStride));
+    frameBuffer.insert("A", Imf::Slice(Imf::FLOAT, base + 3 * sizeof(float), pixelStride, rowStride));
+    Imf::OutputFile file(path.string().c_str(), header);
+    file.setFrameBuffer(frameBuffer);
+    file.writePixels(height);
+}
+
+// A large EXR source + FHD solid + text -> three layers -> Normal merge -> Composition Output. This
+// is the reported graph shape; the source is deliberately larger than the composition so the
+// converted upload keeps full source detail (no resize to composition dimensions).
+[[nodiscard]] std::shared_ptr<const CompiledCompositionPlan>
+largeSourcePlan(const CompositionFormat compositionFormat, const document::AssetRecord& asset,
+                const std::uint64_t idBase) {
+    const auto parameter = [](const std::uint64_t raw) {
+        return bloom::document::ParameterId::fromRaw(raw);
+    };
+    const LayerIds imageIds{parameter(idBase + 0), parameter(idBase + 1), parameter(idBase + 2),
+                            parameter(idBase + 3), parameter(idBase + 4), parameter(idBase + 5)};
+    const LayerIds solidIds{parameter(idBase + 10), parameter(idBase + 11), parameter(idBase + 12),
+                            parameter(idBase + 13), parameter(idBase + 14), parameter(idBase + 15)};
+    const LayerIds textIds{parameter(idBase + 20), parameter(idBase + 21), parameter(idBase + 22),
+                           parameter(idBase + 23), parameter(idBase + 24), parameter(idBase + 25)};
+    std::vector<CompiledOperation> operations;
+    operations.emplace_back(bloom::runtime::CompiledImageSource{
+        bloom::document::NodeId::fromRaw(idBase + 30), asset, 0, 0, 0, std::string{}, false});
+    operations.emplace_back(layerOutput(bloom::document::NodeId::fromRaw(idBase + 31),
+                                        bloom::document::LayerId::fromRaw(idBase + 32),
+                                        OperationIndex::fromRaw(0), imageIds, LayerValues{}));
+    operations.emplace_back(CompiledSolid{
+        bloom::document::NodeId::fromRaw(idBase + 40),
+        {parameter(idBase + 41), Color4d{0.5, 0.25, 0.125, 1.0}},
+        {parameter(idBase + 42), static_cast<double>(compositionFormat.width())},
+        {parameter(idBase + 43), static_cast<double>(compositionFormat.height())}});
+    operations.emplace_back(layerOutput(bloom::document::NodeId::fromRaw(idBase + 44),
+                                        bloom::document::LayerId::fromRaw(idBase + 45),
+                                        OperationIndex::fromRaw(2), solidIds, LayerValues{}));
+    operations.emplace_back(bloom::runtime::CompiledText{
+        bloom::document::NodeId::fromRaw(idBase + 50), parameter(idBase + 51), "BLOOM",
+        {parameter(idBase + 52), 96.0}, {parameter(idBase + 53), Color4d{0.8, 0.4, 0.2, 1.0}},
+        bloom::runtime::CompiledTextLayout{parameter(idBase + 54), 0, {parameter(idBase + 55), 1.0},
+                                           {parameter(idBase + 56), 0.0}}});
+    operations.emplace_back(layerOutput(bloom::document::NodeId::fromRaw(idBase + 57),
+                                        bloom::document::LayerId::fromRaw(idBase + 58),
+                                        OperationIndex::fromRaw(4), textIds, LayerValues{}));
+    operations.emplace_back(CompiledMerge{
+        bloom::document::NodeId::fromRaw(idBase + 60),
+        std::vector<CompiledMergeInput>{
+            CompiledMergeInput{bloom::document::LayerSlotId::fromRaw(idBase + 61),
+                               bloom::document::LayerId::fromRaw(idBase + 32),
+                               OperationIndex::fromRaw(1)},
+            CompiledMergeInput{bloom::document::LayerSlotId::fromRaw(idBase + 62),
+                               bloom::document::LayerId::fromRaw(idBase + 45),
+                               OperationIndex::fromRaw(3)},
+            CompiledMergeInput{bloom::document::LayerSlotId::fromRaw(idBase + 63),
+                               bloom::document::LayerId::fromRaw(idBase + 58),
+                               OperationIndex::fromRaw(5)}}});
+    operations.emplace_back(CompiledCompositionOutput{bloom::document::NodeId::fromRaw(idBase + 64),
+                                                      OperationIndex::fromRaw(6)});
+    return publish(CompiledCompositionPlanDefinition{
+        bloom::document::Revision::fromRaw(7), kProjectId, kCompositionId, compositionFormat,
+        std::move(operations), OperationIndex::fromRaw(7)});
 }
 
 // Full parity against a genuine, uncached CpuCompositionEvaluator frame: identity, bounds, output
@@ -306,6 +400,118 @@ void testBudgetRefusal(Expectations& expectations, const MediaFixture& fixture) 
             prepared.diagnostic.code ==
                 bloom::runtime::PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
         "the media budget refusal is diagnosed as a pixel-storage budget");
+}
+
+// The reported failure: a large EXR source (4608x3164, ~233 MB as RGBA32F) composited over an FHD
+// solid and text is refused by the scene builder under the default 512 MiB preview allowance even
+// though the retained host set is a single source upload. The builder must not sum mutually
+// exclusive GPU output lifetimes into one artificial per-frame total, and a full-source upload must
+// keep its resolution. A follow-up request must still prepare (liveness after pressure).
+void testLargeSourceUnderDefaultAllowance(Expectations& expectations) {
+    const auto directory = std::filesystem::temp_directory_path() / "bloom_gpu_large_source_test";
+    std::filesystem::remove_all(directory);
+    std::filesystem::create_directories(directory);
+    const auto path = directory / "large_4608x3164.exr";
+    writeLargeExrRgba(path, 4608, 3164);
+    const auto asset = imageAsset(path, "large_source", 4200);
+
+    CpuCompositionEvaluator evaluator;
+    evaluator.setAssetBaseDirectory(directory);
+    auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    const CpuGpuSceneBuilder builder(nullptr, context);
+    const auto plan = largeSourcePlan(format(1920, 1080), asset, 5000);
+    auto request = requestFor(*plan);
+    request.pixelStorageByteLimit = std::size_t{512} * 1024U * 1024U;
+
+    const auto prepared = builder.build(plan, request);
+    if (!prepared) {
+        std::cerr << "large-source diagnostic: " << prepared.diagnostic.message << '\n';
+    }
+    expectations.expect(prepared.hasValue(),
+                        "large source + solid/text prepares under the 512 MiB preview allowance");
+    if (!prepared) {
+        return;
+    }
+    const auto* upload = firstUpload(*prepared.scene);
+    expectations.expect(upload != nullptr &&
+                            upload->descriptor.dataWindow().extent().width() == 4608 &&
+                            upload->descriptor.dataWindow().extent().height() == 3164,
+                        "the converted source keeps its full 4608x3164 resolution");
+    expectations.expect(prepared.scene->outputDescriptor().dataWindow().extent().width() == 1920 &&
+                            prepared.scene->outputDescriptor().dataWindow().extent().height() == 1080,
+                        "the composition output stays FHD");
+
+    // Identity and bounds parity against the genuine CPU frame. Pixel replay of the full 233 MB
+    // intermediate set is deliberately not run here; the small-source tests above own bit parity.
+    auto oracleRequest = request;
+    oracleRequest.bypassOperationCache = true;
+    const auto frame = evaluator.evaluate(plan, oracleRequest, {});
+    expectations.expect(frame.frame() != nullptr, "the CPU oracle evaluates the large-source graph");
+    if (frame.frame() != nullptr) {
+        expectations.expect(prepared.scene->processIdentity() == frame.frame()->identity(),
+                            "large source: process identity matches the CPU frame");
+        expectations.expect(
+            std::ranges::equal(prepared.scene->bounds(), frame.frame()->evaluatedBounds()),
+            "large source: evaluated bounds match the CPU frame");
+    }
+
+    // Liveness: a later, ordinary request must still prepare after the pressure.
+    const auto small = mediaPlan(format(64, 48), asset, LayerValues{.position = {32.0, 24.0}}, 5200);
+    const auto recovered = builder.build(small, requestFor(*small));
+    expectations.expect(recovered.hasValue(), "a later request still prepares after large-source pressure");
+
+    // A constrained injected budget refuses cleanly and does not poison the builder for the next
+    // ordinary request.
+    auto constrained = requestFor(*plan);
+    constrained.pixelStorageByteLimit = std::size_t{8} * 1024U * 1024U;
+    const auto refused = builder.build(plan, constrained);
+    expectations.expect(!refused.hasValue() &&
+                            refused.diagnostic.code ==
+                                bloom::runtime::PreparedGpuSceneDiagnosticCode::
+                                    PixelStorageBudgetExceeded,
+                        "a constrained injected budget refuses the large source cleanly");
+    const auto recoveredAfterConstraint = builder.build(small, requestFor(*small));
+    expectations.expect(recoveredAfterConstraint.hasValue(),
+                        "a normal request still prepares after a constrained-budget refusal");
+}
+
+// The capacity-aware producer policy: pure functions of the ASSIGNED budget. A deliberately tiny
+// budget must yield a tiny ceiling (no floor override), a high-capacity budget must admit a
+// 6000x4000 RGBA32F source, and the arithmetic must be overflow-safe.
+void testCapacityAwareProducerPolicy(Expectations& expectations) {
+    constexpr std::size_t kSource6000x4000 = std::size_t{6000} * 4000 * 16U;
+    constexpr std::size_t kTiny = std::size_t{8} * 1024U * 1024U;
+    constexpr std::size_t kAmple = std::size_t{8} * 1024U * 1024U * 1024U;
+
+    // Explicit tiny limits are honoured: never floored up to a legacy constant.
+    expectations.expect(bloom::runtime::gpuProducerMaxImageBytesFor(kTiny) == kTiny / 4,
+                        "a tiny assigned operation budget yields a tiny producer image ceiling");
+    expectations.expect(bloom::runtime::gpuProducerMaxImageBytesFor(kTiny) <
+                            std::size_t{256} * 1024U * 1024U,
+                        "the producer ceiling does not floor a tiny budget up to 256 MiB");
+    expectations.expect(bloom::runtime::gpuPreparedUploadCacheByteBudgetFor(kTiny) == kTiny / 16,
+                        "a tiny assigned budget yields a tiny upload-cache ceiling");
+    expectations.expect(bloom::runtime::gpuPreviewRequestByteAllowanceFor(kTiny) == kTiny / 4,
+                        "a tiny assigned preview budget yields a tiny request allowance");
+
+    // High capacity admits the 6000x4000 source and never exceeds the assigned budget.
+    expectations.expect(bloom::runtime::gpuProducerMaxImageBytesFor(kAmple) >= kSource6000x4000,
+                        "an ample assigned operation budget admits a 6000x4000 RGBA32F source");
+    expectations.expect(bloom::runtime::gpuProducerMaxImageBytesFor(kAmple) <= kAmple,
+                        "the producer ceiling never exceeds the assigned operation budget");
+    expectations.expect(bloom::runtime::gpuPreparedUploadCacheByteBudgetFor(kAmple) >=
+                            std::size_t{233} * 1024U * 1024U,
+                        "an ample assigned budget retains the 233 MB source");
+
+    // Overflow-safe: the largest representable budget still divides before multiplying.
+    const std::size_t maximum = std::numeric_limits<std::size_t>::max();
+    expectations.expect(bloom::runtime::gpuProducerMaxImageBytesFor(maximum) == (maximum / 4),
+                        "the largest budget does not overflow the producer ceiling");
+    expectations.expect(bloom::runtime::gpuPreparedUploadCacheByteBudgetFor(maximum) ==
+                            (maximum / 16),
+                        "the largest budget does not overflow the upload-cache ceiling");
+    expectations.expect(bloom::runtime::gpuPreviewRequestByteAllowanceFor(maximum) == (maximum / 4),
+                        "the largest budget does not overflow the request allowance");
 }
 
 // A changed input colour interpretation is a cache miss and must still match the CPU exactly.
@@ -649,6 +855,8 @@ int main() {
         testGestureCacheNeverTouchesDisk(expectations, evaluator, fixture);
         testAffineAndBlendMedia(expectations, evaluator, fixture);
         testBudgetRefusal(expectations, fixture);
+        testLargeSourceUnderDefaultAllowance(expectations);
+        testCapacityAwareProducerPolicy(expectations);
 
         {
             const auto cancelPlan =

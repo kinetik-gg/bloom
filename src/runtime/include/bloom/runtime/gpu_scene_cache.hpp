@@ -29,6 +29,7 @@
 
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
+#include <bloom/runtime/gpu_memory_budget.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -38,7 +39,11 @@
 namespace bloom::runtime {
 
 struct GpuSceneCacheBudgets final {
-    std::uint64_t maxRetainedBytes = 512ULL * 1024ULL * 1024ULL;
+    // Capacity-aware retained-byte ceiling: sized from the operation-cache allocation so a large
+    // converted source and its produced intermediates can be retained across a scrub when the
+    // machine has room, while a small machine keeps the 512 MiB floor. The cache still evicts
+    // unpinned entries and never invalidates a live pin.
+    std::uint64_t maxRetainedBytes = gpuSceneCacheRetainedByteBudget();
 };
 
 enum class GpuSceneCacheDiagnosticCode : std::uint8_t {

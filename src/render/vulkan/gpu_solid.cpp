@@ -23,7 +23,6 @@ using GpuRendererAccess = bloom::render::GpuRendererAccess;
 
 constexpr std::uint32_t kWorkgroupSizeX = 256;
 constexpr std::uint64_t kDrainTimeoutNanoseconds = 2ULL * 1000ULL * 1000ULL * 1000ULL;
-constexpr std::uint64_t kMaxImageBytes = 256ULL * 1024ULL * 1024ULL;
 constexpr std::int32_t kMaxQuarantines = 4;
 
 std::atomic<std::int32_t> g_quarantineCount{0};
@@ -272,7 +271,7 @@ bool GpuSolid::Impl::createPipeline() {
 }
 
 GpuSolidCreateResult GpuSolid::create(GpuDevice& device, const GpuSolidBudgets& budgets) {
-    if (budgets.maxImageBytes == 0 || budgets.maxImageBytes > kMaxImageBytes) {
+    if (budgets.maxImageBytes == 0) {
         return {nullptr, gpuSolidDiagnostic(GpuSolidDiagnosticCode::InvalidArgument,
                                             "the SolidV1 budget is out of range")};
     }
@@ -294,6 +293,10 @@ GpuSolidCreateResult GpuSolid::create(GpuDevice& device, const GpuSolidBudgets& 
         return {nullptr, gpuSolidDiagnostic(GpuSolidDiagnosticCode::DeviceUnavailable,
                                             "the GPU device exposes no renderer state")};
     }
+    // `maxImageBytes` is a configured UPPER BOUND, not an allocation. A permissive maximum must not
+    // refuse the pipeline: the actual requested image is validated against the device's real
+    // maxResourceSize in begin() (querySolidImageSupport), so a small request runs even when the
+    // configured maximum is larger than any physical image.
     auto impl = std::make_unique<Impl>();
     impl->owner = std::this_thread::get_id();
     impl->control = std::move(control);

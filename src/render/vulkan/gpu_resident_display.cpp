@@ -271,7 +271,7 @@ bool GpuResidentDisplay::Impl::createPipeline() {
 
 GpuResidentDisplayCreateResult
 GpuResidentDisplay::create(GpuDevice& device, const GpuResidentDisplayBudgets& budgets) {
-    if (budgets.maxOwnedBytes == 0 || budgets.maxOwnedBytes > kMaxOwnedBytes) {
+    if (budgets.maxOwnedBytes == 0) {
         return {nullptr, makeDiagnostic(GpuResidentDisplayDiagnosticCode::InvalidArgument,
                                         "the resident display budget is out of range")};
     }
@@ -296,7 +296,11 @@ GpuResidentDisplay::create(GpuDevice& device, const GpuResidentDisplayBudgets& b
     auto impl = std::make_unique<Impl>();
     impl->owner = std::this_thread::get_id();
     impl->control = std::move(control);
+    // A permissive configured maximum is an upper bound, not an allocation: clamp the effective
+    // ceiling instead of refusing the pipeline. begin() validates the actual requested image.
     impl->budgets = budgets;
+    impl->budgets.maxOwnedBytes =
+        budgets.maxOwnedBytes < kMaxOwnedBytes ? budgets.maxOwnedBytes : kMaxOwnedBytes;
     impl->expectedGeneration = impl->control->generation;
     if (!impl->createPipeline()) {
         return {nullptr, impl->createDiagnostic};
