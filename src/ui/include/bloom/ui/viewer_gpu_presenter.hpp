@@ -213,8 +213,12 @@ class ViewerGpuPresenter final : public QObject {
                                const render::GpuPresentImageParams& params,
                                std::shared_ptr<const runtime::GpuPresentationOverlay> overlay);
 
-    // Retires the old native extent on the owner before a new extent is presented. The window is
-    // resized once; present() is refused until the owner reports Active again.
+    // Retires the old native extent on the owner before a new extent is presented. The exact
+    // requested physical (device-pixel) extent is forwarded verbatim. The embedded QWindow is
+    // resized by the host's QWindowContainer (its logical geometry is owned by the
+    // editor/controller), never by this adapter; only a standalone presenter resizes its own
+    // window, from the live window ratio. present() is refused until the owner reports Active
+    // again.
     [[nodiscard]] bool requestResize(std::uint32_t deviceWidth, std::uint32_t deviceHeight);
 
     // Explicit non-blocking retire-before-UI-mutation gate. On SafeToMutate the caller may destroy

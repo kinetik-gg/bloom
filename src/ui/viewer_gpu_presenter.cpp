@@ -51,6 +51,27 @@ constexpr int kPollIntervalMs = 8;
     return logical >= 1.0 ? static_cast<std::uint32_t>(logical) : 1U;
 }
 
+// Embedded-window ownership rule. When the presenter is hosted in a QWindowContainer
+// (containerParent set), the host editor/controller sizes the embedded QWindow from its logical
+// contentRect and Qt applies the live widget device pixel ratio. Resizing that QWindow from here
+// would make the presenter a second owner using the once-injected config ratio; under fractional
+// scaling (live 1.5 vs injected 1.0, say) the two owners disagree and fight. A standalone presenter
+// (no host container) is the sole owner and sizes its own window.
+[[nodiscard]] bool presenterOwnsWindowGeometry(const QWidget* containerParent) noexcept {
+    return containerParent == nullptr;
+}
+
+// The live window ratio is authoritative for a standalone presenter; the injected config ratio is
+// only the fallback for a window that has no screen yet.
+[[nodiscard]] double standaloneWindowRatio(const QWindow* window,
+                                           const double configured) noexcept {
+    const double live = window != nullptr ? window->devicePixelRatio() : 0.0;
+    if (live > 0.0) {
+        return live;
+    }
+    return configured > 0.0 ? configured : 1.0;
+}
+
 } // namespace
 
 struct ViewerGpuPresenter::Impl final {
@@ -440,8 +461,17 @@ struct ViewerGpuPresenter::Impl final {
         }
         targetWidth = deviceWidth;
         targetHeight = deviceHeight;
-        window->resize(static_cast<int>(logicalExtent(deviceWidth, config.device_pixel_ratio)),
-                       static_cast<int>(logicalExtent(deviceHeight, config.device_pixel_ratio)));
+        // Only a standalone presenter owns its QWindow geometry. An embedded QWindow (hosted by the
+        // editor/controller through a QWindowContainer) is sized by that container from its logical
+        // contentRect with the live widget DPR; resizing it here with the stale injected config
+        // ratio is the ownership conflict this method used to create. The exact requested physical
+        // extent is still handed to the GPU port below either way, so the coordinator's swapchain
+        // matches atomically-authored content.
+        if (presenterOwnsWindowGeometry(containerParent)) {
+            const double ratio = standaloneWindowRatio(window, config.device_pixel_ratio);
+            window->resize(static_cast<int>(logicalExtent(deviceWidth, ratio)),
+                           static_cast<int>(logicalExtent(deviceHeight, ratio)));
+        }
         pendingResize = true;
         state = State::Resizing;
         const std::uint64_t sequenceValue = ++sequence;

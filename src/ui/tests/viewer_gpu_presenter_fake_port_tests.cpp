@@ -34,6 +34,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -144,6 +145,7 @@ struct FakePort final : ViewerGpuPort {
     std::vector<GpuPresentationTargetId> forgotten;
     GpuPresentationTargetId nextId = 1;
     std::vector<GpuBorrowedSurface> attaches;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> resizes;
     std::map<GpuPresentationTargetId, GpuPresentationTargetSnapshot> snapshots;
 
     [[nodiscard]] GpuBorrowedInstanceView instanceView() const override { return view; }
@@ -173,8 +175,9 @@ struct FakePort final : ViewerGpuPort {
         return result;
     }
     [[nodiscard]] GpuPresentationPortResult resize(GpuPresentationTargetId target,
-                                                   std::uint64_t sequence, std::uint32_t,
-                                                   std::uint32_t) override {
+                                                   std::uint64_t sequence, std::uint32_t width,
+                                                   std::uint32_t height) override {
+        resizes.emplace_back(width, height);
         GpuPresentationPortResult result;
         result.target = target;
         result.sequence = sequence;
@@ -407,9 +410,93 @@ int main(int argc, char** argv) {
                             "the Rejected terminal record is forgotten");
     }
 
+    // 5. Embedded resize ownership under fractional scaling: the host QWindowContainer owns the
+    //    embedded QWindow geometry. A requestResize for an extent that the stale injected DPR (1.0)
+    //    would have applied as a *logical* size (600x450) must reach the GPU port as the exact
+    //    physical extent, must leave the container's logical geometry untouched across repeats, and
+    //    must not resize the embedded QWindow. 600x450 is the physical extent of a 400x300 logical
+    //    container at the live ratio 1.5, so this is the actual1.5/injected1.0 disagreement.
+    {
+        QWidget embeddedHost;
+        embeddedHost.resize(400, 300);
+        auto* embeddedLayout = new QVBoxLayout(&embeddedHost);
+        embeddedLayout->setContentsMargins(0, 0, 0, 0);
+        embeddedHost.show();
+
+        auto port = std::make_shared<FakePort>();
+        port->view.valid = true;
+        port->view.instance_bits = bare.bits();
+        port->view.epoch = GpuPresentationEpoch{46};
+        // Injected ratio 1.0, exactly as the native test hardcodes and as the production registry
+        // can inject; the live widget ratio is whatever the host compositor reports.
+        ViewerGpuPresenter::Config config = configFor(loader);
+        config.device_pixel_ratio = 1.0;
+        auto presenter = std::make_unique<ViewerGpuPresenter>(port, config);
+        presenter->setContainerParent(&embeddedHost);
+        expectations.expect(presenter->initialize(), "the embedded-resize probe initializes");
+        embeddedLayout->addWidget(presenter->container());
+        presenter->container()->show();
+        expectations.expect(waitForPresenter(*presenter, [&] { return presenter->attached(); }),
+                            "the embedded-resize probe attaches: " +
+                                bloom::ui::test::describeViewerGpuPresenter(*presenter));
+        const GpuPresentationTargetId id = presenter->targetId();
+        port->setState(id, GpuPresentationTargetState::Active, false);
+        expectations.expect(waitForPresenter(*presenter,
+                                             [&] {
+                                                 return presenter->state() ==
+                                                        ViewerGpuPresenter::State::Active;
+                                             }),
+                            "the embedded-resize probe becomes Active: " +
+                                bloom::ui::test::describeViewerGpuPresenter(*presenter));
+
+        QWidget* container = presenter->container();
+        const QRect containerGeometry = container->geometry();
+        const QSize windowSize = presenter->window()->size();
+
+        // Repeated resizes: the container stays the sole owner of the embedded window geometry.
+        for (int repeat = 0; repeat < 3; ++repeat) {
+            const std::uint32_t width = repeat == 1 ? 900U : 600U;
+            const std::uint32_t height = repeat == 1 ? 675U : 450U;
+            expectations.expect(presenter->requestResize(width, height),
+                                "the embedded resize is admitted");
+            expectations.expect(port->resizes.size() == static_cast<std::size_t>(repeat) + 1U &&
+                                    port->resizes.back() == std::make_pair(width, height),
+                                "the GPU port receives the exact requested physical extent");
+            expectations.expect(container->geometry() == containerGeometry,
+                                "the container geometry is unchanged by an embedded resize");
+            expectations.expect(presenter->window()->size() == windowSize,
+                                "the embedded QWindow is not resized by the presenter");
+            expectations.expect(container->parentWidget() == &embeddedHost,
+                                "the embedded container keeps its host parent across resizes");
+            // The port publishes Active again, ending the resize gate before the next request.
+            port->setState(id, GpuPresentationTargetState::Active, false);
+            expectations.expect(waitForPresenter(*presenter,
+                                                 [&] {
+                                                     return presenter->state() ==
+                                                            ViewerGpuPresenter::State::Active;
+                                                 }),
+                                "the embedded resize settles back to Active");
+        }
+
+        bool called = false;
+        bool safe = false;
+        static_cast<void>(
+            presenter->prepareForMutation([&](const ViewerGpuPresenter::MutationResult& result) {
+                called = true;
+                safe = result.outcome == ViewerGpuPresenter::MutationOutcome::SafeToMutate;
+            }));
+        port->setState(id, GpuPresentationTargetState::Retired, true, "embedded probe done");
+        expectations.expect(waitForPresenter(*presenter, [&] { return called; }),
+                            "the embedded-resize probe retires cleanly: " +
+                                bloom::ui::test::describeViewerGpuPresenter(*presenter));
+        expectations.expect(called && safe, "the embedded-resize probe is safe to destroy");
+        presenter.reset();
+    }
+
     if (expectations.failures() == 0) {
         std::cout << "PASS: ViewerGpuPresenter refusal/forget semantics (refusals retained and "
-                     "never forgotten, proven terminals forgotten once)\n";
+                     "never forgotten, proven terminals forgotten once) and embedded resize "
+                     "ownership (container keeps the geometry, GPU gets the physical extent)\n";
     }
     return expectations.failures() == 0 ? 0 : 1;
 }
