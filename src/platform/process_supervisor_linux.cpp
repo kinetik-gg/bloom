@@ -243,21 +243,50 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
     output[1] = Fd{};
     gate[0] = Fd{};
     auto child = std::unique_ptr<ProcessSupervisor>(new ProcessSupervisor(std::move(state)));
-    const rlimit address{options.addressSpaceBytes, options.addressSpaceBytes},
-        files{options.openFiles, options.openFiles}, core{0, 0};
-    // Child main is held at fd 3 until all limits have been installed. No parent limit changes.
-    if (::prlimit(child->state_->pid, RLIMIT_AS, &address, nullptr) != 0 ||
-        ::prlimit(child->state_->pid, RLIMIT_NOFILE, &files, nullptr) != 0 ||
-        ::prlimit(child->state_->pid, RLIMIT_CORE, &core, nullptr) != 0)
-        return ProcessFailure{ProcessError::ResourceLimit, errno};
+    // A fast external tool (glslangValidator, spirv-val) never calls processWorkerBootstrap, so
+    // unlike a trusted worker it does not wait on the gate: it may run to completion before the
+    // parent installs rlimits or writes the ready byte. A WNOHANG probe recognizes an
+    // already-finished child so those post-spawn steps are skipped instead of failing the launch
+    // (prlimit on a zombie reports ESRCH, a gate write on closed pipes reports EPIPE). Limits are
+    // moot for a run that already completed; its output and exit status still gate the caller.
+    auto childExited = [&]() -> bool {
+        while (true) {
+            const auto result = ::waitpid(child->state_->pid, &child->state_->status, WNOHANG);
+            if (result == child->state_->pid || (result < 0 && errno == ECHILD)) {
+                child->state_->reaped = true;
+                return true;
+            }
+            if (result == 0)
+                return false;
+            if (errno != EINTR)
+                return false;
+        }
+    };
+    bool released = childExited();
+    if (!released) {
+        const rlimit address{options.addressSpaceBytes, options.addressSpaceBytes},
+            files{options.openFiles, options.openFiles}, core{0, 0};
+        // Child main is held at fd 3 until all limits have been installed. No parent limit changes.
+        if (::prlimit(child->state_->pid, RLIMIT_AS, &address, nullptr) != 0 ||
+            ::prlimit(child->state_->pid, RLIMIT_NOFILE, &files, nullptr) != 0 ||
+            ::prlimit(child->state_->pid, RLIMIT_CORE, &core, nullptr) != 0) {
+            // The child may have exited between the probe and the limit install; only fail when it
+            // is still running.
+            if (!childExited())
+                return ProcessFailure{ProcessError::ResourceLimit, errno};
+            released = true;
+        }
+    }
     for (const int fd : {child->state_->input.get(), child->state_->output.get()}) {
         const int flags = ::fcntl(fd, F_GETFL);
         if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0)
             return ProcessFailure{ProcessError::Io, errno};
     }
-    constexpr char ready = 'R';
-    if (pipeWrite(gate[1].get(), &ready, 1) != 1)
-        return ProcessFailure{ProcessError::Spawn, errno};
+    if (!released) {
+        constexpr char ready = 'R';
+        if (pipeWrite(gate[1].get(), &ready, 1) != 1 && !childExited())
+            return ProcessFailure{ProcessError::Spawn, errno};
+    }
     return child;
 }
 ProcessResult<std::size_t> ProcessSupervisor::write(std::span<const std::byte> bytes,
