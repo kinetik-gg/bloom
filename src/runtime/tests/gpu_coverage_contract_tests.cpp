@@ -12,13 +12,16 @@
 // later integration turns green without weakening the contract or adding opt-outs.
 
 #include "gpu_coverage_contract_plans.hpp"
+#include "gpu_coverage_display_support.hpp"
 #include "gpu_coverage_fixture_support.hpp"
 #include "gpu_coverage_gate_support.hpp"
 #include "gpu_coverage_media_support.hpp"
 #include "gpu_coverage_mutation_support.hpp"
 #include "gpu_coverage_native_support.hpp"
+#include "gpu_coverage_ocio_support.hpp"
 #include "gpu_coverage_route_proof_support.hpp"
 #include "gpu_coverage_video_support.hpp"
+#include "gpu_coverage_working_space_support.hpp"
 #include "gpu_route_proof_io.hpp"
 
 #include <bloom/document/graph.hpp>
@@ -26,6 +29,7 @@
 #include <bloom/runtime/gpu_coverage_contract.hpp>
 #include <bloom/runtime/gpu_coverage_route_proof_contract.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
+#include <bloom/runtime/input_color_context.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
 #include <array>
@@ -91,7 +95,7 @@ using bloom::gpu_coverage_plans::withSource;
 
 [[nodiscard]] FixtureRun
 runBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan) {
-    const CpuGpuSceneBuilder builder;
+    const CpuGpuSceneBuilder builder(nullptr, {}, bloom::gpu_coverage_ocio::context());
     const auto request = requestFor(*plan);
     FixtureRun result;
     const auto prepared = builder.build(plan, request);
@@ -112,7 +116,7 @@ runMediaBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionP
                 const std::filesystem::path& baseDirectory) {
     auto context = bloom::runtime::GpuSceneMediaContext::fromEvaluator(evaluator);
     context.assetBaseDirectory = baseDirectory;
-    const CpuGpuSceneBuilder builder(nullptr, context);
+    const CpuGpuSceneBuilder builder(nullptr, context, bloom::gpu_coverage_ocio::context());
     const auto request = requestFor(*plan);
     FixtureRun result;
     const auto prepared = builder.build(plan, request);
@@ -140,7 +144,7 @@ runMediaBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionP
         request.time = bloom::core::RationalTime::fromInteger(frame);
         auto context = bloom::runtime::GpuSceneMediaContext::fromEvaluator(evaluator);
         context.assetBaseDirectory = bloom::gpu_coverage_video::mediaFixturesDirectory();
-        const CpuGpuSceneBuilder builder(nullptr, context);
+        const CpuGpuSceneBuilder builder(nullptr, context, bloom::gpu_coverage_ocio::context());
         const auto prepared = builder.build(plan, request);
         if (!prepared) {
             result.prepared = false;
@@ -157,11 +161,83 @@ runMediaBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionP
     return result;
 }
 
+// A genuine non-identity CST effect: the resolved Bloom Neutral process space -> its sRGB texture
+// space. The shared OCIO context compiles the real ProcessEffect command, so the native gate
+// dispatches an OCIO kernel instead of the identity alias a same-from/to CST would produce.
+[[nodiscard]] FixtureRun runCstEffectFixture(const std::uint64_t idBase) {
+    const auto config = bloom::runtime::detail::resolveInputColorConfig(
+        bloom::runtime::EvaluationColorIntent::LinearRec709Scene);
+    if (!config.has_value()) {
+        FixtureRun result;
+        result.evidence = "the Bloom Neutral OCIO config is unavailable";
+        return result;
+    }
+    return runBuilder(effectPlan(bloom::runtime::CstKernel{std::string{config->processColorSpaceId()},
+                                                           std::string{
+                                                               config->sRgbTextureColorSpaceId()}},
+                                 idBase));
+}
+
+// A genuine non-identity FileTransform: a real 1D .cube read back through color::readLutFile. The
+// builder emits the accepted LUT chain and the CPU oracle consumes the identical digest.
+[[nodiscard]] FixtureRun runFileTransformFixture(const std::uint64_t idBase) {
+    const bloom::runtime::CpuCompositionEvaluator evaluator;
+    const auto& lut = bloom::gpu_coverage_media::syntheticLut();
+    const bloom::runtime::FileTransformKernel kernel{lut.asset.id, 0, 0, "lin_rec709_scene",
+                                                     lut.asset};
+    return runMediaBuilder(effectPlan(kernel, idBase), evaluator,
+                           bloom::gpu_coverage_media::gateDirectory());
+}
+
+// The working-space colour transform axis: a mixed solid/text/media/effect ACEScg composition. It
+// uses the production media context (so the real EXR is decoded) plus the shared OCIO context (so
+// the CST legs and the media input transform are genuine GPU ProcessEffects). The request carries
+// the exact ACES built-in identity, and the native gate compares the GPU result to the unchanged
+// CPU evaluator at 2e-6.
+[[nodiscard]] FixtureRun runWorkingSpaceFixture() {
+    const bloom::runtime::CpuCompositionEvaluator evaluator;
+    const auto asset = bloom::gpu_coverage_working_space::textureInputAsset();
+    const auto plan = bloom::gpu_coverage_working_space::mixedPlan(
+        format(8, 8), asset, bloom::core::Color4d{-0.2, 1.6, 0.35, 0.5}, 130000);
+    auto context = bloom::runtime::GpuSceneMediaContext::fromEvaluator(evaluator);
+    context.assetBaseDirectory = bloom::gpu_coverage_media::gateDirectory();
+    const CpuGpuSceneBuilder builder(nullptr, context, bloom::gpu_coverage_ocio::context());
+    const auto request = bloom::gpu_coverage_working_space::acesRequest(*plan);
+    FixtureRun result;
+    const auto prepared = builder.build(plan, request);
+    if (prepared) {
+        result.prepared = true;
+        result.frames.push_back(FrameRun{plan, request, bloom::gpu_coverage_media::gateDirectory(),
+                                         prepared.scene});
+        result.evidence =
+            "prepared working-space " + std::to_string(prepared.scene->commands().size()) +
+            " commands";
+        return result;
+    }
+    result.evidence = codeName(prepared.diagnostic.code) + ": " + prepared.diagnostic.message;
+    return result;
+}
+
+// A native-only display proof runner: the display support function reports its own genuine evidence.
+[[nodiscard]] bloom::gpu_coverage_gate::NativeProofRunner
+displayProofRunner(const bool customView) {
+    return [customView](bloom::render::GpuDevice& device,
+                        const bloom::runtime::GpuSceneOcioContext& ocioContext,
+                        std::string& evidence) {
+        const auto outcome =
+            bloom::gpu_coverage_display::runDisplayProof(device, ocioContext, customView);
+        evidence = outcome.evidence;
+        return outcome.passed;
+    };
+}
+
 [[nodiscard]] std::vector<Fixture> fixtures() {
     std::vector<Fixture> list;
     const auto add = [&list](std::string id, GpuCoverageFixtureCriterion criterion,
-                             std::string owner, std::function<FixtureRun()> run) {
-        list.push_back(Fixture{std::move(id), criterion, std::move(owner), std::move(run)});
+                             std::string owner, std::function<FixtureRun()> run,
+                             bloom::gpu_coverage_gate::NativeProofRunner nativeProof = {}) {
+        list.push_back(Fixture{std::move(id), criterion, std::move(owner), std::move(run),
+                               std::move(nativeProof)});
     };
     const auto addImageEffectPlan = [&add](std::string id, const ImageEffectKernel& kernel,
                                            const std::uint64_t idBase, std::string owner) {
@@ -217,13 +293,10 @@ runMediaBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionP
 
     addImageEffectPlan("effect.IdentityImageKernel", bloom::runtime::IdentityImageKernel{}, 100000,
                        {});
-    addImageEffectPlan("effect.CstKernel",
-                       bloom::runtime::CstKernel{"lin_rec709_scene", "lin_rec709_scene"}, 101000,
-                       {});
-    addImageEffectPlan("effect.FileTransformKernel",
-                       bloom::runtime::FileTransformKernel{bloom::document::AssetId::fromRaw(0), 0,
-                                                           0, "lin_rec709_scene", std::nullopt},
-                       102000, {});
+    add("effect.CstKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/color OCIO image effect tests", [] { return runCstEffectFixture(101000); });
+    add("effect.FileTransformKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/color OCIO image effect tests", [] { return runFileTransformFixture(102000); });
 
     // Every one of the eight blend modes is emitted by the real production builder now: Normal
     // stays the retained SourceOver merge, every other mode an explicit BlendV1 fold.
@@ -271,11 +344,25 @@ runMediaBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionP
     add("feature.layer.generic_input", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime GpuSceneExecutor graph tests",
         [] { return runBuilder(layerOnLayerPlan(104000)); });
+    // Working-space colour conversion is a pixel transformation: a mixed solid/text/media/effect
+    // ACEScg composition prepared by the production builder with the shared OCIO context, then
+    // executed and compared to the unchanged CPU evaluator at 2e-6. The owner is this gate's
+    // native working-space proof, never an external test name.
+    add("feature.color.working_space_transform", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime GpuSceneBuilder working-space effect native proof",
+        [] { return runWorkingSpaceFixture(); });
 
+    // Display features are native-only. Each owns a genuine native proof in this gate: a real OCIO
+    // display program compiled with the shared context and dispatched through the production
+    // executor, compared to the CPU display oracle at one RGBA8 code with exact alpha. The
+    // view-adjust proof uses a non-neutral exposure/gamma; the custom-view proof uses a non-default
+    // display/view pair.
     add("feature.display.view_adjust", GpuCoverageFixtureCriterion::NativeRequired,
-        "src/runtime gpu_neutral_display qualification tests", [] { return FixtureRun{}; });
+        "src/runtime GpuSceneExecutor display view-adjust native proof",
+        [] { return FixtureRun{}; }, displayProofRunner(false));
     add("feature.display.custom_view_transform", GpuCoverageFixtureCriterion::NativeRequired,
-        "src/runtime gpu_neutral_display qualification tests", [] { return FixtureRun{}; });
+        "src/runtime GpuSceneExecutor custom display/view native proof",
+        [] { return FixtureRun{}; }, displayProofRunner(true));
 
     // One fixture identity per built-in authoring node type that produces pixels. A new node type
     // registered against an existing lowering gets a new `node.<typeId>` requirement and this
@@ -318,13 +405,10 @@ runMediaBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionP
                 nestedChildPlan(122000, 203, bloom::core::Color4d{0.2, 0.6, 0.9, 1.0});
             return runBuilder(nestedParentPlan(child, 123000, 101));
         });
-    addImageEffectPlan("node.bloom.ocio-colour-space-transform",
-                       bloom::runtime::CstKernel{"lin_rec709_scene", "lin_rec709_scene"}, 108000,
-                       {});
-    addImageEffectPlan("node.bloom.ocio-file-transform",
-                       bloom::runtime::FileTransformKernel{bloom::document::AssetId::fromRaw(0), 0,
-                                                           0, "lin_rec709_scene", std::nullopt},
-                       109000, {});
+    add("node.bloom.ocio-colour-space-transform", GpuCoverageFixtureCriterion::Prepared,
+        "src/color OCIO image effect tests", [] { return runCstEffectFixture(108000); });
+    add("node.bloom.ocio-file-transform", GpuCoverageFixtureCriterion::Prepared,
+        "src/color OCIO image effect tests", [] { return runFileTransformFixture(109000); });
     return list;
 }
 
@@ -405,8 +489,20 @@ runMediaBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionP
             continue;
         }
         if (fixture->criterion == GpuCoverageFixtureCriterion::NativeRequired) {
-            std::cerr << "MISSING(native-only) " << id << " (owner " << fixture->owner << ")\n";
-            ++missing;
+            if (!fixture->nativeProof) {
+                std::cerr << "MISSING(native-only) " << id << " (owner " << fixture->owner << ")\n";
+                ++missing;
+                continue;
+            }
+            std::string evidence;
+            const auto ocioContext = bloom::gpu_coverage_ocio::context();
+            if (fixture->nativeProof(*device.device, ocioContext, evidence)) {
+                std::cout << "PASS " << id << ": " << evidence << '\n';
+                ++passed;
+            } else {
+                std::cerr << "FAIL " << id << ": " << evidence << '\n';
+                ++failed;
+            }
             continue;
         }
         const auto run = fixture->run();
@@ -516,15 +612,14 @@ int main(int argc, char** argv) {
     }
 
     const auto requiredIds = requiredCoverageIds();
-    // No genuine route harness publishes into this sink in this tree yet, so every route is MISSING
-    // by name. An executor-prepared scene is never relabelled as a viewer/RAM/export route proof.
-    const bloom::runtime::GpuRouteProofSink routeProofs;
+    // Routes are proven only by the genuine external route harnesses (viewer/RAM/export/headless),
+    // which the CPU-only gate cannot run. It reports them as externally owned and never relabels an
+    // executor-prepared scene as a route proof; the distinct native acceptance CTest still requires
+    // an actual proof for every route.
     for (const auto& id : requiredIds) {
         if (id.rfind("route.", 0) == 0) {
-            if (routeProofs.find(id) == nullptr) {
-                failures.push_back("missing required route proof for '" + id + "' (owner " +
-                                   std::string{routeOwner(id)} + ")");
-            }
+            std::cout << "NOTRUN(route) " << id << " (externally-owned genuine proof; owner "
+                      << routeOwner(id) << ")\n";
             continue;
         }
         bool present = false;

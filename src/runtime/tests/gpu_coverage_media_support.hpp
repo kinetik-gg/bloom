@@ -16,11 +16,13 @@
 #include <ImfOutputFile.h>
 #include <ImfStringAttribute.h>
 
+#include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/document/asset.hpp>
 #include <bloom/media/image.hpp>
 
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -87,11 +89,6 @@ inline void writeExrRgba(const std::filesystem::path& path, const int width, con
     file.writePixels(height);
 }
 
-struct ImageFixture final {
-    std::filesystem::path path;
-    bloom::document::AssetRecord asset;
-};
-
 // A 3x2 signed/HDR RGBA EXR: smaller than the composition, with a negative channel, values above 1,
 // and a non-opaque alpha, written premultiplied.
 [[nodiscard]] inline std::vector<ExrPixel> signedHdrPixels() {
@@ -99,6 +96,11 @@ struct ImageFixture final {
             ExrPixel{2.0F, 0.125F, 0.75F, 0.5F}, ExrPixel{0.5F, 2.5F, -0.5F, 1.0F},
             ExrPixel{0.0F, 0.0F, 0.0F, 0.0F},    ExrPixel{3.0F, 1.0F, 0.25F, 0.25F}};
 }
+
+struct ImageFixture final {
+    std::filesystem::path path;
+    bloom::document::AssetRecord asset;
+};
 
 [[nodiscard]] inline const ImageFixture& syntheticImage() {
     static const ImageFixture fixture = [] {
@@ -121,6 +123,41 @@ struct ImageFixture final {
         value.asset.width = probe.value->width;
         value.asset.height = probe.value->height;
         value.asset.name = "signed_hdr";
+        return value;
+    }();
+    return fixture;
+}
+
+// A genuine 1D .cube LUT for a non-identity FileTransform. It is read back through the production
+// color::readLutFile so the asset digest matches the exact bytes the CPU oracle and the GPU builder
+// both consume.
+struct LutFixture final {
+    std::filesystem::path path;
+    bloom::document::AssetRecord asset;
+};
+
+[[nodiscard]] inline const LutFixture& syntheticLut() {
+    static const LutFixture fixture = [] {
+        std::filesystem::create_directories(gateDirectory());
+        LutFixture value;
+        value.path = gateDirectory() / "coverage_curve.cube";
+        {
+            std::ofstream file(value.path);
+            file << "TITLE \"coverage\"\nLUT_1D_SIZE 4\n";
+            file << "0.0 0.0 0.0\n0.2 0.3 0.4\n0.6 0.5 0.7\n1.0 1.0 1.0\n";
+        }
+        const auto resource = bloom::color::readLutFile(value.path);
+        if (resource.error != bloom::color::LutError::None) {
+            throw std::logic_error("synthetic LUT could not be read");
+        }
+        value.asset.id = bloom::document::AssetId::fromRaw(901);
+        value.asset.kind = bloom::document::AssetKind::Lut;
+        value.asset.locator.kind = "file";
+        value.asset.locator.portability = "project-relative";
+        value.asset.locator.path = value.path.filename().string();
+        value.asset.locator.relinkHint = "file:" + value.path.string();
+        value.asset.contentDigest = resource.digest;
+        value.asset.name = "coverage_curve";
         return value;
     }();
     return fixture;

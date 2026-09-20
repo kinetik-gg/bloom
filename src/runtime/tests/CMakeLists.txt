@@ -440,6 +440,14 @@ target_link_libraries(bloom_runtime_gpu_coverage_contract_test
 target_include_directories(bloom_runtime_gpu_coverage_contract_test
     PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS}
             "${PROJECT_SOURCE_DIR}/tests/support")
+# The shared runtime OCIO context for the effect/working-space fixtures is built from the REAL tools
+# staged beside this gate executable by bloom_package_gpu_shader_tools (the same packaging the
+# desktop/CLI/MCP targets use), never a manually injected or ambient path. The executable-relative
+# definition is what the resolver validates.
+target_compile_definitions(bloom_runtime_gpu_coverage_contract_test PRIVATE
+    "BLOOM_GPU_COVERAGE_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_coverage_contract_test>\"")
+include(BloomGpuShaderTools)
+bloom_package_gpu_shader_tools(bloom_runtime_gpu_coverage_contract_test)
 # apps/bloom-media-worker is added after src/runtime, so a TARGET guard here would be false at
 # configure time; mirror the video-scene-preparation tests and take the real worker + fixture
 # generator as build-order dependencies on the platform that defines them.

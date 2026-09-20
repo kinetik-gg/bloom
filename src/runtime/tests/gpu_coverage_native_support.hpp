@@ -57,6 +57,10 @@ struct NativeFixtureOutcome final {
     bool coverageRequired = false;
     std::uint64_t coverageColdDispatches = 0;
     std::uint64_t coverageWarmDispatches = 0;
+    // Set when the scene carries a real GPU OCIO ProcessEffect command. A colour-transform scene
+    // that ran zero native OCIO dispatch is a CPU whole-frame render in disguise.
+    bool ocioRequired = false;
+    std::uint64_t ocioColdDispatches = 0;
     std::string evidence;
 };
 
@@ -76,6 +80,9 @@ struct NativeFixtureOutcome final {
     }
     if (outcome.coverageRequired && outcome.coverageWarmDispatches != 0) {
         return "MISSED_GPU: warm rerun dispatched native coverage work";
+    }
+    if (outcome.ocioRequired && outcome.ocioColdDispatches == 0) {
+        return "MISSED_GPU: zero native OCIO effect dispatch for a colour-transform scene";
     }
     if (outcome.warmDispatches != 0) {
         return "MISSED_GPU: warm rerun dispatched native work";
@@ -116,15 +123,23 @@ struct NativeFixtureOutcome final {
     coverageMissing.familyDispatches = 3;
     coverageMissing.warmCacheHits = 1;
     coverageMissing.coverageRequired = true;
+    // A colour-transform scene that reports a generic dispatch but no OCIO effect dispatch is a CPU
+    // whole-frame render in disguise and must be rejected.
+    NativeFixtureOutcome ocioMissing;
+    ocioMissing.ran = true;
+    ocioMissing.coldDispatches = 3;
+    ocioMissing.familyDispatches = 3;
+    ocioMissing.warmCacheHits = 1;
+    ocioMissing.ocioRequired = true;
     if (!rejects(zeroDispatch) || !rejects(cpuFallback) || !rejects(coverageMissing) ||
-        rejects(genuine)) {
-        evidence = "missed-GPU detection failed for zero-dispatch, CPU-fallback, or missing "
-                   "coverage-dispatch fixtures";
+        !rejects(ocioMissing) || rejects(genuine)) {
+        evidence = "missed-GPU detection failed for zero-dispatch, CPU-fallback, missing "
+                   "coverage-dispatch, or missing OCIO-dispatch fixtures";
         return false;
     }
     evidence =
-        "zero-dispatch, CPU-fallback, and missing coverage-dispatch fixtures are MISSED_GPU; "
-        "a real dispatch is not";
+        "zero-dispatch, CPU-fallback, missing coverage-dispatch, and missing OCIO-dispatch "
+        "fixtures are MISSED_GPU; a real dispatch is not";
     return true;
 }
 
@@ -146,6 +161,40 @@ struct NativeFixtureOutcome final {
         }
     }
     return true;
+}
+
+// The first component that breaks the strict gate, for an actionable failure message. Empty when the
+// spans match exactly (the same predicate pixelsClose() applies).
+[[nodiscard]] inline std::string
+pixelParityDetail(const std::span<const bloom::render::Rgba32f> actual,
+                  const std::span<const bloom::render::Rgba32f> expected) {
+    if (actual.size() != expected.size()) {
+        return " (size " + std::to_string(actual.size()) + " vs " +
+               std::to_string(expected.size()) + ")";
+    }
+    const auto close = [](const float a, const float e) {
+        const float tolerance = std::max(2.0e-6F, 2.0e-6F * std::fabs(e));
+        return std::fabs(a - e) <= tolerance;
+    };
+    for (std::size_t i = 0; i < actual.size(); ++i) {
+        if (actual[i].alpha() != expected[i].alpha()) {
+            return " (alpha at " + std::to_string(i) + ": " + std::to_string(actual[i].alpha()) +
+                   " vs " + std::to_string(expected[i].alpha()) + ")";
+        }
+        if (!close(actual[i].red(), expected[i].red())) {
+            return " (red at " + std::to_string(i) + ": " + std::to_string(actual[i].red()) +
+                   " vs " + std::to_string(expected[i].red()) + ")";
+        }
+        if (!close(actual[i].green(), expected[i].green())) {
+            return " (green at " + std::to_string(i) + ": " + std::to_string(actual[i].green()) +
+                   " vs " + std::to_string(expected[i].green()) + ")";
+        }
+        if (!close(actual[i].blue(), expected[i].blue())) {
+            return " (blue at " + std::to_string(i) + ": " + std::to_string(actual[i].blue()) +
+                   " vs " + std::to_string(expected[i].blue()) + ")";
+        }
+    }
+    return {};
 }
 
 // The family the prepared scene actually requires, so the native counter that must fire is tied to
@@ -238,7 +287,9 @@ runNativeFixture(bloom::render::GpuDevice& device,
         const auto* covered = std::get_if<bloom::runtime::GpuSceneCoverageSolidCommand>(&command);
         if (covered != nullptr && covered->geometry != nullptr) {
             outcome.coverageRequired = true;
-            break;
+        }
+        if (std::holds_alternative<bloom::runtime::GpuSceneOcioEffectCommand>(command)) {
+            outcome.ocioRequired = true;
         }
     }
 
@@ -333,7 +384,8 @@ runNativeFixture(bloom::render::GpuDevice& device,
         }
         if (readback.pixels.size() != cpuImage.pixels().size() ||
             !pixelsClose(readback.pixels, cpuImage.pixels())) {
-            outcome.evidence = "native/CPU pixel parity failed";
+            outcome.evidence = "native/CPU pixel parity failed" +
+                               pixelParityDetail(readback.pixels, cpuImage.pixels());
             drain();
             return false;
         }
@@ -341,6 +393,7 @@ runNativeFixture(bloom::render::GpuDevice& device,
         const auto dispatches = after.dispatches - before.dispatches;
         const auto coverageDispatches =
             bloom::render::GpuPathCoverage::nativeDispatchCount() - coverageBefore;
+        const auto ocioDispatches = after.ocioEffectDispatches - before.ocioEffectDispatches;
         if (warm) {
             outcome.warmDispatches = dispatches;
             outcome.warmCacheHits = after.outputCacheHits - before.outputCacheHits;
@@ -350,6 +403,7 @@ runNativeFixture(bloom::render::GpuDevice& device,
             outcome.familyDispatches =
                 familyCount(after, outcome.family) - familyCount(before, outcome.family);
             outcome.coverageColdDispatches = coverageDispatches;
+            outcome.ocioColdDispatches = ocioDispatches;
         }
         (void)executor.takeImage();
         return true;
@@ -371,7 +425,8 @@ runNativeFixture(bloom::render::GpuDevice& device,
                        std::to_string(outcome.warmDispatches) + ", warm cache hits " +
                        std::to_string(outcome.warmCacheHits) + ", coverage cold " +
                        std::to_string(outcome.coverageColdDispatches) + ", coverage warm " +
-                       std::to_string(outcome.coverageWarmDispatches);
+                       std::to_string(outcome.coverageWarmDispatches) + ", ocio cold " +
+                       std::to_string(outcome.ocioColdDispatches);
     return outcome;
 }
 
