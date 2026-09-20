@@ -2,9 +2,10 @@
 //
 // These vectors prove the process-global bounded resident pool: many pre-created instances beyond
 // capacity, foreign-thread destruction boundedness, retention of an unproven fence, exact
-// owner-thread/device-generation isolation across two real device threads, and owner-drain recovery.
-// The private fault seam is Vulkan-free, so this target exists only where the Vulkan backend is
-// built; a hardware-free build prints an explicit skip and --require-device fails closed.
+// owner-thread/device-generation isolation across two real device threads, and owner-drain
+// recovery. The private fault seam is Vulkan-free, so this target exists only where the Vulkan
+// backend is built; a hardware-free build prints an explicit skip and --require-device fails
+// closed.
 
 #include "gpu_solid_fault.hpp"
 
@@ -276,7 +277,6 @@ struct OwnerThreadContext final {
 
     std::filesystem::path loaderPath;
     GpuSolidParameters parameters;
-    std::unique_ptr<GpuDevice> device;
     std::unique_ptr<GpuSolid> solid;
     std::atomic<bool> ready{false};
     std::atomic<bool> drainNow{false};
@@ -297,8 +297,7 @@ void runOwnerThread(OwnerThreadContext& context) {
         context.ready.store(true);
         return;
     }
-    context.device = std::move(device.device);
-    auto solid = GpuSolid::create(*context.device);
+    auto solid = GpuSolid::create(*device.device);
     if (!solid) {
         context.error = "solid: " + solid.diagnostic.message;
         context.ready.store(true);
@@ -315,12 +314,12 @@ void runOwnerThread(OwnerThreadContext& context) {
     while (!context.drainNow.load()) {
         std::this_thread::yield();
     }
-    (void)GpuSolid::create(*context.device);
+    (void)GpuSolid::create(*device.device);
     context.orphanedAfter = solid_detail::solidResidentOrphaned();
     context.inUseAfter = solid_detail::solidResidentInUse();
     context.retiredAfter = solid_detail::solidResidentRetired();
     context.drained.store(true);
-    // context.device is destroyed here, on its owner thread.
+    // `device` is destroyed here, on its owner thread.
 }
 
 void testOwnerIsolation(Expectations& expectations, const std::filesystem::path& loaderPath) {

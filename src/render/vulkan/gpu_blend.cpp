@@ -1,5 +1,6 @@
 #include <bloom/render/gpu_blend.hpp>
 
+#include "gpu_blend_fault.hpp"
 #include "gpu_blend_private.hpp"
 
 #include <array>
@@ -83,10 +84,31 @@ void GpuBlend::releaseImpl() noexcept {
     if (impl_ == nullptr) {
         return;
     }
-    if (!impl_->onOwnerThread() || !impl_->drainAndRetire()) {
-        noteCompositeQuarantine();
-        [[maybe_unused]] const auto* const quarantined = impl_.release();
+    if (!impl_->onOwnerThread()) {
+        // Foreign thread: never destroy native state. An Impl that owns a resident slot is
+        // preserved in that same slot (orphaned) for owner retirement; an Impl with no slot owns no
+        // Vulkan objects (the pipelines are created lazily under a slot) and can be destroyed here.
+        if (impl_->residentSlot != kBlendNoResidentSlot) {
+            impl_->orphanResidentSlot();
+            (void)impl_.release();
+        } else {
+            impl_.reset();
+        }
         return;
+    }
+    // Owner thread: prove retirement if needed, then free native resources and return the slot. An
+    // unproven submission is retained in the bounded pool for a later owner drain rather than
+    // destroyed in flight.
+    if (impl_->residentSlot != kBlendNoResidentSlot) {
+        if (impl_->queueSubmitted) {
+            cancel();
+            if (!impl_->drainAndRetire()) {
+                impl_->orphanResidentSlot();
+                [[maybe_unused]] const auto* const retained = impl_.release();
+                return;
+            }
+        }
+        impl_->releaseResidentSlot();
     }
     impl_.reset();
 }
@@ -153,112 +175,14 @@ bool GpuBlend::Impl::drainAndRetire() noexcept {
 }
 
 GpuBlend::Impl::~Impl() {
-    assert(owner == std::this_thread::get_id());
+    // A slot-less Impl owns no native Vulkan resources (the pipelines are created lazily under a
+    // slot, and a failed creation is reset before the slot is released), so it may be destroyed
+    // from any thread. A slot-holding Impl is only ever destroyed on its owner thread: a foreign
+    // destruction orphans the slot instead.
+    assert(residentSlot == kBlendNoResidentSlot);
     retainedSource.reset();
     retainedDestination.reset();
     residentImage.reset();
-}
-
-bool GpuBlend::Impl::createPipeline() {
-    constexpr bool kBlendBindings[kBlendBindingCount] = {true, true, true, false};
-    std::string reason;
-    if (!createCompositePipeline(*control, vulkan_detail::kBlendSpirvCode,
-                                 vulkan_detail::kBlendSpirvByteCount, kBlendBindings,
-                                 kBlendBindingCount, kBlendPushBytes, reason, pipeline)) {
-        createDiagnostic = makeDiagnostic(GpuBlendDiagnosticCode::ShaderRejected, reason);
-        return false;
-    }
-    // The portable compensated-Float32 kernel needs no Float64 capability and no 64-bit integer
-    // type, so it is built unconditionally and backs the six general modes on every device that
-    // lacks the exact Float64 companion.
-    if (!createCompositePipeline(*control, vulkan_detail::kBlendPortableSpirvCode,
-                                 vulkan_detail::kBlendPortableSpirvByteCount, kBlendBindings,
-                                 kBlendBindingCount, kBlendPushBytes, reason, pipelinePortable)) {
-        createDiagnostic = makeDiagnostic(GpuBlendDiagnosticCode::ShaderRejected, reason);
-        return false;
-    }
-    // The exact Float64 companion is built only when the device advertised and enabled the core
-    // shaderFloat64 feature AND the caller's policy allows it. The SPIR-V requires that capability,
-    // so it must not be created otherwise. If the device claims support but rejects the pipeline,
-    // creation fails closed rather than silently losing the exactness the general modes need.
-    if (control->shaderFloat64 && policy == GpuBlendKernelPolicy::Auto) {
-        if (!createCompositePipeline(*control, vulkan_detail::kBlendF64SpirvCode,
-                                     vulkan_detail::kBlendF64SpirvByteCount, kBlendBindings,
-                                     kBlendBindingCount, kBlendPushBytes, reason, pipelineF64)) {
-            createDiagnostic = makeDiagnostic(GpuBlendDiagnosticCode::ShaderRejected, reason);
-            return false;
-        }
-        generalUsesF64 = true;
-    }
-
-    const std::array poolSizes{vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 3},
-                               vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 1}};
-    vk::DescriptorPoolCreateInfo poolInfo{};
-    poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
-    poolInfo.maxSets = 1;
-    poolInfo.poolSizeCount = static_cast<std::uint32_t>(poolSizes.size());
-    poolInfo.pPoolSizes = poolSizes.data();
-    const VkDevice rawDevice = static_cast<VkDevice>(*control->device);
-    const auto* dispatcher = control->device.getDispatcher();
-    VkDescriptorPool rawPool = VK_NULL_HANDLE;
-    if (dispatcher->vkCreateDescriptorPool(
-            rawDevice, reinterpret_cast<const VkDescriptorPoolCreateInfo*>(&poolInfo), nullptr,
-            &rawPool) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuBlendDiagnosticCode::AllocationFailed,
-                                          "the blend descriptor pool could not be created");
-        return false;
-    }
-    descriptorPool = vk::raii::DescriptorPool(control->device, rawPool);
-    const std::array setLayouts{*pipeline.descriptorSetLayout};
-    vk::DescriptorSetAllocateInfo allocateInfo{};
-    allocateInfo.descriptorPool = *descriptorPool;
-    allocateInfo.descriptorSetCount = 1;
-    allocateInfo.pSetLayouts = setLayouts.data();
-    VkDescriptorSet rawSet = VK_NULL_HANDLE;
-    if (dispatcher->vkAllocateDescriptorSets(
-            rawDevice, reinterpret_cast<const VkDescriptorSetAllocateInfo*>(&allocateInfo),
-            &rawSet) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuBlendDiagnosticCode::AllocationFailed,
-                                          "the blend descriptor set could not be allocated");
-        return false;
-    }
-    descriptorSet = vk::raii::DescriptorSet(control->device, rawSet, *descriptorPool);
-
-    vk::CommandPoolCreateInfo commandPoolInfo{};
-    commandPoolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
-    commandPoolInfo.queueFamilyIndex = control->computeQueueFamily;
-    VkCommandPool rawCommandPool = VK_NULL_HANDLE;
-    if (dispatcher->vkCreateCommandPool(
-            rawDevice, reinterpret_cast<const VkCommandPoolCreateInfo*>(&commandPoolInfo), nullptr,
-            &rawCommandPool) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuBlendDiagnosticCode::AllocationFailed,
-                                          "the blend command pool could not be created");
-        return false;
-    }
-    commandPool = vk::raii::CommandPool(control->device, rawCommandPool);
-    vk::CommandBufferAllocateInfo commandBufferInfo{};
-    commandBufferInfo.commandPool = *commandPool;
-    commandBufferInfo.level = vk::CommandBufferLevel::ePrimary;
-    commandBufferInfo.commandBufferCount = 1;
-    VkCommandBuffer rawCommandBuffer = VK_NULL_HANDLE;
-    if (dispatcher->vkAllocateCommandBuffers(
-            rawDevice, reinterpret_cast<const VkCommandBufferAllocateInfo*>(&commandBufferInfo),
-            &rawCommandBuffer) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuBlendDiagnosticCode::AllocationFailed,
-                                          "the blend command buffer could not be allocated");
-        return false;
-    }
-    commandBuffer = vk::raii::CommandBuffer(control->device, rawCommandBuffer, *commandPool);
-    vk::FenceCreateInfo fenceInfo{};
-    VkFence rawFence = VK_NULL_HANDLE;
-    if (dispatcher->vkCreateFence(rawDevice, reinterpret_cast<const VkFenceCreateInfo*>(&fenceInfo),
-                                  nullptr, &rawFence) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuBlendDiagnosticCode::AllocationFailed,
-                                          "the blend fence could not be created");
-        return false;
-    }
-    fence = vk::raii::Fence(control->device, rawFence);
-    return true;
 }
 
 GpuBlendCreateResult GpuBlend::create(GpuDevice& device, const GpuBlendBudgets& budgets,
@@ -280,24 +204,26 @@ GpuBlendCreateResult GpuBlend::create(GpuDevice& device, const GpuBlendBudgets& 
                                         "the blend pipeline must be created on the device owner "
                                         "thread")};
     }
-    if (!compositeQuarantineAllowed()) {
-        return {nullptr, makeDiagnostic(GpuBlendDiagnosticCode::DeviceUnavailable,
-                                        "too many undrained GPU generations are quarantined")};
-    }
+    // Retire orphaned foreign-released residents on the owner thread so admission recovers.
+    Impl::drainResidentOrphansOnOwnerThread();
     auto control = GpuRendererAccess::state(device);
     if (control == nullptr) {
         return {nullptr, makeDiagnostic(GpuBlendDiagnosticCode::DeviceUnavailable,
                                         "the GPU device exposes no renderer state")};
     }
+    // Lazy creation: an idle GpuBlend allocates no native resources and holds no resident slot. The
+    // pipelines are created on the first begin under the bounded slot, so many pre-created
+    // instances are bounded by the fixed pool rather than each owning native state. The
+    // Float64/portable selection is resolved here (no allocation) so shaderIdentity is stable
+    // before the first begin and the executor's semantic cache key does not depend on dispatch
+    // order.
     auto impl = std::make_unique<Impl>();
     impl->owner = std::this_thread::get_id();
     impl->control = std::move(control);
     impl->budgets = budgets;
     impl->policy = policy;
     impl->expectedGeneration = impl->control->generation;
-    if (!impl->createPipeline()) {
-        return {nullptr, impl->createDiagnostic};
-    }
+    impl->generalUsesF64 = impl->control->shaderFloat64 && policy == GpuBlendKernelPolicy::Auto;
     return {std::unique_ptr<GpuBlend>(new GpuBlend(std::move(impl))), GpuBlendDiagnostic{}};
 }
 
@@ -327,6 +253,8 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
         return makeDiagnostic(GpuBlendDiagnosticCode::WrongThread,
                               "beginBlend must run on the device owner thread");
     }
+    // Opportunistic, non-blocking retirement of orphaned foreign-released residents.
+    Impl::drainResidentOrphansOnOwnerThread();
     if (impl.deviceLost) {
         return makeDiagnostic(GpuBlendDiagnosticCode::DeviceLost,
                               "the device was lost; this generation must not be reused");
@@ -403,6 +331,12 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
                                                 : GpuBlendDiagnosticCode::Unsupported,
                               support.supported ? "the destination image exceeds the device limit"
                                                 : support.reason);
+    }
+
+    // Acquire the bounded resident slot BEFORE the first native allocation, and create the
+    // pipelines lazily under it. A full pool refuses cleanly without allocating anything.
+    if (!impl.ensureResidentReady()) {
+        return impl.createDiagnostic;
     }
 
     // Normal is the exact retained fma source-over and Add is the exact premultiplied sum, so both
@@ -671,6 +605,10 @@ void GpuBlend::cancel() noexcept {
     }
 }
 
-bool GpuBlend::teardownDrainIncomplete() noexcept { return compositeTeardownIncomplete(); }
+bool GpuBlend::teardownDrainIncomplete() noexcept {
+    // Recoverable pressure, not a permanent fuse: true while a foreign-released or unproven
+    // resident is retained in the bounded pool, and false again once the rightful owner drains it.
+    return blend_detail::blendResidentOrphaned() > 0;
+}
 
 } // namespace bloom::render

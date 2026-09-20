@@ -2,9 +2,10 @@
 //
 // These vectors prove the process-global bounded resident pool: many pre-created instances beyond
 // capacity, foreign-thread destruction boundedness, retention of an unproven fence, exact
-// owner-thread/device-generation isolation across two real device threads, and owner-drain recovery.
-// The private fault seam is Vulkan-free, so this target exists only where the Vulkan backend is
-// built; a hardware-free build prints an explicit skip and --require-device fails closed.
+// owner-thread/device-generation isolation across two real device threads, and owner-drain
+// recovery. The private fault seam is Vulkan-free, so this target exists only where the Vulkan
+// backend is built; a hardware-free build prints an explicit skip and --require-device fails
+// closed.
 
 #include "gpu_image_upload_fault.hpp"
 
@@ -96,8 +97,8 @@ struct Options final {
     if (!window) {
         return nullptr;
     }
-    const auto descriptor =
-        Rgba32fImageDescriptor::create(*window.value(), *window.value(), PixelAspectRatio::square());
+    const auto descriptor = Rgba32fImageDescriptor::create(*window.value(), *window.value(),
+                                                           PixelAspectRatio::square());
     if (!descriptor) {
         return nullptr;
     }
@@ -131,8 +132,8 @@ struct Options final {
     return std::make_shared<const Rgba32fImage>(std::move(*frozen.value()));
 }
 
-[[nodiscard]] GpuImageUploadParameters makeParameters(
-    const std::shared_ptr<const Rgba32fImage>& source) {
+[[nodiscard]] GpuImageUploadParameters
+makeParameters(const std::shared_ptr<const Rgba32fImage>& source) {
     GpuImageUploadParameters parameters;
     parameters.source = source;
     return parameters;
@@ -196,7 +197,8 @@ void testBoundedPool(Expectations& expectations, GpuDevice& device) {
         ++ready;
     }
     expectations.expect(ready == available, "exactly the available upload slots become Ready");
-    expectations.expect(upload_detail::uploadResidentInUse() == capacity, "the upload pool is full");
+    expectations.expect(upload_detail::uploadResidentInUse() == capacity,
+                        "the upload pool is full");
 
     const std::uint64_t refusalsBefore = upload_detail::uploadResidentRefusals();
     auto extra = GpuImageUpload::create(device);
@@ -295,7 +297,6 @@ void testUnprovenRetention(Expectations& expectations, GpuDevice& device) {
 struct OwnerThreadContext final {
     std::filesystem::path loaderPath;
     GpuImageUploadParameters parameters;
-    std::unique_ptr<GpuDevice> device;
     std::unique_ptr<GpuImageUpload> upload;
     std::atomic<bool> ready{false};
     std::atomic<bool> drainNow{false};
@@ -316,8 +317,7 @@ void runOwnerThread(OwnerThreadContext& context) {
         context.ready.store(true);
         return;
     }
-    context.device = std::move(device.device);
-    auto upload = GpuImageUpload::create(*context.device);
+    auto upload = GpuImageUpload::create(*device.device);
     if (!upload) {
         context.error = "upload: " + upload.diagnostic.message;
         context.ready.store(true);
@@ -334,12 +334,12 @@ void runOwnerThread(OwnerThreadContext& context) {
     while (!context.drainNow.load()) {
         std::this_thread::yield();
     }
-    (void)GpuImageUpload::create(*context.device);
+    (void)GpuImageUpload::create(*device.device);
     context.orphanedAfter = upload_detail::uploadResidentOrphaned();
     context.inUseAfter = upload_detail::uploadResidentInUse();
     context.retiredAfter = upload_detail::uploadResidentRetired();
     context.drained.store(true);
-    // context.device is destroyed here, on its owner thread.
+    // `device` is destroyed here, on its owner thread.
 }
 
 void testOwnerIsolation(Expectations& expectations, const std::filesystem::path& loaderPath) {

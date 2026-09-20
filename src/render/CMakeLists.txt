@@ -1022,14 +1022,21 @@ target_sources(
 if(BLOOM_RENDER_VULKAN_AVAILABLE)
     target_sources(bloom_render PRIVATE
         vulkan/gpu_affine.cpp
+        vulkan/gpu_affine_fault.hpp
         vulkan/gpu_affine_private.hpp
         vulkan/gpu_affine_resources.cpp
+        vulkan/gpu_affine_retirement.cpp
         vulkan/gpu_blend.cpp
+        vulkan/gpu_blend_fault.hpp
         vulkan/gpu_blend_private.hpp
+        vulkan/gpu_blend_resources.cpp
+        vulkan/gpu_blend_retirement.cpp
         vulkan/gpu_bounded_retirement.hpp
         vulkan/gpu_composite.cpp
+        vulkan/gpu_composite_fault.hpp
         vulkan/gpu_composite_private.hpp
         vulkan/gpu_composite_resources.cpp
+        vulkan/gpu_composite_retirement.cpp
         vulkan/gpu_device.cpp
         vulkan/gpu_device_bootstrap.cpp
         vulkan/gpu_device_private.hpp

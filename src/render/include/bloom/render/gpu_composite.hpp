@@ -114,8 +114,10 @@ class GpuComposite final {
     GpuComposite& operator=(GpuComposite&& other) noexcept;
     ~GpuComposite();
 
-    // Builds the cached pipelines, layouts, descriptor sets, command pool, and fence for BOTH
-    // operations once, on the device owner thread. Wrong thread returns WrongThread.
+    // Validates the device and budgets on the device owner thread and returns a lazy, native-free
+    // instance. Wrong thread returns WrongThread. The two pipelines, layouts, descriptor sets,
+    // command pool, and fence are built once on the first begin, under one bounded resident-pool
+    // slot acquired before any native allocation; an idle instance allocates nothing.
     [[nodiscard]] static GpuCompositeCreateResult create(GpuDevice& device,
                                                          const GpuCompositeBudgets& budgets = {});
 
@@ -145,8 +147,9 @@ class GpuComposite final {
     // Marks an outstanding job's result discarded; resources stay until the fence retires.
     void cancel() noexcept;
 
-    // Process-global reported limitation: teardown could not drain an in-flight job within its
-    // bounded budget and retained (did not destroy) busy Vulkan objects.
+    // Recoverable pressure, not a permanent fuse: true while a foreign-released or unproven
+    // submission is retained in the bounded process-wide resident pool, and false again once the
+    // rightful owner thread drains it.
     [[nodiscard]] static bool teardownDrainIncomplete() noexcept;
 
   private:

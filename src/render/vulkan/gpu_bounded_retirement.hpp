@@ -24,8 +24,7 @@
 
 namespace bloom::render::primitive_detail {
 
-template <std::size_t Capacity>
-class VoidResidentSlotStore final {
+template <std::size_t Capacity> class VoidResidentSlotStore final {
   public:
     static constexpr std::size_t capacity = Capacity;
 
@@ -100,9 +99,9 @@ class VoidResidentSlotStore final {
     }
 
     // Non-blocking owner drain. `owned` and `retire` run under the lock; `destroy` runs outside it,
-    // so an Impl destructor never re-enters the store. Ownership is only moved out once `retire` has
-    // proven the slot safe to free, so an unproven submission is retained intact. Allocation-free
-    // and noexcept: the staging array is fixed-capacity.
+    // so an Impl destructor never re-enters the store. Ownership is only moved out once `retire`
+    // has proven the slot safe to free, so an unproven submission is retained intact.
+    // Allocation-free and noexcept: the staging array is fixed-capacity.
     template <typename OwnedFn, typename RetireFn, typename DestroyFn>
     void drainOrphans(OwnedFn&& owned, RetireFn&& retire, DestroyFn&& destroy) noexcept {
         std::array<void*, Capacity> freed{};
@@ -150,14 +149,22 @@ class VoidResidentSlotStore final {
 //   * Allocation-free: placement new into the static byte buffer constructs the mutex/atomics/array
 //     with no heap allocation, so first use cannot throw std::bad_alloc and is safe from a noexcept
 //     caller.
-//   * No static destructor: non-destruction removes any process-exit ordering concern, and even if a
+//   * No static destructor: non-destruction removes any process-exit ordering concern, and even if
+//   a
 //     destructor ran it would only destroy a mutex, atomics, and raw void* slots. The store never
 //     owns or deletes a native Impl; orphaned Impls are freed only by the explicit owner-thread
 //     drain, on the owner thread.
-template <std::size_t Capacity>
+//
+// `FamilyTag` makes each family's pool a distinct function-local static even when two families
+// share a capacity. That is mandatory, not optional: a drain callback casts a slot's opaque Impl
+// pointer back to its own family's private Impl type, so two families with different Impl layouts
+// sharing one store would let one family's drain reinterpret the other's Impl. There is
+// deliberately no default tag, so every caller must name its family explicitly and an omission is a
+// compile error. Solid and Upload each pass their own private tag for exactly this reason.
+template <std::size_t Capacity, typename FamilyTag>
 [[nodiscard]] VoidResidentSlotStore<Capacity>& immortalResidentSlotStore() noexcept {
-    alignas(VoidResidentSlotStore<Capacity>) static std::byte storage[sizeof(
-        VoidResidentSlotStore<Capacity>)];
+    alignas(VoidResidentSlotStore<Capacity>) static std::byte
+        storage[sizeof(VoidResidentSlotStore<Capacity>)];
     static VoidResidentSlotStore<Capacity>* const store =
         ::new (static_cast<void*>(storage)) VoidResidentSlotStore<Capacity>();
     return *store;

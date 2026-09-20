@@ -169,6 +169,43 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         LABELS unit gpu render
         TIMEOUT 120
     )
+
+    # Bounded-resource-retirement tests for GpuComposite, GpuBlend, and GpuAffine: >capacity
+    # pre-created Ready instances, foreign-thread destruction boundedness, unproven-fence retention,
+    # exact owner-thread/device-generation isolation across two device threads, and owner-drain
+    # recovery, for each family's own tagged pool.
+    add_executable(bloom_render_gpu_composite_blend_affine_retirement_test
+        gpu_composite_blend_affine_retirement_tests.cpp)
+    target_link_libraries(bloom_render_gpu_composite_blend_affine_retirement_test
+        PRIVATE bloom_render)
+    target_include_directories(bloom_render_gpu_composite_blend_affine_retirement_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan" "${CMAKE_CURRENT_SOURCE_DIR}")
+    bloom_enable_warnings(bloom_render_gpu_composite_blend_affine_retirement_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_composite_blend_affine_retirement_test)
+    bloom_add_test(
+        NAME bloom.render.gpu_composite_blend_affine_retirement
+        COMMAND bloom_render_gpu_composite_blend_affine_retirement_test
+        LABELS unit gpu render
+        TIMEOUT 180
+    )
+
+    # Mixed-family bounded-pool isolation: Solid/CoveredSolidV1 and GpuImageUpload are populated and
+    # foreign-released together, then exactly one family's drain is invoked and must retire only its
+    # own orphan. Proves the two families no longer share one store (a type-confusion hazard) and
+    # that all five families own independent pools.
+    add_executable(bloom_render_gpu_resident_family_isolation_test
+        gpu_resident_family_isolation_tests.cpp)
+    target_link_libraries(bloom_render_gpu_resident_family_isolation_test PRIVATE bloom_render)
+    target_include_directories(bloom_render_gpu_resident_family_isolation_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan" "${CMAKE_CURRENT_SOURCE_DIR}")
+    bloom_enable_warnings(bloom_render_gpu_resident_family_isolation_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_resident_family_isolation_test)
+    bloom_add_test(
+        NAME bloom.render.gpu_resident_family_isolation
+        COMMAND bloom_render_gpu_resident_family_isolation_test
+        LABELS unit gpu render
+        TIMEOUT 120
+    )
 endif()
 
 # takeImage()-before-Ready guard regression for the three resident producers (upload, solid/covered,
@@ -532,12 +569,16 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_path_coverage_resources.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite_resources.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite_retirement.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_upload.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_upload_resources.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_upload_retirement.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_affine.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_affine_resources.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_affine_retirement.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_blend.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_blend_resources.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_blend_retirement.cpp"
     )
     target_include_directories(bloom_render_gpu_scene_executor_fault PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/../include"

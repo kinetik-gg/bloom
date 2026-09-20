@@ -1,5 +1,6 @@
 #include <bloom/render/gpu_affine.hpp>
 
+#include "gpu_affine_fault.hpp"
 #include "gpu_affine_private.hpp"
 
 #include <array>
@@ -55,10 +56,31 @@ void GpuAffine::releaseImpl() noexcept {
     if (impl_ == nullptr) {
         return;
     }
-    if (!impl_->onOwnerThread() || !impl_->drainAndRetire()) {
-        noteAffineQuarantine();
-        [[maybe_unused]] const auto* const quarantined = impl_.release();
+    if (!impl_->onOwnerThread()) {
+        // Foreign thread: never destroy native state. An Impl that owns a resident slot is
+        // preserved in that same slot (orphaned) for owner retirement; an Impl with no slot owns no
+        // Vulkan objects (the pipeline is created lazily under a slot) and can be destroyed here.
+        if (impl_->residentSlot != kAffineNoResidentSlot) {
+            impl_->orphanResidentSlot();
+            (void)impl_.release();
+        } else {
+            impl_.reset();
+        }
         return;
+    }
+    // Owner thread: prove retirement if needed, then free native resources and return the slot. An
+    // unproven submission is retained in the bounded pool for a later owner drain rather than
+    // destroyed in flight.
+    if (impl_->residentSlot != kAffineNoResidentSlot) {
+        if (impl_->queueSubmitted) {
+            cancel();
+            if (!impl_->drainAndRetire()) {
+                impl_->orphanResidentSlot();
+                [[maybe_unused]] const auto* const retained = impl_.release();
+                return;
+            }
+        }
+        impl_->releaseResidentSlot();
     }
     impl_.reset();
 }
@@ -110,89 +132,13 @@ bool GpuAffine::Impl::drainAndRetire() noexcept {
 }
 
 GpuAffine::Impl::~Impl() {
-    assert(owner == std::this_thread::get_id());
+    // A slot-less Impl owns no native Vulkan resources (the pipeline is created lazily under a
+    // slot, and a failed creation is reset before the slot is released), so it may be destroyed
+    // from any thread. A slot-holding Impl is only ever destroyed on its owner thread: a foreign
+    // destruction orphans the slot instead.
+    assert(residentSlot == kAffineNoResidentSlot);
     retainedSource.reset();
     residentImage.reset();
-}
-
-bool GpuAffine::Impl::createPipelines() {
-    constexpr bool kAffineBindings[kAffineBindingCount] = {true, true, false, false};
-    std::string reason;
-    if (!createCompositePipeline(*control, vulkan_detail::kAffineBilinearSpirvCode,
-                                 vulkan_detail::kAffineBilinearSpirvByteCount, kAffineBindings,
-                                 kAffineBindingCount, kAffinePushBytes, reason, affine)) {
-        createDiagnostic = makeDiagnostic(GpuAffineDiagnosticCode::ShaderRejected, reason);
-        return false;
-    }
-
-    const std::array poolSizes{vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 2},
-                               vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 2}};
-    vk::DescriptorPoolCreateInfo poolInfo{};
-    poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
-    poolInfo.maxSets = 1;
-    poolInfo.poolSizeCount = static_cast<std::uint32_t>(poolSizes.size());
-    poolInfo.pPoolSizes = poolSizes.data();
-    const VkDevice rawDevice = static_cast<VkDevice>(*control->device);
-    const auto* dispatcher = control->device.getDispatcher();
-    VkDescriptorPool rawPool = VK_NULL_HANDLE;
-    if (dispatcher->vkCreateDescriptorPool(
-            rawDevice, reinterpret_cast<const VkDescriptorPoolCreateInfo*>(&poolInfo), nullptr,
-            &rawPool) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuAffineDiagnosticCode::AllocationFailed,
-                                          "the affine descriptor pool could not be created");
-        return false;
-    }
-    descriptorPool = vk::raii::DescriptorPool(control->device, rawPool);
-    const vk::DescriptorSetLayout setLayout = *affine.descriptorSetLayout;
-    vk::DescriptorSetAllocateInfo allocateInfo{};
-    allocateInfo.descriptorPool = *descriptorPool;
-    allocateInfo.descriptorSetCount = 1;
-    allocateInfo.pSetLayouts = &setLayout;
-    VkDescriptorSet rawSet = VK_NULL_HANDLE;
-    if (dispatcher->vkAllocateDescriptorSets(
-            rawDevice, reinterpret_cast<const VkDescriptorSetAllocateInfo*>(&allocateInfo),
-            &rawSet) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuAffineDiagnosticCode::AllocationFailed,
-                                          "the affine descriptor set could not be allocated");
-        return false;
-    }
-    affineSet = vk::raii::DescriptorSet(control->device, rawSet, *descriptorPool);
-
-    vk::CommandPoolCreateInfo commandPoolInfo{};
-    commandPoolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
-    commandPoolInfo.queueFamilyIndex = control->computeQueueFamily;
-    VkCommandPool rawCommandPool = VK_NULL_HANDLE;
-    if (dispatcher->vkCreateCommandPool(
-            rawDevice, reinterpret_cast<const VkCommandPoolCreateInfo*>(&commandPoolInfo), nullptr,
-            &rawCommandPool) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuAffineDiagnosticCode::AllocationFailed,
-                                          "the affine command pool could not be created");
-        return false;
-    }
-    commandPool = vk::raii::CommandPool(control->device, rawCommandPool);
-    vk::CommandBufferAllocateInfo commandBufferInfo{};
-    commandBufferInfo.commandPool = *commandPool;
-    commandBufferInfo.level = vk::CommandBufferLevel::ePrimary;
-    commandBufferInfo.commandBufferCount = 1;
-    VkCommandBuffer rawCommandBuffer = VK_NULL_HANDLE;
-    if (dispatcher->vkAllocateCommandBuffers(
-            rawDevice, reinterpret_cast<const VkCommandBufferAllocateInfo*>(&commandBufferInfo),
-            &rawCommandBuffer) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuAffineDiagnosticCode::AllocationFailed,
-                                          "the affine command buffer could not be allocated");
-        return false;
-    }
-    commandBuffer = vk::raii::CommandBuffer(control->device, rawCommandBuffer, *commandPool);
-    vk::FenceCreateInfo fenceInfo{};
-    VkFence rawFence = VK_NULL_HANDLE;
-    if (dispatcher->vkCreateFence(rawDevice, reinterpret_cast<const VkFenceCreateInfo*>(&fenceInfo),
-                                  nullptr, &rawFence) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuAffineDiagnosticCode::AllocationFailed,
-                                          "the affine fence could not be created");
-        return false;
-    }
-    fence = vk::raii::Fence(control->device, rawFence);
-    return true;
 }
 
 GpuAffineCreateResult GpuAffine::create(GpuDevice& device, const GpuAffineBudgets& budgets) {
@@ -209,23 +155,21 @@ GpuAffineCreateResult GpuAffine::create(GpuDevice& device, const GpuAffineBudget
                                         "the affine pipeline must be created on the device owner "
                                         "thread")};
     }
-    if (!affineQuarantineAllowed()) {
-        return {nullptr, makeDiagnostic(GpuAffineDiagnosticCode::DeviceUnavailable,
-                                        "too many undrained GPU generations are quarantined")};
-    }
+    // Retire orphaned foreign-released residents on the owner thread so admission recovers.
+    Impl::drainResidentOrphansOnOwnerThread();
     auto control = GpuRendererAccess::state(device);
     if (control == nullptr) {
         return {nullptr, makeDiagnostic(GpuAffineDiagnosticCode::DeviceUnavailable,
                                         "the GPU device exposes no renderer state")};
     }
+    // Lazy creation: an idle GpuAffine allocates no native resources and holds no resident slot.
+    // The pipeline is created on the first begin under the bounded slot, so many pre-created
+    // instances are bounded by the fixed pool rather than each owning native state.
     auto impl = std::make_unique<Impl>();
     impl->owner = std::this_thread::get_id();
     impl->control = std::move(control);
     impl->budgets = budgets;
     impl->expectedGeneration = impl->control->generation;
-    if (!impl->createPipelines()) {
-        return {nullptr, impl->createDiagnostic};
-    }
     return {std::unique_ptr<GpuAffine>(new GpuAffine(std::move(impl))), GpuAffineDiagnostic{}};
 }
 
@@ -249,6 +193,8 @@ GpuAffineDiagnostic GpuAffine::Impl::preflightCheap() {
         return affineDiagnostic(GpuAffineDiagnosticCode::WrongThread,
                                 "beginAffine must run on the device owner thread");
     }
+    // Opportunistic, non-blocking retirement of orphaned foreign-released residents.
+    drainResidentOrphansOnOwnerThread();
     if (deviceLost) {
         return affineDiagnostic(GpuAffineDiagnosticCode::DeviceLost,
                                 "the device was lost; this generation must not be reused");
@@ -405,6 +351,12 @@ GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(const std::shared_ptr<const G
                                                 : GpuAffineDiagnosticCode::Unsupported,
                               support.supported ? "the output image exceeds the device limit"
                                                 : support.reason);
+    }
+
+    // Acquire the bounded resident slot BEFORE the first native allocation, and create the pipeline
+    // lazily under it. A full pool refuses cleanly without allocating anything.
+    if (!ensureResidentReady()) {
+        return createDiagnostic;
     }
 
     clearJob();
@@ -668,6 +620,10 @@ void GpuAffine::cancel() noexcept {
     }
 }
 
-bool GpuAffine::teardownDrainIncomplete() noexcept { return affineTeardownIncomplete(); }
+bool GpuAffine::teardownDrainIncomplete() noexcept {
+    // Recoverable pressure, not a permanent fuse: true while a foreign-released or unproven
+    // resident is retained in the bounded pool, and false again once the rightful owner drains it.
+    return affine_detail::affineResidentOrphaned() > 0;
+}
 
 } // namespace bloom::render

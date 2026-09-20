@@ -70,11 +70,6 @@ struct CompositeBuffer final {
                                            std::uint32_t pushBytes, std::string& reason,
                                            CompositePipeline& out) noexcept;
 
-// Process-global bounded quarantine accounting and teardown fuse, shared by both translation units.
-[[nodiscard]] bool compositeQuarantineAllowed() noexcept;
-void noteCompositeQuarantine() noexcept;
-[[nodiscard]] bool compositeTeardownIncomplete() noexcept;
-
 // Shared constants and layouts used by both translation units.
 inline constexpr std::uint32_t kCompositeWorkgroupSizeX = 256;
 inline constexpr std::uint32_t kTranslationBindingCount = 5; // 2 images + x axis + y axis + status
@@ -153,6 +148,10 @@ compositeDispatchGroupCount(const std::uint64_t pixels) noexcept {
 // The single job state machine behind GpuComposite. Defined here (not in the .cpp) so both
 // gpu_composite.cpp and gpu_composite_resources.cpp can implement its member operations without a
 // second public header or a second Impl definition.
+//
+// Sentinel for an Impl that owns no bounded resident-pool slot.
+inline constexpr std::size_t kCompositeNoResidentSlot = static_cast<std::size_t>(-1);
+
 struct GpuComposite::Impl final {
     Impl() = default;
     Impl(const Impl&) = delete;
@@ -167,11 +166,32 @@ struct GpuComposite::Impl final {
     [[nodiscard]] bool createPipelines();
     [[nodiscard]] bool drainAndRetire() noexcept;
     [[nodiscard]] bool checkStatusFlag();
+    // Bounded resident-slot management, defined in gpu_composite_retirement.cpp. Acquire is called
+    // before the first native allocation; release is owner-thread retirement; orphan is the
+    // foreign-thread or unproven owner path that preserves the already-owned slot for the owner
+    // drain. The drain is a static member because it names the private Impl type.
+    [[nodiscard]] bool acquireResidentSlot() noexcept;
+    void releaseResidentSlot() noexcept;
+    void orphanResidentSlot() noexcept;
+    static void drainResidentOrphansOnOwnerThread() noexcept;
+    // Acquires the bounded slot and lazily builds the pipelines/layouts/descriptor sets/command
+    // resources under it on the first begin. A full pool refuses before any native allocation; a
+    // creation failure resets the partial native state and returns the slot. Returns false with
+    // createDiagnostic set. Defined in gpu_composite.cpp.
+    [[nodiscard]] bool ensureResidentReady();
+    // Frees every pipeline/descriptor/command/fence native resource. Called only on the owner
+    // thread after a failed ensureResidentReady() so an Impl that then holds no resident slot owns
+    // no Vulkan object and may be destroyed from any thread.
+    void resetPipelineResources() noexcept;
 
     std::thread::id owner;
     std::shared_ptr<vulkan_detail::DeviceAllocatorState> control;
     GpuCompositeBudgets budgets;
     std::uint32_t expectedGeneration = 0;
+    // Bounded resident-pool slot owned by this Impl from before its first native allocation until
+    // owner-thread release. kCompositeNoResidentSlot means this Impl owns no native resources.
+    std::size_t residentSlot = kCompositeNoResidentSlot;
+    bool pipelinesReady = false;
 
     CompositePipeline translation;
     CompositePipeline sourceOver;

@@ -1,5 +1,7 @@
 #include "gpu_composite_private.hpp"
 
+#include "gpu_composite_fault.hpp"
+
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -10,23 +12,7 @@ namespace {
 
 using vulkan_detail::DeviceAllocatorState;
 
-std::atomic<std::int32_t> g_compositeQuarantineCount{0};
-std::atomic<bool> g_compositeTeardownIncomplete{false};
-
-constexpr std::int32_t kMaxCompositeQuarantines = 4;
-
 } // namespace
-
-bool compositeQuarantineAllowed() noexcept {
-    return g_compositeQuarantineCount.load() < kMaxCompositeQuarantines;
-}
-
-void noteCompositeQuarantine() noexcept {
-    g_compositeQuarantineCount.fetch_add(1);
-    g_compositeTeardownIncomplete.store(true);
-}
-
-bool compositeTeardownIncomplete() noexcept { return g_compositeTeardownIncomplete.load(); }
 
 std::uint64_t compositeBufferAllocationBytes(const CompositeBuffer& buffer) noexcept {
     if (!buffer.armed || buffer.state == nullptr || buffer.allocation == VK_NULL_HANDLE) {
@@ -299,6 +285,145 @@ bool createCompositePipeline(DeviceAllocatorState& state, const std::uint32_t* c
     return true;
 }
 
+// Lazily builds the composite native resource set under the bounded slot. Defined in this cohesive
+// translation unit (rather than gpu_composite.cpp) so the public API file stays within its budget.
+void GpuComposite::Impl::resetPipelineResources() noexcept {
+    // Children before parents: a descriptor set frees through its pool and a command buffer frees
+    // through its command pool, so both parent handles must outlive the child. Reset in reverse
+    // declaration order to match the implicit member destruction order.
+    fence = vk::raii::Fence{nullptr};
+    commandBuffer = vk::raii::CommandBuffer{nullptr};
+    commandPool = vk::raii::CommandPool{nullptr};
+    sourceOverSet = vk::raii::DescriptorSet{nullptr};
+    translationSet = vk::raii::DescriptorSet{nullptr};
+    descriptorPool = vk::raii::DescriptorPool{nullptr};
+    sourceOver = CompositePipeline{};
+    translation = CompositePipeline{};
+    pipelinesReady = false;
+}
+
+bool GpuComposite::Impl::ensureResidentReady() {
+    if (!acquireResidentSlot()) {
+        createDiagnostic =
+            compositeDiagnostic(GpuCompositeDiagnosticCode::DeviceUnavailable,
+                                "the bounded composite resident pool is full; no native resources "
+                                "were allocated");
+        return false;
+    }
+    if (!pipelinesReady) {
+        if (!createPipelines()) {
+            resetPipelineResources();
+            releaseResidentSlot();
+            return false;
+        }
+        pipelinesReady = true;
+    }
+    return true;
+}
+
+bool GpuComposite::Impl::createPipelines() {
+    constexpr bool kTranslationBindings[kTranslationBindingCount] = {true, true, false, false,
+                                                                     false};
+    constexpr bool kSourceOverBindings[kSourceOverBindingCount] = {true, true, true, false};
+    std::string reason;
+    if (!createCompositePipeline(*control, vulkan_detail::kTranslationOpacitySpirvCode,
+                                 vulkan_detail::kTranslationOpacitySpirvByteCount,
+                                 kTranslationBindings, kTranslationBindingCount,
+                                 kTranslationPushBytes, reason, translation)) {
+        createDiagnostic = compositeDiagnostic(GpuCompositeDiagnosticCode::ShaderRejected, reason);
+        return false;
+    }
+    if (!createCompositePipeline(*control, vulkan_detail::kSourceOverSpirvCode,
+                                 vulkan_detail::kSourceOverSpirvByteCount, kSourceOverBindings,
+                                 kSourceOverBindingCount, kSourceOverPushBytes, reason,
+                                 sourceOver)) {
+        createDiagnostic = compositeDiagnostic(GpuCompositeDiagnosticCode::ShaderRejected, reason);
+        return false;
+    }
+
+    const std::array poolSizes{vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 4},
+                               vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 5}};
+    vk::DescriptorPoolCreateInfo poolInfo{};
+    poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
+    poolInfo.maxSets = 2;
+    poolInfo.poolSizeCount = static_cast<std::uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
+    const VkDevice rawDevice = static_cast<VkDevice>(*control->device);
+    const auto* dispatcher = control->device.getDispatcher();
+    VkDescriptorPool rawPool = VK_NULL_HANDLE;
+    if (dispatcher->vkCreateDescriptorPool(
+            rawDevice, reinterpret_cast<const VkDescriptorPoolCreateInfo*>(&poolInfo), nullptr,
+            &rawPool) != VK_SUCCESS) {
+        createDiagnostic =
+            compositeDiagnostic(GpuCompositeDiagnosticCode::AllocationFailed,
+                                "the composite descriptor pool could not be created");
+        return false;
+    }
+    descriptorPool = vk::raii::DescriptorPool(control->device, rawPool);
+    const std::array setLayouts{*translation.descriptorSetLayout, *sourceOver.descriptorSetLayout};
+    vk::DescriptorSetAllocateInfo allocateInfo{};
+    allocateInfo.descriptorPool = *descriptorPool;
+    allocateInfo.descriptorSetCount = 2;
+    allocateInfo.pSetLayouts = setLayouts.data();
+    std::array<VkDescriptorSet, 2> rawSets{};
+    if (dispatcher->vkAllocateDescriptorSets(
+            rawDevice, reinterpret_cast<const VkDescriptorSetAllocateInfo*>(&allocateInfo),
+            rawSets.data()) != VK_SUCCESS) {
+        createDiagnostic = compositeDiagnostic(GpuCompositeDiagnosticCode::AllocationFailed,
+                                               "the composite descriptor sets could not be "
+                                               "allocated");
+        return false;
+    }
+    translationSet = vk::raii::DescriptorSet(control->device, rawSets[0], *descriptorPool);
+    sourceOverSet = vk::raii::DescriptorSet(control->device, rawSets[1], *descriptorPool);
+
+    vk::CommandPoolCreateInfo commandPoolInfo{};
+    commandPoolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
+    commandPoolInfo.queueFamilyIndex = control->computeQueueFamily;
+    VkCommandPool rawCommandPool = VK_NULL_HANDLE;
+    if (dispatcher->vkCreateCommandPool(
+            rawDevice, reinterpret_cast<const VkCommandPoolCreateInfo*>(&commandPoolInfo), nullptr,
+            &rawCommandPool) != VK_SUCCESS) {
+        createDiagnostic = compositeDiagnostic(GpuCompositeDiagnosticCode::AllocationFailed,
+                                               "the composite command pool could not be created");
+        return false;
+    }
+    commandPool = vk::raii::CommandPool(control->device, rawCommandPool);
+    vk::CommandBufferAllocateInfo commandBufferInfo{};
+    commandBufferInfo.commandPool = *commandPool;
+    commandBufferInfo.level = vk::CommandBufferLevel::ePrimary;
+    commandBufferInfo.commandBufferCount = 1;
+    VkCommandBuffer rawCommandBuffer = VK_NULL_HANDLE;
+    if (dispatcher->vkAllocateCommandBuffers(
+            rawDevice, reinterpret_cast<const VkCommandBufferAllocateInfo*>(&commandBufferInfo),
+            &rawCommandBuffer) != VK_SUCCESS) {
+        createDiagnostic = compositeDiagnostic(GpuCompositeDiagnosticCode::AllocationFailed,
+                                               "the composite command buffer could not be "
+                                               "allocated");
+        return false;
+    }
+    commandBuffer = vk::raii::CommandBuffer(control->device, rawCommandBuffer, *commandPool);
+    vk::FenceCreateInfo fenceInfo{};
+    VkFence rawFence = VK_NULL_HANDLE;
+    if (dispatcher->vkCreateFence(rawDevice, reinterpret_cast<const VkFenceCreateInfo*>(&fenceInfo),
+                                  nullptr, &rawFence) != VK_SUCCESS) {
+        createDiagnostic = compositeDiagnostic(GpuCompositeDiagnosticCode::AllocationFailed,
+                                               "the composite fence could not be created");
+        return false;
+    }
+    fence = vk::raii::Fence(control->device, rawFence);
+    // TEST-ONLY fault: the full native set has been created, so the caller's cleanup must free
+    // every child before its parent and the slot must be returned for a clean retry.
+    if (static_cast<composite_detail::CompositeRetirementFault>(
+            composite_detail::compositeRetirementFault().load()) ==
+        composite_detail::CompositeRetirementFault::FailPipelineCreation) {
+        createDiagnostic = compositeDiagnostic(GpuCompositeDiagnosticCode::ShaderRejected,
+                                               "injected composite pipeline creation failure");
+        return false;
+    }
+    return true;
+}
+
 // beginSourceOver follows the same shape; it is declared in the public header and defined here.
 GpuCompositeDiagnostic GpuComposite::beginSourceOver(const GpuSourceOverParameters& parameters,
                                                      const std::uint64_t byteBudget) {
@@ -369,6 +494,14 @@ GpuCompositeDiagnostic GpuComposite::beginSourceOver(const GpuSourceOverParamete
             support.supported ? GpuCompositeDiagnosticCode::OverBudget
                               : GpuCompositeDiagnosticCode::Unsupported,
             support.supported ? "the destination image exceeds the device limit" : support.reason);
+    }
+
+    // Opportunistic, non-blocking retirement of orphaned foreign-released residents.
+    Impl::drainResidentOrphansOnOwnerThread();
+    // Acquire the bounded resident slot BEFORE the first native allocation, and create the
+    // pipelines lazily under it. A full pool refuses cleanly without allocating anything.
+    if (!impl.ensureResidentReady()) {
+        return impl.createDiagnostic;
     }
 
     impl.clearJob();

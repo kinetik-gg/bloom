@@ -8,8 +8,8 @@
 #include <thread>
 
 // Bounded process-global resident pool and native orphan retirement for the GpuSolid /
-// CoveredSolidV1 family. Mirrors the accepted GpuPathCoverage lifecycle: one fixed-capacity slot per
-// native-resource-owning Impl, acquired before its first native allocation and held until
+// CoveredSolidV1 family. Mirrors the accepted GpuPathCoverage lifecycle: one fixed-capacity slot
+// per native-resource-owning Impl, acquired before its first native allocation and held until
 // owner-thread release. A foreign-thread destruction only orphans the already-owned slot; the owner
 // drain proves fence retirement (or device loss) non-blockingly and then frees on the owner thread.
 // The pool is the only retained store, so it is fixed and allocation-free and can never leak per
@@ -24,10 +24,14 @@ namespace {
 
 constexpr std::size_t kSolidResidentCapacity = 8;
 
+// Distinguishes the Solid/CoveredSolidV1 pool from every other family's function-local static
+// store.
+struct SolidResidentTag final {};
+
 primitive_detail::VoidResidentSlotStore<kSolidResidentCapacity>& solidSlots() noexcept {
     // Allocation-free, intentionally immortal function-local storage (see
     // immortalResidentSlotStore). No heap allocation on first use; the store never deletes an Impl.
-    return primitive_detail::immortalResidentSlotStore<kSolidResidentCapacity>();
+    return primitive_detail::immortalResidentSlotStore<kSolidResidentCapacity, SolidResidentTag>();
 }
 
 std::atomic<std::uint8_t>& solidRetirementFaultCell() noexcept {
@@ -88,8 +92,7 @@ void GpuSolid::Impl::drainResidentOrphansOnOwnerThread() noexcept {
                 return false;
             }
             const VkResult status = impl->control->device.getDispatcher()->vkGetFenceStatus(
-                static_cast<VkDevice>(*impl->control->device),
-                static_cast<VkFence>(*impl->fence));
+                static_cast<VkDevice>(*impl->control->device), static_cast<VkFence>(*impl->fence));
             if (status != VK_SUCCESS && status != VK_ERROR_DEVICE_LOST) {
                 return false;
             }
