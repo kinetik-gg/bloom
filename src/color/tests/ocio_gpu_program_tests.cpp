@@ -263,7 +263,10 @@ void testResourceAndIdentityMutations(Expectations& expectations) {
     }
 }
 
+#ifdef __linux__
 // --- File-transform LUT fixtures, written to a scratch directory at runtime. -------------------
+// Linux-only: these fixtures feed the isolated-worker parsing cases below, which a non-Linux build
+// must not run in-process.
 
 void writeCube1d(const std::filesystem::path& path) {
     std::ofstream file(path);
@@ -318,7 +321,6 @@ void writeSpi3d(const std::filesystem::path& path) {
     }
 }
 
-#ifdef __linux__
 // On a qualified Linux host each supported format must reach the isolated helper and return a real,
 // accepted program. A non-Linux build must not parse in-process and returns the typed boundary.
 void testFileTransformExtraction(Expectations& expectations,
