@@ -300,6 +300,12 @@ class ViewerEditor final : public QWidget,
     void simulateNativeRetireInFlightForTest();
     void simulateExternalRetireInFlightForTest();
     void finishSimulatedNativeRetireForTest(bool safeToMutate, const std::string& diagnostic = {});
+    // Drives the standalone external retirement completion (the queued body) with the given host
+    // generation, so the unsafe-clear / safe-preserve / stale contract is testable without a
+    // presenter.
+    void finishSimulatedExternalRetireForTest(std::uint64_t hostGeneration, bool safeToMutate,
+                                              PrepareCallback completion,
+                                              const std::string& diagnostic = {});
     [[nodiscard]] std::uint64_t hostMutationGenerationForTest() const noexcept;
     // Test-only: the resident present request the viewer would submit for the current transform,
     // channel, and background. Device-free, so a test can prove the GPU surround matches the CPU
@@ -453,6 +459,13 @@ class ViewerEditor final : public QWidget,
     // inline from the presenter's retire stack.
     void onResidentNativeRetireResult(std::uint64_t generation, bool safeToMutate,
                                       const std::string& diagnostic);
+    // Delivers the standalone external mutation completion (the queued body). On an unsafe result
+    // it clears gpuHostMutationPending_ BEFORE invoking the host completion, because the host gate
+    // never resumes an unsafe entry and the completion may destroy this editor or start another
+    // generation. A safe result keeps the gate pending until resumeNativeSurfaceAfterMutation().
+    void onExternalNativeRetireResult(std::uint64_t generation, std::uint64_t hostGeneration,
+                                      bool safeToMutate, const std::string& diagnostic,
+                                      const PrepareCallback& completion);
     // Resolves the single external mutation folded into an in-flight internal retirement; it is
     // delivered during the queued internal resolution, never on the presenter's own stack.
     void resolveGpuHostMutationWaiters(bool safeToMutate, const std::string& diagnostic);

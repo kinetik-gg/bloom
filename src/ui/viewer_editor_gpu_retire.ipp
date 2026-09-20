@@ -55,12 +55,8 @@ ViewerEditor::prepareNativeSurfaceMutation(const std::uint64_t generation,
             this,
             [this, generation, hostGeneration, safe = result.safeToMutate,
              diagnostic = result.diagnostic, completion] {
-                if (hostGeneration != gpuHostMutationGeneration_) {
-                    return; // superseded by a resume
-                }
-                if (completion) {
-                    completion(generation, PrepareResult{safe, diagnostic});
-                }
+                onExternalNativeRetireResult(generation, hostGeneration, safe, diagnostic,
+                                             completion);
             },
             Qt::QueuedConnection);
     };
@@ -217,6 +213,28 @@ void ViewerEditor::onResidentNativeRetireResult(const std::uint64_t generation,
         this, [this] { updateGpuResidentPresentation(); }, Qt::QueuedConnection);
 }
 
+void ViewerEditor::onExternalNativeRetireResult(const std::uint64_t generation,
+                                                const std::uint64_t hostGeneration,
+                                                const bool safeToMutate,
+                                                const std::string& diagnostic,
+                                                const PrepareCallback& completion) {
+    if (hostGeneration != gpuHostMutationGeneration_) {
+        return; // superseded by a resume or a newer external request
+    }
+    if (!safeToMutate) {
+        // A standalone external retirement owns the presenter's retire slot, and the host gate
+        // deliberately never resumes an unsafe (Retained/unproven) entry, so nothing else will ever
+        // clear this flag. Clear it BEFORE the host completion: that completion may destroy this
+        // editor or start another generation, and a latched gate would refuse every later mutation
+        // and blank retire. The target stays mapped with its cover raised; a Retained presenter
+        // keeps refusing new retires, which is the correct terminal safety, not a recovery.
+        gpuHostMutationPending_ = false;
+    }
+    if (completion) {
+        completion(generation, PrepareResult{safeToMutate, diagnostic});
+    }
+}
+
 void ViewerEditor::resolveGpuHostMutationWaiters(const bool safeToMutate,
                                                  const std::string& diagnostic) {
     gpuHostMutationPending_ = false;
@@ -249,6 +267,16 @@ void ViewerEditor::simulateExternalRetireInFlightForTest() {
     gpuHostMutationPending_ = true;
     gpuHostMutationWaiter_.reset();
     ++gpuHostMutationGeneration_;
+}
+
+void ViewerEditor::finishSimulatedExternalRetireForTest(const std::uint64_t hostGeneration,
+                                                        const bool safeToMutate,
+                                                        PrepareCallback completion,
+                                                        const std::string& diagnostic) {
+    // Drives the exact body the queued external completion runs (onExternalNativeRetireResult), so
+    // the unsafe-clear / safe-preserve / stale-generation contract is testable without a presenter.
+    onExternalNativeRetireResult(hostGeneration, hostGeneration, safeToMutate, diagnostic,
+                                 completion);
 }
 
 std::uint64_t ViewerEditor::hostMutationGenerationForTest() const noexcept {

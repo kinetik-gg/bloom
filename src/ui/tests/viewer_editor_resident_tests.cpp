@@ -365,6 +365,126 @@ void testViewerEditorResidentGateIsInertAndKeepsCpuPaint(Expectations& expectati
     (void)waitUntil([&] { return scheduler.isQuiescent(); });
 }
 
+// Regression for the standalone external retirement completion. The host retirement gate never
+// resumes an unsafe (Retained/unproven) entry, so the editor must clear its own mutation gate when
+// the queued external completion reports unsafe, and it must do so BEFORE the host completion runs
+// (that completion may destroy the editor or start another generation). A safe completion must keep
+// the gate pending until the host resumes, and a stale generation must be ignored. Device-free: the
+// completion handler is driven through the shared test seam, with no presenter and no device.
+void testViewerEditorExternalUnsafeCompletionClearsMutationGate(Expectations& expectations) {
+    auto newProject = makeTestProject("Viewer external unsafe completion");
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+
+    runtime::NodeDefinitionRegistry definitions;
+    expectations.expect(runtime::registerBuiltInNodeDefinitions(definitions),
+                        "the fixture registers built-in node definitions");
+    definitions.freeze();
+    runtime::SnapshotCompiler compiler(definitions);
+    const runtime::CpuCompositionEvaluator evaluator;
+    const runtime::CpuReferenceDisplayPreparer displayPreparer;
+    runtime::QualifiedDisplayProcessorProvider qualifiedProvider;
+    auto pipeline =
+        ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer, qualifiedProvider);
+    ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline);
+    // Stack lifetime (no Qt-parented heap widget): the analyzer's parent-ownership false positive
+    // cannot fire on a stack widget.
+    ui::ViewerEditor viewer(session, controller);
+    viewer.resize(320, 240);
+    viewer.show();
+
+    // 1. Unsafe external completion: the gate must be clear BEFORE the host completion observes it,
+    // so a later mutation is admitted instead of being refused forever by a latched gate. A live
+    // (Retained) target would keep the real presenter refusing new retires; that terminal safety is
+    // not simulated here.
+    viewer.simulateExternalRetireInFlightForTest();
+    const std::uint64_t unsafeGeneration = viewer.hostMutationGenerationForTest();
+    bool unsafeCalled = false;
+    bool admittedDuringCompletion = false;
+    viewer.finishSimulatedExternalRetireForTest(
+        unsafeGeneration, false,
+        [&](const std::uint64_t generation, const ui::EditorNativeSurface::PrepareResult& result) {
+            unsafeCalled = true;
+            expectations.expect(generation == unsafeGeneration,
+                                "the external completion echoes its generation");
+            expectations.expect(!result.safeToMutate, "an unsafe result is never reported safe");
+            admittedDuringCompletion =
+                viewer.prepareNativeSurfaceMutation(
+                    70, [](std::uint64_t, const ui::EditorNativeSurface::PrepareResult&) {}) ==
+                ui::EditorNativeSurface::PrepareOutcome::NoLiveTarget;
+        },
+        "the presentation owner is gone; the surface is retained");
+    expectations.expect(unsafeCalled, "the unsafe external completion reaches the host gate");
+    expectations.expect(admittedDuringCompletion,
+                        "the pending gate is cleared before the external completion runs");
+    bool afterUnsafeCalled = false;
+    expectations.expect(
+        viewer.prepareNativeSurfaceMutation(
+            71, [&](std::uint64_t,
+                    const ui::EditorNativeSurface::PrepareResult&) { afterUnsafeCalled = true; }) ==
+            ui::EditorNativeSurface::PrepareOutcome::NoLiveTarget,
+        "an unsafe external completion leaves the editor unlatched for later mutations");
+    expectations.expect(afterUnsafeCalled, "the unlatched mutation is answered");
+
+    // 2. Safe external completion: the gate stays pending until the host resumes, so a duplicate
+    // request is still refused and only resumeNativeSurfaceAfterMutation() releases it.
+    viewer.simulateExternalRetireInFlightForTest();
+    const std::uint64_t safeGeneration = viewer.hostMutationGenerationForTest();
+    bool safeCalled = false;
+    bool safeResult = false;
+    viewer.finishSimulatedExternalRetireForTest(
+        safeGeneration, true,
+        [&](const std::uint64_t, const ui::EditorNativeSurface::PrepareResult& result) {
+            safeCalled = true;
+            safeResult = result.safeToMutate;
+        },
+        "the surface is proven retired");
+    expectations.expect(safeCalled && safeResult, "the safe external completion is delivered");
+    bool duplicateCalled = false;
+    expectations.expect(viewer.prepareNativeSurfaceMutation(
+                            72,
+                            [&](std::uint64_t, const ui::EditorNativeSurface::PrepareResult&) {
+                                duplicateCalled = true;
+                            }) == ui::EditorNativeSurface::PrepareOutcome::Refused,
+                        "a safe external completion keeps the gate pending until the host resumes");
+    expectations.expect(!duplicateCalled, "the pending-gate duplicate is never answered as safe");
+    viewer.resumeNativeSurfaceAfterMutation();
+    expectations.expect(
+        viewer.prepareNativeSurfaceMutation(
+            73, [](std::uint64_t, const ui::EditorNativeSurface::PrepareResult&) {}) ==
+            ui::EditorNativeSurface::PrepareOutcome::NoLiveTarget,
+        "the host resume releases the gate after a safe external completion");
+
+    // 3. A stale external completion from a superseded generation is ignored: it neither delivers
+    // nor clears the current pending gate.
+    viewer.simulateExternalRetireInFlightForTest();
+    const std::uint64_t staleGeneration = viewer.hostMutationGenerationForTest();
+    viewer.simulateExternalRetireInFlightForTest();
+    bool staleCalled = false;
+    viewer.finishSimulatedExternalRetireForTest(
+        staleGeneration, false,
+        [&](std::uint64_t, const ui::EditorNativeSurface::PrepareResult&) { staleCalled = true; },
+        "a superseded retained result");
+    expectations.expect(!staleCalled, "a stale external completion is discarded");
+    bool currentDuplicateCalled = false;
+    expectations.expect(viewer.prepareNativeSurfaceMutation(
+                            74,
+                            [&](std::uint64_t, const ui::EditorNativeSurface::PrepareResult&) {
+                                currentDuplicateCalled = true;
+                            }) == ui::EditorNativeSurface::PrepareOutcome::Refused,
+                        "a stale completion never releases the current pending gate");
+    expectations.expect(!currentDuplicateCalled, "the current gate stays unanswered");
+    viewer.resumeNativeSurfaceAfterMutation();
+
+    controller.beginShutdown();
+    bridge.beginShutdown();
+    (void)waitUntil([&] { return scheduler.isQuiescent(); });
+}
+
 void testResidentFrameGeometryResolvesTheSameMappingDescriptor(Expectations& expectations) {
     // Direct manipulation resolves its display descriptor from EITHER the CPU packed buffer view OR
     // the GPU-resident lease's immutable geometry. A resident frame has no CPU buffer
@@ -615,6 +735,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     Expectations expectations;
     testViewerEditorResidentGateIsInertAndKeepsCpuPaint(expectations);
+    testViewerEditorExternalUnsafeCompletionClearsMutationGate(expectations);
     testResidentFrameGeometryResolvesTheSameMappingDescriptor(expectations);
     testCompositionFrameChromePaintsWithoutADevice(expectations);
     testViewerEditorBlankCoverIsOpaqueCurrentCpuPaint(expectations);
