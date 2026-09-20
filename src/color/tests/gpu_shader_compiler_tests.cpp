@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -341,19 +342,53 @@ void testConcurrentSameKey(Expectations& expectations, const std::string& glslan
     GpuShaderCompiler compiler;
     const auto request = baseRequest(glslang, spirvVal);
     std::atomic<int> compiled{0};
+    std::mutex failuresMutex;
+    struct AttemptFailure {
+        GpuShaderCompileStatus status = GpuShaderCompileStatus::Failed;
+        std::optional<GpuShaderCompileError> code;
+        std::string diagnostic;
+        int toolExitStatus = 0;
+    };
+    std::vector<AttemptFailure> failures;
     std::vector<std::thread> workers;
     workers.reserve(4);
     for (int worker = 0; worker < 4; ++worker) {
-        workers.emplace_back([&compiler, &request, &compiled]() {
+        workers.emplace_back([&compiler, &request, &compiled, &failuresMutex, &failures]() {
             for (int attempt = 0; attempt < 2; ++attempt) {
-                if (compiler.compile(request).status == GpuShaderCompileStatus::Compiled)
+                const auto result = compiler.compile(request);
+                if (result.status == GpuShaderCompileStatus::Compiled) {
                     ++compiled;
+                    continue;
+                }
+                AttemptFailure failure;
+                failure.status = result.status;
+                if (result.failure) {
+                    failure.code = result.failure->code;
+                    failure.diagnostic = result.failure->diagnostic;
+                    failure.toolExitStatus = result.failure->toolExitStatus;
+                }
+                const std::lock_guard lock(failuresMutex);
+                failures.push_back(std::move(failure));
             }
         });
     }
     for (auto& worker : workers)
         worker.join();
     expectations.expect(compiled.load() == 8, "concurrent identical compiles all succeed");
+    if (compiled.load() != 8) {
+        const std::lock_guard lock(failuresMutex);
+        std::cerr << "concurrent failures: compiled=" << compiled.load()
+                  << " failed=" << failures.size() << '\n';
+        for (const auto& failure : failures) {
+            std::cerr << "  status=" << static_cast<int>(failure.status) << " code=";
+            if (failure.code)
+                std::cerr << static_cast<int>(*failure.code);
+            else
+                std::cerr << "none";
+            std::cerr << " exit=" << failure.toolExitStatus << " diagnostic=" << failure.diagnostic
+                      << '\n';
+        }
+    }
     GpuShaderCompiler reference;
     const auto single = reference.compile(request);
     expectations.expect(single.status == GpuShaderCompileStatus::Compiled && single.artifact,
