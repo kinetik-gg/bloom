@@ -1,5 +1,8 @@
 #include <bloom/ui/gpu_viewer_bootstrap.hpp>
 
+#include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/runtime/gpu_ocio_context.hpp>
+#include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/ui/composition_preview_gpu_scene_stage.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 
@@ -101,22 +104,50 @@ runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
     const runtime::QualifiedDisplayProcessorProvider& qualifiedProcessorProvider,
     std::shared_ptr<runtime::GpuSceneCoverageCache> coverageCache,
     std::shared_ptr<runtime::GpuPreparedUploadCache> uploadCache,
-    CompiledPlanCacheHandle planCache) {
+    CompiledPlanCacheHandle planCache,
+    std::shared_ptr<runtime::GpuOcioContextResolver> ocioContextResolver) {
+    // The one general-display service is created ONCE and consumes the shared resolver, so the
+    // display program uses the exact same shared GpuOcioProgramPreparer as the scene builder.
+    auto displayProgramService = std::make_shared<const runtime::GpuDisplayProgramService>(
+        ocioContextResolver);
     return [&compiler, &evaluator, &qualifiedProcessorProvider,
             coverageCache = std::move(coverageCache), uploadCache = std::move(uploadCache),
-            planCache = std::move(planCache)](
+            planCache = std::move(planCache), ocioContextResolver = std::move(ocioContextResolver),
+            displayProgramService = std::move(displayProgramService)](
                const document::Snapshot& snapshot,
                const runtime::PreviewRequestIdentity& desiredIdentity,
                const std::size_t pixelStorageByteLimit,
                const std::vector<runtime::SnapshotParameterOverride>& interactionOverride,
-               runtime::TaskContext& context) {
-        // The local builder owns the copied context for exactly this invocation. The evaluator's
-        // getters are internally locked, so a concurrent Open/SaveAs base-directory update is
-        // observed as a whole, never as a torn path.
+               runtime::TaskContext& context) -> runtime::TaskResult<
+                   runtime::PreviewGpuSceneStageOutcomeHandle> {
+        using Result = runtime::TaskResult<runtime::PreviewGpuSceneStageOutcomeHandle>;
+        // The local builder owns the copied media context for exactly this invocation. The
+        // evaluator's getters are internally locked, so a concurrent Open/SaveAs base-directory
+        // update is observed as a whole, never as a torn path.
         auto mediaContext = gpuSceneMediaContextFor(evaluator, uploadCache);
-        const runtime::CpuGpuSceneBuilder builder(coverageCache, std::move(mediaContext));
+        // Off-UI shared-tool resolution. The one resolver is idempotent: the first request qualifies
+        // the packaged tools and every later/concurrent request reuses the same context + preparer.
+        // A failed resolve leaves the builder's fail-closed default context so effects/media/ACES
+        // transforms refuse (Unsupported) and the request takes the CPU path with a reason.
+        runtime::GpuSceneOcioContext ocioContext;
+        if (ocioContextResolver != nullptr) {
+            runtime::GpuOcioCancellation cancel = [&context] {
+                return context.isCancellationRequested();
+            };
+            auto resolved = ocioContextResolver->resolve(cancel);
+            if (!resolved.hasValue() &&
+                resolved.error == runtime::GpuOcioContextError::Cancelled) {
+                return Result::cancelled();
+            }
+            if (resolved.hasValue()) {
+                ocioContext = *resolved.context;
+            }
+        }
+        const runtime::CpuGpuSceneBuilder builder(coverageCache, std::move(mediaContext),
+                                                  std::move(ocioContext));
         auto stage = makeCompositionPreviewGpuSceneStage(compiler, builder,
-                                                         qualifiedProcessorProvider, planCache);
+                                                         qualifiedProcessorProvider, planCache,
+                                                         displayProgramService);
         return stage(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride,
                      context);
     };

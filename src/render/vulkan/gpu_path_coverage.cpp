@@ -136,19 +136,21 @@ GpuPathCoverageCreateResult GpuPathCoverage::create(GpuDevice& device,
                           "the GpuPathCoverage pipeline must be created on the device "
                           "owner thread"}};
     }
+    // Retire orphaned foreign-released residents on the owner thread so admission recovers.
+    path_coverage_detail::drainPathCoverageResidentOrphansOnOwnerThread();
     auto control = GpuRendererAccess::state(device);
     if (control == nullptr) {
         return {nullptr, {GpuPathCoverageDiagnosticCode::DeviceUnavailable,
                           "the GPU device exposes no renderer state"}};
     }
+    // Lazy creation: an idle producer allocates no native resources and holds no resident slot.
     auto impl = std::make_unique<GpuPathCoverageImpl>();
     impl->owner = std::this_thread::get_id();
     impl->control = std::move(control);
     impl->budgets = budgets;
     impl->expectedGeneration = impl->control->generation;
-    if (!impl->createPipeline()) {
-        return {nullptr, impl->createDiagnostic};
-    }
+    impl->maxWorkGroupCountY =
+        impl->control->physicalDevice.getProperties().limits.maxComputeWorkGroupCount[1];
     return {std::unique_ptr<GpuPathCoverage>(new GpuPathCoverage(std::move(impl))),
             GpuPathCoverageDiagnostic{}};
 }
@@ -199,6 +201,8 @@ GpuPathCoverageDiagnostic GpuPathCoverage::begin(const GpuPathCoverageParameters
         return {GpuPathCoverageDiagnosticCode::WrongThread,
                 "begin must run on the device owner thread"};
     }
+    // Opportunistic, non-blocking retirement of orphaned foreign-released residents.
+    path_coverage_detail::drainPathCoverageResidentOrphansOnOwnerThread();
     if (impl.deviceLost) {
         return {GpuPathCoverageDiagnosticCode::DeviceLost,
                 "the device was lost; this generation must not be reused"};
@@ -276,6 +280,21 @@ GpuPathCoverageDiagnostic GpuPathCoverage::begin(const GpuPathCoverageParameters
     if (groupsX == 0 || groupsY > maxY) {
         return {GpuPathCoverageDiagnosticCode::OverBudget,
                 "the coverage dispatch exceeds the device workgroup grid limits"};
+    }
+
+    // Acquire the bounded resident slot BEFORE the first native allocation, and create the pipeline
+    // lazily under it. A full pool refuses cleanly without allocating anything.
+    if (!impl.pipelineReady) {
+        if (!path_coverage_detail::acquireResidentSlot(&impl)) {
+            return {GpuPathCoverageDiagnosticCode::DeviceUnavailable,
+                    "the bounded resident pool is full; no coverage native resources were "
+                    "allocated"};
+        }
+        if (!impl.createPipeline()) {
+            path_coverage_detail::releaseResidentSlot(&impl);
+            return impl.createDiagnostic;
+        }
+        impl.pipelineReady = true;
     }
 
     impl.clearJob();

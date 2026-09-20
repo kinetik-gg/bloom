@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <bloom/host/gpu_export_provider.hpp>
+#include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -49,6 +50,7 @@
 #include <QTimer>
 
 #include <memory>
+#include <filesystem>
 
 int main(int argc, char* argv[]) {
     QApplication application(argc, argv);
@@ -226,9 +228,33 @@ int main(int argc, char* argv[]) {
     // Open/SaveAs that changes the session base directory.
     auto gpuSceneCoverageCache = std::make_shared<bloom::runtime::GpuSceneCoverageCache>();
     auto gpuPreparedUploadCache = std::make_shared<bloom::runtime::GpuPreparedUploadCache>();
+    // The ONE shared runtime OCIO context resolver. It is INERT to construct (no hash/fs/OCIO/
+    // process work); the packaged glslangValidator/spirv-val paths come from the application's OWN
+    // packaging macros (never PATH, never a manual setup) and are qualified lazily on the GPU-scene
+    // CPU worker. The same resolver supplies the builder's effect/media/ACES context AND the general
+    // display program's preparer, so there is exactly one tool qualification and one program cache.
+    std::shared_ptr<bloom::runtime::GpuOcioContextResolver> gpuOcioContextResolver =
+        std::make_shared<bloom::runtime::GpuOcioContextResolver>();
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
+    {
+        bloom::runtime::GpuOcioContextRequest request;
+        request.applicationExecutable =
+            std::filesystem::path(QCoreApplication::applicationFilePath().toStdString());
+        request.toolPackage.toolsDirectory = BLOOM_GPU_TOOLS_DIR;
+        request.toolPackage.inventoryName = BLOOM_GPU_TOOLS_INVENTORY_NAME;
+        request.toolPackage.glslangValidatorName = BLOOM_GPU_TOOLS_GLSLANG_NAME;
+        request.toolPackage.spirvValName = BLOOM_GPU_TOOLS_SPIRV_VAL_NAME;
+        request.toolPackage.relocated = static_cast<bool>(BLOOM_GPU_TOOLS_RELOCATED);
+#ifdef BLOOM_GPU_TOOLS_BUNDLE_RELATIVE
+        request.toolPackage.bundleRelative = true;
+#endif
+        gpuOcioContextResolver =
+            std::make_shared<bloom::runtime::GpuOcioContextResolver>(std::move(request));
+    }
+#endif
     auto gpuPreviewGpuSceneStage = bloom::ui::makeSessionRefreshingGpuSceneStage(
         snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, gpuSceneCoverageCache,
-        gpuPreparedUploadCache, compiledPlanCache);
+        gpuPreparedUploadCache, compiledPlanCache, gpuOcioContextResolver);
     auto gpuPreviewCpuStage = bloom::ui::makeCompositionPreviewCpuStage(
         snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, compiledPlanCache);
     auto gpuPreviewCpuDisplayFallback =

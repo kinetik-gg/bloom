@@ -38,11 +38,17 @@ using bloom::render::Rgba32f;
 using bloom::render::Rgba32fImage;
 using bloom::render::Rgba32fImageDescriptor;
 using bloom::render::point_resample_detail::PointResampleFault;
+using bloom::render::point_resample_detail::pointResampleLiveResidentsForTest;
 using bloom::render::point_resample_detail::pointResampleLiveResourceSetsForTest;
 using bloom::render::point_resample_detail::pointResampleQuarantineOccupiedForTest;
+using bloom::render::point_resample_detail::pointResampleRetainedResidentsForTest;
 using bloom::render::point_resample_detail::retirePointResampleQuarantineForOwnerForTest;
+using bloom::render::point_resample_detail::retirePointResampleRetainedForOwnerForTest;
 using bloom::render::point_resample_detail::setPointResampleFaultForTest;
 using bloom::render::point_resample_detail::setPointResampleForcedMaxWorkGroupCountXForTest;
+
+// Must match point_resample_detail::kMaxLiveResidents.
+constexpr std::uint32_t kResidentPool = 8;
 
 [[nodiscard]] std::shared_ptr<const GpuImage>
 makeSource(GpuImageUpload& uploader, const std::uint32_t width, const std::uint32_t height) {
@@ -341,6 +347,87 @@ void testForced2DTailParity(Expectations& expectations, GpuDevice& device) {
     expectations.expect(exact, "2d-tail: every pixel is bit-exact under the flattened 2D dispatch");
 }
 
+// Repeated Ready + foreign-thread destruction must not leak unbounded native resident sets: the
+// bounded resident pool caps live residents, every foreign-destroyed resident moves into the
+// bounded owner-drainable store, and the owner reclaims all of them.
+void testRepeatedReadyForeignDestructionBounded(Expectations& expectations, GpuDevice& device) {
+    auto uploader = bloom::render::GpuImageUpload::create(device);
+    const auto source = uploader ? makeSource(*uploader.upload, 8, 4) : nullptr;
+    const auto request = source ? makeRequest(source, 8, 4, 1.0, 1.0) : std::nullopt;
+    if (!request) {
+        expectations.expect(false, "repeated: fixture built");
+        return;
+    }
+    // Fill the bounded resident pool with Ready (un-taken) results.
+    std::vector<GpuPointResample*> instances;
+    for (std::uint32_t index = 0; index < kResidentPool; ++index) {
+        auto created = GpuPointResample::create(device);
+        expectations.expect(created.hasValue(), "repeated: instance created");
+        if (!created) {
+            return;
+        }
+        auto* const raw = created.resampler.release();
+        instances.push_back(raw);
+        expectations.expect(raw->begin(*request, kBudget).code ==
+                                GpuPointResampleDiagnosticCode::None,
+                            "repeated: a pooled instance begins");
+        expectations.expect(drain(*raw) == GpuPointResamplePollResult::Ready,
+                            "repeated: a pooled instance reaches Ready");
+    }
+    expectations.expect(pointResampleLiveResidentsForTest() == kResidentPool,
+                        "repeated: the resident pool is exactly full");
+    expectations.expect(pointResampleLiveResourceSetsForTest() == 0,
+                        "repeated: no job resource set survives a Ready result");
+
+    // The bounded pool refuses a further resident rather than growing.
+    auto extra = GpuPointResample::create(device);
+    if (!extra) {
+        expectations.expect(false, "repeated: extra instance created");
+        return;
+    }
+    expectations.expect(extra.resampler->begin(*request, kBudget).code ==
+                            GpuPointResampleDiagnosticCode::Busy,
+                        "repeated: the resident pool bound refuses a further resident");
+    expectations.expect(pointResampleLiveResidentsForTest() == kResidentPool,
+                        "repeated: the refusal grows nothing");
+
+    // Foreign-destroy every Ready instance: each resident moves into the bounded retained store.
+    // The fixed-capacity invariant is checked after every step: retention must never fail, and
+    // retained <= live <= pool must always hold.
+    for (std::size_t destroyed = 0; destroyed < instances.size(); ++destroyed) {
+        auto* const raw = instances[destroyed];
+        std::thread foreign([raw] { delete raw; });
+        foreign.join();
+        const auto retained = pointResampleRetainedResidentsForTest();
+        const auto live = pointResampleLiveResidentsForTest();
+        expectations.expect(static_cast<std::size_t>(retained) == destroyed + 1,
+                            "repeated: each foreign destruction is actually retained");
+        expectations.expect(retained <= live && live <= kResidentPool,
+                            "repeated: fixed-capacity invariant retained <= live <= pool");
+    }
+    expectations.expect(pointResampleLiveResidentsForTest() == kResidentPool,
+                        "repeated: retained residents keep their bounded slots");
+    expectations.expect(pointResampleRetainedResidentsForTest() == kResidentPool,
+                        "repeated: every foreign-destroyed resident is bounded in the store");
+    expectations.expect(pointResampleLiveResourceSetsForTest() == 0,
+                        "repeated: foreign destruction leaves no job resource set");
+
+    // Owner recovery drains the whole store, then new work recovers.
+    expectations.expect(retirePointResampleRetainedForOwnerForTest() == kResidentPool,
+                        "repeated: the owner reclaims every retained resident");
+    expectations.expect(pointResampleLiveResidentsForTest() == 0 &&
+                            pointResampleRetainedResidentsForTest() == 0,
+                        "repeated: the bound returns to zero after owner recovery");
+    expectations.expect(extra.resampler->begin(*request, kBudget).code ==
+                            GpuPointResampleDiagnosticCode::None,
+                        "repeated: admission recovers after owner retirement");
+    expectations.expect(drain(*extra.resampler) == GpuPointResamplePollResult::Ready,
+                        "repeated: the recovered job completes");
+    static_cast<void>(extra.resampler->take());
+    expectations.expect(pointResampleLiveResidentsForTest() == 0,
+                        "repeated: take() releases the recovered resident slot");
+}
+
 // An idle instance holds no native resources, so a foreign-thread destruction is safe and frees
 // nothing that must be retained.
 void testIdleForeignThreadDestruction(Expectations& expectations, GpuDevice& device) {
@@ -420,6 +507,7 @@ int main(int argc, char** argv) {
         testDeviceLost(expectations, *device.device);
         testManyPrecreatedInstancesBounded(expectations, *device.device);
         testForced2DTailParity(expectations, *device.device);
+        testRepeatedReadyForeignDestructionBounded(expectations, *device.device);
         testIdleForeignThreadDestruction(expectations, *device.device);
         testForeignThreadDestructionRetains(expectations, *device.device);
         if (expectations.failures() != 0) {

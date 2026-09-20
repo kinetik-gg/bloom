@@ -88,14 +88,32 @@ void GpuPointResample::releaseImpl() noexcept {
     if (impl_ == nullptr) {
         return;
     }
-    // Only the owner thread may touch native resources. A destruction on a foreign thread while a
-    // submission is live retains the whole Impl (bounded by the one occupied reservation) rather
-    // than destroying a possibly in-flight submission from the wrong thread. A foreign destruction
-    // with a retained resident image or a live resource set is retained too, because destroying a
-    // Vulkan image/pipeline off the owner thread is never safe.
-    if (!impl_->onOwnerThread() &&
-        (impl_->queueSubmitted || impl_->resourcesLive || impl_->resources.resident != nullptr)) {
-        [[maybe_unused]] const auto* const retained = impl_.release();
+    // Only the owner thread may touch native resources.
+    if (!impl_->onOwnerThread()) {
+        if (impl_->queueSubmitted || impl_->resourcesLive) {
+            // A live submission or partial resource set: retain the whole Impl, bounded by the one
+            // occupied in-flight reservation.
+            [[maybe_unused]] const auto* const retained = impl_.release();
+            return;
+        }
+        if (impl_->resources.resident != nullptr) {
+            // A completed resident result can be moved into the allocation-free bounded
+            // owner-drainable retained store and reclaimed later on the owner thread.
+            // retainResident moves the unique_ptr ONLY after securing a free slot; on failure the
+            // Impl keeps ownership, so the image is never destroyed on this foreign thread.
+            const bool retained = point_resample_detail::retainResident(
+                impl_->resources.deviceState, impl_->resources.resident, impl_->owner);
+            if (!retained) {
+                [[maybe_unused]] const auto* const leaked = impl_.release();
+                return;
+            }
+            impl_->resources.residentSlotHeld = false;
+            impl_->resources.resident.reset();
+            impl_.reset();
+            return;
+        }
+        // A truly idle instance holds no native resources: safe to destroy from any thread.
+        impl_.reset();
         return;
     }
     if (impl_->queueSubmitted) {
@@ -170,6 +188,8 @@ GpuPointResampleCreateResult GpuPointResample::create(GpuDevice& device,
         return {nullptr, makeDiagnostic(GpuPointResampleDiagnosticCode::DeviceUnavailable,
                                         "the GPU device exposes no renderer state")};
     }
+    // Owner recovery of any residents retained after foreign-thread destruction.
+    static_cast<void>(point_resample_detail::retireRetainedForOwner());
     // No native work here: the bounded reservation and every native resource are created in
     // begin(), so many pre-created instances retain nothing.
     auto impl = std::make_unique<Impl>();
@@ -197,8 +217,13 @@ GpuPointResampleDiagnostic GpuPointResample::begin(const GpuPointResampleRequest
         return makeDiagnostic(GpuPointResampleDiagnosticCode::DeviceLost,
                               "the device was lost; this instance must not be reused");
     }
-    if (impl.queueSubmitted || impl.jobState == GpuPointResampleJobState::Pending) {
-        return makeDiagnostic(GpuPointResampleDiagnosticCode::Busy, "a job is already in flight");
+    // Owner recovery: reclaim any resident results retained after foreign-thread destruction before
+    // starting new work, so ordinary preview/export is never stalled by the bounded store.
+    static_cast<void>(point_resample_detail::retireRetainedForOwner());
+    if (impl.queueSubmitted || impl.jobState == GpuPointResampleJobState::Pending ||
+        impl.jobState == GpuPointResampleJobState::Ready) {
+        return makeDiagnostic(GpuPointResampleDiagnosticCode::Busy,
+                              "a job is already in flight or awaiting take()");
     }
     if (impl.control->generation != impl.expectedGeneration) {
         impl.deviceLost = true;
@@ -443,6 +468,10 @@ GpuImage GpuPointResample::take() noexcept {
     }
     GpuImage taken = std::move(*impl_->resources.resident);
     impl_->resources.resident.reset();
+    if (impl_->resources.residentSlotHeld) {
+        impl_->resources.residentSlotHeld = false;
+        point_resample_detail::releaseResidentSlot();
+    }
     impl_->clearJob();
     return taken;
 }

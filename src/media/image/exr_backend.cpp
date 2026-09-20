@@ -1,4 +1,5 @@
 #include "exr_backend.hpp"
+#include "image_budget.hpp"
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_cpu_input_processor.hpp>
@@ -98,10 +99,13 @@ struct ExrLayout final {
     Imath::Box2i displayWindow;
     std::uint64_t width = 0;
     std::uint64_t height = 0;
+    std::uint64_t displayWidth = 0;
+    std::uint64_t displayHeight = 0;
     std::uint8_t bitDepth = 0;
     bool hasAlpha = false;
     bool luminance = false;
     bool tiled = false;
+    std::uint32_t tileHeight = 1U;
     ImageAlphaAssociation alphaAssociation = ImageAlphaAssociation::Premultiplied;
     std::string colorSpaceTag;
     std::string interpretationAssumption;
@@ -182,20 +186,31 @@ struct ExrLayout final {
         error = ImageDiagnosticCode::InvalidDataWindow;
         return std::nullopt;
     }
-    if (*dataWidth > kMaxImageDimension || *dataHeight > kMaxImageDimension ||
-        *displayWidth > kMaxImageDimension || *displayHeight > kMaxImageDimension) {
+    // There is no fixed dimension or pixel ceiling: OpenEXR is admitted at decode time by the
+    // caller's pixelBudget. The only geometry constraint is what the image types can represent
+    // (32-bit extent) plus multiplication overflow, and this check never allocates pixel storage.
+    const auto maximumExtent =
+        static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max());
+    const auto productOverflows = [](const std::uint64_t a, const std::uint64_t b) {
+        return b != 0 && a > std::numeric_limits<std::uint64_t>::max() / b;
+    };
+    if (*dataWidth > maximumExtent || *dataHeight > maximumExtent ||
+        *displayWidth > maximumExtent || *displayHeight > maximumExtent ||
+        productOverflows(*dataWidth, *dataHeight) ||
+        productOverflows(*displayWidth, *displayHeight)) {
         error = ImageDiagnosticCode::DimensionsExceeded;
         return std::nullopt;
     }
-    if (*dataWidth > std::numeric_limits<std::uint64_t>::max() / *dataHeight ||
-        *dataWidth * *dataHeight > kMaxImagePixels) {
-        error = ImageDiagnosticCode::DimensionsExceeded;
-        return std::nullopt;
-    }
+    std::uint32_t tileHeight = 1U;
     if (tiled) {
         const auto* tiles = header.findTypedAttribute<Imf::TileDescriptionAttribute>("tiles");
         if (tiles == nullptr || tiles->value().mode != Imf::ONE_LEVEL) {
             error = ImageDiagnosticCode::UnsupportedTiledLevels;
+            return std::nullopt;
+        }
+        tileHeight = static_cast<std::uint32_t>(tiles->value().ySize);
+        if (tileHeight == 0U) {
+            error = ImageDiagnosticCode::InvalidHeader;
             return std::nullopt;
         }
     }
@@ -259,10 +274,13 @@ struct ExrLayout final {
                      header.displayWindow(),
                      *dataWidth,
                      *dataHeight,
+                     *displayWidth,
+                     *displayHeight,
                      static_cast<std::uint8_t>(firstChannel->type == Imf::HALF ? 16U : 32U),
                      hasA,
                      !rgb,
                      tiled,
+                     tileHeight,
                      *alpha,
                      {},
                      {}};
@@ -333,7 +351,7 @@ ImageResult<std::shared_ptr<const render::Rgba32fImage>>
 decodeExr(const std::filesystem::path& path, const ImageInterpretation& interpretation,
           std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
           const CancelImageWork& cancel, const ImageProgress& progress,
-          const std::size_t pixelBudget, const std::optional<core::Sha256Digest> expectedDigest) {
+          const std::size_t pixelBudget) {
     if (cancelled(cancel))
         return failure<std::shared_ptr<const render::Rgba32fImage>>(ImageDiagnosticCode::Cancelled,
                                                                     "Image decode cancelled");
@@ -350,34 +368,11 @@ decodeExr(const std::filesystem::path& path, const ImageInterpretation& interpre
             return failure<std::shared_ptr<const render::Rgba32fImage>>(
                 error, "OpenEXR header is unsupported or invalid");
 
-        if (expectedDigest) {
-            std::ifstream file(path, std::ios::binary | std::ios::ate);
-            if (!file)
-                return failure<std::shared_ptr<const render::Rgba32fImage>>(
-                    ImageDiagnosticCode::FileUnavailable, "Image file is missing or unreadable");
-            const auto fileSize = file.tellg();
-            if (fileSize <= 0 || fileSize > static_cast<std::streamoff>(kMaxImageFileBytes))
-                return failure<std::shared_ptr<const render::Rgba32fImage>>(
-                    ImageDiagnosticCode::FileTooLarge, "Image file exceeds the 64 MiB limit");
-            std::vector<std::byte> bytes(static_cast<std::size_t>(fileSize));
-            file.seekg(0);
-            if (!file.read(reinterpret_cast<char*>(bytes.data()), fileSize))
-                return failure<std::shared_ptr<const render::Rgba32fImage>>(
-                    ImageDiagnosticCode::FileReadFailed, "Image read failed");
-            const auto digest = core::Sha256Hasher::hash(bytes);
-            if (!digest || *digest != *expectedDigest)
-                return failure<std::shared_ptr<const render::Rgba32fImage>>(
-                    ImageDiagnosticCode::DigestMismatch, "Image content changed; relink the asset");
-        }
-
         const auto dataWindow = render::ImageWindow::create(
             layout->dataWindow.min.x, layout->dataWindow.min.y, layout->width, layout->height);
-        const auto displayWindow = render::ImageWindow::create(
-            layout->displayWindow.min.x, layout->displayWindow.min.y,
-            static_cast<std::uint64_t>(layout->displayWindow.max.x) -
-                static_cast<std::uint64_t>(layout->displayWindow.min.x) + 1U,
-            static_cast<std::uint64_t>(layout->displayWindow.max.y) -
-                static_cast<std::uint64_t>(layout->displayWindow.min.y) + 1U);
+        const auto displayWindow =
+            render::ImageWindow::create(layout->displayWindow.min.x, layout->displayWindow.min.y,
+                                        layout->displayWidth, layout->displayHeight);
         if (!dataWindow || !displayWindow)
             return failure<std::shared_ptr<const render::Rgba32fImage>>(
                 ImageDiagnosticCode::InvalidDataWindow, "OpenEXR image window is invalid");
@@ -386,60 +381,44 @@ decodeExr(const std::filesystem::path& path, const ImageInterpretation& interpre
         if (!descriptor)
             return failure<std::shared_ptr<const render::Rgba32fImage>>(
                 ImageDiagnosticCode::InvalidDataWindow, "OpenEXR image descriptor is invalid");
-        if (descriptor.value()->layout().pixelStorageBytes > kMaxImageStorageBytes ||
-            descriptor.value()->layout().pixelStorageBytes > pixelBudget)
+        // Peak admission: final RGBA32F storage plus the bounded scanline band and the one-row
+        // scratch must fit the caller's explicit budget. This replaces four full-frame planes (peak
+        // ~2x the decoded bytes) with a small band, so admission matches real peak memory.
+        const auto width = layout->width;
+        const auto height = layout->height;
+        const std::uint64_t channelCount =
+            static_cast<std::uint64_t>(layout->luminance ? 1U : 3U) + (layout->hasAlpha ? 1U : 0U);
+        const std::uint64_t finalBytes = descriptor.value()->layout().pixelStorageBytes;
+        constexpr std::uint64_t kBandTargetBytes = 1024U * 1024U;
+        std::uint64_t chunkRows = 1U;
+        if (layout->tiled) {
+            chunkRows = std::max<std::uint64_t>(1U, layout->tileHeight);
+        } else {
+            std::uint64_t bytesPerRow = 0;
+            if (!detail::checkedSizeProduct(width, channelCount * sizeof(float), bytesPerRow))
+                bytesPerRow = std::numeric_limits<std::uint64_t>::max();
+            chunkRows = std::max<std::uint64_t>(1U, kBandTargetBytes /
+                                                        std::max<std::uint64_t>(bytesPerRow, 1U));
+        }
+        chunkRows = std::min(chunkRows, height);
+        // Every scratch term is both overflow-checked and admitted by subtraction, so no removed
+        // geometry cap can wrap the working-set comparison past the budget.
+        std::uint64_t rowBytes = 0;
+        std::uint64_t bandRows = 0;
+        std::uint64_t bandBytes = 0;
+        const bool scratchSized =
+            detail::checkedSizeProduct(width, sizeof(std::array<float, 4>), rowBytes) &&
+            detail::checkedSizeProduct(chunkRows, width, bandRows) &&
+            detail::checkedSizeProduct(bandRows, channelCount * sizeof(float), bandBytes);
+        if (!scratchSized ||
+            !detail::decodeWorkingSetFits(finalBytes, bandBytes, rowBytes, pixelBudget))
             return failure<std::shared_ptr<const render::Rgba32fImage>>(
                 ImageDiagnosticCode::PixelBudgetExceeded,
-                "Decoded image exceeds the pixel storage budget");
+                "Decoded image exceeds the pixel working-set budget");
         auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), pixelBudget);
         if (!builder)
             return failure<std::shared_ptr<const render::Rgba32fImage>>(
                 ImageDiagnosticCode::AllocationFailure, "Process image allocation failed");
-
-        const auto planeSize = static_cast<std::size_t>(layout->width) * layout->height;
-        std::array<std::vector<float>, 4> planes;
-        for (auto& plane : planes)
-            plane.assign(planeSize, 0.0F);
-        std::ranges::fill(planes[3], 1.0F);
-        Imf::FrameBuffer frameBuffer;
-        const auto rowStride = static_cast<std::size_t>(layout->width) * sizeof(float);
-        const auto insert = [&](const char* name, std::vector<float>& plane) {
-            frameBuffer.insert(name, Imf::Slice::Make(Imf::FLOAT, plane.data(), layout->dataWindow,
-                                                      sizeof(float), rowStride));
-        };
-        if (layout->luminance) {
-            insert("Y", planes[0]);
-        } else {
-            insert("R", planes[0]);
-            insert("G", planes[1]);
-            insert("B", planes[2]);
-        }
-        if (layout->hasAlpha)
-            insert("A", planes[3]);
-        input.setFrameBuffer(frameBuffer);
-
-        if (progress)
-            progress(0, layout->height);
-        const auto rowsPerChunk = std::max<std::uint64_t>(
-            1U, (static_cast<std::uint64_t>(16U * 1024U * 1024U) /
-                 std::max<std::uint64_t>(rowStride * (layout->luminance ? 2U : 4U), 1U)));
-        std::uint64_t completed = 0;
-        while (completed < layout->height) {
-            if (cancelled(cancel))
-                return failure<std::shared_ptr<const render::Rgba32fImage>>(
-                    ImageDiagnosticCode::Cancelled, "Image decode cancelled");
-            const auto count = std::min(rowsPerChunk, layout->height - completed);
-            const auto first = static_cast<std::int64_t>(layout->dataWindow.min.y) +
-                               static_cast<std::int64_t>(completed);
-            const auto last = first + static_cast<std::int64_t>(count) - 1;
-            input.readPixels(static_cast<int>(first), static_cast<int>(last));
-            completed += count;
-            if (progress)
-                progress(completed, layout->height);
-        }
-        if (!input.isComplete())
-            return failure<std::shared_ptr<const render::Rgba32fImage>>(
-                ImageDiagnosticCode::Truncated, "OpenEXR pixel data is truncated");
 
         const bool sourcePremultiplied =
             (interpretation.alphaAssociation == ImageAlphaAssociation::Auto
@@ -475,49 +454,105 @@ decodeExr(const std::filesystem::path& path, const ImageInterpretation& interpre
                 ImageDiagnosticCode::ColorSpaceUnavailable,
                 "Input colour processor could not be prepared");
 
-        std::vector<std::array<float, 4>> row(layout->width);
-        for (std::uint64_t y = 0; y < layout->height; ++y) {
+        const auto bandSamples =
+            static_cast<std::size_t>(chunkRows) * static_cast<std::size_t>(width);
+        std::array<std::vector<float>, 4> band;
+        const std::size_t rgbPlanes = layout->luminance ? 1U : 3U;
+        for (std::size_t index = 0; index < rgbPlanes; ++index)
+            band[index].assign(bandSamples, 0.0F);
+        if (layout->hasAlpha)
+            band[3].assign(bandSamples, 1.0F);
+        std::vector<std::array<float, 4>> row(static_cast<std::size_t>(width));
+        const auto rowStride = static_cast<std::size_t>(width) * sizeof(float);
+
+        std::uint64_t completed = 0;
+        if (progress)
+            progress(0, height);
+        while (completed < height) {
             if (cancelled(cancel))
                 return failure<std::shared_ptr<const render::Rgba32fImage>>(
                     ImageDiagnosticCode::Cancelled, "Image decode cancelled");
-            const auto rowOffset = static_cast<std::size_t>(y) * layout->width;
-            for (std::uint64_t x = 0; x < layout->width; ++x) {
-                const auto offset = rowOffset + static_cast<std::size_t>(x);
-                const auto luminance = layout->luminance ? planes[0][offset] : 0.0F;
-                row[x] =
-                    layout->luminance
-                        ? std::array<float, 4>{luminance, luminance, luminance, planes[3][offset]}
-                        : std::array<float, 4>{planes[0][offset], planes[1][offset],
-                                               planes[2][offset], planes[3][offset]};
-                if (sourcePremultiplied && convert) {
-                    for (std::size_t channel = 0; channel < 3; ++channel)
-                        row[x][channel] = row[x][3] > 0.0F ? row[x][channel] / row[x][3] : 0.0F;
-                }
+            // A tiled read can touch a whole tile row, so tiled chunks are aligned to the tile
+            // grid; scanline chunks are a bounded run of consecutive rows.
+            const auto first = layout->tiled ? (completed / chunkRows) * chunkRows : completed;
+            const auto count = std::min(chunkRows, height - first);
+            const auto firstY = static_cast<std::int64_t>(layout->dataWindow.min.y) +
+                                static_cast<std::int64_t>(first);
+            const auto lastY = firstY + static_cast<std::int64_t>(count) - 1;
+            Imf::FrameBuffer frameBuffer;
+            const auto origin = Imath::V2i(layout->dataWindow.min.x, static_cast<int>(firstY));
+            const auto insert = [&](const char* name, std::vector<float>& plane) {
+                frameBuffer.insert(name, Imf::Slice::Make(Imf::FLOAT, plane.data(), origin,
+                                                          static_cast<std::int64_t>(width),
+                                                          static_cast<std::int64_t>(count),
+                                                          sizeof(float), rowStride));
+            };
+            if (layout->luminance)
+                insert("Y", band[0]);
+            else {
+                insert("R", band[0]);
+                insert("G", band[1]);
+                insert("B", band[2]);
             }
-            if (convert && ((processor && !processor->apply(row)) ||
-                            (compatibilityProcessor && !compatibilityProcessor->apply(row))))
-                return failure<std::shared_ptr<const render::Rgba32fImage>>(
-                    ImageDiagnosticCode::ColorSpaceUnavailable, "Input colour conversion failed");
-            auto outputRow = builder.value()->row(
-                static_cast<std::int64_t>(layout->dataWindow.min.y) + static_cast<std::int64_t>(y));
-            if (!outputRow)
-                return failure<std::shared_ptr<const render::Rgba32fImage>>(
-                    ImageDiagnosticCode::InvalidDataWindow, "OpenEXR output row is invalid");
-            for (std::uint64_t x = 0; x < layout->width; ++x) {
-                const auto& sample = row[x];
-                const auto red =
-                    sourcePremultiplied && !convert ? sample[0] : sample[0] * sample[3];
-                const auto green =
-                    sourcePremultiplied && !convert ? sample[1] : sample[1] * sample[3];
-                const auto blue =
-                    sourcePremultiplied && !convert ? sample[2] : sample[2] * sample[3];
-                const auto pixel = render::Rgba32f::fromPremultiplied(red, green, blue, sample[3]);
-                if (!pixel)
+            if (layout->hasAlpha)
+                insert("A", band[3]);
+            input.setFrameBuffer(frameBuffer);
+            input.readPixels(static_cast<int>(firstY), static_cast<int>(lastY));
+
+            for (std::uint64_t local = 0; local < count; ++local) {
+                if (cancelled(cancel))
                     return failure<std::shared_ptr<const render::Rgba32fImage>>(
-                        ImageDiagnosticCode::DecodeFailed, "OpenEXR contains an invalid pixel");
-                (*outputRow.value())[x] = *pixel.value();
+                        ImageDiagnosticCode::Cancelled, "Image decode cancelled");
+                const auto bandOffset =
+                    static_cast<std::size_t>(local) * static_cast<std::size_t>(width);
+                for (std::uint64_t x = 0; x < width; ++x) {
+                    const auto offset = bandOffset + static_cast<std::size_t>(x);
+                    const auto alpha = layout->hasAlpha ? band[3][offset] : 1.0F;
+                    const auto luminance = layout->luminance ? band[0][offset] : 0.0F;
+                    auto& target = row[static_cast<std::size_t>(x)];
+                    target = layout->luminance
+                                 ? std::array<float, 4>{luminance, luminance, luminance, alpha}
+                                 : std::array<float, 4>{band[0][offset], band[1][offset],
+                                                        band[2][offset], alpha};
+                    if (sourcePremultiplied && convert) {
+                        for (std::size_t channel = 0; channel < 3; ++channel)
+                            target[channel] = target[3] > 0.0F ? target[channel] / target[3] : 0.0F;
+                    }
+                }
+                if (convert && ((processor && !processor->apply(row)) ||
+                                (compatibilityProcessor && !compatibilityProcessor->apply(row))))
+                    return failure<std::shared_ptr<const render::Rgba32fImage>>(
+                        ImageDiagnosticCode::ColorSpaceUnavailable,
+                        "Input colour conversion failed");
+                auto outputRow = builder.value()->row(
+                    static_cast<std::int64_t>(layout->dataWindow.min.y) +
+                    static_cast<std::int64_t>(first) + static_cast<std::int64_t>(local));
+                if (!outputRow)
+                    return failure<std::shared_ptr<const render::Rgba32fImage>>(
+                        ImageDiagnosticCode::InvalidDataWindow, "OpenEXR output row is invalid");
+                for (std::uint64_t x = 0; x < width; ++x) {
+                    const auto& sample = row[static_cast<std::size_t>(x)];
+                    const auto red =
+                        sourcePremultiplied && !convert ? sample[0] : sample[0] * sample[3];
+                    const auto green =
+                        sourcePremultiplied && !convert ? sample[1] : sample[1] * sample[3];
+                    const auto blue =
+                        sourcePremultiplied && !convert ? sample[2] : sample[2] * sample[3];
+                    const auto pixel =
+                        render::Rgba32f::fromPremultiplied(red, green, blue, sample[3]);
+                    if (!pixel)
+                        return failure<std::shared_ptr<const render::Rgba32fImage>>(
+                            ImageDiagnosticCode::DecodeFailed, "OpenEXR contains an invalid pixel");
+                    (*outputRow.value())[static_cast<std::size_t>(x)] = *pixel.value();
+                }
+                ++completed;
+                if (progress)
+                    progress(completed, height);
             }
         }
+        if (!input.isComplete())
+            return failure<std::shared_ptr<const render::Rgba32fImage>>(
+                ImageDiagnosticCode::Truncated, "OpenEXR pixel data is truncated");
         auto image = std::move(*builder.value()).freeze();
         if (!image)
             return failure<std::shared_ptr<const render::Rgba32fImage>>(

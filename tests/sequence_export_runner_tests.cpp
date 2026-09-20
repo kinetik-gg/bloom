@@ -1,20 +1,30 @@
+#include "gpu_route_proof_export_support.hpp"
+
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/host/frame_range_runner.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
+#include <bloom/media/provider/contract.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/video/audio.hpp>
+#include <bloom/media/video/session.hpp>
+#include <bloom/runtime/compiled_plan.hpp>
 #include <chrono>
 #include <csignal>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
+#include <span>
 #include <string_view>
 #include <thread>
 #include <unistd.h>
@@ -34,6 +44,157 @@ template <typename T> T need(media::provider::Result<T> value) {
         throw std::runtime_error(e->detail);
     return std::get<T>(std::move(value));
 }
+
+namespace routeproof = bloom::gpu_route_proof_export;
+enum class GpuProofOutcome : std::uint8_t { NotRequested, Skipped, Ran };
+
+// The per-frame production identity material the sequence runner can genuinely observe: the real
+// compiled plan identity plus the exact frame request and preset. The runner compiles the same
+// plan, so this is production plan/request identity, not a placeholder.
+struct FrameIdentityFields final {
+    std::string_view routeId;
+    std::uint64_t projectId = 0;
+    std::uint64_t compositionId = 0;
+    std::uint64_t sourceRevision = 0;
+    std::uint64_t outputIndex = 0;
+    std::uint64_t operationCount = 0;
+    std::uint32_t planSemantics = 0;
+    std::uint32_t animationSamplingSemantics = 0;
+    std::uint64_t frameIndex = 0;
+    std::int64_t timeNumerator = 0;
+    std::int64_t timeDenominator = 1;
+    std::uint64_t preset = 0;
+    std::string_view provider;
+};
+
+[[nodiscard]] std::string frameIdentityHex(const FrameIdentityFields& fields) {
+    routeproof::CanonicalWriter writer;
+    writer.text("bloom.gpu.route.export-frame-identity.v1");
+    writer.text(fields.routeId);
+    writer.u64(fields.projectId);
+    writer.u64(fields.compositionId);
+    writer.u64(fields.sourceRevision);
+    writer.u64(fields.outputIndex);
+    writer.u64(fields.operationCount);
+    writer.u32(fields.planSemantics);
+    writer.u32(fields.animationSamplingSemantics);
+    writer.u64(fields.frameIndex);
+    writer.i64(fields.timeNumerator);
+    writer.i64(fields.timeDenominator);
+    writer.u64(fields.preset);
+    writer.text(fields.provider);
+    return routeproof::sha256Hex(writer.bytes());
+}
+
+// The actual paired GPU/CPU comparison of one independently decoded video frame. The same encoder
+// contract (same ProRes preset/profile/settings) produced both files, so the only difference is the
+// input process frame; the lossy codec tolerance below is the binding contract, not an arbitrary
+// slack. ProRes is 4:2:2 without alpha, so alpha is not part of the compared planes.
+struct PlaneComparison final {
+    bool comparable = false;
+    std::uint64_t comparedBytes = 0;
+    std::uint64_t mismatchedBytes = 0;
+    std::uint64_t maxDelta = 0;
+};
+
+[[nodiscard]] PlaneComparison compareFrameProduct(const media::provider::FrameProduct& gpu,
+                                                  const media::provider::FrameProduct& cpu,
+                                                  const std::uint32_t tolerance) {
+    PlaneComparison comparison;
+    if (gpu.format != cpu.format || gpu.planes.size() != cpu.planes.size() || gpu.planes.empty()) {
+        return comparison;
+    }
+    for (std::size_t plane = 0; plane < cpu.planes.size(); ++plane) {
+        if (gpu.planes[plane].width != cpu.planes[plane].width ||
+            gpu.planes[plane].height != cpu.planes[plane].height ||
+            gpu.planes[plane].stride != cpu.planes[plane].stride ||
+            gpu.planes[plane].bytes.size() != cpu.planes[plane].bytes.size()) {
+            return comparison;
+        }
+    }
+    comparison.comparable = true;
+    for (std::size_t plane = 0; plane < cpu.planes.size(); ++plane) {
+        const auto& gpuBytes = gpu.planes[plane].bytes;
+        const auto& cpuBytes = cpu.planes[plane].bytes;
+        comparison.comparedBytes += cpuBytes.size();
+        for (std::size_t index = 0; index < cpuBytes.size(); ++index) {
+            const auto gpuValue = std::to_integer<std::uint32_t>(gpuBytes[index]);
+            const auto cpuValue = std::to_integer<std::uint32_t>(cpuBytes[index]);
+            const auto delta = gpuValue > cpuValue ? gpuValue - cpuValue : cpuValue - gpuValue;
+            comparison.maxDelta = std::max(comparison.maxDelta, static_cast<std::uint64_t>(delta));
+            if (delta > tolerance) {
+                ++comparison.mismatchedBytes;
+            }
+        }
+    }
+    return comparison;
+}
+
+// Decodes every video frame of `path` independently through the production FFmpeg worker session.
+[[nodiscard]] std::vector<media::provider::FrameProduct>
+decodeVideoFrames(const std::filesystem::path& path) {
+    std::vector<media::provider::FrameProduct> frames;
+    media::video::VideoDecodeSession session(path);
+    const auto probe = need(session.probe());
+    std::uint32_t stream = 0;
+    std::uint64_t frameCount = 0;
+    bool found = false;
+    for (const auto& descriptor : probe.streams) {
+        if (descriptor.kind == media::provider::MediaKind::Video) {
+            stream = descriptor.id;
+            frameCount = descriptor.frameCount;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        return frames;
+    }
+    media::video::DecodedVideoCache cache(256U * 1024U * 1024U);
+    for (std::uint64_t index = 0; index < frameCount; ++index) {
+        auto decoded = session.frame(probe, stream, index, 0, &cache);
+        if (std::get_if<media::provider::Unavailable>(&decoded) != nullptr) {
+            break;
+        }
+        frames.push_back(*std::get<std::shared_ptr<const media::provider::FrameProduct>>(decoded));
+    }
+    return frames;
+}
+
+void publishVideoProof(const std::filesystem::path& proofDirectory,
+                       const host::SequenceExportResultV1& gpuResult,
+                       const std::vector<std::string>& identityHex,
+                       const std::vector<routeproof::FrameEvidence>& evidence,
+                       const std::uint64_t frameWidth, const std::uint64_t frameHeight) {
+    routeproof::ExportProofCounters counters;
+    counters.deviceOwnershipEpoch = gpuResult.gpuDeviceOwnershipEpoch;
+    counters.nativeDispatches = gpuResult.gpuNativeDispatches;
+    counters.verifiedFrames = identityHex.size();
+    counters.readbackSubmissions = gpuResult.gpuReadbacks;
+    // The accepted final readback transfers one process payload; no separate production payload
+    // counter exists yet, so the real submission count is the payload count, not a guess.
+    counters.payloads = gpuResult.gpuReadbacks;
+    counters.transferredBytes =
+        routeproof::processPayloadBytes(gpuResult.gpuReadbacks, frameWidth, frameHeight);
+    std::string nonce;
+    if (!routeproof::readProofNonce(proofDirectory, nonce)) {
+        throw std::runtime_error("video route proof: a fresh run nonce is required");
+    }
+    const auto processDigest = routeproof::orderedIdentityDigest(identityHex);
+    const auto capturedEvidenceDigest = routeproof::evidenceDigest(evidence);
+    const auto written =
+        routeproof::publishExportProof(proofDirectory, nonce, "route.export.video",
+                                       bloom::runtime::GpuRouteHarnessKind::VideoExport, counters,
+                                       processDigest, capturedEvidenceDigest);
+    if (!written.written) {
+        throw std::runtime_error("video route proof was rejected: " + written.detail);
+    }
+    std::cout << "PASS(route-proof) route.export.video frames=" << counters.verifiedFrames
+              << " dispatches=" << counters.nativeDispatches
+              << " readbacks=" << counters.readbackSubmissions
+              << " bytes=" << counters.transferredBytes << '\n';
+}
+
 struct Fixture {
     document::NewProject initial =
         document::makeNewProject("Export", "Motion", core::RationalTime::fromInteger(2),
@@ -192,18 +353,27 @@ void verify(const host::SequenceExportResultV1& r, const std::filesystem::path& 
     std::cout << path.filename() << " frames=" << qc.frameCount << " samples=" << qc.audioSamples
               << " max=" << qc.maximumError << " mean=" << qc.meanError << '\n';
 }
-// GPU video/range proof: the real sequence runner drives the real per-frame output attempts with
-// the real provider attached, and the surfaced result must show actual GPU evaluation with positive
-// native dispatches and exactly one final readback per GPU-evaluated frame. Skips (NOTE) when no
-// loader is configured; `--require-device` turns an absent device into a failure.
-void testGpuVideoProvenance(Fixture& f, const std::filesystem::path& directory,
-                            const bool requireDevice) {
+// GPU video proof: the real sequence runner drives the real per-frame output attempts with the real
+// provider attached, and the surfaced result must show actual GPU evaluation with positive native
+// dispatches and exactly one final readback per GPU-evaluated frame. The published video is then
+// decoded independently and every frame is compared against the corresponding CPU-exported video
+// (same encoder contract); ProRes is lossy, so the compared 4:2:2 planes are required within the
+// documented preset tolerance below, and the evidence digest is bound to the exact decoded bytes.
+// Skips (exit 77) when no loader/device is configured; `--require-device` turns that into a
+// failure.
+GpuProofOutcome testGpuVideoProvenance(Fixture& f, const std::filesystem::path& directory,
+                                       const std::filesystem::path& cpuReferencePath,
+                                       const std::filesystem::path& proofDirectory,
+                                       const bool requireDevice) {
+    const auto skip = [&proofDirectory] {
+        return proofDirectory.empty() ? GpuProofOutcome::NotRequested : GpuProofOutcome::Skipped;
+    };
     const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER");
     if (loader == nullptr || *loader == '\0') {
         if (requireDevice)
             throw std::runtime_error("--require-device needs BLOOM_TEST_VULKAN_LOADER");
         std::cout << "NOTE: BLOOM_TEST_VULKAN_LOADER unset; skipping GPU video provenance\n";
-        return;
+        return skip();
     }
     auto provider = host::GpuExportProvider::create([&] {
         runtime::GpuProcessFrameEvaluatorOptions options;
@@ -220,7 +390,7 @@ void testGpuVideoProvenance(Fixture& f, const std::filesystem::path& directory,
         if (requireDevice)
             throw std::runtime_error("GPU video: required device unavailable");
         std::cout << "NOTE: no compatible Vulkan device; skipping GPU video provenance\n";
-        return;
+        return skip();
     }
     const auto path = directory / "gpu-motion.mov";
     auto request = f.request(path, output::OutputPresetV1::ProResMovV1);
@@ -237,11 +407,91 @@ void testGpuVideoProvenance(Fixture& f, const std::filesystem::path& directory,
               << " dispatches=" << result.gpuNativeDispatches
               << " readbacks=" << result.gpuReadbacks << " epoch=" << result.gpuDeviceOwnershipEpoch
               << '\n';
+
+    if (proofDirectory.empty()) {
+        return GpuProofOutcome::Ran;
+    }
+
+    // The real CPU export of the same fixture and encoder contract is the reference. ProRes 422 is
+    // a lossy DCT codec and carries no alpha plane, so decoded samples cannot be compared for exact
+    // equality. Both files are produced by the SAME encoder contract (same preset/profile/settings)
+    // from process frames that agree to 2e-6, so the only divergence is codec rounding. The bound
+    // below is the preset's lossy tolerance: 4/255 codes absorbs that rounding while still failing
+    // a genuine GPU/CPU divergence, which is why a mismatched byte is a hard check failure.
+    const auto gpuFrames = decodeVideoFrames(path);
+    const auto cpuFrames = decodeVideoFrames(cpuReferencePath);
+    check(!gpuFrames.empty() && gpuFrames.size() == cpuFrames.size(),
+          "GPU video: both exports decode to the same frame count");
+    constexpr std::uint32_t kProResTolerance = 4;
+    const auto planResult =
+        f.compiler.compile({f.doc.snapshot(), f.initial.initialCompositionId}, {});
+    check(planResult.plan != nullptr, "GPU video: the plan compiles for identity");
+    const host::FrameRangeRequestV1 range{
+        .destination = path,
+        .firstFrame = 0,
+        .lastFrame = static_cast<std::uint64_t>(gpuFrames.empty() ? 0 : gpuFrames.size() - 1),
+        .frameRate = document::FrameRate::framesPerSecond24(),
+        .duration = core::RationalTime::fromInteger(2)};
+    std::vector<std::string> identityHex;
+    std::vector<routeproof::FrameEvidence> evidence;
+    std::uint64_t frameWidth = 0;
+    std::uint64_t frameHeight = 0;
+    for (std::size_t index = 0; index < gpuFrames.size(); ++index) {
+        const auto comparison =
+            compareFrameProduct(gpuFrames[index], cpuFrames[index], kProResTolerance);
+        check(comparison.comparable, "GPU video: decoded frame descriptors/format match the CPU "
+                                     "export");
+        check(comparison.mismatchedBytes == 0,
+              "GPU video: decoded frame matches the CPU export within the ProRes tolerance");
+        const auto time = host::FrameRangeRunnerV1::timeForFrame(range, index);
+        check(time.has_value(), "GPU video: the frame has an exact composition time");
+        FrameIdentityFields fields;
+        fields.routeId = "route.export.video";
+        fields.projectId = planResult.plan->projectId().value();
+        fields.compositionId = planResult.plan->compositionId().value();
+        fields.sourceRevision = planResult.plan->sourceRevision().value();
+        fields.outputIndex = planResult.plan->output().value();
+        fields.operationCount = planResult.plan->operations().size();
+        fields.planSemantics = planResult.plan->planSemanticsVersion();
+        fields.animationSamplingSemantics = planResult.plan->animationSamplingSemanticsVersion();
+        fields.frameIndex = index;
+        fields.timeNumerator = time->numerator();
+        fields.timeDenominator = time->denominator();
+        fields.preset = static_cast<std::uint64_t>(output::OutputPresetV1::ProResMovV1);
+        fields.provider = "gpu-resident";
+        const auto identity = frameIdentityHex(fields);
+        identityHex.push_back(identity);
+        routeproof::FrameEvidence frameEvidence;
+        frameEvidence.identityHex = identity;
+        frameEvidence.comparedPixels = comparison.comparedBytes;
+        frameEvidence.mismatchedPixels = comparison.mismatchedBytes;
+        frameEvidence.maxIntegerDelta = comparison.maxDelta;
+        frameEvidence.alphaExact = true; // ProRes 4:2:2 carries no alpha plane
+        routeproof::CanonicalWriter gpuWriter;
+        gpuWriter.u64(gpuFrames[index].planes.size());
+        for (const auto& plane : gpuFrames[index].planes)
+            gpuWriter.text(routeproof::sha256Hex(plane.bytes));
+        frameEvidence.gpuDecodedDigest = routeproof::sha256Hex(gpuWriter.bytes());
+        routeproof::CanonicalWriter cpuWriter;
+        cpuWriter.u64(cpuFrames[index].planes.size());
+        for (const auto& plane : cpuFrames[index].planes)
+            cpuWriter.text(routeproof::sha256Hex(plane.bytes));
+        frameEvidence.cpuDecodedDigest = routeproof::sha256Hex(cpuWriter.bytes());
+        evidence.push_back(std::move(frameEvidence));
+        if (!gpuFrames[index].planes.empty()) {
+            frameWidth = gpuFrames[index].planes.front().width;
+            frameHeight = gpuFrames[index].planes.front().height;
+        }
+    }
+    publishVideoProof(proofDirectory, result, identityHex, evidence, frameWidth, frameHeight);
+    return GpuProofOutcome::Ran;
 }
-void tests(const std::filesystem::path& directory, const bool requireDevice) {
+GpuProofOutcome tests(const std::filesystem::path& directory, const bool requireDevice,
+                      const std::filesystem::path& proofDirectory) {
     std::filesystem::remove_all(directory);
     std::filesystem::create_directories(directory);
     Fixture f(directory);
+    std::filesystem::path cpuProResPath;
     for (const auto preset :
          {output::OutputPresetV1::ProResMovV1, output::OutputPresetV1::DnxhrMxfV1,
           output::OutputPresetV1::PcmWavV1}) {
@@ -250,10 +500,12 @@ void tests(const std::filesystem::path& directory, const bool requireDevice) {
                                                                                       : "mix.wav");
         const auto result = f.run(f.request(path, preset));
         verify(result, path, preset != output::OutputPresetV1::PcmWavV1);
-        if (preset == output::OutputPresetV1::ProResMovV1)
+        if (preset == output::OutputPresetV1::ProResMovV1) {
+            cpuProResPath = path;
             check(need(result.evidence)
                       .implementationNote.starts_with(media::provider::kProResExportNote),
                   "required ProRes evidence wording");
+        }
     }
     const auto path = directory / "cancel.mov";
     {
@@ -311,16 +563,38 @@ void tests(const std::filesystem::path& directory, const bool requireDevice) {
     const auto refused = f.run(std::move(oversized));
     check(refused.failure && refused.failure->reason == media::provider::Error::Oversized,
           "frame queue budget enforced");
-    testGpuVideoProvenance(f, directory, requireDevice);
+    return testGpuVideoProvenance(f, directory, cpuProResPath, proofDirectory, requireDevice);
 }
 } // namespace
 int main(int argc, char** argv) {
     try {
-        check(argc == 2 || argc == 3, "fixture directory [--require-device]");
-        const bool requireDevice = argc == 3 && std::string_view(argv[2]) == "--require-device";
-        tests(argv[1], requireDevice);
+        std::filesystem::path directory;
+        std::filesystem::path proofDirectory;
+        bool requireDevice = false;
+        for (int index = 1; index < argc; ++index) {
+            const std::string_view argument{argv[index]};
+            if (argument == "--require-device") {
+                requireDevice = true;
+            } else if (argument == "--route-proof-dir" && index + 1 < argc) {
+                proofDirectory = argv[++index];
+            } else if (directory.empty()) {
+                directory = argv[index];
+            } else {
+                throw std::runtime_error("usage: <fixture-directory> [--require-device] "
+                                         "[--route-proof-dir <dir>]");
+            }
+        }
+        if (directory.empty()) {
+            throw std::runtime_error("usage: <fixture-directory> [--require-device] "
+                                     "[--route-proof-dir <dir>]");
+        }
+        const auto outcome = tests(directory, requireDevice, proofDirectory);
+        if (outcome == GpuProofOutcome::Skipped) {
+            return 77;
+        }
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;
     }
+    return 0;
 }

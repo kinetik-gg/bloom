@@ -1,22 +1,99 @@
 #include "gpu_path_coverage_private.hpp"
 
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
 
 // GpuPathCoverage lifecycle, split out of gpu_path_coverage.cpp to keep each translation unit under
-// the file budget: the test-only fault seam, the bounded reservation bookkeeping, the object
-// constructor/destructor, and poll/readback/cancel/observability. begin() and create() stay in
-// gpu_path_coverage.cpp.
+// the file budget: the test-only fault seam, the bounded reservation bookkeeping, the bounded
+// owner-retirement store for foreign-thread destruction, the object constructor/destructor, and
+// poll/readback/cancel/observability. begin() and create() stay in gpu_path_coverage.cpp.
 
 namespace bloom::render {
 namespace {
 constexpr std::uint64_t kDrainTimeoutNanoseconds = 2ULL * 1000ULL * 1000ULL * 1000ULL;
 constexpr std::uint64_t kCoverageDeadlineNanoseconds = 2ULL * 1000ULL * 1000ULL * 1000ULL;
+
+// Bounded resident pool. Every Impl native resource set (compute pipeline plus resident mask plus
+// any in-flight job resources) occupies exactly one fixed slot, acquired before the Impl's first
+// native allocation and held until owner-thread retirement. A foreign-thread destruction never
+// destroys native state: it marks the already-owned slot orphaned and releases the wrapper. The
+// owner drain retires orphaned residents (allocation-free, noexcept) and returns their slots, so
+// admission recovers after recoverable pressure. There is no fuse and no per-object leak.
+constexpr std::size_t kResidentCapacity = 8;
+
+struct ResidentSlot final {
+    GpuPathCoverageImpl* impl = nullptr;
+    bool orphaned = false;
+};
+
+std::mutex& residentMutex() {
+    static auto* const value = new std::mutex();
+    return *value;
+}
+std::array<ResidentSlot, kResidentCapacity>& residentSlots() {
+    static auto* const value = new std::array<ResidentSlot, kResidentCapacity>{};
+    return *value;
+}
+std::atomic<std::uint64_t>& residentRefusals() {
+    static std::atomic<std::uint64_t> value{0};
+    return value;
+}
+std::atomic<std::uint64_t>& residentRetired() {
+    static std::atomic<std::uint64_t> value{0};
+    return value;
+}
+
+// Foreign-thread destruction: preserve the original ownership in the slot, never destroy native
+// state off-thread.
+void orphanResidentSlot(GpuPathCoverageImpl* const impl) noexcept {
+    if (impl == nullptr || impl->residentSlot >= kResidentCapacity) {
+        return;
+    }
+    std::lock_guard lock(residentMutex());
+    ResidentSlot& slot = residentSlots()[impl->residentSlot];
+    if (slot.impl == impl) {
+        slot.orphaned = true;
+    }
+}
+
+// Exact ownership gate: an Impl may only be touched by the device owner thread that created it,
+// and only while it still belongs to the device generation it was created from. Every Vulkan access
+// (fence query, resource teardown) and the final delete must be gated on this.
+[[nodiscard]] bool implOwnedByCurrentThread(const GpuPathCoverageImpl* const impl) noexcept {
+    return impl != nullptr && impl->owner != std::thread::id{} &&
+           impl->owner == std::this_thread::get_id() && impl->control != nullptr &&
+           impl->control->generation == impl->expectedGeneration;
+}
+
+// Non-blocking. Returns true when the Impl has no live submission left to prove. Caller must have
+// checked implOwnedByCurrentThread() first.
+[[nodiscard]] bool retireOrphanedImplIfProven(GpuPathCoverageImpl* const impl) noexcept {
+    if (impl == nullptr) {
+        return true;
+    }
+    if (impl->submitted) {
+        if (impl->jobFence == vk::raii::Fence{nullptr}) {
+            return false;
+        }
+        const VkResult status = impl->control->device.getDispatcher()->vkGetFenceStatus(
+            static_cast<VkDevice>(*impl->control->device),
+            static_cast<VkFence>(*impl->jobFence));
+        if (status != VK_SUCCESS && status != VK_ERROR_DEVICE_LOST) {
+            return false;
+        }
+        impl->deviceLost = impl->deviceLost || status == VK_ERROR_DEVICE_LOST;
+        impl->releaseRetired(false);
+    }
+    return true;
+}
+
 } // namespace
 
 // --- Test-only fault seam (production-owned atomics; setters are private and never called by
@@ -47,6 +124,92 @@ bool retirePathCoverageQuarantineForOwner() noexcept {
         return false;
     }
     return retireQuarantinedLocked(slot);
+}
+
+std::size_t pathCoverageResidentCapacity() noexcept { return kResidentCapacity; }
+
+// Acquires a resident slot before any native allocation. Returns false when the bounded pool is
+// full; the caller refuses the begin cleanly without allocating.
+bool acquireResidentSlot(GpuPathCoverageImpl* const impl) noexcept {
+    std::lock_guard lock(residentMutex());
+    for (std::size_t index = 0; index < kResidentCapacity; ++index) {
+        if (residentSlots()[index].impl == nullptr) {
+            residentSlots()[index] = {impl, false};
+            impl->residentSlot = index;
+            return true;
+        }
+    }
+    residentRefusals().fetch_add(1);
+    return false;
+}
+
+// Owner-thread retirement: returns the slot. Never touches another owner's resources.
+void releaseResidentSlot(GpuPathCoverageImpl* const impl) noexcept {
+    if (impl == nullptr || impl->residentSlot >= kResidentCapacity) {
+        return;
+    }
+    std::lock_guard lock(residentMutex());
+    ResidentSlot& slot = residentSlots()[impl->residentSlot];
+    if (slot.impl == impl) {
+        slot = {};
+    }
+    impl->residentSlot = kPathCoverageNoResidentSlot;
+}
+
+std::size_t pathCoverageResidentInUse() noexcept {
+    std::lock_guard lock(residentMutex());
+    std::size_t count = 0;
+    for (const auto& slot : residentSlots()) {
+        if (slot.impl != nullptr) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+std::size_t pathCoverageResidentOrphaned() noexcept {
+    std::lock_guard lock(residentMutex());
+    std::size_t count = 0;
+    for (const auto& slot : residentSlots()) {
+        if (slot.orphaned) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+std::uint64_t pathCoverageResidentRefusals() noexcept { return residentRefusals().load(); }
+std::uint64_t pathCoverageResidentRetired() noexcept { return residentRetired().load(); }
+
+void drainPathCoverageResidentOrphansOnOwnerThread() noexcept {
+    std::array<GpuPathCoverageImpl*, kResidentCapacity> freed{};
+    std::size_t freedCount = 0;
+    {
+        std::lock_guard lock(residentMutex());
+        for (auto& slot : residentSlots()) {
+            if (slot.impl == nullptr || !slot.orphaned) {
+                continue;
+            }
+            // Never touch another device owner's resources: skip orphans whose exact owner thread
+            // (and generation) is not this thread. The rightful owner drains them.
+            if (!implOwnedByCurrentThread(slot.impl)) {
+                continue;
+            }
+            if (!retireOrphanedImplIfProven(slot.impl)) {
+                continue;
+            }
+            GpuPathCoverageImpl* const impl = slot.impl;
+            slot = {};
+            // Clear the back-pointer before the Impl is destroyed so a stale destructor can never
+            // address a slot that may already have been re-admitted.
+            impl->residentSlot = kPathCoverageNoResidentSlot;
+            freed[freedCount++] = impl;
+        }
+    }
+    for (std::size_t index = 0; index < freedCount; ++index) {
+        delete freed[index];
+        residentRetired().fetch_add(1);
+    }
 }
 
 } // namespace path_coverage_detail
@@ -128,7 +291,10 @@ bool GpuPathCoverageImpl::quarantine() noexcept {
 }
 
 GpuPathCoverageImpl::~GpuPathCoverageImpl() {
-    assert(owner == std::this_thread::get_id());
+    // A resident slot must have been returned by owner retirement before destruction; an Impl with
+    // no slot owns no Vulkan objects (the pipeline is created lazily under a slot), so it is safe to
+    // destroy on any thread.
+    assert(residentSlot == kPathCoverageNoResidentSlot);
     ranges.release();
     spans.release();
     mask.reset();
@@ -150,13 +316,19 @@ void GpuPathCoverage::releaseImpl() noexcept {
     if (impl_ == nullptr) {
         return;
     }
-    // Native pipeline and resident resources are owner-thread-only. A destruction on a foreign
-    // thread retains the Impl (mirroring GpuSolid) rather than tearing down a live device resource
-    // from the wrong thread; an in-flight submission is additionally bounded by the reservation.
     if (!impl_->onOwnerThread()) {
-        [[maybe_unused]] const auto* const retained = impl_.release();
+        // Foreign thread: never destroy native state. An Impl that owns a resident slot is preserved
+        // in that same slot (orphaned) for owner retirement; an Impl with no slot owns no Vulkan
+        // objects and can be destroyed here.
+        if (impl_->residentSlot != kPathCoverageNoResidentSlot) {
+            orphanResidentSlot(impl_.get());
+            (void)impl_.release();
+        } else {
+            impl_.reset();
+        }
         return;
     }
+    // Owner thread: prove retirement if needed, then free native resources and return the slot.
     if (impl_->submitted) {
         cancel();
         const auto deadline =
@@ -168,10 +340,12 @@ void GpuPathCoverage::releaseImpl() noexcept {
             }
         }
         if (impl_->submitted && !impl_->quarantine()) {
+            // Could not prove retirement: keep the Impl and its slot (bounded by the pool).
             [[maybe_unused]] const auto* const retained = impl_.release();
             return;
         }
     }
+    path_coverage_detail::releaseResidentSlot(impl_.get());
     impl_.reset();
 }
 

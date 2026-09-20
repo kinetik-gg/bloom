@@ -379,7 +379,9 @@ if(BUILD_TESTING)
     # still builds and runs the extraction and no-resource native tests (which skip explicitly).
     if(BLOOM_RENDER_VULKAN_AVAILABLE)
         add_executable(bloom_color_ocio_gpu_program_resources_native_test
-            tests/ocio_gpu_program_resources_native_tests.cpp)
+            tests/ocio_gpu_program_resources_native_tests.cpp
+            tests/ocio_gpu_program_dispatch_plan_tests.cpp
+            tests/ocio_gpu_program_reflection_tests.cpp)
         target_link_libraries(bloom_color_ocio_gpu_program_resources_native_test PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)
         target_include_directories(bloom_color_ocio_gpu_program_resources_native_test
             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../render")

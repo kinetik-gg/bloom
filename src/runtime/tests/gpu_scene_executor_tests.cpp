@@ -290,6 +290,15 @@ void expectParity(Expectations& expectations, GpuSceneExecutor& executor,
                         LayerValues{.position = {2.7, 2.4}}, 6.0, 5.0, 12000);
 }
 
+// A 6000x4000 RGBA32F solid (384 MB, above the legacy 256 MiB fixed ceiling) over an FHD
+// composition. It proves an actual native dispatch above 256 MiB when the configured maximum is
+// capacity-sized and the device's real maxResourceSize allows it.
+[[nodiscard]] PlanPtr largeSolidPlan() {
+    return twoLayerPlan(format(1920, 1080), LayerValues{.position = {960.0, 540.0}, .opacity = 1.0},
+                        LayerValues{.position = {3000.0, 2000.0}, .opacity = 0.5}, 6000.0, 4000.0,
+                        20000);
+}
+
 // ---- individual tests --------------------------------------------------------------------------
 
 void testFixtures(Expectations& expectations, GpuSceneExecutor& executor,
@@ -517,7 +526,8 @@ int main(const int argc, char** argv) {
         auto executor = GpuSceneExecutor::create(*device.device, *cache.cache);
         expectations.expect(executor.hasValue(), "the parity executor is created");
         if (!executor) {
-            std::cerr << "FAIL: the parity executor could not be created\n";
+            std::cerr << "FAIL: the parity executor could not be created: "
+                      << executor.diagnostic.message << '\n';
             return 1;
         }
 
@@ -530,6 +540,8 @@ int main(const int argc, char** argv) {
         testSameContentDifferentIdentities(expectations, *device.device);
         testCancellation(expectations, *device.device);
         testTinyBudget(expectations, *device.device);
+        testPermissiveMaximum(expectations, *device.device);
+        testLargeImageNative(expectations, *device.device);
         testStructureRefusal(expectations, *device.device);
         testForeignDeviceAndThread(expectations, *device.device, *cache.cache,
                                    foreignDevice ? foreignDevice.device.get() : nullptr);

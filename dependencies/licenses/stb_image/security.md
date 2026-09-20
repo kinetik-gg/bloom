@@ -1,6 +1,6 @@
 # stb_image security review
 
-Reviewed: 2026-09-15
+Reviewed: 2026-09-15; capacity limits re-reviewed 2026-09-20
 
 ## Disposition
 
@@ -9,10 +9,14 @@ this parser **does consume user-controlled files in process**. Bounds reduce res
 they do not provide memory-corruption isolation or a security guarantee. No claim of absence
 of vulnerabilities is made. General codecs and audio are outside this exception.
 
-The adapter permits only PNG/JPEG. kMaxImageDimension is 16384, kMaxImagePixels is 16777216,
-and kMaxImageFileBytes is 67108864. It checks file size before allocation and dimensions before
-decode. A per-decode allocator caps total live parser allocations at 268435456 bytes. The
-resulting process image has a separate 268435456-byte budget. Directory scanning admits at most
+The adapter permits only PNG/JPEG. It reads through stb's callback stream and does not buffer the
+encoded file, so there is no whole-file cap. Geometry is bounded by stb's own per-axis
+`STBI_MAX_DIMENSIONS` (2^24) and its integer sample-count overflow checks, not by an absolute
+per-axis or total-pixel ceiling. Decoded RGBA32F storage plus the RGBA16 staging buffer must fit the
+caller's explicit `pixelBudget` before the parser is entered. A per-decode, thread-local allocator
+caps total live parser allocations at that same request budget, scoped to one request so concurrent
+decodes with different budgets cannot interfere. The resulting process image has its own
+caller-supplied budget, defaulting to 268435456 bytes. Directory scanning admits at most
 100000 entries and a sequence span of 100000 frames. Cancellation is checked around parser
 calls and during conversion/scanning; an individual bounded parser call cannot be interrupted.
 

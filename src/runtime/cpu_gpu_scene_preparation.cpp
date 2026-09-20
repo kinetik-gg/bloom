@@ -2,10 +2,12 @@
 
 #include "gpu_media_preparation.hpp"
 #include "gpu_scene_coverage.hpp"
+#include "gpu_scene_effect_emission.hpp"
 #include "gpu_scene_layer_emission.hpp"
 #include "gpu_scene_media_layer.hpp"
 #include "gpu_scene_nested.hpp"
 #include "gpu_scene_preparation_builders.hpp"
+#include "gpu_scene_preparation_leaf_emission.hpp"
 #include "gpu_scene_preparation_private.hpp"
 #include "gpu_scene_vector_emission.hpp"
 
@@ -40,20 +42,28 @@ namespace {
 // enclosing layer multiplied into it, and the accumulated layer opacity. It is propagated through a
 // Layer Output exactly as the evaluator does, so a layer fed by another vector layer rasterizes the
 // ORIGINAL leaf geometry through the full chain rather than resampling an intermediate raster.
-struct GpuSceneVectorChain final {
-    std::size_t source = 0;
-    detail::LayerMatrix matrix;
-    double opacity = 1.0;
-};
+// Defined in gpu_scene_effect_emission.hpp so an identity image effect can propagate it unchanged.
+using detail::GpuSceneVectorChain;
 
-// Operations whose pixels are colour-space agnostic: their values are resolved through the exact
-// configured input->working OCIO transform (or are blend/geometry logic over already-resolved
-// pixels), so they are correct under any resolvable working space. The lin_rec709_scene-specific
-// operations (solid pixel, vector coverage, view adjust) are deliberately absent. Used only to keep
-// a non-neutral working space honest: it is admitted for exactly these media scenes and refused for
-// every scene that also carries a lin_rec709-specific operation.
-[[nodiscard]] bool isMediaSafeOperation(const CompiledOperation& operation) noexcept {
-    return std::holds_alternative<CompiledImageSource>(operation) ||
+// Operations whose pixels are colour-space agnostic under any resolvable working space, verified
+// against the CPU reference:
+//  * Solid / Text / Shape authored colours are numeric values in the effective working space; the
+//    CPU evaluator only premultiplies them (render::solidPixelFromStraightLinearRec709Scene is a
+//    pure premultiply, no working-space transform), and the GPU solid / coverage commands store the
+//    same premultiplied values, so they are correct for any working space.
+//  * Layer Output / Affine / Translation / Merge / Blend operate on already-resolved premultiplied
+//    values and are colour-space agnostic.
+//  * Image Source / Video Source are decoded raw and converted to the working space through a real
+//    input->working OCIO ProcessEffect command.
+//  * Image Effect resolves its from/to ids in the effective working space.
+//  * A nested composition inherits the working space; the composition output is a passthrough.
+// An operation not listed here is refused for a non-neutral working space, so a future
+// working-space-specific operation cannot silently mis-colour.
+[[nodiscard]] bool isWorkingSpaceAgnosticOperation(const CompiledOperation& operation) noexcept {
+    return std::holds_alternative<CompiledSolid>(operation) ||
+           std::holds_alternative<CompiledText>(operation) ||
+           std::holds_alternative<CompiledShape>(operation) ||
+           std::holds_alternative<CompiledImageSource>(operation) ||
            std::holds_alternative<CompiledVideoSource>(operation) ||
            std::holds_alternative<CompiledImageEffect>(operation) ||
            std::holds_alternative<CompiledLayerOutput>(operation) ||
@@ -122,15 +132,15 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                                                                       cancellation, reachable)) {
         return failed(error->code, error->message);
     }
-    // A non-neutral working space is honest only for the media-safe subset. A scene that also
-    // reaches a lin_rec709_scene-specific operation (solid pixel, vector coverage, view adjust)
-    // still refuses a non-neutral working space rather than mis-colouring it.
+    // A non-neutral working space is admitted for every operation whose pixels the CPU reference
+    // resolves in the effective working space (see isWorkingSpaceAgnosticOperation). The display
+    // consumer remains a separate lane.
     if (!neutralWorkingSpace) {
         for (std::size_t index = 0; index < operationCount; ++index) {
-            if (reachable[index] && !isMediaSafeOperation(plan->operations()[index])) {
+            if (reachable[index] && !isWorkingSpaceAgnosticOperation(plan->operations()[index])) {
                 return failed(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
-                              "A non-lin_rec709_scene working space is prepared only for "
-                              "media-only scenes");
+                              "A non-lin_rec709_scene working space reached an operation without "
+                              "verified working-space semantics");
             }
         }
     }
@@ -176,8 +186,6 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
 
     const double hScale = resolved.horizontalScale;
     const double vScale = resolved.verticalScale;
-    const double authorWidth = static_cast<double>(plan->format().width());
-    const double authorHeight = static_cast<double>(plan->format().height());
 
     // Screen every reachable layer for an unsupported blend or transform BEFORE any media leaf is
     // resolved or decoded, so a graph containing an unsupported layer never prepares -- and never
@@ -215,14 +223,18 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         return index;
     };
 
-    // Concurrently-held budget: every prepared command's resident output PLUS each unique coverage
-    // raster (shared_ptr identity counts once, so a cache alias is not double charged) must fit the
-    // request's pixel allowance. Overflow-checked with subtraction-only comparators. The coverage
-    // cache's own retained-byte budget is separate ownership accounting and is not charged here.
+    // The prepared scene RETAINS only host allocations: the frozen upload images and the coverage
+    // rasters. Every other command (solid, translation, affine, blend, merge, composition output)
+    // is a window + transform description whose RGBA32F output is allocated at executor time under
+    // the executor's own LIVE-pin budget. Summing those mutually exclusive output lifetimes into
+    // one per-request total refuses graphs the executor -- and the CPU reference -- can actually
+    // run (for example a 4608x3164 source over an FHD solid and text). Only the retained host set
+    // is bounded here; GPU residency is bounded by GpuSceneExecutor::begin(scene, budget), which
+    // takes the honest CPU fallback on refusal. Overflow-checked with subtraction-only comparators.
     const std::uint64_t allowance = request.pixelStorageByteLimit;
-    std::uint64_t chargedBytes = 0;
+    std::uint64_t retainedBytes = 0;
     std::unordered_set<const void*> countedCoverage;
-    const auto charge =
+    const auto chargeRetained =
         [&](const std::uint64_t width, const std::uint64_t height,
             const std::uint64_t bytesPerPixel) -> std::optional<detail::GpuSceneLeafFailure> {
         if (width == 0 || height == 0) {
@@ -236,21 +248,24 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
                 "Prepared command size overflows"};
         }
-        if (chargedBytes > allowance || *bytes > allowance - chargedBytes) {
+        if (retainedBytes > allowance || *bytes > allowance - retainedBytes) {
             return detail::GpuSceneLeafFailure{
                 PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
                 "Prepared scene exceeds the request pixel allowance"};
         }
-        chargedBytes += *bytes;
+        retainedBytes += *bytes;
         return std::nullopt;
     };
+    // GPU-transient outputs are not summed here; the executor's live-pin ledger bounds them.
+    const auto chargeTransient = [](const std::uint64_t, const std::uint64_t, const std::uint64_t)
+        -> std::optional<detail::GpuSceneLeafFailure> { return std::nullopt; };
     const auto chargeCoverage =
         [&](const void* coverageIdentity, const std::uint64_t width,
             const std::uint64_t height) -> std::optional<detail::GpuSceneLeafFailure> {
         if (coverageIdentity == nullptr || !countedCoverage.insert(coverageIdentity).second) {
             return std::nullopt;
         }
-        return charge(width, height, sizeof(std::uint8_t));
+        return chargeRetained(width, height, sizeof(std::uint8_t));
     };
 
     for (std::size_t index = 0; index < operationCount; ++index) {
@@ -264,78 +279,12 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         const auto& operation = plan->operations()[index];
 
         if (const auto* solid = std::get_if<CompiledSolid>(&operation)) {
-            const auto color = detail::resolveParameter(solid->color, *plan, resolved);
-            const auto width = detail::resolveParameter(solid->width, *plan, resolved);
-            const auto height = detail::resolveParameter(solid->height, *plan, resolved);
-            if (!color || !width || !height || width->value < 1.0 || height->value < 1.0) {
-                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                              "Solid parameters are not evaluable");
-            }
-            const auto pixel = render::solidPixelFromStraightLinearRec709Scene(color->value);
-            if (!pixel) {
-                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                              "Solid colour is not evaluable");
-            }
-            double exactWidth = static_cast<double>(fullWindow.extent().width());
-            double exactHeight = static_cast<double>(fullWindow.extent().height());
-            if (width->value != authorWidth) {
-                exactWidth = width->value * hScale;
-            }
-            if (height->value != authorHeight) {
-                exactHeight = height->value * vScale;
-            }
-            const auto w = std::ceil(exactWidth);
-            const auto h = std::ceil(exactHeight);
-            if (!std::isfinite(w) || !std::isfinite(h) || w > 16777216.0 || h > 16777216.0) {
-                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                              "Solid dimensions exceed the supported extent");
-            }
-            const auto window = render::ImageWindow::create(0, 0, static_cast<std::uint64_t>(w),
-                                                            static_cast<std::uint64_t>(h));
-            if (!window) {
-                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                              "Solid bounds are invalid");
-            }
-            const auto descriptor = render::Rgba32fImageDescriptor::create(
-                *window.value(), fullDisplayWindow, fullPixelAspect);
-            if (!descriptor) {
-                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                              "Solid descriptor is invalid");
-            }
-            const auto solidWindow = descriptor.value()->dataWindow();
-            const auto solidDisplay = descriptor.value()->displayWindow();
-            const auto solidAspect = descriptor.value()->pixelAspect();
-            auto& entry = bounds[index];
-            entry.local = detail::boundsForWindow(solidWindow, hScale, vScale);
-            entry.local.right = width->value;
-            entry.local.bottom = height->value;
-            entry.output = entry.local;
-            outputWindowOf[index] = solidWindow;
-
-            detail::OperationKey key;
-            key.add(std::string{"gpu-solid-v1"});
-            key.add(std::bit_cast<std::uint32_t>(pixel.value()->red()));
-            key.add(std::bit_cast<std::uint32_t>(pixel.value()->green()));
-            key.add(std::bit_cast<std::uint32_t>(pixel.value()->blue()));
-            key.add(std::bit_cast<std::uint32_t>(pixel.value()->alpha()));
-            detail::addWindowToKey(key, solidWindow);
-            detail::addWindowToKey(key, solidDisplay);
-            detail::addPixelAspectToKey(key, solidAspect);
-            key.add(std::string{detail::kGpuSolidSpirvSha256});
-            keyOf[index] = key.digest();
-
-            if (const auto error = charge(solidWindow.extent().width(),
-                                          solidWindow.extent().height(), sizeof(render::Rgba32f))) {
+            if (const auto error = detail::emitSolidCommand(
+                    *solid, *plan, resolved, index, operationIndex, fullWindow, fullDisplayWindow,
+                    fullPixelAspect, hScale, vScale, emit, chargeTransient, commandForOperation,
+                    keyOf, outputWindowOf, bounds, vectors)) {
                 return failed(error->code, error->message);
             }
-            GpuSceneSolidCommand command{.sourceOperation = operationIndex,
-                                         .pixel = *pixel.value(),
-                                         .dataWindow = solidWindow,
-                                         .displayWindow = solidDisplay,
-                                         .pixelAspect = solidAspect,
-                                         .semanticKey = keyOf[index]};
-            commandForOperation[index] = emit(std::move(command));
-            vectors[index] = GpuSceneVectorChain{index, {}, 1.0};
             continue;
         }
 
@@ -357,16 +306,49 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
 
         if (std::holds_alternative<CompiledImageSource>(operation) ||
             std::holds_alternative<CompiledVideoSource>(operation)) {
-            const auto remainingBudget = allowance > chargedBytes ? allowance - chargedBytes : 0;
+            // The RAW upload is host-retained (charged against `retainedBytes`); the point-resample
+            // and OCIO outputs are GPU-transient and charged through `chargeTransient` (a no-op
+            // under main's host-only accounting, where the executor's live-pin ledger bounds GPU
+            // residency).
+            const auto remainingBudget = allowance > retainedBytes ? allowance - retainedBytes : 0;
             detail::GpuSceneUploadLeafResult leaf;
             const auto error = detail::buildAndEmitMediaLeaf(
                 operation, operationIndex, request, *plan, resolved, mediaContext_, ocioContext_,
-                remainingBudget, hScale, vScale, charge, cancellation, mediaStatistics, emit,
-                outputWindowOf[index], commandForOperation[index], keyOf[index], leaf);
+                remainingBudget, hScale, vScale, chargeRetained, chargeTransient, cancellation,
+                mediaStatistics, emit, outputWindowOf[index], commandForOperation[index],
+                keyOf[index], leaf);
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
             }
             bounds[index] = leaf.bounds;
+            continue;
+        }
+
+        if (const auto* effect = std::get_if<CompiledImageEffect>(&operation)) {
+            const detail::GpuSceneEffectEmissionContext effectContext{
+                .plan = plan.get(),
+                .request = &request,
+                .resolved = &resolved,
+                .vectors = &vectors,
+                .commandForOperation = &commandForOperation,
+                .keyOf = &keyOf,
+                .outputWindowOf = &outputWindowOf,
+                .bounds = &bounds,
+                .commands = &commands,
+                .fullDisplayWindow = fullDisplayWindow,
+                .fullPixelAspect = fullPixelAspect,
+                .hScale = hScale,
+                .vScale = vScale,
+                .allowance = allowance,
+                .assetBaseDirectory = mediaContext_.assetBaseDirectory,
+                .coverageCache = coverageCache_,
+            };
+            if (const auto error = detail::emitImageEffectOperation(
+                    *effect, operationIndex, effectContext, ocioContext_, cancellation, emit,
+                    chargeTransient, chargeCoverage, commandForOperation, keyOf, outputWindowOf,
+                    bounds, vectors, textConsumed, shapeConsumed)) {
+                return failed(error->code, error->message, mediaStatistics);
+            }
             continue;
         }
 
@@ -379,7 +361,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             detail::GpuSceneNestedResult nested;
             const auto error = detail::prepareNestedComposition(
                 *source, *plan, request, resolved, hScale, vScale, detail::nestedCompositionDepth(),
-                allowance, chargedBytes, cancellation,
+                allowance, retainedBytes, cancellation,
                 [this](const std::shared_ptr<const CompiledCompositionPlan>& childPlan,
                        const EvaluationRequest& childRequest, const CancellationToken& cancel) {
                     return build(childPlan, childRequest, cancel);
@@ -568,7 +550,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     if (const auto error = detail::emitTranslationOpacityCommand(
                             inputIndex, keyOf[inputIndexValue], sourceWindow, *layerWindow,
                             delta->first, delta->second, opacity->value, fullPixelAspect,
-                            operationIndex, charge, emit, commandForOperation[index],
+                            operationIndex, chargeTransient, emit, commandForOperation[index],
                             keyOf[index])) {
                         return failed(error->code, error->message);
                     }
@@ -583,9 +565,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                         leafOperation, *plan, resolved, chainMatrix, *layerWindow,
                         fullDisplayWindow, fullPixelAspect, hScale, vScale,
                         inputVec->opacity * opacity->value, leafPath && nativeGrid, allowance,
-                        operationIndex, transformValue, coverageCache_, cancellation, emit, charge,
-                        chargeCoverage, composedIndex, semanticKey, consumedTextLeaf,
-                        consumedShapeLeaf)) {
+                        operationIndex, &transformValue, coverageCache_, cancellation, emit,
+                        chargeTransient, chargeCoverage, composedIndex, semanticKey,
+                        consumedTextLeaf, consumedShapeLeaf)) {
                     return failed(error->code, error->message);
                 }
                 keyOf[index] = semanticKey;
@@ -605,7 +587,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     if (const auto error = detail::emitTranslationOpacityCommand(
                             inputIndex, keyOf[inputIndexValue], sourceWindow, *layerWindow,
                             delta->first, delta->second, opacity->value, fullPixelAspect,
-                            operationIndex, charge, emit, commandForOperation[index],
+                            operationIndex, chargeTransient, emit, commandForOperation[index],
                             keyOf[index])) {
                         return failed(error->code, error->message);
                     }
@@ -614,46 +596,28 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             }
             if (const auto error = detail::emitAffineLayerCommand(
                     inputIndex, keyOf[inputIndexValue], sourceWindow, *layerWindow, composed,
-                    hScale, vScale, opacity->value, fullPixelAspect, operationIndex, charge, emit,
-                    commandForOperation[index], keyOf[index])) {
+                    hScale, vScale, opacity->value, fullPixelAspect, operationIndex,
+                    chargeTransient, emit, commandForOperation[index], keyOf[index])) {
                 return failed(error->code, error->message);
             }
             continue;
         }
 
         if (const auto* stack = std::get_if<CompiledMerge>(&operation)) {
-            if (const auto error = detail::emitMergeCommand(*stack, *plan, resolved, index, bounds,
-                                                            outputWindowOf, commandForOperation,
-                                                            keyOf, operationIndex, emit, charge)) {
+            if (const auto error = detail::emitMergeCommand(
+                    *stack, *plan, resolved, index, bounds, outputWindowOf, commandForOperation,
+                    keyOf, operationIndex, emit, chargeTransient)) {
                 return failed(error->code, error->message);
             }
             continue;
         }
 
         if (const auto* output = std::get_if<CompiledCompositionOutput>(&operation)) {
-            bounds[index] = bounds[output->input.value()];
-            const auto inner = commandForOperation[output->input.value()];
-            detail::OperationKey key;
-            key.add(std::string{"gpu-composition-output-v1"});
-            key.add(inner == kInvalidGpuSceneCommand ? std::string{"none"}
-                                                     : keyOf[output->input.value()]);
-            detail::addWindowToKey(key, resolved.imageDescriptor.dataWindow());
-            detail::addPixelAspectToKey(key, resolved.imageDescriptor.pixelAspect());
-            keyOf[index] = key.digest();
-
-            if (const auto error = charge(resolved.imageDescriptor.dataWindow().extent().width(),
-                                          resolved.imageDescriptor.dataWindow().extent().height(),
-                                          sizeof(render::Rgba32f))) {
+            if (const auto error = detail::emitCompositionOutputCommand(
+                    *output, resolved, index, operationIndex, emit, chargeTransient,
+                    commandForOperation, keyOf, bounds)) {
                 return failed(error->code, error->message);
             }
-            GpuSceneCompositionOutputCommand command{
-                .sourceOperation = operationIndex,
-                .input = inner,
-                .dataWindow = resolved.imageDescriptor.dataWindow(),
-                .displayWindow = resolved.imageDescriptor.displayWindow(),
-                .pixelAspect = resolved.imageDescriptor.pixelAspect(),
-                .semanticKey = keyOf[index]};
-            commandForOperation[index] = emit(std::move(command));
             continue;
         }
 

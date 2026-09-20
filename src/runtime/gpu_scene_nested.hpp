@@ -217,10 +217,11 @@ inline void addWindowBytes(std::uint64_t& total, const render::ImageWindow windo
 
 } // namespace nested_detail
 
-// Conservative resident-byte total for a spliced child scene: every command's published RGBA32F
-// window plus each unique coverage raster once. It mirrors the builder's own charge accounting and
-// is only used to keep the combined parent+child preparation inside one allowance. Any new
-// command alternative must be classified explicitly here.
+// Retained host-byte total for a spliced child scene: the frozen upload images plus each unique
+// coverage raster once. It deliberately does NOT sum the RGBA32F command outputs, which are
+// allocated at executor time under the executor's own live-pin budget; counting their mutually
+// exclusive lifetimes here would re-introduce the artificial per-frame refusal the builder fixed.
+// Any new command alternative must be classified explicitly here.
 [[nodiscard]] inline std::uint64_t nestedSceneResidentBytes(const PreparedGpuScene& scene) {
     std::uint64_t total = 0;
     std::unordered_set<const void*> countedCoverage;
@@ -228,10 +229,7 @@ inline void addWindowBytes(std::uint64_t& total, const render::ImageWindow windo
         std::visit(
             [&total, &countedCoverage](const auto& item) {
                 using T = std::decay_t<decltype(item)>;
-                if constexpr (std::is_same_v<T, GpuSceneSolidCommand>) {
-                    nested_detail::addWindowBytes(total, item.dataWindow);
-                } else if constexpr (std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
-                    nested_detail::addWindowBytes(total, item.outputWindow);
+                if constexpr (std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
                     const void* identity = item.coverageIdentity();
                     if (identity != nullptr && countedCoverage.insert(identity).second) {
                         const auto maximum = std::numeric_limits<std::uint64_t>::max();
@@ -245,30 +243,25 @@ inline void addWindowBytes(std::uint64_t& total, const render::ImageWindow windo
                         total = bytes > maximum - total ? maximum : total + bytes;
                     }
                 } else if constexpr (std::is_same_v<T, GpuSceneUploadCommand>) {
+                    // A frozen host upload image: the one retained RGBA32F allocation. The
+                    // point-resample proxy output and the OCIO effect output are GPU-transient.
                     nested_detail::addWindowBytes(total, item.descriptor.dataWindow());
-                } else if constexpr (std::is_same_v<T, GpuSceneTranslationCommand>) {
-                    nested_detail::addWindowBytes(total, item.outputWindow);
-                } else if constexpr (std::is_same_v<T, GpuSceneAffineCommand>) {
-                    nested_detail::addWindowBytes(total, item.outputWindow);
-                } else if constexpr (std::is_same_v<T, GpuSceneMergeCommand>) {
-                    nested_detail::addWindowBytes(total, item.outputWindow);
-                } else if constexpr (std::is_same_v<T, GpuSceneBlendCommand>) {
-                    nested_detail::addWindowBytes(total, item.outputWindow);
-                } else if constexpr (std::is_same_v<T, GpuSceneCompositionOutputCommand>) {
-                    nested_detail::addWindowBytes(total, item.dataWindow);
-                } else if constexpr (std::is_same_v<T, GpuSceneOcioEffectCommand>) {
-                    // The OCIO effect's resident output is the same RGBA32F window it publishes;
-                    // its program resources are accounted by the executor/cache ledger, not the
-                    // scene preparation allowance.
-                    nested_detail::addWindowBytes(total, item.outputWindow);
-                } else if constexpr (std::is_same_v<T, GpuScenePointResampleCommand>) {
-                    // The resample publishes one RGBA32F proxy output; its axis metadata is
-                    // accounted by the executor, not the scene preparation allowance.
-                    nested_detail::addWindowBytes(total, item.outputWindow);
+                } else if constexpr (std::is_same_v<T, GpuSceneSolidCommand> ||
+                                     std::is_same_v<T, GpuSceneTranslationCommand> ||
+                                     std::is_same_v<T, GpuSceneAffineCommand> ||
+                                     std::is_same_v<T, GpuSceneMergeCommand> ||
+                                     std::is_same_v<T, GpuSceneBlendCommand> ||
+                                     std::is_same_v<T, GpuSceneCompositionOutputCommand> ||
+                                     std::is_same_v<T, GpuSceneOcioEffectCommand> ||
+                                     std::is_same_v<T, GpuScenePointResampleCommand>) {
+                    // GPU-transient output: allocated at executor time under the live-pin ledger,
+                    // not retained by scene preparation. The OCIO effect's program resources and
+                    // the point-resample axis metadata are accounted by the executor/cache ledger,
+                    // not this allowance.
                 } else {
                     static_assert(kNestedCommandUnhandled<T>,
-                                  "GpuSceneCommand gained an alternative; add its resident-byte "
-                                  "accounting to nestedSceneResidentBytes");
+                                  "GpuSceneCommand gained an alternative; classify its retained "
+                                  "host bytes in nestedSceneResidentBytes");
                 }
             },
             command);

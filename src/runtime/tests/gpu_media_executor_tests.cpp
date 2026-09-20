@@ -524,6 +524,86 @@ void testRealVideo(Expectations& expectations, GpuSceneExecutor& executor,
 
 } // namespace
 
+// The reported graph at full source size: a real 4608x3164 EXR over an FHD solid and text, decoded,
+// prepared, uploaded and dispatched natively. The converted upload keeps its full resolution (no
+// resize to the composition), the output matches the CPU oracle, and an identical rebuild reuses
+// the prepared upload with zero re-decode and zero native re-upload.
+void testLargeSourceNative(Expectations& expectations, GpuDevice& device,
+                           CpuCompositionEvaluator& evaluator) {
+    const auto directory = std::filesystem::temp_directory_path() / "bloom_gpu_large_executor_test";
+    std::filesystem::remove_all(directory);
+    std::filesystem::create_directories(directory);
+    const auto path = directory / "large_4608x3164.exr";
+    writeLargeExrRgba(path, 4608, 3164);
+    const auto asset = imageAsset(path, "large_source", 4200);
+    evaluator.setAssetBaseDirectory(directory);
+
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    auto executor = GpuSceneExecutor::create(device, *cache.cache);
+    expectations.expect(cache.hasValue() && executor.hasValue(), "large: cache+executor created");
+    if (!cache || !executor) {
+        return;
+    }
+    auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    context.assetBaseDirectory = directory;
+    const CpuGpuSceneBuilder builder(nullptr, context);
+    const auto plan = largeSourcePlan(format(1920, 1080), asset, 5000);
+    auto request = requestFor(*plan);
+    // The CPU oracle's peak (source + layer output + merge) is larger than the builder's retained
+    // set, so this native proof uses the executor's real 4 GiB scene budget. The builder's default
+    // 512 MiB allowance is covered by the CPU media scene-preparation test.
+    request.pixelStorageByteLimit = kSceneBudget;
+
+    const auto first = builder.build(plan, request);
+    expectations.expect(first.hasValue(), "large: the full-size EXR graph prepares");
+    if (!first) {
+        return;
+    }
+    const auto* upload = firstUpload(*first.scene);
+    expectations.expect(upload != nullptr &&
+                            upload->descriptor.dataWindow().extent().width() == 4608 &&
+                            upload->descriptor.dataWindow().extent().height() == 3164,
+                        "large: the converted upload keeps full 4608x3164 resolution");
+    expectations.expect(first.scene->outputDescriptor().dataWindow().extent().width() == 1920 &&
+                            first.scene->outputDescriptor().dataWindow().extent().height() == 1080,
+                        "large: the composition output stays FHD");
+
+    auto oracleRequest = request;
+    oracleRequest.bypassOperationCache = true;
+    const auto frame = evaluator.evaluate(plan, oracleRequest, {});
+    expectations.expect(frame.frame() != nullptr, "large: the CPU oracle evaluates the graph");
+
+    const auto run = runScene(*executor.executor, first.scene, kSceneBudget);
+    expectations.expect(run.ready, "large: the full-size graph dispatches natively");
+    if (run.ready && run.image != nullptr && frame.frame() != nullptr) {
+        const auto readback = readbackResidentImage(*run.image, kReadbackBudget);
+        expectations.expect(readback.hasValue(), "large: the test readback succeeds");
+        if (readback) {
+            expectations.expect(
+                pixelsClose(readback.pixels, frame.frame()->processImage().pixels()),
+                "large: every output pixel matches the CPU oracle within the process gate");
+        }
+    }
+    expectations.expect(executor.executor->counters().uploads >= 1,
+                        "large: a real native upload ran for the 233 MB source");
+
+    // Warm identical request: the prepared-upload cache retains the full source, so the rebuild
+    // re-decodes zero frames, and the unchanged output performs zero native dispatches.
+    const auto second = builder.build(plan, request);
+    expectations.expect(second.hasValue() &&
+                            second.scene->mediaStatistics().imageConversions == 0 &&
+                            second.scene->mediaStatistics().uploadCacheHits == 1,
+                        "large: an identical rebuild re-decodes zero frames (upload cache hit)");
+    if (!second) {
+        return;
+    }
+    const auto dispatchesBefore = executor.executor->counters().dispatches;
+    const auto secondRun = runScene(*executor.executor, second.scene, kSceneBudget);
+    expectations.expect(secondRun.ready, "large: the warm rebuild completes");
+    expectations.expect(executor.executor->counters().dispatches == dispatchesBefore,
+                        "large: the warm rebuild performs zero native dispatches");
+}
+
 int main(const int argc, char** argv) {
     try {
         const Options options = parseOptions(argc, argv);
@@ -569,6 +649,7 @@ int main(const int argc, char** argv) {
         testWarmOutputZeroDispatch(expectations, *device.device, evaluator, fixture);
         testCachedInputBudget(expectations, *device.device, evaluator, fixture);
         testRealVideo(expectations, *parityExecutor.executor, evaluator, options.fixtures);
+        testLargeSourceNative(expectations, *device.device, evaluator);
 
         if (!expectations.ok()) {
             std::cerr << "FAIL: GPU media executor expectations failed\n";

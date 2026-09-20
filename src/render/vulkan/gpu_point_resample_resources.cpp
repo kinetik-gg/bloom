@@ -7,7 +7,9 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 
 // Bounded process-global reservation accounting and native per-job resource construction for
@@ -34,6 +36,109 @@ void notePointResampleQuarantine() noexcept { g_pointResampleTeardownIncomplete.
 bool pointResampleTeardownIncomplete() noexcept { return g_pointResampleTeardownIncomplete.load(); }
 
 namespace point_resample_detail {
+
+namespace {
+
+// Bounded live-resident pool: a published output image holds one slot until it is taken
+// (caller-owned), destroyed on the owner thread, or retained for owner recovery. The pool bounds
+// the number of native residents process-wide, so the retained store can always hold them.
+constexpr std::int32_t kMaxLiveResidents = 8;
+std::atomic<std::int32_t> g_liveResidents{0};
+
+struct RetainedSlot final {
+    bool occupied = false;
+    std::shared_ptr<DeviceAllocatorState> deviceState;
+    std::unique_ptr<GpuImage> resident;
+    std::thread::id ownerThread;
+};
+
+// Fixed-capacity, allocation-free retained store. Because every retained resident already holds one
+// of the kMaxLiveResidents pool slots, the number of occupied slots can never exceed the pool, so a
+// free slot always exists when a resident is retained (the fixed-capacity invariant).
+std::mutex g_retainedMutex;
+std::array<RetainedSlot, static_cast<std::size_t>(kMaxLiveResidents)> g_retainedSlots{};
+
+} // namespace
+
+bool acquireResidentSlot() noexcept {
+    std::int32_t current = g_liveResidents.load(std::memory_order_relaxed);
+    while (current < kMaxLiveResidents) {
+        if (g_liveResidents.compare_exchange_weak(current, current + 1,
+                                                  std::memory_order_acq_rel)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void releaseResidentSlot() noexcept { g_liveResidents.fetch_sub(1, std::memory_order_acq_rel); }
+
+std::uint32_t liveResidents() noexcept {
+    return static_cast<std::uint32_t>(g_liveResidents.load());
+}
+
+bool retainResident(const std::shared_ptr<DeviceAllocatorState>& deviceState,
+                    std::unique_ptr<GpuImage>& resident,
+                    const std::thread::id ownerThread) noexcept {
+    try {
+        std::lock_guard lock(g_retainedMutex);
+        // Find a free fixed slot FIRST; only then take ownership of the caller's unique_ptr. A full
+        // store returns false with the caller's ownership intact, so nothing is destroyed here.
+        for (auto& slot : g_retainedSlots) {
+            if (!slot.occupied) {
+                slot.deviceState = deviceState;
+                slot.ownerThread = ownerThread;
+                slot.resident = std::move(resident);
+                slot.occupied = true;
+                return true;
+            }
+        }
+        return false;
+    } catch (...) {
+        return false;
+    }
+}
+
+std::uint32_t retainedResidents() noexcept {
+    try {
+        std::lock_guard lock(g_retainedMutex);
+        std::uint32_t count = 0;
+        for (const auto& slot : g_retainedSlots) {
+            count += slot.occupied ? 1U : 0U;
+        }
+        return count;
+    } catch (...) {
+        return 0;
+    }
+}
+
+std::uint32_t retireRetainedForOwner() noexcept {
+    // Fixed-capacity staging, no allocation. Ownership is moved out under the lock and destroyed
+    // outside it, on the calling (owner) thread.
+    std::array<RetainedSlot, static_cast<std::size_t>(kMaxLiveResidents)> reclaim{};
+    std::size_t count = 0;
+    try {
+        std::lock_guard lock(g_retainedMutex);
+        const auto self = std::this_thread::get_id();
+        for (auto& slot : g_retainedSlots) {
+            if (slot.occupied && slot.ownerThread == self) {
+                reclaim[count].deviceState = std::move(slot.deviceState);
+                reclaim[count].resident = std::move(slot.resident);
+                reclaim[count].ownerThread = slot.ownerThread;
+                reclaim[count].occupied = true;
+                slot.occupied = false;
+                ++count;
+            }
+        }
+    } catch (...) {
+        // Nothing has been destroyed; the slots remain as they were.
+    }
+    for (std::size_t index = 0; index < count; ++index) {
+        releaseResidentSlot();
+        reclaim[index].resident.reset();
+    }
+    return static_cast<std::uint32_t>(count);
+}
 
 std::atomic<std::uint8_t>& pointResampleFault() noexcept {
     static std::atomic<std::uint8_t> value{0};
@@ -63,6 +168,12 @@ bool pointResampleRetireQuarantineForOwner() noexcept {
 std::uint32_t pointResampleLiveResourceSets() noexcept {
     return static_cast<std::uint32_t>(g_pointResampleLiveSets.load());
 }
+
+std::uint32_t pointResampleLiveResidents() noexcept { return liveResidents(); }
+
+std::uint32_t pointResampleRetainedResidents() noexcept { return retainedResidents(); }
+
+std::uint32_t pointResampleRetireRetainedForOwner() noexcept { return retireRetainedForOwner(); }
 
 } // namespace point_resample_detail
 
@@ -100,10 +211,15 @@ void GpuPointResample::Impl::releaseClaim() noexcept {
 }
 
 void GpuPointResample::Impl::releaseRetired() noexcept {
-    std::unique_ptr<GpuImage> keep = std::move(resources.resident);
-    freeJobResources();
+    // The submission is proven retired: free the job resources (releasing the job-set accounting)
+    // but keep the published resident and its bounded resident slot for take() or ownership-thread
+    // destruction.
+    resources.releaseJobOnly();
+    if (resourcesLive) {
+        notePointResampleResourceSetFreed();
+        resourcesLive = false;
+    }
     releaseClaim();
-    resources.resident = std::move(keep);
 }
 
 bool GpuPointResample::Impl::quarantine() noexcept {
@@ -255,6 +371,15 @@ bool GpuPointResample::Impl::launchJob(const std::shared_ptr<const GpuImage>& so
         return false;
     }
 
+    // Bound the number of live native residents process-wide before allocating the output image.
+    if (!point_resample_detail::acquireResidentSlot()) {
+        jobDiagnostic = pointResampleDiagnostic(
+            GpuPointResampleDiagnosticCode::Busy,
+            "the bounded live-resident pool is exhausted; take() published results or retire "
+            "retained ones");
+        return false;
+    }
+    resources.residentSlotHeld = true;
     const auto dataWindow = ImageWindow::create(0, 0, outputWidth, outputHeight);
     if (!dataWindow) {
         jobDiagnostic = pointResampleDiagnostic(GpuPointResampleDiagnosticCode::InvalidArgument,

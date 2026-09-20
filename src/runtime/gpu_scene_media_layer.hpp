@@ -171,26 +171,29 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
 // builder's per-operation outputs. Defined here so the builder orchestrator's image and video
 // blocks share one call site. The remaining media bytes are charged by the leaf helpers through
 // `charge`.
-template <typename Emit, typename Charge>
-[[nodiscard]] std::optional<GpuSceneLeafFailure>
-buildAndEmitMediaLeaf(const CompiledOperation& operation, const OperationIndex operationIndex,
-                      const EvaluationRequest& request, const CompiledCompositionPlan& plan,
-                      const ResolvedEvaluation& resolved, const GpuSceneMediaContext& context,
-                      const GpuSceneOcioContext& ocioContext, const std::uint64_t pixelBudget,
-                      const double hScale, const double vScale, Charge&& charge,
-                      const CancellationToken& cancellation, GpuSceneMediaStatistics& statistics,
-                      Emit&& emit, std::optional<render::ImageWindow>& outputWindow,
-                      GpuSceneCommandIndex& command, std::string& semanticKey,
-                      GpuSceneUploadLeafResult& leaf) {
+template <typename Emit, typename ChargeRetained, typename ChargeTransient>
+[[nodiscard]] std::optional<GpuSceneLeafFailure> buildAndEmitMediaLeaf(
+    const CompiledOperation& operation, const OperationIndex operationIndex,
+    const EvaluationRequest& request, const CompiledCompositionPlan& plan,
+    const ResolvedEvaluation& resolved, const GpuSceneMediaContext& context,
+    const GpuSceneOcioContext& ocioContext, const std::uint64_t pixelBudget, const double hScale,
+    const double vScale, ChargeRetained&& chargeRetained, ChargeTransient&& chargeTransient,
+    const CancellationToken& cancellation, GpuSceneMediaStatistics& statistics, Emit&& emit,
+    std::optional<render::ImageWindow>& outputWindow, GpuSceneCommandIndex& command,
+    std::string& semanticKey, GpuSceneUploadLeafResult& leaf) {
+    // The RAW upload is a host-resident allocation and is charged against the retained-byte
+    // allowance; the point-resample and OCIO outputs are GPU-transient and charged through the
+    // transient charge (which is a no-op under main's host-only accounting, since the executor's
+    // live-pin ledger bounds GPU residency).
     std::optional<GpuSceneLeafFailure> built;
     if (const auto* image = std::get_if<CompiledImageSource>(&operation)) {
         built =
             buildImageColorLeaf(*image, request, plan, resolved, context, ocioContext, pixelBudget,
-                                hScale, vScale, charge, cancellation, statistics, leaf);
+                                hScale, vScale, chargeRetained, cancellation, statistics, leaf);
     } else if (const auto* video = std::get_if<CompiledVideoSource>(&operation)) {
         built =
             buildVideoColorLeaf(*video, request, plan, resolved, context, ocioContext, pixelBudget,
-                                hScale, vScale, charge, cancellation, statistics, leaf);
+                                hScale, vScale, chargeRetained, cancellation, statistics, leaf);
     } else {
         return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InternalInvariant,
                                    "a media leaf was requested for a non-media operation"};
@@ -199,7 +202,7 @@ buildAndEmitMediaLeaf(const CompiledOperation& operation, const OperationIndex o
         return built;
     }
     outputWindow = leaf.outputWindow;
-    return emitMediaLeafCommands(operationIndex, leaf, charge, emit, command, semanticKey);
+    return emitMediaLeafCommands(operationIndex, leaf, chargeTransient, emit, command, semanticKey);
 }
 
 // The bounded GPU colour split leaves. They call prepareImageColorLeaf()/prepareVideoColorLeaf(),

@@ -42,7 +42,6 @@ constexpr std::uint32_t kWorkgroupSizeX = 256;
 constexpr std::size_t kPaletteEntries = 256;
 constexpr std::uint64_t kPaletteBytes =
     static_cast<std::uint64_t>(kPaletteEntries) * sizeof(Rgba32f);
-constexpr std::uint64_t kMaxImageBytes = 256ULL * 1024ULL * 1024ULL;
 
 struct CoveredPushConstants final {
     std::uint32_t width;
@@ -291,7 +290,7 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
                                   "the covered resident image byte count overflows");
     }
     const std::uint64_t imageBytes = pixels * sizeof(Rgba32f);
-    if (imageBytes > impl.budgets.maxImageBytes || imageBytes > kMaxImageBytes) {
+    if (imageBytes > impl.budgets.maxImageBytes) {
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::OverBudget,
                                   "the resident image exceeds the configured byte budget");
     }

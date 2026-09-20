@@ -7,9 +7,19 @@
 // included by a public render header.
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 
+namespace bloom::render {
+struct GpuPathCoverageImpl;
+} // namespace bloom::render
+
 namespace bloom::render::path_coverage_detail {
+
+// Acquire/release a resident slot. Acquire is called before the Impl's first native allocation;
+// release is owner-thread retirement. Defined in the Vulkan translation unit.
+[[nodiscard]] bool acquireResidentSlot(GpuPathCoverageImpl* impl) noexcept;
+void releaseResidentSlot(GpuPathCoverageImpl* impl) noexcept;
 
 enum class PathCoverageFault : std::uint8_t {
     None,
@@ -32,6 +42,20 @@ enum class PathCoverageFault : std::uint8_t {
 // Test/observability seams for the bounded reservation.
 [[nodiscard]] bool pathCoverageQuarantineOccupied() noexcept;
 [[nodiscard]] bool retirePathCoverageQuarantineForOwner() noexcept;
+
+// Bounded resident pool. Every GpuPathCoverage native resource set (compute pipeline plus resident
+// mask plus any in-flight job resources) occupies exactly one of a fixed number of pool slots,
+// acquired before its first native allocation and held until owner-thread retirement. A foreign
+// thread destruction only marks the already-owned slot orphaned and never destroys native state;
+// the owner drain retires orphaned residents (allocation-free, noexcept) and returns their slots.
+// Admission refuses cleanly when the pool is full, and recovers once the owner drains. Production-
+// owned (defined in the Vulkan translation unit and inert in the CPU stub).
+[[nodiscard]] std::size_t pathCoverageResidentCapacity() noexcept;
+[[nodiscard]] std::size_t pathCoverageResidentInUse() noexcept;
+[[nodiscard]] std::size_t pathCoverageResidentOrphaned() noexcept;
+[[nodiscard]] std::uint64_t pathCoverageResidentRefusals() noexcept;
+[[nodiscard]] std::uint64_t pathCoverageResidentRetired() noexcept;
+void drainPathCoverageResidentOrphansOnOwnerThread() noexcept;
 
 // Defined in the Vulkan translation unit and the CPU stub; tests call them.
 void setPathCoverageFaultForTest(PathCoverageFault fault) noexcept;

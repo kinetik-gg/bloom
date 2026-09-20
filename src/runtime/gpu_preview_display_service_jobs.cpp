@@ -273,8 +273,15 @@ void runGpuStartupImpl(const std::shared_ptr<PreviewDisplayServiceCore>& core, T
     // Resident route: qualify the resident display independently of the packed readback
     // qualification. The resident report is the only authority for resident selection.
     if (core->gpuStageFunction != nullptr) {
-        const bool qualified = createAndQualifyResidentRoute(core);
-        if (!qualified) {
+        const bool neutralQualified = createAndQualifyResidentRoute(core);
+        // A failed Neutral qualification is not fatal for the general display route: as long as the
+        // owner created the scene executor (and retained a live resident display), the service is
+        // Ready and each request decides per-stage. The service is only Unavailable when neither
+        // route exists.
+        const bool generalPrerequisites = core->residentExecutor != nullptr &&
+                                          core->residentDisplay != nullptr &&
+                                          !core->residentRouteTerminal;
+        if (!neutralQualified && !generalPrerequisites) {
             std::string detail;
             {
                 std::lock_guard lock(core->stateMutex);
