@@ -3,9 +3,10 @@
 
 // Private to src/runtime. The solid vector-coverage path: a fractional-device-grid solid layer
 // whose CPU evaluation the evaluator performs through render::PathRaster. This reproduces that
-// exact raster (same rectangle path, same matrix, same fill rule) and builds the resolved
-// GpuSceneCoverageSolidCommand. It never materialises the RGBA image; only the R8 coverage is
-// allocated, and only through the caller's bounded charger.
+// exact raster (same rectangle path, same matrix, same fill rule) as the immutable bounded
+// PathRasterCoverageGeometry and builds the resolved GpuSceneCoverageSolidCommand. It never
+// materialises the RGBA image and never builds a per-pixel CPU mask; the executor's native
+// GpuPathCoverage producer rasterizes the geometry on the device.
 
 #include "gpu_scene_preparation_common.hpp"
 
