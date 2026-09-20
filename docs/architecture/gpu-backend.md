@@ -266,6 +266,18 @@ decoding and the CPU fallback, and a zero device ceiling is the honest no-device
 that takes the CPU path. A genuinely unresolved device uses a small safe fallback pool; a known-zero
 device is never turned into that fallback.
 
+Within that pool the lease-registry/frame-cache, scene-cache, and per-request ledgers are
+partitioned 50/20/30. The per-request ledger is the only one that holds RGBA32F working images, and
+a single source-over or translation step simultaneously holds the merge accumulator, the foreground
+input, and its own new output, plus the native operation's actual VMA allocation, status buffer, and
+staging peak. The request share therefore has to cover roughly three full-size float frames, not the
+two a preview-only reading suggests; a smaller share refuses an ordinary full-resolution composition
+that the device could actually run. Because the partition divides the SAME pool, giving the request
+ledger that room leaves fewer RGBA8 resident frame-cache entries, which is the deliberate trade-off.
+The pool itself is still the resolved device budget clamped to the artist's ceiling, so a
+composition whose real working set exceeds that capacity is refused honestly and falls back rather
+than being claimed as supported.
+
 Presentation lane. The qualified Linux loader is rebuilt with `BUILD_WSI_WAYLAND_SUPPORT=ON` alone
 (XCB/Xlib/Xrandr and DirectFB stay `OFF`; the Wayland branch adds no pkg-config or `DT_NEEDED` entry).
 Device bootstrap adds an opt-in presentation request that enables `VK_KHR_surface`,

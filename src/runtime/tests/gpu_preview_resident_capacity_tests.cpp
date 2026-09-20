@@ -48,16 +48,31 @@ GpuResidentCapacity knownCapacity(const std::uint64_t bytes) {
 void testConfiguredPartition() {
     const auto plan = bloom::runtime::gpuResidentCapacityPlanConfigured(2ULL * kGib);
     expect(plan.poolBytes == 2ULL * kGib, "the configured pool is the explicit ceiling");
-    expect(plan.leaseBytes == (2ULL * kGib / 5ULL) * 3ULL, "the lease share is 3/5 of the ceiling");
+    expect(plan.leaseBytes == 2ULL * kGib / 2ULL, "the lease share is 1/2 of the ceiling");
     expect(plan.sceneCacheBytes == 2ULL * kGib / 5ULL, "the scene share is 1/5 of the ceiling");
     expect(plan.requestBytes == 2ULL * kGib - plan.leaseBytes - plan.sceneCacheBytes,
            "the request share completes the ceiling");
+    expect(plan.leaseBytes + plan.sceneCacheBytes + plan.requestBytes == plan.poolBytes,
+           "the partition sums to exactly the pool and can never overcommit it");
+    // Float processing needs the accumulator, the input, and the new output live together with the
+    // native allocation/staging overhead; the request share must never fall back below the retired
+    // 60/20/20 default (pool/5) that starved it.
+    expect(plan.requestBytes >= 2ULL * kGib / 5ULL,
+           "the request share is at or above the retired 60/20/20 default");
+    expect(plan.requestBytes > plan.leaseBytes / 2ULL,
+           "the request share covers more than a quarter of the pool");
     expect(plan.cacheBytes == plan.leaseBytes - plan.leaseBytes / 5ULL,
            "the cache keeps 4/5 of the lease ledger");
     expect(plan.leaseBytes > plan.cacheBytes, "the lease ledger keeps in-flight headroom");
     expect(plan.cacheEntries >= 8 && plan.leaseEntries >= plan.cacheEntries,
            "the entry bounds are positive and aligned");
     expect(!plan.resolved, "a host-configured partition is not an owner-resolved plan");
+
+    // An explicit tiny ceiling is honored proportionally, never floored up, and still sums to it.
+    const auto tiny = bloom::runtime::gpuResidentCapacityPlanConfigured(5);
+    expect(tiny.leaseBytes + tiny.sceneCacheBytes + tiny.requestBytes == tiny.poolBytes &&
+               tiny.poolBytes == 5,
+           "a tiny explicit ceiling partitions exactly without a floor");
 
     const auto zero = bloom::runtime::gpuResidentCapacityPlanConfigured(0);
     expect(zero.poolBytes == 0 && zero.cacheBytes == 0 && zero.leaseBytes == 0 &&

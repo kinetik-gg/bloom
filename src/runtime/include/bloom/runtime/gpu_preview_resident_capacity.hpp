@@ -53,9 +53,15 @@ inline constexpr std::uint64_t kResidentCapacityClaimDivisor = 2;
 
 // Safe total pool when the device budget is genuinely unknown.
 inline constexpr std::uint64_t kUnknownResidentPoolBytes = 256ULL * 1024ULL * 1024ULL;
-// The 60/20/20 lease/scene/request split of the resident pool.
-inline constexpr std::uint64_t kResidentLeaseNumerator = 3;
-inline constexpr std::uint64_t kResidentLeaseDenominator = 5;
+// The 50/20/30 lease/scene/request split of the resident pool. The per-request ledger is the only
+// one whose frames are RGBA32F working images; a single source-over/translation step
+// simultaneously holds the accumulator, the foreground input, and its own new output, plus the
+// native op's real VMA/status/staging overhead. At 3/5 the lease starved that ledger and refused
+// ordinary full-resolution compositions that fit the device. The lease still keeps 4/5 of its half
+// of the pool for the resident frame cache; the exact sum is always the configured pool, so the
+// total can never exceed the device claim or the artist's ceiling.
+inline constexpr std::uint64_t kResidentLeaseNumerator = 1;
+inline constexpr std::uint64_t kResidentLeaseDenominator = 2;
 inline constexpr std::uint64_t kResidentSceneDenominator = 5;
 // The resident cache references at most 4/5 of the lease ledger; the remaining 1/5 is headroom for
 // leases that are in flight or currently presented but not yet retained by the cache.
