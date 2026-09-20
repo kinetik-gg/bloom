@@ -2,6 +2,7 @@
 
 #include <bloom/render/gpu_path_coverage.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -74,7 +75,11 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::ensurePathCoverage() {
         return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
                               "the vector coverage producer needs a bound device");
     }
-    const render::GpuPathCoverageBudgets coverageBudgets{64ULL * 1024ULL * 1024ULL,
+    // The producer's create-time budgets are caller allowances, not ceilings: both are the
+    // executor's ASSIGNED coverage bound, and every per-call `begin` additionally enforces the real
+    // remaining request byte budget plus the device storage-buffer range. There is deliberately no
+    // hardcoded 64 MiB geometry cap here.
+    const render::GpuPathCoverageBudgets coverageBudgets{budgets.maxCoverageBytes,
                                                          budgets.maxCoverageBytes};
     auto created = render::GpuPathCoverage::create(*device, coverageBudgets);
     if (!created) {
@@ -108,6 +113,13 @@ GpuSceneExecutor::Impl::startCoveredStep(const GpuSceneExecutorStep& step) {
             return diagnosticFromPathCoverage(native);
         }
         ++counters.coverageDispatches;
+        // The producer phase allocates the uploaded geometry plus the resident mask; charge that
+        // actual retained peak now so the covered step's reported peak includes geometry + mask,
+        // not just the later fill's output + palette + mask. `begin` already enforced it against
+        // the real remaining request byte budget.
+        peakLiveBytes =
+            std::max(peakLiveBytes, liveBytesAtDispatch + pathCoverage->lastJobAllocationBytes());
+        counters.peakLiveImageBytes = peakLiveBytes;
         nativeKind = NativeKind::PathCoverage;
         return {};
     }

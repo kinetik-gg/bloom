@@ -259,13 +259,24 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     // GPU-transient outputs are not summed here; the executor's live-pin ledger bounds them.
     const auto chargeTransient = [](const std::uint64_t, const std::uint64_t, const std::uint64_t)
         -> std::optional<detail::GpuSceneLeafFailure> { return std::nullopt; };
-    const auto chargeCoverage =
-        [&](const void* coverageIdentity, const std::uint64_t width,
-            const std::uint64_t height) -> std::optional<detail::GpuSceneLeafFailure> {
+    // Charge the ACTUAL retained host coverage bytes once per unique representation, with the exact
+    // helper the nested child total uses. It is never width*height*1: the geometry retains O(rows)
+    // ranges plus spans, so a simple full-width vector is far smaller than its R8 mask and a
+    // complexity-heavy one can be larger.
+    const auto chargeCoverage = [&](const GpuSceneCoverageSolidCommand& command)
+        -> std::optional<detail::GpuSceneLeafFailure> {
+        const void* coverageIdentity = command.coverageIdentity();
         if (coverageIdentity == nullptr || !countedCoverage.insert(coverageIdentity).second) {
             return std::nullopt;
         }
-        return chargeRetained(width, height, sizeof(std::uint8_t));
+        const std::uint64_t bytes = detail::gpuSceneCoverageHostBytes(command);
+        if (retainedBytes > allowance || bytes > allowance - retainedBytes) {
+            return detail::GpuSceneLeafFailure{
+                PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
+                "Prepared scene exceeds the request pixel allowance"};
+        }
+        retainedBytes += bytes;
+        return std::nullopt;
     };
 
     for (std::size_t index = 0; index < operationCount; ++index) {
