@@ -678,9 +678,17 @@ void testWindowStatusBarTrimsCachesUnderMemoryPressure(Expectations& expectation
             strip.cacheToolTipForTest().contains(QStringLiteral("Memory pressure")),
         "the tooltip exposes the effective cap, configured total, sample and state");
     poll(reserve * 2, 55);
+    strip.clearTransientMessage();
+    // A single high static swap reading is only a baseline, never pressure. A rising reading on the
+    // same poll as fresh memory pressure produces both notices in the documented order.
     strip.pollMemoryPressureForTest(
         {.availableBytes = reserve * 2, .swapTotalBytes = 4 * gib, .swapUsedBytes = 2 * gib},
         bloom::runtime::MemoryBudgetLedger::Clock::time_point{} + std::chrono::seconds(60));
+    expectations.expect(strip.messageTextForTest().isEmpty(),
+                        "swap pressure: a first static swap reading does not trim");
+    strip.pollMemoryPressureForTest(
+        {.availableBytes = reserve / 2, .swapTotalBytes = 4 * gib, .swapUsedBytes = 3 * gib},
+        bloom::runtime::MemoryBudgetLedger::Clock::time_point{} + std::chrono::seconds(65));
     expectations.expect(strip.messageTextForTest() ==
                             QStringLiteral("Memory pressure: caches trimmed"),
                         "swap pressure preserves the existing first notice");

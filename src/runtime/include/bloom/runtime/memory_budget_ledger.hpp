@@ -118,6 +118,11 @@ class MemoryBudgetLedger final {
     [[nodiscard]] std::size_t cacheByteBudgetLocked(std::size_t ceiling) const;
     [[nodiscard]] std::size_t capFor(const MachineMemorySample& sample,
                                      std::size_t retained) const noexcept;
+    // Returns true only while swap is actively growing beyond the entry/sustain threshold. Static
+    // occupancy, a first sample, a released sample, a non-advancing clock and missing counters all
+    // rebaseline and assert nothing.
+    [[nodiscard]] bool observeSwapActivity(const MachineMemorySample& sample, Clock::time_point now,
+                                           bool wasSwapPressure) noexcept;
     const std::size_t physicalMemory_;
     // Recursive only for readback from synchronous UI budget-change notifications.
     mutable std::recursive_mutex mutex_;
@@ -125,6 +130,9 @@ class MemoryBudgetLedger final {
     MemoryBudgetState state_;
     std::optional<Clock::time_point> lastCapChange_;
     std::optional<Clock::time_point> recoveryStep_;
+    // Swap is judged by change, never by occupancy: these carry the previous valid sample.
+    std::optional<std::size_t> lastSwapUsedBytes_;
+    std::optional<Clock::time_point> lastSwapSampleTime_;
     unsigned pressurePolls_ = 0;
     bool hasPolled_ = false;
     std::size_t usableByteBudget_ = 0;

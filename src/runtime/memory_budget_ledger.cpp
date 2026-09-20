@@ -43,6 +43,26 @@ namespace {
     return left + std::min(right, std::numeric_limits<std::size_t>::max() - left);
 }
 
+// Swap pressure is activity, not occupancy. A swap file can sit almost full for the life of the
+// boot -- pages written long ago, untouched since -- while RAM is plentiful, so a static reading is
+// never a reason to trim. Only sustained growth relative to the previous valid sample counts; the
+// entry bar ignores small background churn, and once active a quarter-sized sustaining bar keeps a
+// real episode latched without letting a borderline value flap every poll.
+inline constexpr std::size_t kSwapGrowthMinimumBytes = std::size_t{16} * 1024U * 1024U;
+inline constexpr std::size_t kSwapGrowthBytesPerSecond = std::size_t{4} * 1024U * 1024U;
+inline constexpr std::size_t kSwapSustainDivisor = 4;
+
+[[nodiscard]] std::size_t swapGrowthThreshold(const std::chrono::seconds elapsed,
+                                              const bool sustaining) noexcept {
+    const auto seconds =
+        elapsed.count() > 0 ? static_cast<std::size_t>(elapsed.count()) : std::size_t{0};
+    const auto rate = seconds > std::numeric_limits<std::size_t>::max() / kSwapGrowthBytesPerSecond
+                          ? std::numeric_limits<std::size_t>::max()
+                          : kSwapGrowthBytesPerSecond * seconds;
+    const auto entry = std::max(kSwapGrowthMinimumBytes, rate);
+    return sustaining ? std::max<std::size_t>(entry / kSwapSustainDivisor, 1U) : entry;
+}
+
 #if defined(__linux__)
 [[nodiscard]] MachineMemorySample sampleProcMeminfo() {
     std::ifstream meminfo("/proc/meminfo");
@@ -341,6 +361,33 @@ std::size_t MemoryBudgetLedger::capFor(const MachineMemorySample& sample,
                              : std::min(physicalMemory_, kFallbackUsableMemoryBudget));
 }
 
+bool MemoryBudgetLedger::observeSwapActivity(const MachineMemorySample& sample,
+                                             const Clock::time_point now,
+                                             const bool wasSwapPressure) noexcept {
+    if (sample.swapTotalBytes == 0) {
+        // No swap configured, or the platform cannot report it. Drop the baseline so a later valid
+        // sample is measured from scratch instead of from a stale reading.
+        lastSwapUsedBytes_.reset();
+        lastSwapSampleTime_.reset();
+        return false;
+    }
+    if (!lastSwapUsedBytes_ || !lastSwapSampleTime_ || now <= *lastSwapSampleTime_ ||
+        sample.swapUsedBytes < *lastSwapUsedBytes_) {
+        // The first valid sample, a clock that did not advance or moved backwards, or swap that was
+        // partly released all rebaseline. Releasing from a peak means a later rise is measured from
+        // the new low, not against the pre-release peak.
+        lastSwapUsedBytes_ = sample.swapUsedBytes;
+        lastSwapSampleTime_ = now;
+        return false;
+    }
+    const auto elapsed =
+        std::chrono::duration_cast<std::chrono::seconds>(now - *lastSwapSampleTime_);
+    const auto growth = sample.swapUsedBytes - *lastSwapUsedBytes_;
+    lastSwapUsedBytes_ = sample.swapUsedBytes;
+    lastSwapSampleTime_ = now;
+    return growth >= swapGrowthThreshold(elapsed, wasSwapPressure);
+}
+
 MemoryBudgetState MemoryBudgetLedger::poll(MachineMemorySample sample,
                                            const Clock::time_point now) {
     const std::lock_guard lock(mutex_);
@@ -354,8 +401,12 @@ MemoryBudgetState MemoryBudgetLedger::poll(MachineMemorySample sample,
     // An unavailable sample cannot assert recovery or discard an existing pressure episode.
     if (sample.availableBytes)
         state_.memoryPressure = *sample.availableBytes < reserveByteBudget_;
-    state_.swapPressure =
-        sample.swapTotalBytes != 0 && sample.swapUsedBytes > sample.swapTotalBytes / 4;
+    // Swap only asserts while it is actively growing. Missing counters are not evidence of
+    // recovery, so an existing episode is retained until a valid sample clears it through the
+    // baseline reset.
+    const bool swapGrowing = observeSwapActivity(sample, now, wasSwap);
+    if (sample.swapTotalBytes != 0)
+        state_.swapPressure = swapGrowing;
     const bool pressure = state_.memoryPressure || state_.swapPressure;
     state_.memoryNotice = pressure && !wasPressure;
     state_.swapNotice = state_.swapPressure && !wasSwap;

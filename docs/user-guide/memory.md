@@ -59,10 +59,13 @@ floor. The status bar shows the budgets actually in use.
 
 ## When memory runs short
 
-Bloom enters pressure mode if available memory falls below its reserve, or if more than 25% of
-swap is in use. At the first poll it trims caches to **25% of their effective budgets**. If
-pressure remains at the next poll, it trims to **10%**. New cache entries must fit those reduced
-limits too, so ongoing imports cannot immediately refill the caches.
+Bloom enters pressure mode if available memory falls below its reserve, or if swap is **actively
+growing** rather than merely occupied. Swap that was filled long ago and no longer changes does not
+trigger trimming, however full it is; a single high reading is only a baseline, and a later rise is
+measured against the previous reading. Once swap pressure is active a smaller rise keeps it active,
+so a borderline value cannot make the caches flap. At the first poll Bloom trims caches to **25% of
+their effective budgets**. If pressure remains at the next poll, it trims to **10%**. New cache
+entries must fit those reduced limits too, so ongoing imports cannot immediately refill the caches.
 
 The status bar shows **Memory pressure: caches trimmed** once per episode. Swap pressure also
 shows **Swap pressure: caches trimmed** as a separate notice. Your project and configured
@@ -78,7 +81,8 @@ memory or recovery raises the allowance. Trimming never frees a live export prod
 
 After the machine recovers, Bloom waits ten seconds, then restores budgets one step every ten
 seconds: 10% to 25%, then 50%, then 100%. The effective cap itself grows by at most 25% per
-step. New pressure interrupts recovery immediately.
+step. New pressure interrupts recovery immediately, and a swap file that stays full but unchanged
+no longer counts as pressure, so it does not keep the caches trimmed.
 
 Decoded media stored on disk has a separate disk-space budget. Its pending writes consume RAM
 and follow the memory limits above; clearing stored disk entries does not change your memory
