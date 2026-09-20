@@ -1,5 +1,7 @@
 #include <bloom/runtime/gpu_ocio_command.hpp>
 
+#include <bloom/runtime/gpu_ocio_wrapper.hpp>
+
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -91,36 +93,46 @@ std::string_view gpuOcioCommandErrorName(const GpuOcioCommandError error) noexce
         return "invalid-view-adjust";
     case GpuOcioCommandError::UnsupportedViewAdjust:
         return "unsupported-view-adjust";
+    case GpuOcioCommandError::WrapperVersionMismatch:
+        return "wrapper-version-mismatch";
+    case GpuOcioCommandError::WrapperSourceDigestMismatch:
+        return "wrapper-source-digest-mismatch";
     }
     return "unknown";
 }
 
 core::Sha256Digest
 computeGpuOcioCommandIdentity(const GpuOcioCommandIdentityParts& parts) noexcept {
-    static constexpr std::string_view kDomain = "BloomGpuOcioCommandIdentity";
-    std::vector<std::byte> bytes;
-    bytes.reserve(kDomain.size() + 1 + 2 + 1 + 4 + 4 + 32 + 32 + 32 + 8 +
-                  parts.uniformSnapshot.size() + 32 + 4 + parts.wrapperVersion.size());
-    for (const char character : kDomain) {
-        bytes.push_back(static_cast<std::byte>(static_cast<unsigned char>(character)));
+    // This function is noexcept by contract but builds an owned byte buffer; an allocation failure
+    // is reported as the existing zero/error sentinel rather than terminating the process.
+    try {
+        static constexpr std::string_view kDomain = "BloomGpuOcioCommandIdentity";
+        std::vector<std::byte> bytes;
+        bytes.reserve(kDomain.size() + 1 + 2 + 1 + 4 + 4 + 32 + 32 + 32 + 8 +
+                      parts.uniformSnapshot.size() + 32 + 4 + parts.wrapperVersion.size());
+        for (const char character : kDomain) {
+            bytes.push_back(static_cast<std::byte>(static_cast<unsigned char>(character)));
+        }
+        bytes.push_back(std::byte{0});
+        appendBigEndian(bytes, 3, 2);
+        appendBigEndian(bytes, static_cast<std::uint64_t>(parts.encoding), 1);
+        appendBigEndian(bytes, parts.geometry.width, 4);
+        appendBigEndian(bytes, parts.geometry.height, 4);
+        appendDigest(bytes, parts.programContentIdentity);
+        appendDigest(bytes, parts.programResourceDigest);
+        appendDigest(bytes, parts.programShaderTextDigest);
+        appendBigEndian(bytes, parts.uniformSnapshot.size(), 8);
+        bytes.insert(bytes.end(), parts.uniformSnapshot.begin(), parts.uniformSnapshot.end());
+        appendDigest(bytes, parts.artifactDigest);
+        appendText(bytes, parts.wrapperVersion);
+        appendDigest(bytes, parts.wrapperSourceDigest);
+        appendF64(bytes, parts.viewAdjust.exposure);
+        appendF64(bytes, parts.viewAdjust.gamma);
+        const auto digest = core::Sha256Hasher::hash(bytes);
+        return digest.has_value() ? *digest : core::Sha256Digest{};
+    } catch (...) {
+        return core::Sha256Digest{};
     }
-    bytes.push_back(std::byte{0});
-    appendBigEndian(bytes, 3, 2);
-    appendBigEndian(bytes, static_cast<std::uint64_t>(parts.encoding), 1);
-    appendBigEndian(bytes, parts.geometry.width, 4);
-    appendBigEndian(bytes, parts.geometry.height, 4);
-    appendDigest(bytes, parts.programContentIdentity);
-    appendDigest(bytes, parts.programResourceDigest);
-    appendDigest(bytes, parts.programShaderTextDigest);
-    appendBigEndian(bytes, parts.uniformSnapshot.size(), 8);
-    bytes.insert(bytes.end(), parts.uniformSnapshot.begin(), parts.uniformSnapshot.end());
-    appendDigest(bytes, parts.artifactDigest);
-    appendText(bytes, parts.wrapperVersion);
-    appendDigest(bytes, parts.wrapperSourceDigest);
-    appendF64(bytes, parts.viewAdjust.exposure);
-    appendF64(bytes, parts.viewAdjust.gamma);
-    const auto digest = core::Sha256Hasher::hash(bytes);
-    return digest.has_value() ? *digest : core::Sha256Digest{};
 }
 
 PreparedGpuOcioCommand::PreparedGpuOcioCommand(
@@ -183,6 +195,22 @@ GpuOcioCommandResult PreparedGpuOcioCommand::prepare(render::OcioGpuProgramDesc 
     const auto artifactDigest = core::Sha256Hasher::hash(std::as_bytes(std::span(artifact.spirv)));
     if (!artifactDigest.has_value() || *artifactDigest != artifact.spirvDigest) {
         return failure(GpuOcioCommandError::ArtifactDigestMismatch);
+    }
+
+    // Bind the supplied source binding to the canonical production wrapper for (program,
+    // viewAdjust). The preparer always compiles exactly this wrapper, so a stale artifact carrying
+    // a different adjustment (or a tampered digest/version) is refused here, before any native
+    // work.
+    const auto canonical = buildGpuOcioWrapperGlsl(program, binding.viewAdjust);
+    if (!canonical.succeeded()) {
+        return failure(GpuOcioCommandError::WrapperSourceDigestMismatch);
+    }
+    if (canonical.samplingVersion != binding.wrapperVersion) {
+        return failure(GpuOcioCommandError::WrapperVersionMismatch);
+    }
+    if (canonical.sourceDigest != binding.wrapperSourceDigest ||
+        canonical.entryPoint != artifact.entryPoint) {
+        return failure(GpuOcioCommandError::WrapperSourceDigestMismatch);
     }
 
     std::vector<std::uint32_t> spirvWords(artifact.spirv.size() / sizeof(std::uint32_t));

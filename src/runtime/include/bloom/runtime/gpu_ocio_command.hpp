@@ -54,6 +54,12 @@ enum class GpuOcioCommandError : std::uint8_t {
     InvalidViewAdjust,
     // A non-neutral adjustment was supplied for a non-display (ProcessEffect) command.
     UnsupportedViewAdjust,
+    // The binding's wrapper version does not match the canonical production wrapper for
+    // (program, viewAdjust).
+    WrapperVersionMismatch,
+    // The binding's wrapper source digest does not match the canonical production wrapper for
+    // (program, viewAdjust), i.e. the artifact is stale for this adjustment.
+    WrapperSourceDigestMismatch,
 };
 
 [[nodiscard]] std::string_view gpuOcioCommandErrorName(GpuOcioCommandError error) noexcept;
