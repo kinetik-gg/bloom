@@ -134,6 +134,7 @@ target_sources(
         gpu_scene_executor_ocio.cpp
         gpu_scene_executor_point_resample.cpp
         gpu_scene_executor_private.hpp
+        gpu_scene_executor_native_mapping.hpp
         gpu_process_frame.cpp
         gpu_ocio_wrapper.cpp
         gpu_ocio_command.cpp
