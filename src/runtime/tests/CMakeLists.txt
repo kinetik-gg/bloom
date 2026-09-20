@@ -492,9 +492,13 @@ set(BLOOM_GPU_ROUTE_PROOF_WRITER_FIXTURES
     gpu_route_proof_ram)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_tests_properties(bloom.runtime.gpu_coverage_contract PROPERTIES FIXTURES_REQUIRED media3)
+    # The export route-proof writers are Linux-only (the host/scripting harnesses they extend are),
+    # so the native acceptance fixture chain includes their writers only on Linux. The chained
+    # fixtures guarantee order: gpu_route_proofs (fresh nonce) -> gpu_route_proof_writers ->
+    # native acceptance.
     set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
         PROPERTIES FIXTURES_REQUIRED
-            "media3;gpu_route_proofs;${BLOOM_GPU_ROUTE_PROOF_WRITER_FIXTURES}")
+            "media3;gpu_route_proofs;gpu_route_proof_writers;${BLOOM_GPU_ROUTE_PROOF_WRITER_FIXTURES}")
 else()
     set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
         PROPERTIES FIXTURES_REQUIRED
