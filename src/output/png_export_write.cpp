@@ -116,43 +116,63 @@ PngExportWriteResultV1 PngExportWriterV1::run(
             PngExportWriteErrorCodeV1::PreparedBytesLimitExceeded);
     }
 
-    // --- ColorPreparing. The preparer drives C2's chunked apply and checks `cancellation` between
-    // chunks; its own budget check is the second enforcement of the same effective limit checked
-    // above (that one rejects before allocation, this one is the allocator's own guard).
-    const runtime::CpuQualifiedDisplayPreparer preparer(*display.processor);
-    const auto colorResult = preparer.prepare(
-        attempt.frame(),
-        {.aggregatePixelStorageByteLimit = static_cast<std::size_t>(effectiveLimit),
-         .chunkPixelCount = runtime::kDefaultQualifiedDisplayChunkPixelCount,
-         .viewAdjust = {},
-         .displayName = {},
-         .viewName = {},
-         .showLook = true},
-        cancellation, [&progress](const runtime::QualifiedDisplayProgress& stageProgress) {
-            detail::reportExportProgress(progress, {.stage = OutputExportStageV1::ColorPreparing,
-                                                    .completed = stageProgress.completed,
-                                                    .total = stageProgress.total});
-        });
-    if (colorResult.status() == runtime::QualifiedDisplayPreparationStatus::Cancelled) {
-        return PngExportWriteResultV1::cancelled();
+    // --- ColorPreparing / PreparingOutput.
+    //
+    // When the attempt retains a GPU-encoded display payload (the PNG GPU route), that verified
+    // payload is consumed DIRECTLY: no CPU per-pixel display conversion runs. Otherwise the
+    // unchanged CPU ColorPreparing path applies the retained qualified processor in bounded chunks.
+    // Either way the same preset-bound prepared stream feeds Writing and Verifying below, so the
+    // preservation report, approval digest, and reopen verification are unchanged.
+    std::optional<runtime::QualifiedDisplayPreparationResult> colorResult;
+    std::optional<PngRgba8SrgbPreparedStreamV1> preparedHolder;
+    if (attempt.gpuDisplay().isPresent()) {
+        const auto& gpuDisplay = attempt.gpuDisplay();
+        preparedHolder.emplace(PngRgba8SrgbPreparedStreamV1{
+            .dimensions = attempt.frame()->processImage().descriptor()->dataWindow().extent(),
+            .pixels = gpuDisplay.pixels});
+        const auto preparedPixelCount = static_cast<std::uint64_t>(gpuDisplay.width) *
+                                        static_cast<std::uint64_t>(gpuDisplay.height);
+        detail::reportExportProgress(progress, {.stage = OutputExportStageV1::PreparingOutput,
+                                                .completed = preparedPixelCount,
+                                                .total = preparedPixelCount});
+    } else {
+        const runtime::CpuQualifiedDisplayPreparer preparer(*display.processor);
+        colorResult.emplace(preparer.prepare(
+            attempt.frame(),
+            {.aggregatePixelStorageByteLimit = static_cast<std::size_t>(effectiveLimit),
+             .chunkPixelCount = runtime::kDefaultQualifiedDisplayChunkPixelCount,
+             .viewAdjust = {},
+             .displayName = {},
+             .viewName = {},
+             .showLook = true},
+            cancellation, [&progress](const runtime::QualifiedDisplayProgress& stageProgress) {
+                detail::reportExportProgress(progress,
+                                             {.stage = OutputExportStageV1::ColorPreparing,
+                                              .completed = stageProgress.completed,
+                                              .total = stageProgress.total});
+            }));
+        if (colorResult->status() == runtime::QualifiedDisplayPreparationStatus::Cancelled) {
+            return PngExportWriteResultV1::cancelled();
+        }
+        if (colorResult->status() != runtime::QualifiedDisplayPreparationStatus::Prepared ||
+            colorResult->frame() == nullptr) {
+            return PngExportWriteResultV1::failed(
+                translateColorPrepareFailure(colorResult->diagnostics()));
+        }
+        // The two-field aggregate png_output_adapter.hpp predicted. `colorResult` (and therefore
+        // this span) stays alive for the whole Writing/Verifying sequence below, which is exactly
+        // what PngRgba8SrgbPreparedStreamV1's non-owning `pixels` contract requires.
+        const auto& preparedFrame = colorResult->frame()->buffer();
+        preparedHolder.emplace(
+            PngRgba8SrgbPreparedStreamV1{.dimensions = preparedFrame.displayWindow().extent(),
+                                         .pixels = preparedFrame.pixels()});
+        const auto preparedPixelCount =
+            static_cast<std::uint64_t>(preparedFrame.layout().pixelCount);
+        detail::reportExportProgress(progress, {.stage = OutputExportStageV1::PreparingOutput,
+                                                .completed = preparedPixelCount,
+                                                .total = preparedPixelCount});
     }
-    if (colorResult.status() != runtime::QualifiedDisplayPreparationStatus::Prepared ||
-        colorResult.frame() == nullptr) {
-        return PngExportWriteResultV1::failed(
-            translateColorPrepareFailure(colorResult.diagnostics()));
-    }
-
-    // --- PreparingOutput: the two-field aggregate png_output_adapter.hpp predicted.
-    // `preparedFrame` (and therefore this span) stays alive for the whole Writing/Verifying
-    // sequence below, which is exactly what PngRgba8SrgbPreparedStreamV1's non-owning `pixels`
-    // contract requires.
-    const auto& preparedFrame = colorResult.frame()->buffer();
-    const PngRgba8SrgbPreparedStreamV1 prepared{
-        .dimensions = preparedFrame.displayWindow().extent(), .pixels = preparedFrame.pixels()};
-    const auto preparedPixelCount = static_cast<std::uint64_t>(preparedFrame.layout().pixelCount);
-    detail::reportExportProgress(progress, {.stage = OutputExportStageV1::PreparingOutput,
-                                            .completed = preparedPixelCount,
-                                            .total = preparedPixelCount});
+    const PngRgba8SrgbPreparedStreamV1& prepared = *preparedHolder;
     if (cancellation.isCancellationRequested()) {
         return PngExportWriteResultV1::cancelled();
     }

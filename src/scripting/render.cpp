@@ -73,7 +73,7 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
                        .resolution = runtime::CompositionFormatResolution{},
                        .quality = runtime::EvaluationQuality::Reference,
                        .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
-                       .pixelStorageByteLimit = std::size_t{512} * 1024U * 1024U},
+                       .pixelStorageByteLimit = runtime::defaultGpuProcessFrameByteBudget()},
         .targetPath = destination,
         .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
         .owner = {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(1)},

@@ -32,10 +32,12 @@ OutputAnalysisAttemptV1::OutputAnalysisAttemptV1(
     std::shared_ptr<const OutputAnalysisReportV1> report,
     const std::optional<core::Sha256Digest> digest, const OutputPresetV1 preset,
     OutputAnalysisAttemptTargetV1 target, OutputAnalysisAttemptDisplayProductsV1 display,
+    OutputAnalysisAttemptGpuDisplayV1 gpuDisplay,
     std::shared_ptr<ExportResourceReservationV1> reservation) noexcept
     : frame_(std::move(frame)), processIdentity_(std::move(processIdentity)),
       report_(std::move(report)), digest_(digest), preset_(preset), target_(std::move(target)),
-      display_(std::move(display)), reservation_(std::move(reservation)) {}
+      display_(std::move(display)), gpuDisplay_(std::move(gpuDisplay)),
+      reservation_(std::move(reservation)) {}
 
 namespace {
 
@@ -47,7 +49,8 @@ namespace {
 [[nodiscard]] std::optional<std::uint64_t>
 checkedAttemptRetainedBytes(const render::Rgba32fImageDescriptor& descriptor,
                             const OutputAnalysisReportV1& report,
-                            const OutputAnalysisAttemptDisplayProductsV1& display) noexcept {
+                            const OutputAnalysisAttemptDisplayProductsV1& display,
+                            const OutputAnalysisAttemptGpuDisplayV1& gpuDisplay) noexcept {
     constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t total = descriptor.layout().pixelStorageBytes;
     const auto descriptorBytes = static_cast<std::uint64_t>(report.descriptorByteCount());
@@ -83,6 +86,14 @@ checkedAttemptRetainedBytes(const render::Rgba32fImageDescriptor& descriptor,
             return std::nullopt;
         total += bytes;
     }
+    // The retained GPU-encoded display payload (PNG only), charged at its exact checked RGBA8
+    // bytes.
+    const auto gpuDisplayBytes =
+        static_cast<std::uint64_t>(gpuDisplay.pixels.size()) * sizeof(render::Rgba8);
+    if (gpuDisplayBytes > maximum - total) {
+        return std::nullopt;
+    }
+    total += gpuDisplayBytes;
     return total;
 }
 
@@ -149,6 +160,26 @@ buildOutputAnalysisAttemptV1(OutputAnalysisAttemptBuildInputsV1 inputs,
         return OutputAnalysisAttemptBuildResultV1::failure(
             OutputAnalysisAttemptErrorCodeV1::InvalidDisplayProducts);
     }
+    // Validate the optional GPU display payload's binding BEFORE it can be retained: PNG only,
+    // exact process data-window geometry, the exact retained canonical display identity (same
+    // immutable object, never a substitute), the exact process-pixel identity of the frame it was
+    // transferred with, a present command identity, and a checked pixel count. A stale or invalid
+    // binding is a typed refusal, never a silent use or a faked report.
+    if (inputs.gpuDisplay.isPresent()) {
+        const auto& gpuDisplay = inputs.gpuDisplay;
+        const auto extent = inputs.frame->processImage().descriptor()->dataWindow().extent();
+        if (preset != OutputPresetV1::PngRgba8SrgbV1 || inputs.display.identity == nullptr ||
+            gpuDisplay.displayIdentity != inputs.display.identity ||
+            inputs.processIdentity == nullptr ||
+            gpuDisplay.processPixelDigest != inputs.processIdentity->processPixelDigest() ||
+            gpuDisplay.width != extent.width() || gpuDisplay.height != extent.height() ||
+            gpuDisplay.commandIdentity == core::Sha256Digest{} ||
+            gpuDisplay.pixels.size() != static_cast<std::size_t>(extent.width()) *
+                                            static_cast<std::size_t>(extent.height())) {
+            return OutputAnalysisAttemptBuildResultV1::failure(
+                OutputAnalysisAttemptErrorCodeV1::InvalidDisplayProducts);
+        }
+    }
 
     // A nonapprovable report is still a successful, completed attempt (frame-output.md: "A
     // nonapprovable but valid report is a successful analysis attempt"); only an approvable report
@@ -173,7 +204,7 @@ buildOutputAnalysisAttemptV1(OutputAnalysisAttemptBuildInputsV1 inputs,
 
     const auto* descriptor = inputs.frame->processImage().descriptor();
     const auto retainedBytes =
-        checkedAttemptRetainedBytes(*descriptor, *inputs.report, inputs.display);
+        checkedAttemptRetainedBytes(*descriptor, *inputs.report, inputs.display, inputs.gpuDisplay);
     if (!retainedBytes.has_value()) {
         return OutputAnalysisAttemptBuildResultV1::failure(
             OutputAnalysisAttemptErrorCodeV1::ResourceReservationFailed);
@@ -190,7 +221,7 @@ buildOutputAnalysisAttemptV1(OutputAnalysisAttemptBuildInputsV1 inputs,
         auto attempt = std::shared_ptr<OutputAnalysisAttemptV1>(new OutputAnalysisAttemptV1(
             std::move(inputs.frame), std::move(inputs.processIdentity), std::move(inputs.report),
             digest, preset, std::move(inputs.target), std::move(inputs.display),
-            std::move(reservation)));
+            std::move(inputs.gpuDisplay), std::move(reservation)));
         return OutputAnalysisAttemptBuildResultV1::success(std::move(attempt));
     } catch (const std::bad_alloc&) {
         return OutputAnalysisAttemptBuildResultV1::failure(
@@ -220,7 +251,8 @@ prepareFlatExrAttemptV1(const OutputAnalysisAttemptV1& source, FlatExrRgba32fOpt
                                              .processIdentity = source.processIdentity(),
                                              .report = report.report(),
                                              .target = source.target(),
-                                             .display = {}},
+                                             .display = {},
+                                             .gpuDisplay = {}},
                                             ledger);
     } catch (...) {
         return OutputAnalysisAttemptBuildResultV1::failure(

@@ -74,11 +74,12 @@ int run(const Options& options) {
         Color4d{0.125, 0.375, 0.75, 0.5}, LayerValues{.position = {7.5, 6.25}}, 9.0, 7.0, 9000);
     const auto request = requestFor(*plan);
 
-    auto evaluator = runtime::GpuProcessFrameEvaluator::create(
-        runtime::GpuProcessFrameEvaluatorOptions{.enabled = true,
-                                                 .loaderPath = options.loader_path,
-                                                 .requestByteBudget = kRequestBudget,
-                                                 .readbackByteBudget = kReadbackBudget});
+    runtime::GpuProcessFrameEvaluatorOptions evaluatorOptions;
+    evaluatorOptions.enabled = true;
+    evaluatorOptions.loaderPath = options.loader_path;
+    evaluatorOptions.requestByteBudget = kRequestBudget;
+    evaluatorOptions.readbackByteBudget = kReadbackBudget;
+    auto evaluator = runtime::GpuProcessFrameEvaluator::create(evaluatorOptions);
     expectations.expect(evaluator != nullptr, "the evaluator is constructed");
     if (evaluator == nullptr) {
         return 1;

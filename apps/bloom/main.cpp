@@ -298,6 +298,18 @@ int main(int argc, char* argv[]) {
     if (bundledNativeLoader) {
         gpuExportOptions.loaderPath = gpuPreviewDisplayOptions.loaderPath;
     }
+    // Reuse the ONE shared app OCIO context resolver built above from THIS target's own packaging
+    // definitions: the provider's CPU-worker bootstrap qualifies the tools once and publishes the
+    // same shared context for the export evaluator's media/effect transforms and output display, so
+    // preview and export share one tool qualification and one program cache. The media context is
+    // refreshed per request on the calling CPU worker so a session Open/SaveAs that moves the asset
+    // base directory is observed exactly as the preview path observes it.
+    gpuExportOptions.ocioResolver = gpuOcioContextResolver;
+    gpuExportOptions.mediaContextProvider = [&cpuEvaluator, gpuPreparedUploadCache] {
+        auto context = bloom::runtime::GpuSceneMediaContext::fromEvaluator(cpuEvaluator);
+        context.preparedUploadCache = gpuPreparedUploadCache;
+        return context;
+    };
     auto gpuExportProvider = bloom::host::GpuExportProvider::create(gpuExportOptions);
     gpuExportProvider->prepare(taskScheduler);
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);

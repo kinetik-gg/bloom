@@ -2,6 +2,7 @@
 
 #include "json.hpp"
 #include <bloom/host/gpu_export_provider.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/scripting/facade.hpp>
 
 #include <atomic>
@@ -34,6 +35,10 @@ class Server final {
     std::unique_ptr<scripting::Session> session_;
     scripting::Facade facade_;
     runtime::TaskScheduler scheduler_;
+    // Evaluator-owned media caches/base directory for the GPU scene builder. Declared before the
+    // provider so it outlives every request the provider serves (locals/members destruct in reverse
+    // declaration order).
+    runtime::CpuCompositionEvaluator gpuMediaEvaluator_;
     // Server-lifetime GPU final-render provider. It outlives every render request the server
     // serves, so a request never owns the device bootstrap and an interrupted request can never
     // dangle a shared handle. Prepared once on the server's own scheduler worker.

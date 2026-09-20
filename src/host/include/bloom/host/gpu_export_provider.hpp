@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
@@ -7,6 +9,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -105,6 +109,23 @@ class GpuExportProvider final {
     // Diagnostic/test seam: invoked with the id of the thread that performs the final evaluator
     // release inside `collectRetired()`.
     void setRetirementObserver(std::function<void(std::thread::id)> observer);
+
+    // Qualified shader-tool paths (glslangValidator + spirv-val) for preparing GPU output-colour
+    // commands on a CPU task. The composition root injects packaged, app-relative tool paths
+    // through this typed seam; Bloom never searches PATH or accepts an ambient/user path. Empty
+    // paths leave the GPU output-colour route unavailable (the CPU display path remains the honest
+    // fallback).
+    void setGpuDisplayCompileOptions(runtime::GpuOcioCompileOptions options);
+    [[nodiscard]] bool gpuDisplayPreparationAvailable() const noexcept;
+
+    // Blocking CPU-task preparation of one immutable DisplayRgba8 OCIO command from the exact
+    // resolved display processor. Thread-safe; never called from the UI or the GPU owner thread.
+    // The returned command is immutable and cache-shared across warm requests.
+    [[nodiscard]] runtime::GpuOcioPreparationResult
+    prepareGpuDisplayCommand(const color::ResolvedBloomNeutralConfig& config,
+                             std::string_view display, std::string_view view,
+                             runtime::GpuOcioCommandGeometry geometry,
+                             const runtime::GpuOcioCancellation& cancel = {});
 
   private:
     explicit GpuExportProvider(runtime::GpuProcessFrameEvaluatorOptions options);

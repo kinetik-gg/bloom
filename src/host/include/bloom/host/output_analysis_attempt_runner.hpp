@@ -71,6 +71,15 @@ struct OutputAnalysisAttemptGpuProvenanceV1 final {
     // The genuine native device ownership epoch that produced the frame, propagated from
     // GpuProcessFrameOutcome. Zero when no device evaluated the request (disabled/CPU fallback).
     std::uint64_t deviceOwnershipEpoch = 0;
+    // Output-colour transfer accounting from the same single combined readback. The identity arm
+    // reports ArmNone with one payload, one submission, and zero encoded bytes; a colour arm
+    // reports two payloads under the same one submission. Zero/None on the CPU fallback.
+    runtime::GpuOutputColorArm encodedArm = runtime::GpuOutputColorArm::None;
+    std::uint64_t readbackSubmissions = 0;
+    std::uint64_t transferredPayloads = 0;
+    std::uint64_t processPayloadBytes = 0;
+    std::uint64_t encodedPayloadBytes = 0;
+    core::Sha256Digest outputCommandIdentity{};
 
     [[nodiscard]] bool gpuEvaluated() const noexcept {
         return status == runtime::GpuProcessFrameStatus::Evaluated;
@@ -112,6 +121,18 @@ struct OutputAnalysisAttemptRequestV1 final {
     // without dangling the in-flight evaluation; the provider hands the same evaluator to every
     // frame of a range.
     std::shared_ptr<GpuExportProvider> gpuProvider = nullptr;
+    // Optional already-compiled, immutable OCIO output command prepared on a CPU task before the
+    // GPU owner dispatch (null = identity arm: process payload only). When present the one combined
+    // readback also transfers the encoded output (process-effect RGBA32F or straight display RGBA8)
+    // alongside the unchanged process payload used for semantic identity.
+    //
+    // This is an explicit test seam, not a trust override: the runner accepts a supplied command
+    // ONLY when its canonical identity byte-equals the command it prepared itself from the exact
+    // resolved config/working space/display/view and the exact data-window geometry. Any other
+    // command (wrong transform, stale config revision, or one prepared for a different frame) is
+    // refused and the attempt falls back to the honest CPU reference/display path; a foreign
+    // command is never stamped with the canonical display identity.
+    std::shared_ptr<const runtime::PreparedGpuOcioCommand> outputColorCommand = nullptr;
 };
 
 enum class OutputAnalysisAttemptStageV1 : std::uint8_t {
