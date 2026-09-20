@@ -137,6 +137,7 @@ target_sources(
         gpu_ocio_preparation.cpp
         gpu_ocio_program_executor.cpp
         gpu_ocio_program_retained_bytes.hpp
+        gpu_output_color.cpp
         view_adjust.cpp
         view_adjust_support.hpp
         value_graph_evaluation.cpp
@@ -172,6 +173,7 @@ target_sources(
             include/bloom/runtime/gpu_ocio_command.hpp
             include/bloom/runtime/gpu_ocio_preparation.hpp
             include/bloom/runtime/gpu_ocio_program_executor.hpp
+            include/bloom/runtime/gpu_output_color.hpp
             include/bloom/runtime/input_color_context.hpp
             include/bloom/runtime/prepared_gpu_scene.hpp
             include/bloom/runtime/prepared_preview_frame.hpp

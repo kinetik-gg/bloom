@@ -1148,3 +1148,27 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
     set_tests_properties(bloom.runtime.gpu_ocio_view_adjust
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+# Runtime GPU output-colour stage: one prepared OCIO command dispatched, then the exact process
+# RGBA32F payload plus the encoded output read back in ONE combined submission and compared against
+# the unchanged CPU OCIO oracle (2e-6 / one RGBA8 code, exact alpha and process bits). The identity
+# arm proves a single process-only payload; cancel and budget ceilings prove the retirement model.
+if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_gpu_output_color_test gpu_output_color_tests.cpp)
+    target_link_libraries(bloom_runtime_gpu_output_color_test
+        PRIVATE bloom_runtime_evaluator bloom_render)
+    if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
+        target_compile_definitions(bloom_runtime_gpu_output_color_test PRIVATE
+            "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+    endif()
+    bloom_enable_warnings(bloom_runtime_gpu_output_color_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_output_color_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_output_color
+        COMMAND bloom_runtime_gpu_output_color_test
+        LABELS runtime unit gpu color export
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.runtime.gpu_output_color
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()
