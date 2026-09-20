@@ -41,6 +41,15 @@ GpuDisplayImageReadback readbackResidentDisplayImage(const GpuDisplayImage&,
     return result;
 }
 
+GpuDisplayImageSparseReadback
+readbackResidentDisplayImageSparse(const GpuDisplayImage&, std::span<const ImagePixelCoordinate>,
+                                   std::uint64_t) noexcept {
+    GpuDisplayImageSparseReadback result;
+    result.code = GpuDisplayImageReadbackCode::DeviceUnavailable;
+    result.message = "Bloom was built without Vulkan dependencies";
+    return result;
+}
+
 struct GpuResidentDisplay::Impl final {};
 
 GpuResidentDisplay::GpuResidentDisplay(std::unique_ptr<Impl> impl) noexcept

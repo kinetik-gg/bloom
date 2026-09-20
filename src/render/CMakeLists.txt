@@ -897,6 +897,8 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_process_readback.cpp
         vulkan/gpu_resident_display.cpp
         vulkan/gpu_resident_display_private.hpp
+        vulkan/gpu_resident_display_readback.cpp
+        vulkan/gpu_resident_display_readback_private.hpp
         vulkan/gpu_resident_display_resources.cpp
         vulkan/gpu_solid.cpp
         vulkan/gpu_solid_covered.cpp

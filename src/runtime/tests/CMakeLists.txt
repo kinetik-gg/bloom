@@ -479,13 +479,26 @@ set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
 # The generated video fixtures are owned by the media worker's `media3` setup, exactly like the
 # existing video-scene-preparation tests. The route-proof setup fixture is separate and always
 # required by the native gate; it publishes no proof, only a fresh nonce.
+#
+# The gate consumes the genuine proofs the real route harnesses publish, so it must run after them.
+# The harnesses live in the UI test tree (they need the Qt shell) and each sets up its own fixture;
+# the names are listed here because a runtime test may not set a property on a test that lives in
+# another directory. A required fixture with no setup test is treated as satisfied, so a build with
+# no UI shell (or a platform without these harnesses) keeps the gate's previous behaviour and never
+# fabricates a proof. The viewer and RAM-preview writers are this workstream's; the remaining export
+# writers add their own fixture names to this same list.
+set(BLOOM_GPU_ROUTE_PROOF_WRITER_FIXTURES
+    gpu_route_proof_viewer
+    gpu_route_proof_ram)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_tests_properties(bloom.runtime.gpu_coverage_contract PROPERTIES FIXTURES_REQUIRED media3)
     set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
-        PROPERTIES FIXTURES_REQUIRED "media3;gpu_route_proofs")
+        PROPERTIES FIXTURES_REQUIRED
+            "media3;gpu_route_proofs;${BLOOM_GPU_ROUTE_PROOF_WRITER_FIXTURES}")
 else()
     set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
-        PROPERTIES FIXTURES_REQUIRED gpu_route_proofs)
+        PROPERTIES FIXTURES_REQUIRED
+            "gpu_route_proofs;${BLOOM_GPU_ROUTE_PROOF_WRITER_FIXTURES}")
 endif()
 
 # Route-proof handoff tests. Both targets include the Qt-free shared codec from tests/support through
