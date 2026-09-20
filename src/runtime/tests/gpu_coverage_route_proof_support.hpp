@@ -1,10 +1,10 @@
 #pragma once
 
-// Private route-proof support for the bounded GPU coverage contract test. It reports the standalone
-// executor evidence for the blend/affine arms the production builder does not emit, and it proves
-// the typed route-proof sink rejects every generic or boolean-shaped fake. It never publishes a
-// fabricated "real" proof: no genuine route harness exists in this tree yet, so every route stays
-// MISSING until one does.
+// Private route-proof support for the bounded GPU coverage contract test. It proves the typed
+// route-proof sink rejects every generic or boolean-shaped fake. It never publishes a fabricated
+// "real" proof: no genuine route harness exists in this tree yet, so every route stays MISSING
+// until one does. Blend and affine are now real production builder fixtures, so no standalone
+// executor evidence is reported here any more.
 
 #include <bloom/runtime/gpu_coverage_contract.hpp>
 
@@ -15,19 +15,6 @@
 #include <vector>
 
 namespace bloom::gpu_coverage_route_proof {
-
-// Standalone executor semantic evidence. The production builder refuses non-Normal blending and
-// non-translation layers, but the executor's GpuBlend and GpuAffine arms are proven against the
-// actual CPU oracle by a separate native test. These lines report that evidence; they are
-// deliberately NOT counted as builder coverage.
-inline void printStandaloneExecutorEvidence() {
-    std::cout << "EXECUTOR-EVIDENCE blend: all eight modes proven standalone by "
-                 "bloom.runtime.gpu_affine_blend_executor (builder emits Normal only; not builder "
-                 "coverage)\n";
-    std::cout << "EXECUTOR-EVIDENCE affine: composed scale/rotation/anchor proven standalone by "
-                 "bloom.runtime.gpu_affine_blend_executor (builder translation-only; not builder "
-                 "coverage)\n";
-}
 
 [[nodiscard]] inline bloom::runtime::GpuRouteExecutionProof representativeRouteProof() {
     return bloom::runtime::GpuRouteExecutionProof{

@@ -11,6 +11,7 @@
 // This gate is EXPECTED RED until the required production fixtures exist. It is the gate that
 // later integration turns green without weakening the contract or adding opt-outs.
 
+#include "gpu_coverage_contract_plans.hpp"
 #include "gpu_coverage_fixture_support.hpp"
 #include "gpu_coverage_gate_support.hpp"
 #include "gpu_coverage_media_support.hpp"
@@ -72,6 +73,19 @@ using bloom::gpu_coverage_gate::FixtureRun;
 using bloom::gpu_coverage_gate::FrameRun;
 using bloom::gpu_coverage_gate::requiredCoverageIds;
 using bloom::gpu_coverage_gate::routeOwner;
+using bloom::gpu_coverage_plans::AffineAxis;
+using bloom::gpu_coverage_plans::basePlan;
+using bloom::gpu_coverage_plans::effectPlan;
+using bloom::gpu_coverage_plans::layerOnLayerPlan;
+using bloom::gpu_coverage_plans::modifiedLayer;
+using bloom::gpu_coverage_plans::nestedBranchReusePlans;
+using bloom::gpu_coverage_plans::nestedChildPlan;
+using bloom::gpu_coverage_plans::nestedParentPlan;
+using bloom::gpu_coverage_plans::parentedPlan;
+using bloom::gpu_coverage_plans::rasterAffinePlan;
+using bloom::gpu_coverage_plans::shape;
+using bloom::gpu_coverage_plans::text;
+using bloom::gpu_coverage_plans::withSource;
 
 [[nodiscard]] FixtureRun
 runBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan) {
@@ -141,138 +155,6 @@ runMediaBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionP
     return result;
 }
 
-[[nodiscard]] std::shared_ptr<const bloom::runtime::CompiledCompositionPlan> basePlan() {
-    return twoLayerPlan(format(16, 12), LayerValues{.position = {4.3, 3.1}},
-                        LayerValues{.position = {11.5, 8.2}, .opacity = 0.75}, 6.0, 5.0, 90000);
-}
-
-[[nodiscard]] std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>
-withSource(const CompiledOperation& source, const std::uint64_t idBase,
-           const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>* nested = nullptr,
-           const double layerOpacity = 1.0) {
-    auto definition = basePlan()->copyDefinition();
-    definition.operations[0] = source;
-    if (layerOpacity != 1.0) {
-        auto& layer = std::get<bloom::runtime::CompiledLayerOutput>(definition.operations[1]);
-        layer.opacity = CompiledScalarParameter{layer.opacity.id, layerOpacity};
-    }
-    if (nested != nullptr) {
-        definition.nestedPlans.push_back(*nested);
-    }
-    (void)idBase;
-    return publish(std::move(definition));
-}
-
-// A strict, kind-valid shape: a Line has no fill so it must carry a nonzero stroke, and a Path must
-// carry real anchors. Non-Line kinds may additionally request a stroke so the native CPU oracle
-// parity exercises the vector stroke/opacity arm rather than fill alone.
-[[nodiscard]] CompiledShape shape(const ShapeKind kind, const std::uint64_t idBase,
-                                  const bool withStroke = false) {
-    CompiledShape value{};
-    value.sourceNodeId = NodeId::fromRaw(idBase);
-    value.kind = kind;
-    value.size = CompiledVec2Parameter{ParameterId::fromRaw(idBase + 1), Vec2d{6.0, 5.0}};
-    value.fillEnabled = true;
-    value.fillColor = CompiledColorParameter{ParameterId::fromRaw(idBase + 2),
-                                             bloom::core::Color4d{0.8, 0.4, 0.2, 1.0}};
-    value.strokeEnabled = withStroke;
-    value.strokeColor = CompiledColorParameter{ParameterId::fromRaw(idBase + 3),
-                                               bloom::core::Color4d{0.1, 0.6, 0.9, 1.0}};
-    value.strokeWidth =
-        CompiledScalarParameter{ParameterId::fromRaw(idBase + 4), withStroke ? 1.5 : 0.0};
-    if (kind == ShapeKind::Line) {
-        value.fillEnabled = false;
-        value.strokeEnabled = true;
-        value.strokeWidth = CompiledScalarParameter{ParameterId::fromRaw(idBase + 4), 1.5};
-        value.lineStart = Vec2d{0.0, 0.0};
-        value.lineEnd = Vec2d{6.0, 5.0};
-    } else if (kind == ShapeKind::Path) {
-        value.path.closed = true;
-        value.path.anchors = {
-            bloom::document::PathAnchor{Vec2d{0.0, 0.0}, std::nullopt, std::nullopt},
-            bloom::document::PathAnchor{Vec2d{6.0, 0.0}, std::nullopt, std::nullopt},
-            bloom::document::PathAnchor{Vec2d{3.0, 5.0}, std::nullopt, std::nullopt}};
-    }
-    return value;
-}
-
-[[nodiscard]] CompiledText text(const std::uint64_t idBase) {
-    return CompiledText{
-        NodeId::fromRaw(idBase),
-        ParameterId::fromRaw(idBase + 1),
-        "gpu",
-        {ParameterId::fromRaw(idBase + 2), 12.0},
-        {ParameterId::fromRaw(idBase + 3), bloom::core::Color4d{1.0, 1.0, 1.0, 1.0}},
-        CompiledTextLayout{ParameterId::fromRaw(idBase + 4),
-                           0,
-                           {ParameterId::fromRaw(idBase + 5), 1.0},
-                           {ParameterId::fromRaw(idBase + 6), 0.0}}};
-}
-
-[[nodiscard]] CompiledImageEffect effect(const ImageEffectKernel& kernel,
-                                         const std::uint64_t idBase) {
-    return CompiledImageEffect{NodeId::fromRaw(idBase), OperationIndex::fromRaw(0), kernel, false,
-                               false};
-}
-
-[[nodiscard]] std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>
-effectPlan(const ImageEffectKernel& kernel, const std::uint64_t idBase) {
-    auto definition = basePlan()->copyDefinition();
-    auto solid = definition.operations[0];
-    auto layer = std::get<bloom::runtime::CompiledLayerOutput>(definition.operations[1]);
-    layer.input = OperationIndex::fromRaw(1);
-    auto merge = std::get<bloom::runtime::CompiledMerge>(definition.operations[4]);
-    merge.entries = {bloom::runtime::CompiledMergeInput{
-        bloom::document::LayerSlotId::fromRaw(idBase), layer.layerId, OperationIndex::fromRaw(2)}};
-    definition.operations.clear();
-    definition.operations.push_back(std::move(solid));
-    definition.operations.push_back(effect(kernel, idBase + 10));
-    definition.operations.push_back(layer);
-    definition.operations.push_back(merge);
-    definition.operations.push_back(bloom::runtime::CompiledCompositionOutput{
-        NodeId::fromRaw(idBase + 30), OperationIndex::fromRaw(3)});
-    definition.output = OperationIndex::fromRaw(4);
-    return publish(std::move(definition));
-}
-
-[[nodiscard]] CompiledOperation compositionSource(const std::uint64_t idBase) {
-    CompiledCompositionSource source{};
-    source.sourceNodeId = NodeId::fromRaw(idBase);
-    source.nestedPlanIndex = 0;
-    return source;
-}
-
-[[nodiscard]] std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>
-modifiedLayer(const std::function<void(bloom::runtime::CompiledLayerOutput&)>& edit) {
-    auto definition = basePlan()->copyDefinition();
-    edit(std::get<bloom::runtime::CompiledLayerOutput>(definition.operations[1]));
-    return publish(std::move(definition));
-}
-
-// A fully reachable layer fed by another layer (the generic graph-input axis): every operation is
-// reachable from the output, so the refusal must be the layer-input screen, not an invalid plan.
-[[nodiscard]] std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>
-layerOnLayerPlan(const std::uint64_t idBase) {
-    auto definition = basePlan()->copyDefinition();
-    auto solid = definition.operations[0];
-    auto layerA = std::get<bloom::runtime::CompiledLayerOutput>(definition.operations[1]);
-    auto layerB = std::get<bloom::runtime::CompiledLayerOutput>(definition.operations[3]);
-    layerB.input = OperationIndex::fromRaw(1);
-    bloom::runtime::CompiledMerge merge{
-        NodeId::fromRaw(idBase + 1),
-        {bloom::runtime::CompiledMergeInput{bloom::document::LayerSlotId::fromRaw(idBase + 2),
-                                            layerB.layerId, OperationIndex::fromRaw(2)}}};
-    definition.operations.clear();
-    definition.operations.push_back(std::move(solid));
-    definition.operations.push_back(layerA);
-    definition.operations.push_back(layerB);
-    definition.operations.push_back(std::move(merge));
-    definition.operations.push_back(bloom::runtime::CompiledCompositionOutput{
-        NodeId::fromRaw(idBase + 3), OperationIndex::fromRaw(3)});
-    definition.output = OperationIndex::fromRaw(4);
-    return publish(std::move(definition));
-}
-
 [[nodiscard]] std::vector<Fixture> fixtures() {
     std::vector<Fixture> list;
     const auto add = [&list](std::string id, GpuCoverageFixtureCriterion criterion,
@@ -302,9 +184,10 @@ layerOnLayerPlan(const std::uint64_t idBase) {
                 withSource(shape(ShapeKind::Rectangle, 96000, true), 96000, nullptr, 0.7));
         });
     add("operation.CompiledCompositionSource", GpuCoverageFixtureCriterion::Prepared,
-        "src/runtime SnapshotCompiler nested composition tests", [] {
-            const auto nested = basePlan();
-            return runBuilder(withSource(compositionSource(97000), 97000, &nested));
+        "src/runtime gpu nested scene preparation tests", [] {
+            const auto child =
+                nestedChildPlan(120000, 201, bloom::core::Color4d{0.125, 0.375, 0.75, 0.5});
+            return runBuilder(nestedParentPlan(child, 121000, 100));
         });
     addImageEffectPlan("operation.CompiledImageEffect", bloom::runtime::IdentityImageKernel{},
                        98000, "src/color OCIO image effect tests");
@@ -340,28 +223,17 @@ layerOnLayerPlan(const std::uint64_t idBase) {
                                                            0, "lin_rec709_scene", std::nullopt},
                        102000, {});
 
+    // Every one of the eight blend modes is emitted by the real production builder now: Normal
+    // stays the retained SourceOver merge, every other mode an explicit BlendV1 fold.
     for (const auto mode : bloom::core::kBlendModes) {
         const auto id =
             std::string{"feature.blend."} + std::to_string(bloom::core::blendModeStoredValue(mode));
-        if (mode == bloom::core::kDefaultBlendMode) {
-            add(id, GpuCoverageFixtureCriterion::Prepared,
-                "src/render GpuComposite + composite parity tests", [mode] {
-                    return runBuilder(
-                        modifiedLayer([mode](bloom::runtime::CompiledLayerOutput& layer) {
-                            layer.blendMode = mode;
-                        }));
-                });
-            continue;
-        }
-        // The production scene builder emits Normal blending only. The executor's GpuBlend command
-        // is proven standalone for every one of the eight modes by the native affine/blend executor
-        // test; that is standalone semantic evidence, NOT builder coverage, so this axis stays
-        // NotRun here rather than being relabelled as covered.
-        add(id, GpuCoverageFixtureCriterion::NativeRequired,
-            "src/runtime gpu_affine_blend_executor_native_tests (standalone GpuBlend parity; "
-            "builder "
-            "output not claimed)",
-            [] { return FixtureRun{}; });
+        add(id, GpuCoverageFixtureCriterion::Prepared,
+            "src/render GpuComposite + gpu scene blend integration tests", [mode] {
+                return runBuilder(modifiedLayer([mode](bloom::runtime::CompiledLayerOutput& layer) {
+                    layer.blendMode = mode;
+                }));
+            });
     }
     constexpr std::array<ShapeKind, 7> kShapeKinds{
         ShapeKind::Rectangle, ShapeKind::Ellipse, ShapeKind::Triangle, ShapeKind::Polygon,
@@ -372,25 +244,22 @@ layerOnLayerPlan(const std::uint64_t idBase) {
         add(id, GpuCoverageFixtureCriterion::Prepared, "src/render PathRaster + shape source tests",
             [kind] { return runBuilder(withSource(shape(kind, 103000), 103000)); });
     }
-    // The builder prepares translation-only layers; a non-identity scale, rotation, or anchor is
-    // refused. The executor's GpuAffine composed-matrix arm is proven standalone (scale, rotation,
-    // and anchor together) by the native affine/blend executor test, so these axes are NotRun with
-    // that evidence rather than presented as builder coverage.
-    constexpr std::string_view kAffineOwner =
-        "src/runtime gpu_affine_blend_executor_native_tests (standalone GpuAffine parity; builder "
-        "output not claimed)";
-    add("feature.layer.affine.scale", GpuCoverageFixtureCriterion::NativeRequired,
-        std::string{kAffineOwner}, [] { return FixtureRun{}; });
-    add("feature.layer.affine.rotation", GpuCoverageFixtureCriterion::NativeRequired,
-        std::string{kAffineOwner}, [] { return FixtureRun{}; });
-    add("feature.layer.affine.anchor", GpuCoverageFixtureCriterion::NativeRequired,
-        std::string{kAffineOwner}, [] { return FixtureRun{}; });
+    // A layer over a raster merge result is a raster input, so the production builder must emit the
+    // accepted GpuAffine command for each transform axis (scale, rotation, anchor).
+    add("feature.layer.affine.scale", GpuCoverageFixtureCriterion::Prepared,
+        "src/render LayerTransform + gpu scene affine integration tests",
+        [] { return runBuilder(rasterAffinePlan(AffineAxis::Scale, 112000)); });
+    add("feature.layer.affine.rotation", GpuCoverageFixtureCriterion::Prepared,
+        "src/render LayerTransform + gpu scene affine integration tests",
+        [] { return runBuilder(rasterAffinePlan(AffineAxis::Rotation, 112100)); });
+    add("feature.layer.affine.anchor", GpuCoverageFixtureCriterion::Prepared,
+        "src/render LayerTransform + gpu scene affine integration tests",
+        [] { return runBuilder(rasterAffinePlan(AffineAxis::Anchor, 112200)); });
+    // A real parented layer: layer B composes layer A's matrix (its parent), so the parented shear
+    // is prepared through the production builder.
     add("feature.layer.parent", GpuCoverageFixtureCriterion::Prepared,
-        "src/runtime layer_parent_transform tests", [] {
-            return runBuilder(modifiedLayer([](bloom::runtime::CompiledLayerOutput& layer) {
-                layer.parent = OperationIndex::fromRaw(0);
-            }));
-        });
+        "src/runtime layer_parent_transform tests",
+        [] { return runBuilder(parentedPlan(112300)); });
     add("feature.layer.generic_input", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime GpuSceneExecutor graph tests",
         [] { return runBuilder(layerOnLayerPlan(104000)); });
@@ -436,9 +305,10 @@ layerOnLayerPlan(const std::uint64_t idBase) {
         "src/render PathRaster + shape source tests",
         [] { return runBuilder(withSource(shape(ShapeKind::Rectangle, 106000, true), 106000)); });
     add("node.bloom.composition-source", GpuCoverageFixtureCriterion::Prepared,
-        "src/runtime SnapshotCompiler nested composition tests", [] {
-            const auto nested = basePlan();
-            return runBuilder(withSource(compositionSource(107000), 107000, &nested));
+        "src/runtime gpu nested scene preparation tests", [] {
+            const auto child =
+                nestedChildPlan(122000, 203, bloom::core::Color4d{0.2, 0.6, 0.9, 1.0});
+            return runBuilder(nestedParentPlan(child, 123000, 101));
         });
     addImageEffectPlan("node.bloom.ocio-colour-space-transform",
                        bloom::runtime::CstKernel{"lin_rec709_scene", "lin_rec709_scene"}, 108000,
@@ -520,6 +390,32 @@ layerOnLayerPlan(const std::uint64_t idBase) {
             ++failed;
         }
     }
+    // Dedicated nested proof: the per-fixture run above checks cold/warm parity, but the child
+    // branch reuse across a single-branch edit is proven here through the same production builder
+    // and executor, on two parent scenes whose children differ in one branch only.
+    {
+        const auto plans = nestedBranchReusePlans();
+        const bloom::runtime::CpuGpuSceneBuilder builder;
+        const auto requestA = requestFor(*plans.planA);
+        const auto requestB = requestFor(*plans.planB);
+        const auto preparedA = builder.build(plans.planA, requestA);
+        const auto preparedB = builder.build(plans.planB, requestB);
+        std::string evidence;
+        const bloom::runtime::CpuCompositionEvaluator evaluator;
+        if (!preparedA || !preparedB) {
+            std::cerr << "FAIL nested-branch-reuse: both parent scenes must prepare\n";
+            ++failed;
+        } else if (!bloom::gpu_coverage_native::runNestedBranchReuse(
+                       *device.device, evaluator, plans.planA, requestA, preparedA.scene,
+                       plans.planB, requestB, preparedB.scene, evidence)) {
+            std::cerr << "FAIL nested-branch-reuse: " << evidence << '\n';
+            ++failed;
+        } else {
+            std::cout << "PASS nested-branch-reuse: " << evidence << '\n';
+            ++passed;
+        }
+    }
+
     std::cout << "\nNATIVE coverage: " << passed << " pass, " << failed << " fail, " << missing
               << " missing\n";
     return (failed == 0 && missing == 0) ? 0 : 1;
@@ -566,7 +462,6 @@ int main(int argc, char** argv) {
     } else {
         failures.push_back("native acceptance negative proof: " + nativeNegativeEvidence);
     }
-    bloom::gpu_coverage_route_proof::printStandaloneExecutorEvidence();
 
     const auto requiredIds = requiredCoverageIds();
     // No genuine route harness publishes into this sink in this tree yet, so every route is MISSING
