@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <latch>
 #include <memory>
@@ -92,7 +93,11 @@ class Expectations final {
     artifact.entryPoint = wrapper.entryPoint;
     artifact.targetEnvironment = "vulkan1.2";
     artifact.stage = GpuShaderStage::Compute;
-    artifact.spirvDigest = *Sha256Hasher::hash(std::as_bytes(std::span(artifact.spirv)));
+    const auto spirvDigest = Sha256Hasher::hash(std::as_bytes(std::span(artifact.spirv)));
+    if (!spirvDigest.has_value()) {
+        std::abort();
+    }
+    artifact.spirvDigest = *spirvDigest;
     artifact.sourceDigest = wrapper.sourceDigest;
     return artifact;
 }

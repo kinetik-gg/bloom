@@ -264,9 +264,10 @@ displayProofRunner(const bool customView) {
     };
     const auto addImageEffectPlan = [&add](std::string id, const ImageEffectKernel& kernel,
                                            const std::uint64_t idBase, std::string owner) {
-        const auto base = std::string{"src/color OCIO image effect tests"};
-        add(std::move(id), GpuCoverageFixtureCriterion::Prepared,
-            owner.empty() ? base : std::move(owner),
+        if (owner.empty()) {
+            owner = "src/color OCIO image effect tests";
+        }
+        add(std::move(id), GpuCoverageFixtureCriterion::Prepared, std::move(owner),
             [kernel, idBase] { return runBuilder(effectPlan(kernel, idBase)); });
     };
 
@@ -454,9 +455,7 @@ displayProofRunner(const bool customView) {
     return list;
 }
 
-} // namespace
-
-int main(int argc, char** argv) {
+int run(int argc, char** argv) {
     bool requireDevice = false;
     bool nativeAcceptance = false;
     std::filesystem::path loader;
@@ -560,4 +559,15 @@ int main(int argc, char** argv) {
         return 1;
     }
     return 0;
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    try {
+        return run(argc, argv);
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
+        return 1;
+    }
 }

@@ -20,7 +20,9 @@
 
 #include "gpu_preview_display_service_general_fixture.ipp"
 
-int main(const int argc, char** argv) {
+namespace {
+
+int run(const int argc, char** argv) {
     const TestOptions options = parseOptions(argc, argv);
     if (!options.valid) {
         return 2;
@@ -649,4 +651,15 @@ int main(const int argc, char** argv) {
     std::cerr << expectations.failures() << " general display service expectation(s) failed\n";
     return 1;
 #endif
+}
+
+} // namespace
+
+int main(const int argc, char** argv) {
+    try {
+        return run(argc, argv);
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
+        return 1;
+    }
 }

@@ -96,6 +96,7 @@ void runTwoCallerTest(Expectations& expectations, const Options& options) {
     std::atomic<int> evaluated{0};
     const auto deadline = std::chrono::steady_clock::now() + 30s;
     std::vector<std::thread> callers;
+    callers.reserve(2);
     for (int i = 0; i < 2; ++i) {
         callers.emplace_back([&] {
             const auto outcome = evaluator->evaluate(plan, request);

@@ -185,7 +185,7 @@ void testCoverageCacheEviction(Expectations& expectations) {
     auto geometry = std::make_shared<bloom::runtime::GpuSceneCoverageGeometry>();
     geometry->width = 4;
     geometry->height = 4;
-    geometry->rows.resize(4U * 4U);
+    geometry->rows.resize(std::size_t{4} * 4U);
     geometry->spans.resize(8U);
     const std::uint64_t bytes = bloom::runtime::gpuSceneCoverageGeometryBytes(*geometry);
     expectations.expect(bytes == 16U * sizeof(bloom::render::PathRasterCoverageRange) +

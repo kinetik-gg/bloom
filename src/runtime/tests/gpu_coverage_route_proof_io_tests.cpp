@@ -107,8 +107,8 @@ void testRoundTrip(const std::filesystem::path& dir) {
 }
 
 void testValidationNegatives() {
-    const auto expectIssue = [](GpuRouteExecutionProof proof, const GpuCoverageContractIssue issue,
-                                const std::string_view what) {
+    const auto expectIssue = [](const GpuRouteExecutionProof& proof,
+                                const GpuCoverageContractIssue issue, const std::string_view what) {
         const auto issues = bloom::runtime::validateGpuRouteExecutionProof(proof);
         expect(!issues.empty() && issues.front().issue == issue, what);
     };

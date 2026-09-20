@@ -147,7 +147,12 @@ void runParentedCases(Expectations& expectations, GpuDevice& device) {
     const auto origin = window(7, -3, 9, 6);
     const auto display = window(7, -3, 9, 6);
     const auto square = PixelAspectRatio::square();
-    const auto wide = *PixelAspectRatio::create(2, 1);
+    const auto wideOption = PixelAspectRatio::create(2, 1);
+    expectations.expect(wideOption.has_value(), "wide (2:1) pixel aspect is created");
+    if (!wideOption.has_value()) {
+        return;
+    }
+    const auto wide = *wideOption;
     const Vec2d originPosition{4.0, 2.0};
     const Vec2d childPosition{-1.5, 3.25};
     const auto originPixels = semanticPixels(origin.extent().width(), origin.extent().height());

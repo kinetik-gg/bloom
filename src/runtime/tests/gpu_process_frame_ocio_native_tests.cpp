@@ -303,9 +303,7 @@ mixedPlan(const CompositionFormat compositionFormat, const document::AssetRecord
     return request;
 }
 
-} // namespace
-
-int main(int argc, char** argv) {
+int run(int argc, char** argv) {
     const auto options = parseOptions(argc, argv);
     if (!options.valid) {
         std::cerr << "invalid arguments\n";
@@ -585,4 +583,15 @@ int main(int argc, char** argv) {
     std::cout << "PASS: mixed media+CST+text GPU export with resolved OCIO context\n";
     return 0;
 #endif
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    try {
+        return run(argc, argv);
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
+        return 1;
+    }
 }

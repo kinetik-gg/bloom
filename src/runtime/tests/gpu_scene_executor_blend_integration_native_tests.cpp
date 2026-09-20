@@ -187,7 +187,7 @@ rasterAffinePlan(const CompositionFormat compositionFormat, const bool parented,
     if (parented) {
         layerC.parent = OperationIndex::fromRaw(1);
     }
-    operations.emplace_back(std::move(layerC));
+    operations.emplace_back(layerC);
     operations.emplace_back(
         CompiledMerge{NodeId::fromRaw(idBase + 7),
                       {CompiledMergeInput{LayerSlotId::fromRaw(idBase + 32), layerCId,

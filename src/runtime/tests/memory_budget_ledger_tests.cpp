@@ -118,7 +118,7 @@ void swapActivityPolicy() {
     // Releasing swap rebaselines, so a later rise is measured from the new low.
     state = ledger.poll(swapSample(gib), at(60));
     expect(!state.swapPressure, "a released sample rebaselines without pressure");
-    state = ledger.poll(swapSample(gib + 4 * 1024 * 1024), at(65));
+    state = ledger.poll(swapSample(gib + std::size_t{4} * 1024 * 1024), at(65));
     expect(!state.swapPressure, "small background churn below the entry threshold is ignored");
     // Clock rollback and a first sample are deterministic and never manufacture growth.
     state = ledger.poll(swapSample(2 * gib), at(60));
@@ -127,9 +127,9 @@ void swapActivityPolicy() {
     expect(state.swapPressure, "real growth from the rebaselined sample is still detected");
     // Bounded hysteresis: a smaller sustained rise keeps an active episode latched, while a static
     // reading releases it.
-    state = ledger.poll(swapSample(3 * gib + 8 * 1024 * 1024), at(75));
+    state = ledger.poll(swapSample(3 * gib + std::size_t{8} * 1024 * 1024), at(75));
     expect(state.swapPressure, "a smaller sustained rise keeps an active episode latched");
-    state = ledger.poll(swapSample(3 * gib + 8 * 1024 * 1024), at(80));
+    state = ledger.poll(swapSample(3 * gib + std::size_t{8} * 1024 * 1024), at(80));
     expect(!state.swapPressure, "a static reading releases the latched episode");
     // Missing counters cannot assert recovery from a live episode, and a returning valid sample is
     // a fresh baseline rather than a spike measured against the intervening gap.

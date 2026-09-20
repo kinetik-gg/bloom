@@ -68,74 +68,72 @@ inline void routeProofSinkRejectsFakes(std::vector<std::string>& failures) {
                  GpuCoverageContractIssue::RouteProofEmptyOrGeneric, "empty/generic proof");
     auto unknown = representativeRouteProof();
     unknown.routeId = "route.does-not-exist";
-    expectReject(std::move(unknown), GpuCoverageContractIssue::RouteProofUnknownRoute,
-                 "unknown route");
+    expectReject(unknown, GpuCoverageContractIssue::RouteProofUnknownRoute, "unknown route");
     auto mismatch = representativeRouteProof();
     mismatch.harness = bloom::runtime::GpuRouteHarnessKind::RamPreview;
-    expectReject(std::move(mismatch), GpuCoverageContractIssue::RouteProofHarnessMismatch,
+    expectReject(mismatch, GpuCoverageContractIssue::RouteProofHarnessMismatch,
                  "harness/route mismatch");
     auto noProvenance = representativeRouteProof();
     noProvenance.evidenceDigest.clear();
-    expectReject(std::move(noProvenance), GpuCoverageContractIssue::RouteProofMissingProvenance,
+    expectReject(noProvenance, GpuCoverageContractIssue::RouteProofMissingProvenance,
                  "missing evidence digest");
     auto shortDigest = representativeRouteProof();
     shortDigest.processIdentityDigest = "not-a-sha256";
-    expectReject(std::move(shortDigest), GpuCoverageContractIssue::RouteProofMissingProvenance,
+    expectReject(shortDigest, GpuCoverageContractIssue::RouteProofMissingProvenance,
                  "non-canonical frame digest");
     auto uppercaseDigest = representativeRouteProof();
     uppercaseDigest.evidenceDigest =
         "FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210";
-    expectReject(std::move(uppercaseDigest), GpuCoverageContractIssue::RouteProofMissingProvenance,
+    expectReject(uppercaseDigest, GpuCoverageContractIssue::RouteProofMissingProvenance,
                  "uppercase evidence digest");
     auto zeroEpoch = representativeRouteProof();
     zeroEpoch.deviceOwnershipEpoch = "0000";
-    expectReject(std::move(zeroEpoch), GpuCoverageContractIssue::RouteProofMissingProvenance,
+    expectReject(zeroEpoch, GpuCoverageContractIssue::RouteProofMissingProvenance,
                  "zero device epoch");
     auto alphaEpoch = representativeRouteProof();
     alphaEpoch.deviceOwnershipEpoch = "abc";
-    expectReject(std::move(alphaEpoch), GpuCoverageContractIssue::RouteProofMissingProvenance,
+    expectReject(alphaEpoch, GpuCoverageContractIssue::RouteProofMissingProvenance,
                  "non-decimal device epoch");
     auto negativeEpoch = representativeRouteProof();
     negativeEpoch.deviceOwnershipEpoch = "-1";
-    expectReject(std::move(negativeEpoch), GpuCoverageContractIssue::RouteProofMissingProvenance,
+    expectReject(negativeEpoch, GpuCoverageContractIssue::RouteProofMissingProvenance,
                  "negative device epoch");
     auto noDispatch = representativeRouteProof();
     noDispatch.nativeDispatches = 0;
-    expectReject(std::move(noDispatch), GpuCoverageContractIssue::RouteProofNoNativeDispatch,
+    expectReject(noDispatch, GpuCoverageContractIssue::RouteProofNoNativeDispatch,
                  "zero cold native dispatch");
     auto noFrame = representativeRouteProof();
     noFrame.verifiedFrames = 0;
-    expectReject(std::move(noFrame), GpuCoverageContractIssue::RouteProofNoVerifiedFrame,
-                 "no verified frame");
+    expectReject(noFrame, GpuCoverageContractIssue::RouteProofNoVerifiedFrame, "no verified frame");
     auto previewReadback = representativeRouteProof();
     previewReadback.readbackSubmissions = 1;
-    expectReject(std::move(previewReadback), GpuCoverageContractIssue::RouteProofExcessReadback,
+    expectReject(previewReadback, GpuCoverageContractIssue::RouteProofExcessReadback,
                  "preview readback submission");
     auto tooManyPayloads = representativeExportProof();
     tooManyPayloads.payloads = 3; // > two payloads per verified frame
-    expectReject(std::move(tooManyPayloads), GpuCoverageContractIssue::RouteProofExcessReadback,
+    expectReject(tooManyPayloads, GpuCoverageContractIssue::RouteProofExcessReadback,
                  "export three payloads for one frame");
     auto tooManySubmissions = representativeExportProof();
     tooManySubmissions.readbackSubmissions = 2; // > one submission per verified frame
-    expectReject(std::move(tooManySubmissions), GpuCoverageContractIssue::RouteProofExcessReadback,
+    expectReject(tooManySubmissions, GpuCoverageContractIssue::RouteProofExcessReadback,
                  "export two submissions for one frame");
     auto fewerPayloads = representativeExportProof();
     fewerPayloads.verifiedFrames = 2;
     fewerPayloads.readbackSubmissions = 2;
     fewerPayloads.payloads = 1; // fewer payloads than submissions is impossible
-    expectReject(std::move(fewerPayloads), GpuCoverageContractIssue::RouteProofExcessReadback,
+    expectReject(fewerPayloads, GpuCoverageContractIssue::RouteProofExcessReadback,
                  "export fewer payloads than submissions");
     auto overflowPayloads = representativeExportProof();
     overflowPayloads.payloads = std::numeric_limits<std::uint64_t>::max();
-    expectReject(std::move(overflowPayloads), GpuCoverageContractIssue::RouteProofExcessReadback,
+    expectReject(overflowPayloads, GpuCoverageContractIssue::RouteProofExcessReadback,
                  "export payloads at UINT64_MAX");
     auto overflowSubmissions = representativeExportProof();
     overflowSubmissions.readbackSubmissions = std::numeric_limits<std::uint64_t>::max();
-    expectReject(std::move(overflowSubmissions), GpuCoverageContractIssue::RouteProofExcessReadback,
+    expectReject(overflowSubmissions, GpuCoverageContractIssue::RouteProofExcessReadback,
                  "export submissions at UINT64_MAX");
     auto noBytes = representativeExportProof();
     noBytes.transferredBytes = 0;
-    expectReject(std::move(noBytes), GpuCoverageContractIssue::RouteProofMissingTransferredBytes,
+    expectReject(noBytes, GpuCoverageContractIssue::RouteProofMissingTransferredBytes,
                  "export without transferred bytes");
     if (!sink.proofs().empty()) {
         failures.push_back("route-proof sink retained a rejected proof");

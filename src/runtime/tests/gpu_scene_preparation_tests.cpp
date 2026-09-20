@@ -588,8 +588,8 @@ void testAffineAndParent(Expectations& expectations, const CpuCompositionEvaluat
                                             OperationIndex::fromRaw(2)}};
         std::vector<CompiledOperation> operations;
         operations.push_back(std::move(definition.operations[0]));
-        operations.push_back(std::move(layerA));
-        operations.push_back(std::move(layerB));
+        operations.push_back(layerA);
+        operations.push_back(layerB);
         operations.push_back(std::move(merge));
         operations.push_back(CompiledCompositionOutput{bloom::document::NodeId::fromRaw(40453),
                                                        OperationIndex::fromRaw(3)});

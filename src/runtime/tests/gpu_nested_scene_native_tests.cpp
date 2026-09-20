@@ -199,7 +199,7 @@ affineBlendParentPlan(const std::shared_ptr<const CompiledCompositionPlan>& chil
                                         .opacity = 0.8,
                                         .blendMode = bloom::core::BlendMode::Screen});
     childLayer.parent = OperationIndex::fromRaw(1);
-    operations.emplace_back(std::move(childLayer));
+    operations.emplace_back(childLayer);
     operations.emplace_back(
         CompiledMerge{NodeId::fromRaw(9150),
                       std::vector<CompiledMergeInput>{CompiledMergeInput{
