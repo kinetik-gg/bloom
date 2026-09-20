@@ -13,6 +13,7 @@ target_sources(
         sequence_export_runner.cpp
         output_analysis_attempt_runner.cpp
         project_session.cpp
+        project_session_creation.cpp
         publication_coordinator.cpp
         save_publication.cpp
         session_async_io.cpp

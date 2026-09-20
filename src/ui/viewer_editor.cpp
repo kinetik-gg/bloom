@@ -1040,10 +1040,10 @@ void ViewerEditor::updateCompositionActions() {
     }
     const auto* composition = session_.composition();
     const bool hasComposition = composition != nullptr;
-    const bool hasSeveral = session_.snapshot().project().compositions().size() > 1;
     viewerCompositionDuplicateAction_->setEnabled(hasComposition);
     viewerCompositionRenameAction_->setEnabled(hasComposition);
-    viewerCompositionDeleteAction_->setEnabled(hasComposition && hasSeveral);
+    // Deleting the final composition is allowed and returns to the blank, usable empty project.
+    viewerCompositionDeleteAction_->setEnabled(hasComposition);
 }
 
 void ViewerEditor::updateOverlayActions() {

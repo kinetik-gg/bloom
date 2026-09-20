@@ -57,18 +57,35 @@ enum class DurationUnit : std::uint8_t { Frames, Seconds };
 // which reduces, and the value round-trips through toSeconds() without a float remainder.
 constexpr std::int64_t kSecondsDenominator = 1'000'000;
 
+// The largest whole-frame count the dialog models; matches the Frames field's range.
 constexpr std::int64_t kMaxFrames = 1'000'000;
 
+// Rounds a double to a bounded int64 without invoking std::llround's out-of-range undefined
+// behavior. Values at or outside [minimum, maximum] clamp to the nearer bound, so an inherited
+// extreme (but valid) duration can be displayed safely.
+[[nodiscard]] std::int64_t clampedRound(const double value, const std::int64_t minimum,
+                                        const std::int64_t maximum) noexcept {
+    const auto low = static_cast<double>(minimum);
+    const auto high = static_cast<double>(maximum);
+    if (!std::isfinite(value) || value <= low) {
+        return minimum;
+    }
+    if (value >= high) {
+        return maximum;
+    }
+    return std::llround(value);
+}
+
 // The exact composition duration a field value names in `unit` at `rate`, or nullopt when the value
-// is not representable (nonpositive, or the frame product overflows a RationalTime numerator).
-// Frames are integer by construction; seconds are converted at microsecond precision.
+// is not representable (nonpositive, or outside int64). Frames are integer by construction; seconds
+// are converted at microsecond precision.
 [[nodiscard]] std::optional<core::RationalTime>
 durationForValue(const double value, const DurationUnit unit, const document::FrameRate rate) {
     if (unit == DurationUnit::Frames) {
-        if (!std::isfinite(value) || value < 1.0 || value > static_cast<double>(kMaxFrames)) {
+        if (!std::isfinite(value) || value < 1.0) {
             return std::nullopt;
         }
-        const auto frames = static_cast<std::int64_t>(std::llround(value));
+        const auto frames = clampedRound(value, 1, kMaxFrames);
         const auto rateDenominator = static_cast<std::int64_t>(rate.denominator());
         const auto rateNumerator = static_cast<std::int64_t>(rate.numerator());
         if (rateNumerator <= 0 || rateDenominator <= 0 ||
@@ -80,43 +97,38 @@ durationForValue(const double value, const DurationUnit unit, const document::Fr
     if (!std::isfinite(value) || value <= 0.0) {
         return std::nullopt;
     }
-    const auto microseconds = std::llround(value * static_cast<double>(kSecondsDenominator));
-    if (microseconds < 1) {
+    const auto microseconds = value * static_cast<double>(kSecondsDenominator);
+    if (!std::isfinite(microseconds) || microseconds < 1.0 ||
+        microseconds > static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
         return std::nullopt;
     }
-    return core::RationalTime::create(microseconds, kSecondsDenominator);
+    return core::RationalTime::create(std::llround(microseconds), kSecondsDenominator);
 }
 
 // The field value that displays `duration` in `unit` at `rate`. Frames round to the nearest whole
-// frame (documented frame precision) and clamp to at least one; seconds are returned exactly and
-// the spin box's own decimal precision rounds the display.
+// frame and clamp to the field's range; seconds are returned exactly (the field's own decimal
+// precision rounds only the display).
 [[nodiscard]] double displayValueForDuration(const core::RationalTime duration,
                                              const DurationUnit unit,
                                              const document::FrameRate rate) {
     const double seconds = duration.toSeconds();
     if (unit == DurationUnit::Seconds) {
-        return seconds;
+        return std::isfinite(seconds) ? seconds : 1.0 / static_cast<double>(kSecondsDenominator);
     }
     const auto rateNumerator = static_cast<double>(rate.numerator());
     const auto rateDenominator = static_cast<double>(rate.denominator());
     if (rateNumerator <= 0.0 || rateDenominator <= 0.0) {
         return 1.0;
     }
-    const auto frames = std::llround(seconds * rateNumerator / rateDenominator);
-    if (frames < 1) {
-        return 1.0;
-    }
-    if (frames > kMaxFrames) {
-        return static_cast<double>(kMaxFrames);
-    }
-    return static_cast<double>(frames);
+    const double frames = seconds * rateNumerator / rateDenominator;
+    return static_cast<double>(clampedRound(frames, 1, kMaxFrames));
 }
 
 struct NewCompositionFields final {
     QLineEdit* name = nullptr;
     QSpinBox* width = nullptr;
     QSpinBox* height = nullptr;
-    QSpinBox* frameRate = nullptr;
+    QDoubleSpinBox* frameRate = nullptr;
     QDoubleSpinBox* duration = nullptr;
     kit::KDropdown* durationUnit = nullptr;
     kit::KColorChip* background = nullptr;
@@ -153,11 +165,20 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
     fields.height->setRange(1, static_cast<int>(document::CompositionFormat::kMaximumDimension));
     fields.height->setValue(static_cast<int>(currentFormat.height()));
     form->addRow(QObject::tr("Height"), fields.height);
-    fields.frameRate = new QSpinBox(&dialog);
+    const auto inheritedRate = currentFormat.frameRate();
+    fields.frameRate = new QDoubleSpinBox(&dialog);
     fields.frameRate->setObjectName(QStringLiteral("assetsFrameRateField"));
-    fields.frameRate->setRange(1, 1000);
-    fields.frameRate->setValue(static_cast<int>(currentFormat.frameRate().numerator() /
-                                                currentFormat.frameRate().denominator()));
+    fields.frameRate->setDecimals(3);
+    fields.frameRate->setRange(0.001, 1000.0);
+    fields.frameRate->setSingleStep(1.0);
+    fields.frameRate->setKeyboardTracking(false);
+    {
+        // Display the inherited rate precisely enough to read (29.970 for 30000/1001) instead of
+        // truncating it to a whole number. The exact rational is kept until the artist edits it.
+        const QSignalBlocker blocker(fields.frameRate);
+        fields.frameRate->setValue(static_cast<double>(inheritedRate.numerator()) /
+                                   static_cast<double>(inheritedRate.denominator()));
+    }
     form->addRow(QObject::tr("Frame rate (fps)"), fields.frameRate);
 
     // Duration + unit selector on one row (label "Duration", numeric field, unit dropdown). The
@@ -198,72 +219,89 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
 
     fields.buttons->button(QDialogButtonBox::Ok)->setObjectName(QStringLiteral("assetsDialogOk"));
 
-    const auto frameRateForField = [&fields] {
-        return document::FrameRate::create(static_cast<std::uint32_t>(fields.frameRate->value()), 1)
-            .value_or(document::FrameRate::framesPerSecond24());
+    // The exact duration the dialog authors. It changes only on a numeric edit or a frame-rate
+    // change -- never on a unit switch, which only re-displays the same canonical duration in the
+    // other unit. That keeps one frame at 24 fps exactly 1/24 across Frames -> Seconds -> Frames
+    // instead of degrading to a rounded microsecond count.
+    std::optional<core::RationalTime> canonicalDuration = initialDuration;
+    DurationUnit unit = DurationUnit::Frames;
+    bool frameRateEdited = false;
+
+    const auto effectiveRate = [&]() -> document::FrameRate {
+        if (!frameRateEdited) {
+            return inheritedRate;
+        }
+        // The artist's typed rate at millifps precision, reduced to lowest terms.
+        const auto numerator = clampedRound(fields.frameRate->value() * 1000.0, 1, 1000 * 1000);
+        return document::FrameRate::create(static_cast<std::uint32_t>(numerator), 1000)
+            .value_or(inheritedRate);
     };
     const auto currentUnit = [&fields] {
         return fields.durationUnit->currentData().toString() == QStringLiteral("seconds")
                    ? DurationUnit::Seconds
                    : DurationUnit::Frames;
     };
-    // Applies the numeric field's range/decimals/suffix to the active unit WITHOUT changing its
-    // value. Called before a unit-conversion write so the spin box accepts the converted value.
-    const auto configureValueField = [&fields](const DurationUnit unit) {
+    // Applies the numeric field's range/decimals/step to the active unit WITHOUT changing its
+    // value.
+    const auto configureValueField = [&fields](const DurationUnit next) {
         const QSignalBlocker blocker(fields.duration);
-        if (unit == DurationUnit::Frames) {
+        if (next == DurationUnit::Frames) {
             fields.duration->setDecimals(0);
             fields.duration->setRange(1.0, static_cast<double>(kMaxFrames));
             fields.duration->setSingleStep(1.0);
         } else {
             fields.duration->setDecimals(6);
-            fields.duration->setRange(1.0 / static_cast<double>(kSecondsDenominator), 1000000.0);
+            fields.duration->setRange(1.0 / static_cast<double>(kSecondsDenominator), 1'000'000.0);
             fields.duration->setSingleStep(0.1);
         }
     };
+    // Re-displays the canonical duration in the active unit; the field's own precision rounds only
+    // the display, never the stored value.
+    const auto displayCanonical = [&] {
+        if (!canonicalDuration.has_value()) {
+            return;
+        }
+        const QSignalBlocker blocker(fields.duration);
+        fields.duration->setValue(
+            displayValueForDuration(*canonicalDuration, unit, effectiveRate()));
+    };
     // Enables OK only for a representable duration and reports the reason when not.
     const auto refreshValidity = [&] {
-        const auto duration =
-            durationForValue(fields.duration->value(), currentUnit(), frameRateForField());
-        if (!duration.has_value()) {
+        const bool valid = canonicalDuration.has_value();
+        if (!valid) {
             fields.error->setText(
                 QObject::tr("Enter a duration greater than zero and within the supported range."));
             fields.error->show();
         } else {
             fields.error->hide();
         }
-        fields.buttons->button(QDialogButtonBox::Ok)->setEnabled(duration.has_value());
+        fields.buttons->button(QDialogButtonBox::Ok)->setEnabled(valid);
     };
 
-    // Initial setup: Frames default, showing the initial duration as a frame count at the field's
-    // frame rate. The value is written after the range/decimals so it is never clamped by a stale
-    // configuration.
-    configureValueField(DurationUnit::Frames);
-    {
-        const QSignalBlocker blocker(fields.duration);
-        fields.duration->setValue(
-            displayValueForDuration(initialDuration, DurationUnit::Frames, frameRateForField()));
-    }
+    configureValueField(unit);
+    displayCanonical();
+    refreshValidity();
 
     QObject::connect(fields.durationUnit, &kit::KDropdown::currentIndexChanged, &dialog, [&](int) {
-        const auto unit = currentUnit();
-        const auto rate = frameRateForField();
-        const auto duration = durationForValue(
-            fields.duration->value(),
-            unit == DurationUnit::Seconds ? DurationUnit::Frames : DurationUnit::Seconds, rate);
+        unit = currentUnit();
         configureValueField(unit);
-        if (duration.has_value()) {
-            const QSignalBlocker blocker(fields.duration);
-            fields.duration->setValue(displayValueForDuration(*duration, unit, rate));
+        displayCanonical(); // same canonical duration, expressed in the new unit
+        refreshValidity();
+    });
+    // A frame-rate change keeps the entered number: in Frames the exact frame count is re-divided
+    // by the new rate, in Seconds the exact seconds are unchanged.
+    QObject::connect(fields.frameRate, &QDoubleSpinBox::valueChanged, &dialog, [&](double) {
+        frameRateEdited = true;
+        if (unit == DurationUnit::Frames) {
+            canonicalDuration = durationForValue(fields.duration->value(), unit, effectiveRate());
         }
         refreshValidity();
     });
-    // A frame-rate change keeps the entered number: frames stay frames, seconds stay seconds, and
-    // the duration follows naturally. Only validity is re-checked.
-    QObject::connect(fields.frameRate, &QSpinBox::valueChanged, &dialog,
-                     [&] { refreshValidity(); });
-    QObject::connect(fields.duration, &QDoubleSpinBox::valueChanged, &dialog,
-                     [&] { refreshValidity(); });
+    // A numeric edit replaces the canonical duration with the exact value the artist entered.
+    QObject::connect(fields.duration, &QDoubleSpinBox::valueChanged, &dialog, [&](double) {
+        canonicalDuration = durationForValue(fields.duration->value(), unit, effectiveRate());
+        refreshValidity();
+    });
     QObject::connect(fields.buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     QObject::connect(fields.buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, &fields] {
         if (!document::isValidHumanFacingName(fields.name->text().toUtf8().toStdString())) {
@@ -276,27 +314,23 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
         dialog.accept();
     });
 
-    refreshValidity();
     if (dialog.exec() != QDialog::Accepted) {
         return std::nullopt;
     }
 
-    const auto rate =
-        document::FrameRate::create(static_cast<std::uint32_t>(fields.frameRate->value()), 1);
-    const auto format = rate.has_value() ? document::CompositionFormat::create(
-                                               static_cast<std::uint32_t>(fields.width->value()),
-                                               static_cast<std::uint32_t>(fields.height->value()),
-                                               currentFormat.pixelAspect(), *rate)
-                                         : std::nullopt;
-    const auto duration = durationForValue(fields.duration->value(), currentUnit(), *rate);
-    if (!rate.has_value() || !format.has_value() || !duration.has_value()) {
+    const auto rate = effectiveRate();
+    const auto format = document::CompositionFormat::create(
+        static_cast<std::uint32_t>(fields.width->value()),
+        static_cast<std::uint32_t>(fields.height->value()), currentFormat.pixelAspect(), rate);
+    if (!format.has_value() || !canonicalDuration.has_value()) {
         return std::nullopt;
     }
+    const auto duration = *canonicalDuration;
 
     commands::Transaction transaction(QStringLiteral("Add Composition").toStdString(),
                                       session.snapshot().revision());
     transaction.emplace<commands::AddComposition>(
-        fields.name->text().toStdString(), *format, *rate, *duration,
+        fields.name->text().toStdString(), *format, rate, duration,
         core::Color4d{static_cast<double>(fields.background->color().red),
                       static_cast<double>(fields.background->color().green),
                       static_cast<double>(fields.background->color().blue),

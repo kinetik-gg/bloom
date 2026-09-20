@@ -419,10 +419,10 @@ void MainWindow::updateCompositionActions() {
         return;
     }
     const bool hasComposition = compositionSession_.composition() != nullptr;
-    const bool hasSeveral = compositionSession_.snapshot().project().compositions().size() > 1;
     duplicateCompositionAction_->setEnabled(hasComposition);
     renameCompositionAction_->setEnabled(hasComposition);
-    deleteCompositionAction_->setEnabled(hasComposition && hasSeveral);
+    // Deleting the final composition is allowed and returns to the blank, usable empty project.
+    deleteCompositionAction_->setEnabled(hasComposition);
 }
 
 void MainWindow::createViewMenu(QMenu& viewMenu) {

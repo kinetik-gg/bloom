@@ -263,17 +263,42 @@ void testEmptyWorkspaceEditorsAndFirstComposition(Expectations& expectations) {
     expectations.expect(dialogOpened, "first composition: the action drove the real dialog");
     expectations.expect(session.composition() != nullptr,
                         "first composition: creating the first composition activates it");
-    // Delete stays disabled for the FINAL composition: the command layer protects the last one
-    // (src/commands/operations.cpp DeleteComposition), so offering it here would promise a
-    // command that refuses. Renaming/duplicating become available.
+    // With the final composition deletable, Delete is offered alongside Rename/Duplicate once a
+    // composition is active.
     expectations.expect(
         renameCompositionAction != nullptr && renameCompositionAction->isEnabled() &&
-            duplicateCompositionAction != nullptr && duplicateCompositionAction->isEnabled(),
-        "first composition: Rename/Duplicate enable once an active composition "
+            duplicateCompositionAction != nullptr && duplicateCompositionAction->isEnabled() &&
+            deleteCompositionAction != nullptr && deleteCompositionAction->isEnabled(),
+        "first composition: Rename/Duplicate/Delete enable once a composition "
         "exists");
     if (assetsTree != nullptr) {
         expectations.expect(assetsTree->topLevelItem(0)->childCount() == 1,
                             "first composition: Assets lists the new composition");
+    }
+
+    // Deleting the FINAL composition returns to the same usable blank UI, and undo restores the
+    // composition as the active one.
+    if (deleteCompositionAction != nullptr && undoAction != nullptr) {
+        deleteCompositionAction->trigger();
+        QApplication::processEvents();
+        expectations.expect(session.composition() == nullptr &&
+                                session.snapshot().project().compositions().empty() &&
+                                !window.isShowingReadOnlyPlaceholder(),
+                            "final delete: the project is blank and the workspace stays usable");
+        expectations.expect(!deleteCompositionAction->isEnabled() &&
+                                !renameCompositionAction->isEnabled() &&
+                                !duplicateCompositionAction->isEnabled(),
+                            "final delete: composition actions disable with no active composition");
+        if (assetsTree != nullptr) {
+            expectations.expect(assetsTree->topLevelItem(0)->childCount() == 0,
+                                "final delete: Assets returns to an empty Compositions root");
+        }
+        undoAction->trigger();
+        QApplication::processEvents();
+        expectations.expect(session.composition() != nullptr &&
+                                session.snapshot().project().compositions().size() == 1 &&
+                                deleteCompositionAction->isEnabled(),
+                            "final delete: undo restores the composition and reactivates it");
     }
 }
 
@@ -322,7 +347,8 @@ void testFramesAtTwentyFiveAndThirtyFps(Expectations& expectations) {
         const auto id = runNewCompositionDialog(
             *fixture.session,
             [fps](QDialog& dialog, Expectations& expect) {
-                auto* rate = dialog.findChild<QSpinBox*>(QStringLiteral("assetsFrameRateField"));
+                auto* rate =
+                    dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsFrameRateField"));
                 auto* duration =
                     dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsDurationField"));
                 auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
@@ -357,7 +383,7 @@ void testFractionalSeconds(Expectations& expectations) {
                 dialog.findChild<ui::kit::KDropdown*>(QStringLiteral("assetsDurationUnitDropdown"));
             auto* duration =
                 dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsDurationField"));
-            auto* rate = dialog.findChild<QSpinBox*>(QStringLiteral("assetsFrameRateField"));
+            auto* rate = dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsFrameRateField"));
             auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
             if (unit == nullptr || duration == nullptr || rate == nullptr || ok == nullptr) {
                 expect.expect(false, "fractional seconds: controls exist");
@@ -427,7 +453,8 @@ void testFpsChangeKeepsEnteredUnit(Expectations& expectations) {
         const auto id = runNewCompositionDialog(
             *fixture.session,
             [](QDialog& dialog, Expectations& expect) {
-                auto* rate = dialog.findChild<QSpinBox*>(QStringLiteral("assetsFrameRateField"));
+                auto* rate =
+                    dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsFrameRateField"));
                 auto* duration =
                     dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsDurationField"));
                 auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
@@ -459,7 +486,8 @@ void testFpsChangeKeepsEnteredUnit(Expectations& expectations) {
                     QStringLiteral("assetsDurationUnitDropdown"));
                 auto* duration =
                     dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsDurationField"));
-                auto* rate = dialog.findChild<QSpinBox*>(QStringLiteral("assetsFrameRateField"));
+                auto* rate =
+                    dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsFrameRateField"));
                 auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
                 if (unit == nullptr || duration == nullptr || rate == nullptr || ok == nullptr) {
                     expect.expect(false, "fps seconds: controls exist");
@@ -540,7 +568,7 @@ void testInheritsCurrentCompositionDuration(Expectations& expectations) {
         [](QDialog& dialog, Expectations& expect) {
             auto* duration =
                 dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsDurationField"));
-            auto* rate = dialog.findChild<QSpinBox*>(QStringLiteral("assetsFrameRateField"));
+            auto* rate = dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsFrameRateField"));
             auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
             if (duration == nullptr || rate == nullptr || ok == nullptr) {
                 expect.expect(false, "inherit duration: controls exist");

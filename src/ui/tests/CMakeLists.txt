@@ -802,6 +802,17 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+add_executable(bloom_composition_duration_test composition_duration_tests.cpp)
+target_link_libraries(bloom_composition_duration_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_composition_duration_test)
+bloom_add_test(
+    NAME bloom.ui.composition-duration
+    COMMAND bloom_composition_duration_test
+    LABELS ui integration
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 add_executable(bloom_ui_multi_selection_test composition_session_multi_selection_tests.cpp)
 target_link_libraries(bloom_ui_multi_selection_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_ui_multi_selection_test)
