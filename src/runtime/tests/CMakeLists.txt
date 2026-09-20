@@ -529,11 +529,13 @@ bloom_add_test(
 
 # Bounded GPU final-render/export bridge: the real plan -> CpuGpuSceneBuilder -> GpuSceneExecutor
 # -> production GpuProcessReadback -> GPU-provenance ProcessFrame path, checked against the CPU
-# reference oracle and the canonical process-frame semantic identity. Uses the same loader/
+# reference oracle for process pixels, dispatch counters, and provenance. The canonical output
+# semantic identity is proven in bloom.host (src/host/tests/gpu_process_frame_identity_tests.cpp)
+# because the runtime module must not depend on bloom::output, even in tests. Uses the same loader/
 # --require-device contract and skips explicitly without a device.
 add_executable(bloom_runtime_gpu_process_frame_test gpu_process_frame_tests.cpp)
 target_link_libraries(bloom_runtime_gpu_process_frame_test
-    PRIVATE bloom_runtime_evaluator bloom_render bloom_output)
+    PRIVATE bloom_runtime_evaluator bloom_render)
 bloom_enable_warnings(bloom_runtime_gpu_process_frame_test)
 bloom_enable_strict_floating_point(bloom_runtime_gpu_process_frame_test)
 bloom_add_test(
@@ -543,7 +545,8 @@ bloom_add_test(
     TIMEOUT 600
 )
 
-# Focused real-device live-pin ref-count regression for the executor (audit F1) plus the# upload-cancel branch consistency fix (audit F2). It runs its own 24-level distinct-index merge DAG
+# Focused real-device live-pin ref-count regression for the executor (audit F1) plus the
+# upload-cancel branch consistency fix (audit F2). It runs its own 24-level distinct-index merge DAG
 # under a budget of a known live-image count times the probe-measured actual per-image allocation,
 # independent of the buggy whole-graph retained peak; the unchanged executor suite above keeps its
 # own coverage. Same loader/--require-device contract.

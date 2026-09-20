@@ -124,7 +124,7 @@ void freeQuarantinedSlotLocked(ProcessReadbackSlot& slot) noexcept {
            slot.ownerThread == std::this_thread::get_id();
 }
 
-// Best-effort non-blocking retirement of a QUARANTINED slot. Only the slot owner may call this (the
+// Best-effort non-blocking retirement of a quarantined slot. Only the slot owner may call this (the
 // caller holds the mutex and has checked the owner thread). Returns true when the fence is proven
 // signalled or the device is lost, in which case the resources are freed.
 [[nodiscard]] bool retireQuarantinedSlotLocked(ProcessReadbackSlot& slot) noexcept {
@@ -359,7 +359,7 @@ bool GpuProcessReadback::begin(std::shared_ptr<const GpuImage> image,
         const std::thread::id self = std::this_thread::get_id();
         // Claim the global slot. A Reserved slot is owned by a live Impl and a Quarantined slot by
         // a possibly in-flight submission; neither may be reused by a foreign OR same owner thread
-        // until proven retired. Only a same-owner QUARANTINED slot whose fence is proven retired
+        // until proven retired. Only a same-owner quarantined slot whose fence is proven retired
         // may be reclaimed. A Reserved slot is never reclaimed (the owning Impl still holds
         // resources).
         {
