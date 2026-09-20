@@ -68,9 +68,10 @@ class GpuProcessReadback final {
     // Owner-thread. Validates the source and byte budget, allocates one bounded host-visible
     // staging buffer, records the barrier+copy+barrier, submits, and returns true while Pending.
     // The caller-supplied shared_ptr retains the source image (and therefore its device generation)
-    // for the whole submission lifetime; the readback never keeps a raw source pointer that could
-    // outlive the image. The image's unretired-submission flag stays set until take()/retirement
-    // proves the fence.
+    // for the whole submission lifetime through the global RESERVED slot, so the readback never
+    // keeps a raw source pointer that could outlive the image. The concurrent host-buffer peak this
+    // call admits is the actual allocator-rounded staging allocation plus the eventual host pixel
+    // vector, both checked against `byteBudget` before submission.
     [[nodiscard]] bool begin(std::shared_ptr<const GpuImage> image,
                              std::uint64_t byteBudget) noexcept;
 

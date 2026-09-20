@@ -236,6 +236,43 @@ void testSameOwnerSecondReadbackRefused(Expectations& expectations, GpuDevice& d
                         "same-owner-second: the third pixels are intact");
 }
 
+// Regression: a budget that can hold the logical bytes but not the actual allocator-rounded staging
+// plus the host vector is refused OverBudget, releases the slot, and a subsequent valid readback
+// succeeds.
+void testBudgetBoundaryReleasesSlot(Expectations& expectations, GpuDevice& device) {
+    auto solidOp = GpuSolid::create(device);
+    expectations.expect(solidOp.hasValue(), "budget-boundary: solid op created");
+    if (!solidOp) {
+        return;
+    }
+    auto source = makeSolid(*solidOp.solid, {0.6, 0.2, 0.4, 1.0}, 8, 8);
+    expectations.expect(source != nullptr, "budget-boundary: source built");
+    if (source == nullptr) {
+        return;
+    }
+    // 8x8 RGBA32F = 1024 logical bytes. A budget just below the concurrent peak (staging + vector)
+    // must be refused; the exact rounding is allocator-dependent, so use a clearly-too-small value
+    // that still admits the logical 1024 bytes.
+    GpuProcessReadback refused;
+    const bool began = refused.begin(source, 1100);
+    expectations.expect(!began, "budget-boundary: an under-peak budget is refused");
+    expectations.expect(refused.diagnostic().code == GpuProcessReadbackCode::OverBudget,
+                        "budget-boundary: the refusal is a typed OverBudget");
+
+    // The refused pre-submit failure released the slot: a subsequent valid readback succeeds.
+    GpuProcessReadback valid;
+    expectations.expect(valid.begin(source, kBudget),
+                        "budget-boundary: a subsequent valid readback begins");
+    GpuProcessReadbackState poll = valid.state();
+    while (poll == GpuProcessReadbackState::Pending) {
+        poll = valid.poll();
+    }
+    expectations.expect(poll == GpuProcessReadbackState::Ready,
+                        "budget-boundary: the subsequent readback completes");
+    expectations.expect(valid.take().size() == 64,
+                        "budget-boundary: the subsequent pixels are intact");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -262,6 +299,7 @@ int main(int argc, char** argv) {
         testWrongThreadPollThenOwnerCompletion(expectations, *device.device);
         testForeignOwnerCannotSteal(expectations, *device.device, createOptions);
         testSameOwnerSecondReadbackRefused(expectations, *device.device, createOptions);
+        testBudgetBoundaryReleasesSlot(expectations, *device.device);
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " readback expectation(s) failed\n";
             return 1;
