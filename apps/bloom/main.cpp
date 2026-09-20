@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <bloom/host/gpu_export_provider.hpp>
+#include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -234,25 +235,17 @@ int main(int argc, char* argv[]) {
     // CPU worker. The same resolver supplies the builder's effect/media/ACES context AND the
     // general display program's preparer, so there is exactly one tool qualification and one
     // program cache.
+    // Compose the ONE shared resolver from this target's packaged tools via the shared root helper,
+    // exactly like bloom-cli/bloom-mcp: non-relocated pins staged digests, relocated uses
+    // inventory.
     std::shared_ptr<bloom::runtime::GpuOcioContextResolver> gpuOcioContextResolver =
-        std::make_shared<bloom::runtime::GpuOcioContextResolver>();
-#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
-    {
-        bloom::runtime::GpuOcioContextRequest request;
-        request.applicationExecutable =
-            std::filesystem::path(QCoreApplication::applicationFilePath().toStdString());
-        request.toolPackage.toolsDirectory = BLOOM_GPU_TOOLS_DIR;
-        request.toolPackage.inventoryName = BLOOM_GPU_TOOLS_INVENTORY_NAME;
-        request.toolPackage.glslangValidatorName = BLOOM_GPU_TOOLS_GLSLANG_NAME;
-        request.toolPackage.spirvValName = BLOOM_GPU_TOOLS_SPIRV_VAL_NAME;
-        request.toolPackage.relocated = static_cast<bool>(BLOOM_GPU_TOOLS_RELOCATED);
-#ifdef BLOOM_GPU_TOOLS_BUNDLE_RELATIVE
-        request.toolPackage.bundleRelative = true;
-#endif
-        gpuOcioContextResolver =
-            std::make_shared<bloom::runtime::GpuOcioContextResolver>(std::move(request));
+        bloom::host::makePackagedGpuOcioResolver(
+            std::filesystem::path(QCoreApplication::applicationFilePath().toStdString()));
+    if (gpuOcioContextResolver == nullptr) {
+        // No packaged tools: keep the inert fail-closed resolver so every affected request takes
+        // the CPU path, exactly as before.
+        gpuOcioContextResolver = std::make_shared<bloom::runtime::GpuOcioContextResolver>();
     }
-#endif
     auto gpuPreviewGpuSceneStage = bloom::ui::makeSessionRefreshingGpuSceneStage(
         snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, gpuSceneCoverageCache,
         gpuPreparedUploadCache, compiledPlanCache, gpuOcioContextResolver);

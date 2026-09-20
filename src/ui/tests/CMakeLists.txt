@@ -230,6 +230,27 @@ bloom_add_test(
 )
 target_link_libraries(bloom_gpu_preview_submitter_test PRIVATE bloom_ui)
 target_link_libraries(bloom_gpu_preview_app_test PRIVATE bloom_ui bloom_runtime_evaluator)
+# Desktop composition-root regression: the shared host packaged-tool helper supplies the expected
+# staged digests and qualifies the REAL tools staged beside this executable, so the default general
+# Neutral DisplayRgba8 program is available at 6000x4000. Mirrors apps/bloom/main.cpp exactly; no
+# device and no qualification bypass.
+add_executable(bloom_ui_gpu_preview_app_packaged_tools_test
+    gpu_preview_app_packaged_tools_tests.cpp)
+target_include_directories(bloom_ui_gpu_preview_app_packaged_tools_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_ui_gpu_preview_app_packaged_tools_test
+    PRIVATE bloom_runtime_evaluator bloom_host)
+include(BloomGpuShaderTools)
+bloom_package_gpu_shader_tools(bloom_ui_gpu_preview_app_packaged_tools_test)
+bloom_enable_warnings(bloom_ui_gpu_preview_app_packaged_tools_test)
+bloom_add_test(
+    NAME bloom.ui.gpu_preview_app_packaged_tools
+    COMMAND bloom_ui_gpu_preview_app_packaged_tools_test
+    LABELS ui gpu color
+    TIMEOUT 120
+)
+set_tests_properties(bloom.ui.gpu_preview_app_packaged_tools
+    PROPERTIES SKIP_RETURN_CODE 77)
 # bloom_ui_gpu_presentation_target_test adopts the borrowed VkInstance through Qt's public
 # QVulkanInstance, so it exists only where this build has both the pinned Vulkan headers and a Qt
 # build that shipped the Vulkan feature (BLOOM_UI_VULKAN_AVAILABLE, src/ui/CMakeLists.txt). On a Qt
