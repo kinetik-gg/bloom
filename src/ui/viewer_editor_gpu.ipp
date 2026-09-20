@@ -508,6 +508,18 @@ std::size_t ViewerEditor::gpuPresentAcceptedCountForTest() const noexcept {
     return gpuResident_ != nullptr ? gpuResident_->acceptedPresentCount() : 0U;
 }
 
+std::uint64_t ViewerEditor::gpuNativeAppliedSequenceForTest() const noexcept {
+    return gpuResident_ != nullptr ? gpuResident_->nativeAppliedSequence() : 0U;
+}
+
+std::uint64_t ViewerEditor::gpuNativePresentCountForTest() const noexcept {
+    return gpuResident_ != nullptr ? gpuResident_->nativePresentCount() : 0U;
+}
+
+std::uint64_t ViewerEditor::gpuNativeLastEnqueuedSequenceForTest() const noexcept {
+    return gpuResident_ != nullptr ? gpuResident_->nativeLastEnqueuedSequence() : 0U;
+}
+
 std::string ViewerEditor::gpuPresentationDiagnosticForTest() const {
     return gpuResident_ != nullptr ? gpuResident_->diagnostic() : std::string{};
 }

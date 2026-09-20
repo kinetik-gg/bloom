@@ -276,6 +276,12 @@ class ViewerEditor final : public QWidget,
     [[nodiscard]] bool gpuResidentConfiguredForTest() const noexcept;
     [[nodiscard]] std::size_t gpuPresentAttemptCountForTest() const noexcept;
     [[nodiscard]] std::size_t gpuPresentAcceptedCountForTest() const noexcept;
+    // Genuine owner-observed native present progress (read-only; mailbox admission does not advance
+    // it). A caller proving a specific request was presented waits until
+    // gpuNativeAppliedSequenceForTest() >= gpuNativeLastEnqueuedSequenceForTest().
+    [[nodiscard]] std::uint64_t gpuNativeAppliedSequenceForTest() const noexcept;
+    [[nodiscard]] std::uint64_t gpuNativePresentCountForTest() const noexcept;
+    [[nodiscard]] std::uint64_t gpuNativeLastEnqueuedSequenceForTest() const noexcept;
     [[nodiscard]] std::string gpuPresentationDiagnosticForTest() const;
     void pollGpuResidentForTest();
     // Renders the actual cover handoff pixmap for the current CPU content (test seam).

@@ -194,6 +194,14 @@ class ViewerGpuResidentController final {
     [[nodiscard]] bool presentationAcknowledged() const noexcept;
     [[nodiscard]] std::uint64_t presentedSequence() const noexcept;
     [[nodiscard]] std::size_t overlayRasterCount() const noexcept;
+    // Genuine owner-observed native present progress for the live presenter (read-only): the
+    // applied sequence and applied present count the presentation owner published, and the last
+    // sequence this controller enqueued. A mailbox admission never advances these; a caller that
+    // needs proof a specific request was genuinely presented waits until
+    // nativeAppliedSequence() >= nativeLastEnqueuedSequence(). Zero when no presenter exists.
+    [[nodiscard]] std::uint64_t nativeAppliedSequence() const noexcept;
+    [[nodiscard]] std::uint64_t nativePresentCount() const noexcept;
+    [[nodiscard]] std::uint64_t nativeLastEnqueuedSequence() const noexcept;
 
   private:
     struct Impl;

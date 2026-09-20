@@ -693,6 +693,18 @@ std::uint64_t ViewerGpuResidentController::presentedSequence() const noexcept {
     return impl_->enqueuedSequence;
 }
 
+std::uint64_t ViewerGpuResidentController::nativeAppliedSequence() const noexcept {
+    return impl_->presenter != nullptr ? impl_->presenter->appliedSequence() : 0U;
+}
+
+std::uint64_t ViewerGpuResidentController::nativePresentCount() const noexcept {
+    return impl_->presenter != nullptr ? impl_->presenter->presentCount() : 0U;
+}
+
+std::uint64_t ViewerGpuResidentController::nativeLastEnqueuedSequence() const noexcept {
+    return impl_->presenter != nullptr ? impl_->presenter->lastEnqueuedSequence() : 0U;
+}
+
 std::size_t ViewerGpuResidentController::overlayRasterCount() const noexcept {
     return impl_->overlayRasters;
 }
