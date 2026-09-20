@@ -36,5 +36,11 @@ if(BUILD_TESTING)
     target_include_directories(bloom_media_image_capacity_test PRIVATE ${PROJECT_SOURCE_DIR}/src/output/tests
         ${CMAKE_CURRENT_SOURCE_DIR})
     bloom_enable_warnings(bloom_media_image_capacity_test)
-    bloom_add_test(NAME bloom.media.image_capacity COMMAND bloom_media_image_capacity_test LABELS unit media)
+    # The fixture is deliberately real and large (6000x4000 = 24 Mpixel EXR/PNG written and decoded
+    # several times, plus a 20000-wide probe), so the unoptimized Debug Linux CI build needs well
+    # over the 30 s default even though the optimized macOS Release job finishes in ~8 s. Bound the
+    # wait per-test rather than widening the default for every test; this keeps the test mandatory on
+    # all platforms with the same large-image, overflow, and budget guarantees.
+    bloom_add_test(NAME bloom.media.image_capacity COMMAND bloom_media_image_capacity_test LABELS unit media
+                   TIMEOUT 180)
 endif()
