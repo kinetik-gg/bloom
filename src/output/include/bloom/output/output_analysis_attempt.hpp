@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <vector>
 
 // docs/architecture/frame-output.md "Pre-Approval Output Analysis Attempt" and "Immutable Export
 // Request": the immutable, owning product a completed OutputAnalysisAttempt graph publishes.
@@ -71,6 +72,28 @@ struct OutputAnalysisAttemptDisplayProductsV1 final {
     }
 };
 
+// A GPU-encoded straight-RGBA8 display payload produced by the evaluator's ONE combined final
+// readback, retained so the PNG writer can consume it directly with no CPU per-pixel display
+// conversion. It is bound to the exact process geometry and to the SAME immutable canonical
+// display-processor identity the attempt already retains (never an independent copy): the build
+// function validates that binding against the retained frame/display products before retaining it.
+struct OutputAnalysisAttemptGpuDisplayV1 final {
+    std::vector<render::Rgba8> pixels;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    // The immutable prepared GPU command identity that produced this payload.
+    core::Sha256Digest commandIdentity{};
+    // The exact process-pixel semantic digest of the frame this payload was transferred with. It
+    // binds the encoded product to the process identity, so a payload can never be retained
+    // against a different frame whose process pixels would yield a different identity.
+    core::Sha256Digest processPixelDigest{};
+    // Aliases exactly the display products' canonical identity shared_ptr, so the payload can never
+    // be paired with a substitute identity.
+    std::shared_ptr<const color::DisplayProcessorIdentityV1> displayIdentity;
+
+    [[nodiscard]] bool isPresent() const noexcept { return !pixels.empty(); }
+};
+
 enum class OutputAnalysisAttemptErrorCodeV1 : std::uint8_t {
     None,
     InvalidTarget,
@@ -95,6 +118,8 @@ struct OutputAnalysisAttemptBuildInputsV1 final {
     std::shared_ptr<const OutputAnalysisReportV1> report;
     OutputAnalysisAttemptTargetV1 target;
     OutputAnalysisAttemptDisplayProductsV1 display;
+    // Optional GPU-encoded display payload. Absent keeps the unchanged CPU display path.
+    OutputAnalysisAttemptGpuDisplayV1 gpuDisplay = {};
 };
 
 class [[nodiscard]] OutputAnalysisAttemptBuildResultV1 final {
@@ -160,6 +185,12 @@ class OutputAnalysisAttemptV1 final {
         return display_;
     }
     [[nodiscard]] const OutputAnalysisAttemptDisplayProductsV1& display() const&& = delete;
+    // The retained GPU-encoded display payload, if the attempt was produced by the GPU PNG route.
+    // Empty on the CPU path; the writer consumes it directly when present.
+    [[nodiscard]] const OutputAnalysisAttemptGpuDisplayV1& gpuDisplay() const& noexcept {
+        return gpuDisplay_;
+    }
+    [[nodiscard]] const OutputAnalysisAttemptGpuDisplayV1& gpuDisplay() const&& = delete;
     [[nodiscard]] const OutputAnalysisAttemptTargetV1& target() const noexcept { return target_; }
     [[nodiscard]] const std::shared_ptr<ExportResourceReservationV1>& resources() const& noexcept {
         return reservation_;
@@ -177,6 +208,7 @@ class OutputAnalysisAttemptV1 final {
                             std::optional<core::Sha256Digest> digest, OutputPresetV1 preset,
                             OutputAnalysisAttemptTargetV1 target,
                             OutputAnalysisAttemptDisplayProductsV1 display,
+                            OutputAnalysisAttemptGpuDisplayV1 gpuDisplay,
                             std::shared_ptr<ExportResourceReservationV1> reservation) noexcept;
 
     std::shared_ptr<const runtime::ProcessFrame> frame_;
@@ -186,6 +218,7 @@ class OutputAnalysisAttemptV1 final {
     OutputPresetV1 preset_ = OutputPresetV1::FlatExrRgba32fLinRec709SceneV1;
     OutputAnalysisAttemptTargetV1 target_;
     OutputAnalysisAttemptDisplayProductsV1 display_;
+    OutputAnalysisAttemptGpuDisplayV1 gpuDisplay_;
     std::shared_ptr<ExportResourceReservationV1> reservation_;
 };
 

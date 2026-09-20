@@ -278,6 +278,17 @@ if(BUILD_TESTING)
                        tests/frame_export_publication_tests.cpp)
         target_link_libraries(bloom_host_frame_export_publication_test PRIVATE bloom_host
                                                                                ZLIB::ZLIB)
+        # Qualified packaged shader tools for the real GPU DisplayRgba8 PNG route. When present the
+        # test prepares a real display command and asserts the GPU payload; when absent the CPU
+        # display path is the honest fallback and that half of the test is compiled out.
+        find_program(bloom_host_gpu_tools_glslang NAMES glslangValidator)
+        find_program(bloom_host_gpu_tools_spirv_val NAMES spirv-val)
+        if(bloom_host_gpu_tools_glslang AND bloom_host_gpu_tools_spirv_val)
+            get_filename_component(bloom_host_gpu_tools_dir
+                                   "${bloom_host_gpu_tools_glslang}" DIRECTORY)
+            target_compile_definitions(bloom_host_frame_export_publication_test PRIVATE
+                "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_host_gpu_tools_dir}\"")
+        endif()
         bloom_enable_warnings(bloom_host_frame_export_publication_test)
         bloom_add_test(
             NAME bloom.host.frame-export-publication

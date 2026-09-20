@@ -132,6 +132,8 @@ target_sources(
         gpu_scene_executor_ocio.cpp
         gpu_scene_executor_private.hpp
         gpu_process_frame.cpp
+        gpu_process_frame_readback.cpp
+        gpu_process_frame_readback_private.hpp
         gpu_ocio_wrapper.cpp
         gpu_ocio_command.cpp
         gpu_ocio_preparation.cpp

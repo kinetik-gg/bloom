@@ -17,6 +17,14 @@ struct GpuExportProvider::State final {
     // raw scheduler pointer.
     std::optional<runtime::TaskHandle<void>> bootstrapHandle;
     std::function<void(std::thread::id)> retirementObserver;
+    // Separate from `mutex`: a multi-second OCIO compile on a CPU task must not block evaluator
+    // coordination. Guarded independently.
+    std::mutex displayMutex;
+    std::optional<runtime::GpuOcioCompileOptions> displayCompile;
+    // Shared, not unique: prepareGpuDisplayCommand() takes a shared reference under `displayMutex`
+    // and then calls prepare() OUTSIDE it, so a concurrent setGpuDisplayCompileOptions() reset can
+    // never destroy the preparer mid-prepare (UAF). The last reference retires it.
+    std::shared_ptr<runtime::GpuOcioProgramPreparer> displayPreparer;
     bool bootstrapScheduled = false;
     bool bootstrapComplete = false;
     bool stopping = false;
@@ -210,6 +218,60 @@ void GpuExportProvider::setRetirementObserver(std::function<void(std::thread::id
     }
     std::lock_guard lock(state_->mutex);
     state_->retirementObserver = std::move(observer);
+}
+
+void GpuExportProvider::setGpuDisplayCompileOptions(runtime::GpuOcioCompileOptions options) {
+    if (state_ == nullptr) {
+        return;
+    }
+    std::lock_guard lock(state_->displayMutex);
+    state_->displayCompile = std::move(options);
+    state_->displayPreparer.reset(); // rebuild lazily against the new options
+}
+
+bool GpuExportProvider::gpuDisplayPreparationAvailable() const noexcept {
+    if (state_ == nullptr) {
+        return false;
+    }
+    std::lock_guard lock(state_->displayMutex);
+    return state_->displayCompile.has_value() &&
+           runtime::validGpuOcioCompileOptions(*state_->displayCompile);
+}
+
+runtime::GpuOcioPreparationResult GpuExportProvider::prepareGpuDisplayCommand(
+    const color::ResolvedBloomNeutralConfig& config, const std::string_view display,
+    const std::string_view view, const runtime::GpuOcioCommandGeometry geometry,
+    const runtime::GpuOcioCancellation& cancel) {
+    if (state_ == nullptr) {
+        return {nullptr, runtime::GpuOcioPreparationError::InvalidRequest,
+                "no GPU export provider"};
+    }
+    // Take an immutable (preparer, options) pair TOGETHER under the display lock: the shared
+    // preparer reference keeps the object alive for the whole prepare() call even if a concurrent
+    // setGpuDisplayCompileOptions() swaps the options and resets the member. prepare() runs outside
+    // the lock (the compiler/cache are internally synchronized), so a long compile never blocks the
+    // setter or evaluator coordination.
+    runtime::GpuOcioCompileOptions compile;
+    std::shared_ptr<runtime::GpuOcioProgramPreparer> preparer;
+    {
+        std::lock_guard lock(state_->displayMutex);
+        if (!state_->displayCompile.has_value() ||
+            !runtime::validGpuOcioCompileOptions(*state_->displayCompile)) {
+            return {nullptr, runtime::GpuOcioPreparationError::InvalidRequest,
+                    "no qualified GPU display compile options were supplied"};
+        }
+        if (state_->displayPreparer == nullptr) {
+            state_->displayPreparer =
+                std::make_shared<runtime::GpuOcioProgramPreparer>(runtime::GpuOcioPreparerBudgets{});
+        }
+        compile = *state_->displayCompile;
+        preparer = state_->displayPreparer;
+    }
+    runtime::GpuOcioTransformSpec spec;
+    spec.kind = runtime::GpuOcioTransformKind::Display;
+    spec.display = std::string(display);
+    spec.view = std::string(view);
+    return preparer->prepare(config, spec, geometry, compile, cancel);
 }
 
 } // namespace bloom::host

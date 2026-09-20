@@ -343,14 +343,27 @@ int run(int argc, char** argv) {
                             "warm GPU pixels are byte-identical to the cold GPU pixels");
     }
 
-    // An ordinary unsupported operation (a rotated layer) must be diagnosed and left to CPU, never
-    // claimed as GPU.
+    // Rotation is inside the current prepared-GPU affine subset, so a rotated (affine) layer now
+    // evaluates genuinely on the GPU. This is the current positive behaviour.
     const auto rotated = twoSolidPlan(format(24, 18), Color4d{0.5, 0.25, 0.125, 1.0},
                                       LayerValues{.position = {4.25, 3.5}, .rotation = 30.0},
                                       Color4d{0.125, 0.375, 0.75, 0.5},
                                       LayerValues{.position = {7.5, 6.25}}, 9.0, 7.0, 9100);
     const auto rotatedRequest = requestFor(*rotated);
-    const auto refused = evaluator->evaluate(rotated, rotatedRequest);
+    const auto rotatedOutcome = evaluator->evaluate(rotated, rotatedRequest);
+    expectations.expect(rotatedOutcome.status == GpuProcessFrameStatus::Evaluated &&
+                            rotatedOutcome.frame != nullptr &&
+                            rotatedOutcome.frame->identity().provider ==
+                                EvaluationProvider::GpuResident,
+                        "a rotated (affine) layer is evaluated on the GPU");
+
+    // A genuinely out-of-subset operation (a text box on the integer grid) must be diagnosed and
+    // left to CPU, never claimed as GPU.
+    auto text = makeText(9200);
+    text.layout.box = {2.0, 2.0};
+    const auto unsupported = vectorLeafPlan(format(24, 18), text, LayerValues{}, 9200);
+    const auto unsupportedRequest = requestFor(*unsupported);
+    const auto refused = evaluator->evaluate(unsupported, unsupportedRequest);
     expectations.expect(refused.status == GpuProcessFrameStatus::UnsupportedGpuSubset,
                         "an out-of-subset operation is diagnosed, not silently CPU-executed");
 

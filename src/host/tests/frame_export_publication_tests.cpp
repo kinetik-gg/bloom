@@ -1,5 +1,7 @@
 #include <bloom/host/frame_export_publication.hpp>
 
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/output_analysis_attempt_runner.hpp>
 #include <bloom/host/publication_coordinator.hpp>
@@ -1378,6 +1380,307 @@ void testPngColorPreparingCancellationPublishesNothing(Expectations& expectation
 // exact alpha, then publishes the GPU attempt as EXR and both attempts as PNG, independently
 // reopen-verifying the EXR and independently decoding both PNGs to compare the RGBA8 bytes (RGB
 // within one code, alpha exact) against the unchanged CPU reference.
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+// Real provider with a qualified device and packaged shader tools, ready to prepare display
+// commands. Returns null (with a NOTE) when the loader/device is unavailable, exactly like the
+// existing GPU publication tests.
+[[nodiscard]] std::shared_ptr<host::GpuExportProvider>
+makeGpuDisplayTestProvider(ExportFixture& fixture, const std::string_view context) {
+    const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER");
+    if (loader == nullptr || *loader == '\0') {
+        std::cout << "NOTE: BLOOM_TEST_VULKAN_LOADER unset; skipping " << context << '\n';
+        return nullptr;
+    }
+    runtime::GpuProcessFrameEvaluatorOptions options;
+    options.enabled = true;
+    options.loaderPath = std::filesystem::path(loader);
+    auto provider = host::GpuExportProvider::create(options);
+    provider->prepare(fixture.scheduler());
+    const auto bootstrapDeadline = std::chrono::steady_clock::now() + 30s;
+    while (!provider->prepared() && std::chrono::steady_clock::now() < bootstrapDeadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    if (!provider->deviceAvailable()) {
+        std::cout << "NOTE: no compatible Vulkan device; skipping " << context << '\n';
+        return nullptr;
+    }
+    runtime::GpuOcioCompileOptions displayCompile;
+    displayCompile.glslangValidatorPath =
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
+    displayCompile.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+    provider->setGpuDisplayCompileOptions(std::move(displayCompile));
+    return provider;
+}
+
+// Runs one PNG attempt carrying a deliberately-refused `request.outputColorCommand` and proves the
+// runner never launders it: no GPU display payload is retained, the retained frame and provenance
+// are the honest CPU reference path, and the CPU display products still publish a valid PNG.
+void expectGpuDisplayCommandRefused(
+    Expectations& expectations, ExportFixture& fixture,
+    const std::shared_ptr<host::GpuExportProvider>& provider,
+    const std::shared_ptr<const runtime::PreparedGpuOcioCommand>& refused,
+    const std::string_view context) {
+    const auto target =
+        fixture.path() / (std::string(context) + "-refused.png");
+    auto request = attemptRequestFor(target, output::OutputPresetV1::PngRgba8SrgbV1);
+    request.gpuProvider = provider;
+    request.outputColorCommand = refused;
+    auto begin = host::beginOutputAnalysisAttemptV1(fixture.scheduler(), fixture.artifacts(),
+                                                    fixture.ledger(), std::move(request));
+    expectations.expect(static_cast<bool>(begin), "gpu command refusal: the attempt begins");
+    if (!begin) {
+        return;
+    }
+    auto runner = std::move(begin).takeHandle();
+    std::optional<host::OutputAnalysisAttemptOutcomeV1> outcome;
+    const auto deadline = std::chrono::steady_clock::now() + 30s;
+    while (std::chrono::steady_clock::now() < deadline) {
+        outcome = runner.tryComplete();
+        if (outcome.has_value()) {
+            break;
+        }
+        std::this_thread::sleep_for(1ms);
+    }
+    expectations.expect(outcome.has_value() && static_cast<bool>(*outcome),
+                        "gpu command refusal: the mismatched command is refused and the attempt "
+                        "falls back to the honest CPU path");
+    if (!outcome.has_value() || !*outcome) {
+        return;
+    }
+    expectations.expect(!(*outcome).attempt()->gpuDisplay().isPresent(),
+                        "gpu command refusal: no GPU display payload is retained");
+    expectations.expect((*outcome).attempt()->frame() != nullptr &&
+                            (*outcome).attempt()->frame()->identity().provider ==
+                                runtime::EvaluationProvider::CpuReference,
+                        "gpu command refusal: the retained frame is the CPU reference");
+    const auto& provenance = (*outcome).gpuProvenance();
+    expectations.expect(provenance.has_value() && !provenance->gpuEvaluated() &&
+                            provenance->encodedArm == runtime::GpuOutputColorArm::None &&
+                            provenance->transferredPayloads == 0,
+                        "gpu command refusal: the GPU arm is never reported as evaluated");
+    auto approval = host::approveFrameExportV1(fixture.coordinator(), (*outcome).attempt(),
+                                               requireDigest((*outcome).attempt(), expectations));
+    if (!approval) {
+        return;
+    }
+    auto run = beginExportRun(fixture.scheduler(), fixture.artifacts(),
+                              std::move(approval).takeRequest(), fixture.path());
+    if (!run.has_value()) {
+        return;
+    }
+    const auto resultOpt = awaitExportRun(*run);
+    expectations.expect(resultOpt.has_value() && static_cast<bool>(*resultOpt) &&
+                            std::filesystem::exists(target),
+                        "gpu command refusal: the honest CPU fallback publishes the PNG");
+}
+
+// A command prepared for the SAME geometry but a WRONG transform (a process-effect CST rather than
+// the resolved display transform) must be refused. The runner accepts a supplied command only when
+// its canonical identity byte-equals the command it prepared from the exact resolved
+// config/working space/display/view and geometry.
+void testGpuSameGeometryWrongTransformRefused(Expectations& expectations) {
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+    ExportFixture fixture;
+    if (!fixture.setUp(expectations, "wrong transform: fixture is available")) {
+        return;
+    }
+    auto provider = makeGpuDisplayTestProvider(fixture, "wrong transform refusal");
+    if (provider == nullptr) {
+        return;
+    }
+    auto resolution = bloom::color::resolveOcioBuiltIn(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kBloomNeutralV1ConfigUri,
+        bloom::color::kBloomNeutralV1ConfigDigest, runtime::kLinearRec709SceneColorSpaceId);
+    expectations.expect(resolution.ready(),
+                        "wrong transform: the built-in neutral config resolves");
+    if (!resolution.ready()) {
+        static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+        return;
+    }
+    auto config = std::move(resolution).takeResolved();
+    expectations.expect(config.has_value(), "wrong transform: the resolved config is taken");
+    if (!config.has_value()) {
+        static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+        return;
+    }
+    runtime::GpuOcioCompileOptions compile;
+    compile.glslangValidatorPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
+    compile.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+    runtime::GpuOcioProgramPreparer preparer(runtime::GpuOcioPreparerBudgets{});
+    runtime::GpuOcioTransformSpec spec;
+    spec.kind = runtime::GpuOcioTransformKind::Cst;
+    spec.fromId = std::string(config->processColorSpaceId());
+    spec.toId = std::string(config->outputColorSpaceId());
+    auto prepared =
+        preparer.prepare(*config, spec, runtime::GpuOcioCommandGeometry{2, 2}, compile);
+    expectations.expect(prepared.hasValue(),
+                        "wrong transform: the process-effect command itself prepares with the "
+                        "same geometry");
+    if (prepared.hasValue()) {
+        expectations.expect(
+            prepared.command->encoding() == runtime::GpuOcioOutputEncoding::FinalRgba32f,
+            "wrong transform: the injected command is a process-effect (not display) command");
+        expectGpuDisplayCommandRefused(expectations, fixture, provider, prepared.command,
+                                       "wrong transform");
+    }
+    static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+#else
+    static_cast<void>(expectations);
+#endif
+}
+
+// A command prepared for a DIFFERENT config revision / frame (the ACEScg built-in rather than the
+// resolved Bloom Neutral config) with the same geometry must be refused: its canonical identity
+// differs from the command the runner prepared from the exact resolved config.
+void testGpuCrossRevisionCommandRefused(Expectations& expectations) {
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+    ExportFixture fixture;
+    if (!fixture.setUp(expectations, "cross revision: fixture is available")) {
+        return;
+    }
+    auto provider = makeGpuDisplayTestProvider(fixture, "cross revision refusal");
+    if (provider == nullptr) {
+        return;
+    }
+    const auto acesRevision = bloom::color::ocioBuiltInContentRevision(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
+    expectations.expect(acesRevision.has_value(), "cross revision: the ACES revision resolves");
+    if (!acesRevision.has_value()) {
+        static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+        return;
+    }
+    auto resolution = bloom::color::resolveOcioBuiltIn(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri,
+        *acesRevision, "ACEScg");
+    expectations.expect(resolution.ready(), "cross revision: the ACES config resolves");
+    if (!resolution.ready()) {
+        static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+        return;
+    }
+    auto aces = std::move(resolution).takeResolved();
+    expectations.expect(aces.has_value(), "cross revision: the ACES config is taken");
+    if (!aces.has_value()) {
+        static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+        return;
+    }
+    auto prepared = provider->prepareGpuDisplayCommand(
+        *aces, aces->displayName(), aces->viewName(), runtime::GpuOcioCommandGeometry{2, 2});
+    expectations.expect(prepared.hasValue(),
+                        "cross revision: the ACES display command itself prepares with the same "
+                        "geometry");
+    if (prepared.hasValue()) {
+        expectGpuDisplayCommandRefused(expectations, fixture, provider, prepared.command,
+                                       "cross revision");
+    }
+    static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+#else
+    static_cast<void>(expectations);
+#endif
+}
+#endif
+
+// A stale/mismatched GPU display command (prepared for the wrong geometry) is refused, never
+// silently used: the evaluator's combined readback rejects the geometry binding and the attempt
+// fails typed at Evaluating. The honest CPU display path is the no-command case, covered by the
+// existing CPU-only PNG publication tests.
+void testGpuStaleDisplayBindingRefused(Expectations& expectations) {
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+    const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER");
+    if (loader == nullptr || *loader == '\0') {
+        std::cout << "NOTE: BLOOM_TEST_VULKAN_LOADER unset; skipping stale binding refusal\n";
+        return;
+    }
+    ExportFixture fixture;
+    if (!fixture.setUp(expectations, "stale binding: fixture is available")) {
+        return;
+    }
+    runtime::GpuProcessFrameEvaluatorOptions options;
+    options.enabled = true;
+    options.loaderPath = std::filesystem::path(loader);
+    auto provider = host::GpuExportProvider::create(options);
+    provider->prepare(fixture.scheduler());
+    const auto bootstrapDeadline = std::chrono::steady_clock::now() + 30s;
+    while (!provider->prepared() && std::chrono::steady_clock::now() < bootstrapDeadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    if (!provider->deviceAvailable()) {
+        std::cout << "NOTE: no compatible Vulkan device; skipping stale binding refusal\n";
+        return;
+    }
+    runtime::GpuOcioCompileOptions displayCompile;
+    displayCompile.glslangValidatorPath =
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
+    displayCompile.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+    provider->setGpuDisplayCompileOptions(std::move(displayCompile));
+
+    auto resolution = bloom::color::resolveOcioBuiltIn(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kBloomNeutralV1ConfigUri,
+        bloom::color::kBloomNeutralV1ConfigDigest, runtime::kLinearRec709SceneColorSpaceId);
+    if (!resolution.ready()) {
+        return;
+    }
+    auto config = std::move(resolution).takeResolved();
+    if (!config.has_value()) {
+        return;
+    }
+    // Deliberately wrong geometry for the 2x2 fixture plan.
+    auto prepared = provider->prepareGpuDisplayCommand(
+        *config, config->displayName(), config->viewName(), runtime::GpuOcioCommandGeometry{1, 1});
+    expectations.expect(prepared.hasValue(), "stale binding: the stale command itself prepares");
+    if (!prepared.hasValue()) {
+        return;
+    }
+    const auto target = fixture.path() / "stale.png";
+    auto request = attemptRequestFor(target, output::OutputPresetV1::PngRgba8SrgbV1);
+    request.gpuProvider = provider;
+    request.outputColorCommand = prepared.command;
+    auto begin = host::beginOutputAnalysisAttemptV1(fixture.scheduler(), fixture.artifacts(),
+                                                    fixture.ledger(), std::move(request));
+    expectations.expect(static_cast<bool>(begin), "stale binding: the attempt begins");
+    if (!begin) {
+        return;
+    }
+    auto runner = std::move(begin).takeHandle();
+    std::optional<host::OutputAnalysisAttemptOutcomeV1> outcome;
+    const auto deadline = std::chrono::steady_clock::now() + 30s;
+    while (std::chrono::steady_clock::now() < deadline) {
+        outcome = runner.tryComplete();
+        if (outcome.has_value()) {
+            break;
+        }
+        std::this_thread::sleep_for(1ms);
+    }
+    expectations.expect(outcome.has_value() && static_cast<bool>(*outcome),
+                        "stale binding: the mismatched command is refused and the attempt falls "
+                        "back to the honest CPU display path");
+    if (!outcome.has_value() || !*outcome) {
+        static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+        return;
+    }
+    expectations.expect(!(*outcome).attempt()->gpuDisplay().isPresent(),
+                        "stale binding: no GPU display payload is retained");
+    const auto& provenance = (*outcome).gpuProvenance();
+    expectations.expect(provenance.has_value() && !provenance->gpuEvaluated(),
+                        "stale binding: the GPU arm is never reported as evaluated");
+    // The CPU fallback still publishes a valid PNG (the honest retained display products).
+    auto approval = host::approveFrameExportV1(fixture.coordinator(), (*outcome).attempt(),
+                                               requireDigest((*outcome).attempt(), expectations));
+    if (approval) {
+        auto run = beginExportRun(fixture.scheduler(), fixture.artifacts(),
+                                  std::move(approval).takeRequest(), fixture.path());
+        if (run.has_value()) {
+            const auto resultOpt = awaitExportRun(*run);
+            expectations.expect(resultOpt.has_value() && static_cast<bool>(*resultOpt) &&
+                                    std::filesystem::exists(target),
+                                "stale binding: the CPU fallback publishes the PNG");
+        }
+    }
+    static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+#else
+    static_cast<void>(expectations);
+#endif
+}
+
 void testGpuCompositedExportParity(Expectations& expectations, const bool requireDevice) {
     const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER");
     if (loader == nullptr || *loader == '\0') {
@@ -1407,6 +1710,15 @@ void testGpuCompositedExportParity(Expectations& expectations, const bool requir
         std::cout << "NOTE: no compatible Vulkan device; skipping GPU publication parity\n";
         return;
     }
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+    // Qualified packaged shader tools: enables the real GPU DisplayRgba8 PNG route (the CPU display
+    // path remains the fallback when these are unavailable).
+    runtime::GpuOcioCompileOptions displayCompile;
+    displayCompile.glslangValidatorPath =
+        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
+    displayCompile.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+    provider->setGpuDisplayCompileOptions(std::move(displayCompile));
+#endif
 
     const auto buildAttempt =
         [&](const std::filesystem::path& target, const output::OutputPresetV1 preset,
@@ -1548,6 +1860,22 @@ void testGpuCompositedExportParity(Expectations& expectations, const bool requir
     expectations.expect(pngParity,
                         "gpu parity: GPU-composited PNG pixels match the CPU reference within one "
                         "code with exact alpha");
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+    // Real GPU display route: the PNG attempt retains the verified DisplayRgba8 payload directly
+    // (no CPU per-pixel display conversion), transferred in the SAME single submission as the
+    // process payload.
+    expectations.expect(gpuPngAttempt->gpuDisplay().isPresent(),
+                        "gpu parity: the PNG attempt retains a GPU-encoded display payload");
+    expectations.expect(gpuPngProvenance.has_value() &&
+                            gpuPngProvenance->encodedArm ==
+                                runtime::GpuOutputColorArm::DisplayRgba8 &&
+                            gpuPngProvenance->readbackSubmissions == 1 &&
+                            gpuPngProvenance->transferredPayloads == 2 &&
+                            gpuPngProvenance->encodedPayloadBytes > 0 &&
+                            gpuPngProvenance->counters.nativeDispatches > 0,
+                        "gpu parity: the PNG route makes one submission carrying process+encoded "
+                        "payloads with real dispatches");
+#endif
     static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
 }
 
@@ -1578,6 +1906,9 @@ int main(const int argc, char** argv) {
         testBothPresetsExportFromTheSameFixture(expectations);
         testPngPreparedBytesLimitExceededIsTyped(expectations);
         testPngColorPreparingCancellationPublishesNothing(expectations);
+        testGpuStaleDisplayBindingRefused(expectations);
+        testGpuSameGeometryWrongTransformRefused(expectations);
+        testGpuCrossRevisionCommandRefused(expectations);
         testGpuCompositedExportParity(expectations, requireDevice);
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';

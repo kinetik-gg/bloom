@@ -28,6 +28,8 @@
 
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/evaluation.hpp>
+#include <bloom/runtime/gpu_ocio_command.hpp>
+#include <bloom/runtime/gpu_output_color.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 
@@ -119,6 +121,18 @@ struct GpuProcessFrameOutcome final {
     // cancelled, or failed before a device result). Diagnostics only; it never enters a digest.
     std::uint64_t deviceOwnershipEpoch = 0;
 
+    // Encoded output-colour product, produced by the same single combined final readback that
+    // produced the process payload above. `encodedArm` is None for the identity arm (no output
+    // command was supplied): only the exact process payload is transferred and
+    // `outputColorCounters.transferredPayloads == 1`. A ProcessEffect command fills
+    // `encodedEffectRgba32f`; a DisplayRgba8 command fills `encodedDisplayRgba8`. The process
+    // payload is always the unchanged process bits used for semantic identity.
+    GpuOutputColorArm encodedArm = GpuOutputColorArm::None;
+    std::vector<render::Rgba32f> encodedEffectRgba32f;
+    std::vector<render::Rgba8> encodedDisplayRgba8;
+    core::Sha256Digest outputCommandIdentity{};
+    GpuOutputColorCounters outputColorCounters;
+
     [[nodiscard]] bool hasValue() const noexcept { return frame != nullptr; }
     explicit operator bool() const noexcept { return hasValue(); }
 };
@@ -164,12 +178,18 @@ class GpuProcessFrameEvaluator final {
     [[nodiscard]] GpuProcessFrameDiagnostic availabilityDiagnostic() const;
 
     // Builds the prepared scene with the real CpuGpuSceneBuilder, executes it on the owner worker,
-    // and performs exactly one final readback. Never blocks on a Vulkan call from the caller
-    // thread. A scene outside the prepared-GPU subset is `UnsupportedGpuSubset`; the caller falls
-    // back to the CPU reference evaluator.
+    // and performs exactly one final combined readback. Never blocks on a Vulkan call from the
+    // caller thread. A scene outside the prepared-GPU subset is `UnsupportedGpuSubset`; the caller
+    // falls back to the CPU reference evaluator.
+    //
+    // `outputCommand` is an already-compiled, immutable OCIO output command prepared on a CPU task
+    // before dispatch. It may be null (identity arm): only the exact process payload is read back.
+    // When non-null the one combined submission also transfers the encoded output (process-effect
+    // RGBA32F or straight display RGBA8) alongside the unchanged process payload.
     [[nodiscard]] GpuProcessFrameOutcome
     evaluate(std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
-             const CancellationToken& cancellation = {}, EvaluationProgressCallback progress = {});
+             const CancellationToken& cancellation = {}, EvaluationProgressCallback progress = {},
+             std::shared_ptr<const PreparedGpuOcioCommand> outputCommand = nullptr);
 
     // Non-blocking. The destructor joins the owner worker.
     void beginShutdown() noexcept;

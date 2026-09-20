@@ -1,8 +1,9 @@
 #include <bloom/runtime/gpu_process_frame.hpp>
 
+#include "gpu_process_frame_readback_private.hpp"
+
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/gpu_device.hpp>
-#include <bloom/render/gpu_process_readback.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
@@ -25,8 +26,6 @@
 
 namespace bloom::runtime {
 namespace {
-
-using namespace std::chrono_literals;
 
 GpuProcessFrameDiagnosticCode mapSceneDiagnostic(PreparedGpuSceneDiagnosticCode code) {
     switch (code) {
@@ -62,24 +61,6 @@ GpuProcessFrameDiagnosticCode mapExecutorDiagnostic(GpuSceneExecutorDiagnosticCo
         return GpuProcessFrameDiagnosticCode::DeviceUnavailable;
     default:
         return GpuProcessFrameDiagnosticCode::InternalInvariant;
-    }
-}
-
-GpuProcessFrameDiagnosticCode mapProcessReadbackCode(render::GpuProcessReadbackCode code) {
-    switch (code) {
-    case render::GpuProcessReadbackCode::None:
-        return GpuProcessFrameDiagnosticCode::None;
-    case render::GpuProcessReadbackCode::OverBudget:
-        return GpuProcessFrameDiagnosticCode::ReadbackOverBudget;
-    case render::GpuProcessReadbackCode::DeviceLost:
-        return GpuProcessFrameDiagnosticCode::DeviceLost;
-    case render::GpuProcessReadbackCode::DeviceUnavailable:
-    case render::GpuProcessReadbackCode::WrongThread:
-        return GpuProcessFrameDiagnosticCode::DeviceUnavailable;
-    case render::GpuProcessReadbackCode::Cancelled:
-        return GpuProcessFrameDiagnosticCode::Cancelled;
-    default:
-        return GpuProcessFrameDiagnosticCode::ReadbackFailed;
     }
 }
 
@@ -141,6 +122,7 @@ struct GpuProcessFrameRequest final {
     std::optional<EvaluationRequest> evaluation;
     CancellationToken cancellation;
     EvaluationProgressCallback progress;
+    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand;
 
     bool done = false;
     GpuProcessFrameOutcome outcome;
@@ -168,6 +150,9 @@ struct GpuProcessFrameEvaluator::Impl final {
     std::unique_ptr<render::GpuDevice> device;
     std::unique_ptr<GpuSceneCache> cache;
     std::unique_ptr<GpuSceneExecutor> executor;
+    // Final combined output-colour readback stage (process payload, plus the encoded output when a
+    // prepared command is supplied). Created on the owner thread alongside the executor.
+    std::unique_ptr<GpuOutputColorStage> outputColor;
 
     // Bounded FIFO of admitted requests. A caller admits its slot under `mutex`, wakes the owner,
     // and waits on the slot's own condition variable until the owner marks it done or shutdown
@@ -179,11 +164,13 @@ struct GpuProcessFrameEvaluator::Impl final {
     GpuProcessFrameOutcome runRequest(std::shared_ptr<const CompiledCompositionPlan> plan,
                                       const EvaluationRequest& request,
                                       const CancellationToken& cancellation,
-                                      const EvaluationProgressCallback& progress);
-    GpuProcessFrameOutcome runRequestImpl(std::shared_ptr<const CompiledCompositionPlan> plan,
-                                          const EvaluationRequest& request,
-                                          const CancellationToken& cancellation,
-                                          const EvaluationProgressCallback& progress);
+                                      const EvaluationProgressCallback& progress,
+                                      std::shared_ptr<const PreparedGpuOcioCommand> outputCommand);
+    GpuProcessFrameOutcome
+    runRequestImpl(std::shared_ptr<const CompiledCompositionPlan> plan,
+                   const EvaluationRequest& request, const CancellationToken& cancellation,
+                   const EvaluationProgressCallback& progress,
+                   std::shared_ptr<const PreparedGpuOcioCommand> outputCommand);
 };
 
 // Marks a queued-but-not-yet-run request done with a Cancelled outcome and wakes its caller. Called
@@ -198,9 +185,11 @@ void completeQueuedAsCancelled(const std::shared_ptr<GpuProcessFrameRequest>& re
 
 GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequest(
     std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
-    const CancellationToken& cancellation, const EvaluationProgressCallback& progress) {
+    const CancellationToken& cancellation, const EvaluationProgressCallback& progress,
+    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand) {
     try {
-        return runRequestImpl(std::move(plan), request, cancellation, progress);
+        return runRequestImpl(std::move(plan), request, cancellation, progress,
+                              std::move(outputCommand));
     } catch (const std::bad_alloc&) {
         return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::BadAllocation,
                        "the request failed to allocate its host buffers");
@@ -217,7 +206,8 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequest(
 
 GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
     std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
-    const CancellationToken& cancellation, const EvaluationProgressCallback& progress) {
+    const CancellationToken& cancellation, const EvaluationProgressCallback& progress,
+    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand) {
     if (executor == nullptr || device == nullptr || cache == nullptr) {
         return failure(GpuProcessFrameStatus::DeviceUnavailable,
                        GpuProcessFrameDiagnosticCode::DeviceUnavailable,
@@ -230,14 +220,23 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
 
     // Respect a prior unproven native submission before reusing the executor: drain on the owner
     // thread with a real bounded deadline, never reuse under an unretired submission.
-    if (executor->ownerDrainRequired() || executor->hasUnretiredSubmission()) {
+    const auto outputColorUnretired = [this] {
+        return outputColor != nullptr && outputColor->hasUnretiredSubmission();
+    };
+    if (executor->ownerDrainRequired() || executor->hasUnretiredSubmission() ||
+        outputColorUnretired()) {
         const auto drainDeadline = std::chrono::steady_clock::now() + options.nativeDeadline;
-        while ((executor->ownerDrainRequired() || executor->hasUnretiredSubmission()) &&
+        while ((executor->ownerDrainRequired() || executor->hasUnretiredSubmission() ||
+                outputColorUnretired()) &&
                std::chrono::steady_clock::now() < drainDeadline) {
             static_cast<void>(executor->poll());
+            if (outputColor != nullptr) {
+                static_cast<void>(outputColor->poll());
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        if (executor->ownerDrainRequired() || executor->hasUnretiredSubmission()) {
+        if (executor->ownerDrainRequired() || executor->hasUnretiredSubmission() ||
+            outputColorUnretired()) {
             return failure(GpuProcessFrameStatus::Failed,
                            GpuProcessFrameDiagnosticCode::DeviceUnavailable,
                            "a prior native submission is not retired; refusing reuse");
@@ -351,89 +350,29 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
         return outcome;
     }
 
-    // 5. The ONE final RGBA32F readback, at the CPU output-adapter boundary, through the production
-    // bounded/cancellable primitive. The host-buffer peak across the whole publish path is
-    // max(staging VMA allocation + readback vector, readback vector + immutable image), NOT the sum
-    // of all three: the staging allocation is released when the fence retires, before the immutable
-    // image is built. Both phases hold two pixel-sized buffers, so the preflight requires
-    // 2 * pixelsBytes <= readbackByteBudget. The readback primitive independently re-checks the
-    // ACTUAL allocator-rounded staging size plus the eventual vector against the same budget before
-    // it submits, so allocator rounding cannot exceed the allowance.
+    // 5-6. The ONE final combined readback plus the immutable process-image publication, owned by
+    // the private readback helper. One submission transfers the exact process payload and, when a
+    // prepared command was supplied, exactly one encoded payload; the two are never folded into one
+    // transfer and the counters report them separately. With a null command this is the identity
+    // arm: process payload only, one payload, no colour work.
     const auto& descriptor = scene->outputDescriptor();
-    const std::uint64_t width = descriptor.dataWindow().extent().width();
-    const std::uint64_t height = descriptor.dataWindow().extent().height();
-    if (width == 0 || height == 0 || width > UINT64_MAX / height ||
-        width * height > options.readbackByteBudget / (2U * sizeof(render::Rgba32f))) {
+    if (outputColor == nullptr) {
         outcome.status = GpuProcessFrameStatus::Failed;
-        outcome.diagnostic = {GpuProcessFrameDiagnosticCode::ReadbackOverBudget,
-                              "the final readback host buffers exceed the readback byte budget"};
+        outcome.diagnostic = {GpuProcessFrameDiagnosticCode::DeviceUnavailable,
+                              "the GPU output-colour stage is not initialized"};
         return outcome;
     }
-
-    render::GpuProcessReadback readback;
-    if (!readback.begin(image, options.readbackByteBudget)) {
-        outcome.status = GpuProcessFrameStatus::Failed;
-        outcome.diagnostic = {mapProcessReadbackCode(readback.diagnostic().code),
-                              readback.diagnostic().message};
+    auto transfer = detail::runFinalCombinedReadback(
+        *outputColor, descriptor, std::move(outputCommand), std::move(image),
+        options.readbackByteBudget, options.nativeDeadline, cancellation, stopRequested);
+    if (transfer.status != GpuProcessFrameStatus::Evaluated || transfer.processImage == nullptr) {
+        outcome.counters.readbacks = transfer.readbacks;
+        outcome.status = transfer.status;
+        outcome.diagnostic = {transfer.diagnosticCode, std::move(transfer.diagnosticMessage)};
         return outcome;
     }
-    const auto readbackDeadline = std::chrono::steady_clock::now() + options.nativeDeadline;
-    while (readback.state() == render::GpuProcessReadbackState::Pending) {
-        if (cancellation.isCancellationRequested() || stopRequested.load()) {
-            readback.cancel();
-        }
-        static_cast<void>(readback.poll());
-        if (readback.state() == render::GpuProcessReadbackState::Pending) {
-            if (std::chrono::steady_clock::now() >= readbackDeadline) {
-                readback.cancel();
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-    }
-    if (readback.state() != render::GpuProcessReadbackState::Ready) {
-        const auto code = mapProcessReadbackCode(readback.diagnostic().code);
-        outcome.status = code == GpuProcessFrameDiagnosticCode::Cancelled
-                             ? GpuProcessFrameStatus::Cancelled
-                             : GpuProcessFrameStatus::Failed;
-        outcome.diagnostic = {code, readback.diagnostic().message};
-        return outcome;
-    }
-
-    // 6. Publish an immutable Rgba32fImage from the readback bytes.
-    auto imageBuilder = render::Rgba32fImageBuilder::create(
-        descriptor, static_cast<std::size_t>(options.readbackByteBudget));
-    if (!imageBuilder) {
-        outcome.status = GpuProcessFrameStatus::Failed;
-        outcome.diagnostic = {GpuProcessFrameDiagnosticCode::BadAllocation,
-                              "the process image host buffer could not be allocated"};
-        return outcome;
-    }
-    auto pixels = readback.take();
-    outcome.counters.readbacks = 1;
-    auto* imageBuilderPtr = imageBuilder.value();
-    const auto originY = descriptor.dataWindow().originY();
-    for (std::uint32_t row = 0; row < height; ++row) {
-        auto destination = imageBuilderPtr->row(originY + static_cast<std::int64_t>(row));
-        if (!destination) {
-            outcome.status = GpuProcessFrameStatus::Failed;
-            outcome.diagnostic = {GpuProcessFrameDiagnosticCode::InternalInvariant,
-                                  "the process image row could not be addressed"};
-            return outcome;
-        }
-        const auto sourceOffset = static_cast<std::size_t>(row) * width;
-        std::memcpy(destination.value()->data(), pixels.data() + sourceOffset,
-                    static_cast<std::size_t>(width) * sizeof(render::Rgba32f));
-    }
-    pixels.clear();
-    pixels.shrink_to_fit();
-    auto frozen = std::move(*imageBuilderPtr).freeze();
-    if (!frozen) {
-        outcome.status = GpuProcessFrameStatus::Failed;
-        outcome.diagnostic = {GpuProcessFrameDiagnosticCode::InternalInvariant,
-                              "the process image could not be frozen"};
-        return outcome;
-    }
-    auto processImage = std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
+    outcome.counters.readbacks = transfer.readbacks;
+    auto processImage = std::move(transfer.processImage);
 
     // 7. A genuine immutable ProcessFrame with GPU provenance, built through the real private
     // constructor. The semantic-identity inputs (semantics versions, color intent, quality) are the
@@ -459,6 +398,13 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
 
     outcome.status = GpuProcessFrameStatus::Evaluated;
     outcome.frame = std::move(frame);
+    // The encoded output transferred by the SAME single submission, kept distinct from the process
+    // payload. The identity arm reports None with no encoded bytes.
+    outcome.encodedArm = transfer.encodedArm;
+    outcome.encodedEffectRgba32f = std::move(transfer.encodedEffectRgba32f);
+    outcome.encodedDisplayRgba8 = std::move(transfer.encodedDisplayRgba8);
+    outcome.outputCommandIdentity = transfer.outputCommandIdentity;
+    outcome.outputColorCounters = transfer.outputColorCounters;
     outcome.diagnostic = {};
     return outcome;
 }
@@ -495,7 +441,15 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
                                     createdExecutor.diagnostic.message};
                 } else {
                     executor = std::move(createdExecutor.executor);
-                    gpuReady.store(true, std::memory_order_release);
+                    auto createdOutputColor = GpuOutputColorStage::create(*device);
+                    if (!createdOutputColor) {
+                        availability = {GpuProcessFrameDiagnosticCode::ExecutorUnavailable,
+                                        createdOutputColor.diagnostic.message};
+                        executor.reset();
+                    } else {
+                        outputColor = std::move(createdOutputColor.stage);
+                        gpuReady.store(true, std::memory_order_release);
+                    }
                 }
             }
         } else {
@@ -542,8 +496,8 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
             continue;
         }
 
-        auto outcome =
-            runRequest(active->plan, *active->evaluation, active->cancellation, active->progress);
+        auto outcome = runRequest(active->plan, *active->evaluation, active->cancellation,
+                                  active->progress, std::move(active->outputCommand));
 
         std::lock_guard lock(mutex);
         active->outcome = std::move(outcome);
@@ -552,6 +506,7 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
     }
 
     // Device-generation resources must be destroyed on the owner thread that created them.
+    outputColor.reset();
     executor.reset();
     cache.reset();
     device.reset();
@@ -619,7 +574,8 @@ GpuProcessFrameDiagnostic GpuProcessFrameEvaluator::availabilityDiagnostic() con
 
 GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
     std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
-    const CancellationToken& cancellation, EvaluationProgressCallback progress) {
+    const CancellationToken& cancellation, EvaluationProgressCallback progress,
+    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand) {
     if (impl_ == nullptr) {
         return failure(GpuProcessFrameStatus::Failed,
                        GpuProcessFrameDiagnosticCode::InternalInvariant, "no evaluator");
@@ -646,6 +602,7 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
     slot->evaluation = request;
     slot->cancellation = cancellation;
     slot->progress = std::move(progress);
+    slot->outputCommand = std::move(outputCommand);
     {
         std::lock_guard lock(impl_->mutex);
         if (impl_->stopping) {
