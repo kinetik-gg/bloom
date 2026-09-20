@@ -58,6 +58,10 @@ struct GpuOcioTransformSpec final {
     color::LutDirection direction = color::LutDirection::Forward;
     std::string processSpaceId;
     std::string workingSpaceId;
+    // DisplayPacking only. The exact post-display exposure/gamma applied by the production wrapper.
+    // Neutral for every other kind; a non-neutral adjustment on a non-display kind is refused. Both
+    // fields are folded into the preparer warm key.
+    ViewAdjust viewAdjust{};
 };
 
 // Explicitly injected compiler configuration. `glslangValidatorPath` and `spirvValPath` must be

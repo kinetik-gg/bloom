@@ -28,6 +28,12 @@ void appendText(std::vector<std::byte>& bytes, const std::string_view text) {
     }
 }
 
+void appendF64(std::vector<std::byte>& bytes, const double value) {
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    appendBigEndian(bytes, bits, 8);
+}
+
 [[nodiscard]] std::uint64_t retainedResourceBytes(const render::OcioGpuProgramDesc& program,
                                                   const std::size_t spirvBytes) noexcept {
     std::uint64_t total = 0;
@@ -81,6 +87,10 @@ std::string_view gpuOcioCommandErrorName(const GpuOcioCommandError error) noexce
         return "stage-encoding-mismatch";
     case GpuOcioCommandError::UniformSnapshotMismatch:
         return "uniform-snapshot-mismatch";
+    case GpuOcioCommandError::InvalidViewAdjust:
+        return "invalid-view-adjust";
+    case GpuOcioCommandError::UnsupportedViewAdjust:
+        return "unsupported-view-adjust";
     }
     return "unknown";
 }
@@ -95,7 +105,7 @@ computeGpuOcioCommandIdentity(const GpuOcioCommandIdentityParts& parts) noexcept
         bytes.push_back(static_cast<std::byte>(static_cast<unsigned char>(character)));
     }
     bytes.push_back(std::byte{0});
-    appendBigEndian(bytes, 2, 2);
+    appendBigEndian(bytes, 3, 2);
     appendBigEndian(bytes, static_cast<std::uint64_t>(parts.encoding), 1);
     appendBigEndian(bytes, parts.geometry.width, 4);
     appendBigEndian(bytes, parts.geometry.height, 4);
@@ -106,6 +116,9 @@ computeGpuOcioCommandIdentity(const GpuOcioCommandIdentityParts& parts) noexcept
     bytes.insert(bytes.end(), parts.uniformSnapshot.begin(), parts.uniformSnapshot.end());
     appendDigest(bytes, parts.artifactDigest);
     appendText(bytes, parts.wrapperVersion);
+    appendDigest(bytes, parts.wrapperSourceDigest);
+    appendF64(bytes, parts.viewAdjust.exposure);
+    appendF64(bytes, parts.viewAdjust.gamma);
     const auto digest = core::Sha256Hasher::hash(bytes);
     return digest.has_value() ? *digest : core::Sha256Digest{};
 }
@@ -114,21 +127,30 @@ PreparedGpuOcioCommand::PreparedGpuOcioCommand(
     render::OcioGpuProgramDesc program, render::CompiledGpuShader artifact,
     const GpuOcioOutputEncoding encoding, const GpuOcioCommandGeometry geometry,
     std::vector<std::uint32_t> spirvWords, core::Sha256Digest identity, std::string wrapperVersion,
+    core::Sha256Digest wrapperSourceDigest, ViewAdjust viewAdjust,
     const std::uint64_t retainedBytes) noexcept
     : program_(std::move(program)), artifact_(std::move(artifact)), encoding_(encoding),
       geometry_(geometry), spirvWords_(std::move(spirvWords)), identity_(identity),
-      wrapperVersion_(std::move(wrapperVersion)), retainedBytes_(retainedBytes) {}
+      wrapperVersion_(std::move(wrapperVersion)), wrapperSourceDigest_(wrapperSourceDigest),
+      viewAdjust_(viewAdjust), retainedBytes_(retainedBytes) {}
 
 GpuOcioCommandResult PreparedGpuOcioCommand::prepare(render::OcioGpuProgramDesc program,
                                                      render::CompiledGpuShader artifact,
                                                      const GpuOcioCommandGeometry geometry,
-                                                     const std::string_view wrapperVersion) {
+                                                     GpuOcioCommandSourceBinding binding) {
     if (geometry.width == 0 || geometry.height == 0) {
         return failure(GpuOcioCommandError::InvalidGeometry);
     }
     const std::uint64_t pixelCount = static_cast<std::uint64_t>(geometry.width) * geometry.height;
     if (pixelCount == 0 || pixelCount > std::numeric_limits<std::uint32_t>::max()) {
         return failure(GpuOcioCommandError::InvalidGeometry);
+    }
+    if (!binding.viewAdjust.valid()) {
+        return failure(GpuOcioCommandError::InvalidViewAdjust);
+    }
+    if (program.stage != render::OcioGpuProgramStage::DisplayPacking &&
+        !binding.viewAdjust.neutral()) {
+        return failure(GpuOcioCommandError::UnsupportedViewAdjust);
     }
     // The specific uniform-snapshot check precedes the general descriptor validation so a tampered
     // snapshot keeps its precise typed diagnostic. It is strictly narrower than the descriptor
@@ -175,7 +197,9 @@ GpuOcioCommandResult PreparedGpuOcioCommand::prepare(render::OcioGpuProgramDesc 
         .uniformSnapshot = std::span<const std::byte>(program.uniformBufferData.data(),
                                                       program.uniformBufferData.size()),
         .artifactDigest = artifact.spirvDigest,
-        .wrapperVersion = wrapperVersion,
+        .wrapperVersion = binding.wrapperVersion,
+        .wrapperSourceDigest = binding.wrapperSourceDigest,
+        .viewAdjust = binding.viewAdjust,
     };
     const auto identity = computeGpuOcioCommandIdentity(parts);
     if (identity == core::Sha256Digest{}) {
@@ -184,7 +208,8 @@ GpuOcioCommandResult PreparedGpuOcioCommand::prepare(render::OcioGpuProgramDesc 
     const std::uint64_t retainedBytes = retainedResourceBytes(program, artifact.spirv.size());
     auto command = std::shared_ptr<const PreparedGpuOcioCommand>(new PreparedGpuOcioCommand(
         std::move(program), std::move(artifact), encoding, geometry, std::move(spirvWords),
-        identity, std::string(wrapperVersion), retainedBytes));
+        identity, std::move(binding.wrapperVersion), binding.wrapperSourceDigest,
+        binding.viewAdjust, retainedBytes));
     GpuOcioCommandResult result;
     result.command = std::move(command);
     return result;
