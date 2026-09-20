@@ -276,7 +276,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         layout->addWidget(integer_);
         connect(integer_, &QLineEdit::editingFinished, this, [this] { commit(); });
     } else if (definition_.valueKind == document::ParameterValueKind::Boolean) {
-        toggle_ = new kit::KCheckBox(controls);
+        toggle_ = new kit::KSwitch(controls);
         toggle_->setObjectName(definition_.schemaKey == "bloom.image.premultiply"
                                    ? "propertiesImagePremultiply"
                                    : "propertiesRegistryBool");

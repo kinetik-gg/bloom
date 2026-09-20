@@ -52,10 +52,15 @@ template <typename Expect> void auditUi3(WindowFixture& fixture, const Expect& e
     expect(value.cellRect().top() == px(Spacing::FieldMargin) &&
                value.cellRect().left() == px(Spacing::FieldMargin),
            &value, "B5 primitive field margin");
+    auto* propertiesEditor = window->findChild<QWidget*>("propertiesEditor");
     for (auto* section : window->findChildren<KSection*>()) {
+        // Properties sections compensate section/row chrome to a gutter band with XS body
+        // padding; every other section uses SectionPadding.
+        const int padding = propertiesEditor != nullptr && propertiesEditor->isAncestorOf(section)
+                                ? px(Spacing::XS)
+                                : px(Spacing::SectionPadding);
         expect(section->bodyLayout()->contentsMargins() ==
-                   QMargins(px(Spacing::SectionPadding), px(Spacing::SectionPadding),
-                            px(Spacing::SectionPadding), px(Spacing::SectionPadding)),
+                   QMargins(padding, padding, padding, padding),
                section, "B6 uniform section padding");
     }
     auto* properties = window->findChild<QWidget*>("propertiesEditor");

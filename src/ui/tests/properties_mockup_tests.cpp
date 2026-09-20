@@ -97,17 +97,20 @@ void run() {
     if (!panel || !grid)
         return;
     waitForBounds(*grid);
-    auto* search = area.findChild<QLineEdit*>("propertiesSearchField");
-    auto* header = area.findChild<QWidget*>("editorHeader");
-    expect(search && header->isAncestorOf(search), "search is hosted in the panel header");
-    expect(search && search->width() <= ui::kit::px(ui::kit::Size::PropertiesSearchWidth),
-           "search width is compact");
+    // Visible band contract: area chrome (1px content inset + 1px content margin) plus the
+    // panel's XS outer margin reads as exactly one inter-panel gutter before the section.
+    {
+        auto* section = panel->findChild<ui::kit::KSection*>("propertiesSection_object");
+        expect(section != nullptr &&
+                   section->mapTo(&area, QPoint()).x() == ui::kit::px(ui::kit::Spacing::Gutter),
+               "section starts exactly one gutter from the area edge");
+    }
     auto* positionX = panel->findChild<ui::kit::KValueField*>("positionXEditor");
     auto* positionY = panel->findChild<ui::kit::KValueField*>("positionYEditor");
     auto* positionLink = panel->findChild<ui::kit::KButton*>("positionLinkToggle");
     auto* opacity = panel->findChild<ui::kit::KValueField*>("opacityEditor");
-    auto* visible = panel->findChild<ui::kit::KCheckBox*>("layerVisibleSwitch");
-    auto* solo = panel->findChild<ui::kit::KCheckBox*>("layerSoloSwitch");
+    auto* visible = panel->findChild<ui::kit::KSwitch*>("layerVisibleSwitch");
+    auto* solo = panel->findChild<ui::kit::KSwitch*>("layerSoloSwitch");
     expect(positionX && positionY && positionLink && opacity && visible && solo,
            "compact controls retain their identities");
     if (!positionX || !positionY || !positionLink || !opacity || !visible || !solo)
@@ -119,6 +122,8 @@ void run() {
         opacityRow->findChild<ui::KeyframeDiamond*>("propertiesKeyframeIndicator");
     expect(xIn(positionX, panel) == xIn(opacityRow->findChild<ui::kit::KSlider*>(), panel),
            "control columns start at the same x");
+    expect(xIn(visible, panel) == xIn(opacityRow->findChild<ui::kit::KSlider*>(), panel),
+           "switches are left-aligned to the control column, not centered");
     expect(xIn(positionDiamond, panel) == xIn(opacityDiamond, panel), "keyframe columns align");
     expect(xIn(positionDiamond, panel) > xIn(positionY, panel), "diamond follows controls");
     expect(xIn(positionX, panel) < xIn(positionLink, panel) &&
@@ -132,20 +137,29 @@ void run() {
            "numeric widths are 64–72 px");
     const auto y = visible->mapTo(panel, QPoint{}).y();
     expect(solo->mapTo(panel, QPoint{}).y() - y == ui::kit::px(ui::kit::Size::PropertiesRowPitch),
-           "checkbox row pitch is 28 px");
-    expect(visible->isChecked() && !solo->isChecked() && visible->width() == visible->height(),
-           "object flags are square checkboxes");
+           "switch row pitch is 28 px");
+    expect(visible->isChecked() && !solo->isChecked() && visible->width() > visible->height(),
+           "object flags are switches, wider than they are tall");
     idle(*visible);
     idle(*solo);
+    // The thumb travels with the Fast motion; sample only once it arrives.
+    QElapsedTimer thumbTimer;
+    thumbTimer.start();
+    while (visible->thumbPosition() < 1.0 && thumbTimer.elapsed() < 2000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+    }
+    expect(visible->thumbPosition() >= 1.0, "checked switch thumb arrives at the on end");
     const auto on = visible->grab().toImage();
     const auto off = solo->grab().toImage();
-    const int inset =
-        (ui::kit::px(ui::kit::Size::Control) - ui::kit::px(ui::kit::Size::PropertiesCheckBox)) / 2;
-    const QPoint fill(inset + 3, inset + 3);
-    expect(on.pixelColor(fill).lightness() > off.pixelColor(fill).lightness(),
-           "checked checkbox is brighter than unchecked");
-    expect(on.pixelColor(fill).blue() > on.pixelColor(fill).red(),
-           "checked checkbox uses accent blue");
+    // At the thumb's on-end rest position: thumb ink when on, field when off. Left of the
+    // thumb's travel: accent fill when on.
+    const QPoint thumbRest(on.width() / 2 + 7, on.height() / 2);
+    const QPoint trackFill(on.width() / 2 - 9, on.height() / 2);
+    expect(on.pixelColor(thumbRest).lightness() > off.pixelColor(thumbRest).lightness(),
+           "checked switch is brighter than unchecked");
+    expect(on.pixelColor(trackFill).blue() > on.pixelColor(trackFill).red(),
+           "checked switch uses accent blue");
     expect(opacity->displayedValue() == "100", "whole values omit decimal zeroes");
     auto* parent = panel->findChild<ui::kit::KDropdown*>("propertiesParentDropdown");
     expect(parent && parent->isEnabled() && parent->currentText() == "None" &&

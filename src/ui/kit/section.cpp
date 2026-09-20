@@ -6,12 +6,10 @@
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
-#include <QAction>
 #include <QEvent>
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMenu>
 #include <QMouseEvent>
 #include <QPalette>
 #include <QSettings>
@@ -79,13 +77,6 @@ KSection::KSection(const QString& title, QWidget* parent) : QWidget(parent) {
     reset_->setAccessibleName(tr("Reset"));
     connect(reset_, &KButton::clicked, this, &KSection::resetRequested);
     headerLayout->addWidget(reset_);
-
-    menu_ = makeHeaderButton(header_, QStringLiteral("kSectionMenu"));
-    menu_->setIconId(IconId::Handle);
-    menu_->setToolTip(tr("Section menu"));
-    menu_->setAccessibleName(tr("Section menu"));
-    connect(menu_, &KButton::clicked, this, &KSection::showSectionMenu);
-    headerLayout->addWidget(menu_);
 
     layout->addWidget(header_);
 
@@ -157,21 +148,13 @@ void KSection::setResetEnabled(const bool enabled) {
 
 bool KSection::isResetEnabled() const noexcept { return resetEnabled_; }
 
+void KSection::setBodyPadding(const int padding) {
+    bodyLayout_->setContentsMargins(padding, padding, padding, padding);
+}
+
 void KSection::applyCollapsedState() {
     body_->setVisible(!collapsed_);
     chevron_->setIconId(collapsed_ ? IconId::CaretRight : IconId::CaretDown);
-}
-
-void KSection::showSectionMenu() {
-    QMenu menu(this);
-    auto* reset = menu.addAction(tr("Reset"));
-    connect(reset, &QAction::triggered, this, &KSection::resetRequested);
-    menu.addSeparator();
-    auto* collapseAll = menu.addAction(tr("Collapse all"));
-    connect(collapseAll, &QAction::triggered, this, &KSection::collapseAllRequested);
-    auto* expandAll = menu.addAction(tr("Expand all"));
-    connect(expandAll, &QAction::triggered, this, &KSection::expandAllRequested);
-    menu.exec(menu_->mapToGlobal(QPoint(0, menu_->height())));
 }
 
 bool KSection::eventFilter(QObject* watched, QEvent* event) {

@@ -28,19 +28,6 @@
 #include <utility>
 
 namespace bloom::ui::properties {
-namespace {
-
-QString sectionFilterGroup(const QString& id) {
-    if (id == QStringLiteral("object") || id == QStringLiteral("composition"))
-        return QStringLiteral("object");
-    if (id == QStringLiteral("transform"))
-        return QStringLiteral("transform");
-    if (id == QStringLiteral("merge-inputs") || id.startsWith(QStringLiteral("upstream-")))
-        return QStringLiteral("graph");
-    return QStringLiteral("source");
-}
-
-} // namespace
 
 void refreshColor(CompositionSession& session, const std::string_view schemaKey,
                   const core::Color4d value, kit::KColorChip* chip,
@@ -292,7 +279,9 @@ kit::KSection* addSection(QVBoxLayout* layout, QWidget* parent, const QString& i
                           const QString& title) {
     auto* section = makeSection(layout, parent, QStringLiteral("propertiesSection_") + id, title,
                                 QStringLiteral("properties/sections/%1/collapsed").arg(id));
-    section->setProperty("propertiesSectionGroup", sectionFilterGroup(id));
+    // Visible band matches the inter-panel Gutter (6): the section's own 1px outer hairline
+    // plus the row's 1px padding leave XS(4) for the body itself.
+    section->setBodyPadding(px(kit::Spacing::XS));
     return section;
 }
 

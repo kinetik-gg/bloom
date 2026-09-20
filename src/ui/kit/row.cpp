@@ -4,6 +4,7 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/kit/slider.hpp>
+#include <bloom/ui/kit/switch_control.hpp>
 namespace bloom::ui::kit {
 namespace {
 class PropertyRowLabel final : public KLabel {
@@ -87,8 +88,11 @@ KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator,
         if (auto* chip = qobject_cast<kit::KColorChip*>(value))
             chip->setFixedSize(kit::px(kit::Size::PropertiesFieldWidth),
                                kit::px(kit::Size::PropertiesSwatchHeight));
-        const bool flexible = !leadingIndicator_ && (qobject_cast<kit::KSlider*>(value) ||
-                                                     value->maximumWidth() == QWIDGETSIZE_MAX);
+        // A switch paints its track centered in whatever it is given, so it must never be
+        // the flexible field: it stays fixed at its own sizeHint at the row's leading edge.
+        const bool flexible =
+            !leadingIndicator_ && qobject_cast<kit::KSwitch*>(value) == nullptr &&
+            (qobject_cast<kit::KSlider*>(value) || value->maximumWidth() == QWIDGETSIZE_MAX);
         expanding = expanding || flexible;
         layout->addWidget(value, flexible ? 1 : 0, Qt::AlignVCenter);
     }

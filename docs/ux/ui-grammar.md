@@ -316,13 +316,11 @@ The [validation map and capture contract](grammar1-validation.md) identify enfor
 Existing object names remain stable. New names are `viewerToolColumn`, `viewerSelectTool`,
 `viewerHandTool`, `viewerZoomTool`, `viewerTextTool`, `viewerRectangleTool`, `viewerEllipseTool`,
 `viewerPolygonTool`, `viewerStarTool`, `viewerLineTool`, `viewerPenTool`,
-`propertiesFilterStrip`, `propertiesFilterAll`, `propertiesFilterObject`,
-`propertiesFilterTransform`, `propertiesFilterSource`, `propertiesFilterGraph`,
 and `nodeReadOnlyValue`. Node row widgets expose `nodeParameterRole` and
 `nodeParameterRowPitch` for geometry audits; list headings expose `headerRow`.
 
-The metric audit covers the status line, ten enabled viewer tools, the five Properties filter
-choices, card/control containment and socket-row alignment at DPR 1, 1.5 and 2. It also verifies the timeline menu set remains expanded at
+The metric audit covers the status line, ten enabled viewer tools,
+card/control containment and socket-row alignment at DPR 1, 1.5 and 2. It also verifies the timeline menu set remains expanded at
 1600 and 1920 logical-pixel window widths. Whole-window references and final captures run at
 DPR 1 and 1.5. Changed geometry tests use the viewer's real padded mapping.
 
@@ -333,8 +331,14 @@ New automation names: `viewerAddMenu`, `viewerAddMenuButton`.
 
 Rows own `Spacing::RowPadding` (1 on all edges); KValueField owns `FieldMargin` (1)
 inside its allocation, including scene proxies. `PropertyGutter` (8) separates labels and
-controls independently of component gaps. KSection owns `SectionPadding` (8 on every edge).
-Expanded RGBA rows use a blank-label KPropertyRow so controls align beneath the swatch.
+controls independently of component gaps. KSection owns `SectionPadding` (8 on every edge),
+overridable per section via `setBodyPadding`; Properties uses `Spacing::XS` (4) for its outer
+side/bottom margins, outer top margin, and section body padding so every visible band reads as
+exactly the 6px inter-panel `Gutter` once the area's own 1px content inset, 1px content margin
+(absent on top, where the header bounds the content), section hairline, and row padding are
+accounted for: 1+1+4 on the sides, 0+6 on top, 1+4+1 inside sections.
+A switch is never a row's flexible field: it keeps its own size at the value column's leading
+edge instead of stretching centered. Expanded RGBA rows use a blank-label KPropertyRow so controls align beneath the swatch.
 
 Timeline switches retain ToggleCell squares (24), with IconChrome (16) glyphs: unchecked is an
 empty neutral bordered box, checked uses the same Regular glyph as the column heading. Hidden
@@ -427,14 +431,9 @@ edge, paints the header Surface, and owns ChromePadding and ChromeGap around bor
 KDropdown's minimum is the measured widest item plus its icon, padding and chevron; requested
 fixed widths are floors. The chrome builder respects that minimum after assigning density.
 
-Properties has a leading `propertiesFilterStrip` KToolColumn at `Size::ToolColumnWidth`. Its five
-exclusive KIconToggles are All, Object, Transform, Source and Graph. All is the default and the
-choice persists as `properties/filter`; the strip never changes section collapse state. Object
-includes the no-selection Composition section, Source covers Solid/Text/Shape/Image/Audio source
-sections, and Graph covers Merge inputs plus every upstream section. A group with no section for
-the current selection is disabled, and a persisted group that disappears after selection changes
-falls back to All. Tooltips state the complete section set so the icon-only controls remain
-discoverable.
+Properties shows every section with no filter strip and no header search. Sections collapse
+individually with persisted state; there is no Collapse all / Expand all affordance and no
+section menu. KSection headers carry only the chevron, title, and Reset.
 
 Node Add menu and search order is Sources, Layers, Compositing, Colour, Values, Math, Convert, String,
 Logic, Time, Color, Vector, Utilities, Output. The UI category projection owns normalization;

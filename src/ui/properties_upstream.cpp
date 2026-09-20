@@ -75,7 +75,7 @@ void PropertiesEditor::configureUpstream() {
         upstreamPanel_->setObjectName("propertiesUpstreamPanel");
         auto* layout = new QVBoxLayout(upstreamPanel_);
         layout->setContentsMargins(0, 0, 0, 0);
-        layout->setSpacing(kit::px(kit::Spacing::S));
+        layout->setSpacing(kit::px(kit::Spacing::Gutter));
         auto* selectionLayout = qobject_cast<QVBoxLayout*>(selectionSection_->layout());
         selectionLayout->insertWidget(selectionLayout->count() - 1, upstreamPanel_);
         int more = 0;

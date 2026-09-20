@@ -11,8 +11,8 @@
 //
 // Scope: global preferences only. Per-area viewer state (`viewer/analysis/<area>`,
 // `viewer/display-view/<revision>/<area>`, `viewer/look/<area>`), per-composition safe-area
-// presets, per-project export settings, `properties/filter` (a transient view filter), the legacy
-// `appearance/chrome` key, window geometry, and the workspace layout are deliberately NOT here.
+// presets, per-project export settings, the legacy `appearance/chrome` key, window geometry,
+// and the workspace layout are deliberately NOT here.
 // Project truth lives in the document; these are session preferences that must never influence
 // evaluation semantics (docs/architecture/overview.md, "State Categories").
 //
