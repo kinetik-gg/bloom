@@ -31,8 +31,20 @@ class ApplicationShutdownCoordinator final : public QObject {
     using NativeSurfaceSource = std::function<std::vector<EditorNativeSurface*>()>;
     void setNativeSurfaceSource(NativeSurfaceSource source);
 
+    // Optional GPU final-render retirement participant. `beginGpuRetirement` is invoked once, at
+    // beginShutdown(), and must only signal (never block): it asks the provider to retire its
+    // evaluator owner asynchronously. `gpuRetirementComplete` is polled from the UI event loop and
+    // returns true only once that retirement is genuinely proven (the evaluator's owner thread has
+    // fully returned); on a true return the participant has also released the retired evaluator.
+    // When unset, the GPU half is trivially satisfied and behavior is unchanged.
+    using GpuRetirementBegin = std::function<void()>;
+    using GpuRetirementComplete = std::function<bool()>;
+    void setGpuExportRetirement(GpuRetirementBegin beginGpuRetirement,
+                                GpuRetirementComplete gpuRetirementComplete);
+
     [[nodiscard]] bool isShuttingDown() const noexcept;
     [[nodiscard]] bool nativeSurfaceRetirementSatisfied() const noexcept;
+    [[nodiscard]] bool gpuExportRetirementSatisfied() const noexcept;
     [[nodiscard]] const std::string& nativeSurfaceRefusalDiagnostic() const noexcept;
 
   public slots:
@@ -57,17 +69,22 @@ class ApplicationShutdownCoordinator final : public QObject {
     // self-explaining instead of silently unresponsive.
     void logStillShuttingDownDiagnostic() const;
     void beginNativeSurfaceRetirement();
+    void pollGpuExportRetirement();
     void publishQuiescenceIfReady();
 
     CompositionPreviewController& previewController_;
     TaskUiBridge& taskUiBridge_;
     NativeSurfaceSource nativeSurfaceSource_;
+    GpuRetirementBegin gpuRetirementBegin_;
+    GpuRetirementComplete gpuRetirementComplete_;
     NativeSurfaceRetirementGate surfaceRetirementGate_;
     std::string nativeSurfaceRefusalDiagnostic_;
     QTimer stuckShutdownDiagnosticTimer_;
+    QTimer gpuRetirementPollTimer_;
     bool shuttingDown_ = false;
     bool taskQuiescence_ = false;
     bool surfaceRetirementComplete_ = false;
+    bool gpuExportRetirementComplete_ = true;
     bool quiescencePublished_ = false;
 };
 

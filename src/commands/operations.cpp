@@ -891,10 +891,9 @@ OperationResult DeleteComposition::apply(document::Draft& draft) const {
     if (draft.project().findComposition(compositionId_) == nullptr) {
         return invalidComposition(compositionId_);
     }
-    if (draft.project().compositions().size() <= 1) {
-        return OperationResult::rejected(OperationIssueCode::Unsupported,
-                                         "The last composition cannot be deleted");
-    }
+    // A project may legitimately own no composition: a blank new project already does, and deleting
+    // the final composition must reach that same usable empty state as one undoable command. There
+    // is therefore no last-composition guard here.
     if (!draft.project().removeComposition(compositionId_)) {
         return invalidComposition(compositionId_);
     }

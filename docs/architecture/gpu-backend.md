@@ -103,7 +103,9 @@ Scene preparation, caches, and executor. `CpuGpuSceneBuilder` (`prepared_gpu_sce
 (solid, covered solid, unparented translation-only layer, image/video upload, Normal merge,
 composition output) using the evaluator's real preflight resolution and, for a fractional
 translation-only solid, the same CPU coverage raster; it allocates no full RGBA CPU image and fails
-closed `Unsupported` for every out-of-subset reachable operation. Command semantic keys carry the
+closed `Unsupported` for every out-of-subset reachable operation. That host-built coverage mask is a
+known gap, not a GPU vector-coverage implementation: `feature.geometry.vector_coverage` stays
+Required and RED until a native GPU coverage producer replaces it. Command semantic keys carry the
 resolved operands plus the pinned render SPIR-V digests and never node/layer IDs, operation indexes,
 or the revision. `ImageSource`/`VideoSource` leaves resolve and colour-convert on the CPU task thread
 through the evaluator's own entry points and publish a frozen upload command whose source semantic key
@@ -129,7 +131,8 @@ that pin.
 Coverage contract and final render. `bloom/runtime/gpu_coverage_contract.hpp` is the exhaustive,
 compile-time-checked registry of every `CompiledOperation`/`ImageEffectKernel` alternative, every
 image-producing authoring lowering, every built-in pixel node type, and the required blend, shape,
-layer, colour, and display feature axes and render routes. GPU production preparation is required by
+geometry (native vector coverage), layer, colour, and display feature axes and render routes. GPU
+production preparation is required by
 default; adding an alternative, lowering, or pixel node type without classifying and fixturing it is
 a compile failure or a missing-fixture failure, and an unclassified or unfixtured required id keeps
 the coverage gate RED by name rather than warning. A fixture passes only with a genuine prepared GPU
@@ -139,10 +142,14 @@ admitted-but-not-prepared pass, and an invalid plan or missing media is never a 
 The only permitted exceptions are typed and narrow: an actual pixel operation, feature, or route
 exception requires a non-empty id, a rationale, and an owning document or accepted decision
 reference, and no such exception exists today. Host-preparation declarations -- media container and
-sample I/O and decompression, font shaping, parameter/geometry resolution, and one final readback --
-are a separate audited list and are not a route to exempt a pixel operation, feature, or route.
-Approval identifiers are never fabricated, and working-space colour conversion is a pixel
-transformation that is never an opt-out.
+sample I/O and decompression, font load/shaping, parameter/curve/geometry resolution, and one final
+readback -- are a separate audited list and are not a route to exempt a pixel operation, feature, or
+route. Approval identifiers are never fabricated, and working-space colour conversion is a pixel
+transformation that is never an opt-out. Per-pixel vector coverage rasterization (the CPU
+`PathRaster::coverageRow` mask) is likewise a pixel transformation, not host preparation: a
+`CoveredSolidV1` fill from a host-built mask does not satisfy the Required
+`feature.geometry.vector_coverage` axis, which needs a native GPU coverage producer with real
+device provenance and dispatch counters.
 
 Preview and final rendering are both required. Interactive viewer preview, RAM preview fill and
 playback, still-frame export, sequence/range export, video export, and headless/scripted render are

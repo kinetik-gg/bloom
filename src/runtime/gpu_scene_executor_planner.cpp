@@ -286,6 +286,58 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         return {};
     }
 
+    if (const auto* ocioCommand = std::get_if<GpuSceneOcioEffectCommand>(&command)) {
+        if (ocioCommand->program == nullptr ||
+            ocioCommand->program->encoding() != GpuOcioOutputEncoding::FinalRgba32f) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::Unsupported,
+                                  "an OCIO effect command has no ProcessEffect program");
+        }
+        if (const auto plan = planCommand(ocioCommand->input, color);
+            plan.code != GpuSceneExecutorDiagnosticCode::None) {
+            return plan;
+        }
+        if (color[ocioCommand->input] != 2) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                  "an OCIO effect input was not planned");
+        }
+        const auto inputDescriptor = expectedDescriptorOf(*scene, ocioCommand->input, 0);
+        if (!inputDescriptor.has_value()) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                  "the OCIO effect input descriptor is not derivable");
+        }
+        const auto geometry = ocioCommand->program->geometry();
+        const bool sameGeometry = inputDescriptor->data == ocioCommand->outputWindow &&
+                                  inputDescriptor->display == ocioCommand->displayWindow &&
+                                  inputDescriptor->pixelAspect == ocioCommand->pixelAspect &&
+                                  ocioCommand->outputWindow.extent().width() == geometry.width &&
+                                  ocioCommand->outputWindow.extent().height() == geometry.height;
+        if (!sameGeometry) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "an OCIO effect command geometry does not match its input");
+        }
+        std::uint64_t bytes = 0;
+        if (!checkedImageBytes(ocioCommand->outputWindow, bytes)) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "an OCIO effect command has an empty output window");
+        }
+        GpuSceneExecutorStep step;
+        step.kind = GpuSceneExecutorStepKind::OcioEffect;
+        step.command = index;
+        step.input = ocioCommand->input;
+        step.cacheKey = key;
+        step.cacheOnComplete = true;
+        step.outputWindow = ocioCommand->outputWindow;
+        step.ocioCommand = ocioCommand->program;
+        steps.push_back(std::move(step));
+        color[index] = 2;
+        return {};
+    }
+
     if (const auto* merge = std::get_if<GpuSceneMergeCommand>(&command)) {
         for (const GpuSceneCommandIndex foreground : merge->foregrounds) {
             if (const auto plan = planCommand(foreground, color);

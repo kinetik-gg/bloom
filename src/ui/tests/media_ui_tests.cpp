@@ -16,6 +16,10 @@
 #include <QUrl>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/layer_operations.hpp>
+#include <bloom/commands/operations.hpp>
+#include <bloom/commands/transaction.hpp>
+#include <bloom/core/rational_time.hpp>
+#include <bloom/document/composition_settings.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/assets_editor.hpp>
@@ -135,6 +139,21 @@ void run() {
     ui::ProjectHost host(scheduler);
     ui::CompositionSession session(*host.liveDocumentAndStack().first,
                                    *host.liveDocumentAndStack().second, host.lowestCompositionId());
+    // Explicit seed opt-in: application startup is now blank (no composition), but this fixture
+    // drops assets onto a node canvas and exercises the timeline, so it authors the one composition
+    // it needs through the ordinary command path.
+    if (session.composition() == nullptr) {
+        commands::Transaction seed("Seed media fixture composition", session.snapshot().revision());
+        seed.emplace<commands::AddComposition>("Main", document::CompositionFormat{},
+                                               core::RationalTime::fromInteger(10));
+        const auto seeded = session.executeTransaction(std::move(seed));
+        const auto seededId =
+            seeded.succeeded()
+                ? seeded.outputId<document::CompositionId>(commands::kAddCompositionOutput)
+                : std::nullopt;
+        require(seededId.has_value() && session.setComposition(*seededId),
+                "media fixture composition seed");
+    }
     ui::TaskUiBridge bridge(scheduler);
     ui::AssetController controller(session, host, scheduler, bridge);
     ui::AssetsEditor assets(session);

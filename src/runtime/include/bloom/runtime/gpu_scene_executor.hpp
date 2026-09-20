@@ -38,9 +38,9 @@
 
 #include <bloom/render/gpu_composite.hpp>
 #include <bloom/render/gpu_device.hpp>
-#include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/gpu_solid.hpp>
+#include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
@@ -131,6 +131,16 @@ struct GpuSceneExecutorCounters final {
     // runs zero of every one of these.
     std::uint64_t affineDispatches = 0;
     std::uint64_t blendDispatches = 0;
+    // One OCIO ProcessEffect dispatch. A warm scene whose OCIO command output is already cached
+    // runs zero of these.
+    std::uint64_t ocioEffectDispatches = 0;
+    // Bounded OCIO native-program cache: creations, warm reuses, evictions, and refusals.
+    std::uint64_t ocioProgramCreations = 0;
+    std::uint64_t ocioProgramReuses = 0;
+    std::uint64_t ocioProgramEvictions = 0;
+    std::uint64_t ocioProgramRefusals = 0;
+    // Actual VMA retained bytes currently charged to the OCIO program cache.
+    std::uint64_t ocioRetainedProgramBytes = 0;
     std::uint64_t dispatches = 0;
     std::uint64_t uploads = 0;
     std::uint64_t readbacks = 0;
@@ -187,6 +197,13 @@ struct GpuSceneExecutorBudgets final {
     // Structural ceilings validated before any Vulkan work.
     std::uint64_t maxCommands = 4096;
     std::uint64_t maxCoverageBytes = 256ULL * 1024ULL * 1024ULL;
+    // Bounded OCIO native-program cache: entry count and the sum of the programs' ACTUAL VMA
+    // retained allocation bytes (never a descriptor-declared sample estimate). The per-program
+    // ceilings are forwarded to render::GpuOcioProgram::create.
+    std::uint64_t maxOcioPrograms = 8;
+    std::uint64_t maxOcioRetainedProgramBytes = 256ULL * 1024ULL * 1024ULL;
+    std::uint64_t maxOcioOwnedBytesPerProgram = 512ULL * 1024ULL * 1024ULL;
+    std::uint64_t maxOcioLutBytesPerProgram = 256ULL * 1024ULL * 1024ULL;
     // A native job that has not retired by this deadline is cancelled and failed closed.
     std::uint64_t jobDeadlineMilliseconds = 5000;
 };

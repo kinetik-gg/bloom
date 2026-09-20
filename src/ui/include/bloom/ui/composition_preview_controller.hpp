@@ -47,9 +47,9 @@ struct CompositionPreviewSettings final {
     std::string viewName;
     bool showLook = true;
     // Capacity-aware: sized from the RAM-preview allocation (gpuPreviewRequestByteAllowance()),
-    // floored at the pre-existing 512 MiB, so the request allowance follows the machine and the
-    // operator's memory overrides instead of a fixed constant. A constrained injected budget still
-    // refuses cleanly and takes the honest CPU fallback.
+    // so the request allowance follows the machine and the operator's memory overrides instead of a
+    // fixed constant. A constrained injected budget still refuses cleanly and takes the honest CPU
+    // fallback.
     std::size_t pixelStorageByteLimit = runtime::gpuPreviewRequestByteAllowance();
     // The first Interactive request is immediate. Subsequent requests inside this 16 ms window
     // coalesce to the newest value; an active worker remains the admission gate.

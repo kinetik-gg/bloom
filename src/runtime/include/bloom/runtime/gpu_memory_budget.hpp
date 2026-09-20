@@ -13,10 +13,11 @@
 //  * the prepared-upload cache is HOST-retained (decoded/converted images);
 //  * the scene cache and the per-request executor allowance are DEVICE admission bounds. They are
 //    host-derived here because the policy is host-side, and the native primitives additionally
-//    clamp every per-image request to the device's real limits (storage-buffer range, workgroup
-//    geometry, allocator admission) instead of a legacy fixed ceiling. The effective device limit
-//    is therefore min(host-derived bound, device limit), and a device that cannot allocate refuses
-//    honestly and takes the CPU fallback.
+//    clamp every per-resource request to the device's real limits: a VkImage request is bounded by
+//    the format's maxResourceSize (querySolidImageSupport), and a buffer-backed request (coverage
+//    mask, affine coordinate buffer) by the device's storage-buffer range. The effective device
+//    limit is therefore min(host-derived bound, device limit), and a device that cannot allocate
+//    refuses honestly and takes the CPU fallback.
 //
 // The `...For` overloads are pure functions of an assigned budget so a policy test can prove the
 // tiny-budget and high-capacity cases without a device or the process ledger.
@@ -35,9 +36,9 @@ namespace gpu_memory_budget_detail {
 
 } // namespace gpu_memory_budget_detail
 
-// Upper bound on a single native image, from the assigned operation-cache budget. A device with a
-// smaller storage-buffer range clamps below this; a 6000x4000 RGBA32F frame (384 MB) is admitted
-// only when the assigned budget and the device both allow it.
+// Upper bound on a single native image, from the assigned operation-cache budget. A device whose
+// image format maxResourceSize is smaller clamps below this; a 6000x4000 RGBA32F frame (384 MB) is
+// admitted only when the assigned budget and the device both allow it.
 [[nodiscard]] inline std::size_t
 gpuProducerMaxImageBytesFor(const std::size_t operationCacheByteBudget) noexcept {
     return gpu_memory_budget_detail::fraction(operationCacheByteBudget, 1, 4);

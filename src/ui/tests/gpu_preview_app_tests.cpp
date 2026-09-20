@@ -601,6 +601,83 @@ void testPipelineTiming(Expectations& expectations, const Options& options) {
 
 } // namespace
 
+// After an injected budget refusal the SAME controller and service must stay responsive: the failed
+// request reaches a terminal state, a later request on the same controller renders, and shutdown is
+// bounded. The recovery runs through the real service; only the first request is injected as a real
+// task failure on the real scheduler (no fake service).
+void testControllerLivenessAfterBudgetRefusal(Expectations& expectations, const Options& options) {
+    auto newProject = makeViewerProject();
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    expectations.expect(
+        session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.4, 0.8, 1.0}),
+        "liveness: the fixture adds a solid layer");
+    runtime::TaskScheduler scheduler(serviceSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    AppFixture fixture;
+    runtime::GpuPreviewDisplayService service(scheduler, fixture.stage(), fixture.fallback(),
+                                              gpuOptions(options.loader));
+    static_cast<void>(waitUntil([&] {
+        return service.status().state != runtime::GpuPreviewDisplayServiceState::Initializing;
+    }));
+
+    auto injected = std::make_shared<std::atomic<bool>>(false);
+    ui::PreviewPreparationSubmitter submitter =
+        [&service, &scheduler,
+         injected](runtime::TaskRequest request, const document::Snapshot& snapshot,
+                   const runtime::PreviewRequestIdentity& identity, const std::size_t limit,
+                   const std::vector<runtime::SnapshotParameterOverride>& overrides) {
+            if (!injected->exchange(true)) {
+                return scheduler.submit<runtime::PreviewPreparationResultHandle>(
+                    std::move(request), [](runtime::TaskContext&) {
+                        return runtime::TaskResult<runtime::PreviewPreparationResultHandle>::failed(
+                            {runtime::TaskDiagnostic{
+                                .code = "bloom.preview.gpu-scene.pixel-budget-exceeded",
+                                .severity = runtime::DiagnosticSeverity::Error,
+                                .summary = "Prepared scene exceeds the request pixel allowance",
+                                .detail = {},
+                                .suggestedAction = "Take the full CPU composition preview path."}});
+                    });
+            }
+            return service.submit(std::move(request), snapshot, identity, limit, overrides);
+        };
+
+    auto frameCache = std::make_shared<ui::PreviewFrameCache>();
+    ui::CompositionPreviewController controller(
+        session, scheduler, bridge,
+        ui::makeCompositionPreviewPipeline(fixture.compiler, fixture.evaluator,
+                                           fixture.referencePreparer, fixture.provider,
+                                           fixture.planCache),
+        {.colorIntent = session.colorIntent(),
+         .displayName = {},
+         .viewName = {},
+         .showLook = true,
+         .pixelStorageByteLimit = kBudget},
+        frameCache, nullptr, std::move(submitter));
+
+    expectations.expect(waitUntil([&] {
+                            const auto activity = controller.state().activity;
+                            return activity == ui::PreviewActivity::Failed ||
+                                   activity == ui::PreviewActivity::Unsupported ||
+                                   activity == ui::PreviewActivity::Ready;
+                        }),
+                        "liveness: the injected budget refusal reaches a terminal state");
+    expectations.expect(controller.state().activity != ui::PreviewActivity::Rendering,
+                        "liveness: the controller is not stranded in Rendering");
+
+    // A later request on the SAME controller/service must render through the real service.
+    controller.requestRefresh();
+    expectations.expect(waitUntil([&] { return isReady(controller); }),
+                        "liveness: a later request on the same controller renders");
+
+    controller.beginShutdown();
+    service.beginShutdown();
+    bridge.beginShutdown();
+    expectations.expect(controller.isShuttingDown(), "liveness: shutdown is bounded");
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -611,6 +688,7 @@ int main(int argc, char** argv) {
     Expectations expectations;
     try {
         testControllerGpuPathAndParity(expectations, options);
+        testControllerLivenessAfterBudgetRefusal(expectations, options);
         testMissingLoaderCpuFallback(expectations);
         testPipelineTiming(expectations, options);
     } catch (const std::exception& error) {

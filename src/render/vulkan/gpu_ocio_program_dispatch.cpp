@@ -76,6 +76,19 @@ void GpuOcioProgram::Impl::beginImpl(const bool display,
         fail(GpuOcioProgramDiagnosticCode::InvalidArgument, "the pixel count is invalid");
         return;
     }
+    // Plan a capacity-safe 2D dispatch before any allocation or work. A geometry the device's
+    // maxComputeWorkGroupCount cannot cover, or one whose flattened uint32 index would wrap, is
+    // refused here rather than submitted as an out-of-range dispatch. No artificial pixel ceiling:
+    // the only refusals are real device capacity and index representability.
+    const auto dispatchPlan = ocio_program_detail::planOcioDispatch(
+        pixelCount, ocio_program_detail::kWorkgroupSizeX, maxWorkGroupCountX, maxWorkGroupCountY);
+    if (!dispatchPlan.valid()) {
+        fail(dispatchPlan.error == ocio_program_detail::OcioDispatchPlanError::DeviceCapacity
+                 ? GpuOcioProgramDiagnosticCode::Unsupported
+                 : GpuOcioProgramDiagnosticCode::InvalidArgument,
+             "the geometry cannot be covered by a capacity-safe compute dispatch");
+        return;
+    }
     const std::span<const std::byte> values =
         uniformBytes.empty() ? std::span<const std::byte>(desc.uniformBufferData) : uniformBytes;
     if (values.size() != desc.uniformBufferSize) {
@@ -83,8 +96,16 @@ void GpuOcioProgram::Impl::beginImpl(const bool display,
              "the uniform bytes do not match the declared UBO size");
         return;
     }
-    const std::uint64_t transientBytes = display ? pixelCount * 4U : 0U;
-    if (transientBytes > byteBudget || transientBytes > budgets.maxOwnedBytes) {
+    // Pre-allocation gate on a conservative estimate of this job's native bytes: the display arm
+    // owns a packed uint buffer plus an RGBA8 output image, the effect arm an RGBA32F output image.
+    // The actual VMA sizes are re-checked below before submission. Display/effect both charge the
+    // full output, so a caller cannot force an unbounded allocation through a small budget.
+    const std::uint64_t packedEstimate = display ? pixelCount * 4U : 0U;
+    const std::uint64_t outputEstimate =
+        pixelCount * static_cast<std::uint64_t>(display ? 4U : sizeof(Rgba32f));
+    const std::uint64_t jobEstimate = packedEstimate + outputEstimate;
+    if (jobEstimate > byteBudget || jobEstimate > budgets.maxOwnedBytes ||
+        retainedResourceBytes > budgets.maxOwnedBytes - jobEstimate) {
         fail(GpuOcioProgramDiagnosticCode::OverBudget,
              "the request output exceeds the byte budget");
         return;
@@ -92,18 +113,32 @@ void GpuOcioProgram::Impl::beginImpl(const bool display,
     auto& state = *control;
     const VkDevice device = static_cast<VkDevice>(*state.device);
     const auto* dispatcher = state.device.getDispatcher();
+    std::uint64_t jobActual = 0;
 
     if (display) {
         auto imageImpl = std::make_unique<GpuDisplayImageImpl>();
         imageImpl->state = control;
         imageImpl->generation = expectedGeneration;
+        // The output has exactly the input's geometry: propagate the data/display window and pixel
+        // aspect so a downstream native operation (composite/merge) can consume the resident
+        // result.
+        imageImpl->dataWindow = inputImpl->dataWindow;
+        imageImpl->displayWindow = inputImpl->displayWindow;
+        imageImpl->pixelAspect = inputImpl->pixelAspect;
         if (!createDisplayImage(state, inputImpl->width, inputImpl->height, *imageImpl)) {
             fail(GpuOcioProgramDiagnosticCode::AllocationFailed,
                  "the display output image could not be created");
             return;
         }
+        // The packed buffer is persistent across jobs; grow OR shrink it to the current geometry.
+        // beginImpl is only reachable with no unretired submission (the api guards that), so the
+        // old buffer is never destroyed while the GPU can still read it.
+        const std::uint64_t packedBytes = pixelCount * 4U;
+        if (packed.buffer != VK_NULL_HANDLE && packed.bytes != packedBytes) {
+            destroyResidentBuffer(state, packed);
+        }
         if (packed.buffer == VK_NULL_HANDLE &&
-            !createResidentBuffer(state, pixelCount * 4U,
+            !createResidentBuffer(state, packedBytes,
                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                   0, false, packed)) {
@@ -113,18 +148,43 @@ void GpuOcioProgram::Impl::beginImpl(const bool display,
         }
         displayOutput =
             std::make_unique<GpuDisplayImage>(makeGpuDisplayImage(std::move(imageImpl)));
-        ocio_program_detail::writeBufferDescriptor(ioSet, state, 1, packed.buffer, packed.bytes);
+        jobActual = gpuDisplayImageImpl(*displayOutput)->allocationBytes +
+                    static_cast<std::uint64_t>(packed.info.size);
     } else {
         auto imageImpl = std::make_unique<GpuImageImpl>();
         imageImpl->state = control;
         imageImpl->generation = expectedGeneration;
+        // The output has exactly the input's geometry: propagate the data/display window and pixel
+        // aspect so a downstream native operation (composite/merge) can consume the resident
+        // result.
+        imageImpl->dataWindow = inputImpl->dataWindow;
+        imageImpl->displayWindow = inputImpl->displayWindow;
+        imageImpl->pixelAspect = inputImpl->pixelAspect;
         if (!createResidentImage(state, inputImpl->width, inputImpl->height, *imageImpl)) {
             fail(GpuOcioProgramDiagnosticCode::AllocationFailed,
                  "the effect output image could not be created");
             return;
         }
-        ocio_program_detail::writeImageDescriptor(ioSet, state, 1, imageImpl->view);
         effectOutput = std::make_unique<GpuImage>(makeGpuImage(std::move(imageImpl)));
+        jobActual = effectOutput->allocationBytes();
+    }
+    // Enforce the byte budget on the ACTUAL VMA allocation sizes (allocator rounding included).
+    // An undersized budget is refused here, before any submission or publication; the just-created
+    // transient output is released so no unpublished result is retained.
+    if (jobActual > byteBudget || jobActual > budgets.maxOwnedBytes ||
+        retainedResourceBytes > budgets.maxOwnedBytes - jobActual) {
+        displayOutput.reset();
+        effectOutput.reset();
+        fail(GpuOcioProgramDiagnosticCode::OverBudget,
+             "the actual request allocation exceeds the byte budget");
+        return;
+    }
+    lastJobBytes = jobActual;
+    if (display) {
+        ocio_program_detail::writeBufferDescriptor(ioSet, state, 1, packed.buffer, packed.bytes);
+    } else {
+        ocio_program_detail::writeImageDescriptor(ioSet, state, 1,
+                                                  gpuImageImpl(*effectOutput)->view);
     }
     ocio_program_detail::writeImageDescriptor(ioSet, state, 0, inputImpl->view);
     std::memset(statusMapped, 0, static_cast<std::size_t>(ocio_program_detail::kStatusBytes));
@@ -196,11 +256,11 @@ void GpuOcioProgram::Impl::beginImpl(const bool display,
                              inputImpl->height};
     dispatcher->vkCmdPushConstants(raw, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
                                    &push);
-    dispatcher->vkCmdDispatch(
-        raw,
-        static_cast<std::uint32_t>((pixelCount + ocio_program_detail::kWorkgroupSizeX - 1ULL) /
-                                   ocio_program_detail::kWorkgroupSizeX),
-        1, 1);
+    // Capacity-safe 2D grid: the wrapper flattens gl_GlobalInvocationID.y * (groupsX *
+    // workGroupSizeX) + gl_GlobalInvocationID.x back to the linear pixel index and discards the
+    // tail with its own pixelCount guard. When the work already fits, groupsY == 1 and this is the
+    // exact previous 1D dispatch.
+    dispatcher->vkCmdDispatch(raw, dispatchPlan.groupsX, dispatchPlan.groupsY, 1);
 
     if (display) {
         VkBufferMemoryBarrier packedBarrier{};
@@ -264,7 +324,6 @@ void GpuOcioProgram::Impl::beginImpl(const bool display,
     jobPixelCount = static_cast<std::uint32_t>(pixelCount);
     jobWidth = inputImpl->width;
     jobHeight = inputImpl->height;
-    lastJobBytes = transientBytes;
     inputRetained = input;
 }
 

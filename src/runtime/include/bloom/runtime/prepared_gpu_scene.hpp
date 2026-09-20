@@ -33,10 +33,12 @@
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/evaluation.hpp>
+#include <bloom/runtime/gpu_ocio_command.hpp>
+#include <bloom/runtime/gpu_ocio_preparation.hpp>
 
-#include <cstdint>
 #include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -91,6 +93,10 @@ struct GpuSceneMediaStatistics final {
     std::uint64_t videoSources = 0;
     std::uint64_t imageConversions = 0;
     std::uint64_t videoConversions = 0;
+    // Native (GPU) colour-transform commands successfully prepared through the injected OCIO
+    // preparer. A warm build serves the same program from the preparer's own content cache; the
+    // upload cache hit is what suppresses the decode/convert entirely.
+    std::uint64_t ocioCommandPreparations = 0;
     std::uint64_t uploadCacheHits = 0;
     std::uint64_t uploadCacheMisses = 0;
     std::uint64_t uploadKeyConstructions = 0;
@@ -249,10 +255,30 @@ struct GpuSceneBlendCommand final {
     std::string semanticKey;
 };
 
+// One OCIO ProcessEffect transform over a resident RGBA32F input. `program` is the immutable
+// runtime-prepared command (the extracted OCIO descriptor plus the compiled SPIR-V artifact and the
+// canonical identity covering config/program/resources/uniforms/geometry/output encoding/artifact
+// digest). The output has the input's geometry and stays resident RGBA32F; the executor never reads
+// it back. The builder extracts/compiles this off the UI thread; the executor only drives it.
+struct GpuSceneOcioEffectCommand final {
+    GpuSceneCommandIndex index = kInvalidGpuSceneCommand;
+    OperationIndex sourceOperation = OperationIndex::fromRaw(0);
+    GpuSceneCommandIndex input = kInvalidGpuSceneCommand;
+    // The input's own semantic key, carried explicitly so the executor canonicalizes the effective
+    // key from fields rather than trusting a producer-supplied combined key.
+    std::string inputKey;
+    std::shared_ptr<const PreparedGpuOcioCommand> program;
+    // The output data window (== input data window) plus the preserved display window/pixel aspect.
+    render::ImageWindow outputWindow;
+    render::ImageWindow displayWindow;
+    core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
+    std::string semanticKey;
+};
+
 using GpuSceneCommand =
     std::variant<GpuSceneSolidCommand, GpuSceneTranslationCommand, GpuSceneCoverageSolidCommand,
                  GpuSceneUploadCommand, GpuSceneMergeCommand, GpuSceneCompositionOutputCommand,
-                 GpuSceneAffineCommand, GpuSceneBlendCommand>;
+                 GpuSceneAffineCommand, GpuSceneBlendCommand, GpuSceneOcioEffectCommand>;
 
 // Canonical, construction-time semantic key builders. Producer code (the scene builder / graph
 // worker) must call these rather than hand-format a key, so two independent producers agree and a
@@ -269,8 +295,8 @@ inline void appendSemanticDouble(std::string& out, double value) {
         value = 0.0;
     }
     char buffer[40];
-    const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value,
-                                      std::chars_format::general);
+    const auto result =
+        std::to_chars(buffer, buffer + sizeof(buffer), value, std::chars_format::general);
     if (result.ec == std::errc{}) {
         out.append(buffer, static_cast<std::size_t>(result.ptr - buffer));
     }
@@ -287,8 +313,7 @@ inline void appendSemanticWindow(std::string& out, const render::ImageWindow& wi
     out.append(std::to_string(window.extent().height()));
 }
 
-inline void appendSemanticPixelAspect(std::string& out,
-                                      const core::PixelAspectRatio& pixelAspect) {
+inline void appendSemanticPixelAspect(std::string& out, const core::PixelAspectRatio& pixelAspect) {
     out.append("|par=");
     out.append(std::to_string(pixelAspect.numerator()));
     out.push_back('/');
@@ -306,9 +331,9 @@ inline void appendSemanticFloatBits(std::string& out, float value) {
 } // namespace gpu_scene_key_detail
 
 [[nodiscard]] inline std::string
-makeGpuSceneAffineSemanticKey(const std::string& inputKey,
-                              const render::ImageWindow& sourceWindow, const render::GpuAffineMatrix& matrix,
-                              const float opacity, const render::ImageWindow& outputWindow,
+makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWindow& sourceWindow,
+                              const render::GpuAffineMatrix& matrix, const float opacity,
+                              const render::ImageWindow& outputWindow,
                               const core::PixelAspectRatio& pixelAspect,
                               const std::string& artifactDigest) {
     std::string key = "affine-bilinear-v1|in=";
@@ -334,12 +359,10 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey,
     return key;
 }
 
-[[nodiscard]] inline std::string
-makeGpuSceneBlendSemanticKey(const std::string& sourceKey, const std::string& destinationKey,
-                             const core::BlendMode mode, const render::ImageWindow& sourceWindow,
-                             const render::ImageWindow& outputWindow,
-                             const core::PixelAspectRatio& pixelAspect,
-                             const std::string& artifactDigest) {
+[[nodiscard]] inline std::string makeGpuSceneBlendSemanticKey(
+    const std::string& sourceKey, const std::string& destinationKey, const core::BlendMode mode,
+    const render::ImageWindow& sourceWindow, const render::ImageWindow& outputWindow,
+    const core::PixelAspectRatio& pixelAspect, const std::string& artifactDigest) {
     std::string key = "blend-v1|src=";
     key.append(sourceKey);
     key.append("|dst=");
@@ -351,6 +374,23 @@ makeGpuSceneBlendSemanticKey(const std::string& sourceKey, const std::string& de
     gpu_scene_key_detail::appendSemanticPixelAspect(key, pixelAspect);
     key.append("|artifact=");
     key.append(artifactDigest);
+    return key;
+}
+
+// Effective scene key for one OCIO ProcessEffect command. The program's canonical identity already
+// covers config revision, extracted program/resources, uniforms, geometry, and output encoding plus
+// the compiled artifact digest; the input command key and the output window/pixel aspect are folded
+// in so two commands with the same program over different upstream geometry never share an output.
+[[nodiscard]] inline std::string makeGpuSceneOcioEffectSemanticKey(
+    const std::string& inputKey, const core::Sha256Digest& programIdentity,
+    const render::ImageWindow& outputWindow, const core::PixelAspectRatio& pixelAspect) {
+    std::string key = "ocio-effect-v1|in=";
+    key.append(inputKey);
+    key.append("|program=");
+    const auto hex = programIdentity.toLowercaseHex();
+    key.append(hex.data(), hex.size());
+    gpu_scene_key_detail::appendSemanticWindow(key, outputWindow);
+    gpu_scene_key_detail::appendSemanticPixelAspect(key, pixelAspect);
     return key;
 }
 
@@ -450,6 +490,18 @@ struct PreparedGpuSceneBuildResult final {
     explicit operator bool() const noexcept { return hasValue(); }
 };
 
+// Off-UI GPU OCIO preparation injection for media-source colour conversion and image-effect
+// commands. The builder resolves the exact configured colour-space transform through the accepted
+// OCIO GPU builder, generates the wrapper, and compiles it off the UI thread through the injected
+// preparer; it never compiles shader text itself and never consults PATH, an environment variable,
+// or a workspace path. A null preparer makes a reachable non-identity transform fail closed
+// (Unsupported) so a caller that does not prepare transforms keeps the existing CPU path rather
+// than silently substituting identity.
+struct GpuSceneOcioContext final {
+    std::shared_ptr<GpuOcioProgramPreparer> preparer;
+    GpuOcioCompileOptions compileOptions;
+};
+
 // Stateless CPU scene preparation. The caller owns the plan and request; nothing is retained beyond
 // the returned scene.
 class GpuSceneCoverageCache;
@@ -463,9 +515,16 @@ class CpuGpuSceneBuilder final {
     // asset base directory and the prepared-upload cache used by ImageSource/VideoSource leaves.
     // The default empty context keeps the non-media constructor callers working: a media scene then
     // fails closed with MediaUnavailable instead of decoding with different semantics.
+    //
+    // The optional OCIO context supplies the off-UI preparer and the qualified compiler tool paths
+    // used for a media-source or image-effect colour transform. Its default (no preparer, no tools)
+    // keeps every existing caller working and fails a non-identity transform closed rather than
+    // mis-rendering it.
     explicit CpuGpuSceneBuilder(std::shared_ptr<GpuSceneCoverageCache> coverageCache = nullptr,
-                                GpuSceneMediaContext mediaContext = {})
-        : coverageCache_(std::move(coverageCache)), mediaContext_(std::move(mediaContext)) {}
+                                GpuSceneMediaContext mediaContext = {},
+                                GpuSceneOcioContext ocioContext = {})
+        : coverageCache_(std::move(coverageCache)), mediaContext_(std::move(mediaContext)),
+          ocioContext_(std::move(ocioContext)) {}
 
     [[nodiscard]] PreparedGpuSceneBuildResult
     build(const std::shared_ptr<const CompiledCompositionPlan>& plan,
@@ -478,6 +537,7 @@ class CpuGpuSceneBuilder final {
 
     std::shared_ptr<GpuSceneCoverageCache> coverageCache_;
     GpuSceneMediaContext mediaContext_;
+    GpuSceneOcioContext ocioContext_;
 };
 
 } // namespace bloom::runtime

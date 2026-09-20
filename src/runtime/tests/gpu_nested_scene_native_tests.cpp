@@ -63,13 +63,16 @@ using bloom::runtime::CompiledVec2Parameter;
 using bloom::runtime::CpuCompositionEvaluator;
 using bloom::runtime::CpuGpuSceneBuilder;
 using bloom::runtime::EvaluationRequest;
+using bloom::runtime::GpuSceneAffineCommand;
 using bloom::runtime::GpuSceneCache;
 using bloom::runtime::GpuSceneCacheBudgets;
 using bloom::runtime::GpuSceneCommand;
+using bloom::runtime::GpuSceneCompositionOutputCommand;
 using bloom::runtime::GpuSceneExecutor;
 using bloom::runtime::GpuSceneExecutorDiagnosticCode;
 using bloom::runtime::GpuSceneExecutorPollResult;
 using bloom::runtime::GpuSceneSolidCommand;
+using bloom::runtime::kInvalidGpuSceneCommand;
 using bloom::runtime::OperationIndex;
 
 constexpr std::uint64_t kRevision = 7;
@@ -86,7 +89,11 @@ constexpr std::uint64_t kSceneBudget = 64ULL * 1024ULL * 1024ULL;
 
 struct LayerValues final {
     bloom::document::Vec2d position{4.0, 3.0};
+    bloom::document::Vec2d anchor{0.0, 0.0};
+    bloom::document::Vec2d scale{1.0, 1.0};
+    double rotation = 0.0;
     double opacity = 1.0;
+    bloom::core::BlendMode blendMode = bloom::core::kDefaultBlendMode;
 };
 
 [[nodiscard]] CompiledLayerOutput layer(const std::uint64_t idBase, const std::uint64_t layerRaw,
@@ -96,12 +103,12 @@ struct LayerValues final {
         bloom::document::LayerId::fromRaw(layerRaw),
         input,
         CompiledVec2Parameter{ParameterId::fromRaw(idBase + 1), values.position},
-        CompiledVec2Parameter{ParameterId::fromRaw(idBase + 2), bloom::document::Vec2d{0.0, 0.0}},
-        CompiledVec2Parameter{ParameterId::fromRaw(idBase + 3), bloom::document::Vec2d{1.0, 1.0}},
-        CompiledScalarParameter{ParameterId::fromRaw(idBase + 4), 0.0},
+        CompiledVec2Parameter{ParameterId::fromRaw(idBase + 2), values.anchor},
+        CompiledVec2Parameter{ParameterId::fromRaw(idBase + 3), values.scale},
+        CompiledScalarParameter{ParameterId::fromRaw(idBase + 4), values.rotation},
         CompiledScalarParameter{ParameterId::fromRaw(idBase + 5), values.opacity},
         ParameterId::fromRaw(idBase + 6),
-        bloom::core::kDefaultBlendMode};
+        values.blendMode};
 }
 
 // A child composition: two independently-coloured solid branches merged bottom-to-top.
@@ -162,6 +169,50 @@ parentPlan(const std::shared_ptr<const CompiledCompositionPlan>& child,
                                                  format(12, 10),
                                                  std::move(operations),
                                                  OperationIndex::fromRaw(2)};
+    definition.duration = RationalTime::fromInteger(100);
+    definition.nestedPlans.push_back(child);
+    return std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+}
+
+// A parent whose PARENTED Layer Output transforms the nested child raster with a general affine and
+// an explicit non-Normal blend, then merges it. The parent Layer Output contributes its composed
+// matrix only. The nested source is a raster, so the merged layer must take the raster affine path
+// through the full parent*child matrix -- never a vector chain fabricated from the nested source.
+[[nodiscard]] std::shared_ptr<const CompiledCompositionPlan>
+affineBlendParentPlan(const std::shared_ptr<const CompiledCompositionPlan>& child,
+                      const std::uint64_t compositionRaw) {
+    std::vector<CompiledOperation> operations;
+    operations.emplace_back(CompiledCompositionSource{
+        NodeId::fromRaw(9100), 0,
+        CompiledCompositionTimeMapping{
+            {ParameterId::fromRaw(9101), 0.0}, {ParameterId::fromRaw(9102), 1.0}, 0}});
+    // The parent transform layer (not itself merged; it only contributes its composed matrix).
+    operations.emplace_back(
+        layer(9110, 9120, OperationIndex::fromRaw(0),
+              LayerValues{.position = {6.5, 5.5}, .scale = {1.2, 0.9}, .rotation = -20.0}));
+    // The merged child layer, parented to the layer above and blended over the transparent base.
+    auto childLayer = layer(9140, 9130, OperationIndex::fromRaw(0),
+                            LayerValues{.position = {6.0, 5.0},
+                                        .anchor = {0.5, 0.25},
+                                        .scale = {1.4, 1.1},
+                                        .rotation = 30.0,
+                                        .opacity = 0.8,
+                                        .blendMode = bloom::core::BlendMode::Screen});
+    childLayer.parent = OperationIndex::fromRaw(1);
+    operations.emplace_back(std::move(childLayer));
+    operations.emplace_back(
+        CompiledMerge{NodeId::fromRaw(9150),
+                      std::vector<CompiledMergeInput>{CompiledMergeInput{
+                          bloom::document::LayerSlotId::fromRaw(9151),
+                          bloom::document::LayerId::fromRaw(9130), OperationIndex::fromRaw(2)}}});
+    operations.emplace_back(
+        CompiledCompositionOutput{NodeId::fromRaw(9160), OperationIndex::fromRaw(3)});
+    CompiledCompositionPlanDefinition definition{bloom::document::Revision::fromRaw(kRevision),
+                                                 kProject,
+                                                 CompositionId::fromRaw(compositionRaw),
+                                                 format(12, 10),
+                                                 std::move(operations),
+                                                 OperationIndex::fromRaw(4)};
     definition.duration = RationalTime::fromInteger(100);
     definition.nestedPlans.push_back(child);
     return std::make_shared<const CompiledCompositionPlan>(std::move(definition));
@@ -348,6 +399,77 @@ void runNested(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                         "nested native: changed-branch pixels match the CPU oracle");
 }
 
+// A nested child raster through a general affine layer with a non-Normal blend. This is the
+// combined nested + ordinary-builder regression: the child must stay a raster (the layer emits an
+// affine whose input is the child's Composition Output command, never a fabricated vector chain),
+// and the GPU affine and blend dispatches must match the CPU oracle.
+void runNestedAffineBlend(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    const auto child = childPlan(3000, 301, Color4d{0.2, 0.4, 0.6, 0.75});
+    const auto parent = affineBlendParentPlan(child, 300);
+    const auto request = requestFor(*parent);
+    const CpuGpuSceneBuilder builder;
+    const auto prepared = builder.build(parent, request);
+    expectations.expect(prepared.hasValue(), "nested affine/blend: prepares");
+    if (!prepared) {
+        std::cerr << "nested affine/blend diagnostic: " << prepared.diagnostic.message << "\n";
+        return;
+    }
+
+    // The nested source is a raster: the layer's command is an affine whose input is the child's
+    // Composition Output command (a vector chain would have consumed a solid/text/shape leaf
+    // instead).
+    bool sawAffineOverChildOutput = false;
+    for (const auto& command : prepared.scene->commands()) {
+        const auto* affine = std::get_if<GpuSceneAffineCommand>(&command);
+        if (affine == nullptr || affine->input == kInvalidGpuSceneCommand) {
+            continue;
+        }
+        const auto& input = prepared.scene->commands()[affine->input];
+        if (std::holds_alternative<GpuSceneCompositionOutputCommand>(input)) {
+            sawAffineOverChildOutput = true;
+        }
+    }
+    expectations.expect(sawAffineOverChildOutput,
+                        "nested affine/blend: the child raster takes the affine path, not a vector "
+                        "chain");
+
+    const CpuCompositionEvaluator evaluator;
+    auto oracleRequest = request;
+    oracleRequest.bypassOperationCache = true;
+    const auto frame = evaluator.evaluate(parent, oracleRequest, {});
+    expectations.expect(frame.frame() != nullptr, "nested affine/blend: CPU oracle evaluates");
+    if (!frame.frame()) {
+        return;
+    }
+
+    auto executor = GpuSceneExecutor::create(device, cache);
+    expectations.expect(executor.hasValue(), "nested affine/blend: executor creates");
+    if (!executor) {
+        return;
+    }
+    const auto cold = runScene(*executor.executor, prepared.scene);
+    expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready,
+                        "nested affine/blend: run completes: " +
+                            executor.executor->diagnostic().message);
+    if (cold.pollResult != GpuSceneExecutorPollResult::Ready) {
+        return;
+    }
+    const auto counters = executor.executor->counters();
+    expectations.expect(counters.affineDispatches >= 1,
+                        "nested affine/blend: a real affine dispatch ran");
+    expectations.expect(counters.blendDispatches >= 1,
+                        "nested affine/blend: a real blend dispatch ran");
+    expectations.expect(parity(cold.pixels, frame.frame()->processImage().pixels()),
+                        "nested affine/blend: GPU pixels match the CPU oracle (2e-6)");
+    const auto& oracleDescriptor = *frame.frame()->processImage().descriptor();
+    expectations.expect(cold.dataWindow.has_value() &&
+                            *cold.dataWindow == oracleDescriptor.dataWindow() &&
+                            cold.displayWindow.has_value() &&
+                            *cold.displayWindow == oracleDescriptor.displayWindow() &&
+                            cold.pixelAspect == oracleDescriptor.pixelAspect(),
+                        "nested affine/blend: GPU output descriptor matches the CPU descriptor");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -377,6 +499,7 @@ int main(int argc, char** argv) {
             return 1;
         }
         runNested(expectations, *device.device, *cache.cache);
+        runNestedAffineBlend(expectations, *device.device, *cache.cache);
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " nested native expectation(s) failed\n";
             return 1;

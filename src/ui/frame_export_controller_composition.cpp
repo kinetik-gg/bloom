@@ -75,6 +75,7 @@ void FrameExportController::beginCompositionExport(CompositionExportRequest requ
         .workingColorSpaceId = std::string(session_.colorIntent().workingColorSpaceId),
         .ocioConfigRevision = session_.colorIntent().ocioConfigRevision,
         .ocioConfigUri = std::string(session_.colorIntent().ocioConfigUri)};
+    captured.gpuProvider = gpuExportProvider_;
     if (request.deliverable == DeliverablePreset::Review) {
         captured.displayName = "Rec.1886 Rec.709 - Display";
         captured.viewName = "ACES 1.0 - SDR Video";

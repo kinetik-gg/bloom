@@ -38,16 +38,16 @@
 
 namespace bloom::runtime {
 
-// The pre-existing floor. The live default is capacity-aware (gpuPreparedUploadCacheByteBudget()):
-// an ample-memory machine retains a large converted source instead of re-decoding it every request.
+// The live default is capacity-aware (gpuPreparedUploadCacheByteBudget()): an ample-memory machine
+// retains a large converted source instead of re-decoding it every request, and an explicitly tiny
+// assigned budget stays tiny.
 inline constexpr std::uint64_t kDefaultPreparedUploadCacheBytes = 128ULL * 1024ULL * 1024ULL;
 inline constexpr std::size_t kDefaultPreparedUploadCacheEntries = 4096;
 
 class GpuPreparedUploadCache final {
   public:
-    explicit GpuPreparedUploadCache(
-        std::uint64_t maxBytes = gpuPreparedUploadCacheByteBudget(),
-        std::size_t maxEntries = kDefaultPreparedUploadCacheEntries);
+    explicit GpuPreparedUploadCache(std::uint64_t maxBytes = gpuPreparedUploadCacheByteBudget(),
+                                    std::size_t maxEntries = kDefaultPreparedUploadCacheEntries);
 
     [[nodiscard]] std::shared_ptr<const render::Rgba32fImage> find(const std::string& key) noexcept;
     void store(std::string key, std::shared_ptr<const render::Rgba32fImage> image);

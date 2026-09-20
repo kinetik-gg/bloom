@@ -180,13 +180,12 @@ void testLargeImageNative(Expectations& expectations, GpuDevice& device) {
     const auto run = runScene(*executor.executor, prepared.scene, kSceneBudget);
     expectations.expect(run.ready, "large: the 6000x4000 solid dispatches natively");
     if (run.ready) {
-        expectations.expect(run.countersAtReady.solidDispatches +
-                                    run.countersAtReady.coveredSolidDispatches +
-                                    run.countersAtReady.translationDispatches +
-                                    run.countersAtReady.sourceOverDispatches +
-                                    run.countersAtReady.uploads >
-                                0,
-                            "large: at least one native operation ran for the 384 MB image");
+        expectations.expect(
+            run.countersAtReady.solidDispatches + run.countersAtReady.coveredSolidDispatches +
+                    run.countersAtReady.translationDispatches +
+                    run.countersAtReady.sourceOverDispatches + run.countersAtReady.uploads >
+                0,
+            "large: at least one native operation ran for the 384 MB image");
     }
 }
 

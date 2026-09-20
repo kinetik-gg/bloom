@@ -26,6 +26,11 @@ struct SequenceExportRequestV1 {
     std::string ocioConfigUri = std::string(runtime::kBloomNeutralOcioConfigUri);
     std::string displayName = {}, viewName = {};
     std::uint64_t queueByteLimit = 512ULL * 1024U * 1024U;
+    // Shared GPU final-render provider for every frame of the sequence. Null keeps the unchanged
+    // CPU reference path. The runner copies this exact provider into each per-frame attempt, so the
+    // evaluator stays alive across the whole range and an application-owned provider may retire
+    // independently.
+    std::shared_ptr<GpuExportProvider> gpuProvider = nullptr;
 };
 enum class SequenceExportStageV1 : std::uint8_t {
     Compiling,
@@ -40,6 +45,16 @@ struct SequenceExportResultV1 {
     std::optional<media::provider::Unavailable> failure;
     std::optional<media::provider::MediaQcEvidenceV1> evidence;
     std::uint64_t encodedFrames = 0;
+    // Native provenance/counters accumulated over the per-frame output attempts (diagnostics
+    // only). `gpuEvaluatedFrames` counts frames whose attempt actually ran the GPU bridge;
+    // `gpuNativeDispatches` and `gpuReadbacks` are the summed per-attempt counters. Zero when no
+    // provider was supplied or every frame fell back to the CPU reference path.
+    std::uint64_t gpuEvaluatedFrames = 0;
+    std::uint64_t gpuNativeDispatches = 0;
+    std::uint64_t gpuReadbacks = 0;
+    // Genuine native device ownership epoch observed on the GPU-evaluated frames (last nonzero
+    // value; zero when no frame used a device). Diagnostics only.
+    std::uint64_t gpuDeviceOwnershipEpoch = 0;
     [[nodiscard]] bool published() const noexcept { return publication.targetWasPublished(); }
 };
 // Authoring-thread driver. poll() never blocks: it composes the existing attempt/approval stages.

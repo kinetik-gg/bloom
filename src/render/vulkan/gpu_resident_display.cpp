@@ -23,7 +23,6 @@ using GpuRendererAccess = bloom::render::GpuRendererAccess;
 
 constexpr std::uint32_t kWorkgroupSizeX = 256;
 constexpr std::uint64_t kDrainTimeoutNanoseconds = 2ULL * 1000ULL * 1000ULL * 1000ULL;
-constexpr std::uint64_t kMaxOwnedBytes = 512ULL * 1024ULL * 1024ULL;
 constexpr std::int32_t kMaxQuarantines = 4;
 
 std::atomic<std::int32_t> g_quarantineCount{0};
@@ -296,11 +295,10 @@ GpuResidentDisplay::create(GpuDevice& device, const GpuResidentDisplayBudgets& b
     auto impl = std::make_unique<Impl>();
     impl->owner = std::this_thread::get_id();
     impl->control = std::move(control);
-    // A permissive configured maximum is an upper bound, not an allocation: clamp the effective
-    // ceiling instead of refusing the pipeline. begin() validates the actual requested image.
+    // The configured maximum is an upper bound, not an allocation: begin() validates the actual
+    // requested owned bytes against both the configured/requested budget and the device's real
+    // limit, so a permissive maximum never refuses the pipeline.
     impl->budgets = budgets;
-    impl->budgets.maxOwnedBytes =
-        budgets.maxOwnedBytes < kMaxOwnedBytes ? budgets.maxOwnedBytes : kMaxOwnedBytes;
     impl->expectedGeneration = impl->control->generation;
     if (!impl->createPipeline()) {
         return {nullptr, impl->createDiagnostic};

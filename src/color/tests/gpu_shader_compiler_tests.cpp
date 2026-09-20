@@ -137,16 +137,31 @@ void testRealCompileAndCache(Expectations& expectations, const std::string& glsl
             asBytes(first.artifact->spirv.data(), first.artifact->spirv.size()));
         expectations.expect(digest.has_value() && *digest == first.artifact->spirvDigest,
                             "artifact digest is the exact SPIR-V hash");
+        const auto sourceDigest = bloom::core::Sha256Hasher::hash(
+            asBytes(reinterpret_cast<const std::uint8_t*>(request.computeShaderText.data()),
+                    request.computeShaderText.size()));
+        expectations.expect(sourceDigest.has_value() &&
+                                first.artifact->sourceDigest == *sourceDigest,
+                            "artifact carries the exact source digest");
+        expectations.expect(first.artifact->sourceDigest != bloom::core::Sha256Digest{},
+                            "artifact source provenance is non-zero");
     }
     const auto second = compiler.compile(request);
     expectations.expect(second.status == GpuShaderCompileStatus::Compiled,
                         "repeat compile still succeeds");
+    expectations.expect(second.artifact.has_value() && first.artifact.has_value() &&
+                            second.artifact->sourceDigest == first.artifact->sourceDigest,
+                        "a compiler cache hit preserves the exact source digest");
     expectations.expect(compiler.stats().cacheHits == 1 && compiler.stats().cacheMisses == 1,
                         "identical request identity is a stable cache hit");
     auto changed = request;
     changed.computeShaderText += "\n";
-    expectations.expect(compiler.compile(changed).status == GpuShaderCompileStatus::Compiled,
+    const auto changedResult = compiler.compile(changed);
+    expectations.expect(changedResult.status == GpuShaderCompileStatus::Compiled,
                         "changed source still compiles");
+    expectations.expect(changedResult.artifact.has_value() && first.artifact.has_value() &&
+                            changedResult.artifact->sourceDigest != first.artifact->sourceDigest,
+                        "a changed source carries a distinct source digest");
     expectations.expect(compiler.stats().cacheMisses == 2, "changed source misses the cache");
     auto retargeted = request;
     retargeted.targetEnvironment = "vulkan1.1";

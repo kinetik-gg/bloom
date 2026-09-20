@@ -206,6 +206,13 @@ class TimelineLayerStack final : public kit::KListSurface {
     void setEntries(std::vector<TimelineLayerEntry> entries);
     void setScrollOffset(int offset);
 
+    // Drops every pooled row (and, with them, the rows' own session connections) immediately. A
+    // session rebind to a composition-less project emits its other changed signals -- live value,
+    // snapshot -- right after documentRebound(), and a stale pooled row would otherwise dereference
+    // a composition that is already gone. The next rebuild recreates whatever rows the new document
+    // needs; a blank project needs none. Also clears the transient row interaction state.
+    void clearPooledRows();
+
     [[nodiscard]] int rowCount() const noexcept { return static_cast<int>(entries_.size()); }
     // The resolved row descriptions, in stack order -- the durable name and the derived kind every
     // projection assertion used to read off QTreeWidgetItem::text(0)/text(1).

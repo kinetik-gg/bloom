@@ -9,9 +9,11 @@ target_sources(
         frame_export_publication.cpp
         frame_export_publication_naming.cpp
         frame_range_runner.cpp
+        gpu_export_provider.cpp
         sequence_export_runner.cpp
         output_analysis_attempt_runner.cpp
         project_session.cpp
+        project_session_creation.cpp
         publication_coordinator.cpp
         save_publication.cpp
         session_async_io.cpp
@@ -27,6 +29,7 @@ target_sources(
             include/bloom/host/copy_publication.hpp
             include/bloom/host/frame_export_publication.hpp
             include/bloom/host/frame_range_runner.hpp
+            include/bloom/host/gpu_export_provider.hpp
             include/bloom/host/sequence_export_runner.hpp
             include/bloom/host/font_catalogue.hpp
             include/bloom/host/output_analysis_attempt_runner.hpp

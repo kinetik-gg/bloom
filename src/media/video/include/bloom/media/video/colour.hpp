@@ -39,4 +39,19 @@ videoToSceneLinear(const media::provider::FrameProduct& frame, std::uint32_t ove
                    render::Rgba32fImageDescriptor composition, double horizontalScale,
                    double verticalScale, std::size_t byteBudget,
                    const std::function<bool()>& cancel = {});
+
+// Codec-side preparation ONLY: the same H.273 Rec.709 YUV matrix, range handling and
+// config-managed transfer-8 (no curve) path the config-managed videoToSceneLinear overload uses,
+// but with NO OCIO processor applied. It produces premultiplied RGB in the source's pre-OCIO input
+// state at the requested resolution. The caller emits the input->working OCIO transform as a GPU
+// command over this image, so no OCIO colour pass is hidden in host code.
+//
+// `inputColorSpaceId` must be non-empty: it selects the config-managed transfer path exactly as the
+// CPU reference does, so the host bytes match the CPU's pre-OCIO state byte for byte.
+[[nodiscard]] media::provider::Result<render::Rgba32fImage>
+videoToInputColorSpace(const media::provider::FrameProduct& frame, std::uint32_t overrideTransfer,
+                       std::string_view inputColorSpaceId,
+                       render::Rgba32fImageDescriptor composition, double horizontalScale,
+                       double verticalScale, std::size_t byteBudget,
+                       const std::function<bool()>& cancel = {});
 } // namespace bloom::media::video

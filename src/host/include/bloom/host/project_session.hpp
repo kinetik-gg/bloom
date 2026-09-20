@@ -663,6 +663,14 @@ class ProjectSession final {
 
     [[nodiscard]] static ProjectSessionCreateResult
     createNew(ProjectSessionIdentitySource& identitySource, NewProjectSessionRequest request);
+    // Creates a blank new project: identity, name, and the immutable Bloom Neutral v1 built-in
+    // color settings only, with NO composition. File > New and application startup use this, so a
+    // new document is genuinely empty and exposes no active composition (see
+    // docs/architecture/project-session.md, "Session Publication") -- no placeholder composition
+    // is created, and no undo entry is staged for it. Callers that explicitly want a composition on
+    // creation (fixtures, headless scripting) use the seeded createNew() overload above.
+    [[nodiscard]] static ProjectSessionCreateResult
+    createNewBlank(ProjectSessionIdentitySource& identitySource, std::string projectName);
     [[nodiscard]] static ProjectSessionCreateResult
     createDecoded(ProjectSessionIdentitySource& identitySource,
                   DecodedProjectSessionRequest request);
@@ -763,6 +771,13 @@ class ProjectSession final {
                    std::vector<project::ManifestRequirement> retainedRequirements);
     ProjectSession(ProjectSessionId projectSessionId,
                    ProjectDisplayPath preservedDisplayPath) noexcept;
+
+    // Shared tail for createNew()/createNewBlank(): builds the document and its fresh command
+    // stack, issues the runtime session identity, installs the immutable Bloom Neutral v1 built-in
+    // color settings, and returns the created session. Only ever called with an already-validated
+    // document; createNewBlank() passes a composition-less project, which is a valid new document.
+    [[nodiscard]] static ProjectSessionCreateResult
+    installNewProject(ProjectSessionIdentitySource& identitySource, document::Project project);
 
     [[nodiscard]] ProjectSessionCommandResult unavailableCommandResult() const noexcept;
     [[nodiscard]] SessionResultAcceptanceAdvanceStatus

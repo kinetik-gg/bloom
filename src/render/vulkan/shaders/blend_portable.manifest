@@ -1,6 +1,6 @@
 {
   "schema": "bloom.gpu.shader.manifest.v1",
-  "generator": "tools/gpu-shaders/embed_blend_spirv.py (compile/validate/embed, no runtime shader load)",
+  "generator": "tools/gpu-shaders/embed_blend_spirv.cpp (compile/validate/embed, no runtime shader load)",
   "generatorRevision": 1,
   "operation": "BlendV1Portable",
   "entrypoint": "main",

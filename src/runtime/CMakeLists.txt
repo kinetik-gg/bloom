@@ -81,6 +81,7 @@ target_sources(
         cpu_gpu_scene_preparation.cpp
         gpu_scene_nested.cpp
         gpu_scene_nested.hpp
+        gpu_scene_preparation_builders.hpp
         gpu_scene_preparation_private.hpp
         gpu_scene_preparation_common.hpp
         gpu_scene_coverage.cpp
@@ -128,8 +129,15 @@ target_sources(
         gpu_scene_executor.cpp
         gpu_scene_executor_planner.cpp
         gpu_scene_executor_execution.cpp
+        gpu_scene_executor_ocio.cpp
         gpu_scene_executor_private.hpp
         gpu_process_frame.cpp
+        gpu_ocio_wrapper.cpp
+        gpu_ocio_command.cpp
+        gpu_ocio_preparation.cpp
+        gpu_ocio_program_executor.cpp
+        gpu_ocio_program_retained_bytes.hpp
+        gpu_output_color.cpp
         view_adjust.cpp
         view_adjust_support.hpp
         value_graph_evaluation.cpp
@@ -161,6 +169,11 @@ target_sources(
             include/bloom/runtime/gpu_prepared_upload_cache.hpp
             include/bloom/runtime/gpu_scene_executor.hpp
             include/bloom/runtime/gpu_process_frame.hpp
+            include/bloom/runtime/gpu_ocio_wrapper.hpp
+            include/bloom/runtime/gpu_ocio_command.hpp
+            include/bloom/runtime/gpu_ocio_preparation.hpp
+            include/bloom/runtime/gpu_ocio_program_executor.hpp
+            include/bloom/runtime/gpu_output_color.hpp
             include/bloom/runtime/input_color_context.hpp
             include/bloom/runtime/prepared_gpu_scene.hpp
             include/bloom/runtime/prepared_preview_frame.hpp
@@ -186,6 +199,7 @@ target_compile_features(bloom_runtime_evaluator PUBLIC cxx_std_20)
 target_link_libraries(bloom_runtime_evaluator PUBLIC bloom_runtime_compiler bloom_render
                                                      bloom_color_ocio bloom_media_image
                                                      bloom_media_cache bloom_media_video bloom_color_video)
+target_link_libraries(bloom_runtime_evaluator PRIVATE bloom_color_gpu_shader)
 bloom_enable_warnings(bloom_runtime_evaluator)
 bloom_enable_strict_floating_point(bloom_runtime_evaluator)
 

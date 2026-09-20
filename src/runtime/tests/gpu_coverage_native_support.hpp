@@ -19,9 +19,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
+#include <variant>
+#include <vector>
 
 namespace bloom::gpu_coverage_native {
 
@@ -30,6 +33,8 @@ enum class NativeOperationFamily : std::uint8_t {
     CoveredSolid,
     Translation,
     SourceOver,
+    Blend,
+    Affine,
     Upload,
     None,
 };
@@ -112,7 +117,7 @@ struct NativeFixtureOutcome final {
         if (!close(actual[i].red(), expected[i].red()) ||
             !close(actual[i].green(), expected[i].green()) ||
             !close(actual[i].blue(), expected[i].blue()) ||
-            !close(actual[i].alpha(), expected[i].alpha())) {
+            actual[i].alpha() != expected[i].alpha()) {
             return false;
         }
     }
@@ -127,6 +132,8 @@ requiredFamily(const bloom::runtime::PreparedGpuScene& scene) {
     bool hasCoverage = false;
     bool hasTranslation = false;
     bool hasMerge = false;
+    bool hasBlend = false;
+    bool hasAffine = false;
     for (const auto& command : scene.commands()) {
         hasSolid =
             hasSolid || std::holds_alternative<bloom::runtime::GpuSceneSolidCommand>(command);
@@ -137,6 +144,18 @@ requiredFamily(const bloom::runtime::PreparedGpuScene& scene) {
             std::holds_alternative<bloom::runtime::GpuSceneTranslationCommand>(command);
         hasMerge =
             hasMerge || std::holds_alternative<bloom::runtime::GpuSceneMergeCommand>(command);
+        hasBlend =
+            hasBlend || std::holds_alternative<bloom::runtime::GpuSceneBlendCommand>(command);
+        hasAffine =
+            hasAffine || std::holds_alternative<bloom::runtime::GpuSceneAffineCommand>(command);
+    }
+    // The distinguishing family first: an explicit BlendV1 fold or a GpuAffine placement is what a
+    // blend/affine fixture must actually dispatch, even when its inputs also emit coverage.
+    if (hasBlend) {
+        return NativeOperationFamily::Blend;
+    }
+    if (hasAffine) {
+        return NativeOperationFamily::Affine;
     }
     if (hasCoverage) {
         return NativeOperationFamily::CoveredSolid;
@@ -165,6 +184,10 @@ familyCount(const bloom::runtime::GpuSceneExecutorCounters& counters,
         return counters.translationDispatches;
     case NativeOperationFamily::SourceOver:
         return counters.sourceOverDispatches;
+    case NativeOperationFamily::Blend:
+        return counters.blendDispatches;
+    case NativeOperationFamily::Affine:
+        return counters.affineDispatches;
     case NativeOperationFamily::Upload:
         return counters.uploads;
     case NativeOperationFamily::None:
@@ -312,6 +335,152 @@ runNativeFixture(bloom::render::GpuDevice& device,
                        std::to_string(outcome.warmDispatches) + ", warm cache hits " +
                        std::to_string(outcome.warmCacheHits);
     return outcome;
+}
+
+// Native nested-composition proof for the coverage gate. The production builder splices a real
+// child plan's commands into the parent scene, so cold must dispatch genuine child commands, the
+// immediate warm rerun must dispatch nothing new and hit the cache, and after a single-branch child
+// edit the untouched branch's content-addressed key must still be cached while only the changed
+// subtree re-dispatches. Pixels and descriptors are checked against the unchanged CPU oracle.
+[[nodiscard]] inline bool runNestedBranchReuse(
+    bloom::render::GpuDevice& device, const bloom::runtime::CpuCompositionEvaluator& oracle,
+    const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& planA,
+    const bloom::runtime::EvaluationRequest& requestA,
+    const std::shared_ptr<const bloom::runtime::PreparedGpuScene>& sceneA,
+    const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& planB,
+    const bloom::runtime::EvaluationRequest& requestB,
+    const std::shared_ptr<const bloom::runtime::PreparedGpuScene>& sceneB, std::string& evidence) {
+    constexpr std::uint64_t kSceneBudget = 1U << 28U;
+    constexpr auto kDeadline = std::chrono::steady_clock::duration{std::chrono::seconds{10}};
+    auto cacheResult = bloom::runtime::GpuSceneCache::create(device);
+    if (!cacheResult) {
+        evidence = "nested branch reuse: scene cache could not be created";
+        return false;
+    }
+    auto executorResult = bloom::runtime::GpuSceneExecutor::create(device, *cacheResult.cache);
+    if (!executorResult) {
+        evidence = "nested branch reuse: executor create failed";
+        return false;
+    }
+    auto& executor = *executorResult.executor;
+
+    struct RunResult final {
+        bool ok = false;
+        std::vector<bloom::render::Rgba32f> pixels;
+        bloom::runtime::GpuSceneExecutorCounters counters;
+        std::optional<bloom::render::ImageWindow> dataWindow;
+        std::optional<bloom::render::ImageWindow> displayWindow;
+        bloom::core::PixelAspectRatio pixelAspect = bloom::core::PixelAspectRatio::square();
+        std::string why;
+    };
+    const auto run = [&](const std::shared_ptr<const bloom::runtime::PreparedGpuScene>& scene) {
+        RunResult result;
+        if (const auto diagnostic = executor.begin(scene, kSceneBudget);
+            diagnostic.code != bloom::runtime::GpuSceneExecutorDiagnosticCode::None) {
+            result.why = "begin refused: " + diagnostic.message;
+            return result;
+        }
+        const auto deadline = std::chrono::steady_clock::now() + kDeadline;
+        while (std::chrono::steady_clock::now() < deadline) {
+            const auto poll = executor.poll();
+            if (poll == bloom::runtime::GpuSceneExecutorPollResult::Ready) {
+                break;
+            }
+            if (poll == bloom::runtime::GpuSceneExecutorPollResult::Failure ||
+                poll == bloom::runtime::GpuSceneExecutorPollResult::WrongThread) {
+                result.why = "poll failed: " + executor.diagnostic().message;
+                return result;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        const auto* image = executor.image();
+        if (image == nullptr) {
+            result.why = "no resident image";
+            return result;
+        }
+        result.dataWindow = image->dataWindow();
+        result.displayWindow = image->displayWindow();
+        result.pixelAspect = image->pixelAspect();
+        const auto readback = bloom::render::readbackResidentImage(*image, kSceneBudget);
+        if (!readback) {
+            result.why = "readback failed";
+            return result;
+        }
+        result.pixels = readback.pixels;
+        result.counters = executor.counters();
+        (void)executor.takeImage();
+        result.ok = true;
+        return result;
+    };
+
+    const auto evaluate =
+        [&](const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan,
+            const bloom::runtime::EvaluationRequest& request) {
+            auto oracleRequest = request;
+            oracleRequest.bypassOperationCache = true;
+            return oracle.evaluate(plan, oracleRequest, {});
+        };
+    const auto frameA = evaluate(planA, requestA);
+    if (frameA.frame() == nullptr) {
+        evidence = "nested branch reuse: CPU oracle A did not evaluate";
+        return false;
+    }
+    const auto& oracleA = frameA.frame()->processImage();
+
+    const auto cold = run(sceneA);
+    if (!cold.ok || cold.counters.dispatches == 0 || cold.counters.commandsExecuted == 0 ||
+        cold.counters.readbacks != 0 || !cold.dataWindow.has_value() ||
+        *cold.dataWindow != oracleA.descriptor()->dataWindow() || !cold.displayWindow.has_value() ||
+        *cold.displayWindow != oracleA.descriptor()->displayWindow() ||
+        cold.pixelAspect != oracleA.descriptor()->pixelAspect() ||
+        !pixelsClose(cold.pixels, oracleA.pixels())) {
+        evidence =
+            "nested branch reuse: cold run failed: " +
+            (cold.why.empty() ? std::string{"dispatch/parity/descriptor mismatch"} : cold.why);
+        return false;
+    }
+
+    const auto warm = run(sceneA);
+    if (!warm.ok || warm.counters.dispatches != cold.counters.dispatches ||
+        warm.counters.commandCacheHits <= cold.counters.commandCacheHits) {
+        evidence = "nested branch reuse: warm run did not reuse the cache with zero dispatch";
+        return false;
+    }
+
+    // The first child solid is the branch that does not change between A and B.
+    std::optional<std::string> branchKey;
+    for (const auto& command : sceneA->commands()) {
+        if (const auto* solid = std::get_if<bloom::runtime::GpuSceneSolidCommand>(&command);
+            solid != nullptr && solid->sourceOperation.value() == 0) {
+            branchKey = solid->semanticKey;
+            break;
+        }
+    }
+    if (!branchKey.has_value()) {
+        evidence = "nested branch reuse: no unrelated child branch key was found";
+        return false;
+    }
+
+    const auto frameB = evaluate(planB, requestB);
+    if (frameB.frame() == nullptr) {
+        evidence = "nested branch reuse: CPU oracle B did not evaluate";
+        return false;
+    }
+    const auto& oracleB = frameB.frame()->processImage();
+    const auto changed = run(sceneB);
+    if (!changed.ok || changed.counters.dispatches <= warm.counters.dispatches ||
+        changed.counters.dispatches - warm.counters.dispatches >= cold.counters.dispatches ||
+        cacheResult.cache->find(*branchKey) == nullptr ||
+        !pixelsClose(changed.pixels, oracleB.pixels())) {
+        evidence = "nested branch reuse: changed-branch dispatch or branch reuse failed";
+        return false;
+    }
+
+    evidence = "nested branch reuse: cold dispatches " + std::to_string(cold.counters.dispatches) +
+               ", warm reuses the cache, changed subtree re-dispatches " +
+               std::to_string(changed.counters.dispatches - warm.counters.dispatches) +
+               ", untouched branch cached";
+    return true;
 }
 
 } // namespace bloom::gpu_coverage_native

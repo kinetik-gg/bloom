@@ -41,7 +41,7 @@ namespace bloom::runtime {
 struct GpuSceneCacheBudgets final {
     // Capacity-aware retained-byte ceiling: sized from the operation-cache allocation so a large
     // converted source and its produced intermediates can be retained across a scrub when the
-    // machine has room, while a small machine keeps the 512 MiB floor. The cache still evicts
+    // machine has room, and an explicitly tiny assigned budget stays tiny. The cache still evicts
     // unpinned entries and never invalidates a live pin.
     std::uint64_t maxRetainedBytes = gpuSceneCacheRetainedByteBudget();
 };

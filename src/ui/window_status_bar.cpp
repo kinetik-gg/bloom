@@ -269,6 +269,10 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     // could not do, the command did not run, and the reason belongs where every other notice is.
     connect(&session_, &CompositionSession::commandRejected, this,
             [this](const QString& reason) { showTransientMessage(reason); });
+    // A blank project (no active composition) has no colour or preview truth to report, so the
+    // chip/cells switch to a neutral status the moment a composition is created or removed.
+    connect(&session_, &CompositionSession::compositionChanged, this,
+            &WindowStatusBar::refreshPreviewCells);
 
     if (operationCache_ != nullptr) {
         cacheRefreshTimer_ = new QTimer(this);
@@ -353,6 +357,19 @@ void WindowStatusBar::refreshPreviewCells() {
     if (previewController_ == nullptr) {
         static_cast<StatusColorChip*>(colorChip_)
             ->setState({tr("Color state unavailable"), kit::Color::Warn});
+        previewState_->clear();
+        droppedFrames_->clear();
+        cache_->setText(operationCache_ == nullptr ? QString{}
+                                                   : operationCacheText(*operationCache_));
+        return;
+    }
+    if (session_.composition() == nullptr) {
+        // No active composition: there is no colour or preview truth to report, and the ordinary
+        // "Reference (unqualified)" / "Preview unsupported" cells would read as a failure of a
+        // project that simply has not been authored yet. Show the neutral no-composition status and
+        // omit the preview/colour badges until a composition exists.
+        static_cast<StatusColorChip*>(colorChip_)
+            ->setState({tr("No composition"), kit::Color::Muted});
         previewState_->clear();
         droppedFrames_->clear();
         cache_->setText(operationCache_ == nullptr ? QString{}

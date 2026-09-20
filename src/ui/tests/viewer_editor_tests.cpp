@@ -849,10 +849,30 @@ void testEmptyStateInvitationTextPresentWithoutComposition(Expectations& expecta
     expectations.expect(session.composition() == nullptr,
                         "the fixture genuinely has no composition -- this is the empty state, not "
                         "merely an unready one");
+    expectations.expect(viewer.emptyStateInvitationTextForTest() ==
+                            QStringLiteral("Create a composition to begin"),
+                        "with no composition the canvas invites creating a composition, not a "
+                        "layer");
     const QImage image = viewer.grab().toImage();
     expectations.expect(!image.isNull(), "the empty-state canvas still renders offscreen (smoke)");
 
     reachQuiescence(controller, bridge, scheduler, expectations);
+}
+
+// An active composition with no layers keeps the layer invitation; once it has content the canvas
+// shows no empty-state text (including a genuinely unsupported render, which stays honest).
+void testActiveEmptyCompositionInvitesALayer(Expectations& expectations) {
+    using namespace bloom;
+    ViewerFixture fixture(makeTestProject("Active empty invitation"));
+    expectations.expect(fixture.session.composition() != nullptr,
+                        "active-empty: the fixture has an active composition");
+    expectations.expect(fixture.viewer.emptyStateInvitationTextForTest() ==
+                            QStringLiteral("Create a layer to begin"),
+                        "active-empty: the invitation names the layer, not the composition");
+    expectations.expect(fixture.session.addSolidLayer("Solid", core::Color4d{0.2, 0.4, 0.6, 1.0}),
+                        "active-empty: a layer is added");
+    expectations.expect(fixture.viewer.emptyStateInvitationTextForTest().isEmpty(),
+                        "with content the canvas shows no empty-state invitation");
 }
 
 void testAutoFollowsFitResize(Expectations& expectations) {
@@ -1983,5 +2003,6 @@ int main(int argc, char** argv) {
     testMiddleDragPans(expectations);
     testCtrlZeroFitsAndCtrlOneIsActualSize(expectations);
     testEmptyStateInvitationTextPresentWithoutComposition(expectations);
+    testActiveEmptyCompositionInvitesALayer(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

@@ -5,6 +5,7 @@
 #include "gpu_scene_layer_emission.hpp"
 #include "gpu_scene_media_layer.hpp"
 #include "gpu_scene_nested.hpp"
+#include "gpu_scene_preparation_builders.hpp"
 #include "gpu_scene_preparation_private.hpp"
 #include "gpu_scene_vector_emission.hpp"
 
@@ -45,16 +46,20 @@ struct GpuSceneVectorChain final {
     double opacity = 1.0;
 };
 
-[[nodiscard]] bool isSubsetOperation(const CompiledOperation& operation) noexcept {
-    return std::holds_alternative<CompiledSolid>(operation) ||
-           std::holds_alternative<CompiledText>(operation) ||
-           std::holds_alternative<CompiledShape>(operation) ||
-           std::holds_alternative<CompiledImageSource>(operation) ||
+// Operations whose pixels are colour-space agnostic: their values are resolved through the exact
+// configured input->working OCIO transform (or are blend/geometry logic over already-resolved
+// pixels), so they are correct under any resolvable working space. The lin_rec709_scene-specific
+// operations (solid pixel, vector coverage, view adjust) are deliberately absent. Used only to keep
+// a non-neutral working space honest: it is admitted for exactly these media scenes and refused for
+// every scene that also carries a lin_rec709-specific operation.
+[[nodiscard]] bool isMediaSafeOperation(const CompiledOperation& operation) noexcept {
+    return std::holds_alternative<CompiledImageSource>(operation) ||
            std::holds_alternative<CompiledVideoSource>(operation) ||
+           std::holds_alternative<CompiledImageEffect>(operation) ||
            std::holds_alternative<CompiledLayerOutput>(operation) ||
            std::holds_alternative<CompiledMerge>(operation) ||
-           std::holds_alternative<CompiledCompositionOutput>(operation) ||
-           std::holds_alternative<CompiledCompositionSource>(operation);
+           std::holds_alternative<CompiledCompositionSource>(operation) ||
+           std::holds_alternative<CompiledCompositionOutput>(operation);
 }
 
 } // namespace
@@ -87,12 +92,18 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                       "Compiled plan semantics are unsupported");
     }
     if (request.quality != EvaluationQuality::Reference ||
-        request.colorIntent.workingColorSpaceId != kLinearRec709SceneColorSpaceId ||
         request.colorIntent.workingColorSpaceId.find('\0') != std::string_view::npos ||
         request.roi) {
         return failed(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
-                      "Only Reference quality, lin_rec709_scene, and no ROI are prepared");
+                      "Only Reference quality and no ROI are prepared");
     }
+    // The non-media prepared subset (solid pixels, vector coverage, image effects) assumes
+    // lin_rec709_scene pixel semantics, so a different working space is refused for it. A
+    // media-only scene carries no such operation: its pixels are resolved through the exact
+    // configured input->working OCIO transform, so an ACES scene-linear working space (or any other
+    // resolvable one) is prepared. The reachable-subset check runs below.
+    const bool neutralWorkingSpace =
+        request.colorIntent.workingColorSpaceId == kLinearRec709SceneColorSpaceId;
     if (plan->operations().empty() || request.output.value() >= plan->operations().size() ||
         request.output != plan->output() ||
         !std::holds_alternative<CompiledCompositionOutput>(
@@ -105,47 +116,22 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     }
 
     const std::size_t operationCount = plan->operations().size();
-    std::vector<bool> reachable(operationCount, false);
-    std::vector<std::size_t> pending{request.output.value()};
-    while (!pending.empty()) {
-        const auto index = pending.back();
-        pending.pop_back();
-        if (index >= operationCount) {
-            return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                          "Plan references an invalid operation");
-        }
-        if (reachable[index]) {
-            continue;
-        }
-        reachable[index] = true;
-        detail::forEachInput(plan->operations()[index], [&pending](const OperationIndex input) {
-            pending.push_back(input.value());
-        });
-        // A parent is not a pixel input, but the child's composed matrix needs the parent's matrix,
-        // so the parent subtree is part of what this build must resolve. The preflight still
-        // rejects a parent that is not an earlier Layer Output.
-        if (const auto* layer = std::get_if<CompiledLayerOutput>(&plan->operations()[index]);
-            layer && layer->parent && layer->parent->value() < operationCount) {
-            pending.push_back(layer->parent->value());
-        }
+    // The reachable-operation subset classifier is extracted to gpu_scene_preparation_builders.hpp.
+    std::vector<bool> reachable;
+    if (const auto error = detail::computeReachablePreparedOperations(*plan, request.output.value(),
+                                                                      cancellation, reachable)) {
+        return failed(error->code, error->message);
     }
-    for (std::size_t index = 0; index < operationCount; ++index) {
-        if (!reachable[index]) {
-            continue;
-        }
-        const auto& operation = plan->operations()[index];
-        if (!isSubsetOperation(operation)) {
-            return failed(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
-                          "A reachable operation is outside the prepared subset");
-        }
-        // A composition source is inside the prepared subset only when it names a present,
-        // compatible child plan. A source that does not is refused exactly as it was before nested
-        // compositions were prepared at all, before any resolution or child build.
-        if (const auto* source = std::get_if<CompiledCompositionSource>(&operation);
-            source != nullptr && !detail::nestedCompositionChainIsSupported(*source, *plan)) {
-            return failed(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
-                          "A composition source without a supported nested plan is outside the "
-                          "prepared subset");
+    // A non-neutral working space is honest only for the media-safe subset. A scene that also
+    // reaches a lin_rec709_scene-specific operation (solid pixel, vector coverage, view adjust)
+    // still refuses a non-neutral working space rather than mis-colouring it.
+    if (!neutralWorkingSpace) {
+        for (std::size_t index = 0; index < operationCount; ++index) {
+            if (reachable[index] && !isMediaSafeOperation(plan->operations()[index])) {
+                return failed(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
+                              "A non-lin_rec709_scene working space is prepared only for "
+                              "media-only scenes");
+            }
         }
     }
 
@@ -157,8 +143,16 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         const auto code = checked.diagnostic.has_value()
                               ? checked.diagnostic->code
                               : EvaluationDiagnosticCode::InternalInvariant;
-        std::string message = checked.diagnostic.has_value() ? checked.diagnostic->summary
-                                                             : std::string{"Preflight failed"};
+        std::string message;
+        if (checked.diagnostic.has_value()) {
+            message = checked.diagnostic->summary;
+            if (message.empty()) {
+                message = checked.diagnostic->detail;
+            }
+        }
+        if (message.empty()) {
+            message = "Preflight failed";
+        }
         return failed(code == EvaluationDiagnosticCode::PixelStorageBudgetExceeded
                           ? PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded
                           : PreparedGpuSceneDiagnosticCode::PreflightFailure,
@@ -255,10 +249,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         return std::nullopt;
     };
     // GPU-transient outputs are not summed here; the executor's live-pin ledger bounds them.
-    const auto chargeTransient = [](const std::uint64_t, const std::uint64_t,
-                                    const std::uint64_t) -> std::optional<detail::GpuSceneLeafFailure> {
-        return std::nullopt;
-    };
+    const auto chargeTransient = [](const std::uint64_t, const std::uint64_t, const std::uint64_t)
+        -> std::optional<detail::GpuSceneLeafFailure> { return std::nullopt; };
     const auto chargeCoverage =
         [&](const std::shared_ptr<const std::vector<std::uint8_t>>& coverage,
             const std::uint64_t width,
@@ -340,9 +332,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             key.add(std::string{detail::kGpuSolidSpirvSha256});
             keyOf[index] = key.digest();
 
-            if (const auto error = chargeTransient(solidWindow.extent().width(),
-                                                   solidWindow.extent().height(),
-                                                   sizeof(render::Rgba32f))) {
+            if (const auto error =
+                    chargeTransient(solidWindow.extent().width(), solidWindow.extent().height(),
+                                    sizeof(render::Rgba32f))) {
                 return failed(error->code, error->message);
             }
             GpuSceneSolidCommand command{.sourceOperation = operationIndex,
@@ -375,48 +367,38 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         if (const auto* image = std::get_if<CompiledImageSource>(&operation)) {
             const auto remainingBudget = allowance > retainedBytes ? allowance - retainedBytes : 0;
             detail::GpuSceneUploadLeafResult leaf;
-            const auto error = detail::buildImageUploadLeaf(
-                *image, request, *plan, resolved, mediaContext_, remainingBudget, hScale, vScale,
-                chargeRetained, cancellation, mediaStatistics, leaf);
+            const auto error = detail::buildImageColorLeaf(
+                *image, request, *plan, resolved, mediaContext_, ocioContext_, remainingBudget,
+                hScale, vScale, chargeRetained, cancellation, mediaStatistics, leaf);
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
             }
             bounds[index] = leaf.bounds;
             outputWindowOf[index] = leaf.outputWindow;
-            keyOf[index] = leaf.semanticKey;
-            if (!leaf.descriptor.has_value()) {
-                return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                              "the upload leaf produced no image descriptor");
+            if (const auto emitError =
+                    detail::emitMediaLeafCommands(operationIndex, leaf, chargeTransient, emit,
+                                                  commandForOperation[index], keyOf[index])) {
+                return failed(emitError->code, emitError->message, mediaStatistics);
             }
-            GpuSceneUploadCommand command{.sourceOperation = operationIndex,
-                                          .image = std::move(leaf.image),
-                                          .descriptor = *leaf.descriptor,
-                                          .semanticKey = leaf.semanticKey};
-            commandForOperation[index] = emit(std::move(command));
             continue;
         }
 
         if (const auto* video = std::get_if<CompiledVideoSource>(&operation)) {
             const auto remainingBudget = allowance > retainedBytes ? allowance - retainedBytes : 0;
             detail::GpuSceneUploadLeafResult leaf;
-            const auto error = detail::buildVideoUploadLeaf(
-                *video, request, *plan, resolved, mediaContext_, remainingBudget, hScale, vScale,
-                chargeRetained, cancellation, mediaStatistics, leaf);
+            const auto error = detail::buildVideoColorLeaf(
+                *video, request, *plan, resolved, mediaContext_, ocioContext_, remainingBudget,
+                hScale, vScale, chargeRetained, cancellation, mediaStatistics, leaf);
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
             }
             bounds[index] = leaf.bounds;
             outputWindowOf[index] = leaf.outputWindow;
-            keyOf[index] = leaf.semanticKey;
-            if (!leaf.descriptor.has_value()) {
-                return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                              "the upload leaf produced no image descriptor");
+            if (const auto emitError =
+                    detail::emitMediaLeafCommands(operationIndex, leaf, chargeTransient, emit,
+                                                  commandForOperation[index], keyOf[index])) {
+                return failed(emitError->code, emitError->message, mediaStatistics);
             }
-            GpuSceneUploadCommand command{.sourceOperation = operationIndex,
-                                          .image = std::move(leaf.image),
-                                          .descriptor = *leaf.descriptor,
-                                          .semanticKey = leaf.semanticKey};
-            commandForOperation[index] = emit(std::move(command));
             continue;
         }
 
@@ -429,7 +411,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             detail::GpuSceneNestedResult nested;
             const auto error = detail::prepareNestedComposition(
                 *source, *plan, request, resolved, hScale, vScale, detail::nestedCompositionDepth(),
-                allowance > retainedBytes ? allowance - retainedBytes : 0, cancellation,
+                allowance, retainedBytes, cancellation,
                 [this](const std::shared_ptr<const CompiledCompositionPlan>& childPlan,
                        const EvaluationRequest& childRequest, const CancellationToken& cancel) {
                     return build(childPlan, childRequest, cancel);
@@ -437,18 +419,6 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 commands, nested);
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
-            }
-            if (!nested.outputWindow.has_value()) {
-                return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                              "the nested composition published no output window", mediaStatistics);
-            }
-            if (nested.residentBytes != 0) {
-                if (retainedBytes > allowance || nested.residentBytes > allowance - retainedBytes) {
-                    return failed(PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
-                                  "Prepared scene exceeds the request pixel allowance",
-                                  mediaStatistics);
-                }
-                retainedBytes += nested.residentBytes;
             }
             bounds[index] = nested.bounds;
             outputWindowOf[index] = *nested.outputWindow;
@@ -646,8 +616,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                         fullDisplayWindow, fullPixelAspect, hScale, vScale,
                         inputVec->opacity * opacity->value, leafPath && nativeGrid, allowance,
                         operationIndex, transformValue, coverageCache_, cancellation, emit,
-                        chargeTransient, chargeCoverage, composedIndex, semanticKey, consumedTextLeaf,
-                        consumedShapeLeaf)) {
+                        chargeTransient, chargeCoverage, composedIndex, semanticKey,
+                        consumedTextLeaf, consumedShapeLeaf)) {
                     return failed(error->code, error->message);
                 }
                 keyOf[index] = semanticKey;
@@ -676,18 +646,17 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             }
             if (const auto error = detail::emitAffineLayerCommand(
                     inputIndex, keyOf[inputIndexValue], sourceWindow, *layerWindow, composed,
-                    hScale, vScale, opacity->value, fullPixelAspect, operationIndex, chargeTransient, emit,
-                    commandForOperation[index], keyOf[index])) {
+                    hScale, vScale, opacity->value, fullPixelAspect, operationIndex,
+                    chargeTransient, emit, commandForOperation[index], keyOf[index])) {
                 return failed(error->code, error->message);
             }
             continue;
         }
 
         if (const auto* stack = std::get_if<CompiledMerge>(&operation)) {
-            if (const auto error = detail::emitMergeCommand(*stack, *plan, resolved, index, bounds,
-                                                            outputWindowOf, commandForOperation,
-                                                            keyOf, operationIndex, emit,
-                                                            chargeTransient)) {
+            if (const auto error = detail::emitMergeCommand(
+                    *stack, *plan, resolved, index, bounds, outputWindowOf, commandForOperation,
+                    keyOf, operationIndex, emit, chargeTransient)) {
                 return failed(error->code, error->message);
             }
             continue;
@@ -704,10 +673,10 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             detail::addPixelAspectToKey(key, resolved.imageDescriptor.pixelAspect());
             keyOf[index] = key.digest();
 
-            if (const auto error = chargeTransient(
-                    resolved.imageDescriptor.dataWindow().extent().width(),
-                    resolved.imageDescriptor.dataWindow().extent().height(),
-                    sizeof(render::Rgba32f))) {
+            if (const auto error =
+                    chargeTransient(resolved.imageDescriptor.dataWindow().extent().width(),
+                                    resolved.imageDescriptor.dataWindow().extent().height(),
+                                    sizeof(render::Rgba32f))) {
                 return failed(error->code, error->message);
             }
             GpuSceneCompositionOutputCommand command{

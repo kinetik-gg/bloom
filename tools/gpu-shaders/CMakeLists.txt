@@ -189,6 +189,10 @@ find_program(BLOOM_SPIRV_VAL
     NAMES spirv-val
     HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
     NO_DEFAULT_PATH)
+find_program(BLOOM_SPIRV_DIS
+    NAMES spirv-dis
+    HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
+    NO_DEFAULT_PATH)
 if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
     set(BLOOM_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated-shaders")
     add_custom_target(bloom_gpu_neutral_display_verify
@@ -213,4 +217,49 @@ if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
         DEPENDS bloom_gpu_neutral_display_generator
         COMMENT "Generating twice, diffing, compiling with glslangValidator, and validating SPIR-V"
         VERBATIM)
+endif()
+
+# ---------------------------------------------------------------------------
+# BlendV1 SPIR-V embed generator
+#
+# Deterministic offline embed of the hand-written blend*.comp kernels. It drives the pinned
+# glslangValidator/spirv-val/spirv-dis itself and writes the checked-in .inc array plus the manifest
+# pins, or --check verifies them. It reuses bloom::core::Sha256Hasher read-only, like the neutral
+# display generator, and needs no OpenColorIO.
+# ---------------------------------------------------------------------------
+add_executable(bloom_gpu_blend_spirv_generator
+    embed_blend_spirv.cpp
+    "${BLOOM_CORE_DIR}/sha256.cpp")
+target_include_directories(bloom_gpu_blend_spirv_generator PRIVATE "${BLOOM_CORE_DIR}/include")
+if(MSVC)
+    target_compile_options(bloom_gpu_blend_spirv_generator PRIVATE /W4 /WX)
+else()
+    target_compile_options(bloom_gpu_blend_spirv_generator PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+# ---------------------------------------------------------------------------
+# Optional offline verification for every blend family: --check the checked-in
+# .inc/manifest against a fresh pinned compile, then generate each family twice
+# and require byte-identical .inc and manifest outputs.
+# ---------------------------------------------------------------------------
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL AND BLOOM_SPIRV_DIS)
+    set(BLOOM_BLEND_SHADER_DIR "${BLOOM_REPO_ROOT}/src/render/vulkan/shaders")
+    set(BLOOM_BLEND_WORK_DIR "${CMAKE_CURRENT_BINARY_DIR}/blend-spirv-verify")
+    add_custom_target(bloom_gpu_blend_spirv_verify
+        COMMAND "${CMAKE_COMMAND}"
+                "-DBLOOM_BLEND_GENERATOR=$<TARGET_FILE:bloom_gpu_blend_spirv_generator>"
+                "-DBLOOM_BLEND_GLSLANG=${BLOOM_GLSLANG_VALIDATOR}"
+                "-DBLOOM_BLEND_SPIRV_VAL=${BLOOM_SPIRV_VAL}"
+                "-DBLOOM_BLEND_SPIRV_DIS=${BLOOM_SPIRV_DIS}"
+                "-DBLOOM_BLEND_SHADER_DIR=${BLOOM_BLEND_SHADER_DIR}"
+                "-DBLOOM_BLEND_WORK_DIR=${BLOOM_BLEND_WORK_DIR}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/verify_blend_spirv.cmake"
+        DEPENDS bloom_gpu_blend_spirv_generator
+        COMMENT "Checking and regenerating every BlendV1 SPIR-V embed twice"
+        VERBATIM)
+else()
+    message(STATUS
+        "bloom_gpu_blend_spirv_verify is unavailable: glslangValidator/spirv-val/spirv-dis not "
+        "found in ${BLOOM_DEPENDENCY_PREFIX}/bin")
 endif()
