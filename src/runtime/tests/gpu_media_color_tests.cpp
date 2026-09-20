@@ -67,6 +67,11 @@ int main(const int argc, char** argv) {
             return 2;
         }
 #ifndef BLOOM_GPUSHADER_TOOLS_DIR
+        if (options.require_device) {
+            std::cerr
+                << "FAIL: --require-device requested but BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
+            return 1;
+        }
         std::cout << "SKIP: BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
         return kSkipExit;
 #else

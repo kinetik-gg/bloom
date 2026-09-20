@@ -48,11 +48,21 @@ struct FixtureRun final {
 // production code under test and carry no prerequisite. A colour-transform fixture additionally
 // needs the packaged glslangValidator/spirv-val that the production GpuOcioContextResolver
 // validates; a build that deliberately packages no tools (CPU stub, unqualified mode, or a missing
-// prefix) cannot execute it. That environmental absence is reported as a typed NotRun, never as a
-// prepared pass, never as a diagnostic-string guess, and never as a pixel exemption.
+// prefix) cannot execute it. A video-source fixture additionally needs the generated media-worker
+// fixtures, which only exist on the platform that builds that generator. That environmental absence
+// is reported as a typed NotRun, never as a prepared pass, never as a diagnostic-string guess, and
+// never as a pixel exemption.
 enum class FixturePrerequisite {
     None,
     PackagedShaderTools,
+    MediaFixtures,
+};
+
+// Environmental availability of the explicit prerequisites. Passed into the classifier so the
+// decision is directly testable and is never inferred from a fixture's own failure diagnostic.
+struct PrerequisiteAvailability final {
+    bool packagedShaderTools = false;
+    bool mediaFixtures = false;
 };
 
 // How one fixture is handled in a CPU gate run. NativeNotRun and PrerequisiteNotRun are explicit
@@ -118,15 +128,26 @@ struct Fixture final {
 // Classify one fixture for a CPU gate run. This is the single decision point for the environmental
 // NotRun paths: a NativeRequired fixture is always native-not-run on the CPU path, and a fixture
 // whose explicit prerequisite is unavailable is prerequisite-not-run. Every other fixture runs.
-// Tool availability is passed in so the decision is directly testable and never inferred from a
-// failure diagnostic.
-[[nodiscard]] inline FixtureExecution classifyFixtureExecution(const Fixture& fixture,
-                                                               const bool toolsAvailable) {
+// Prerequisite availability is passed in so the decision is directly testable and never inferred
+// from a failure diagnostic.
+[[nodiscard]] inline FixtureExecution
+classifyFixtureExecution(const Fixture& fixture, const PrerequisiteAvailability& available) {
     if (fixture.criterion == bloom::runtime::GpuCoverageFixtureCriterion::NativeRequired) {
         return FixtureExecution::NativeNotRun;
     }
-    if (fixture.prerequisite != FixturePrerequisite::None && !toolsAvailable) {
-        return FixtureExecution::PrerequisiteNotRun;
+    switch (fixture.prerequisite) {
+    case FixturePrerequisite::None:
+        break;
+    case FixturePrerequisite::PackagedShaderTools:
+        if (!available.packagedShaderTools) {
+            return FixtureExecution::PrerequisiteNotRun;
+        }
+        break;
+    case FixturePrerequisite::MediaFixtures:
+        if (!available.mediaFixtures) {
+            return FixtureExecution::PrerequisiteNotRun;
+        }
+        break;
     }
     return FixtureExecution::Run;
 }
@@ -161,43 +182,65 @@ structuralFixtureFailures(const std::vector<Fixture>& list,
 }
 
 // Focused regression for the unavailable-prerequisite path. It asserts the decision matrix
-// directly: an explicit shader-tools prerequisite with the tools absent is a NotRun, the same
-// fixture with the tools present runs, an independent fixture never becomes a skip, and a Required
-// id with no fixture entry remains a structural failure at either tool state. Returns true only
-// when every expectation holds; the driver turns a false into a gate failure.
+// directly: an explicit shader-tools prerequisite with the tools absent is a NotRun and runs when
+// they are present; an explicit media-fixtures prerequisite with the fixtures absent is a NotRun
+// and runs when they are present, independently of tool availability; an independent fixture never
+// becomes a skip; and a Required id with no fixture entry remains a structural failure at any
+// prerequisite state. Returns true only when every expectation holds; the driver turns a false into
+// a gate failure.
 [[nodiscard]] inline bool prerequisiteDecisionRegression(std::string& evidence) {
     Fixture toolDependent;
     toolDependent.id = "regression.shader-dependent";
     toolDependent.prerequisite = FixturePrerequisite::PackagedShaderTools;
 
+    Fixture mediaDependent;
+    mediaDependent.id = "regression.media-dependent";
+    mediaDependent.prerequisite = FixturePrerequisite::MediaFixtures;
+
     Fixture independent;
     independent.id = "regression.independent";
 
-    const std::vector<Fixture> present{toolDependent, independent};
-    const std::vector<std::string> required{"regression.shader-dependent", "regression.independent",
+    const std::vector<Fixture> present{toolDependent, mediaDependent, independent};
+    const std::vector<std::string> required{"regression.shader-dependent",
+                                            "regression.media-dependent", "regression.independent",
                                             "regression.missing"};
 
-    const bool absentSkip =
-        classifyFixtureExecution(toolDependent, false) == FixtureExecution::PrerequisiteNotRun;
-    const bool presentRun = classifyFixtureExecution(toolDependent, true) == FixtureExecution::Run;
+    const PrerequisiteAvailability none{false, false};
+    const PrerequisiteAvailability all{true, true};
+    const PrerequisiteAvailability mediaOnly{false, true};
+
+    const bool absentToolsSkip =
+        classifyFixtureExecution(toolDependent, none) == FixtureExecution::PrerequisiteNotRun;
+    const bool presentToolsRun =
+        classifyFixtureExecution(toolDependent, all) == FixtureExecution::Run;
+    const bool absentMediaSkip =
+        classifyFixtureExecution(mediaDependent, none) == FixtureExecution::PrerequisiteNotRun;
+    const bool presentMediaRun =
+        classifyFixtureExecution(mediaDependent, all) == FixtureExecution::Run;
+    const bool mediaRunsWithoutTools =
+        classifyFixtureExecution(mediaDependent, mediaOnly) == FixtureExecution::Run;
     const bool independentRun =
-        classifyFixtureExecution(independent, false) == FixtureExecution::Run;
+        classifyFixtureExecution(independent, none) == FixtureExecution::Run;
     const auto absentStructural = structuralFixtureFailures(present, required);
     const bool missingStillFails = !absentStructural.empty();
     bool missingNamed = false;
     for (const auto& failure : absentStructural) {
         missingNamed = missingNamed || failure.find("'regression.missing'") != std::string::npos;
     }
-    const bool okay =
-        absentSkip && presentRun && independentRun && missingStillFails && missingNamed;
+    const bool okay = absentToolsSkip && presentToolsRun && absentMediaSkip && presentMediaRun &&
+                      mediaRunsWithoutTools && independentRun && missingStillFails && missingNamed;
     evidence =
-        okay ? "prerequisite decision matrix holds; missing fixture fails with tools absent"
-             : "prerequisite decision matrix violated (skip=" +
-                   std::string{absentSkip ? "ok" : "bad"} +
-                   ", run=" + std::string{presentRun ? "ok" : "bad"} +
-                   ", independent=" + std::string{independentRun ? "ok" : "bad"} +
-                   ", missing=" + std::string{missingStillFails && missingNamed ? "ok" : "bad"} +
-                   ")";
+        okay
+            ? "prerequisite decision matrix holds; missing fixture fails with tools absent"
+            : "prerequisite decision matrix violated (skip=" +
+                  std::string{absentToolsSkip ? "ok" : "bad"} +
+                  ", run=" + std::string{presentToolsRun ? "ok" : "bad"} +
+                  ", media-skip=" + std::string{absentMediaSkip ? "ok" : "bad"} +
+                  ", media-run=" + std::string{presentMediaRun ? "ok" : "bad"} +
+                  ", media-tools-independent=" + std::string{mediaRunsWithoutTools ? "ok" : "bad"} +
+                  ", independent=" + std::string{independentRun ? "ok" : "bad"} +
+                  ", missing=" + std::string{missingStillFails && missingNamed ? "ok" : "bad"} +
+                  ")";
     return okay;
 }
 

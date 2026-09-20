@@ -883,6 +883,10 @@ else()
         TIMEOUT 600
     )
 endif()
+# A build without the pinned shader tools returns kSkipExit (77) from main. Record that honestly as
+# a CTest skip rather than a failure, exactly as the sibling tool-dependent GPU tests do; a missing
+# media-worker generator on this platform also skips before any device work.
+set_tests_properties(bloom.runtime.gpu_media_color PROPERTIES SKIP_RETURN_CODE 77)
 
 # Test-only fault variant: cancellation / deadline / unproven upload retention against a real
 # submitted copy. It uses the same proof-only macro and header as the solid fault variant and links

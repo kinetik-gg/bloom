@@ -65,8 +65,6 @@ using bloom::runtime::PreviewGpuSceneStageStatus;
 using bloom::runtime::TaskResult;
 using bloom::runtime::TaskState;
 
-constexpr std::size_t kBudget = std::size_t{1} << 28;
-
 class Expectations final {
   public:
     void expect(const bool ok, const std::string& message) {
@@ -80,6 +78,10 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
+
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
+
+constexpr std::size_t kBudget = std::size_t{1} << 28;
 
 [[nodiscard]] bloom::runtime::TaskSchedulerConfig schedulerConfig() {
     return {.cpuWorkerCount = 2,
@@ -175,8 +177,6 @@ runStage(Fixture& fixture, std::shared_ptr<bloom::runtime::GpuOcioContextResolve
     return *result->value();
 }
 
-#ifdef BLOOM_GPU_TOOLS_AVAILABLE
-#if BLOOM_GPU_TOOLS_AVAILABLE
 [[nodiscard]] std::optional<bloom::core::Sha256Digest>
 parsePinnedDigest(const std::string_view text) {
     constexpr std::string_view prefix = "sha256:";
@@ -223,8 +223,8 @@ acesColorSettings(const bloom::document::ColorSettings& base) {
     settings.ocioConfig.expectedRevision.digest = *revision;
     return settings;
 }
-#endif
-#endif
+
+#endif // BLOOM_GPU_TOOLS_AVAILABLE
 
 } // namespace
 

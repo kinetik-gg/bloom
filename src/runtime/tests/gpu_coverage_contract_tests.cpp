@@ -89,6 +89,7 @@ using bloom::gpu_coverage_gate::FixtureExecution;
 using bloom::gpu_coverage_gate::FixturePrerequisite;
 using bloom::gpu_coverage_gate::FixtureRun;
 using bloom::gpu_coverage_gate::FrameRun;
+using bloom::gpu_coverage_gate::PrerequisiteAvailability;
 using bloom::gpu_coverage_gate::prerequisiteDecisionRegression;
 using bloom::gpu_coverage_gate::requiredCoverageIds;
 using bloom::gpu_coverage_gate::routeOwner;
@@ -316,8 +317,10 @@ displayProofRunner(const bool customView) {
                 image.asset, LayerValues{.position = {4.3, 3.1}, .opacity = 1.0}, 99000);
             return runMediaBuilder(plan, evaluator, bloom::gpu_coverage_media::gateDirectory());
         });
-    add("operation.CompiledVideoSource", GpuCoverageFixtureCriterion::Prepared,
-        "src/media video source tests", [] {
+    add(
+        "operation.CompiledVideoSource", GpuCoverageFixtureCriterion::Prepared,
+        "src/media video source tests",
+        [] {
             try {
                 return runVideoFixture(bloom::gpu_coverage_video::probeVideoFixture(), 111000);
             } catch (const std::exception& error) {
@@ -325,7 +328,8 @@ displayProofRunner(const bool customView) {
                 result.evidence = error.what();
                 return result;
             }
-        });
+        },
+        {}, FixturePrerequisite::MediaFixtures);
 
     addImageEffectPlan("effect.IdentityImageKernel", bloom::runtime::IdentityImageKernel{}, 100000,
                        {});
@@ -443,8 +447,10 @@ displayProofRunner(const bool customView) {
                 image.asset, LayerValues{.position = {4.3, 3.1}, .opacity = 1.0}, 110000);
             return runMediaBuilder(plan, evaluator, bloom::gpu_coverage_media::gateDirectory());
         });
-    add("node.bloom.video-source", GpuCoverageFixtureCriterion::Prepared,
-        "src/media video source tests", [] {
+    add(
+        "node.bloom.video-source", GpuCoverageFixtureCriterion::Prepared,
+        "src/media video source tests",
+        [] {
             try {
                 return runVideoFixture(bloom::gpu_coverage_video::probeVideoFixture(), 113000);
             } catch (const std::exception& error) {
@@ -452,7 +458,8 @@ displayProofRunner(const bool customView) {
                 result.evidence = error.what();
                 return result;
             }
-        });
+        },
+        {}, FixturePrerequisite::MediaFixtures);
     add("node.bloom.text-source", GpuCoverageFixtureCriterion::Prepared,
         "src/render text_raster + text source tests",
         [] { return runBuilder(withSource(text(105000), 105000, nullptr, 0.6)); });
@@ -536,6 +543,9 @@ int run(int argc, char** argv) {
     }
 
     const bool toolsAvailable = bloom::gpu_coverage_ocio::toolsAvailable();
+    const bool mediaFixturesAvailable =
+        !bloom::gpu_coverage_video::mediaFixturesDirectory().empty();
+    const PrerequisiteAvailability prerequisiteAvailability{toolsAvailable, mediaFixturesAvailable};
     // Routes are proven only by the genuine external route harnesses (viewer/RAM/export/headless),
     // which the CPU-only gate cannot run. It reports them as externally owned and never relabels an
     // executor-prepared scene as a route proof; the distinct native acceptance CTest still requires
@@ -551,8 +561,9 @@ int run(int argc, char** argv) {
     std::size_t red = 0;
     std::size_t notRun = 0;
     std::size_t prerequisiteNotRun = 0;
+    std::size_t mediaNotRun = 0;
     for (const auto& fixture : list) {
-        const auto execution = classifyFixtureExecution(fixture, toolsAvailable);
+        const auto execution = classifyFixtureExecution(fixture, prerequisiteAvailability);
         if (execution == FixtureExecution::NativeNotRun) {
             std::cout << "NOTRUN " << fixture.id << " (native fixture owned by " << fixture.owner
                       << ")\n";
@@ -560,10 +571,16 @@ int run(int argc, char** argv) {
             continue;
         }
         if (execution == FixtureExecution::PrerequisiteNotRun) {
-            std::cout << "NOTRUN(tools) " << fixture.id
-                      << " (packaged GPU shader tools unavailable: "
-                      << bloom::gpu_coverage_ocio::unavailableReason() << ")\n";
-            ++prerequisiteNotRun;
+            if (fixture.prerequisite == FixturePrerequisite::MediaFixtures) {
+                std::cout << "NOTRUN(media) " << fixture.id
+                          << " (generated media fixtures not supplied)\n";
+                ++mediaNotRun;
+            } else {
+                std::cout << "NOTRUN(tools) " << fixture.id
+                          << " (packaged GPU shader tools unavailable: "
+                          << bloom::gpu_coverage_ocio::unavailableReason() << ")\n";
+                ++prerequisiteNotRun;
+            }
             continue;
         }
         const auto result = fixture.run();
@@ -578,8 +595,8 @@ int run(int argc, char** argv) {
     }
 
     std::cout << "\nGPU coverage contract: " << passed << " pass, " << red << " required holes, "
-              << prerequisiteNotRun << " not-run (unavailable tools), " << notRun
-              << " native-not-run\n";
+              << prerequisiteNotRun << " not-run (unavailable tools), " << mediaNotRun
+              << " not-run (media fixtures absent), " << notRun << " native-not-run\n";
     if (!failures.empty()) {
         std::cerr << "\nGPU COVERAGE GATE RED (" << failures.size() << " failures):\n";
         for (const auto& failure : failures) {
@@ -587,15 +604,19 @@ int run(int argc, char** argv) {
         }
         return 1;
     }
-    if (prerequisiteNotRun > 0) {
-        // Every structural and independent check passed; the required shader-tool preparation could
-        // not execute because this build stages no tools. This is an explicit environmental SKIP
-        // (CTest 77), never a red gate and never a fabricated pass. A qualified build that packages
-        // the tools executes these fixtures normally and fails if the resolver is broken.
-        std::cout << "SKIP: " << prerequisiteNotRun
-                  << " required fixtures need the packaged GPU shader tools, which this build does "
-                     "not stage ("
-                  << bloom::gpu_coverage_ocio::unavailableReason() << ")\n";
+    if (prerequisiteNotRun > 0 || mediaNotRun > 0) {
+        // Every structural and independent check passed; the required fixture could not execute
+        // because this build/environment does not supply its explicit prerequisite. This is an
+        // explicit environmental SKIP (CTest 77), never a red gate and never a fabricated pass. A
+        // qualified build that supplies the prerequisite executes these fixtures normally and fails
+        // if the production path is broken.
+        std::cout << "SKIP: " << (prerequisiteNotRun + mediaNotRun)
+                  << " required fixtures were not executable in this environment ("
+                  << prerequisiteNotRun << " need the packaged GPU shader tools";
+        if (prerequisiteNotRun > 0) {
+            std::cout << " (" << bloom::gpu_coverage_ocio::unavailableReason() << ")";
+        }
+        std::cout << ", " << mediaNotRun << " need the generated media fixtures)\n";
         return 77;
     }
     return 0;

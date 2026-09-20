@@ -29,6 +29,8 @@
 
 namespace {
 
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
+
 int failures = 0;
 
 void expect(const bool condition, const std::string& label) {
@@ -37,6 +39,8 @@ void expect(const bool condition, const std::string& label) {
         std::cerr << "FAIL: " << label << '\n';
     }
 }
+
+#endif // BLOOM_GPU_TOOLS_AVAILABLE
 
 } // namespace
 
