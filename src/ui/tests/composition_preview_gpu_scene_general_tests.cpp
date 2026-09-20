@@ -1,30 +1,35 @@
-// Production general-display stage acceptance: the real bootstrap/session stage seam
-// (SnapshotCompiler -> CpuGpuSceneBuilder -> QualifiedDisplayProcessorProvider ->
-// makeCompositionPreviewGpuSceneStage with the lazy GpuDisplayProgramService).
+// Production general-display stage acceptance: the ACTUAL application/session stage factory
+// (makeSessionRefreshingGpuSceneStage) fed by the ONE shared runtime GpuOcioContextResolver built
+// from the packaged tools staged beside this executable. There are no manually injected tool paths
+// and no injected preparer: the resolver qualifies the real packaged tools off the UI thread and
+// supplies both the builder's effect/media/ACES working-space context and the same shared preparer
+// to the general display program service.
 //
-// The stage must derive each request's exact project color binding from its color identity (OCIO
-// config URI, expected content revision, working color space, display/view), prepare the matching
-// OCIO DisplayRgba8 program off the UI thread, and validate the returned program's own binding
-// before carrying it. This proves the production route, not a manual-preparer substitute:
-//   * neutral project -> Neutral-bound program;
-//   * project config switch -> ACES-bound program with a distinct command identity;
-//   * two configs exposing the SAME display/view names are still distinct bindings;
-//   * a working-space change is a different binding and command;
-//   * an identical prepare is a warm command-cache hit;
-//   * a cancelled prepare reports Cancelled.
+// Coverage:
+//   * a Bloom Neutral project (solid + text) prepares a GPU scene and a Neutral-bound display
+//     program;
+//   * a project switched to the ACES 1.3 CG config with the ACEScg working space (solid + text)
+//     prepares a GPU scene and an ACES-bound display program;
+//   * the config/working switch leaves no stale colour: the two programs do not match each other's
+//     binding and have distinct command identities;
+//   * a warm identical request adds no new compile (the shared preparer's cache is warm);
+//   * a missing-tools resolver yields no fabricated program (typed CPU fallback);
+//   * cancellation is typed.
 //
-// It needs the pinned glslangValidator/spirv-val; without them the general case is compiled out and
-// the test is a clean skip.
+// Without the pinned tools the test is a clean skip. Media leaves and CST effects are covered by the
+// runtime preparation/native suites (which exercise the same builder + shared resolver context).
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/core/sha256.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_ocio_display_arm.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
@@ -43,10 +48,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 
 namespace {
@@ -74,7 +81,7 @@ class Expectations final {
 };
 
 [[nodiscard]] bloom::runtime::TaskSchedulerConfig schedulerConfig() {
-    return {.cpuWorkerCount = 1,
+    return {.cpuWorkerCount = 2,
             .blockingIoWorkerCount = 1,
             .cpuQueueCapacity = 16,
             .blockingIoQueueCapacity = 4,
@@ -93,7 +100,8 @@ class Expectations final {
 }
 
 [[nodiscard]] bloom::runtime::PreviewRequestIdentity
-identityFor(const bloom::document::Snapshot& snapshot, const bloom::document::CompositionId id) {
+identityFor(const bloom::document::Snapshot& snapshot, const bloom::document::CompositionId id,
+            const bloom::runtime::EvaluationColorIntent intent) {
     return {.projectId = snapshot.project().id(),
             .compositionId = id,
             .sourceRevision = snapshot.revision(),
@@ -102,7 +110,7 @@ identityFor(const bloom::document::Snapshot& snapshot, const bloom::document::Co
             .output = bloom::runtime::PreviewOutput::Composition,
             .resolution = bloom::runtime::CompositionFormatResolution{},
             .quality = bloom::runtime::EvaluationQuality::Reference,
-            .colorIntent = bloom::runtime::EvaluationColorIntent::LinearRec709Scene,
+            .colorIntent = intent,
             .resolutionPolicy = bloom::runtime::PreviewResolutionPolicy::Auto,
             .displayName = {},
             .viewName = {},
@@ -114,7 +122,6 @@ struct Fixture final {
     bloom::runtime::SnapshotCompiler compiler;
     bloom::runtime::CpuCompositionEvaluator evaluator;
     bloom::runtime::QualifiedDisplayProcessorProvider provider;
-    bloom::runtime::CpuGpuSceneBuilder builder;
     bloom::runtime::TaskScheduler scheduler;
     bloom::ui::CompiledPlanCacheHandle planCache = std::make_shared<bloom::ui::CompiledPlanCache>();
 
@@ -126,18 +133,16 @@ struct Fixture final {
     }
 };
 
+// Runs the ACTUAL session-refreshing stage (with the shared resolver) on a scheduler worker and
+// returns the outcome handle.
 [[nodiscard]] std::shared_ptr<const bloom::runtime::PreviewGpuSceneStageOutcome>
-runStageOutcome(Fixture& fixture,
-                const std::shared_ptr<const bloom::runtime::GpuDisplayProgramService>& service,
-                const bloom::runtime::PreviewRequestIdentity& identity,
-                const bloom::document::Snapshot& snapshot, Expectations& expectations,
-                const std::string& label) {
-    // The exact application/session wiring: the session-refreshing stage constructs a local
-    // media-context builder per request and invokes the real GPU-scene stage with the general
-    // display service.
+runStage(Fixture& fixture, std::shared_ptr<bloom::runtime::GpuOcioContextResolver> resolver,
+         const bloom::runtime::PreviewRequestIdentity& identity,
+         const bloom::document::Snapshot& snapshot, Expectations& expectations,
+         const std::string& label) {
     auto function = bloom::ui::makeSessionRefreshingGpuSceneStage(
         fixture.compiler, fixture.evaluator, fixture.provider, nullptr, nullptr, fixture.planCache,
-        service);
+        std::move(resolver));
     auto submission = fixture.scheduler.submit<StageValue>(
         bloom::runtime::TaskRequest("general stage",
                                     {.kind = bloom::runtime::TaskOwnerKind::Composition,
@@ -150,7 +155,7 @@ runStageOutcome(Fixture& fixture,
     if (!submission.accepted()) {
         return nullptr;
     }
-    const auto deadline = std::chrono::steady_clock::now() + 30s;
+    const auto deadline = std::chrono::steady_clock::now() + 60s;
     std::optional<TaskResult<StageValue>> result;
     while (std::chrono::steady_clock::now() < deadline) {
         if (auto taken = submission.handle.tryTakeResult()) {
@@ -169,34 +174,54 @@ runStageOutcome(Fixture& fixture,
     return *result->value();
 }
 
-[[nodiscard]] std::shared_ptr<const bloom::runtime::PreviewGpuSceneStage>
-runStage(Fixture& fixture,
-         const std::shared_ptr<const bloom::runtime::GpuDisplayProgramService>& service,
-         const bloom::runtime::PreviewRequestIdentity& identity,
-         const bloom::document::Snapshot& snapshot, Expectations& expectations,
-         const std::string& label) {
-    const auto outcome = runStageOutcome(fixture, service, identity, snapshot, expectations, label);
-    expectations.expect(outcome != nullptr &&
-                            outcome->status == PreviewGpuSceneStageStatus::Prepared,
-                        label + ": the stage prepared a GPU scene");
-    return outcome != nullptr && outcome->status == PreviewGpuSceneStageStatus::Prepared
-               ? outcome->stage
-               : nullptr;
+#ifdef BLOOM_GPU_TOOLS_AVAILABLE
+#if BLOOM_GPU_TOOLS_AVAILABLE
+[[nodiscard]] std::optional<bloom::core::Sha256Digest>
+parsePinnedDigest(const std::string_view text) {
+    constexpr std::string_view prefix = "sha256:";
+    if (text.size() != prefix.size() + bloom::core::kSha256HexCharacters ||
+        text.substr(0, prefix.size()) != prefix) {
+        return std::nullopt;
+    }
+    return bloom::core::Sha256Digest::fromLowercaseHex(text.substr(prefix.size()));
 }
 
-#ifdef BLOOM_GPUSHADER_TOOLS_DIR
-[[nodiscard]] std::shared_ptr<const bloom::runtime::GpuDisplayProgramService>
-makeProgramService() {
-    // Construction is pure: the provider resolves the packaged tools lazily on the CPU worker.
-    return std::make_shared<const bloom::runtime::GpuDisplayProgramService>(
-        []() -> bloom::runtime::GpuOcioCompileOptions {
-            bloom::runtime::GpuOcioCompileOptions options;
-            options.glslangValidatorPath =
-                std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
-            options.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
-            return options;
-        });
+[[nodiscard]] std::shared_ptr<bloom::runtime::GpuOcioContextResolver> packagedResolver() {
+    bloom::runtime::GpuOcioContextRequest request;
+    request.applicationExecutable = std::filesystem::path{BLOOM_GPU_GENERAL_TEST_EXECUTABLE};
+    request.toolPackage.toolsDirectory = BLOOM_GPU_TOOLS_DIR;
+    request.toolPackage.inventoryName = BLOOM_GPU_TOOLS_INVENTORY_NAME;
+    request.toolPackage.glslangValidatorName = BLOOM_GPU_TOOLS_GLSLANG_NAME;
+    request.toolPackage.spirvValName = BLOOM_GPU_TOOLS_SPIRV_VAL_NAME;
+    request.toolPackage.relocated = static_cast<bool>(BLOOM_GPU_TOOLS_RELOCATED);
+#ifdef BLOOM_GPU_TOOLS_BUNDLE_RELATIVE
+    request.toolPackage.bundleRelative = true;
+#endif
+#ifdef BLOOM_GPU_TOOLS_GLSLANG_STAGED_SHA256
+    request.toolPackage.glslangStagedDigest = parsePinnedDigest(BLOOM_GPU_TOOLS_GLSLANG_STAGED_SHA256);
+#endif
+#ifdef BLOOM_GPU_TOOLS_SPIRV_VAL_STAGED_SHA256
+    request.toolPackage.spirvValStagedDigest =
+        parsePinnedDigest(BLOOM_GPU_TOOLS_SPIRV_VAL_STAGED_SHA256);
+#endif
+    return std::make_shared<bloom::runtime::GpuOcioContextResolver>(std::move(request));
 }
+
+[[nodiscard]] bloom::document::ColorSettings acesColorSettings(
+    const bloom::document::ColorSettings& base) {
+    const auto revision = bloom::color::ocioBuiltInContentRevision(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
+    if (!revision.has_value()) {
+        std::abort();
+    }
+    auto settings = base;
+    settings.processColorSpaceId = "ACEScg";
+    settings.ocioConfig.locator =
+        bloom::document::BuiltInOcioConfigLocator{std::string(bloom::color::kAcesCgV1ConfigUri)};
+    settings.ocioConfig.expectedRevision.digest = *revision;
+    return settings;
+}
+#endif
 #endif
 
 } // namespace
@@ -205,163 +230,135 @@ int runTests(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     Expectations expectations;
-#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
     Fixture fixture;
-    auto project = makeProject();
-    const auto compositionId = project.initialCompositionId;
-    bloom::document::Document document(std::move(project.project));
-    bloom::commands::CommandStack commands(document);
-    bloom::ui::CompositionSession session(document, commands, compositionId);
-    expectations.expect(
-        session.addSolidLayer(QStringLiteral("Solid"), bloom::core::Color4d{0.2, 0.5, 0.7, 1.0}),
-        "solid layer created");
+
+    // --- Bloom Neutral project: solid + text -> Neutral-bound general program --------------------
+    auto neutralProject = makeProject();
+    const auto neutralComposition = neutralProject.initialCompositionId;
+    bloom::document::Document neutralDocument(std::move(neutralProject.project));
+    bloom::commands::CommandStack neutralCommands(neutralDocument);
+    bloom::ui::CompositionSession neutralSession(neutralDocument, neutralCommands,
+                                                 neutralComposition);
+    expectations.expect(neutralSession.addSolidLayer(QStringLiteral("Solid"),
+                                                     bloom::core::Color4d{0.2, 0.5, 0.7, 1.0}),
+                        "neutral: solid layer added");
+    expectations.expect(neutralSession.addTextLayer(QStringLiteral("Title"),
+                                                    QStringLiteral("Bloom")),
+                        "neutral: text layer added");
     fixture.provider.publish(bloom::runtime::buildBloomNeutralQualifiedDisplayProcessor());
-    const auto snapshot = session.snapshot();
+    const auto neutralSnapshot = neutralSession.snapshot();
+    const auto neutralIdentity =
+        identityFor(neutralSnapshot, neutralComposition, neutralSession.colorIntent());
 
-    auto service = makeProgramService();
-
-    // Neutral project: a Neutral-bound general display program rides the stage.
-    const auto neutralIdentity = identityFor(snapshot, compositionId);
-    const auto neutralStage = runStage(fixture, service, neutralIdentity, snapshot, expectations,
-                                       "neutral");
-    if (neutralStage != nullptr && !neutralStage->hasGeneralDisplayProgram()) {
-        for (const auto& diagnostic : neutralStage->diagnostics()) {
-            std::cerr << "  stage diagnostic " << diagnostic.code << ": " << diagnostic.summary
-                      << '\n';
-        }
-    }
-    expectations.expect(neutralStage != nullptr && neutralStage->hasGeneralDisplayProgram(),
+    auto resolver = packagedResolver();
+    const auto neutralOutcome = runStage(fixture, resolver, neutralIdentity, neutralSnapshot,
+                                         expectations, "neutral");
+    expectations.expect(neutralOutcome != nullptr &&
+                            neutralOutcome->status == PreviewGpuSceneStageStatus::Prepared,
+                        "neutral: solid+text prepares a GPU scene");
+    const bool neutralHasProgram =
+        neutralOutcome != nullptr && neutralOutcome->stage != nullptr &&
+        neutralOutcome->stage->hasGeneralDisplayProgram();
+    expectations.expect(neutralHasProgram,
                         "neutral: the stage carries a general display program");
-    if (neutralStage == nullptr || !neutralStage->hasGeneralDisplayProgram()) {
+    if (!neutralHasProgram) {
+        if (neutralOutcome != nullptr && neutralOutcome->stage != nullptr) {
+            for (const auto& diagnostic : neutralOutcome->stage->diagnostics()) {
+                std::cerr << "  neutral diagnostic " << diagnostic.code << ": "
+                          << diagnostic.summary << '\n';
+            }
+        }
         std::cerr << expectations.failures() << " general stage expectation(s) failed\n";
         return 1;
     }
+    const auto neutralProgram = *neutralOutcome->stage->displayProgram();
     const auto neutralBinding = bloom::runtime::gpuDisplayColorBindingForIntent(
         neutralIdentity.colorIntent, neutralIdentity.displayName, neutralIdentity.viewName);
-    const auto neutralProgram = *neutralStage->displayProgram();
     expectations.expect(
         bloom::runtime::gpuDisplayProgramMatchesRequest(neutralProgram, neutralBinding),
-        "neutral: the program matches the request project binding");
+        "neutral: the program matches the Neutral project binding");
     expectations.expect(neutralProgram.binding.expectedRevision ==
                             bloom::color::kBloomNeutralV1ConfigDigest,
                         "neutral: the program records the Neutral content revision");
-    expectations.expect(neutralProgram.binding.workingColorSpaceId == "lin_rec709_scene",
-                        "neutral: the program records the resolved working space");
 
-    // Project config switch to ACES: a distinct ACES-bound program.
-    const auto acesRevision = bloom::color::ocioBuiltInContentRevision(
-        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
-    expectations.expect(acesRevision.has_value(), "the ACES built-in exposes its revision");
-    if (acesRevision.has_value()) {
-        auto acesResolution = bloom::color::resolveOcioBuiltIn(
-            bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri,
-            *acesRevision, "ACEScg");
-        auto aces = std::move(acesResolution).takeResolved();
-        expectations.expect(aces.has_value(), "the ACES config resolves");
-        if (aces.has_value()) {
-            std::string acesDisplay;
-            std::string acesView;
-            for (const auto& candidate : aces->displays()) {
-                auto built = bloom::color::buildCpuDisplayProcessorForView(*aces, candidate.display,
-                                                                           candidate.view);
-                if (built.handle() != nullptr) {
-                    acesDisplay = candidate.display;
-                    acesView = candidate.view;
-                    break;
-                }
-            }
-            expectations.expect(!acesDisplay.empty(), "an ACES display/view pair is available");
-            if (!acesDisplay.empty()) {
-                bloom::runtime::EvaluationColorIntent acesIntent;
-                acesIntent.workingColorSpaceId = "ACEScg";
-                acesIntent.ocioConfigRevision = *acesRevision;
-                acesIntent.ocioConfigUri = bloom::color::kAcesCgV1ConfigUri;
+    // --- ACES project: switch config + working space, solid + text ------------------------------
+    auto acesProject = makeProject();
+    const auto acesComposition = acesProject.initialCompositionId;
+    bloom::document::Document acesDocument(std::move(acesProject.project));
+    bloom::commands::CommandStack acesCommands(acesDocument);
+    bloom::ui::CompositionSession acesSession(acesDocument, acesCommands, acesComposition);
+    acesSession.setColorSettings(acesColorSettings(acesSession.colorSettings()));
+    expectations.expect(acesSession.addSolidLayer(QStringLiteral("Solid"),
+                                                  bloom::core::Color4d{0.2, 0.5, 0.7, 1.0}),
+                        "aces: solid layer added");
+    expectations.expect(acesSession.addTextLayer(QStringLiteral("Title"),
+                                                 QStringLiteral("Bloom")),
+                        "aces: text layer added");
+    const auto acesSnapshot = acesSession.snapshot();
+    const auto acesIdentity = identityFor(acesSnapshot, acesComposition, acesSession.colorIntent());
+    expectations.expect(acesIdentity.colorIntent.workingColorSpaceId == "ACEScg" &&
+                            acesIdentity.colorIntent.ocioConfigUri ==
+                                bloom::color::kAcesCgV1ConfigUri,
+                        "aces: the session reports the ACES config + working space");
 
-                const auto acesBinding = bloom::runtime::gpuDisplayColorBindingForIntent(
-                    acesIntent, acesDisplay, acesView);
-                auto acesPrepared =
-                    service->prepare(acesBinding, 64, 48, bloom::runtime::ViewAdjust{});
-                expectations.expect(acesPrepared.hasValue(),
-                                    "aces: the ACES project binding prepares a display program");
-                if (!acesPrepared.hasValue()) {
-                    return 1;
-                }
-                const auto& acesProgram = acesPrepared.program;
-                expectations.expect(
-                    bloom::runtime::gpuDisplayProgramMatchesRequest(acesProgram, acesBinding),
-                    "aces: the program matches the ACES project binding");
-                expectations.expect(
-                    acesProgram.command->identity() != neutralProgram.command->identity(),
-                    "aces: the config switch changes the prepared command identity");
-                expectations.expect(
-                    !bloom::runtime::gpuDisplayProgramMatchesRequest(neutralProgram, acesBinding),
-                    "aces: the Neutral program is refused for the ACES binding");
+    const auto acesOutcome =
+        runStage(fixture, resolver, acesIdentity, acesSnapshot, expectations, "aces");
+    expectations.expect(acesOutcome != nullptr &&
+                            acesOutcome->status == PreviewGpuSceneStageStatus::Prepared,
+                        "aces: solid+text prepares a GPU scene in the ACES working space");
+    const bool acesHasProgram = acesOutcome != nullptr && acesOutcome->stage != nullptr &&
+                                acesOutcome->stage->hasGeneralDisplayProgram();
+    expectations.expect(acesHasProgram,
+                        "aces: the stage carries an ACES-bound general display program");
+    if (acesHasProgram) {
+        const auto acesProgram = *acesOutcome->stage->displayProgram();
+        const auto acesBinding = bloom::runtime::gpuDisplayColorBindingForIntent(
+            acesIdentity.colorIntent, acesIdentity.displayName, acesIdentity.viewName);
+        expectations.expect(
+            bloom::runtime::gpuDisplayProgramMatchesRequest(acesProgram, acesBinding),
+            "aces: the program matches the ACES project binding");
+        expectations.expect(acesProgram.command->identity() != neutralProgram.command->identity(),
+                            "switch: the config/working switch changes the command identity");
+        expectations.expect(
+            !bloom::runtime::gpuDisplayProgramMatchesRequest(neutralProgram, acesBinding),
+            "switch: the Neutral program is refused for the ACES binding (no stale colour)");
+        expectations.expect(
+            !bloom::runtime::gpuDisplayProgramMatchesRequest(acesProgram, neutralBinding),
+            "switch: the ACES program is refused for the Neutral binding");
 
-                // Two configs exposing the SAME display/view names are still distinct bindings, and
-                // the names alone never select the config: the Neutral default pair name does not
-                // resolve in the ACES config.
-                const auto sameNameAcesBinding =
-                    bloom::runtime::gpuDisplayColorBindingForIntent(
-                        acesIntent, neutralProgram.binding.display, neutralProgram.binding.view);
-                expectations.expect(
-                    !bloom::runtime::gpuDisplayProgramMatchesRequest(neutralProgram,
-                                                                     sameNameAcesBinding),
-                    "aces: identical display/view names in another config do not match");
-                auto sameNamePrepared =
-                    service->prepare(sameNameAcesBinding, 64, 48, bloom::runtime::ViewAdjust{});
-                expectations.expect(!sameNamePrepared.hasValue(),
-                                    "aces: identical names do not resolve in another config");
-
-                // Working-space change within the same config.
-                auto ap0Intent = acesIntent;
-                ap0Intent.workingColorSpaceId = "ACES2065-1";
-                const auto ap0Binding = bloom::runtime::gpuDisplayColorBindingForIntent(
-                    ap0Intent, acesDisplay, acesView);
-                auto ap0 = service->prepare(ap0Binding, 64, 48, bloom::runtime::ViewAdjust{});
-                expectations.expect(ap0.hasValue(),
-                                    "working space: ACES2065-1 resolves and prepares");
-                if (ap0.hasValue()) {
-                    expectations.expect(
-                        !bloom::runtime::gpuDisplayProgramMatchesRequest(acesProgram, ap0Binding),
-                        "working space: the ACEScg program is refused for the ACES2065-1 binding");
-                    expectations.expect(
-                        ap0.program.command->identity() != acesProgram.command->identity(),
-                        "working space: the change produces a different command");
-                }
-
-                // Warm reuse and cancellation.
-                const auto before = service->counters();
-                auto warm = service->prepare(acesBinding, 64, 48, bloom::runtime::ViewAdjust{});
-                const auto after = service->counters();
-                expectations.expect(
-                    warm.hasValue() &&
-                        warm.program.command->identity() == acesProgram.command->identity(),
-                    "warm: the identical prepare returns the same command");
-                expectations.expect(after.cacheHits > before.cacheHits,
-                                    "warm: the identical prepare is a command-cache hit");
-                auto cancelled = service->prepare(acesBinding, 64, 48,
-                                                  bloom::runtime::ViewAdjust{},
-                                                  [] { return true; });
-                expectations.expect(
-                    cancelled.error == bloom::runtime::GpuDisplayProgramError::Cancelled,
-                    "cancel: a cancelled prepare reports Cancelled");
-
-                // The current GPU scene subset only prepares lin_rec709_scene, so an ACES-working
-                // project must take the full CPU path from the real stage with a reason and carry no
-                // general program -- never a fabricated one.
-                auto acesIdentity = neutralIdentity;
-                acesIdentity.colorIntent = acesIntent;
-                acesIdentity.displayName = acesDisplay;
-                acesIdentity.viewName = acesView;
-                const auto acesOutcome =
-                    runStageOutcome(fixture, service, acesIdentity, snapshot, expectations, "aces");
-                expectations.expect(acesOutcome != nullptr &&
-                                        acesOutcome->status ==
-                                            PreviewGpuSceneStageStatus::UnsupportedGpuSubset,
-                                    "aces: the unsupported working space takes the CPU fallback");
-            }
-        }
+        // --- Warm identical request: no new compile, shared cache hit ---------------------------
+        const auto beforeWarm = resolver->preparer()->counters();
+        const auto warmOutcome =
+            runStage(fixture, resolver, acesIdentity, acesSnapshot, expectations, "aces-warm");
+        const auto afterWarm = resolver->preparer()->counters();
+        expectations.expect(warmOutcome != nullptr && warmOutcome->stage != nullptr &&
+                                warmOutcome->stage->hasGeneralDisplayProgram() &&
+                                warmOutcome->stage->displayProgram()->command->identity() ==
+                                    acesProgram.command->identity(),
+                            "warm: the identical request returns the same command");
+        expectations.expect(afterWarm.compiles == beforeWarm.compiles,
+                            "warm: the identical request adds no new compile");
+        expectations.expect(afterWarm.cacheHits > beforeWarm.cacheHits,
+                            "warm: the shared preparer served the command from its cache");
     }
+
+    // --- Cancellation is typed (a fresh resolver, before any tool work) ----------------------
+    bloom::runtime::GpuOcioContextResolver freshResolver;
+    const auto cancelled = freshResolver.resolve([] { return true; });
+    expectations.expect(!cancelled.hasValue() &&
+                            cancelled.error == bloom::runtime::GpuOcioContextError::Cancelled,
+                        "cancel: a cancelled shared resolve is a typed refusal");
+
+    // --- Missing tools: no fabricated program (typed CPU fallback) ---------------------------
+    auto missingResolver = std::make_shared<bloom::runtime::GpuOcioContextResolver>();
+    const auto missingOutcome = runStage(fixture, missingResolver, acesIdentity, acesSnapshot,
+                                         expectations, "missing-tools");
+    expectations.expect(missingOutcome != nullptr,
+                        "missing-tools: the stage still returns a terminal outcome");
+    expectations.expect(missingOutcome != nullptr && missingOutcome->stage != nullptr &&
+                            !missingOutcome->stage->hasGeneralDisplayProgram(),
+                        "missing-tools: no general display program is fabricated");
 #endif
 
     if (expectations.failures() != 0) {

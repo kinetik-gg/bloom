@@ -109,22 +109,21 @@ gpuSceneMediaContextFor(const runtime::CpuCompositionEvaluator& evaluator,
 // freshly copied media context (sharing the coverage + prepared-upload caches) and immediately
 // invokes the existing stage function while that builder is alive. This is the
 // media-follows-session seam; the evaluator's canonical accessors are internally locked.
+//
+// `ocioContextResolver` is the ONE shared, inert runtime::GpuOcioContextResolver. It is resolved on
+// this CPU worker per request (idempotent after the first success) and supplies BOTH the builder's
+// GpuSceneOcioContext (its single shared GpuOcioProgramPreparer and the validated executable-
+// relative tool paths, enabling effects/media/arbitrary ACES working space) and the SAME preparer
+// to the general display program service. A null resolver or a failed resolve keeps the builder's
+// default fail-closed context and every affected request takes the CPU fallback with a reason.
+// Nothing here resolves tools, hashes, or compiles on the UI thread.
 [[nodiscard]] runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
     const runtime::SnapshotCompiler& compiler, const runtime::CpuCompositionEvaluator& evaluator,
     const runtime::QualifiedDisplayProcessorProvider& qualifiedDisplayProcessorProvider,
     std::shared_ptr<runtime::GpuSceneCoverageCache> coverageCache,
     std::shared_ptr<runtime::GpuPreparedUploadCache> uploadCache,
     CompiledPlanCacheHandle planCache = nullptr,
-    std::shared_ptr<const runtime::GpuDisplayProgramService> displayProgramService = nullptr);
-
-// Builds the off-UI general-display program service from a lazy compile-options provider. The
-// provider is NOT invoked here: it runs on the first prepare() call on the GPU-scene CPU worker, so
-// no shader-tool resolution, hashing, config resolution, or compilation ever happens on the UI
-// thread. The provider returns empty paths when the packaged tools cannot be resolved; every
-// affected request then takes the CPU display fallback (never a silent approximation).
-[[nodiscard]] std::shared_ptr<const runtime::GpuDisplayProgramService>
-makeGpuDisplayProgramService(runtime::GpuDisplayProgramService::CompileOptionsProvider
-                                 optionsProvider);
+    std::shared_ptr<runtime::GpuOcioContextResolver> ocioContextResolver = nullptr);
 
 // Owns the cached presentation capability for the whole application. It is not a QObject, holds no
 // native handle, and never blocks. The application refreshes it from the EXISTING TaskUiBridge poll

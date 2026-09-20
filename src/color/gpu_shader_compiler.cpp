@@ -452,7 +452,12 @@ GpuShaderCompileResult GpuShaderCompiler::compile(const GpuShaderCompileRequest&
         if (Clock::now() >= deadline)
             return failed(GpuShaderCompileError::Timeout,
                           "compile deadline elapsed before cache publication");
-        return GpuShaderCompileResult{GpuShaderCompileStatus::Compiled, *cached, std::nullopt};
+        render::CompiledGpuShader cachedArtifact = *cached;
+        // The cache key is the source digest, so the cached artifact's provenance is exact; set it
+        // explicitly so a consumer can always bind the returned artifact to its source.
+        cachedArtifact.sourceDigest = *sourceDigest;
+        return GpuShaderCompileResult{GpuShaderCompileStatus::Compiled, std::move(cachedArtifact),
+                                      std::nullopt};
     }
 
     auto temp = makeTempDirectory();
@@ -530,6 +535,7 @@ GpuShaderCompileResult GpuShaderCompiler::compile(const GpuShaderCompileRequest&
     if (!artifactDigest)
         return failed(GpuShaderCompileError::IoFailure, "artifact digest unavailable");
     artifact.spirvDigest = *artifactDigest;
+    artifact.sourceDigest = *sourceDigest;
     artifact.entryPoint = request.entryPoint;
     artifact.targetEnvironment = request.targetEnvironment;
     artifact.stage = render::GpuShaderStage::Compute;

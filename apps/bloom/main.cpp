@@ -1,5 +1,6 @@
 #include <algorithm>
-#include <bloom/color/gpu_shader_tool_resolver.hpp>
+#include <bloom/host/gpu_export_provider.hpp>
+#include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -227,43 +228,33 @@ int main(int argc, char* argv[]) {
     // Open/SaveAs that changes the session base directory.
     auto gpuSceneCoverageCache = std::make_shared<bloom::runtime::GpuSceneCoverageCache>();
     auto gpuPreparedUploadCache = std::make_shared<bloom::runtime::GpuPreparedUploadCache>();
-    // The general-display program service. The packaged glslangValidator/spirv-val paths come from
-    // the application's OWN packaging macros (never PATH, never a manual setup), resolved through the
-    // color resolver's inventory validation. That resolution (and the per-project OCIO config
-    // resolution and shader compilation) is LAZY: the provider below runs on the GPU-scene CPU
-    // worker on first use, never on the UI thread. Without the tools every affected request takes
-    // the CPU display fallback.
-    std::shared_ptr<const bloom::runtime::GpuDisplayProgramService> gpuDisplayProgramService;
+    // The ONE shared runtime OCIO context resolver. It is INERT to construct (no hash/fs/OCIO/
+    // process work); the packaged glslangValidator/spirv-val paths come from the application's OWN
+    // packaging macros (never PATH, never a manual setup) and are qualified lazily on the GPU-scene
+    // CPU worker. The same resolver supplies the builder's effect/media/ACES context AND the general
+    // display program's preparer, so there is exactly one tool qualification and one program cache.
+    std::shared_ptr<bloom::runtime::GpuOcioContextResolver> gpuOcioContextResolver =
+        std::make_shared<bloom::runtime::GpuOcioContextResolver>();
 #if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
     {
-        bloom::color::GpuShaderToolPackage toolPackage;
-        toolPackage.toolsDirectory = BLOOM_GPU_TOOLS_DIR;
-        toolPackage.inventoryName = BLOOM_GPU_TOOLS_INVENTORY_NAME;
-        toolPackage.glslangValidatorName = BLOOM_GPU_TOOLS_GLSLANG_NAME;
-        toolPackage.spirvValName = BLOOM_GPU_TOOLS_SPIRV_VAL_NAME;
-        toolPackage.relocated = static_cast<bool>(BLOOM_GPU_TOOLS_RELOCATED);
-#ifdef BLOOM_GPU_TOOLS_BUNDLE_RELATIVE
-        toolPackage.bundleRelative = true;
-#endif
-        const auto applicationPath =
+        bloom::runtime::GpuOcioContextRequest request;
+        request.applicationExecutable =
             std::filesystem::path(QCoreApplication::applicationFilePath().toStdString());
-        gpuDisplayProgramService = bloom::ui::makeGpuDisplayProgramService(
-            [toolPackage, applicationPath]() -> bloom::runtime::GpuOcioCompileOptions {
-                bloom::runtime::GpuOcioCompileOptions options;
-                bloom::color::GpuShaderToolResolver resolver;
-                const auto resolved = resolver.resolve(applicationPath, toolPackage);
-                if (!resolved.ok) {
-                    return options;
-                }
-                options.glslangValidatorPath = resolved.paths.glslangValidator;
-                options.spirvValPath = resolved.paths.spirvVal;
-                return options;
-            });
+        request.toolPackage.toolsDirectory = BLOOM_GPU_TOOLS_DIR;
+        request.toolPackage.inventoryName = BLOOM_GPU_TOOLS_INVENTORY_NAME;
+        request.toolPackage.glslangValidatorName = BLOOM_GPU_TOOLS_GLSLANG_NAME;
+        request.toolPackage.spirvValName = BLOOM_GPU_TOOLS_SPIRV_VAL_NAME;
+        request.toolPackage.relocated = static_cast<bool>(BLOOM_GPU_TOOLS_RELOCATED);
+#ifdef BLOOM_GPU_TOOLS_BUNDLE_RELATIVE
+        request.toolPackage.bundleRelative = true;
+#endif
+        gpuOcioContextResolver =
+            std::make_shared<bloom::runtime::GpuOcioContextResolver>(std::move(request));
     }
 #endif
     auto gpuPreviewGpuSceneStage = bloom::ui::makeSessionRefreshingGpuSceneStage(
         snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, gpuSceneCoverageCache,
-        gpuPreparedUploadCache, compiledPlanCache, gpuDisplayProgramService);
+        gpuPreparedUploadCache, compiledPlanCache, gpuOcioContextResolver);
     auto gpuPreviewCpuStage = bloom::ui::makeCompositionPreviewCpuStage(
         snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, compiledPlanCache);
     auto gpuPreviewCpuDisplayFallback =
@@ -296,7 +287,29 @@ int main(int argc, char* argv[]) {
     bloom::ui::RamPreviewController ramPreviewController(
         compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline,
         nullptr, gpuPreviewDisplaySubmitter);
+    // The application-lifetime GPU final-render provider is created HERE, once, before the
+    // shutdown coordinator that will own its retirement ordering, so it outlives every coordinator
+    // callback and every export attempt. It reuses the same app-relative bundled loader the
+    // preview service uses. The coordinator signals the evaluator owner (non-blocking) at
+    // beginShutdown and polls genuine retirement completion from the UI event loop, so the UI
+    // never waits on the native owner even after task admission closes.
+    bloom::runtime::GpuProcessFrameEvaluatorOptions gpuExportOptions;
+    gpuExportOptions.enabled = bundledNativeLoader;
+    if (bundledNativeLoader) {
+        gpuExportOptions.loaderPath = gpuPreviewDisplayOptions.loaderPath;
+    }
+    auto gpuExportProvider = bloom::host::GpuExportProvider::create(gpuExportOptions);
+    gpuExportProvider->prepare(taskScheduler);
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);
+    shutdownCoordinator.setGpuExportRetirement(
+        [&gpuExportProvider] { gpuExportProvider->beginShutdown(); },
+        [&gpuExportProvider] {
+            if (!gpuExportProvider->retirementComplete()) {
+                return false;
+            }
+            gpuExportProvider->collectRetired();
+            return true;
+        });
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &ramPreviewController, &bloom::ui::RamPreviewController::beginShutdown);
@@ -328,7 +341,7 @@ int main(int argc, char* argv[]) {
     bloom::ui::FrameExportController frameExportController(
         compositionSession, taskScheduler, taskUiBridge, snapshotCompiler,
         projectHost.publicationCoordinator(), projectHost.artifactCoordinator(), {},
-        &qualifiedDisplayProcessorProvider);
+        &qualifiedDisplayProcessorProvider, gpuExportProvider);
 
     // The typed viewer GPU dependency context. Its presentation-client getter reads the cached
     // service capability, so an editor created before the async startup qualification finishes is

@@ -1,13 +1,18 @@
-// The lazy multi-config general-display program service. See the header for the contract. This
-// translation unit owns the per-config preparer cache; the shader-tool resolution and the OCIO
-// config/working-space resolution both happen here on the first prepare() call (off the UI thread),
-// never at construction. The per-config GpuDisplayProgramPreparer itself lives in
-// gpu_ocio_display_arm.cpp and is shared by this service.
+// The bounded multi-config general-display program service. It consumes the ONE shared
+// GpuOcioContextResolver (never resolving tools or owning a second preparer itself): the first
+// prepare() resolves the shared context and reuses its single GpuOcioProgramPreparer for every
+// config. Per-config and CPU-oracle resolutions are cached in bounded LRU caches keyed by the exact
+// config/working identity and the display/view; the immutable resolved objects are pinned by
+// shared_ptr while cached. The command program cache is the shared preparer's own bounded cache.
 
 #include <bloom/runtime/gpu_ocio_display_arm.hpp>
 
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_cpu_display_processor.hpp>
+#include <bloom/runtime/gpu_ocio_context.hpp>
+#include <bloom/runtime/prepared_gpu_scene.hpp>
 
+#include <algorithm>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -15,7 +20,6 @@
 #include <vector>
 
 namespace bloom::runtime {
-
 namespace {
 
 struct DisplayConfigKey final {
@@ -27,27 +31,42 @@ struct DisplayConfigKey final {
     friend bool operator==(const DisplayConfigKey&, const DisplayConfigKey&) = default;
 };
 
+struct ConfigEntry final {
+    DisplayConfigKey key;
+    std::shared_ptr<const color::ResolvedBloomNeutralConfig> config;
+    std::uint64_t serial = 0;
+};
+
+struct OracleEntry final {
+    DisplayConfigKey key;
+    std::string display;
+    std::string view;
+    std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> oracle;
+    std::uint64_t serial = 0;
+};
+
 } // namespace
 
 struct GpuDisplayProgramService::Impl final {
-    Impl(CompileOptionsProvider providerValue, GpuOcioPreparerBudgets preparerBudgets)
-        : provider(std::move(providerValue)), budgets(preparerBudgets) {}
+    Impl(std::shared_ptr<GpuOcioContextResolver> resolverValue, const std::size_t maxConfigsValue,
+         const std::size_t maxOraclesValue)
+        : resolver(std::move(resolverValue)),
+          maxConfigs(std::max<std::size_t>(maxConfigsValue, 1)),
+          maxOracles(std::max<std::size_t>(maxOraclesValue, 1)) {}
 
-    CompileOptionsProvider provider;
-    GpuOcioPreparerBudgets budgets;
+    std::shared_ptr<GpuOcioContextResolver> resolver;
+    std::size_t maxConfigs;
+    std::size_t maxOracles;
     mutable std::mutex mutex;
-    mutable bool optionsResolved = false;
-    mutable GpuOcioCompileOptions options;
-    // Tiny set of immutable per-config preparers keyed by the exact config/working identity. The
-    // number of distinct project configs is bounded in practice; a linear scan avoids requiring an
-    // ordering on the digest.
-    mutable std::vector<std::pair<DisplayConfigKey, std::shared_ptr<GpuDisplayProgramPreparer>>>
-        configs;
+    mutable std::uint64_t serial = 0;
+    mutable std::vector<ConfigEntry> configs;
+    mutable std::vector<OracleEntry> oracles;
 };
 
-GpuDisplayProgramService::GpuDisplayProgramService(CompileOptionsProvider optionsProvider,
-                                                   GpuOcioPreparerBudgets budgets)
-    : impl_(std::make_unique<Impl>(std::move(optionsProvider), budgets)) {}
+GpuDisplayProgramService::GpuDisplayProgramService(
+    std::shared_ptr<GpuOcioContextResolver> resolver, const std::size_t maxConfigs,
+    const std::size_t maxOracles)
+    : impl_(std::make_unique<Impl>(std::move(resolver), maxConfigs, maxOracles)) {}
 
 GpuDisplayProgramService::~GpuDisplayProgramService() = default;
 
@@ -67,31 +86,52 @@ GpuDisplayProgramService::prepare(const GpuDisplayColorBinding& binding, const s
         result.diagnostic = "the general display preparation was cancelled before resolution";
         return result;
     }
+    if (impl_->resolver == nullptr) {
+        result.error = GpuDisplayProgramError::ConfigUnavailable;
+        result.diagnostic = "no shared GPU OCIO context resolver is configured";
+        return result;
+    }
 
-    std::shared_ptr<GpuDisplayProgramPreparer> preparer;
-    {
-        std::lock_guard lock(impl_->mutex);
-        if (!impl_->optionsResolved) {
-            impl_->options = impl_->provider ? impl_->provider() : GpuOcioCompileOptions{};
-            impl_->optionsResolved = true;
-        }
-        if (impl_->options.glslangValidatorPath.empty() || impl_->options.spirvValPath.empty()) {
-            result.error = GpuDisplayProgramError::ConfigUnavailable;
-            result.diagnostic = "the qualified GPU shader tools are unavailable";
+    // Resolve the one shared context (idempotent after the first success). Its single preparer is
+    // reused for every config and its compile options carry the validated executable-relative tools.
+    const auto contextResult = impl_->resolver->resolve(cancel);
+    if (!contextResult.hasValue()) {
+        if (contextResult.error == GpuOcioContextError::Cancelled) {
+            result.error = GpuDisplayProgramError::Cancelled;
+            result.diagnostic = "the shared GPU OCIO context resolution was cancelled";
             return result;
         }
-        const DisplayConfigKey key{binding.locatorKind, binding.locatorValue,
-                                   binding.expectedRevision, binding.workingColorSpaceId};
-        for (const auto& entry : impl_->configs) {
-            if (entry.first == key) {
-                preparer = entry.second;
+        result.error = GpuDisplayProgramError::ConfigUnavailable;
+        result.diagnostic = contextResult.diagnostic.empty()
+                                ? std::string("the shared GPU OCIO context is unavailable")
+                                : contextResult.diagnostic;
+        return result;
+    }
+    const GpuSceneOcioContext& context = *contextResult.context;
+    if (context.preparer == nullptr) {
+        result.error = GpuDisplayProgramError::ConfigUnavailable;
+        result.diagnostic = "the shared GPU OCIO context has no prepared compiler";
+        return result;
+    }
+
+    const DisplayConfigKey key{binding.locatorKind, binding.locatorValue, binding.expectedRevision,
+                               binding.workingColorSpaceId};
+    std::shared_ptr<const color::ResolvedBloomNeutralConfig> config;
+    std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> oracle;
+    {
+        std::lock_guard lock(impl_->mutex);
+        // Config lookup (bounded LRU).
+        for (auto& entry : impl_->configs) {
+            if (entry.key == key) {
+                entry.serial = ++impl_->serial;
+                config = entry.config;
                 break;
             }
         }
-        if (preparer == nullptr) {
-            auto resolution = color::resolveOcioBuiltIn(binding.locatorKind, binding.locatorValue,
-                                                        binding.expectedRevision,
-                                                        binding.workingColorSpaceId);
+        if (config == nullptr) {
+            auto resolution =
+                color::resolveOcioBuiltIn(binding.locatorKind, binding.locatorValue,
+                                          binding.expectedRevision, binding.workingColorSpaceId);
             if (!resolution.ready()) {
                 result.error = GpuDisplayProgramError::ConfigUnavailable;
                 result.diagnostic = "the requested OCIO config/working space did not resolve";
@@ -103,45 +143,107 @@ GpuDisplayProgramService::prepare(const GpuDisplayColorBinding& binding, const s
                 result.diagnostic = "the requested OCIO config/working space did not resolve";
                 return result;
             }
-            const bool revisionMatches = resolved->expectedRevision() == binding.expectedRevision;
-            const bool workingMatches = binding.workingColorSpaceId.empty() ||
-                                        resolved->processColorSpaceId() ==
-                                            binding.workingColorSpaceId;
-            if (!revisionMatches || !workingMatches) {
+            if (resolved->expectedRevision() != binding.expectedRevision ||
+                (!binding.workingColorSpaceId.empty() &&
+                 resolved->processColorSpaceId() != binding.workingColorSpaceId)) {
                 result.error = GpuDisplayProgramError::BindingMismatch;
                 result.diagnostic = "the resolved config does not match the requested binding";
                 return result;
             }
-            preparer =
-                std::make_shared<GpuDisplayProgramPreparer>(std::move(*resolved), impl_->options);
-            impl_->configs.emplace_back(key, preparer);
+            config = std::make_shared<const color::ResolvedBloomNeutralConfig>(std::move(*resolved));
+            if (impl_->configs.size() >= impl_->maxConfigs) {
+                const auto victim = std::min_element(
+                    impl_->configs.begin(), impl_->configs.end(),
+                    [](const ConfigEntry& a, const ConfigEntry& b) { return a.serial < b.serial; });
+                impl_->configs.erase(victim);
+            }
+            impl_->configs.push_back(ConfigEntry{key, config, ++impl_->serial});
+        }
+
+        // Oracle lookup (bounded LRU); the CPU display processor is built for the same config pair.
+        const std::string resolvedDisplay =
+            binding.display.empty() ? std::string(config->displayName()) : binding.display;
+        const std::string resolvedView =
+            binding.view.empty() ? std::string(config->viewName()) : binding.view;
+        for (auto& entry : impl_->oracles) {
+            if (entry.key == key && entry.display == resolvedDisplay && entry.view == resolvedView) {
+                entry.serial = ++impl_->serial;
+                oracle = entry.oracle;
+                break;
+            }
+        }
+        if (oracle == nullptr) {
+            auto built =
+                color::buildCpuDisplayProcessorForView(*config, resolvedDisplay, resolvedView);
+            auto handle = std::move(built).takeHandle();
+            if (!handle.has_value()) {
+                result.error = GpuDisplayProgramError::OracleUnavailable;
+                result.diagnostic = "the CPU display oracle could not be prepared for the pair";
+                return result;
+            }
+            oracle = std::make_shared<const color::PreparedCpuDisplayProcessorHandle>(
+                std::move(*handle));
+            if (impl_->oracles.size() >= impl_->maxOracles) {
+                const auto victim = std::min_element(
+                    impl_->oracles.begin(), impl_->oracles.end(),
+                    [](const OracleEntry& a, const OracleEntry& b) { return a.serial < b.serial; });
+                impl_->oracles.erase(victim);
+            }
+            impl_->oracles.push_back(
+                OracleEntry{key, resolvedDisplay, resolvedView, oracle, ++impl_->serial});
         }
     }
 
-    auto prepared =
-        preparer->prepare(binding.display, binding.view, width, height, viewAdjust, cancel);
-    if (prepared.hasValue()) {
-        prepared.program.binding.locatorKind = binding.locatorKind;
-        prepared.program.binding.locatorValue = binding.locatorValue;
+    // The Display transform is extracted from the config's own working space. The spec's
+    // working-id is set from the resolved config so the SHARED preparer's command cache keys a
+    // changed working space distinctly (Display extraction itself uses only display/view).
+    GpuOcioTransformSpec spec;
+    spec.kind = GpuOcioTransformKind::Display;
+    spec.display = binding.display.empty() ? std::string(config->displayName()) : binding.display;
+    spec.view = binding.view.empty() ? std::string(config->viewName()) : binding.view;
+    spec.workingSpaceId = std::string(config->processColorSpaceId());
+    spec.viewAdjust = viewAdjust;
+
+    const auto prepared =
+        context.preparer->prepare(*config, spec, GpuOcioCommandGeometry{width, height},
+                                  context.compileOptions, cancel);
+    if (!prepared.hasValue()) {
+        result.error = prepared.error == GpuOcioPreparationError::CompileCancelled
+                           ? GpuDisplayProgramError::Cancelled
+                           : GpuDisplayProgramError::TransformUnavailable;
+        result.diagnostic = prepared.diagnostic.empty()
+                                ? std::string("the OCIO display transform could not be prepared")
+                                : prepared.diagnostic;
+        return result;
     }
-    return prepared;
+
+    result.program.command = prepared.command;
+    result.program.cpuOracle = std::move(oracle);
+    result.program.binding.locatorKind = binding.locatorKind;
+    result.program.binding.locatorValue = binding.locatorValue;
+    result.program.binding.expectedRevision = config->expectedRevision();
+    result.program.binding.workingColorSpaceId = std::string(config->processColorSpaceId());
+    result.program.binding.display = spec.display;
+    result.program.binding.view = spec.view;
+    result.program.viewAdjust = viewAdjust;
+    result.program.width = width;
+    result.program.height = height;
+    result.error = GpuDisplayProgramError::None;
+    return result;
 }
 
 GpuOcioPreparerCounters GpuDisplayProgramService::counters() const {
-    GpuOcioPreparerCounters total;
     std::lock_guard lock(impl_->mutex);
-    for (const auto& entry : impl_->configs) {
-        const auto counters = entry.second->counters();
-        total.preparations += counters.preparations;
-        total.cacheHits += counters.cacheHits;
-        total.cacheMisses += counters.cacheMisses;
-        total.extractions += counters.extractions;
-        total.compiles += counters.compiles;
-        total.compileFailures += counters.compileFailures;
-        total.evictions += counters.evictions;
-        total.cacheEntries += counters.cacheEntries;
-        total.cacheBytes += counters.cacheBytes;
+    GpuOcioPreparerCounters total;
+    if (impl_->resolver != nullptr) {
+        // The shared preparer's counters are the authoritative cold/warm measurement; expose them
+        // through this service so a caller sees the same numbers the actual route compiled with.
+        const auto context = impl_->resolver->preparer();
+        if (context != nullptr) {
+            total = context->counters();
+        }
     }
+    total.cacheEntries = impl_->configs.size() + impl_->oracles.size();
     return total;
 }
 

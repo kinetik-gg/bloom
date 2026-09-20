@@ -9,10 +9,13 @@
 // compile until it is classified here.
 //
 // The only permitted exceptions are narrow, typed, explicitly approved host-preparation steps --
-// media decode/conversion, font shaping, parameter/geometry resolution -- which are not
-// whole-frame pixel-rendering opt-outs. An exception must name a nonempty stable id, a nonempty
-// rationale, and an owning document/decision reference. There are no wildcard or blanket opt-outs,
-// and no approval identifier may be invented.
+// media container/sample I/O and decompression, font load/shaping, parameter/curve/geometry
+// RESOLUTION, and one final readback -- which are not whole-frame pixel-rendering opt-outs. An
+// exception must name a nonempty stable id, a nonempty rationale, and an owning document/decision
+// reference. There are no wildcard or blanket opt-outs, and no approval identifier may be invented.
+// Per-pixel coverage rasterization (CPU PathRaster coverageRow) is a pixel transformation, never
+// host preparation; the generated coverage mask is Required GPU work
+// (feature.geometry.vector_coverage).
 
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/document/node_definition_registry.hpp>
@@ -50,6 +53,8 @@ struct GpuCoverageEntry final {
     // Owns its storage so generated ids (for example node.<typeId>) stay valid after the registry
     // returns.
     std::string id;
+    // label, approvalReference, and rationale are always string literals, so a view is safe. Any
+    // future generated text here must become an owned std::string like id.
     std::string_view label;
     GpuCoverageDisposition disposition = GpuCoverageDisposition::Required;
     // Nonempty exactly for an approved exception or host-preparation entry. A repository document
@@ -143,10 +148,13 @@ template <typename Variant, std::size_t... Index>
         std::make_index_sequence<std::variant_size_v<ImageEffectKernel>>{});
 }
 
-// A feature axis a single basic fixture must not be able to claim on its own.
+// A feature axis a single basic fixture must not be able to claim on its own. Both id and label are
+// OWNED: a shape label is generated text, so a view into a temporary std::string would dangle once
+// the temporary dies and the caller retains the registry. `fixtureOwner` is always a string
+// literal.
 struct GpuFeatureCoverageEntry final {
     std::string id;
-    std::string_view label;
+    std::string label;
     GpuCoverageDisposition disposition = GpuCoverageDisposition::Required;
     // The production module or suite that owns the genuine fixture.
     std::string_view fixtureOwner;
@@ -194,6 +202,14 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
             std::string{"shape kind axis: "} + std::string{gpuShapeKindFeatureLabel(kind)},
             GpuCoverageDisposition::Required, "src/render PathRaster + shape source tests"});
     }
+    // The vector coverage axis is a PIXEL operation, not host preparation: a GPU vector path must
+    // rasterize its own coverage on the device and prove it with native provenance/counters. A CPU
+    // PathRaster coverage mask consumed by CoveredSolidV1 (a fill from a host mask) does NOT
+    // satisfy this axis, so it stays Required and unfixtured here until the native GPU coverage
+    // producer and its consumer fixture land.
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.geometry.vector_coverage", "native GPU vector coverage rasterization",
+        GpuCoverageDisposition::Required, "src/render gpu vector coverage native tests"});
     out.push_back(GpuFeatureCoverageEntry{
         "feature.layer.affine.scale", "layer scale axis", GpuCoverageDisposition::Required,
         "src/render LayerTransform + gpu scene preparation tests"});
@@ -228,6 +244,7 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
 // render does not count. The final-render routes may read back the single composited image at the
 // CPU codec/file boundary; per-node or per-operation full-frame roundtrips are not an
 // implementation.
+// All three fields are fixed string literals, so views into static storage are safe here.
 struct GpuRouteCoverageEntry final {
     std::string_view id;
     std::string_view label;
@@ -272,8 +289,12 @@ enum class GpuCoverageContractIssue : std::uint8_t {
     RouteProofMissingProvenance,
     // The proof recorded zero actual native dispatches: a CPU whole-frame fallback, not a GPU pass.
     RouteProofNoNativeDispatch,
-    // The proof recorded more full-frame readbacks than its route policy allows.
+    // The proof recorded no verified frame, so it demonstrates no real per-frame run.
+    RouteProofNoVerifiedFrame,
+    // The proof recorded more final readback submissions/payloads than its route policy allows.
     RouteProofExcessReadback,
+    // A final-render proof omitted the explicit transferred-byte evidence.
+    RouteProofMissingTransferredBytes,
 };
 
 struct GpuCoverageContractDiagnostic final {
@@ -281,137 +302,10 @@ struct GpuCoverageContractDiagnostic final {
     std::string detail;
 };
 
-// The closed set of production harnesses that can prove one render route. A route can only be
-// proven by the harness that owns it; a generic "verified" flag or a bare bool cannot stand in.
-enum class GpuRouteHarnessKind : std::uint8_t {
-    None = 0,
-    ViewerPreview,
-    RamPreview,
-    StillFrameExport,
-    SequenceRangeExport,
-    VideoExport,
-    HeadlessScripted,
-};
-
-[[nodiscard]] constexpr std::string_view
-gpuRouteHarnessRouteId(const GpuRouteHarnessKind harness) noexcept {
-    switch (harness) {
-    case GpuRouteHarnessKind::ViewerPreview:
-        return "route.preview.viewer";
-    case GpuRouteHarnessKind::RamPreview:
-        return "route.preview.ram_preview";
-    case GpuRouteHarnessKind::StillFrameExport:
-        return "route.export.still_frame";
-    case GpuRouteHarnessKind::SequenceRangeExport:
-        return "route.export.sequence_range";
-    case GpuRouteHarnessKind::VideoExport:
-        return "route.export.video";
-    case GpuRouteHarnessKind::HeadlessScripted:
-        return "route.export.headless_scripted";
-    case GpuRouteHarnessKind::None:
-        return {};
-    }
-    return {};
-}
-
-// Preview routes are readback-free by construction; only a final-render route may read the single
-// composited image back at the codec/file boundary.
-[[nodiscard]] constexpr bool gpuRouteAllowsFinalReadback(const std::string_view routeId) noexcept {
-    return routeId == "route.export.still_frame" || routeId == "route.export.sequence_range" ||
-           routeId == "route.export.video" || routeId == "route.export.headless_scripted";
-}
-
-// The typed proof an externally executed production route must publish. Every field is real
-// provenance captured from the genuine run -- the production process identity digest, the actual
-// device ownership epoch, the real native dispatch count, the bounded full-frame readback count,
-// and a captured evidence digest. It is deliberately structured so a bool or a generic fake cannot
-// satisfy it, and no proof is registered in this repository today: every route stays MISSING until
-// its real harness publishes one.
-struct GpuRouteExecutionProof final {
-    std::string routeId;
-    GpuRouteHarnessKind harness = GpuRouteHarnessKind::None;
-    std::string processIdentityDigest;
-    std::string deviceOwnershipEpoch;
-    std::uint64_t nativeDispatches = 0;
-    std::uint64_t fullFrameReadbacks = 0;
-    std::string evidenceDigest;
-};
-
-[[nodiscard]] inline std::vector<GpuCoverageContractDiagnostic>
-validateGpuRouteExecutionProof(const GpuRouteExecutionProof& proof) {
-    std::vector<GpuCoverageContractDiagnostic> issues;
-    if (proof.routeId.empty() || proof.harness == GpuRouteHarnessKind::None) {
-        issues.push_back({GpuCoverageContractIssue::RouteProofEmptyOrGeneric,
-                          "a route proof has no route id or harness kind"});
-        return issues;
-    }
-    bool known = false;
-    for (const auto& route : gpuRenderRouteCoverage()) {
-        known = known || route.id == proof.routeId;
-    }
-    if (!known) {
-        issues.push_back({GpuCoverageContractIssue::RouteProofUnknownRoute,
-                          "route proof names an unknown route '" + proof.routeId + "'"});
-        return issues;
-    }
-    if (gpuRouteHarnessRouteId(proof.harness) != proof.routeId) {
-        issues.push_back(
-            {GpuCoverageContractIssue::RouteProofHarnessMismatch,
-             "route proof for '" + proof.routeId + "' was produced by a different harness"});
-    }
-    if (proof.processIdentityDigest.empty() || proof.deviceOwnershipEpoch.empty() ||
-        proof.evidenceDigest.empty()) {
-        issues.push_back({GpuCoverageContractIssue::RouteProofMissingProvenance,
-                          "route proof for '" + proof.routeId +
-                              "' omits the production identity, device epoch, or evidence digest"});
-    }
-    if (proof.nativeDispatches == 0) {
-        issues.push_back(
-            {GpuCoverageContractIssue::RouteProofNoNativeDispatch,
-             "route proof for '" + proof.routeId +
-                 "' recorded zero native dispatches (a CPU fallback is not a GPU pass)"});
-    }
-    const bool readbackAllowed = gpuRouteAllowsFinalReadback(proof.routeId);
-    if ((!readbackAllowed && proof.fullFrameReadbacks != 0) ||
-        (readbackAllowed && proof.fullFrameReadbacks > 1)) {
-        issues.push_back(
-            {GpuCoverageContractIssue::RouteProofExcessReadback,
-             "route proof for '" + proof.routeId + "' exceeds its full-frame readback policy"});
-    }
-    return issues;
-}
-
-// The sink a real, externally executed route harness publishes into. A proof is retained only when
-// it validates; an empty/generic or fake proof is rejected by name. The gate reads this sink and
-// keeps every route MISSING while it is empty.
-class GpuRouteProofSink final {
-  public:
-    [[nodiscard]] GpuCoverageContractIssue publish(const GpuRouteExecutionProof& proof) {
-        const auto issues = validateGpuRouteExecutionProof(proof);
-        if (!issues.empty()) {
-            return issues.front().issue;
-        }
-        proofs_.push_back(proof);
-        return GpuCoverageContractIssue::None;
-    }
-
-    [[nodiscard]] const std::vector<GpuRouteExecutionProof>& proofs() const noexcept {
-        return proofs_;
-    }
-
-    [[nodiscard]] const GpuRouteExecutionProof*
-    find(const std::string_view routeId) const noexcept {
-        for (const auto& proof : proofs_) {
-            if (proof.routeId == routeId) {
-                return &proof;
-            }
-        }
-        return nullptr;
-    }
-
-  private:
-    std::vector<GpuRouteExecutionProof> proofs_;
-};
+// The typed render-route proof contract (harness kinds, GpuRouteExecutionProof, validation, and the
+// sink) lives in gpu_coverage_route_proof_contract.hpp, which includes this header. It is kept
+// separate so this classifier header stays bounded and consumers that do not need route proofs do
+// not pull them in.
 
 // The narrow, already-approved host-preparation steps. These are not whole-frame pixel-rendering
 // opt-outs; the rendering operation itself remains Required above. Each entry names the accepted
@@ -419,7 +313,10 @@ class GpuRouteProofSink final {
 //
 // Media decode is intentionally scoped to container/sample I/O and decompression only. Converting
 // the decoded samples into the working colour space is a pixel transformation and remains Required
-// (see feature.color.working_space_transform and the OCIO image-effect kernels).
+// (see feature.color.working_space_transform and the OCIO image-effect kernels). Likewise, font
+// load/shaping and parameter/curve/geometry resolution are host preparation, but the per-pixel
+// coverage mask a vector source rasterizes is a pixel transformation and is Required GPU work
+// (feature.geometry.vector_coverage); there is no host-preparation exemption for it.
 [[nodiscard]] inline std::vector<GpuCoverageEntry> gpuApprovedCpuPreparation() {
     return {
         GpuCoverageEntry{"prep.media.io_decompress",
@@ -439,12 +336,6 @@ class GpuRouteProofSink final {
             GpuCoverageDisposition::ApprovedCpuHostPreparation, "docs/architecture/gpu-backend.md",
             "Animated and driven operands are resolved by the real CPU preflight before "
             "the GPU command is built."},
-        GpuCoverageEntry{
-            "prep.geometry.coverage_raster",
-            "vector coverage rasterization for fractional transforms",
-            GpuCoverageDisposition::ApprovedCpuHostPreparation, "docs/architecture/gpu-backend.md",
-            "The exact CPU PathRaster coverage is host-built; the GPU command consumes "
-            "it rather than re-evaluating whole-frame pixels."},
         GpuCoverageEntry{
             "prep.export.final_readback",
             "single final composited image readback at the codec/file boundary",

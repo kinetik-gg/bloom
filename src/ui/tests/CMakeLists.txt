@@ -206,29 +206,20 @@ target_link_libraries(bloom_composition_preview_controller_test PRIVATE bloom_ui
 target_link_libraries(bloom_composition_preview_cpu_stage_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_preview_gpu_scene_stage_test PRIVATE bloom_ui)
 target_include_directories(bloom_composition_preview_gpu_scene_stage_test
-    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/tests")
-# Production general-display stage path. It needs the pinned glslangValidator/spirv-val to compile a
-# real OCIO DisplayRgba8 program; without them the general case is compiled out and the test is a
-# clean pass with no general assertion (never a fabricated success).
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+# Production general-display stage path. It drives the ACTUAL makeSessionRefreshingGpuSceneStage
+# with the shared runtime GpuOcioContextResolver over the REAL packaged tools staged beside this
+# executable by bloom_package_gpu_shader_tools (no injected tool paths or preparer); without the
+# tools the general assertions are compiled out and the test is a clean pass.
 add_executable(bloom_composition_preview_gpu_scene_general_test
     composition_preview_gpu_scene_general_tests.cpp)
 target_include_directories(bloom_composition_preview_gpu_scene_general_test
     PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
 target_link_libraries(bloom_composition_preview_gpu_scene_general_test PRIVATE bloom_ui)
-find_program(bloom_ui_general_ocio_glslang_validator
-    NAMES glslangValidator
-    HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
-    NO_DEFAULT_PATH)
-find_program(bloom_ui_general_ocio_spirv_val
-    NAMES spirv-val
-    HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
-    NO_DEFAULT_PATH)
-if(bloom_ui_general_ocio_glslang_validator AND bloom_ui_general_ocio_spirv_val)
-    get_filename_component(bloom_ui_general_ocio_tools_dir
-        "${bloom_ui_general_ocio_glslang_validator}" DIRECTORY)
-    target_compile_definitions(bloom_composition_preview_gpu_scene_general_test PRIVATE
-        "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_ui_general_ocio_tools_dir}\"")
-endif()
+target_compile_definitions(bloom_composition_preview_gpu_scene_general_test PRIVATE
+    "BLOOM_GPU_GENERAL_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_composition_preview_gpu_scene_general_test>\"")
+include(BloomGpuShaderTools)
+bloom_package_gpu_shader_tools(bloom_composition_preview_gpu_scene_general_test)
 bloom_enable_warnings(bloom_composition_preview_gpu_scene_general_test)
 bloom_add_test(
     NAME bloom.ui.composition_preview_gpu_scene_general
@@ -818,6 +809,28 @@ bloom_add_test(
     COMMAND bloom_assets_editor_test
     LABELS ui integration assets
     TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+add_executable(bloom_project_host_empty_test project_host_empty_tests.cpp)
+target_link_libraries(bloom_project_host_empty_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_project_host_empty_test)
+bloom_add_test(
+    NAME bloom.ui.project-host-empty
+    COMMAND bloom_project_host_empty_test
+    LABELS ui integration
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+add_executable(bloom_composition_duration_test composition_duration_tests.cpp)
+target_link_libraries(bloom_composition_duration_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_composition_duration_test)
+bloom_add_test(
+    NAME bloom.ui.composition-duration
+    COMMAND bloom_composition_duration_test
+    LABELS ui integration
+    TIMEOUT 60
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 

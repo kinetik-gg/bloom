@@ -39,14 +39,22 @@ struct ExrPixel final {
     float alpha = 1.0F;
 };
 
-void writeExrRgba(const std::filesystem::path& path, const int width, const int height,
-                  const std::vector<ExrPixel>& pixels) {
+// ACES AP0 primaries with the ACES white point, exactly the values the media EXR reader recognizes
+// as the ACES2065-1 interpretation.
+[[nodiscard]] inline Imf::Chromaticities acesAp0Chromaticities() {
+    return Imf::Chromaticities(Imath::V2f(0.7347F, 0.2653F), Imath::V2f(0.0F, 1.0F),
+                               Imath::V2f(0.0001F, -0.0770F), Imath::V2f(0.32168F, 0.33767F));
+}
+
+void writeExrRgbaWithChromaticities(const std::filesystem::path& path, const int width,
+                                    const int height, const std::vector<ExrPixel>& pixels,
+                                    const Imf::Chromaticities& chromaticities) {
     if (static_cast<int>(pixels.size()) != width * height) {
         throw std::logic_error("EXR fixture pixel count does not match its dimensions");
     }
     const Imath::Box2i window(Imath::V2i(0, 0), Imath::V2i(width - 1, height - 1));
     Imf::Header header(window, window);
-    header.insert("chromaticities", Imf::ChromaticitiesAttribute(Imf::Chromaticities()));
+    header.insert("chromaticities", Imf::ChromaticitiesAttribute(chromaticities));
     header.insert("alphaAssociation", Imf::StringAttribute("premultiplied"));
     header.channels().insert("R", Imf::Channel(Imf::FLOAT));
     header.channels().insert("G", Imf::Channel(Imf::FLOAT));
@@ -74,6 +82,11 @@ void writeExrRgba(const std::filesystem::path& path, const int width, const int 
     Imf::OutputFile file(path.string().c_str(), header);
     file.setFrameBuffer(frameBuffer);
     file.writePixels(height);
+}
+
+void writeExrRgba(const std::filesystem::path& path, const int width, const int height,
+                  const std::vector<ExrPixel>& pixels) {
+    writeExrRgbaWithChromaticities(path, width, height, pixels, Imf::Chromaticities());
 }
 
 [[nodiscard]] document::AssetRecord imageAsset(const std::filesystem::path& path,

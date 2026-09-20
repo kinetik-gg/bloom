@@ -52,7 +52,7 @@ void testAddCompositionBuildsTopologyAndUndoRedo(TestContext& test) {
                 "AddComposition redo restores the pinned composition");
 }
 
-void testDeleteCompositionGuardsLastAndUndoRedo(TestContext& test) {
+void testDeleteCompositionAllowsLastAndUndoRedo(TestContext& test) {
     Document document(
         document::makeNewProject("Project", "Main", core::RationalTime::fromInteger(10)).project);
     CommandStack stack(document);
@@ -79,15 +79,22 @@ void testDeleteCompositionGuardsLastAndUndoRedo(TestContext& test) {
                     document.snapshot().project().findComposition(initialId) == nullptr,
                 "DeleteComposition redo reapplies the deletion");
 
+    // Deleting the FINAL composition is allowed and yields the same usable empty project a blank
+    // startup begins with; undo restores it as one history step.
     const auto lastBefore = document.snapshot();
     Transaction last("Delete Last Composition", lastBefore.revision());
     last.emplace<DeleteComposition>(secondId);
-    const auto refused = stack.execute(std::move(last));
-    test.expect(refused.status == CommandStatus::Rejected &&
-                    refused.operationFailures.front().issue.code ==
-                        OperationIssueCode::Unsupported &&
-                    document.snapshot().revision() == lastBefore.revision() && stack.size() == 2,
-                "DeleteComposition refuses to delete the last composition atomically");
+    const auto lastDelete = stack.execute(std::move(last));
+    test.expect(lastDelete.changed() && document.snapshot().project().compositions().empty() &&
+                    document.snapshot().project().validate().ok(),
+                "DeleteComposition deletes the last composition and leaves a valid empty project");
+    test.expect(stack.size() == 3, "deleting the last composition is a single history entry");
+    test.expect(stack.undo().changed() &&
+                    document.snapshot().project().findComposition(secondId) != nullptr &&
+                    document.snapshot().project().validate().ok(),
+                "undo restores the final composition");
+    test.expect(stack.redo().changed() && document.snapshot().project().compositions().empty(),
+                "redo removes the final composition again");
 }
 
 void testDuplicateCompositionRemapsDeepDocumentState(TestContext& test) {
@@ -232,7 +239,7 @@ int main() {
     bloom::commands::test::TestContext test;
     try {
         bloom::commands::test::testAddCompositionBuildsTopologyAndUndoRedo(test);
-        bloom::commands::test::testDeleteCompositionGuardsLastAndUndoRedo(test);
+        bloom::commands::test::testDeleteCompositionAllowsLastAndUndoRedo(test);
         bloom::commands::test::testDuplicateCompositionRemapsDeepDocumentState(test);
         bloom::commands::test::testSafeAreaSettingsAreUndoableAndDuplicated(test);
         bloom::commands::test::testWorkingColorSpaceOverrideIsUndoable(test);

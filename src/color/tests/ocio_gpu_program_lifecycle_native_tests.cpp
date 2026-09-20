@@ -178,7 +178,9 @@ uint bloom_ocio_quantize(float value)
         out << quantizerGlsl();
     }
     out << "void main() {\n";
-    out << "  uint index = gl_GlobalInvocationID.x;\n";
+    out << "  const uint bloom_ocio_stride_x = gl_NumWorkGroups.x * gl_WorkGroupSize.x;\n";
+    out << "  uint index = gl_GlobalInvocationID.y * bloom_ocio_stride_x + "
+           "gl_GlobalInvocationID.x;\n";
     out << "  if (index >= bloom_ocio_push.pixelCount) { return; }\n";
     out << "  ivec2 c = ivec2(int(index % bloom_ocio_push.width), int(index / "
            "bloom_ocio_push.width));\n";

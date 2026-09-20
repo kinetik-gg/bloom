@@ -34,6 +34,7 @@
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/gpu_ocio_command.hpp>
+#include <bloom/runtime/gpu_ocio_preparation.hpp>
 
 #include <charconv>
 #include <cmath>
@@ -92,6 +93,10 @@ struct GpuSceneMediaStatistics final {
     std::uint64_t videoSources = 0;
     std::uint64_t imageConversions = 0;
     std::uint64_t videoConversions = 0;
+    // Native (GPU) colour-transform commands successfully prepared through the injected OCIO
+    // preparer. A warm build serves the same program from the preparer's own content cache; the
+    // upload cache hit is what suppresses the decode/convert entirely.
+    std::uint64_t ocioCommandPreparations = 0;
     std::uint64_t uploadCacheHits = 0;
     std::uint64_t uploadCacheMisses = 0;
     std::uint64_t uploadKeyConstructions = 0;
@@ -485,6 +490,18 @@ struct PreparedGpuSceneBuildResult final {
     explicit operator bool() const noexcept { return hasValue(); }
 };
 
+// Off-UI GPU OCIO preparation injection for media-source colour conversion and image-effect
+// commands. The builder resolves the exact configured colour-space transform through the accepted
+// OCIO GPU builder, generates the wrapper, and compiles it off the UI thread through the injected
+// preparer; it never compiles shader text itself and never consults PATH, an environment variable,
+// or a workspace path. A null preparer makes a reachable non-identity transform fail closed
+// (Unsupported) so a caller that does not prepare transforms keeps the existing CPU path rather
+// than silently substituting identity.
+struct GpuSceneOcioContext final {
+    std::shared_ptr<GpuOcioProgramPreparer> preparer;
+    GpuOcioCompileOptions compileOptions;
+};
+
 // Stateless CPU scene preparation. The caller owns the plan and request; nothing is retained beyond
 // the returned scene.
 class GpuSceneCoverageCache;
@@ -498,9 +515,16 @@ class CpuGpuSceneBuilder final {
     // asset base directory and the prepared-upload cache used by ImageSource/VideoSource leaves.
     // The default empty context keeps the non-media constructor callers working: a media scene then
     // fails closed with MediaUnavailable instead of decoding with different semantics.
+    //
+    // The optional OCIO context supplies the off-UI preparer and the qualified compiler tool paths
+    // used for a media-source or image-effect colour transform. Its default (no preparer, no tools)
+    // keeps every existing caller working and fails a non-identity transform closed rather than
+    // mis-rendering it.
     explicit CpuGpuSceneBuilder(std::shared_ptr<GpuSceneCoverageCache> coverageCache = nullptr,
-                                GpuSceneMediaContext mediaContext = {})
-        : coverageCache_(std::move(coverageCache)), mediaContext_(std::move(mediaContext)) {}
+                                GpuSceneMediaContext mediaContext = {},
+                                GpuSceneOcioContext ocioContext = {})
+        : coverageCache_(std::move(coverageCache)), mediaContext_(std::move(mediaContext)),
+          ocioContext_(std::move(ocioContext)) {}
 
     [[nodiscard]] PreparedGpuSceneBuildResult
     build(const std::shared_ptr<const CompiledCompositionPlan>& plan,
@@ -513,6 +537,7 @@ class CpuGpuSceneBuilder final {
 
     std::shared_ptr<GpuSceneCoverageCache> coverageCache_;
     GpuSceneMediaContext mediaContext_;
+    GpuSceneOcioContext ocioContext_;
 };
 
 } // namespace bloom::runtime

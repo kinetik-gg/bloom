@@ -367,47 +367,29 @@ struct GpuDisplayProgramResult final {
     [[nodiscard]] explicit operator bool() const noexcept { return hasValue(); }
 };
 
-// Blocking, thread-safe per-config display-program preparer. `config` and `options` are immutable
-// for the lifetime of the instance; the shared GpuOcioProgramPreparer owns the bounded command
-// cache and the persistent compiler, so an identical (display, view, geometry, viewAdjust) request
-// is a cache hit. The program's binding is taken from the resolved config, never from the caller.
-class GpuDisplayProgramPreparer final {
-  public:
-    GpuDisplayProgramPreparer(color::ResolvedBloomNeutralConfig config,
-                              GpuOcioCompileOptions options);
-    ~GpuDisplayProgramPreparer();
-    GpuDisplayProgramPreparer(const GpuDisplayProgramPreparer&) = delete;
-    GpuDisplayProgramPreparer& operator=(const GpuDisplayProgramPreparer&) = delete;
+class GpuOcioContextResolver;
 
-    [[nodiscard]] GpuDisplayProgramResult
-    prepare(std::string_view display, std::string_view view, std::uint32_t width,
-            std::uint32_t height, ViewAdjust viewAdjust = {},
-            const GpuOcioCancellation& cancel = {}) const;
-
-    [[nodiscard]] GpuOcioPreparerCounters counters() const;
-
-  private:
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
-};
-
-// The production general-display program service. It is constructed with an options provider and
-// resolves the shader tools lazily on the first prepare() call (never at construction), then
-// resolves and caches one immutable config per exact (locator, revision, working space) identity.
-// Every resolution and compile happens off the UI thread because prepare() runs on the GPU-scene
-// CPU worker. No hash, config, or compile I/O is performed by the constructor.
+// The production general-display program service. It consumes the ONE shared
+// runtime::GpuOcioContextResolver: it never resolves the packaged tools itself and never owns a
+// second GpuOcioProgramPreparer. The first prepare() (run on the GPU-scene CPU worker) resolves the
+// shared context and reuses its single preparer for every config, so a warm identical request is a
+// command-cache hit and a changed config/working space is a cold, separately-keyed command.
+//
+// Per-config resolution is cached in a BOUNDED cache keyed by the exact (locator, content revision,
+// working space) identity; the CPU oracle is cached in a bounded cache keyed by that identity plus
+// the display/view. The immutable resolved config and oracle are pinned by shared_ptr while cached;
+// the least-recently-used entry is evicted first, so the cache cannot grow without bound. The
+// command program cache is the shared preparer's own bounded cache.
 class GpuDisplayProgramService final {
   public:
-    using CompileOptionsProvider = std::function<GpuOcioCompileOptions()>;
-
-    explicit GpuDisplayProgramService(CompileOptionsProvider optionsProvider,
-                                      GpuOcioPreparerBudgets budgets = {});
+    explicit GpuDisplayProgramService(std::shared_ptr<GpuOcioContextResolver> resolver,
+                                      std::size_t maxConfigs = 8, std::size_t maxOracles = 16);
     ~GpuDisplayProgramService();
     GpuDisplayProgramService(const GpuDisplayProgramService&) = delete;
     GpuDisplayProgramService& operator=(const GpuDisplayProgramService&) = delete;
 
-    // Blocking. Resolves the requested config/working space on first use and caches the per-config
-    // preparer by the exact config identity, so a warm identical request is a command-cache hit.
+    // Blocking. Resolves the shared context (idempotent), resolves the requested config/working
+    // space on first use, then prepares the command through the SHARED preparer.
     [[nodiscard]] GpuDisplayProgramResult
     prepare(const GpuDisplayColorBinding& binding, std::uint32_t width, std::uint32_t height,
             ViewAdjust viewAdjust = {}, const GpuOcioCancellation& cancel = {}) const;

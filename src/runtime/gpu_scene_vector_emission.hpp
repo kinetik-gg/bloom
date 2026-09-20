@@ -136,7 +136,7 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
     const render::ImageWindow layerWindow, const render::ImageWindow fullDisplayWindow,
     const core::PixelAspectRatio fullPixelAspect, const double hScale, const double vScale,
     const double opacity, const bool nativeGrid, const std::uint64_t allowance,
-    const OperationIndex operationIndex, const render::LayerTransform& transformValue,
+    const OperationIndex operationIndex, const render::LayerTransform* transformValue,
     const std::shared_ptr<GpuSceneCoverageCache>& coverageCache,
     const CancellationToken& cancellation, Emit&& emit, Charge&& charge,
     ChargeCoverage&& chargeCoverage, GpuSceneCommandIndex& composed, std::string& semanticKey,
@@ -145,7 +145,7 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
     const auto* textInput = std::get_if<CompiledText>(&inputOperation);
     const auto* shapeInput = std::get_if<CompiledShape>(&inputOperation);
 
-    if (textInput != nullptr && nativeGrid) {
+    if (textInput != nullptr && nativeGrid && transformValue != nullptr) {
         // The integer-grid CPU arm renders the text leaf's own proxy-scaled coverage image and
         // translates it by an exact integer. Build that leaf coverage over its own bitmap window,
         // then the identity TranslationOpacityBilinearV1 command performs the exact integer move
@@ -176,7 +176,7 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
         const std::string leafKey = leafCommand.semanticKey;
         leafCommand.sourceOperation = operationIndex;
         const auto leafIndex = emit(std::move(leafCommand));
-        const auto device = transformValue.translationOnlyDeviceTranslation();
+        const auto device = transformValue->translationOnlyDeviceTranslation();
         if (!device.has_value()) {
             return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InternalInvariant,
                                        "Translation-only transform lost its device translation"};

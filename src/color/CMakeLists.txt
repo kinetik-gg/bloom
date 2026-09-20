@@ -340,6 +340,19 @@ if(BUILD_TESTING)
         TIMEOUT 120
         LABELS unit color ocio gpu)
 
+    # CPU-only proof for the versioned CPU fast-power parity adapter: the real neutral GammaOp CST
+    # must receive the ssePower `pow` redirection with the generated body left verbatim, and a
+    # non-GammaOp program must not. The device parity proof is the runtime precision native test.
+    add_executable(bloom_color_ocio_gpu_precision_test
+        tests/ocio_gpu_precision_tests.cpp)
+    target_link_libraries(bloom_color_ocio_gpu_precision_test PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)
+    bloom_enable_warnings(bloom_color_ocio_gpu_precision_test)
+    bloom_add_test(
+        NAME bloom.color.ocio-gpu-precision
+        COMMAND bloom_color_ocio_gpu_precision_test
+        TIMEOUT 120
+        LABELS unit color ocio gpu)
+
     # Native GpuOcioProgram proof. Compiles the complete wrapper+OCIO GLSL with the pinned tools
     # off the device owner thread, then runs the real Vulkan pipeline and compares against the real
     # CPU colour processors. Skips explicitly (77) when no compatible device is present.
@@ -366,7 +379,9 @@ if(BUILD_TESTING)
     # still builds and runs the extraction and no-resource native tests (which skip explicitly).
     if(BLOOM_RENDER_VULKAN_AVAILABLE)
         add_executable(bloom_color_ocio_gpu_program_resources_native_test
-            tests/ocio_gpu_program_resources_native_tests.cpp)
+            tests/ocio_gpu_program_resources_native_tests.cpp
+            tests/ocio_gpu_program_dispatch_plan_tests.cpp
+            tests/ocio_gpu_program_reflection_tests.cpp)
         target_link_libraries(bloom_color_ocio_gpu_program_resources_native_test PRIVATE bloom_color_ocio OpenColorIO::OpenColorIO)
         target_include_directories(bloom_color_ocio_gpu_program_resources_native_test
             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../render")

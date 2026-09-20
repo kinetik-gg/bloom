@@ -98,6 +98,13 @@ GpuOcioProgramDiagnostic GpuOcioProgram::beginEffect(std::shared_ptr<const GpuIm
     if (impl.jobState == GpuOcioProgramJobState::Pending) {
         return makeDiagnostic(GpuOcioProgramDiagnosticCode::Busy, "a job is already in flight");
     }
+    // A failure that left a submission unretired (e.g. an unexpected fence status) must not be
+    // cleared: clearJob() would resize/destroy the packed buffer or publish nothing while the GPU
+    // may still read it. Refuse typed Busy until the owner proves retirement or loses the device.
+    if (impl.queueSubmitted) {
+        return makeDiagnostic(GpuOcioProgramDiagnosticCode::Busy,
+                              "the previous submission is not proven retired");
+    }
     if (impl.jobState != GpuOcioProgramJobState::Idle) {
         impl.clearJob();
     }
@@ -123,6 +130,13 @@ GpuOcioProgramDiagnostic GpuOcioProgram::beginDisplay(std::shared_ptr<const GpuI
     }
     if (impl.jobState == GpuOcioProgramJobState::Pending) {
         return makeDiagnostic(GpuOcioProgramDiagnosticCode::Busy, "a job is already in flight");
+    }
+    // A failure that left a submission unretired (e.g. an unexpected fence status) must not be
+    // cleared: clearJob() would resize/destroy the packed buffer or publish nothing while the GPU
+    // may still read it. Refuse typed Busy until the owner proves retirement or loses the device.
+    if (impl.queueSubmitted) {
+        return makeDiagnostic(GpuOcioProgramDiagnosticCode::Busy,
+                              "the previous submission is not proven retired");
     }
     if (impl.jobState != GpuOcioProgramJobState::Idle) {
         impl.clearJob();

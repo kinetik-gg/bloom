@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -19,6 +20,7 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace bloom::color::ocio_gpu_native_test {
@@ -210,7 +212,9 @@ std::string buildWrapperGlsl(const bloom::render::OcioGpuProgramDesc& desc, cons
         out << quantizerGlsl();
     }
     out << "void main() {\n";
-    out << "  uint index = gl_GlobalInvocationID.x;\n";
+    out << "  const uint bloom_ocio_stride_x = gl_NumWorkGroups.x * gl_WorkGroupSize.x;\n";
+    out << "  uint index = gl_GlobalInvocationID.y * bloom_ocio_stride_x + "
+           "gl_GlobalInvocationID.x;\n";
     out << "  if (index >= bloom_ocio_push.pixelCount) { return; }\n";
     out << "  ivec2 c = ivec2(int(index % bloom_ocio_push.width), int(index / "
            "bloom_ocio_push.width));\n";
@@ -243,6 +247,22 @@ makeProgram(bloom::render::GpuDevice& device, bloom::render::OcioGpuProgramDesc 
         return std::nullopt;
     }
     return std::shared_ptr<GpuOcioProgram>(std::move(created.program));
+}
+
+bloom::render::GpuOcioProgramPollResult
+awaitOcioCompletion(bloom::render::GpuOcioProgram& program, Expectations& expectations) {
+    // Finite ceiling: ~20 s of 1 ms ticks. A job that has not retired by then is a failure, never a
+    // hang. This is a bounded wait, not a naked busy loop.
+    constexpr int kMaxAttempts = 20000;
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+        const auto result = program.poll();
+        if (result != bloom::render::GpuOcioProgramPollResult::Pending) {
+            return result;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    expectations.expect(false, "the native OCIO job retires within the bounded poll window");
+    return bloom::render::GpuOcioProgramPollResult::Pending;
 }
 
 std::uint8_t quantize(const double value) {
