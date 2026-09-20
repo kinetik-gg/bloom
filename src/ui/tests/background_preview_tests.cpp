@@ -445,48 +445,7 @@ void testPointerPressCancelsBeforePreviewChanges(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
-void testHalfCachedPlaybackNeverWaits(Expectations& expectations) {
-    SessionFixture fixture(makeTestProject("Half cached playback", time(8, 25)));
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "initial ready");
-    for (const auto index : {2, 4, 6, 0}) {
-        (void)fixture.session.setCurrentTime(time(index, 25));
-        expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                            "seed cached frame");
-    }
-    fixture.controller.recordPreparationDuration(
-        fixture.controller.state().frame->desiredIdentity(), 1h);
-    auto now = std::chrono::steady_clock::now();
-    ui::PlaybackController playback(fixture.session, fixture.controller, [&] { return now; }, 16ms);
-    const auto before = fixture.preparationCount.load();
-    playback.play();
-    for (int index = 1; index <= 7; ++index) {
-        now += 40ms;
-        playback.tick();
-        expectations.expect(fixture.session.currentTime() == time(index, 25),
-                            "clock advances on every tick");
-        const auto shown = index % 2 == 0 ? index : index - 1;
-        expectations.expect(fixture.controller.state().frame != nullptr &&
-                                fixture.controller.state().frame->desiredIdentity().time ==
-                                    time(shown, 25),
-                            "cached frames show immediately; misses retain the previous picture");
-        expectations.expect(fixture.controller.droppedFrameCount() ==
-                                static_cast<std::uint64_t>((index + 1) / 2),
-                            "each uncached frame is counted once");
-    }
-    expectations.expect(fixture.preparationCount.load() == before,
-                        "slow misses submit no evaluations");
-    now += 200ms;
-    playback.tick();
-    expectations.expect(fixture.controller.droppedFrameCount() == 4,
-                        "cached wrap advances one frame without drops even after a host stall");
-    now += 40ms;
-    playback.tick();
-    expectations.expect(fixture.controller.droppedFrameCount() == 9,
-                        "uncached catch-up counts four skipped indices and its uncached target");
-    playback.pause();
-    expectations.expect(fixture.controller.droppedFrameCount() == 9, "pause retains the run total");
-    finishFixture(fixture, expectations);
-}
+#include "background_preview_playback.ipp"
 
 void testVisibleAdmissionAndSupersession(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Visible playback admission", time(8, 25)));
@@ -702,7 +661,7 @@ int main(int argc, char** argv) {
     Expectations expectations;
     try {
         testPointerPressCancelsBeforePreviewChanges(expectations);
-        testHalfCachedPlaybackNeverWaits(expectations);
+        testHalfCachedPlaybackAdmitsIdleMissesAndBackpressures(expectations);
         testVisibleAdmissionAndSupersession(expectations);
         testBackgroundFillsAheadWhilePlaying(expectations);
         testWorkAreaBoundsBackground(expectations);

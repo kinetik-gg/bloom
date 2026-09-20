@@ -72,6 +72,10 @@ GpuSolidDiagnostic GpuSolid::beginCovered(const GpuSolidParameters&, std::span<c
                                           float, std::uint64_t) {
     return diagnostic();
 }
+GpuSolidDiagnostic GpuSolid::beginCoveredResident(const GpuSolidParameters&, const GpuPathCoverage&,
+                                                  float, std::uint64_t) {
+    return diagnostic();
+}
 GpuSolidPollResult GpuSolid::poll() { return GpuSolidPollResult::Failure; }
 const GpuImage* GpuSolid::image() const noexcept { return nullptr; }
 GpuImage GpuSolid::takeImage() noexcept { return GpuImage{}; }

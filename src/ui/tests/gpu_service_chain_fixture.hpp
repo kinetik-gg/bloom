@@ -290,11 +290,15 @@ hasCpuPixels(const std::shared_ptr<const runtime::PreparedPreviewFrame>& frame) 
 }
 
 // Evaluate one immutable plan with the fixture evaluator and convert it with the fixture qualified
-// display processor. This is the shared CPU oracle body.
+// display processor. This is the shared CPU oracle body. `resolution` defaults to the full
+// composition format; a caller comparing against a proxy-resolved GPU product passes the request's
+// own resolved resolution so the oracle lands on the SAME pixel grid.
 [[nodiscard]] inline std::shared_ptr<const runtime::PreparedPreviewFrame>
 planCpuReference(Fixture& fixture,
                  const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
-                 const PreviewRequestIdentity& identity) {
+                 const PreviewRequestIdentity& identity,
+                 const runtime::EvaluationResolution& resolution = runtime::EvaluationResolution{
+                     runtime::CompositionFormatResolution{}}) {
     if (plan == nullptr || fixture.processor == nullptr) {
         return nullptr;
     }
@@ -302,7 +306,7 @@ planCpuReference(Fixture& fixture,
         fixture.evaluator.evaluate(plan,
                                    {.time = identity.time,
                                     .output = plan->output(),
-                                    .resolution = runtime::CompositionFormatResolution{},
+                                    .resolution = resolution,
                                     .quality = EvaluationQuality::Reference,
                                     .colorIntent = EvaluationColorIntent::LinearRec709Scene,
                                     .pixelStorageByteLimit = kBudget},
@@ -339,6 +343,21 @@ snapshotCpuReference(Fixture& fixture, const bloom::document::Snapshot& snapshot
         return nullptr;
     }
     return planCpuReference(fixture, compile.plan, identity);
+}
+
+// The same genuine CPU reference, evaluated at the request's own resolved resolution. A route proof
+// that compares actual resident pixels against the oracle must use this so both are on one pixel
+// grid (the resident product is proxy-resolved when the request asked for Auto).
+[[nodiscard]] inline std::shared_ptr<const runtime::PreparedPreviewFrame>
+snapshotCpuReferenceAtResolution(Fixture& fixture, const bloom::document::Snapshot& snapshot,
+                                 const PreviewRequestIdentity& identity) {
+    const auto compile = fixture.compiler.compile(
+        {.snapshot = snapshot, .compositionId = identity.compositionId, .parameterOverrides = {}},
+        {});
+    if (compile.status != runtime::SnapshotCompileStatus::Compiled || compile.plan == nullptr) {
+        return nullptr;
+    }
+    return planCpuReference(fixture, compile.plan, identity, identity.resolution);
 }
 
 [[nodiscard]] inline bool

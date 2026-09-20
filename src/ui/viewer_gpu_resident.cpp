@@ -75,9 +75,16 @@ struct ViewerGpuResidentController::Impl final {
     PresentAck presentAck;
     CpuFallback cpuFallback;
     CpuCoverSnapshot coverSnapshot;
+    // The cover is parented to this alien host so Qt's WA_NativeWindow sibling enforcement only
+    // reaches the cover, never the host's parent (the editor) or the editor's other children.
+    ViewerGpuCpuCoverHost* coverHost = nullptr;
     ViewerGpuCpuCover* cover = nullptr;
     // True only while a native transition (attach/resize/resume/refusal) needs the CPU cover.
     bool coverRequired = true;
+    // True once the cover pixmap holds the current CPU paint. It is captured on the hidden->visible
+    // transition only, so a retained/refused transition that re-raises the cover does not
+    // re-rasterize the snapshot every poll tick.
+    bool coverCaptured = false;
     std::function<void()> stateChanged;
     ViewerGpuPresenter::State lastReportedState = ViewerGpuPresenter::State::Uninitialized;
 
@@ -126,41 +133,71 @@ struct ViewerGpuResidentController::Impl final {
         }
     }
 
-    void ensureCover(const QRect& rect) {
+    // Returns true only on the conceal->reveal transition that actually showed and restacked the
+    // cover. A cover that is already visible is left completely untouched.
+    [[nodiscard]] bool ensureCover(const QRect& rect) {
         if (!coverSnapshot) {
-            return;
+            return false;
+        }
+        if (coverHost == nullptr) {
+            coverHost = new ViewerGpuCpuCoverHost(dependencies.containerParent);
+        }
+        if (coverHost->geometry() != rect) {
+            coverHost->setGeometry(rect);
         }
         if (cover == nullptr) {
-            cover = new ViewerGpuCpuCover(dependencies.containerParent);
+            cover = new ViewerGpuCpuCover(coverHost);
             cover->setObjectName(QStringLiteral("bloomViewerGpuCpuCover"));
+            coverCaptured = false;
         }
-        if (cover->geometry() != rect) {
-            cover->setGeometry(rect);
+        const QRect local(QPoint(0, 0), rect.size());
+        if (cover->geometry() != local) {
+            cover->setGeometry(local);
         }
-        // Snapshot only on the transition into visibility; a visible cover is not
-        // re-captured on every ordinary present.
-        if (!cover->isVisible()) {
+        // Snapshot once per conceal->reveal transition; a cover that is merely re-raised while it
+        // already holds the current paint is not re-rasterized (and a hidden ancestor cannot be
+        // mistaken for a transition, unlike a bare isVisible() test).
+        if (!coverCaptured) {
             cover->setSnapshot(coverSnapshot());
-            cover->show();
+            coverCaptured = true;
         }
-        cover->raise();
+        if (!cover->isVisible()) {
+            if (!coverHost->isVisible()) {
+                coverHost->show();
+            }
+            cover->show();
+            cover->raise();
+            return true;
+        }
+        return false;
     }
 
     void showCover() {
         if (cover == nullptr) {
             return;
         }
-        if (!cover->isVisible()) {
+        if (!coverCaptured) {
             cover->setSnapshot(coverSnapshot());
-            cover->show();
+            coverCaptured = true;
         }
-        cover->raise();
+        if (!cover->isVisible()) {
+            if (coverHost != nullptr && !coverHost->isVisible()) {
+                coverHost->show();
+            }
+            cover->show();
+            cover->raise();
+        }
     }
 
     void hideCover() {
         if (cover != nullptr) {
             cover->hide();
         }
+        if (coverHost != nullptr) {
+            coverHost->hide();
+        }
+        // The next reveal must capture fresh paint, whatever changed while it was concealed.
+        coverCaptured = false;
     }
 
     [[nodiscard]] bool ensurePresenter(const std::uint32_t width, const std::uint32_t height) {
@@ -351,6 +388,12 @@ struct ViewerGpuResidentController::Impl final {
             }
             return;
         }
+        if (presentPending) {
+            // A newer present is authored but not yet enqueued (the target is still attaching or
+            // resizing). The previous present's sequence must not acknowledge the newer request, or
+            // the cover would hide over a stale frame.
+            return;
+        }
         if (!presenter->acceptingPresent()) {
             return; // still attaching/resizing; wait
         }
@@ -403,6 +446,16 @@ QWidget* ViewerGpuResidentController::cpuCoverForTest() const noexcept { return 
 void ViewerGpuResidentController::concealCpuCover() {
     impl_->coverRequired = false;
     impl_->hideCover();
+}
+
+void ViewerGpuResidentController::revealCpuCover(const QRect& containerRect) {
+    // Keep the cover required while the transition is in flight, then raise it. ensureCover()
+    // captures the CPU paint once per conceal->reveal transition, so a retained/refused transition
+    // that re-raises the cover on every poll tick never re-rasterizes it (and never churns platform
+    // buffers); a fresh capture happens only after a conceal, so a blank/no-frame state stays blank
+    // rather than flashing the previous native frame.
+    impl_->coverRequired = true;
+    static_cast<void>(impl_->ensureCover(containerRect));
 }
 
 bool ViewerGpuResidentController::cpuCoverVisibleForTest() const noexcept {
@@ -510,19 +563,24 @@ bool ViewerGpuResidentController::present(const runtime::PreparedPreviewFrame& f
     }
     // Parent to the injected host and give final geometry BEFORE first attach; never reparent a
     // live surface. The native CPU cover is raised above it until a genuine present ack.
-    if (impl_->coverRequired) {
-        impl_->ensureCover(request.containerRect.toRect());
-    }
+    const bool coverRevealed =
+        impl_->coverRequired && impl_->ensureCover(request.containerRect.toRect());
     if (QWidget* container = impl_->presenter->container(); container != nullptr) {
         const QRect target(request.containerRect.topLeft().toPoint(),
                            request.containerRect.size().toSize());
         if (container->geometry() != target) {
             container->setGeometry(target);
         }
-        if (!container->isVisible()) {
+        const bool containerRevealed = !container->isVisible();
+        if (containerRevealed) {
             container->show();
         }
-        if (impl_->cover != nullptr) {
+        // Restack the cover only on a genuine reveal transition (the cover was just shown, or the
+        // container was just mapped above it). QWidget::raise() is stack-order dependent: when the
+        // widget is already topmost it early-returns, but when it has to reorder it marks the whole
+        // widget dirty. A stable, already-visible, topmost cover needs no restack, so no restack is
+        // issued per present.
+        if (impl_->cover != nullptr && (coverRevealed || containerRevealed)) {
             impl_->cover->raise();
         }
     }
@@ -532,14 +590,17 @@ bool ViewerGpuResidentController::present(const runtime::PreparedPreviewFrame& f
         impl_->targetWidth = width;
         impl_->targetHeight = height;
     } else if (width != impl_->targetWidth || height != impl_->targetHeight) {
-        // The swapchain resize gate: retire the old extent and wait for the new one
-        // to become Active before presenting. The next poll re-presents with the
-        // new params.
+        // The swapchain resize gate: retire the old extent and wait for the new one to become
+        // Active before presenting. Raise the CPU cover above the resizing surface (its last
+        // acknowledged swapchain image is stale for the new extent) and fall through to author the
+        // re-present with the new extent; pumpPendingPresent() enqueues it as soon as the target is
+        // Active again. Waiting on a presenter state-change edge alone loses the re-present when
+        // the owner finishes the resize within one poll interval.
         if (!requestTargetResize(width, height)) {
             impl_->failCpu(impl_->diagnostic);
             return false;
         }
-        return true;
+        static_cast<void>(impl_->ensureCover(request.containerRect.toRect()));
     }
 
     // Destination is the PAR-folded display rect in native-container device pixels; source is the
@@ -691,6 +752,18 @@ bool ViewerGpuResidentController::presentationAcknowledged() const noexcept {
 
 std::uint64_t ViewerGpuResidentController::presentedSequence() const noexcept {
     return impl_->enqueuedSequence;
+}
+
+std::uint64_t ViewerGpuResidentController::nativeAppliedSequence() const noexcept {
+    return impl_->presenter != nullptr ? impl_->presenter->appliedSequence() : 0U;
+}
+
+std::uint64_t ViewerGpuResidentController::nativePresentCount() const noexcept {
+    return impl_->presenter != nullptr ? impl_->presenter->presentCount() : 0U;
+}
+
+std::uint64_t ViewerGpuResidentController::nativeLastEnqueuedSequence() const noexcept {
+    return impl_->presenter != nullptr ? impl_->presenter->lastEnqueuedSequence() : 0U;
 }
 
 std::size_t ViewerGpuResidentController::overlayRasterCount() const noexcept {

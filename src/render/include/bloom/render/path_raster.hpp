@@ -37,6 +37,33 @@ struct PathStroke {
 struct PathBounds {
     double left = 0, top = 0, right = 0, bottom = 0;
 };
+// Immutable, bounded scanline coverage geometry: for each output row and each of
+// the four sub-scanlines, the inclusive sample-index spans where a 4 x 4 centre
+// sample is covered. A sample index is `pixel * 4 + sx` within one row, so every
+// span is an integer grid interval and the consumer needs no Float64/Int64 to
+// count coverage. The CPU builds only geometry (O(edges * rows), no per-pixel
+// scan); the exact CPU `coverageRow` boundary comparison is preserved by
+// resolving each crossing through a bounded binary search over the real
+// quarter-sample positions.
+struct PathRasterCoverageRange {
+    std::uint32_t offset = 0;
+    std::uint32_t count = 0;
+    friend bool operator==(const PathRasterCoverageRange&,
+                           const PathRasterCoverageRange&) = default;
+};
+struct PathRasterCoverageSpan {
+    std::uint32_t first = 0; // inclusive sample index within the row
+    std::uint32_t last = 0;  // inclusive sample index within the row
+    friend bool operator==(const PathRasterCoverageSpan&, const PathRasterCoverageSpan&) = default;
+};
+struct PathRasterCoverageGeometry {
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    // Exactly height * 4 entries; the row-major (row * 4 + sy) sub-scanline range.
+    std::vector<PathRasterCoverageRange> rows;
+    // Concatenated spans; a range's [offset, offset + count) selects its own spans.
+    std::vector<PathRasterCoverageSpan> spans;
+};
 // Cancellation is checked during flattening, outline construction and every coverage subscanline.
 using PathCancellation = std::function<bool()>;
 // Coordinates remain in author space. Flattening error is at most 1/32 output pixel at the
@@ -57,6 +84,12 @@ class PathRaster final {
     [[nodiscard]] bool coverageRow(std::int64_t x, std::int64_t y, std::span<std::uint8_t> row,
                                    PathFillRule rule, bool stroke,
                                    const PathCancellation& cancelled = {}) const;
+    // The bounded scanline geometry behind coverageRow for one output window. It
+    // uses the identical crossings, fill rule, stroke alignment and clip rule as
+    // coverageRow but emits integer sample spans instead of a per-pixel mask.
+    [[nodiscard]] ImageResult<PathRasterCoverageGeometry>
+    coverageGeometry(std::int64_t x, std::int64_t y, std::uint32_t width, std::uint32_t height,
+                     PathFillRule rule, bool stroke, const PathCancellation& cancelled = {}) const;
 
   private:
     std::vector<PathPoint> fill_;

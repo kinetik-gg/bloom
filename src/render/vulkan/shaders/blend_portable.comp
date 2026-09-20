@@ -1,0 +1,208 @@
+#version 460
+// Bloom BlendV1 portable compute shader (general separable fold on standard Float32).
+// Offline-generated/embedded; do not edit at runtime.
+//
+// This is the Float64-free companion to blend_f64.comp. It reproduces the CPU oracle
+// render::blendLinearRec709SceneRow() for the six general core::BlendMode values (Multiply, Screen,
+// Overlay, Darken, Lighten, Difference) without the core shaderFloat64 feature and without any
+// 64-bit integer type, so it runs on common Apple/MoltenVK and other Float32-only devices.
+//
+// Why plain Float32 is not enough: the oracle divides premultiplied channels by their alpha, applies
+// the W3C separable blend function B(Cb, Cs), and evaluates the source-over fold
+//
+//   co = as*(1-ab)*Cs + as*ab*B(Cb, Cs) + (1-as)*ab*Cb
+//
+// in Float64 and rounds once to Float32. With large HDR operands and tiny alphas the terms can
+// cancel to a near-zero result; a plain Float32 fold loses the low bits of that cancellation and
+// misses the documented per-finite-component 2e-6 absolute-or-relative gate (Difference in
+// particular). This shader therefore carries every channel through an error-free double-float
+// (hi + lo) representation -- Dekker/Knuth two-sum and two-product with an explicit fma -- giving
+// ~48 significand bits, enough to track the Float64 oracle far inside the gate, and rounds the
+// premultiplied result to Float32 exactly once, mirroring the oracle.
+//
+// Bindings, push constants, window mapping, endpoint shortcuts, alpha compositing, and the
+// non-finite/subnormal error policy are identical to blend.comp and blend_f64.comp.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D bloom_blend_source;
+layout(set = 0, binding = 1, rgba32f) uniform readonly image2D bloom_blend_backdrop;
+layout(set = 0, binding = 2, rgba32f) uniform writeonly image2D bloom_blend_output;
+layout(set = 0, binding = 3) buffer BloomBlendError { uint flags[]; } bloom_error;
+
+layout(push_constant) uniform BloomBlendPushConstants {
+    uint destWidth;
+    uint destHeight;
+    uint sourceWidth;
+    uint sourceHeight;
+    int sourceOffsetX;
+    int sourceOffsetY;
+    uint mode;
+} bloom_blend_push;
+
+const uint kErrorInputNonFinite = 1u;
+const uint kErrorResultNonFinite = 2u;
+const uint kErrorInputSubnormal = 4u;
+
+bool bloom_is_subnormal(float value)
+{
+    uint bits = floatBitsToUint(value) & 0x7FFFFFFFu;
+    return bits != 0u && bits < 0x00800000u;
+}
+
+uint bloom_lane_errors(vec4 value)
+{
+    uint errors = 0u;
+    if (any(isnan(value)) || any(isinf(value))) { errors |= kErrorInputNonFinite; }
+    if (bloom_is_subnormal(value.x) || bloom_is_subnormal(value.y) ||
+        bloom_is_subnormal(value.z) || bloom_is_subnormal(value.w)) {
+        errors |= kErrorInputSubnormal;
+    }
+    return errors;
+}
+
+// Error-free double-float: value == hi + lo with |lo| <= ulp(hi)/2. Only Float32 and fma are used.
+struct BloomDf { float hi; float lo; };
+
+BloomDf bloom_df(float value) { return BloomDf(value, 0.0); }
+
+void bloom_two_sum(float a, float b, out float sum, out float error)
+{
+    sum = a + b;
+    float virtualB = sum - a;
+    error = (a - (sum - virtualB)) + (b - virtualB);
+}
+
+void bloom_two_prod(float a, float b, out float product, out float error)
+{
+    product = a * b;
+    error = fma(a, b, -product);
+}
+
+BloomDf bloom_df_add(BloomDf a, BloomDf b)
+{
+    float sum;
+    float error;
+    bloom_two_sum(a.hi, b.hi, sum, error);
+    error += a.lo + b.lo;
+    bloom_two_sum(sum, error, sum, error);
+    return BloomDf(sum, error);
+}
+
+BloomDf bloom_df_sub(BloomDf a, BloomDf b)
+{
+    return bloom_df_add(a, BloomDf(-b.hi, -b.lo));
+}
+
+BloomDf bloom_df_mul(BloomDf a, BloomDf b)
+{
+    float product;
+    float error;
+    bloom_two_prod(a.hi, b.hi, product, error);
+    error += a.hi * b.lo + a.lo * b.hi;
+    bloom_two_sum(product, error, product, error);
+    return BloomDf(product, error);
+}
+
+// Correctly-rounded-enough quotient: one Float32 quotient refined by its double-float residual.
+BloomDf bloom_df_div(BloomDf numerator, BloomDf denominator)
+{
+    float quotient = numerator.hi / denominator.hi;
+    BloomDf remainder = bloom_df_sub(numerator, bloom_df_mul(bloom_df(quotient), denominator));
+    float correction = remainder.hi / denominator.hi;
+    return bloom_df_add(bloom_df(quotient), bloom_df(correction));
+}
+
+float bloom_df_to_float(BloomDf value) { return value.hi + value.lo; }
+
+// The W3C separable blend function B(Cb, Cs) for the six general modes, in double-float. The Overlay
+// pivot reads the backdrop exactly as the CPU oracle's separableBlend() does.
+BloomDf bloom_separable_df(uint mode, BloomDf backdrop, BloomDf source)
+{
+    if (mode == 2u) { return bloom_df_mul(backdrop, source); }                       // Multiply
+    if (mode == 3u) {                                                               // Screen
+        return bloom_df_sub(bloom_df_add(backdrop, source), bloom_df_mul(backdrop, source));
+    }
+    if (mode == 4u) {                                                               // Overlay
+        if (backdrop.hi <= 0.5) {
+            return bloom_df_mul(bloom_df_mul(bloom_df(2.0), backdrop), source);
+        }
+        return bloom_df_sub(
+            bloom_df(1.0),
+            bloom_df_mul(bloom_df_mul(bloom_df(2.0), bloom_df_sub(bloom_df(1.0), backdrop)),
+                         bloom_df_sub(bloom_df(1.0), source)));
+    }
+    if (mode == 5u) { return backdrop.hi <= source.hi ? backdrop : source; }         // Darken
+    if (mode == 6u) { return backdrop.hi >= source.hi ? backdrop : source; }         // Lighten
+    if (mode == 7u) {                                                               // Difference
+        BloomDf difference = bloom_df_sub(backdrop, source);
+        bool negative = difference.hi < 0.0 || (difference.hi == 0.0 && difference.lo < 0.0);
+        return negative ? BloomDf(-difference.hi, -difference.lo)
+                        : BloomDf(difference.hi, difference.lo);
+    }
+    return source;
+}
+
+void main()
+{
+    uvec2 index = gl_GlobalInvocationID.xy;
+    if (index.x >= bloom_blend_push.destWidth || index.y >= bloom_blend_push.destHeight) {
+        return;
+    }
+    ivec2 destLocal = ivec2(index);
+    ivec2 sourceLocal = destLocal + ivec2(bloom_blend_push.sourceOffsetX,
+                                          bloom_blend_push.sourceOffsetY);
+
+    vec4 backdrop = imageLoad(bloom_blend_backdrop, destLocal);
+    bool sourceInside = sourceLocal.x >= 0 && sourceLocal.y >= 0 &&
+                        sourceLocal.x < int(bloom_blend_push.sourceWidth) &&
+                        sourceLocal.y < int(bloom_blend_push.sourceHeight);
+    vec4 source = sourceInside ? imageLoad(bloom_blend_source, sourceLocal) : vec4(0.0);
+
+    uint errors = bloom_lane_errors(backdrop);
+    if (sourceInside) { errors |= bloom_lane_errors(source); }
+    if (errors != 0u) {
+        atomicOr(bloom_error.flags[0], errors);
+        imageStore(bloom_blend_output, destLocal, backdrop);
+        return;
+    }
+
+    // Exact CPU endpoints, as on the other two kernels.
+    if (source.a == 0.0) {
+        imageStore(bloom_blend_output, destLocal, backdrop);
+        return;
+    }
+    if (backdrop.a == 0.0) {
+        imageStore(bloom_blend_output, destLocal, source);
+        return;
+    }
+
+    BloomDf sourceAlpha = bloom_df(source.a);
+    BloomDf backdropAlpha = bloom_df(backdrop.a);
+    BloomDf inverseSourceAlpha = bloom_df_sub(bloom_df(1.0), sourceAlpha);
+    BloomDf inverseBackdropAlpha = bloom_df_sub(bloom_df(1.0), backdropAlpha);
+
+    vec4 composited = vec4(0.0, 0.0, 0.0, fma(inverseSourceAlpha.hi, backdropAlpha.hi,
+                                              sourceAlpha.hi));
+    for (int channel = 0; channel < 3; ++channel) {
+        BloomDf straightSource =
+            bloom_df_div(bloom_df(source[channel]), sourceAlpha);
+        BloomDf straightBackdrop =
+            bloom_df_div(bloom_df(backdrop[channel]), backdropAlpha);
+        BloomDf blended =
+            bloom_separable_df(bloom_blend_push.mode, straightBackdrop, straightSource);
+        BloomDf sourceWeighted =
+            bloom_df_mul(bloom_df_mul(sourceAlpha, inverseBackdropAlpha), straightSource);
+        BloomDf blendWeighted = bloom_df_mul(bloom_df_mul(sourceAlpha, backdropAlpha), blended);
+        BloomDf backdropWeighted =
+            bloom_df_mul(bloom_df_mul(inverseSourceAlpha, backdropAlpha), straightBackdrop);
+        composited[channel] = bloom_df_to_float(
+            bloom_df_add(bloom_df_add(sourceWeighted, blendWeighted), backdropWeighted));
+    }
+
+    if (any(isnan(composited)) || any(isinf(composited))) {
+        atomicOr(bloom_error.flags[0], kErrorResultNonFinite);
+        imageStore(bloom_blend_output, destLocal, backdrop);
+        return;
+    }
+    imageStore(bloom_blend_output, destLocal, composited);
+}

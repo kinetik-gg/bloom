@@ -1,4 +1,5 @@
 #include "exr_backend.hpp"
+#include "image_budget.hpp"
 #include "stb_image_adapter.hpp"
 #include <algorithm>
 #include <array>
@@ -9,43 +10,70 @@
 #include <bloom/media/image.hpp>
 #include <charconv>
 #include <fstream>
+#include <limits>
 #include <span>
 #include <utility>
 
 namespace bloom::media {
 namespace {
 [[nodiscard]] bool cancelled(const CancelImageWork& cancel) { return cancel && cancel(); }
-ImageResult<std::vector<std::byte>> readImage(const std::filesystem::path& path,
-                                              const CancelImageWork& cancel) {
+
+constexpr std::size_t kImageHeaderBytes = 16;
+constexpr std::size_t kHashChunkBytes = std::size_t{1024} * 1024U;
+// PNG/JPEG peak admission phases: the decoded RGBA32F image (16 bytes/px), the codec's RGBA16
+// staging buffer (4 channels * 2 bytes = 8 bytes/px), and the one-row float conversion scratch
+// (16 bytes/px). Every phase that is live at once must fit the caller's explicit budget before the
+// parser runs.
+constexpr std::uint64_t kRgba32fBytesPerPixel = sizeof(render::Rgba32f);
+constexpr std::uint64_t kPngJpegStagingBytesPerPixel = 8U;
+
+// Streams the whole file through SHA-256 in bounded chunks. There is no whole-file cap: the hash is
+// the content identity, the working set is one chunk, and cancellation is polled per chunk.
+[[nodiscard]] ImageResult<core::Sha256Digest> hashFile(const std::filesystem::path& path,
+                                                       const CancelImageWork& cancel) {
     if (cancelled(cancel))
         return {{}, {}, true};
-    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    std::ifstream input(path, std::ios::binary);
     if (!input)
-        return {{}, "Image file is missing or unreadable"};
-    const auto size = input.tellg();
-    if (size <= 0 || size > static_cast<std::streamoff>(kMaxImageFileBytes))
-        return {{}, "Image file exceeds the 64 MiB limit or is empty"};
-    std::vector<std::byte> bytes(static_cast<std::size_t>(size));
-    input.seekg(0);
-    for (std::size_t offset = 0; offset < bytes.size();) {
+        return {
+            {}, "Image file is missing or unreadable", false, ImageDiagnosticCode::FileUnavailable};
+    core::Sha256Hasher hasher;
+    std::vector<std::byte> buffer(kHashChunkBytes);
+    for (;;) {
         if (cancelled(cancel))
             return {{}, {}, true};
-        const auto count = std::min<std::size_t>(65536, bytes.size() - offset);
-        if (!input.read(reinterpret_cast<char*>(bytes.data() + offset),
-                        static_cast<std::streamsize>(count)))
-            return {{}, "Image read failed"};
-        offset += count;
+        input.read(reinterpret_cast<char*>(buffer.data()),
+                   static_cast<std::streamsize>(buffer.size()));
+        const auto count = static_cast<std::size_t>(input.gcount());
+        if (count > 0 && !hasher.update(std::span(buffer.data(), count)))
+            return {{}, "Image digest failed", false, ImageDiagnosticCode::FileReadFailed};
+        if (count < buffer.size()) {
+            if (!input.eof())
+                return {{}, "Image read failed", false, ImageDiagnosticCode::FileReadFailed};
+            break;
+        }
     }
-    if (input.peek() != std::char_traits<char>::eof())
-        return {{}, "Image changed while reading"};
-    return {std::move(bytes), {}};
+    return {hasher.finalize(), {}};
 }
+
+[[nodiscard]] bool readHeader(const std::filesystem::path& path, const std::span<std::byte> head,
+                              std::size_t& bytesRead) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+        return false;
+    input.read(reinterpret_cast<char*>(head.data()), static_cast<std::streamsize>(head.size()));
+    bytesRead = static_cast<std::size_t>(input.gcount());
+    return !input.bad();
+}
+
+// A codec-level geometry check only: dimensions must be positive and their RGBA32F byte count must
+// be representable. The caller's pixelBudget decides how large a decode is admitted.
 [[nodiscard]] bool validInfo(const detail::ImageInfo& info) {
-    return info.width > 0 && info.height > 0 &&
-           static_cast<std::uint32_t>(info.width) <= kMaxImageDimension &&
-           static_cast<std::uint32_t>(info.height) <= kMaxImageDimension &&
-           static_cast<std::uint64_t>(info.width) * static_cast<std::uint64_t>(info.height) <=
-               kMaxImagePixels;
+    if (info.width <= 0 || info.height <= 0)
+        return false;
+    const auto pixels =
+        static_cast<std::uint64_t>(info.width) * static_cast<std::uint64_t>(info.height);
+    return pixels <= std::numeric_limits<std::size_t>::max() / kRgba32fBytesPerPixel;
 }
 
 [[nodiscard]] bool isExrMagic(const std::span<const std::byte> bytes) {
@@ -53,6 +81,13 @@ ImageResult<std::vector<std::byte>> readImage(const std::filesystem::path& path,
            static_cast<unsigned char>(bytes[1]) == 0x2fU &&
            static_cast<unsigned char>(bytes[2]) == 0x31U &&
            static_cast<unsigned char>(bytes[3]) == 0x01U;
+}
+
+[[nodiscard]] bool isPngMagic(const std::span<const std::byte> bytes) {
+    return bytes.size() >= 4 && static_cast<unsigned char>(bytes[0]) == 137U &&
+           static_cast<unsigned char>(bytes[1]) == 'P' &&
+           static_cast<unsigned char>(bytes[2]) == 'N' &&
+           static_cast<unsigned char>(bytes[3]) == 'G';
 }
 
 [[nodiscard]] bool isTiffMagic(const std::span<const std::byte> bytes) {
@@ -173,21 +208,26 @@ std::filesystem::path resolveImagePath(std::string_view relativePath, std::strin
 ImageResult<ImageProbe> probeImage(const std::filesystem::path& path, const CancelImageWork& cancel,
                                    const ImageProvider* provider) {
     try {
-        auto bytes = readImage(path, cancel);
-        if (!bytes.value.has_value())
-            return {{}, bytes.diagnostic, bytes.cancelled};
-        const auto digest = core::Sha256Hasher::hash(*bytes.value);
-        if (!digest)
-            return {{}, "Image digest failed", false, ImageDiagnosticCode::FileReadFailed};
-        if (isExrMagic(*bytes.value))
-            return detail::probeExr(path, *digest, cancel);
-        if (isTiffMagic(*bytes.value)) {
+        auto digest = hashFile(path, cancel);
+        if (!digest.value.has_value())
+            return {{}, digest.diagnostic, digest.cancelled};
+        std::array<std::byte, kImageHeaderBytes> head{};
+        std::size_t headBytes = 0;
+        if (!readHeader(path, head, headBytes))
+            return {{},
+                    "Image file is missing or unreadable",
+                    false,
+                    ImageDiagnosticCode::FileUnavailable};
+        const auto view = std::span<const std::byte>(head.data(), headBytes);
+        if (isExrMagic(view))
+            return detail::probeExr(path, *digest.value, cancel);
+        if (isTiffMagic(view)) {
             if (provider == nullptr || !provider->decode)
                 return providerMissing<ImageProbe>();
             const auto response = provider->decode({.path = path,
                                                     .interpretation = {},
                                                     .pixelBudget = kMaxImageStorageBytes,
-                                                    .expectedDigest = digest});
+                                                    .expectedDigest = digest.value});
             if (!response.value.has_value())
                 return {{},
                         response.diagnostic,
@@ -198,18 +238,16 @@ ImageResult<ImageProbe> probeImage(const std::filesystem::path& path, const Canc
             return {response.value->probe, {}};
         }
         detail::ImageInfo info;
-        if (!detail::imageInfo(*bytes.value, info) || !validInfo(info))
-            return {{}, "Invalid PNG/JPEG header or image dimensions exceed limits"};
-        const auto png = bytes.value->size() >= 8 &&
-                         static_cast<unsigned char>((*bytes.value)[0]) == 137U &&
-                         static_cast<unsigned char>((*bytes.value)[1]) == 'P' &&
-                         static_cast<unsigned char>((*bytes.value)[2]) == 'N' &&
-                         static_cast<unsigned char>((*bytes.value)[3]) == 'G';
+        if (!detail::imageInfo(path, info) || !validInfo(info))
+            return {{},
+                    "Invalid PNG/JPEG header or image dimensions",
+                    false,
+                    ImageDiagnosticCode::InvalidHeader};
         return {ImageProbe{static_cast<std::uint32_t>(info.width),
                            static_cast<std::uint32_t>(info.height),
                            static_cast<std::uint8_t>(info.sixteenBit ? 16 : 8),
-                           *digest,
-                           png ? ImageFormat::Png : ImageFormat::Jpeg,
+                           *digest.value,
+                           isPngMagic(view) ? ImageFormat::Png : ImageFormat::Jpeg,
                            ImageColorSpace::Srgb,
                            ImageAlphaAssociation::Straight,
                            "srgb_rec709_display",
@@ -227,21 +265,26 @@ decodeImage(const std::filesystem::path& path, const ImageInterpretation& interp
     try {
         if (progress)
             progress(0, 0);
-        auto bytes = readImage(path, cancel);
-        if (!bytes.value.has_value())
-            return {{}, bytes.diagnostic, bytes.cancelled};
-        const auto digest = core::Sha256Hasher::hash(*bytes.value);
-        if (!digest)
-            return {{}, "Image digest failed", false, ImageDiagnosticCode::FileReadFailed};
-        if (expectedDigest && *digest != *expectedDigest)
+        auto digest = hashFile(path, cancel);
+        if (!digest.value.has_value())
+            return {{}, digest.diagnostic, digest.cancelled};
+        if (expectedDigest && *digest.value != *expectedDigest)
             return {{},
                     "Image content changed; relink the asset",
                     false,
                     ImageDiagnosticCode::DigestMismatch};
-        if (isExrMagic(*bytes.value))
+        std::array<std::byte, kImageHeaderBytes> head{};
+        std::size_t headBytes = 0;
+        if (!readHeader(path, head, headBytes))
+            return {{},
+                    "Image file is missing or unreadable",
+                    false,
+                    ImageDiagnosticCode::FileUnavailable};
+        const auto view = std::span<const std::byte>(head.data(), headBytes);
+        if (isExrMagic(view))
             return detail::decodeExr(path, interpretation, std::move(processor), cancel, progress,
-                                     pixelBudget, expectedDigest);
-        if (isTiffMagic(*bytes.value)) {
+                                     pixelBudget);
+        if (isTiffMagic(view)) {
             if (provider == nullptr || !provider->decode)
                 return providerMissing<std::shared_ptr<const render::Rgba32fImage>>();
             if (!processor && !interpretation.inputColorSpaceId.empty()) {
@@ -277,18 +320,36 @@ decodeImage(const std::filesystem::path& path, const ImageInterpretation& interp
             return applyInputProcessor(response.value->image, processor, cancel, pixelBudget);
         }
         detail::ImageInfo info;
-        if (!detail::imageInfo(*bytes.value, info) || !validInfo(info))
-            return {{}, "Invalid PNG/JPEG header or image dimensions exceed limits"};
-        const auto width = static_cast<std::uint32_t>(info.width);
-        const auto height = static_cast<std::uint32_t>(info.height);
-        if (static_cast<std::uint64_t>(width) * height * sizeof(render::Rgba32f) > pixelBudget)
-            return {{}, "Decoded image exceeds the pixel storage budget"};
+        if (!detail::imageInfo(path, info) || !validInfo(info))
+            return {{},
+                    "Invalid PNG/JPEG header or image dimensions",
+                    false,
+                    ImageDiagnosticCode::InvalidHeader};
+        const auto width = static_cast<std::uint64_t>(info.width);
+        const auto height = static_cast<std::uint64_t>(info.height);
+        std::uint64_t pixels = 0;
+        std::uint64_t finalBytes = 0;
+        std::uint64_t stagingBytes = 0;
+        std::uint64_t rowBytes = 0;
+        const bool sized =
+            detail::checkedSizeProduct(width, height, pixels) &&
+            detail::checkedSizeProduct(pixels, kRgba32fBytesPerPixel, finalBytes) &&
+            detail::checkedSizeProduct(pixels, kPngJpegStagingBytesPerPixel, stagingBytes) &&
+            detail::checkedSizeProduct(width, sizeof(std::array<float, 4>), rowBytes);
+        if (!sized ||
+            !detail::decodeWorkingSetFits(finalBytes, stagingBytes, rowBytes, pixelBudget))
+            return {{},
+                    "Decoded image exceeds the pixel storage budget",
+                    false,
+                    ImageDiagnosticCode::PixelBudgetExceeded};
         if (cancelled(cancel))
             return {{}, {}, true};
-        auto samples = detail::imageSamples(*bytes.value, info);
+        auto samples = detail::imageSamples(path, info, pixelBudget);
         if (samples.empty())
-            return {{}, "PNG/JPEG decode failed"};
-        bytes.value.reset();
+            return {{},
+                    "PNG/JPEG decode failed or exceeded the pixel budget",
+                    false,
+                    ImageDiagnosticCode::DecodeFailed};
         if (cancelled(cancel))
             return {{}, {}, true};
         const bool convert = !interpretation.inputColorSpaceId.empty() ||
@@ -330,17 +391,24 @@ decodeImage(const std::filesystem::path& path, const ImageInterpretation& interp
         auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), pixelBudget);
         if (!builder)
             return {{}, "Process image allocation failed"};
-        std::vector<std::array<float, 4>> row(width);
-        for (std::uint32_t y = 0; y < height; ++y) {
+        std::vector<std::array<float, 4>> row(static_cast<std::size_t>(width));
+        for (std::uint64_t y = 0; y < height; ++y) {
             if (cancelled(cancel))
                 return {{}, {}, true};
-            for (std::uint32_t x = 0; x < width; ++x) {
-                const auto offset = (static_cast<std::size_t>(y) * width + x) * 4;
+            for (std::uint64_t x = 0; x < width; ++x) {
+                const auto offset = (static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+                                     static_cast<std::size_t>(x)) *
+                                    4;
                 for (std::size_t c = 0; c < 4; ++c)
-                    row[x][c] = static_cast<float>(samples[offset + c]) / 65535.0F;
+                    row[static_cast<std::size_t>(x)][c] =
+                        static_cast<float>(samples[offset + c]) / 65535.0F;
                 if (interpretation.alphaAssociation == ImageAlphaAssociation::Premultiplied) {
                     for (std::size_t c = 0; c < 3; ++c)
-                        row[x][c] = row[x][3] > 0.0F ? row[x][c] / row[x][3] : 0.0F;
+                        row[static_cast<std::size_t>(x)][c] =
+                            row[static_cast<std::size_t>(x)][3] > 0.0F
+                                ? row[static_cast<std::size_t>(x)][c] /
+                                      row[static_cast<std::size_t>(x)][3]
+                                : 0.0F;
                 }
             }
             if (convert && ((processor && !processor->apply(row)) ||
@@ -349,14 +417,14 @@ decodeImage(const std::filesystem::path& path, const ImageInterpretation& interp
                         "Input colour conversion failed",
                         false,
                         ImageDiagnosticCode::ColorSpaceUnavailable};
-            auto outputRow = builder.value()->row(y);
-            for (std::uint32_t x = 0; x < width; ++x) {
-                const auto& sample = row[x];
+            auto outputRow = builder.value()->row(static_cast<std::int64_t>(y));
+            for (std::uint64_t x = 0; x < width; ++x) {
+                const auto& sample = row[static_cast<std::size_t>(x)];
                 auto pixel = render::Rgba32f::fromPremultiplied(
                     sample[0] * sample[3], sample[1] * sample[3], sample[2] * sample[3], sample[3]);
                 if (!pixel)
                     return {{}, "Input colour conversion produced an invalid pixel"};
-                (*outputRow.value())[x] = *pixel.value();
+                (*outputRow.value())[static_cast<std::size_t>(x)] = *pixel.value();
             }
             if (progress)
                 progress(y + 1, height);

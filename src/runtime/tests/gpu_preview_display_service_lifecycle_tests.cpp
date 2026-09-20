@@ -342,6 +342,11 @@ NativeDeadlineScenarioResult runNativeDeadlineScenario(const std::filesystem::pa
     auto core = std::make_shared<PreviewDisplayServiceCore>();
     core->scheduler = &scheduler;
     core->options.previewByteAllowance = kBudget;
+    // Mirror the production service constructor: the owner-resolved admission allowance is seeded
+    // from the configured options before the native pump can read it. Without this the handcrafted
+    // core reports a zero device allowance and the real pipeline refuses every dispatch as
+    // OverBudget, so the deadline path would never be reached.
+    core->effectivePreviewByteAllowance.store(kBudget, std::memory_order_relaxed);
     core->gpuAvailable = true;
     core->qualification = report;
     core->display = std::move(pipeline.display);
@@ -356,6 +361,10 @@ NativeDeadlineScenarioResult runNativeDeadlineScenario(const std::filesystem::pa
     stage->stage = std::make_shared<const PreviewCpuStage>(makeIdentity(*plan, 1), frame, processor,
                                                            kBudget, std::vector<TaskDiagnostic>{});
     stage->pixelStorageByteLimit = kBudget;
+    // Mirror startGpuPreviewStage(): the accepted request carries both the host pixel-storage
+    // ceiling and the device-stage admission allowance resolved from capacity.
+    stage->requestOwnedBytes = kBudget;
+    stage->gpuByteAllowance = kBudget;
     stage->owner = TaskOwner{.kind = TaskOwnerKind::Composition, .id = TaskOwnerId::fromRaw(1)};
     stage->priority = TaskPriority::Visible;
     stage->phase = PreviewDisplayStageRecord::Phase::AwaitingNative;

@@ -299,6 +299,13 @@ class GpuPresentationCoordinator final {
     // waits.
     void pump();
 
+    // Owner-thread diagnostic. True while at least one admitted target still needs the owner to
+    // drive it (attach/resize/retire progress, an extracted pending update/resize/retire, an
+    // acquired image awaiting present, or an un-ingested client request). False for a stable idle
+    // Active target. A driver loop uses this to wait on its wake hook instead of polling at full
+    // rate; every client request invokes the wake hook, so an idle wait cannot miss new work.
+    [[nodiscard]] bool hasPendingWork() const;
+
     // Refuses new targets/updates and asks every target to retire. Non-blocking; keep calling
     // pump() until shutdownStatus().drained or the drain budget is exceeded.
     void beginShutdown() noexcept;

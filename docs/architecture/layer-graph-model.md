@@ -957,6 +957,12 @@ that READS another composition's output -- not to an output port on this one.
 `Many` is the default, including Merge. Only the `Composition Output` endpoint is
 `OnePerComposition`.
 
+The `Composition Output` image input is OPTIONAL, matching the Layer Output content port: a
+disconnected endpoint is an ordinary empty composition, so it draws nothing and compiles to a
+transparent frame rather than failing the topology. Disconnecting the output therefore clears the
+viewer to empty instead of leaving the previous frame on screen. Its audio input stays optional, and
+every other required node input remains strict.
+
 `AddNode` enforces it and refuses with the type it refused, so every Add surface -- keyboard, menu,
 search -- inherits one rule instead of keeping its own copy. The Add search reads the refusal back
 from a dry run of the same operation and lists the type as a disabled result carrying that message;

@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -163,6 +164,9 @@ struct DeviceSelection final {
     std::uint64_t deviceMemoryBytes = 0;
     bool memoryBudgetSupported = false;
     bool portabilitySubset = false;
+    // The device advertises the core shaderFloat64 feature. Enabled at device creation only when
+    // true, so a Float64 kernel is available exactly when the hardware supports it.
+    bool shaderFloat64 = false;
     int rank = -1;
 };
 
@@ -251,7 +255,11 @@ selectPhysicalDevice(const vk::raii::Instance& instance) {
             // or usable-budget claim (integrated GPUs share host memory, and drivers may migrate).
             if ((memoryProperties2.memoryProperties.memoryHeaps[heap].flags &
                  VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0U) {
-                deviceLocalBytes += memoryProperties2.memoryProperties.memoryHeaps[heap].size;
+                const std::uint64_t heapBytes =
+                    memoryProperties2.memoryProperties.memoryHeaps[heap].size;
+                const std::uint64_t sum = deviceLocalBytes + heapBytes;
+                deviceLocalBytes =
+                    sum < deviceLocalBytes ? std::numeric_limits<std::uint64_t>::max() : sum;
             }
         }
 
@@ -265,6 +273,7 @@ selectPhysicalDevice(const vk::raii::Instance& instance) {
             deviceExtensionAvailable(instance, device, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
         selection.portabilitySubset =
             deviceExtensionAvailable(instance, device, kPortabilitySubsetExtensionName);
+        selection.shaderFloat64 = features2.features.shaderFloat64 == VK_TRUE;
         selection.rank = rank;
         best = selection;
     }
@@ -389,6 +398,11 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     if (swapchainExtensionEnabled) {
         deviceExtensions.push_back(kSwapchainExtensionName);
     }
+    // VK_EXT_memory_budget is a behavior-free query extension. Enable it only when the selected
+    // device advertises it so VMA can report a live heap budget instead of a nominal estimate.
+    if (selection->memoryBudgetSupported) {
+        deviceExtensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+    }
 
     // Presentation-retirement mechanisms. Prefer maintenance1 present fences; fall back to
     // present_wait + present_id. Each is enabled only when both the extension and its device
@@ -497,6 +511,10 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     VkPhysicalDeviceFeatures2 enabledFeatures{};
     enabledFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     enabledFeatures.pNext = &enabledFeatures12;
+    // Enable shaderFloat64 only when the selected device actually advertises it. It is requested
+    // additively for the Float64 blend path; a device without it is untouched and keeps the
+    // Float32 path.
+    enabledFeatures.features.shaderFloat64 = selection->shaderFloat64 ? VK_TRUE : VK_FALSE;
 
     VkDeviceCreateInfo deviceInfo{};
     deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -547,11 +565,14 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     control->presentationEpoch = allocatePresentationEpoch();
     control->borrowedInstanceBits = handleBits(static_cast<VkInstance>(rawInstance));
     control->generation = 1;
+    control->shaderFloat64 = selection->shaderFloat64;
     control->maxStorageBufferRange = selection->properties.limits.maxStorageBufferRange;
     control->maxComputeWorkGroupCountX = selection->properties.limits.maxComputeWorkGroupCount[0];
     control->maxComputeWorkGroupInvocations =
         selection->properties.limits.maxComputeWorkGroupInvocations;
     control->maxComputeWorkGroupSizeX = selection->properties.limits.maxComputeWorkGroupSize[0];
+    control->deviceLocalBytes = selection->deviceMemoryBytes;
+    control->memoryBudgetEnabled = selection->memoryBudgetSupported;
 
     VmaVulkanFunctions vmaFunctions{};
     vmaFunctions.vkGetInstanceProcAddr = getInstanceProcAddr;
@@ -563,6 +584,11 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     allocatorInfo.instance = rawInstance;
     allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_2;
     allocatorInfo.pVulkanFunctions = &vmaFunctions;
+    // The budget flag is only valid with the extension actually enabled; VMA would otherwise
+    // report no budget. The fallback path below never requires it.
+    if (selection->memoryBudgetSupported) {
+        allocatorInfo.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
+    }
     if (vmaCreateAllocator(&allocatorInfo, &control->allocator) != VK_SUCCESS) {
         return {nullptr, diagnostic(GpuDiagnosticCode::AllocatorUnavailable,
                                     "the Vulkan Memory Allocator could not be initialized")};

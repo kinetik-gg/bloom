@@ -16,12 +16,42 @@
 namespace bloom::runtime {
 namespace {
 
+using gpu_scene_executor_detail::affineFieldsFinite;
 using gpu_scene_executor_detail::cachedDescriptorMatches;
 using gpu_scene_executor_detail::checkedImageBytes;
-using gpu_scene_executor_detail::commandKey;
 using gpu_scene_executor_detail::descriptorMatches;
+using gpu_scene_executor_detail::effectiveCommandKey;
 using gpu_scene_executor_detail::expectedDescriptorOf;
 using gpu_scene_executor_detail::makeDiagnostic;
+
+// The ACTUAL BlendV1 artifact token, delegated to the render-owned canonical identity. It selects
+// the pipeline the native op really built from the device's shaderFloat64 capability and the
+// GpuBlend kernel policy: exact Float32 for Normal/Add, the exact Float64 companion for the six
+// general modes when selected, and the portable compensated-Float32 kernel otherwise. A
+// producer-supplied `artifactDigest` is never consulted, so an adversarially wrong digest still
+// cannot point the cache at another shader's output.
+[[nodiscard]] std::string actualBlendArtifactToken(const render::GpuBlend& blend,
+                                                   const core::BlendMode mode) {
+    return std::string(blend.shaderIdentity(mode));
+}
+
+// Effective, executor-owned semantic key, and the single authoritative BlendV1 artifact selection.
+// Blend commands are keyed here from the actual portable/Float64/Float32 pipeline; every other
+// command keeps the shared canonicalization. The blend input keys and geometry are still recomputed
+// from declared fields, never trusted from the producer.
+[[nodiscard]] std::string effectiveCommandKey(const GpuSceneCommand& command,
+                                              const render::GpuBlend* blend) {
+    if (const auto* blendCommand = std::get_if<GpuSceneBlendCommand>(&command)) {
+        if (blend == nullptr) {
+            return {};
+        }
+        return makeGpuSceneBlendSemanticKey(blendCommand->sourceKey, blendCommand->destinationKey,
+                                            blendCommand->mode, blendCommand->sourceWindow,
+                                            blendCommand->outputWindow, blendCommand->pixelAspect,
+                                            actualBlendArtifactToken(*blend, blendCommand->mode));
+    }
+    return effectiveCommandKey(command);
+}
 
 } // namespace
 
@@ -45,7 +75,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
     color[index] = 1;
     const GpuSceneCommand& command = scene->commands()[index];
     const bool isOutput = index == scene->outputCommand();
-    const std::string& key = commandKey(command);
+    const std::string key = effectiveCommandKey(command, blend.get());
 
     if (auto hit = cache->find(key)) {
         if (!hit->isValid() || !hit->isBoundTo(*device)) {
@@ -96,15 +126,26 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
 
     if (const auto* covered = std::get_if<GpuSceneCoverageSolidCommand>(&command)) {
         std::uint64_t bytes = 0;
-        if (!checkedImageBytes(covered->outputWindow, bytes) || covered->coverage == nullptr) {
+        if (!checkedImageBytes(covered->outputWindow, bytes) ||
+            (covered->geometry == nullptr && covered->coverage == nullptr)) {
             color[index] = 2;
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
                                   "a covered solid command is incomplete");
         }
-        const std::uint64_t expected =
-            static_cast<std::uint64_t>(covered->outputWindow.extent().width()) *
+        const std::uint64_t width =
+            static_cast<std::uint64_t>(covered->outputWindow.extent().width());
+        const std::uint64_t height =
             static_cast<std::uint64_t>(covered->outputWindow.extent().height());
-        if (covered->coverage->size() != expected) {
+        const std::uint64_t expected = width * height;
+        if (covered->geometry != nullptr) {
+            const auto& geometry = *covered->geometry;
+            if (geometry.width != width || geometry.height != height ||
+                geometry.rows.size() != height * 4ULL) {
+                color[index] = 2;
+                return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                      "a covered solid geometry does not match its window");
+            }
+        } else if (covered->coverage->size() != expected) {
             color[index] = 2;
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
                                   "a covered solid coverage size does not match its window");
@@ -125,8 +166,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.solidDataWindow = covered->outputWindow;
         step.solidDisplayWindow = covered->displayWindow;
         step.solidPixelAspect = covered->pixelAspect;
-        step.coverage =
-            std::span<const std::uint8_t>(covered->coverage->data(), covered->coverage->size());
+        step.coverageGeometry = covered->geometry;
+        step.hostCoverage = covered->coverage;
         step.coveredOpacity = covered->opacity;
         steps.push_back(std::move(step));
         color[index] = 2;
@@ -187,19 +228,213 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         return {};
     }
 
-    if (const auto* merge = std::get_if<GpuSceneMergeCommand>(&command)) {
-        for (const GpuSceneCommandIndex foreground : merge->foregrounds) {
-            if (const auto plan = planCommand(foreground, color);
-                plan.code != GpuSceneExecutorDiagnosticCode::None) {
-                return plan;
-            }
+    if (const auto* affineCommand = std::get_if<GpuSceneAffineCommand>(&command)) {
+        if (!affineFieldsFinite(*affineCommand)) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "an affine command has a non-finite matrix or opacity");
         }
+        if (const auto plan = planCommand(affineCommand->input, color);
+            plan.code != GpuSceneExecutorDiagnosticCode::None) {
+            return plan;
+        }
+        if (color[affineCommand->input] != 2) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                  "an affine input was not planned");
+        }
+        std::uint64_t bytes = 0;
+        if (!checkedImageBytes(affineCommand->outputWindow, bytes)) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "an affine command has an empty output window");
+        }
+        GpuSceneExecutorStep step;
+        step.kind = GpuSceneExecutorStepKind::Affine;
+        step.command = index;
+        step.input = affineCommand->input;
+        step.cacheKey = key;
+        step.cacheOnComplete = true;
+        step.outputWindow = affineCommand->outputWindow;
+        step.affineMatrix = affineCommand->matrix;
+        step.affineOpacity = affineCommand->opacity;
+        steps.push_back(std::move(step));
+        color[index] = 2;
+        return {};
+    }
+
+    if (const auto* blendCommand = std::get_if<GpuSceneBlendCommand>(&command)) {
+        if (const auto plan = planCommand(blendCommand->source, color);
+            plan.code != GpuSceneExecutorDiagnosticCode::None) {
+            return plan;
+        }
+        if (const auto plan = planCommand(blendCommand->destination, color);
+            plan.code != GpuSceneExecutorDiagnosticCode::None) {
+            return plan;
+        }
+        if (color[blendCommand->source] != 2 || color[blendCommand->destination] != 2) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                  "a blend input was not planned");
+        }
+        std::uint64_t bytes = 0;
+        if (!checkedImageBytes(blendCommand->outputWindow, bytes)) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "a blend command has an empty output window");
+        }
+        GpuSceneExecutorStep step;
+        step.kind = GpuSceneExecutorStepKind::Blend;
+        step.command = index;
+        step.input = blendCommand->source;
+        step.destination = blendCommand->destination;
+        step.cacheKey = key;
+        step.cacheOnComplete = true;
+        step.outputWindow = blendCommand->outputWindow;
+        step.blendMode = blendCommand->mode;
+        steps.push_back(std::move(step));
+        color[index] = 2;
+        return {};
+    }
+
+    if (const auto* ocioCommand = std::get_if<GpuSceneOcioEffectCommand>(&command)) {
+        if (ocioCommand->program == nullptr ||
+            ocioCommand->program->encoding() != GpuOcioOutputEncoding::FinalRgba32f) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::Unsupported,
+                                  "an OCIO effect command has no ProcessEffect program");
+        }
+        if (const auto plan = planCommand(ocioCommand->input, color);
+            plan.code != GpuSceneExecutorDiagnosticCode::None) {
+            return plan;
+        }
+        if (color[ocioCommand->input] != 2) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                  "an OCIO effect input was not planned");
+        }
+        const auto inputDescriptor = expectedDescriptorOf(*scene, ocioCommand->input, 0);
+        if (!inputDescriptor.has_value()) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                  "the OCIO effect input descriptor is not derivable");
+        }
+        const auto geometry = ocioCommand->program->geometry();
+        const bool sameGeometry = inputDescriptor->data == ocioCommand->outputWindow &&
+                                  inputDescriptor->display == ocioCommand->displayWindow &&
+                                  inputDescriptor->pixelAspect == ocioCommand->pixelAspect &&
+                                  ocioCommand->outputWindow.extent().width() == geometry.width &&
+                                  ocioCommand->outputWindow.extent().height() == geometry.height;
+        if (!sameGeometry) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "an OCIO effect command geometry does not match its input");
+        }
+        std::uint64_t bytes = 0;
+        if (!checkedImageBytes(ocioCommand->outputWindow, bytes)) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "an OCIO effect command has an empty output window");
+        }
+        GpuSceneExecutorStep step;
+        step.kind = GpuSceneExecutorStepKind::OcioEffect;
+        step.command = index;
+        step.input = ocioCommand->input;
+        step.cacheKey = key;
+        step.cacheOnComplete = true;
+        step.outputWindow = ocioCommand->outputWindow;
+        step.ocioCommand = ocioCommand->program;
+        steps.push_back(std::move(step));
+        color[index] = 2;
+        return {};
+    }
+
+    if (const auto* resample = std::get_if<GpuScenePointResampleCommand>(&command)) {
+        if (!gpu_scene_executor_detail::pointResampleFieldsValid(*resample)) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "a point-resample command has invalid proxy scales");
+        }
+        if (const auto plan = planCommand(resample->input, color);
+            plan.code != GpuSceneExecutorDiagnosticCode::None) {
+            return plan;
+        }
+        if (color[resample->input] != 2) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                  "a point-resample input was not planned");
+        }
+        const auto inputDescriptor = expectedDescriptorOf(*scene, resample->input, 0);
+        if (!inputDescriptor.has_value()) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                  "the point-resample input descriptor is not derivable");
+        }
+        // The output window must be exactly the derived proxy window; the source window and pixel
+        // aspect must match the input; the display window is carried explicitly (the resample
+        // publishes a new display window, so it need not equal the source's). This keeps a
+        // malformed command from resampling to another grid or mismatching the composition.
+        const auto expectedOutput = render::ImageWindow::create(
+            0, 0,
+            static_cast<std::uint64_t>(std::max(
+                1.0, std::ceil(static_cast<double>(inputDescriptor->data.extent().width()) *
+                               resample->horizontalScale))),
+            static_cast<std::uint64_t>(std::max(
+                1.0, std::ceil(static_cast<double>(inputDescriptor->data.extent().height()) *
+                               resample->verticalScale))));
+        const bool geometryMatches = static_cast<bool>(expectedOutput) &&
+                                     resample->outputWindow == *expectedOutput.value() &&
+                                     resample->sourceWindow == inputDescriptor->data &&
+                                     resample->pixelAspect == inputDescriptor->pixelAspect;
+        if (!geometryMatches) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "a point-resample command geometry does not match its input");
+        }
+        std::uint64_t bytes = 0;
+        if (!checkedImageBytes(resample->outputWindow, bytes)) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "a point-resample command has an empty output window");
+        }
+        GpuSceneExecutorStep step;
+        step.kind = GpuSceneExecutorStepKind::PointResample;
+        step.command = index;
+        step.input = resample->input;
+        step.cacheKey = key;
+        step.cacheOnComplete = true;
+        step.outputWindow = resample->outputWindow;
+        step.pointResampleHorizontalScale = resample->horizontalScale;
+        step.pointResampleVerticalScale = resample->verticalScale;
+        const auto outputDescriptor = render::Rgba32fImageDescriptor::create(
+            resample->outputWindow, resample->displayWindow, resample->pixelAspect);
+        if (!outputDescriptor) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "a point-resample descriptor is invalid");
+        }
+        step.pointResampleOutput = *outputDescriptor.value();
+        steps.push_back(std::move(step));
+        color[index] = 2;
+        return {};
+    }
+
+    if (const auto* merge = std::get_if<GpuSceneMergeCommand>(&command)) {
         std::uint64_t bytes = 0;
         if (!checkedImageBytes(merge->outputWindow, bytes)) {
             color[index] = 2;
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
                                   "a merge command has an empty window");
         }
+        // Interleave each foreground subtree with its own source-over instead of emitting every
+        // foreground first. The old order pinned ALL foregrounds at once: a wide merge of full-size
+        // layers held every layer plus the accumulator until the source-over steps ran, crossing
+        // the request budget even though each layer is consumed immediately after its composite.
+        // Here foreground i is planned, composited, and released before foreground i+1 is planned,
+        // so the live set stays accumulator + one foreground (+ that subtree's transient). The
+        // accumulator is still emitted before the first source-over (and first when there are no
+        // foregrounds), so the first dispatched step and the per-foreground composite order are
+        // unchanged; only the pin lifetime of the intermediate foregrounds changes.
         GpuSceneExecutorStep base;
         base.kind = GpuSceneExecutorStepKind::Solid;
         base.command = index;
@@ -211,19 +446,43 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         if (base.cacheOnComplete) {
             base.cacheKey = merge->semanticKey;
         }
-        steps.push_back(std::move(base));
-        for (std::size_t i = 0; i < merge->foregrounds.size(); ++i) {
+        if (merge->foregrounds.empty()) {
+            steps.push_back(std::move(base));
+            color[index] = 2;
+            return {};
+        }
+        // Build the per-foreground source-over step in a single-use helper, and emit the chain
+        // explicitly: plan the first foreground, then the single-use accumulator, then its
+        // source-over, then plan and composite each remaining foreground in turn. `base` is moved
+        // exactly once, outside every loop, while the emitted order and the DAG accounting stay
+        // identical to the interleaved order the live-pin bound depends on.
+        const auto planForeground = [this, &color](const GpuSceneCommandIndex foreground) {
+            return planCommand(foreground, color);
+        };
+        const auto makeSourceOver = [&merge, index](const std::size_t foregroundIndex) {
             GpuSceneExecutorStep step;
             step.kind = GpuSceneExecutorStepKind::SourceOver;
             step.command = index;
-            step.input = merge->foregrounds[i];
+            step.input = merge->foregrounds[foregroundIndex];
             step.destination = kInvalidGpuSceneCommand; // the current accumulator at `index`
-            const bool last = i + 1 == merge->foregrounds.size();
-            step.cacheOnComplete = last;
-            if (last) {
+            step.cacheOnComplete = foregroundIndex + 1 == merge->foregrounds.size();
+            if (step.cacheOnComplete) {
                 step.cacheKey = merge->semanticKey;
             }
-            steps.push_back(std::move(step));
+            return step;
+        };
+        if (const auto plan = planForeground(merge->foregrounds.front());
+            plan.code != GpuSceneExecutorDiagnosticCode::None) {
+            return plan;
+        }
+        steps.push_back(std::move(base));
+        steps.push_back(makeSourceOver(0));
+        for (std::size_t i = 1; i < merge->foregrounds.size(); ++i) {
+            if (const auto plan = planForeground(merge->foregrounds[i]);
+                plan.code != GpuSceneExecutorDiagnosticCode::None) {
+                return plan;
+            }
+            steps.push_back(makeSourceOver(i));
         }
         color[index] = 2;
         return {};

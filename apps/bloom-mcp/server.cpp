@@ -1,5 +1,7 @@
 #include "server.hpp"
 
+#include <bloom/host/gpu_export_tool_package.hpp>
+
 #include <array>
 #include <chrono>
 #include <limits>
@@ -77,12 +79,37 @@ bool Server::interceptCancellation(const std::string_view message) {
 
 Server::Server(std::unique_ptr<scripting::Session> session)
     : session_(std::move(session)), facade_(*session_) {
+    // One server-lifetime GPU final-render provider, bootstrapped once on the server scheduler's
+    // worker and reused by every render request; no per-request device bootstrap, no singleton.
+    // The packaged GPU shader tools are composed from THIS executable's own definitions (never
+    // PATH), and the media context follows the opened project's asset base so headless media/effect
+    // scenes run through the production GPU paths. A device/tool refusal keeps the CPU reference
+    // path.
+    if (session_ != nullptr && !session_->displayPath().empty()) {
+        gpuMediaEvaluator_.setAssetBaseDirectory(session_->displayPath().parent_path());
+    }
+    runtime::GpuProcessFrameEvaluatorOptions gpuOptions;
+    gpuOptions.ocioResolver = host::makePackagedGpuOcioResolver(host::currentExecutablePath());
+    gpuOptions.mediaContextProvider = [this] {
+        return runtime::GpuSceneMediaContext::fromEvaluator(gpuMediaEvaluator_);
+    };
+    gpuExportProvider_ = host::GpuExportProvider::create(std::move(gpuOptions));
+    gpuExportProvider_->prepare(scheduler_);
     subscription_ = facade_.events.subscribe([this](const commands::CommandEvent& event) {
         if (events_.size() == 1024) {
             events_.pop_front();
         }
         events_.emplace_back(++sequence_, event);
     });
+}
+
+Server::~Server() {
+    // Headless server teardown runs on the stdio/main thread, never the UI event loop: signal the
+    // evaluator owner and prove retirement completion before the provider is released. The
+    // scheduler that ran the bootstrap is still alive here.
+    if (gpuExportProvider_ != nullptr) {
+        static_cast<void>(gpuExportProvider_->shutdownAndWait(std::chrono::seconds(10)));
+    }
 }
 
 std::string Server::error(yyjson_val* id, const int code, const std::string_view message) {

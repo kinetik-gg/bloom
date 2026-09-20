@@ -1,10 +1,12 @@
 #include <bloom/host/output_analysis_attempt_runner.hpp>
 
-#include <bloom/color/bloom_neutral_builtin.hpp>
-#include <bloom/color/ocio_builtin_registry.hpp>
-#include <bloom/color/ocio_cpu_display_processor.hpp>
-#include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include "output_analysis_attempt_color_private.hpp"
 
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_process_frame.hpp>
+
+#include <chrono>
 #include <new>
 #include <type_traits>
 #include <utility>
@@ -13,23 +15,13 @@ namespace bloom::host {
 
 namespace {
 
-// The PNG-only color half of the blocking stage, in the exact closed input vocabulary
-// analyzePngRgba8SrgbV1 accepts. `display` is populated only when both fields below are the
-// nominal Ready/Qualified pair.
-struct ColorResolutionOutcomeV1 final {
-    output::PngRgba8SrgbColorResolutionStateV1 colorResolution =
-        output::PngRgba8SrgbColorResolutionStateV1::Ready;
-    output::OutputAnalysisAdapterStateV1 adapter = output::OutputAnalysisAdapterStateV1::Qualified;
-    output::OutputAnalysisAttemptDisplayProductsV1 display;
-};
-
 // Everything the blocking stage hands the Cpu stage, behind ONE shared_ptr: runtime::
 // TaskResultValue caps a task result at four pointers (task_scheduler.hpp), and the retained
 // target plus the PNG display products exceed that on their own. Bundling them keeps the task
 // result a single small handle while still transferring both products by value semantics.
 struct ResolvedAttemptInputsV1 final {
     output::OutputAnalysisAttemptTargetV1 target;
-    ColorResolutionOutcomeV1 color;
+    detail::ColorResolutionOutcomeV1 color;
 };
 
 struct ResolvingOutcomeV1 final {
@@ -43,127 +35,6 @@ struct ResolvingOutcomeV1 final {
 };
 static_assert(runtime::TaskResultValue<ResolvingOutcomeV1>);
 
-// Maps the C2 in-process registry's own closed outcome set onto the analyzer's closed PNG
-// color-resolution input states, one to one, per frame-output.md's "The five ocio.* codes map
-// one-to-one from the corresponding typed color-resolution failures". `Ready` is handled by the
-// caller (it is the only outcome that carries a resolved product to build a processor from).
-//
-// `LocatorKindRequiresHelper` names a real, planned locator kind that this in-process registry
-// never resolves; it is unreachable for the built-in URI this code always passes, and it maps to
-// `MissingResource` (`ocio.resource-missing`) -- the honest "the configuration resource this build
-// can reach does not cover that locator" state -- rather than being collapsed into `Missing`.
-// `UnsupportedVersion` (`ocio.version-unsupported`) has no producer at all in version 1: the
-// built-in payload's version is frozen with the binary, so nothing can present a newer one.
-[[nodiscard]] output::PngRgba8SrgbColorResolutionStateV1
-mapRegistryOutcome(const color::OcioBuiltInRegistryOutcome outcome) noexcept {
-    switch (outcome) {
-    case color::OcioBuiltInRegistryOutcome::Ready:
-        break; // unreachable here; the caller only maps a non-Ready outcome.
-    case color::OcioBuiltInRegistryOutcome::Missing:
-        return output::PngRgba8SrgbColorResolutionStateV1::Missing;
-    case color::OcioBuiltInRegistryOutcome::Changed:
-        return output::PngRgba8SrgbColorResolutionStateV1::Changed;
-    case color::OcioBuiltInRegistryOutcome::Invalid:
-        return output::PngRgba8SrgbColorResolutionStateV1::Invalid;
-    case color::OcioBuiltInRegistryOutcome::LocatorKindRequiresHelper:
-        return output::PngRgba8SrgbColorResolutionStateV1::MissingResource;
-    }
-    return output::PngRgba8SrgbColorResolutionStateV1::Missing;
-}
-
-// Binds a built or reused processor handle to the retained display-product triple. The identity is
-// an ALIASING shared_ptr into the handle's own DisplayProcessorIdentityV1 member -- never an
-// independently adopted copy -- so the exported identity can never be paired with a different
-// processor (frame-output.md: "Recomputing pixel hashes or substituting an equivalent-looking
-// frame or processor at approval or export is forbidden").
-[[nodiscard]] std::optional<output::OutputAnalysisAttemptDisplayProductsV1>
-retainDisplayProducts(std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> handle) {
-    core::Sha256Digest expectedRevision;
-    if (const auto view = handle->identity().borrowedView(); view.has_value()) {
-        expectedRevision = view->expectedOcioRevision();
-    } else {
-        return std::nullopt;
-    }
-    std::shared_ptr<const color::DisplayProcessorIdentityV1> identity(handle, &handle->identity());
-    return output::OutputAnalysisAttemptDisplayProductsV1{.processor = std::move(handle),
-                                                          .identity = std::move(identity),
-                                                          .expectedOcioRevision = expectedRevision};
-}
-
-// The attempt graph's step 4. Never throws; a genuine allocation/internal failure is signalled by
-// returning nullopt so the caller can fail the attempt AT the ColorPreparing stage, while every
-// modelled configuration/adapter state returns a populated outcome that the analyzer turns into a
-// truthful, non-approvable report.
-[[nodiscard]] std::optional<ColorResolutionOutcomeV1>
-resolvePngDisplayProducts(runtime::QualifiedDisplayProcessorProvider* const provider,
-                          const runtime::EvaluationColorIntent& intent) noexcept {
-    try {
-        const bool neutralWorkingSpace =
-            intent.workingColorSpaceId == runtime::kLinearRec709SceneColorSpaceId &&
-            (intent.ocioConfigRevision == core::Sha256Digest{} ||
-             intent.ocioConfigRevision == color::kBloomNeutralV1ConfigDigest);
-        if (neutralWorkingSpace && provider != nullptr) {
-            const auto snapshot = provider->snapshot();
-            if (snapshot.readiness == runtime::QualifiedDisplayProcessorReadiness::Ready &&
-                snapshot.handle != nullptr) {
-                auto products = retainDisplayProducts(snapshot.handle);
-                if (!products.has_value()) {
-                    return std::nullopt;
-                }
-                return ColorResolutionOutcomeV1{
-                    .colorResolution = output::PngRgba8SrgbColorResolutionStateV1::Ready,
-                    .adapter = output::OutputAnalysisAdapterStateV1::Qualified,
-                    .display = std::move(*products)};
-            }
-        }
-
-        const auto expectedRevision = intent.ocioConfigRevision == core::Sha256Digest{}
-                                          ? color::kBloomNeutralV1ConfigDigest
-                                          : intent.ocioConfigRevision;
-        const auto locator =
-            neutralWorkingSpace ? color::kBloomNeutralV1ConfigUri : color::kAcesCgV1ConfigUri;
-        auto resolution =
-            color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn, locator,
-                                      expectedRevision, intent.workingColorSpaceId);
-        if (!resolution.ready()) {
-            return ColorResolutionOutcomeV1{
-                .colorResolution = mapRegistryOutcome(resolution.outcome()),
-                .adapter = output::OutputAnalysisAdapterStateV1::Qualified,
-                .display = {}};
-        }
-        auto resolved = std::move(resolution).takeResolved();
-        if (!resolved.has_value()) {
-            return std::nullopt;
-        }
-
-        // frame-output.md: "A resolved PNG configuration whose helper, processor, or execution
-        // provider cannot run is an adapter-execution failure: Color keeps its Ready nominal tuple
-        // while External Dependencies uses adapter.unavailable."
-        auto built = color::buildBloomNeutralCpuDisplayProcessor(*resolved);
-        auto handleValue = std::move(built).takeHandle();
-        if (!handleValue.has_value()) {
-            return ColorResolutionOutcomeV1{
-                .colorResolution = output::PngRgba8SrgbColorResolutionStateV1::Ready,
-                .adapter = output::OutputAnalysisAdapterStateV1::Unavailable,
-                .display = {}};
-        }
-        auto handle = std::make_shared<const color::PreparedCpuDisplayProcessorHandle>(
-            std::move(*handleValue));
-        auto products = retainDisplayProducts(std::move(handle));
-        if (!products.has_value()) {
-            return std::nullopt;
-        }
-        return ColorResolutionOutcomeV1{.colorResolution =
-                                            output::PngRgba8SrgbColorResolutionStateV1::Ready,
-                                        .adapter = output::OutputAnalysisAdapterStateV1::Qualified,
-                                        .display = std::move(*products)};
-    } catch (const std::bad_alloc&) {
-        return std::nullopt;
-    } catch (...) {
-        return std::nullopt;
-    }
-}
-
 enum class BuildFailureKindV1 : std::uint8_t {
     None,
     Evaluation,
@@ -172,11 +43,19 @@ enum class BuildFailureKindV1 : std::uint8_t {
     AttemptBuild,
 };
 
+// The successful Evaluating/Identifying/Analyzing product, heap-shared as one handle so the task
+// result stays within TaskResultValue's 4-pointer cap even though the retained native provenance
+// carries the full counter set.
+struct BuildProductV1 final {
+    std::shared_ptr<const output::OutputAnalysisAttemptV1> attempt;
+    OutputAnalysisAttemptGpuProvenanceV1 gpuProvenance;
+};
+
 struct BuildOutcomeV1 final {
     bool succeeded = false;
     BuildFailureKindV1 failureKind = BuildFailureKindV1::None;
     std::uint8_t rawCode = 0;
-    std::shared_ptr<const output::OutputAnalysisAttemptV1> attempt = nullptr;
+    std::shared_ptr<const BuildProductV1> product = nullptr;
 };
 static_assert(runtime::TaskResultValue<BuildOutcomeV1>);
 
@@ -210,9 +89,11 @@ translateBuildFailure(const BuildOutcomeV1& outcome) noexcept {
 } // namespace
 
 OutputAnalysisAttemptOutcomeV1 OutputAnalysisAttemptOutcomeV1::completed(
-    std::shared_ptr<const output::OutputAnalysisAttemptV1> attempt) noexcept {
+    std::shared_ptr<const output::OutputAnalysisAttemptV1> attempt,
+    std::optional<OutputAnalysisAttemptGpuProvenanceV1> gpuProvenance) noexcept {
     OutputAnalysisAttemptOutcomeV1 outcome;
     outcome.attempt_ = std::move(attempt);
+    outcome.gpuProvenance_ = gpuProvenance;
     return outcome;
 }
 
@@ -233,8 +114,18 @@ struct OutputAnalysisAttemptRunnerState final {
     OutputAnalysisAttemptStageV1 stage = OutputAnalysisAttemptStageV1::Resolving;
     runtime::TaskHandle<ResolvingOutcomeV1> resolvingHandle;
     std::optional<runtime::TaskHandle<BuildOutcomeV1>> buildHandle;
+    // Set once Resolving succeeds and cleared when the Cpu evaluation task is submitted. While it
+    // is set, the runner may be deferring on the GPU provider's lazy bootstrap.
+    std::shared_ptr<const ResolvedAttemptInputsV1> resolvedInputs;
+    std::optional<std::chrono::steady_clock::time_point> gpuGateDeadline;
     bool completed = false;
 };
+
+// Bounded deferral for the GPU provider's lazy bootstrap. The gate is owner-driven: tryComplete()
+// simply reports "not yet" while the provider boots and the authoring surface's existing poll
+// loop re-drives it. A provider that never reaches a terminal state cannot wedge an export
+// forever, so after this bound the evaluation proceeds and the truthful CPU fallback runs.
+constexpr auto kGpuBootstrapDeferralLimit = std::chrono::seconds(5);
 
 } // namespace detail
 
@@ -280,40 +171,82 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
     }
 
     if (!state_->buildHandle.has_value()) {
-        // Still waiting on / just reached the Resolving stage.
-        auto taken = state_->resolvingHandle.tryTakeResult();
-        if (!taken.has_value()) {
-            return std::nullopt;
-        }
-        if (taken->state() == runtime::TaskState::Cancelled) {
-            state_->completed = true;
-            return OutputAnalysisAttemptOutcomeV1::failure(
-                {OutputAnalysisAttemptStageV1::Resolving, true, std::monostate{}});
-        }
-        if (taken->state() != runtime::TaskState::Succeeded || !taken->value().has_value() ||
-            !taken->value()->succeeded) {
-            state_->completed = true;
-            if (taken->value().has_value() && taken->value()->colorStageFailed) {
-                return OutputAnalysisAttemptOutcomeV1::failure(
-                    {OutputAnalysisAttemptStageV1::ColorPreparing, false, std::monostate{}});
+        if (state_->resolvedInputs == nullptr) {
+            // Still waiting on / just reached the Resolving stage.
+            auto taken = state_->resolvingHandle.tryTakeResult();
+            if (!taken.has_value()) {
+                return std::nullopt;
             }
-            const auto error = taken->value().has_value() ? taken->value()->error
-                                                          : platform::StagedArtifactError::None;
-            return OutputAnalysisAttemptOutcomeV1::failure(
-                {OutputAnalysisAttemptStageV1::Resolving, false, error});
+            if (taken->state() == runtime::TaskState::Cancelled) {
+                state_->completed = true;
+                return OutputAnalysisAttemptOutcomeV1::failure(
+                    {OutputAnalysisAttemptStageV1::Resolving, true, std::monostate{}});
+            }
+            if (taken->state() != runtime::TaskState::Succeeded || !taken->value().has_value() ||
+                !taken->value()->succeeded) {
+                state_->completed = true;
+                if (taken->value().has_value() && taken->value()->colorStageFailed) {
+                    return OutputAnalysisAttemptOutcomeV1::failure(
+                        {OutputAnalysisAttemptStageV1::ColorPreparing, false, std::monostate{}});
+                }
+                const auto error = taken->value().has_value() ? taken->value()->error
+                                                              : platform::StagedArtifactError::None;
+                return OutputAnalysisAttemptOutcomeV1::failure(
+                    {OutputAnalysisAttemptStageV1::Resolving, false, error});
+            }
+            // Resolving succeeded: retain its typed result (the target, and for PNG the retained
+            // display products) until the evaluation stage is actually submitted -- possibly after
+            // a bounded GPU-bootstrap deferral -- then consume it directly into the next task's
+            // closure, never a wait/get/join.
+            state_->resolvedInputs = taken->value()->resolved;
+            if (state_->resolvedInputs == nullptr) {
+                state_->completed = true;
+                return OutputAnalysisAttemptOutcomeV1::failure(
+                    {OutputAnalysisAttemptStageV1::Resolving, false, std::monostate{}});
+            }
         }
 
-        // Resolving succeeded: submit the Cpu stage, consuming its typed result (the retained
-        // target, and for PNG the retained display products) directly into the next task's closure
-        // -- never a wait/get/join.
-        auto resolved = taken->value()->resolved;
-        if (resolved == nullptr) {
-            state_->completed = true;
-            return OutputAnalysisAttemptOutcomeV1::failure(
-                {OutputAnalysisAttemptStageV1::Resolving, false, std::monostate{}});
+        // GPU bootstrap gate: defer the evaluation stage until the provider's lazy bootstrap is
+        // terminal, so the first real export on a supported device is genuinely GPU instead of a
+        // CPU fallback that raced the bootstrap. This is owner-driven -- tryComplete() simply
+        // reports "not yet" and the authoring surface's existing poll loop re-drives it -- so no
+        // worker is blocked and no CPU task is submitted while waiting. The bound keeps a wedged
+        // provider from stalling an export forever.
+        const auto& provider = state_->request.gpuProvider;
+        if (provider != nullptr && !provider->prepared()) {
+            if (!state_->gpuGateDeadline.has_value()) {
+                state_->gpuGateDeadline =
+                    std::chrono::steady_clock::now() + detail::kGpuBootstrapDeferralLimit;
+            }
+            if (std::chrono::steady_clock::now() < *state_->gpuGateDeadline) {
+                return std::nullopt;
+            }
         }
+
+        auto resolved = std::move(state_->resolvedInputs);
+        state_->resolvedInputs.reset();
+        state_->gpuGateDeadline.reset();
         const auto preset = state_->request.preset;
         auto* ledger = state_->ledger;
+        auto gpuProvider = state_->request.gpuProvider; // shared ownership travels with the task
+        // The command the combined readback will run. The canonical command was prepared on the
+        // Resolving CPU task from the EXACT resolved config/working space/display/view and the
+        // exact data-window geometry. `request.outputColorCommand` is an explicit test seam and is
+        // accepted ONLY when it byte-identifies that canonical command; any other command (wrong
+        // transform, stale config revision, or a command prepared for a different frame) is
+        // refused, and the attempt falls back honestly to the CPU reference/display path instead of
+        // laundering foreign pixels under the canonical display identity.
+        const auto& canonicalCommand = resolved->color.gpuDisplayCommand;
+        const auto& requestedCommand = state_->request.outputColorCommand;
+        const bool refusedRequestedCommand =
+            requestedCommand != nullptr &&
+            (canonicalCommand == nullptr ||
+             requestedCommand->identity() != canonicalCommand->identity());
+        const bool forceCpuFallback = refusedRequestedCommand;
+        auto outputColorCommand =
+            refusedRequestedCommand
+                ? nullptr
+                : (requestedCommand != nullptr ? requestedCommand : canonicalCommand);
         auto plan = state_->request.plan;
         auto evaluation = state_->request.evaluation;
 
@@ -322,28 +255,88 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu);
         auto submission = state_->scheduler->submit<BuildOutcomeV1>(
             std::move(cpuRequest),
-            [plan = std::move(plan), evaluation, resolved, preset,
-             ledger](runtime::TaskContext& context) -> runtime::TaskResult<BuildOutcomeV1> {
+            [plan = std::move(plan), evaluation, resolved, preset, ledger,
+             gpuProvider = std::move(gpuProvider), forceCpuFallback,
+             outputColorCommand = std::move(outputColorCommand)](
+                runtime::TaskContext& context) -> runtime::TaskResult<BuildOutcomeV1> {
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
                 }
 
                 context.reportProgress(
                     {.phase = "Evaluating", .subphase = "", .completed = 0, .total = std::nullopt});
-                const runtime::CpuCompositionEvaluator evaluator;
-                auto evalResult = evaluator.evaluate(plan, evaluation, context.cancellation());
-                if (evalResult.status() == runtime::EvaluationStatus::Cancelled) {
-                    return runtime::TaskResult<BuildOutcomeV1>::cancelled();
+                // GPU final-render bridge: when an available device and a prepared-GPU-subset scene
+                // exist, evaluate through the genuine native scene executor and read the final
+                // RGBA32F back exactly once. An unavailable device, a disabled provider, or a
+                // scene outside the subset falls through to the CPU reference evaluator on the
+                // same snapshot/identity. The typed native provenance/counters are retained for
+                // diagnostics; they never alter the analysis or the approval digest. A refused
+                // requested command forces the full CPU reference path: the identity arm must never
+                // silently substitute for the display transform the caller asked to run.
+                OutputAnalysisAttemptGpuProvenanceV1 gpuProvenance;
+                output::OutputAnalysisAttemptGpuDisplayV1 gpuDisplay;
+                std::shared_ptr<const runtime::ProcessFrame> evaluatedFrame;
+                if (gpuProvider != nullptr && !forceCpuFallback) {
+                    auto evaluator = gpuProvider->evaluator();
+                    if (evaluator != nullptr) {
+                        auto gpuOutcome = evaluator->evaluate(
+                            plan, evaluation, context.cancellation(), {}, outputColorCommand);
+                        gpuProvenance.status = gpuOutcome.status;
+                        gpuProvenance.counters = gpuOutcome.counters;
+                        gpuProvenance.deviceOwnershipEpoch = gpuOutcome.deviceOwnershipEpoch;
+                        gpuProvenance.encodedArm = gpuOutcome.encodedArm;
+                        gpuProvenance.readbackSubmissions =
+                            gpuOutcome.outputColorCounters.readbackSubmissions;
+                        gpuProvenance.transferredPayloads =
+                            gpuOutcome.outputColorCounters.transferredPayloads;
+                        gpuProvenance.processPayloadBytes =
+                            gpuOutcome.outputColorCounters.processPayloadBytes;
+                        gpuProvenance.encodedPayloadBytes =
+                            gpuOutcome.outputColorCounters.encodedPayloadBytes;
+                        gpuProvenance.outputCommandIdentity = gpuOutcome.outputCommandIdentity;
+                        if (gpuOutcome.status == runtime::GpuProcessFrameStatus::Evaluated) {
+                            evaluatedFrame = gpuOutcome.frame;
+                            // Retain the verified display payload, bound to the exact process
+                            // geometry and the SAME canonical display identity the attempt retains.
+                            const auto* descriptor =
+                                gpuOutcome.frame != nullptr
+                                    ? gpuOutcome.frame->processImage().descriptor()
+                                    : nullptr;
+                            if (gpuOutcome.encodedArm == runtime::GpuOutputColorArm::DisplayRgba8 &&
+                                !gpuOutcome.encodedDisplayRgba8.empty() && descriptor != nullptr &&
+                                resolved->color.display.identity != nullptr) {
+                                const auto extent = descriptor->dataWindow().extent();
+                                if (static_cast<std::size_t>(extent.width()) * extent.height() ==
+                                    gpuOutcome.encodedDisplayRgba8.size()) {
+                                    gpuDisplay.pixels = std::move(gpuOutcome.encodedDisplayRgba8);
+                                    gpuDisplay.width = extent.width();
+                                    gpuDisplay.height = extent.height();
+                                    gpuDisplay.commandIdentity = gpuOutcome.outputCommandIdentity;
+                                    gpuDisplay.displayIdentity = resolved->color.display.identity;
+                                }
+                            }
+                        }
+                    } else {
+                        gpuProvenance.status = runtime::GpuProcessFrameStatus::DeviceUnavailable;
+                    }
                 }
-                if (evalResult.status() != runtime::EvaluationStatus::Evaluated ||
-                    evalResult.frame() == nullptr) {
-                    const auto code = evalResult.diagnostics().empty()
-                                          ? runtime::EvaluationDiagnosticCode::InternalInvariant
-                                          : evalResult.diagnostics().front().code;
-                    return runtime::TaskResult<BuildOutcomeV1>::succeeded(
-                        {.succeeded = false,
-                         .failureKind = BuildFailureKindV1::Evaluation,
-                         .rawCode = static_cast<std::uint8_t>(code)});
+                if (evaluatedFrame == nullptr) {
+                    const runtime::CpuCompositionEvaluator evaluator;
+                    auto evalResult = evaluator.evaluate(plan, evaluation, context.cancellation());
+                    if (evalResult.status() == runtime::EvaluationStatus::Cancelled) {
+                        return runtime::TaskResult<BuildOutcomeV1>::cancelled();
+                    }
+                    if (evalResult.status() != runtime::EvaluationStatus::Evaluated ||
+                        evalResult.frame() == nullptr) {
+                        const auto code = evalResult.diagnostics().empty()
+                                              ? runtime::EvaluationDiagnosticCode::InternalInvariant
+                                              : evalResult.diagnostics().front().code;
+                        return runtime::TaskResult<BuildOutcomeV1>::succeeded(
+                            {.succeeded = false,
+                             .failureKind = BuildFailureKindV1::Evaluation,
+                             .rawCode = static_cast<std::uint8_t>(code)});
+                    }
+                    evaluatedFrame = evalResult.frame();
                 }
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
@@ -355,7 +348,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                                         .total = std::nullopt});
                 const output::ProcessFrameSemanticIdentityV1Preparer identityPreparer;
                 auto identityResult =
-                    identityPreparer.prepare(evalResult.frame(), context.cancellation());
+                    identityPreparer.prepare(evaluatedFrame, context.cancellation());
                 if (identityResult.status() ==
                     output::ProcessFrameSemanticIdentityPreparationStatus::Cancelled) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
@@ -414,12 +407,20 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
                 }
 
+                // Bind the retained encoded display product to the exact process-pixel identity of
+                // the frame it was transferred with; buildOutputAnalysisAttemptV1 re-validates the
+                // pairing, so a cross-frame payload can never be retained.
+                if (gpuDisplay.isPresent()) {
+                    gpuDisplay.processPixelDigest = identityResult.identity()->processPixelDigest();
+                }
+
                 auto buildResult = output::buildOutputAnalysisAttemptV1(
-                    {.frame = evalResult.frame(),
+                    {.frame = evaluatedFrame,
                      .processIdentity = identityResult.identity(),
                      .report = analyzed.report(),
                      .target = resolved->target,
-                     .display = resolved->color.display},
+                     .display = resolved->color.display,
+                     .gpuDisplay = std::move(gpuDisplay)},
                     *ledger);
                 if (!buildResult) {
                     return runtime::TaskResult<BuildOutcomeV1>::succeeded(
@@ -428,7 +429,9 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                          .rawCode = static_cast<std::uint8_t>(buildResult.error())});
                 }
                 return runtime::TaskResult<BuildOutcomeV1>::succeeded(
-                    {.succeeded = true, .attempt = buildResult.attempt()});
+                    {.succeeded = true,
+                     .product = std::make_shared<const BuildProductV1>(
+                         BuildProductV1{buildResult.attempt(), gpuProvenance})});
             });
 
         if (!submission.accepted()) {
@@ -449,15 +452,17 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
         return OutputAnalysisAttemptOutcomeV1::failure(
             {OutputAnalysisAttemptStageV1::Evaluating, true, std::monostate{}});
     }
-    if (taken->state() != runtime::TaskState::Succeeded || !taken->value().has_value() ||
-        !taken->value()->succeeded || taken->value()->attempt == nullptr) {
-        if (taken->value().has_value()) {
-            return OutputAnalysisAttemptOutcomeV1::failure(translateBuildFailure(*taken->value()));
-        }
+    if (!taken->value().has_value()) {
         return OutputAnalysisAttemptOutcomeV1::failure(
             {OutputAnalysisAttemptStageV1::Analyzing, false, std::monostate{}});
     }
-    return OutputAnalysisAttemptOutcomeV1::completed(taken->value()->attempt);
+    const auto& buildValue = taken->value();
+    const auto& product = buildValue->product;
+    if (taken->state() != runtime::TaskState::Succeeded || !buildValue->succeeded ||
+        product == nullptr || product->attempt == nullptr) {
+        return OutputAnalysisAttemptOutcomeV1::failure(translateBuildFailure(*buildValue));
+    }
+    return OutputAnalysisAttemptOutcomeV1::completed(product->attempt, product->gpuProvenance);
 }
 
 OutputAnalysisAttemptRunnerResultV1::OutputAnalysisAttemptRunnerResultV1(
@@ -494,20 +499,26 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
             .stage = OutputAnalysisAttemptStageV1::Resolving,
             .resolvingHandle = {},
             .buildHandle = std::nullopt,
+            .resolvedInputs = nullptr,
+            .gpuGateDeadline = std::nullopt,
             .completed = false,
         });
 
     const auto preset = state->request.preset;
     auto* const displayProvider = state->request.displayProcessorProvider;
+    auto* const gpuProvider = state->request.gpuProvider.get();
     const auto colorIntent = state->request.evaluation.colorIntent;
+    const runtime::GpuOcioCommandGeometry colorGeometry{
+        .width = state->request.plan != nullptr ? state->request.plan->format().width() : 0,
+        .height = state->request.plan != nullptr ? state->request.plan->format().height() : 0};
 
     runtime::TaskRequest resolvingRequest(
         "Resolve an export target", attemptOwner(state->request.owner),
         runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo);
     auto submission = scheduler.submit<ResolvingOutcomeV1>(
         std::move(resolvingRequest),
-        [&artifacts, targetPath, overwritePolicy, preset, displayProvider,
-         colorIntent](runtime::TaskContext& context) -> runtime::TaskResult<ResolvingOutcomeV1> {
+        [&artifacts, targetPath, overwritePolicy, preset, displayProvider, gpuProvider, colorIntent,
+         colorGeometry](runtime::TaskContext& context) -> runtime::TaskResult<ResolvingOutcomeV1> {
             if (context.isCancellationRequested()) {
                 return runtime::TaskResult<ResolvingOutcomeV1>::cancelled();
             }
@@ -541,7 +552,9 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
                                         .subphase = "",
                                         .completed = 0,
                                         .total = std::nullopt});
-                auto color = resolvePngDisplayProducts(displayProvider, colorIntent);
+                auto color = detail::resolvePngDisplayProducts(
+                    displayProvider, gpuProvider, colorIntent, colorGeometry,
+                    [&context] { return context.isCancellationRequested(); });
                 if (!color.has_value()) {
                     return runtime::TaskResult<ResolvingOutcomeV1>::succeeded(
                         {.succeeded = false, .colorStageFailed = true});

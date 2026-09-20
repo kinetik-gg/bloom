@@ -35,6 +35,7 @@
 #include <QPicture>
 #include <QPixmap>
 #include <QPointF>
+#include <QRect>
 #include <QRectF>
 #include <QSizeF>
 
@@ -140,6 +141,12 @@ class ViewerGpuResidentController final {
     // Hides the native CPU cover so the host's own CPU paint (or no frame) is
     // exposed. Safe when no cover exists; never destroys or reparents a surface.
     void concealCpuCover();
+    // Raises the native CPU cover with the host's CURRENT CPU paint (a fresh snapshot) above the
+    // still-mapped native container. This is what lets a live target stay mapped while it retires:
+    // the opaque cover hides the last native child and no stale frame can flash, and the container
+    // is never hidden, reparented, or destroyed here. Safe when no snapshot callback is configured
+    // (no-op) and when no cover exists yet.
+    void revealCpuCover(const QRect& containerRect);
     [[nodiscard]] bool cpuCoverVisibleForTest() const noexcept;
     // Fired whenever the presenter's state changed since the previous poll
     // (attach ack, retire, refusal), so the host can re-evaluate whether to
@@ -194,6 +201,14 @@ class ViewerGpuResidentController final {
     [[nodiscard]] bool presentationAcknowledged() const noexcept;
     [[nodiscard]] std::uint64_t presentedSequence() const noexcept;
     [[nodiscard]] std::size_t overlayRasterCount() const noexcept;
+    // Genuine owner-observed native present progress for the live presenter (read-only): the
+    // applied sequence and applied present count the presentation owner published, and the last
+    // sequence this controller enqueued. A mailbox admission never advances these; a caller that
+    // needs proof a specific request was genuinely presented waits until
+    // nativeAppliedSequence() >= nativeLastEnqueuedSequence(). Zero when no presenter exists.
+    [[nodiscard]] std::uint64_t nativeAppliedSequence() const noexcept;
+    [[nodiscard]] std::uint64_t nativePresentCount() const noexcept;
+    [[nodiscard]] std::uint64_t nativeLastEnqueuedSequence() const noexcept;
 
   private:
     struct Impl;

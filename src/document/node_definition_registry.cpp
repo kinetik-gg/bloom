@@ -293,7 +293,10 @@ template <typename Definition>
         return hasCanonicalKey(definition, kCompositionOutputNodeType,
                                kCompositionOutputNodeSchemaVersion) &&
                definition.cardinality == NodeCardinality::OnePerComposition &&
-               hasLeadingImageInput(definition, kCompositionOutputInputPort) &&
+               // The image input is OPTIONAL, mirroring the Layer Output content port (task FIX1,
+               // item B): a disconnected Composition Output is an ordinary empty composition that
+               // renders transparent, not a topology failure. The lowering owns that empty path.
+               hasLeadingImageInput(definition, kCompositionOutputInputPort, false) &&
                definition.inputs.size() == 2 &&
                definition.inputs[1].name == kCompositionOutputAudioInputPort &&
                definition.inputs[1].valueKind == SocketValueKind::Audio &&
@@ -444,7 +447,9 @@ template <typename Definition>
     using namespace bloom::document;
     return {{std::string(kCompositionOutputNodeType), kCompositionOutputNodeSchemaVersion},
             NodeLoweringKind::CompositionOutput,
-            {{std::string(kCompositionOutputInputPort), SocketValueKind::Image, true},
+            // The image input is OPTIONAL, matching the Layer Output content port: a disconnected
+            // output is an empty composition that draws nothing, not a failed compile.
+            {{std::string(kCompositionOutputInputPort), SocketValueKind::Image, false},
              {std::string(kCompositionOutputAudioInputPort), SocketValueKind::Audio, false}},
             {},
             {},

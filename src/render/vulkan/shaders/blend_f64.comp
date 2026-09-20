@@ -1,0 +1,121 @@
+#version 460
+// Bloom BlendV1 Float64 compute shader (general separable fold). Offline-generated/embedded.
+//
+// This is the exact-arithmetic companion to blend.comp. The CPU oracle computes the general W3C
+// fold in Float64 and rounds once to Float32; a Float32 shader loses bits to cancellation when
+// large HDR operands produce a near-zero result, which the 2e-6 absolute-or-relative gate rejects.
+// This variant performs the straight-alpha divisions, the separable blend function, and the fold in
+// Float64 and rounds once to Float32, so it tracks the CPU oracle across HDR and cancellation.
+//
+// It requires the core shaderFloat64 feature. GpuBlend creates this pipeline only when the device
+// advertised and enabled that feature; otherwise the six general modes report Unsupported and the
+// caller keeps the CPU reference path. Normal (exact fma source-over) and Add (exact premultiplied
+// sum) stay on the Float32 blend.comp pipeline.
+//
+// Bindings, push constants, window mapping, endpoint shortcuts, and the non-finite/subnormal error
+// policy are identical to blend.comp.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D bloom_blend_source;
+layout(set = 0, binding = 1, rgba32f) uniform readonly image2D bloom_blend_backdrop;
+layout(set = 0, binding = 2, rgba32f) uniform writeonly image2D bloom_blend_output;
+layout(set = 0, binding = 3) buffer BloomBlendError { uint flags[]; } bloom_error;
+
+layout(push_constant) uniform BloomBlendPushConstants {
+    uint destWidth;
+    uint destHeight;
+    uint sourceWidth;
+    uint sourceHeight;
+    int sourceOffsetX;
+    int sourceOffsetY;
+    uint mode;
+} bloom_blend_push;
+
+const uint kErrorInputNonFinite = 1u;
+const uint kErrorResultNonFinite = 2u;
+const uint kErrorInputSubnormal = 4u;
+
+bool bloom_is_subnormal(float value)
+{
+    uint bits = floatBitsToUint(value) & 0x7FFFFFFFu;
+    return bits != 0u && bits < 0x00800000u;
+}
+
+uint bloom_lane_errors(vec4 value)
+{
+    uint errors = 0u;
+    if (any(isnan(value)) || any(isinf(value))) { errors |= kErrorInputNonFinite; }
+    if (bloom_is_subnormal(value.x) || bloom_is_subnormal(value.y) ||
+        bloom_is_subnormal(value.z) || bloom_is_subnormal(value.w)) {
+        errors |= kErrorInputSubnormal;
+    }
+    return errors;
+}
+
+double bloom_separable_blend(uint mode, double cb, double cs)
+{
+    if (mode == 1u) { return cb + cs; }
+    if (mode == 2u) { return cb * cs; }
+    if (mode == 3u) { return cb + cs - cb * cs; }
+    if (mode == 4u) { return cb <= 0.5 ? 2.0 * cb * cs : 1.0 - 2.0 * (1.0 - cb) * (1.0 - cs); }
+    if (mode == 5u) { return min(cb, cs); }
+    if (mode == 6u) { return max(cb, cs); }
+    if (mode == 7u) { return abs(cb - cs); }
+    return cs;
+}
+
+void main()
+{
+    uvec2 index = gl_GlobalInvocationID.xy;
+    if (index.x >= bloom_blend_push.destWidth || index.y >= bloom_blend_push.destHeight) {
+        return;
+    }
+    ivec2 destLocal = ivec2(index);
+    ivec2 sourceLocal = destLocal + ivec2(bloom_blend_push.sourceOffsetX,
+                                          bloom_blend_push.sourceOffsetY);
+
+    vec4 backdrop = imageLoad(bloom_blend_backdrop, destLocal);
+    bool sourceInside = sourceLocal.x >= 0 && sourceLocal.y >= 0 &&
+                        sourceLocal.x < int(bloom_blend_push.sourceWidth) &&
+                        sourceLocal.y < int(bloom_blend_push.sourceHeight);
+    vec4 source = sourceInside ? imageLoad(bloom_blend_source, sourceLocal) : vec4(0.0);
+
+    uint errors = bloom_lane_errors(backdrop);
+    if (sourceInside) { errors |= bloom_lane_errors(source); }
+    if (errors != 0u) {
+        atomicOr(bloom_error.flags[0], errors);
+        imageStore(bloom_blend_output, destLocal, backdrop);
+        return;
+    }
+
+    if (source.a == 0.0) {
+        imageStore(bloom_blend_output, destLocal, backdrop);
+        return;
+    }
+    if (backdrop.a == 0.0) {
+        imageStore(bloom_blend_output, destLocal, source);
+        return;
+    }
+
+    double as = double(source.a);
+    double ab = double(backdrop.a);
+    double inverseSourceAlpha = 1.0 - as;
+    dvec3 straightSource = dvec3(source.rgb) / as;
+    dvec3 straightBackdrop = dvec3(backdrop.rgb) / ab;
+    vec4 composited = vec4(0.0, 0.0, 0.0, float(fma(inverseSourceAlpha, ab, as)));
+    for (int channel = 0; channel < 3; ++channel) {
+        double blended = bloom_separable_blend(bloom_blend_push.mode,
+                                               straightBackdrop[channel], straightSource[channel]);
+        double premultiplied = as * (1.0 - ab) * straightSource[channel] +
+                               as * ab * blended +
+                               (1.0 - as) * ab * straightBackdrop[channel];
+        composited[channel] = float(premultiplied);
+    }
+
+    if (any(isnan(composited)) || any(isinf(composited))) {
+        atomicOr(bloom_error.flags[0], kErrorResultNonFinite);
+        imageStore(bloom_blend_output, destLocal, backdrop);
+        return;
+    }
+    imageStore(bloom_blend_output, destLocal, composited);
+}

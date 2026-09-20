@@ -101,10 +101,19 @@ struct DeviceAllocatorState final {
     // Bounded bootstrap facts recorded once so a renderer can validate a request against real
     // device limits before touching the allocator or queue.
     std::uint32_t generation = 0;
+    // True only when the selected device advertised and Bloom enabled the core shaderFloat64
+    // feature, so a Float64 kernel may be created. Gated on real support; never inferred.
+    bool shaderFloat64 = false;
     std::uint64_t maxStorageBufferRange = 0;
     std::uint32_t maxComputeWorkGroupCountX = 0;
     std::uint32_t maxComputeWorkGroupInvocations = 0;
     std::uint32_t maxComputeWorkGroupSizeX = 0;
+
+    // Resolved device allocation budget inputs. `deviceLocalBytes` is the summed DEVICE_LOCAL heap
+    // size and `memoryBudgetEnabled` is true only when VK_EXT_memory_budget was actually enabled
+    // and the VMA allocator was created with the matching budget flag.
+    std::uint64_t deviceLocalBytes = 0;
+    bool memoryBudgetEnabled = false;
 };
 
 } // namespace bloom::render::vulkan_detail

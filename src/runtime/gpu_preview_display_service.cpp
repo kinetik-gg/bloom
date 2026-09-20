@@ -17,57 +17,39 @@ namespace {
 
 [[nodiscard]] std::chrono::milliseconds
 serviceWaitInterval(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core) {
-    // The presentation coordinator must be pumped regularly to make native retirement progress even
-    // when no UI request arrives, so a live (unretired) presentation generation keeps the short
-    // interval just like an in-flight native preview job.
-    const bool presentationLive = core->presentation != nullptr && core->presentation->available &&
-                                  !core->presentationRetired;
-    const bool active = !core->stages.empty() || core->nativeInFlight ||
-                        core->residentNativeInFlight || !core->residentNativeReady.empty() ||
-                        presentationLive;
-    return active ? std::chrono::milliseconds(2) : std::chrono::milliseconds(50);
+    // Any preview stage, queued native job, or in-flight native submission needs the short poll.
+    const bool previewActive = !core->stages.empty() || core->nativeInFlight ||
+                               core->residentNativeInFlight || !core->nativeReady.empty() ||
+                               !core->residentNativeReady.empty();
+    if (previewActive) {
+        return std::chrono::milliseconds(2);
+    }
+    // A live presentation generation keeps the short interval only while a target still needs the
+    // owner to drive it (attach/resize/retire progress or an extracted/un-ingested request). A
+    // stable idle Active target is woken by the coordinator's own wake hook the moment a new frame,
+    // resize, or retirement arrives, so it waits on the notification instead of polling at 500 Hz.
+    if (core->presentation != nullptr && core->presentation->available &&
+        !core->presentationRetired && core->presentation->coordinator != nullptr &&
+        core->presentation->coordinator->hasPendingWork()) {
+        return std::chrono::milliseconds(2);
+    }
+    // Bounded idle wait: notifications still interrupt it immediately, so this only caps how long
+    // an otherwise idle owner sleeps before re-checking.
+    return std::chrono::milliseconds(50);
 }
 
 // Samples no state; the caller captures the wake generation BEFORE doing work, so a notification
-// that arrives during that work cannot be missed by the subsequent wait.
+// that arrives during that work cannot be missed by the subsequent wait. The interval is computed
+// before the wake mutex is taken so the presentation coordinator's mailbox lock is never nested
+// inside the service wake lock.
 void waitForWake(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core,
                  const std::uint64_t observedGeneration, const bool wakeOnStopping) {
+    const auto interval = serviceWaitInterval(core);
     std::unique_lock lock(core->wakeMutex);
-    core->wakeCondition.wait_for(lock, serviceWaitInterval(core), [&] {
+    core->wakeCondition.wait_for(lock, interval, [&] {
         return (wakeOnStopping && core->stopping.load(std::memory_order_acquire)) ||
                core->wakeGeneration != observedGeneration;
     });
-}
-
-void retireNativeOnOwner(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core) {
-    core->nativeReady.clear();
-    core->nativeActive.reset();
-    core->nativeInFlight = false;
-    // Presentation owns the resident-frame lease registry and the coordinator on this same device.
-    // Retire it first: coordinator, then registry, then the compute pipeline, then the device. The
-    // helper keeps pumping through pending retirement and reports an unproven/quarantined target
-    // rather than a false safe ack.
-    detail::retireServicePresentation(core);
-    // Resident native ownership (executor -> display -> scene cache) drains/cancels on this owner
-    // thread; any unproven submission is retained by the owned pipeline until it proves retirement
-    // or is destroyed. Then the packed native teardown drains/quarantines in GpuNeutralDisplay.
-    core->residentNativeReady.clear();
-    core->residentNativeActive.reset();
-    core->residentNativeInFlight = false;
-    detail::retireResidentRoute(core);
-    core->display.reset();
-    if (core->presentationRetirementUnproven) {
-        // A native presentation generation could not be proven retired. The process quarantine now
-        // holds raw native targets that reference this device, so the device is deliberately
-        // retained rather than destroyed out from under them. This is an explicit, reported
-        // retention (never a fabricated safe ack) and the host must not tear down its Qt surfaces.
-        static_cast<void>(core->device.release()); // NOLINT(bugprone-unused-return-value)
-    } else {
-        core->device.reset();
-    }
-    std::lock_guard lock(core->stateMutex);
-    core->state = GpuPreviewDisplayServiceState::Stopped;
-    core->gpuAvailable = false;
 }
 
 // The single drain path, including the exception path: no ownership deadline and no early release.
@@ -118,6 +100,7 @@ void drainService(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core
             detail::processPreviewStages(core);
             detail::processNativeDisplay(core);
             detail::processResidentNativeDisplay(core);
+            detail::processServiceCachePurge(core);
             detail::pumpServicePresentation(core);
             waitForWake(core, observed, /*wakeOnStopping=*/false);
         } catch (...) {
@@ -137,7 +120,7 @@ void drainService(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core
             std::this_thread::yield();
         }
     }
-    retireNativeOnOwner(core);
+    detail::retireNativeOnOwner(core);
 }
 
 void runServiceLoop(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core) {
@@ -159,6 +142,7 @@ void runServiceLoop(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
                 detail::processPreviewStages(core);
                 detail::processNativeDisplay(core);
                 detail::processResidentNativeDisplay(core);
+                detail::processServiceCachePurge(core);
                 // Presentation must be pumped on every iteration, even when no preview task is
                 // outstanding, so native acquire/present/retire progresses and the shutdown
                 // snapshot stays current.
@@ -381,6 +365,10 @@ GpuPreviewDisplayService::GpuPreviewDisplayService(TaskScheduler& scheduler,
     core->options = std::move(options);
     core->stageFunction = std::move(stageFunction);
     core->fallback = std::move(displayFallback);
+    core->effectiveResidentLeaseBudgets = core->options.residentLeaseBudgets;
+    core->effectiveResidentSceneCacheBudgets = core->options.residentSceneCacheBudgets;
+    core->effectivePreviewByteAllowance.store(core->options.previewByteAllowance,
+                                              std::memory_order_relaxed);
     impl_->core = core;
 
     if (!core->options.enabled) {
@@ -439,6 +427,10 @@ GpuPreviewDisplayService::GpuPreviewDisplayService(TaskScheduler& scheduler,
     core->stageFunction = std::move(cpuStageFunction);
     core->gpuStageFunction = std::move(gpuStageFunction);
     core->fallback = std::move(displayFallback);
+    core->effectiveResidentLeaseBudgets = core->options.residentLeaseBudgets;
+    core->effectiveResidentSceneCacheBudgets = core->options.residentSceneCacheBudgets;
+    core->effectivePreviewByteAllowance.store(core->options.previewByteAllowance,
+                                              std::memory_order_relaxed);
     impl_->core = core;
 
     if (!core->options.enabled) {
@@ -515,6 +507,7 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
     result.presentationShutdown = core.publishedPresentationShutdown;
     result.residentQualification = core.publishedResidentQualification;
     result.residentDetail = core.publishedResidentDetail;
+    result.residentCapacityPlan = core.publishedResidentCapacityPlan;
     result.counters.residentGraphJobs =
         core.counterResidentGraphJobs.load(std::memory_order_relaxed);
     result.counters.nativeDispatches = core.counterNativeDispatches.load(std::memory_order_relaxed);
@@ -524,6 +517,8 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
     result.counters.gpuCacheHits = core.counterGpuCacheHits.load(std::memory_order_relaxed);
     result.counters.gpuCacheMisses = core.counterGpuCacheMisses.load(std::memory_order_relaxed);
     result.counters.cpuFallbacks = core.counterCpuFallbacks.load(std::memory_order_relaxed);
+    result.counters.gpuAdmissionRefusals =
+        core.counterGpuAdmissionRefusals.load(std::memory_order_relaxed);
     result.counters.fullFrameReadbacks =
         core.counterFullFrameReadbacks.load(std::memory_order_relaxed);
     result.counters.displayStatusReads =
@@ -553,25 +548,38 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
     const bool residentMode = core->gpuStageFunction != nullptr;
     bool gpuMode = false;
     if (residentMode) {
-        // Resident selection is driven ONLY by the genuine resident report and a usable
-        // presentation generation. It is deliberately not gated on the packed readback
-        // qualification, packed bandwidth, a fake qualification, or the raw document revision.
+        // Resident selection requires a usable presentation generation and a live route. It is
+        // deliberately NOT gated on the Neutral-specific qualification (its measured pixel interval
+        // and packed parity are a performance/parity gate for the Neutral shader, not a global
+        // support gate): the per-request stage decides between a prepared general display program,
+        // the startup Neutral fast path, and the CPU fallback. The packed readback qualification,
+        // packed bandwidth, a fake qualification, and the raw document revision are all irrelevant.
         gpuMode = current.state == GpuPreviewDisplayServiceState::Ready && current.gpuAvailable &&
-                  current.residentQualification != nullptr &&
-                  current.residentQualification->eligible() && !core->residentRouteTerminal &&
-                  core->presentation != nullptr && core->presentation->available &&
-                  core->presentation->registry != nullptr;
+                  !core->residentRouteTerminal && core->presentation != nullptr &&
+                  core->presentation->available && core->presentation->registry != nullptr;
     } else {
         gpuMode = current.state == GpuPreviewDisplayServiceState::Ready && current.gpuAvailable &&
                   current.qualification != nullptr && current.qualification->eligible();
     }
-    const std::size_t allowance =
-        pixelStorageByteLimit != 0 ? pixelStorageByteLimit : core->options.previewByteAllowance;
-    if (!gpuMode || pixelStorageByteLimit == 0 || allowance > core->options.previewByteAllowance ||
-        !detail::gpuPreviewDisplayRequestIsNeutral(identity)) {
-        // Reference/unavailable/disabled, oversize admission, or non-neutral: ordinary CPU task
-        // before any stage work on the held reservation. For the resident arm an unavailable
-        // presentation generation takes this honest CPU fallback.
+    // Two DISTINCT budgets. `pixelStorageByteLimit` is the caller's HOST pixel-storage ceiling for
+    // decoding and the CPU fallback and is never lowered here. The device stage admits the request
+    // with the host ceiling clamped down to the owner-resolved GPU request ceiling: a large host
+    // ceiling is clamped, never treated as an oversize GPU request. A zero device ceiling (or zero
+    // host ceiling) is zero device admission, which honestly takes the CPU path.
+    const std::size_t gpuAllowance = static_cast<std::size_t>(
+        gpuResidentRequestBudget(static_cast<std::uint64_t>(pixelStorageByteLimit),
+                                 static_cast<std::uint64_t>(core->previewByteAllowance())));
+    // In resident mode the per-request stage decides between the general display program (which may
+    // be a non-default display/view and a non-neutral ViewAdjust), the startup Neutral fast path,
+    // and the CPU fallback. The submit gate therefore must NOT preempt a non-neutral request: doing
+    // so would re-introduce the old neutral-only gate and silently drop every prepared general
+    // display program. The packed (non-resident) arm keeps the neutral requirement.
+    const bool neutralRequired = !residentMode;
+    if (!gpuMode || gpuAllowance == 0 ||
+        (neutralRequired && !detail::gpuPreviewDisplayRequestIsNeutral(identity))) {
+        // Reference/unavailable/disabled, no device admission, or a packed non-neutral request:
+        // ordinary CPU task before any stage work on the held reservation. For the resident arm an
+        // unavailable presentation generation takes this honest CPU fallback.
         return submitCpuRootReserved(core, std::move(request), snapshot, identity,
                                      pixelStorageByteLimit, overrides);
     }
@@ -587,13 +595,13 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
     }
 
     detail::PreviewStageSubmission stageSubmission(
-        snapshot, identity, pixelStorageByteLimit, overrides, request.priority, request.owner,
-        request.groupId, request.sourceVersion, request.coalescingKey);
+        snapshot, identity, pixelStorageByteLimit, gpuAllowance, overrides, request.priority,
+        request.owner, request.groupId, request.sourceVersion, request.coalescingKey);
     TaskRequest cpuRequest = request;
     try {
         auto submission = core->scheduler->submitGpu<PreviewPreparationResultHandle>(
             std::move(request), core->generation,
-            GpuTaskAdmission{.queuedCommandBytes = 0, .requestOwnedBytes = allowance},
+            GpuTaskAdmission{.queuedCommandBytes = 0, .requestOwnedBytes = gpuAllowance},
             [core, residentMode, stageSubmission = std::move(stageSubmission)](
                 TaskContext& context,
                 GpuTaskCompletion<PreviewPreparationResultHandle> completion) mutable {
@@ -614,7 +622,10 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
             core->finishRootAdmission({}, false);
             return submission;
         }
-        // Admission unavailable before any stage work: ordinary CPU task on the held reservation.
+        // Admission unavailable before any stage work. Record the bounded-admission refusal so a
+        // silent CPU fallback can never hide a GPU request-capacity mismatch, then take the honest
+        // CPU path on the held reservation.
+        core->counterGpuAdmissionRefusals.fetch_add(1, std::memory_order_relaxed);
         return submitCpuRootReserved(core, std::move(cpuRequest), snapshot, identity,
                                      pixelStorageByteLimit, overrides);
     } catch (...) {
@@ -622,7 +633,12 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
         throw;
     }
 }
-
+bool GpuPreviewDisplayService::purgeRetainedCaches(
+    const std::chrono::milliseconds timeout) noexcept {
+    return impl_ == nullptr || impl_->core == nullptr
+               ? false
+               : detail::purgeServiceCaches(impl_->core, timeout);
+}
 void GpuPreviewDisplayService::beginShutdown() noexcept {
     if (impl_ == nullptr || impl_->core == nullptr) {
         return;
@@ -638,6 +654,9 @@ void GpuPreviewDisplayService::beginShutdown() noexcept {
         ++core->wakeGeneration;
     }
     core->wakeCondition.notify_all();
+    // Release any worker blocked in purgeRetainedCaches() so it observes stopping rather than
+    // waiting out its timeout.
+    core->cachePurgeCondition.notify_all();
     {
         std::lock_guard lock(core->stateMutex);
         if (core->state != GpuPreviewDisplayServiceState::Stopped) {

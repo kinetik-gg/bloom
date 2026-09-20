@@ -255,16 +255,15 @@ void testPerformancePageUsesInjectedProvider(Expectations& check) {
     auto* backend = window.findChild<QLabel*>(QStringLiteral("preferencesPerformanceBackendValue"));
     auto* device = window.findChild<QLabel*>(QStringLiteral("preferencesPerformanceDeviceValue"));
     auto* deviceRow = window.findChild<QWidget*>(QStringLiteral("preferencesPerformanceDeviceRow"));
-    auto* route = window.findChild<QLabel*>(QStringLiteral("preferencesPerformanceRouteValue"));
+    auto* removedRoute =
+        window.findChild<QLabel*>(QStringLiteral("preferencesPerformanceRouteValue"));
     check.expect(backend != nullptr && backend->text() == QStringLiteral("Vulkan"),
                  "an injected provider supplies the backend name");
     check.expect(device != nullptr && device->text() == QStringLiteral("Test GPU"),
                  "an injected provider supplies the device row");
     check.expect(deviceRow != nullptr && !deviceRow->isHidden(),
                  "a reported device makes the device row visible");
-    check.expect(route != nullptr &&
-                     route->text() == QStringLiteral("Available for eligible previews"),
-                 "the route reports availability, not per-frame activity");
+    check.expect(removedRoute == nullptr, "the removed Available preview route row is gone");
 }
 
 // A mutable cached provider: the Performance page must follow it while the dialog is visible.

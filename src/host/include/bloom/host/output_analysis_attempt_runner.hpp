@@ -1,11 +1,13 @@
 #pragma once
 
+#include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/output/output_analysis_analyzer.hpp>
 #include <bloom/output/output_analysis_attempt.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/output/process_frame_semantic_identity.hpp>
 #include <bloom/platform/staged_artifact.hpp>
 #include <bloom/runtime/evaluation.hpp>
+#include <bloom/runtime/gpu_process_frame.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
@@ -58,6 +60,34 @@
 // generalized from bloom/host/session_async_io.hpp's own single-stage use of it.
 namespace bloom::host {
 
+// The genuine native work the real output attempt performed, retained for diagnostics and tests
+// only. This never enters the approval digest, the process/output semantic identity, the resource
+// ledger, or the report facets: those are owned by the unchanged output-analysis contract. A
+// caller that never selected the GPU bridge (or one whose provider found no loader/device) sees
+// `Disabled`/`DeviceUnavailable` with zero counters, and the CPU reference path is the result.
+struct OutputAnalysisAttemptGpuProvenanceV1 final {
+    runtime::GpuProcessFrameStatus status = runtime::GpuProcessFrameStatus::Disabled;
+    runtime::GpuProcessFrameCounters counters;
+    // The genuine native device ownership epoch that produced the frame, propagated from
+    // GpuProcessFrameOutcome. Zero when no device evaluated the request (disabled/CPU fallback).
+    std::uint64_t deviceOwnershipEpoch = 0;
+    // Output-colour transfer accounting from the same single combined readback. The identity arm
+    // reports ArmNone with one payload, one submission, and zero encoded bytes; a colour arm
+    // reports two payloads under the same one submission. Zero/None on the CPU fallback.
+    runtime::GpuOutputColorArm encodedArm = runtime::GpuOutputColorArm::None;
+    std::uint64_t readbackSubmissions = 0;
+    std::uint64_t transferredPayloads = 0;
+    std::uint64_t processPayloadBytes = 0;
+    std::uint64_t encodedPayloadBytes = 0;
+    core::Sha256Digest outputCommandIdentity{};
+
+    [[nodiscard]] bool gpuEvaluated() const noexcept {
+        return status == runtime::GpuProcessFrameStatus::Evaluated;
+    }
+    friend bool operator==(const OutputAnalysisAttemptGpuProvenanceV1&,
+                           const OutputAnalysisAttemptGpuProvenanceV1&) = default;
+};
+
 struct OutputAnalysisAttemptRequestV1 final {
     std::shared_ptr<const runtime::CompiledCompositionPlan> plan;
     runtime::EvaluationRequest evaluation;
@@ -79,6 +109,30 @@ struct OutputAnalysisAttemptRequestV1 final {
     // Failed, the blocking stage resolves and builds its own; that is a real cost, never a silent
     // fallback to an unqualified transform. Must outlive the whole asynchronous operation.
     runtime::QualifiedDisplayProcessorProvider* displayProcessorProvider = nullptr;
+    // Optional GPU final-render provider. When it is non-null the Evaluating stage is DEFERRED
+    // (owner-driven, never blocking a worker) until the provider reports its lazy bootstrap
+    // terminal, so the first export on a supported device is genuinely GPU rather than a CPU
+    // fallback that raced the bootstrap. A provider that ends up unavailable, or a scene outside
+    // the qualified prepared-GPU subset, falls through to the CPU reference evaluator on the same
+    // snapshot/identity/request.
+    //
+    // SHARED ownership: the async attempt retains this provider, and every evaluator handle it
+    // publishes, for the whole attempt lifetime. An application-owned provider may be retired
+    // without dangling the in-flight evaluation; the provider hands the same evaluator to every
+    // frame of a range.
+    std::shared_ptr<GpuExportProvider> gpuProvider = nullptr;
+    // Optional already-compiled, immutable OCIO output command prepared on a CPU task before the
+    // GPU owner dispatch (null = identity arm: process payload only). When present the one combined
+    // readback also transfers the encoded output (process-effect RGBA32F or straight display RGBA8)
+    // alongside the unchanged process payload used for semantic identity.
+    //
+    // This is an explicit test seam, not a trust override: the runner accepts a supplied command
+    // ONLY when its canonical identity byte-equals the command it prepared itself from the exact
+    // resolved config/working space/display/view and the exact data-window geometry. Any other
+    // command (wrong transform, stale config revision, or one prepared for a different frame) is
+    // refused and the attempt falls back to the honest CPU reference/display path; a foreign
+    // command is never stamped with the canonical display identity.
+    std::shared_ptr<const runtime::PreparedGpuOcioCommand> outputColorCommand = nullptr;
 };
 
 enum class OutputAnalysisAttemptStageV1 : std::uint8_t {
@@ -128,8 +182,9 @@ class OutputAnalysisAttemptFailureV1 final {
 
 class [[nodiscard]] OutputAnalysisAttemptOutcomeV1 final {
   public:
-    [[nodiscard]] static OutputAnalysisAttemptOutcomeV1
-    completed(std::shared_ptr<const output::OutputAnalysisAttemptV1> attempt) noexcept;
+    [[nodiscard]] static OutputAnalysisAttemptOutcomeV1 completed(
+        std::shared_ptr<const output::OutputAnalysisAttemptV1> attempt,
+        std::optional<OutputAnalysisAttemptGpuProvenanceV1> gpuProvenance = std::nullopt) noexcept;
     [[nodiscard]] static OutputAnalysisAttemptOutcomeV1
     failure(OutputAnalysisAttemptFailureV1 failure) noexcept;
 
@@ -140,6 +195,15 @@ class [[nodiscard]] OutputAnalysisAttemptOutcomeV1 final {
     }
     [[nodiscard]] const std::shared_ptr<const output::OutputAnalysisAttemptV1>&
     attempt() const&& = delete;
+    // Native provenance/counters of the actual output attempt. Present on every completed attempt
+    // (including a CPU fallback, where it reports Disabled/DeviceUnavailable with zero counters);
+    // absent only when no attempt was produced at all.
+    [[nodiscard]] const std::optional<OutputAnalysisAttemptGpuProvenanceV1>&
+    gpuProvenance() const& noexcept {
+        return gpuProvenance_;
+    }
+    [[nodiscard]] const std::optional<OutputAnalysisAttemptGpuProvenanceV1>&
+    gpuProvenance() const&& = delete;
     [[nodiscard]] const OutputAnalysisAttemptFailureV1* failure() const& noexcept {
         return failure_.has_value() ? &*failure_ : nullptr;
     }
@@ -147,6 +211,7 @@ class [[nodiscard]] OutputAnalysisAttemptOutcomeV1 final {
 
   private:
     std::shared_ptr<const output::OutputAnalysisAttemptV1> attempt_;
+    std::optional<OutputAnalysisAttemptGpuProvenanceV1> gpuProvenance_;
     std::optional<OutputAnalysisAttemptFailureV1> failure_;
 };
 

@@ -10,6 +10,7 @@ void checkParity(Expectations& expectations, const CpuCompositionEvaluator& eval
     const auto prepared = builder.build(plan, request);
     expectations.expect(prepared.hasValue(), label + ": prepares");
     if (!prepared) {
+        std::cerr << label << " diagnostic: " << prepared.diagnostic.message << "\n";
         return;
     }
     // Evaluate the oracle uncached: the evaluator's semantic cache deliberately ignores node and
@@ -29,8 +30,16 @@ void checkParity(Expectations& expectations, const CpuCompositionEvaluator& eval
     expectations.expect(prepared.scene->outputDescriptor() ==
                             *frame.frame()->processImage().descriptor(),
                         label + ": output descriptor matches");
+    double hScale = 1.0;
+    double vScale = 1.0;
+    if (const auto* proxy = std::get_if<bloom::runtime::ProxyResolution>(&request.resolution)) {
+        hScale = static_cast<double>(proxy->extent.width()) /
+                 static_cast<double>(plan->format().width());
+        vScale = static_cast<double>(proxy->extent.height()) /
+                 static_cast<double>(plan->format().height());
+    }
     std::vector<std::shared_ptr<const Rgba32fImage>> images;
-    expectations.expect(replayScene(*prepared.scene, images), label + ": replays");
+    expectations.expect(replayScene(*prepared.scene, images, hScale, vScale), label + ": replays");
     const auto& replayed = images[prepared.scene->outputCommand()];
     expectations.expect(
         replayed != nullptr &&
@@ -40,6 +49,108 @@ void checkParity(Expectations& expectations, const CpuCompositionEvaluator& eval
         replayed == nullptr
             ? label + ": replay produced no image"
             : label + ": pixel parity " + firstMismatch(*replayed, frame.frame()->processImage()));
+}
+
+// A text -> translation-only layer -> output plan. Text is a single premultiplied colour through an
+// 8-bit glyph coverage, so it must prepare through the same CoveredSolidV1 coverage command a
+// fractional solid uses, with the real render::textOutlines geometry.
+void testTextCoverage(Expectations& expectations, const CpuCompositionEvaluator& evaluator) {
+    const auto plan = textPlan(format(24, 16), LayerValues{.position = {12.3, 8.1}}, 50000);
+    const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+    expectations.expect(prepared.hasValue(), "a fractional text layer prepares");
+    if (!prepared) {
+        std::cerr << "text diagnostic: " << prepared.diagnostic.message << "\n";
+        return;
+    }
+    bool sawCoverage = false;
+    for (const auto& command : prepared.scene->commands()) {
+        sawCoverage = sawCoverage ||
+                      std::holds_alternative<bloom::runtime::GpuSceneCoverageSolidCommand>(command);
+    }
+    expectations.expect(sawCoverage, "text prepares a native coverage command");
+    checkParity(expectations, evaluator, plan, requestFor(*plan), "text fractional coverage");
+
+    // Integer device grid: place the layer so the translation is exactly integral. The text leaf
+    // bounds do not depend on the layer position, so they are read from the probe above.
+    const auto centre = prepared.scene->bounds()[0].output;
+    if (!centre.empty()) {
+        auto definition = plan->copyDefinition();
+        auto& layer = std::get<CompiledLayerOutput>(definition.operations[1]);
+        const auto positionId = layer.position.id;
+        layer.position = CompiledVec2Parameter{
+            positionId, bloom::document::Vec2d{(centre.left + centre.right) * 0.5,
+                                               (centre.top + centre.bottom) * 0.5}};
+        const auto integerPlan = publish(std::move(definition));
+        checkParity(expectations, evaluator, integerPlan, requestFor(*integerPlan),
+                    "text integer-grid coverage");
+    }
+}
+
+void testShapeCoverage(Expectations& expectations, const CpuCompositionEvaluator& evaluator) {
+    using Kind = bloom::document::ShapeKind;
+    std::uint64_t base = 60000;
+    for (const auto kind :
+         {Kind::Rectangle, Kind::Ellipse, Kind::Triangle, Kind::Polygon, Kind::Star, Kind::Path}) {
+        ShapeValues shapeValues;
+        shapeValues.kind = kind;
+        shapeValues.points = 6;
+        shapeValues.cornerRadius = 0.75;
+        const auto plan =
+            shapePlan(format(24, 16), LayerValues{.position = {12.3, 8.1}}, shapeValues, base);
+        checkParity(expectations, evaluator, plan, requestFor(*plan), "shape fill coverage");
+        base += 100;
+    }
+    // Line suppresses the fill entirely; it is a stroke-only shape.
+    {
+        ShapeValues v;
+        v.kind = Kind::Line;
+        v.strokeEnabled = true;
+        v.strokeWidth = 1.5;
+        const auto plan = shapePlan(format(24, 16), LayerValues{.position = {12.3, 8.1}}, v, base);
+        checkParity(expectations, evaluator, plan, requestFor(*plan), "line stroke-only coverage");
+        base += 100;
+    }
+    // Closed stroke-only shape.
+    {
+        ShapeValues v;
+        v.kind = Kind::Ellipse;
+        v.fillEnabled = false;
+        v.strokeEnabled = true;
+        v.strokeWidth = 2.5;
+        const auto plan = shapePlan(format(24, 16), LayerValues{.position = {12.3, 8.1}}, v, base);
+        checkParity(expectations, evaluator, plan, requestFor(*plan),
+                    "ellipse stroke-only coverage");
+        base += 100;
+    }
+
+    // Fill + stroke: exercises the SourceOver merge and, at opacity != 1, the post-opacity pass.
+    for (const double opacity : {1.0, 0.65}) {
+        ShapeValues v;
+        v.kind = Kind::Ellipse;
+        v.strokeEnabled = true;
+        v.strokeWidth = 2.0;
+        v.fillColor = Color4d{0.7, 0.2, 0.1, 0.8};
+        v.strokeColor = Color4d{0.1, 0.4, 0.9, 0.6};
+        const auto plan = shapePlan(
+            format(24, 16), LayerValues{.position = {9.7, 6.2}, .opacity = opacity}, v, base);
+        checkParity(expectations, evaluator, plan, requestFor(*plan), "shape fill+stroke coverage");
+        base += 100;
+    }
+    // Non-square PAR proxy.
+    {
+        ShapeValues v;
+        v.kind = Kind::Star;
+        v.points = 7;
+        v.innerRatio = 0.4;
+        v.strokeEnabled = true;
+        v.strokeWidth = 1.0;
+        const auto plan = shapePlan(format(11, 7, pixelAspect(4, 3)),
+                                    LayerValues{.position = {5.3, 3.1}}, v, base);
+        const auto extent = bloom::render::ImageExtent::create(7, 5);
+        auto request = requestFor(*plan);
+        request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+        checkParity(expectations, evaluator, plan, request, "star proxy non-square PAR");
+    }
 }
 
 void testBasicAndMerge(Expectations& expectations, const CpuCompositionEvaluator& evaluator) {
@@ -329,78 +440,178 @@ void testBudgetRefusal(Expectations& expectations) {
                         "the failure is a diagnosed pixel-storage budget, not an allocation throw");
 }
 
-void testUnsupported(Expectations& expectations) {
+#include "gpu_scene_coverage_budget_tests.ipp"
+
+void testUnsupported(Expectations& expectations, const CpuCompositionEvaluator& evaluator) {
     const CpuGpuSceneBuilder builder;
     const auto solidPlan = twoLayerPlan(format(8, 8), LayerValues{}, LayerValues{}, 8.0, 8.0, 5000);
 
-    // ROI.
+    // A request ROI is resolved by the CPU evaluator, so the prepared scene must match it exactly:
+    // identity, bounds, the ROI process descriptor, and every replayed pixel.
     {
         auto request = requestFor(*solidPlan);
-        const auto roiWindow = ImageWindow::create(0, 0, 4, 4);
+        const auto roiWindow = ImageWindow::create(1, 1, 4, 4);
+        request.roi = *roiWindow.value();
+        checkParity(expectations, evaluator, solidPlan, request, "region of interest");
+    }
+    // An out-of-resolution ROI is refused by the shared preflight before any work, exactly as the
+    // CPU evaluator refuses it; it is never silently widened to the full frame.
+    {
+        auto request = requestFor(*solidPlan);
+        const auto roiWindow = ImageWindow::create(-1, 0, 1, 1);
         request.roi = *roiWindow.value();
         const auto prepared = builder.build(solidPlan, request);
         expectations.expect(!prepared && prepared.diagnostic.code ==
-                                             PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
-                            "ROI is refused before any work");
+                                             PreparedGpuSceneDiagnosticCode::PreflightFailure,
+                            "an out-of-resolution ROI is refused before any work");
     }
-    // Non-linear color intent.
+    // A non-lin_rec709_scene working space is admitted for the colour-agnostic operations: a solid
+    // applies no working-space transform (the CPU reference only premultiplies the authored value),
+    // so it now prepares and carries the requested working space in its process identity. A
+    // transform that must resolve the working space still fails closed; that path is covered by the
+    // media/effect acceptance tests.
     {
         auto request = requestFor(*solidPlan);
         request.colorIntent.workingColorSpaceId = "acescg";
         const auto prepared = builder.build(solidPlan, request);
-        expectations.expect(!prepared && prepared.diagnostic.code ==
-                                             PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
-                            "a non-lin_rec709_scene intent is refused");
+        expectations.expect(prepared.hasValue(),
+                            "a colour-agnostic solid scene prepares under a non-neutral working "
+                            "space");
+        if (prepared) {
+            expectations.expect(prepared.scene->processIdentity().colorIntent.workingColorSpaceId ==
+                                    "acescg",
+                                "the prepared identity carries the requested working space");
+        }
     }
-    // Rotation.
+    // An operation kind still outside the prepared subset (nested Composition Source).
     {
         auto definition = solidPlan->copyDefinition();
-        std::get<CompiledLayerOutput>(definition.operations[1]).rotation.source = 30.0;
-        const auto rotated = publish(std::move(definition));
-        const auto prepared = builder.build(rotated, requestFor(*rotated));
-        expectations.expect(!prepared && prepared.diagnostic.code ==
-                                             PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
-                            "a rotated layer is refused");
-    }
-    // Non-Normal blend.
-    {
-        auto definition = solidPlan->copyDefinition();
-        std::get<CompiledLayerOutput>(definition.operations[1]).blendMode =
-            bloom::core::BlendMode::Screen;
-        const auto screen = publish(std::move(definition));
-        const auto prepared = builder.build(screen, requestFor(*screen));
-        expectations.expect(!prepared && prepared.diagnostic.code ==
-                                             PreparedGpuSceneDiagnosticCode::UnsupportedBlend,
-                            "a non-Normal blend is refused");
-    }
-    // Parented layer.
-    {
-        auto definition = solidPlan->copyDefinition();
-        std::get<CompiledLayerOutput>(definition.operations[1]).parent = OperationIndex::fromRaw(0);
-        const auto parented = publish(std::move(definition));
-        const auto prepared = builder.build(parented, requestFor(*parented));
-        expectations.expect(!prepared && prepared.diagnostic.code ==
-                                             PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
-                            "a parented layer is refused");
-    }
-    // An unsupported operation kind (Text).
-    {
-        auto definition = solidPlan->copyDefinition();
-        definition.operations[0] = bloom::runtime::CompiledText{
-            bloom::document::NodeId::fromRaw(6000),
-            bloom::document::ParameterId::fromRaw(6001),
-            "x",
-            {bloom::document::ParameterId::fromRaw(6002), 12.0},
-            {bloom::document::ParameterId::fromRaw(6003), Color4d{1, 1, 1, 1}},
-            bloom::runtime::CompiledTextLayout{bloom::document::ParameterId::fromRaw(6004),
-                                               0,
-                                               {bloom::document::ParameterId::fromRaw(6005), 1.0},
-                                               {bloom::document::ParameterId::fromRaw(6006), 0.0}}};
-        const auto text = publish(std::move(definition));
-        const auto prepared = builder.build(text, requestFor(*text));
+        definition.operations[0] = bloom::runtime::CompiledCompositionSource{
+            bloom::document::NodeId::fromRaw(6000), 0,
+            bloom::runtime::CompiledCompositionTimeMapping{
+                {bloom::document::ParameterId::fromRaw(6001), 0.0},
+                {bloom::document::ParameterId::fromRaw(6002), 1.0},
+                0}};
+        const auto nested = publish(std::move(definition));
+        const auto prepared = builder.build(nested, requestFor(*nested));
         expectations.expect(!prepared && prepared.diagnostic.code ==
                                              PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                             "an out-of-subset operation is refused before any resolution");
+    }
+}
+
+void testBlendModes(Expectations& expectations, const CpuCompositionEvaluator& evaluator) {
+    using bloom::core::BlendMode;
+    const std::array modes{BlendMode::Normal,  BlendMode::Add,       BlendMode::Multiply,
+                           BlendMode::Screen,  BlendMode::Overlay,   BlendMode::Darken,
+                           BlendMode::Lighten, BlendMode::Difference};
+    std::uint64_t idBase = 30000;
+    for (const auto mode : modes) {
+        const LayerValues top{.position = {2.7, 2.4}, .opacity = 0.75, .blendMode = mode};
+        const auto plan = twoLayerPlan(format(16, 12), LayerValues{.position = {4.3, 3.1}}, top,
+                                       6.0, 5.0, idBase);
+        checkParity(expectations, evaluator, plan, requestFor(*plan),
+                    "blend mode " + std::to_string(static_cast<unsigned>(mode)));
+        idBase += 100;
+    }
+}
+
+// Full affine, parent composition and generic (layer-on-layer) input parity against the live CPU
+// composition evaluator, including rotated/nonuniform/signed scale, anchor, parented shear, a
+// parent outside its active span with an active child, a vector chain through two layers, and a
+// proxy.
+void testAffineAndParent(Expectations& expectations, const CpuCompositionEvaluator& evaluator) {
+    // Rotation on both (fractional) layers.
+    {
+        const auto plan =
+            twoLayerPlan(format(16, 12), LayerValues{.position = {4.3, 3.1}, .rotation = 30.0},
+                         LayerValues{.position = {2.7, 2.4}, .rotation = -15.0}, 6.0, 5.0, 40000);
+        checkParity(expectations, evaluator, plan, requestFor(*plan), "affine rotation");
+    }
+    // Nonuniform + signed scale with a nonzero anchor.
+    {
+        const auto plan = twoLayerPlan(
+            format(16, 12),
+            LayerValues{.position = {4.3, 3.1}, .anchor = {1.0, -0.5}, .scale = {1.75, -0.5}},
+            LayerValues{.position = {2.7, 2.4}, .scale = {-2.0, 0.75}}, 6.0, 5.0, 40100);
+        checkParity(expectations, evaluator, plan, requestFor(*plan), "affine signed/anchor");
+    }
+    // Parented shear: a rotated, nonuniformly scaled parent composed with a rotated child.
+    {
+        auto definition = twoLayerPlan(format(24, 16),
+                                       LayerValues{.position = {12.0, 8.0},
+                                                   .anchor = {1.5, -0.5},
+                                                   .scale = {1.5, -0.75},
+                                                   .rotation = 30.0},
+                                       LayerValues{.position = {7.0, 9.0},
+                                                   .anchor = {0.25, 0.5},
+                                                   .scale = {2.0, 0.5},
+                                                   .rotation = -15.0},
+                                       9.0, 7.0, 40200)
+                              ->copyDefinition();
+        std::get<CompiledLayerOutput>(definition.operations[3]).parent = OperationIndex::fromRaw(1);
+        const auto plan = publish(std::move(definition));
+        checkParity(expectations, evaluator, plan, requestFor(*plan), "parented shear");
+    }
+    // A parent outside its active span still composes its matrix into the active child.
+    {
+        auto definition =
+            twoLayerPlan(
+                format(24, 16),
+                LayerValues{.position = {12.0, 8.0}, .scale = {1.5, 1.5}, .rotation = 30.0},
+                LayerValues{.position = {7.0, 9.0}, .scale = {0.5, 2.0}, .rotation = 20.0}, 9.0,
+                7.0, 40300)
+                ->copyDefinition();
+        std::get<CompiledLayerOutput>(definition.operations[1]).inPoint =
+            RationalTime::fromInteger(2);
+        std::get<CompiledLayerOutput>(definition.operations[3]).parent = OperationIndex::fromRaw(1);
+        const auto plan = publish(std::move(definition));
+        checkParity(expectations, evaluator, plan, requestFor(*plan, RationalTime::fromInteger(0)),
+                    "parent outside active span");
+    }
+    // Generic layer-on-layer input: the child consumes the parent's vector chain, so the original
+    // solid geometry rasterizes through the full composed matrix, not an intermediate raster. The
+    // unused second solid is removed so every operation stays reachable.
+    {
+        auto definition =
+            twoLayerPlan(
+                format(24, 16),
+                LayerValues{.position = {12.0, 8.0}, .scale = {1.25, 1.25}, .rotation = 10.0},
+                LayerValues{.position = {8.0, 7.0}, .scale = {0.75, 1.5}, .rotation = -12.0}, 10.0,
+                8.0, 40400)
+                ->copyDefinition();
+        auto layerA = std::get<CompiledLayerOutput>(definition.operations[1]);
+        auto layerB = std::get<CompiledLayerOutput>(definition.operations[3]);
+        layerB.input = OperationIndex::fromRaw(1);
+        auto merge = std::get<CompiledMerge>(definition.operations[4]);
+        merge.entries = {CompiledMergeInput{merge.entries[1].slotId, layerB.layerId,
+                                            OperationIndex::fromRaw(2)}};
+        std::vector<CompiledOperation> operations;
+        operations.push_back(std::move(definition.operations[0]));
+        operations.push_back(layerA);
+        operations.push_back(layerB);
+        operations.push_back(std::move(merge));
+        operations.push_back(CompiledCompositionOutput{bloom::document::NodeId::fromRaw(40453),
+                                                       OperationIndex::fromRaw(3)});
+        definition.operations = std::move(operations);
+        definition.output = OperationIndex::fromRaw(4);
+        const auto plan = publish(std::move(definition));
+        checkParity(expectations, evaluator, plan, requestFor(*plan), "generic layer input");
+    }
+    // Non-square PAR proxy with affine layers.
+    {
+        const auto plan =
+            twoLayerPlan(format(11, 7, pixelAspect(4, 3)),
+                         LayerValues{.position = {5.3, 3.1}, .scale = {1.5, 0.5}, .rotation = 25.0},
+                         LayerValues{.position = {2.7, 4.9},
+                                     .anchor = {1.0, -0.5},
+                                     .scale = {-1.0, 1.5},
+                                     .rotation = -40.0},
+                         5.0, 4.0, 40500);
+        const auto extent = bloom::render::ImageExtent::create(7, 5);
+        auto request = requestFor(*plan);
+        request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+        checkParity(expectations, evaluator, plan, request, "affine proxy non-square PAR");
     }
 }
 
@@ -420,8 +631,13 @@ int main() {
         testTimeActivation(expectations, evaluator);
         testInactiveAndMuteSolo(expectations, evaluator);
         testBudgetRefusal(expectations);
+        testCoverageHostGeometryBudget(expectations);
         testKeyStability(expectations);
-        testUnsupported(expectations);
+        testTextCoverage(expectations, evaluator);
+        testShapeCoverage(expectations, evaluator);
+        testBlendModes(expectations, evaluator);
+        testAffineAndParent(expectations, evaluator);
+        testUnsupported(expectations, evaluator);
         if (!expectations.ok()) {
             std::cerr << "FAIL: GPU scene preparation expectations failed\n";
             return 1;

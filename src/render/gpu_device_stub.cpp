@@ -53,6 +53,8 @@ const GpuCapabilityReport& GpuDevice::capabilityReport() const noexcept {
     return kEmptyCapabilityReport;
 }
 
+GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept { return {}; }
+
 GpuQualification GpuDevice::qualificationFor(const GpuOperationId operation,
                                              const GpuPrecision precision) const noexcept {
     if (impl_ == nullptr) {

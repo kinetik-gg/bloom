@@ -12,8 +12,10 @@
 
 #include "gpu_device_private.hpp"
 #include "gpu_image_private.hpp"
+#include "gpu_solid_fault.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -43,6 +45,7 @@ struct GpuSolidUploadBuffer final {
             allocation = other.allocation;
             bytes = other.bytes;
             armed = other.armed;
+            owner = std::move(other.owner);
             other.state = nullptr;
             other.buffer = VK_NULL_HANDLE;
             other.allocation = VK_NULL_HANDLE;
@@ -62,6 +65,7 @@ struct GpuSolidUploadBuffer final {
         allocation = VK_NULL_HANDLE;
         bytes = 0;
         armed = false;
+        owner.reset();
     }
 
     vulkan_detail::DeviceAllocatorState* state = nullptr;
@@ -69,6 +73,10 @@ struct GpuSolidUploadBuffer final {
     VmaAllocation allocation = VK_NULL_HANDLE;
     std::uint64_t bytes = 0;
     bool armed = false;
+    // For the resident-coverage path this co-owns the producer's mask buffer so
+    // it can never be freed while this submission still references it. Null for
+    // the ordinary host-uploaded coverage.
+    std::shared_ptr<void> owner;
 };
 
 // CoveredSolidV1 pipeline resources. Created lazily on the first beginCovered on
@@ -86,6 +94,9 @@ struct GpuSolidCoveredResources final {
     bool ready = false;
     std::string reason;
 };
+
+// Sentinel for an Impl that owns no bounded resident-pool slot.
+inline constexpr std::size_t kSolidNoResidentSlot = static_cast<std::size_t>(-1);
 
 struct GpuSolid::Impl final {
     Impl() = default;
@@ -109,10 +120,30 @@ struct GpuSolid::Impl final {
         coveredMask.release();
     }
     void releaseResident() { residentImage.reset(); }
+    // Bounded resident-slot management, defined in gpu_solid_retirement.cpp. Acquire is called
+    // before the first native allocation; release is owner-thread retirement; orphan is the
+    // foreign-thread or unproven owner path that preserves the already-owned slot for the owner
+    // drain. The drain is a static member because it names the private Impl type.
+    [[nodiscard]] bool acquireResidentSlot() noexcept;
+    void releaseResidentSlot() noexcept;
+    void orphanResidentSlot() noexcept;
+    static void drainResidentOrphansOnOwnerThread() noexcept;
+    // Frees every base pipeline/command/fence native resource. Called only on the owner thread
+    // after a failed createPipeline() so an Impl that then holds no resident slot owns no Vulkan
+    // object and may be destroyed from any thread.
+    void resetPipelineResources() noexcept;
     [[nodiscard]] bool createPipeline();
     // Builds the CoveredSolidV1 shader module, descriptor layout, pipeline
     // layout, pipeline, descriptor pool, and descriptor set.
     [[nodiscard]] bool createCoveredPipeline();
+    // Shared implementation of the covered fill. `hostCoverage` is non-empty for
+    // the ordinary path and the CPU float mask is uploaded; otherwise the
+    // already-resident `residentMaskBuffer` (owned by `residentOwner`) is bound
+    // directly with no host roundtrip.
+    [[nodiscard]] GpuSolidDiagnostic
+    beginCoveredJob(const GpuSolidParameters& base, std::span<const std::uint8_t> hostCoverage,
+                    float opacity, std::uint64_t byteBudget, VkBuffer residentMaskBuffer,
+                    std::uint64_t residentMaskBytes, std::shared_ptr<void> residentOwner);
     // Bounded owner-thread drain. Returns true when the submission is proved
     // retired.
     [[nodiscard]] bool drainAndRetire() noexcept;
@@ -121,6 +152,10 @@ struct GpuSolid::Impl final {
     std::shared_ptr<vulkan_detail::DeviceAllocatorState> control;
     GpuSolidBudgets budgets;
     std::uint32_t expectedGeneration = 0;
+    // Bounded resident-pool slot owned by this Impl from before its first native allocation until
+    // owner-thread release. kSolidNoResidentSlot means this Impl owns no native resources.
+    std::size_t residentSlot = kSolidNoResidentSlot;
+    bool pipelineReady = false;
 
     vk::raii::ShaderModule shaderModule{nullptr};
     vk::raii::DescriptorSetLayout descriptorSetLayout{nullptr};

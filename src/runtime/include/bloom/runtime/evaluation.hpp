@@ -208,6 +208,11 @@ class ProcessFrame final {
 
   private:
     friend class CpuCompositionEvaluator;
+    // Narrow trusted friend: the GPU final-render/export bridge publishes a genuine ProcessFrame
+    // whose scene-linear RGBA32F pixels came from the native scene executor and whose provenance is
+    // EvaluationProvider::GpuResident. It constructs through this same private constructor, so no
+    // second public/forged frame path exists.
+    friend class GpuProcessFrameEvaluator;
 
     ProcessFrame(ProcessFrameIdentity identity,
                  std::shared_ptr<const render::Rgba32fImage> processImage,

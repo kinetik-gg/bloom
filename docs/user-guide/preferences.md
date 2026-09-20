@@ -30,8 +30,9 @@ running session.
 ## Memory and disk budgets
 
 A budget of 0 means "use the machine-derived default". See [Memory](memory.md) for how Bloom derives
-the defaults, and for the two cache ceilings. The **Clear** command for the disk cache also remains
-under **Composition → Clear Media Cache…**.
+the defaults, and for the two cache ceilings. The disk cache can be purged at any time from
+**Edit → Purge… → Purge media cache**, which clears the on-disk store and the applicable in-memory
+decoded media off the interface thread; the source files are never changed.
 
 ## Project, session, and per-area state
 

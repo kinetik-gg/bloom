@@ -1,0 +1,33 @@
+#version 460
+// Bloom OCIO GPU wrapper fixture (offline compile/validate only; no runtime use).
+//
+// Proves the wrapper contract compiles as a Vulkan GLSL compute shader with the exact
+// un-premultiply -> OCIO -> re-premultiply / pack structure the native lane will bind to a real
+// extracted OCIO program. `bloom_ocio_transform` is a placeholder here; the real function and its
+// textures/uniforms come from render::OcioGpuProgramDesc and are never string-rewritten.
+
+layout(local_size_x = 64) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer BloomOcioInput {
+    vec4 pixels[];
+} bloom_input;
+
+layout(std430, set = 0, binding = 1) writeonly buffer BloomOcioOutput {
+    vec4 pixels[];
+} bloom_output;
+
+layout(std140, set = 0, binding = 2) uniform BloomOcioParams {
+    vec2 viewAdjust;
+} bloom_params;
+
+vec3 bloom_ocio_transform(vec3 rgb) { return rgb; }
+
+void main() {
+    const uint index = gl_GlobalInvocationID.x;
+    const vec4 premultiplied = bloom_input.pixels[index];
+    const float alpha = premultiplied.a;
+    const vec3 straight = alpha != 0.0 ? premultiplied.rgb / alpha : vec3(0.0);
+    const vec3 transformed = bloom_ocio_transform(straight);
+    const vec3 packed = clamp(transformed, 0.0, 1.0) + vec3(bloom_params.viewAdjust.x * 0.0);
+    bloom_output.pixels[index] = vec4(packed * alpha, alpha);
+}

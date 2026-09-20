@@ -55,6 +55,49 @@ struct Crossing {
     double x;
     int winding;
 };
+// One crossing reduced to the first integer sample index at which the CPU
+// `crossing.x <= sampleX` test becomes true. `list` tags the winding accumulator
+// (0 fill, 1 outline, 2 clip) so one merged sweep can track all three.
+struct CoverageEvent {
+    std::uint32_t threshold;
+    std::uint8_t list;
+    int winding;
+};
+constexpr std::uint32_t kMaximumCoverageSpans = 1U << 22U;
+// Resolves the exact CPU boundary comparison `crossingX <= sampleX(g)` where
+// `sampleX(g)` is the real quarter-sample expression from coverageRow. A bounded
+// binary search avoids an approximate `ceil` that could disagree on a sample
+// whose centre lies exactly on an edge.
+[[nodiscard]] std::uint32_t coverageThreshold(const double crossingX, const std::int64_t x,
+                                              const std::uint32_t width, const double scaleX) {
+    const std::uint64_t sampleCount = static_cast<std::uint64_t>(width) * 4ULL;
+    std::uint64_t lo = 0, hi = sampleCount;
+    while (lo < hi) {
+        const std::uint64_t middle = lo + (hi - lo) / 2;
+        const auto pixel = static_cast<std::uint32_t>(middle >> 2);
+        const auto sub = static_cast<std::uint32_t>(middle & 3U);
+        const double sampleX = (static_cast<double>(x) + static_cast<double>(pixel) +
+                                (static_cast<double>(sub) + 0.5) / 4) /
+                               scaleX;
+        if (sampleX >= crossingX) {
+            hi = middle;
+        } else {
+            lo = middle + 1;
+        }
+    }
+    return static_cast<std::uint32_t>(lo);
+}
+void appendCoverageEvents(const std::vector<Crossing>& crossings, const std::uint8_t list,
+                          const std::int64_t x, const std::uint32_t width, const double scaleX,
+                          std::vector<CoverageEvent>& out) {
+    const std::uint32_t sampleCount = width * 4U;
+    for (const auto& crossing : crossings) {
+        const std::uint32_t threshold = coverageThreshold(crossing.x, x, width, scaleX);
+        if (threshold < sampleCount) {
+            out.push_back({threshold, list, crossing.winding});
+        }
+    }
+}
 void crossings(std::span<const PathPoint> polygon, double y, std::vector<Crossing>& out) {
     if (polygon.size() < 3)
         return;
@@ -255,6 +298,107 @@ ImageResult<PathRaster> PathRaster::transformed(std::span<const Path> paths, Pat
     }
     return ImageResult<PathRaster>::success(std::move(result));
 }
+ImageResult<PathRasterCoverageGeometry>
+PathRaster::coverageGeometry(const std::int64_t x, const std::int64_t y, const std::uint32_t width,
+                             const std::uint32_t height, const PathFillRule rule, const bool stroke,
+                             const PathCancellation& cancelled) const {
+    const auto failure = [] {
+        return ImageResult<PathRasterCoverageGeometry>::failure(
+            ImageError::codeOnly(ImageErrorCode::InvalidParameter));
+    };
+    if (width == 0 || height == 0 ||
+        static_cast<std::uint64_t>(width) * 4ULL >
+            static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()))
+        return failure();
+    PathRasterCoverageGeometry geometry;
+    geometry.width = width;
+    geometry.height = height;
+    geometry.rows.resize(static_cast<std::size_t>(height) * 4ULL);
+    const std::uint32_t sampleCount = width * 4U;
+    std::vector<Crossing> fill, outline, clip;
+    std::vector<CoverageEvent> events;
+    for (std::uint32_t row = 0; row < height; ++row) {
+        for (std::uint32_t sy = 0; sy < 4; ++sy) {
+            if (stopped(cancelled))
+                return failure();
+            const double sampleY = (static_cast<double>(y) + static_cast<double>(row) +
+                                    (static_cast<double>(sy) + 0.5) / 4) /
+                                   scaleY_;
+            fill.clear();
+            outline.clear();
+            clip.clear();
+            events.clear();
+            crossings(clip_, sampleY, clip);
+            sortCrossings(clip);
+            if (!stroke || align_ != PathStrokeAlign::Center) {
+                crossings(fill_, sampleY, fill);
+                for (const auto& contour : contours_)
+                    crossings(contour, sampleY, fill);
+            }
+            if (stroke)
+                for (const auto& polygon : outlines_)
+                    crossings(polygon, sampleY, outline);
+            sortCrossings(fill);
+            sortCrossings(outline);
+            appendCoverageEvents(fill, 0, x, width, scaleX_, events);
+            appendCoverageEvents(outline, 1, x, width, scaleX_, events);
+            if (!clip_.empty())
+                appendCoverageEvents(clip, 2, x, width, scaleX_, events);
+            std::ranges::sort(events, [](const CoverageEvent& a, const CoverageEvent& b) {
+                return a.threshold < b.threshold;
+            });
+
+            const auto emit = [&](const std::uint32_t first, const std::uint32_t last, const int fw,
+                                  const int sw, const int cw) -> bool {
+                const bool inFill = inside(fw, rule);
+                const bool covered =
+                    stroke ? sw != 0 && (align_ == PathStrokeAlign::Center ||
+                                         (align_ == PathStrokeAlign::Inside ? inFill : !inFill))
+                           : inFill;
+                if (!covered || (!clip_.empty() && cw == 0))
+                    return true;
+                if (geometry.spans.size() >= kMaximumCoverageSpans)
+                    return false;
+                geometry.spans.push_back({first, last});
+                return true;
+            };
+
+            const auto rangeIndex = static_cast<std::size_t>(row) * 4ULL + sy;
+            const auto beginOffset = geometry.spans.size();
+            std::size_t eventIndex = 0;
+            int fw = 0, sw = 0, cw = 0;
+            const auto applyEventsAt = [&](const std::uint32_t threshold) {
+                while (eventIndex < events.size() && events[eventIndex].threshold == threshold) {
+                    const auto& event = events[eventIndex++];
+                    if (event.list == 0)
+                        fw += event.winding;
+                    else if (event.list == 1)
+                        sw += event.winding;
+                    else
+                        cw += event.winding;
+                }
+            };
+            applyEventsAt(0);
+            std::uint32_t cursor = 0;
+            while (eventIndex < events.size()) {
+                const std::uint32_t threshold = events[eventIndex].threshold;
+                if (threshold > cursor) {
+                    if (!emit(cursor, threshold - 1, fw, sw, cw))
+                        return failure();
+                    cursor = threshold;
+                }
+                applyEventsAt(threshold);
+            }
+            if (cursor < sampleCount && !emit(cursor, sampleCount - 1, fw, sw, cw))
+                return failure();
+            geometry.rows[rangeIndex] = {
+                static_cast<std::uint32_t>(beginOffset),
+                static_cast<std::uint32_t>(geometry.spans.size() - beginOffset)};
+        }
+    }
+    return ImageResult<PathRasterCoverageGeometry>::success(std::move(geometry));
+}
+
 PathBounds PathRaster::bounds(bool fill, bool stroke) const noexcept {
     PathBounds bounds;
     bool first = true;

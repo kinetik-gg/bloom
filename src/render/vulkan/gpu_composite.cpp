@@ -1,5 +1,6 @@
 #include <bloom/render/gpu_composite.hpp>
 
+#include "gpu_composite_fault.hpp"
 #include "gpu_composite_private.hpp"
 
 #ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
@@ -23,8 +24,6 @@ namespace bloom::render {
 namespace {
 
 constexpr std::uint64_t kDrainTimeoutNanoseconds = 2ULL * 1000ULL * 1000ULL * 1000ULL;
-constexpr std::uint64_t kMaxImageBytes = 256ULL * 1024ULL * 1024ULL;
-constexpr std::uint64_t kMaxMetadataBytes = 16ULL * 1024ULL * 1024ULL;
 
 [[nodiscard]] GpuCompositeDiagnostic makeDiagnostic(const GpuCompositeDiagnosticCode code,
                                                     std::string message) {
@@ -86,10 +85,31 @@ void GpuComposite::releaseImpl() noexcept {
     if (impl_ == nullptr) {
         return;
     }
-    if (!impl_->onOwnerThread() || !impl_->drainAndRetire()) {
-        noteCompositeQuarantine();
-        [[maybe_unused]] const auto* const quarantined = impl_.release();
+    if (!impl_->onOwnerThread()) {
+        // Foreign thread: never destroy native state. An Impl that owns a resident slot is
+        // preserved in that same slot (orphaned) for owner retirement; an Impl with no slot owns no
+        // Vulkan objects (the pipelines are created lazily under a slot) and can be destroyed here.
+        if (impl_->residentSlot != kCompositeNoResidentSlot) {
+            impl_->orphanResidentSlot();
+            [[maybe_unused]] const auto* const retained = impl_.release();
+        } else {
+            impl_.reset();
+        }
         return;
+    }
+    // Owner thread: prove retirement if needed, then free native resources and return the slot. An
+    // unproven submission is retained in the bounded pool for a later owner drain rather than
+    // destroyed in flight.
+    if (impl_->residentSlot != kCompositeNoResidentSlot) {
+        if (impl_->queueSubmitted) {
+            cancel();
+            if (!impl_->drainAndRetire()) {
+                impl_->orphanResidentSlot();
+                [[maybe_unused]] const auto* const retained = impl_.release();
+                return;
+            }
+        }
+        impl_->releaseResidentSlot();
     }
     impl_.reset();
 }
@@ -140,107 +160,19 @@ bool GpuComposite::Impl::drainAndRetire() noexcept {
 }
 
 GpuComposite::Impl::~Impl() {
-    assert(owner == std::this_thread::get_id());
+    // A slot-less Impl owns no native Vulkan resources (the pipelines are created lazily under a
+    // slot, and a failed creation is reset before the slot is released), so it may be destroyed
+    // from any thread. A slot-holding Impl is only ever destroyed on its owner thread: a foreign
+    // destruction orphans the slot instead.
+    assert(residentSlot == kCompositeNoResidentSlot);
     retainedSource.reset();
     retainedDestination.reset();
     residentImage.reset();
 }
 
-bool GpuComposite::Impl::createPipelines() {
-    constexpr bool kTranslationBindings[kTranslationBindingCount] = {true, true, false, false,
-                                                                     false};
-    constexpr bool kSourceOverBindings[kSourceOverBindingCount] = {true, true, true, false};
-    std::string reason;
-    if (!createCompositePipeline(*control, vulkan_detail::kTranslationOpacitySpirvCode,
-                                 vulkan_detail::kTranslationOpacitySpirvByteCount,
-                                 kTranslationBindings, kTranslationBindingCount,
-                                 kTranslationPushBytes, reason, translation)) {
-        createDiagnostic = makeDiagnostic(GpuCompositeDiagnosticCode::ShaderRejected, reason);
-        return false;
-    }
-    if (!createCompositePipeline(*control, vulkan_detail::kSourceOverSpirvCode,
-                                 vulkan_detail::kSourceOverSpirvByteCount, kSourceOverBindings,
-                                 kSourceOverBindingCount, kSourceOverPushBytes, reason,
-                                 sourceOver)) {
-        createDiagnostic = makeDiagnostic(GpuCompositeDiagnosticCode::ShaderRejected, reason);
-        return false;
-    }
-
-    const std::array poolSizes{vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 4},
-                               vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 5}};
-    vk::DescriptorPoolCreateInfo poolInfo{};
-    poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
-    poolInfo.maxSets = 2;
-    poolInfo.poolSizeCount = static_cast<std::uint32_t>(poolSizes.size());
-    poolInfo.pPoolSizes = poolSizes.data();
-    const VkDevice rawDevice = static_cast<VkDevice>(*control->device);
-    const auto* dispatcher = control->device.getDispatcher();
-    VkDescriptorPool rawPool = VK_NULL_HANDLE;
-    if (dispatcher->vkCreateDescriptorPool(
-            rawDevice, reinterpret_cast<const VkDescriptorPoolCreateInfo*>(&poolInfo), nullptr,
-            &rawPool) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuCompositeDiagnosticCode::AllocationFailed,
-                                          "the composite descriptor pool could not be created");
-        return false;
-    }
-    descriptorPool = vk::raii::DescriptorPool(control->device, rawPool);
-    const std::array setLayouts{*translation.descriptorSetLayout, *sourceOver.descriptorSetLayout};
-    vk::DescriptorSetAllocateInfo allocateInfo{};
-    allocateInfo.descriptorPool = *descriptorPool;
-    allocateInfo.descriptorSetCount = 2;
-    allocateInfo.pSetLayouts = setLayouts.data();
-    std::array<VkDescriptorSet, 2> rawSets{};
-    if (dispatcher->vkAllocateDescriptorSets(
-            rawDevice, reinterpret_cast<const VkDescriptorSetAllocateInfo*>(&allocateInfo),
-            rawSets.data()) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuCompositeDiagnosticCode::AllocationFailed,
-                                          "the composite descriptor sets could not be allocated");
-        return false;
-    }
-    translationSet = vk::raii::DescriptorSet(control->device, rawSets[0], *descriptorPool);
-    sourceOverSet = vk::raii::DescriptorSet(control->device, rawSets[1], *descriptorPool);
-
-    vk::CommandPoolCreateInfo commandPoolInfo{};
-    commandPoolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
-    commandPoolInfo.queueFamilyIndex = control->computeQueueFamily;
-    VkCommandPool rawCommandPool = VK_NULL_HANDLE;
-    if (dispatcher->vkCreateCommandPool(
-            rawDevice, reinterpret_cast<const VkCommandPoolCreateInfo*>(&commandPoolInfo), nullptr,
-            &rawCommandPool) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuCompositeDiagnosticCode::AllocationFailed,
-                                          "the composite command pool could not be created");
-        return false;
-    }
-    commandPool = vk::raii::CommandPool(control->device, rawCommandPool);
-    vk::CommandBufferAllocateInfo commandBufferInfo{};
-    commandBufferInfo.commandPool = *commandPool;
-    commandBufferInfo.level = vk::CommandBufferLevel::ePrimary;
-    commandBufferInfo.commandBufferCount = 1;
-    VkCommandBuffer rawCommandBuffer = VK_NULL_HANDLE;
-    if (dispatcher->vkAllocateCommandBuffers(
-            rawDevice, reinterpret_cast<const VkCommandBufferAllocateInfo*>(&commandBufferInfo),
-            &rawCommandBuffer) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuCompositeDiagnosticCode::AllocationFailed,
-                                          "the composite command buffer could not be allocated");
-        return false;
-    }
-    commandBuffer = vk::raii::CommandBuffer(control->device, rawCommandBuffer, *commandPool);
-    vk::FenceCreateInfo fenceInfo{};
-    VkFence rawFence = VK_NULL_HANDLE;
-    if (dispatcher->vkCreateFence(rawDevice, reinterpret_cast<const VkFenceCreateInfo*>(&fenceInfo),
-                                  nullptr, &rawFence) != VK_SUCCESS) {
-        createDiagnostic = makeDiagnostic(GpuCompositeDiagnosticCode::AllocationFailed,
-                                          "the composite fence could not be created");
-        return false;
-    }
-    fence = vk::raii::Fence(control->device, rawFence);
-    return true;
-}
-
 GpuCompositeCreateResult GpuComposite::create(GpuDevice& device,
                                               const GpuCompositeBudgets& budgets) {
-    if (budgets.maxImageBytes == 0 || budgets.maxImageBytes > kMaxImageBytes ||
-        budgets.maxMetadataBytes == 0 || budgets.maxMetadataBytes > kMaxMetadataBytes) {
+    if (budgets.maxImageBytes == 0 || budgets.maxMetadataBytes == 0) {
         return {nullptr, makeDiagnostic(GpuCompositeDiagnosticCode::InvalidArgument,
                                         "the composite budget is out of range")};
     }
@@ -254,23 +186,21 @@ GpuCompositeCreateResult GpuComposite::create(GpuDevice& device,
                                "the composite pipeline must be created on the device owner "
                                "thread")};
     }
-    if (!compositeQuarantineAllowed()) {
-        return {nullptr, makeDiagnostic(GpuCompositeDiagnosticCode::DeviceUnavailable,
-                                        "too many undrained GPU generations are quarantined")};
-    }
+    // Retire orphaned foreign-released residents on the owner thread so admission recovers.
+    Impl::drainResidentOrphansOnOwnerThread();
     auto control = GpuRendererAccess::state(device);
     if (control == nullptr) {
         return {nullptr, makeDiagnostic(GpuCompositeDiagnosticCode::DeviceUnavailable,
                                         "the GPU device exposes no renderer state")};
     }
+    // Lazy creation: an idle GpuComposite allocates no native resources and holds no resident slot.
+    // Both pipelines are created on the first begin under the bounded slot, so many pre-created
+    // instances are bounded by the fixed pool rather than each owning native state.
     auto impl = std::make_unique<Impl>();
     impl->owner = std::this_thread::get_id();
     impl->control = std::move(control);
     impl->budgets = budgets;
     impl->expectedGeneration = impl->control->generation;
-    if (!impl->createPipelines()) {
-        return {nullptr, impl->createDiagnostic};
-    }
     return {std::unique_ptr<GpuComposite>(new GpuComposite(std::move(impl))),
             GpuCompositeDiagnostic{}};
 }
@@ -301,6 +231,8 @@ GpuCompositeDiagnostic GpuComposite::beginTranslation(const GpuTranslationParame
         return makeDiagnostic(GpuCompositeDiagnosticCode::WrongThread,
                               "beginTranslation must run on the device owner thread");
     }
+    // Opportunistic, non-blocking retirement of orphaned foreign-released residents.
+    Impl::drainResidentOrphansOnOwnerThread();
     if (impl.deviceLost) {
         return makeDiagnostic(GpuCompositeDiagnosticCode::DeviceLost,
                               "the device was lost; this generation must not be reused");
@@ -370,6 +302,12 @@ GpuCompositeDiagnostic GpuComposite::beginTranslation(const GpuTranslationParame
                                                 : GpuCompositeDiagnosticCode::Unsupported,
                               support.supported ? "the output image exceeds the device limit"
                                                 : support.reason);
+    }
+
+    // Acquire the bounded resident slot BEFORE the first native allocation, and create the
+    // pipelines lazily under it. A full pool refuses cleanly without allocating anything.
+    if (!impl.ensureResidentReady()) {
+        return impl.createDiagnostic;
     }
 
     impl.clearJob();
@@ -677,6 +615,10 @@ void GpuComposite::cancel() noexcept {
     }
 }
 
-bool GpuComposite::teardownDrainIncomplete() noexcept { return compositeTeardownIncomplete(); }
+bool GpuComposite::teardownDrainIncomplete() noexcept {
+    // Recoverable pressure, not a permanent fuse: true while a foreign-released or unproven
+    // resident is retained in the bounded pool, and false again once the rightful owner drains it.
+    return composite_detail::compositeResidentOrphaned() > 0;
+}
 
 } // namespace bloom::render

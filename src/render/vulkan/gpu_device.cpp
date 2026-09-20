@@ -2,8 +2,10 @@
 
 #include "gpu_device_private.hpp"
 
+#include <array>
 #include <cassert>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -68,6 +70,61 @@ const GpuCapabilityReport& GpuDevice::capabilityReport() const noexcept {
         return impl_->report;
     }
     return kEmptyCapabilityReport;
+}
+
+GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept {
+    GpuAllocationBudget result;
+    if (impl_ == nullptr || impl_->state != GpuDeviceState::Ready || impl_->control == nullptr) {
+        return result;
+    }
+    if (std::this_thread::get_id() != impl_->owner) {
+        return result;
+    }
+    const auto& control = *impl_->control;
+    result.device_local_bytes = control.deviceLocalBytes;
+
+    if (control.allocator != VK_NULL_HANDLE && control.memoryBudgetEnabled) {
+        const VkPhysicalDeviceMemoryProperties* properties = nullptr;
+        vmaGetMemoryProperties(control.allocator, &properties);
+        if (properties != nullptr && properties->memoryHeapCount > 0U) {
+            // VMA fills exactly memoryHeapCount entries; VK_MAX_MEMORY_HEAPS is the spec upper
+            // bound, so a fixed stack array is always sufficient and this noexcept query never
+            // allocates.
+            std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
+            vmaGetHeapBudgets(control.allocator, budgets.data());
+            std::uint64_t available = 0;
+            bool reported = false;
+            const auto addSaturating = [&available](const std::uint64_t value) noexcept {
+                const std::uint64_t sum = available + value;
+                available = sum < available ? std::numeric_limits<std::uint64_t>::max() : sum;
+            };
+            for (std::uint32_t heap = 0;
+                 heap < properties->memoryHeapCount && heap < VK_MAX_MEMORY_HEAPS; ++heap) {
+                if ((properties->memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) == 0U) {
+                    continue;
+                }
+                reported = true;
+                const VmaBudget& budget = budgets[heap];
+                if (budget.budget > budget.usage) {
+                    addSaturating(budget.budget - budget.usage);
+                }
+            }
+            if (reported) {
+                result.source = GpuAllocationBudgetSource::MemoryBudget;
+                result.available_bytes = available;
+                return result;
+            }
+        }
+    }
+
+    // No live budget: report the summed DEVICE_LOCAL capacity as an explicitly-typed nominal
+    // estimate. Callers that plan against it must apply their own conservative fraction; this is
+    // never silently labelled as actual free VRAM.
+    if (result.device_local_bytes > 0U) {
+        result.source = GpuAllocationBudgetSource::DeviceLocalEstimate;
+        result.available_bytes = result.device_local_bytes;
+    }
+    return result;
 }
 
 GpuQualification GpuDevice::qualificationFor(const GpuOperationId operation,

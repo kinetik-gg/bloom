@@ -8,18 +8,29 @@
 //   gpu_scene_executor.cpp           - the public GpuSceneExecutor surface
 // This header owns the shared step vocabulary, the small pure helpers, and the Impl definition.
 
+#include "gpu_scene_executor_native_mapping.hpp"
+
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/render/gpu_affine.hpp>
+#include <bloom/render/gpu_blend.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
+#include <bloom/render/gpu_ocio_program.hpp>
+#include <bloom/render/gpu_path_coverage.hpp>
+#include <bloom/render/gpu_point_resample.hpp>
+#include <bloom/render/path_raster.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -31,13 +42,26 @@ namespace bloom::runtime {
 enum class GpuSceneExecutorStepKind : std::uint8_t {
     Solid,        // GpuSolid::begin: a solid command, a merge transparent base, or a transparent
                   // composition output.
-    CoveredSolid, // GpuSolid::beginCovered: the exact R8 coverage path.
+    CoveredSolid, // GpuSolid::beginCoveredResident/beginCovered: the R8 coverage path.
+    // The native GpuPathCoverage compute dispatch for one vector source's coverage geometry. It
+    // does not publish an image; on Ready the covered fill is started from the resident mask.
+    PathCoverage,
     // GpuImageUpload::begin: one ImageSource/VideoSource leaf. The exact converted host image is
     // uploaded once per builder semantic source key; the strong source reference is retained until
     // the submission's fence is proven retired (or the whole job is quarantined).
     Upload,
     Translation, // GpuComposite::beginTranslation: a translation command or a composition copy.
     SourceOver,  // GpuComposite::beginSourceOver: one merge layer.
+    Affine,      // GpuAffine::beginAffineMatrix: a general composed affine placement.
+    Blend,       // GpuBlend::beginBlend: one explicit two-input blend mode.
+    // GpuOcioProgram::beginEffect: one OCIO ProcessEffect transform over a resident RGBA32F input.
+    // The immutable PreparedGpuOcioCommand carries the extracted descriptor and compiled artifact;
+    // the executor retains one native program per command identity across warm frames.
+    OcioEffect,
+    // GpuPointResample::begin: one PointResampleV1 nearest-neighbour gather of a resident input
+    // into a proxy output. The host prepares only the O(width+height) axis maps; the pixels stay on
+    // the device.
+    PointResample,
 };
 
 // One native step. `command` is the scene command this step completes (kInvalid for an intermediate
@@ -60,8 +84,11 @@ struct GpuSceneExecutorStep final {
     std::optional<render::ImageWindow> solidDataWindow;
     std::optional<render::ImageWindow> solidDisplayWindow;
     core::PixelAspectRatio solidPixelAspect = core::PixelAspectRatio::square();
-    // Covered solid (borrowed from the retained scene; the scene outlives the job).
-    std::span<const std::uint8_t> coverage;
+    // Covered solid (borrowed from the retained scene; the scene outlives the job). A PathRaster
+    // vector source carries immutable coverage geometry consumed by GpuPathCoverage; the integer
+    // FreeType text leaf carries its host bitmap. At most one is non-null.
+    std::shared_ptr<const render::PathRasterCoverageGeometry> coverageGeometry;
+    std::shared_ptr<const std::vector<std::uint8_t>> hostCoverage;
     float coveredOpacity = 1.0F;
     // Upload source: the strong immutable CPU source the converted pixels came from. It is retained
     // for the job lifetime so the staging copy and any unretired submission keep their source
@@ -72,14 +99,28 @@ struct GpuSceneExecutorStep final {
     double translationX = 0.0;
     double translationY = 0.0;
     float translationOpacity = 1.0F;
+    // Affine: the exact composed placement and the already-rounded opacity. The input is `input`,
+    // the output data window is `outputWindow`.
+    render::GpuAffineMatrix affineMatrix;
+    float affineOpacity = 1.0F;
+    // Blend: `input` is the foreground source, `destination` the backdrop.
+    core::BlendMode blendMode = core::kDefaultBlendMode;
+    // OCIO ProcessEffect: the immutable prepared command (descriptor + artifact + identity).
+    // `input` is the resident RGBA32F source; the output window/display window/pixel aspect are
+    // `outputWindow` plus the scene command's preserved display geometry (carried through the scene
+    // command, not duplicated here).
+    std::shared_ptr<const PreparedGpuOcioCommand> ocioCommand;
+    // PointResampleV1: `input` is the resident RGBA32F source; the output is `outputWindow` with
+    // the input's display window/pixel aspect preserved (carried through the scene command).
+    double pointResampleHorizontalScale = 1.0;
+    double pointResampleVerticalScale = 1.0;
+    // The validated output descriptor for a point-resample step (the proxy window plus the input's
+    // display window and pixel aspect), held as an optional because ImageWindow and
+    // Rgba32fImageDescriptor have no public default constructor.
+    std::optional<render::Rgba32fImageDescriptor> pointResampleOutput;
 };
 
 namespace gpu_scene_executor_detail {
-
-[[nodiscard]] inline GpuSceneExecutorDiagnostic
-makeDiagnostic(const GpuSceneExecutorDiagnosticCode code, std::string message) {
-    return GpuSceneExecutorDiagnostic{code, std::move(message)};
-}
 
 // Overflow-checked width*height*16 for a non-empty window. Used only by the planner to reject a
 // structurally impossible window early; it is never reported as an actual byte count.
@@ -125,7 +166,78 @@ inline const std::string kEmptyCommandKey;
     if (const auto* output = std::get_if<GpuSceneCompositionOutputCommand>(&command)) {
         return output->semanticKey;
     }
+    if (const auto* affine = std::get_if<GpuSceneAffineCommand>(&command)) {
+        return affine->semanticKey;
+    }
+    if (const auto* blend = std::get_if<GpuSceneBlendCommand>(&command)) {
+        return blend->semanticKey;
+    }
+    if (const auto* ocio = std::get_if<GpuSceneOcioEffectCommand>(&command)) {
+        return ocio->semanticKey;
+    }
+    if (const auto* resample = std::get_if<GpuScenePointResampleCommand>(&command)) {
+        return resample->semanticKey;
+    }
     return kEmptyCommandKey;
+}
+
+// The single AffineBilinearV1 artifact token. Affine has one shader, so its effective pin is fixed.
+inline constexpr std::string_view kAffineArtifactToken = "affine-bilinear-v1";
+
+// The single PointResampleV1 artifact token. PointResample has one shader, so its effective pin is
+// fixed.
+inline constexpr std::string_view kPointResampleArtifactToken = "point-resample-v1";
+
+[[nodiscard]] inline bool affineFieldsFinite(const GpuSceneAffineCommand& affine) noexcept {
+    return std::isfinite(affine.matrix.a) && std::isfinite(affine.matrix.b) &&
+           std::isfinite(affine.matrix.tx) && std::isfinite(affine.matrix.c) &&
+           std::isfinite(affine.matrix.d) && std::isfinite(affine.matrix.ty) &&
+           std::isfinite(affine.opacity);
+}
+
+[[nodiscard]] inline bool
+pointResampleFieldsValid(const GpuScenePointResampleCommand& resample) noexcept {
+    return std::isfinite(resample.horizontalScale) && std::isfinite(resample.verticalScale) &&
+           resample.horizontalScale > 0.0 && resample.horizontalScale <= 1.0 &&
+           resample.verticalScale > 0.0 && resample.verticalScale <= 1.0;
+}
+
+// Effective, executor-owned semantic key for every command except blend. Affine is RECOMPUTED from
+// its declared fields; a producer-supplied semanticKey is never trusted for a lookup or an
+// insertion. Blend commands are keyed by the planner's authoritative overload, which alone knows
+// the actual selected pipeline; they must not reach this fallback, so an empty result is returned
+// for a blend rather than its advisory key. Empty also means the command is not keyable
+// (malformed); the caller refuses it rather than silently using a weaker key.
+[[nodiscard]] inline std::string effectiveCommandKey(const GpuSceneCommand& command) {
+    if (const auto* affine = std::get_if<GpuSceneAffineCommand>(&command)) {
+        if (!affineFieldsFinite(*affine)) {
+            return {};
+        }
+        return makeGpuSceneAffineSemanticKey(
+            affine->inputKey, affine->sourceWindow, affine->matrix, affine->opacity,
+            affine->outputWindow, affine->pixelAspect, std::string{kAffineArtifactToken});
+    }
+    if (const auto* resample = std::get_if<GpuScenePointResampleCommand>(&command)) {
+        if (!pointResampleFieldsValid(*resample)) {
+            return {};
+        }
+        return makeGpuScenePointResampleSemanticKey(
+            resample->inputKey, resample->sourceWindow, resample->outputWindow,
+            resample->displayWindow, resample->horizontalScale, resample->verticalScale,
+            resample->pixelAspect, std::string{kPointResampleArtifactToken});
+    }
+    if (std::get_if<GpuSceneBlendCommand>(&command) != nullptr) {
+        return {};
+    }
+    if (const auto* ocio = std::get_if<GpuSceneOcioEffectCommand>(&command)) {
+        if (ocio->program == nullptr ||
+            ocio->program->encoding() != GpuOcioOutputEncoding::FinalRgba32f) {
+            return {};
+        }
+        return makeGpuSceneOcioEffectSemanticKey(ocio->inputKey, ocio->program->identity(),
+                                                 ocio->outputWindow, ocio->pixelAspect);
+    }
+    return commandKey(command);
 }
 
 [[nodiscard]] inline bool windowsEqual(const std::optional<render::ImageWindow> lhs,
@@ -136,9 +248,10 @@ inline const std::string kEmptyCommandKey;
 // Full descriptor match for a produced image against a scene command. A translation's display
 // window and pixel aspect are preserved from its resolved input image, so that input is passed when
 // it is known.
-[[nodiscard]] inline bool descriptorMatches(const GpuSceneCommand& command,
-                                            const render::GpuImage& image,
-                                            const render::GpuImage* translationInput) noexcept {
+[[nodiscard]] inline bool
+descriptorMatches(const GpuSceneCommand& command, const render::GpuImage& image,
+                  const render::GpuImage* translationInput,
+                  const render::GpuImage* backdropInput = nullptr) noexcept {
     if (const auto* solid = std::get_if<GpuSceneSolidCommand>(&command)) {
         return windowsEqual(image.dataWindow(), solid->dataWindow) &&
                windowsEqual(image.displayWindow(), solid->displayWindow) &&
@@ -174,12 +287,49 @@ inline const std::string kEmptyCommandKey;
                windowsEqual(image.displayWindow(), upload->descriptor.displayWindow()) &&
                image.pixelAspect() == upload->descriptor.pixelAspect();
     }
+    if (const auto* affine = std::get_if<GpuSceneAffineCommand>(&command)) {
+        if (!windowsEqual(image.dataWindow(), affine->outputWindow)) {
+            return false;
+        }
+        if (translationInput != nullptr) {
+            return image.displayWindow() == translationInput->displayWindow() &&
+                   image.pixelAspect() == translationInput->pixelAspect();
+        }
+        return true;
+    }
+    if (const auto* blend = std::get_if<GpuSceneBlendCommand>(&command)) {
+        if (!windowsEqual(image.dataWindow(), blend->outputWindow)) {
+            return false;
+        }
+        if (backdropInput != nullptr) {
+            return image.displayWindow() == backdropInput->displayWindow() &&
+                   image.pixelAspect() == backdropInput->pixelAspect();
+        }
+        return true;
+    }
+    if (const auto* ocio = std::get_if<GpuSceneOcioEffectCommand>(&command)) {
+        // The native OCIO effect output propagates the input's data/display window and pixel
+        // aspect, so the executor validates the produced descriptor against the command's full
+        // output geometry. The program geometry is additionally enforced by the planner against the
+        // input.
+        return windowsEqual(image.dataWindow(), ocio->outputWindow) &&
+               windowsEqual(image.displayWindow(), ocio->displayWindow) &&
+               image.pixelAspect() == ocio->pixelAspect;
+    }
+    if (const auto* resample = std::get_if<GpuScenePointResampleCommand>(&command)) {
+        // The resample publishes a NEW image: the proxy data window, its own display window, and
+        // the input's pixel aspect. It does not inherit the source display window (a
+        // full-resolution source may be larger than the composition proxy).
+        return windowsEqual(image.dataWindow(), resample->outputWindow) &&
+               windowsEqual(image.displayWindow(), resample->displayWindow) &&
+               image.pixelAspect() == resample->pixelAspect;
+    }
     return false;
 }
 
 [[nodiscard]] inline bool cachedDescriptorMatches(const GpuSceneCommand& command,
                                                   const render::GpuImage& image) noexcept {
-    return descriptorMatches(command, image, nullptr);
+    return descriptorMatches(command, image, nullptr, nullptr);
 }
 
 struct SceneDescriptorInfo final {
@@ -207,12 +357,32 @@ expectedDescriptorOf(const PreparedGpuScene& scene, const GpuSceneCommandIndex i
                     return std::nullopt;
                 }
                 return SceneDescriptorInfo{item.outputWindow, source->display, source->pixelAspect};
+            } else if constexpr (std::is_same_v<T, GpuSceneAffineCommand>) {
+                const auto source = expectedDescriptorOf(scene, item.input, depth + 1);
+                if (!source.has_value()) {
+                    return std::nullopt;
+                }
+                return SceneDescriptorInfo{item.outputWindow, source->display, source->pixelAspect};
+            } else if constexpr (std::is_same_v<T, GpuSceneBlendCommand>) {
+                const auto backdrop = expectedDescriptorOf(scene, item.destination, depth + 1);
+                if (!backdrop.has_value()) {
+                    return std::nullopt;
+                }
+                return SceneDescriptorInfo{item.outputWindow, backdrop->display,
+                                           backdrop->pixelAspect};
+            } else if constexpr (std::is_same_v<T, GpuSceneOcioEffectCommand> ||
+                                 std::is_same_v<T, GpuSceneMergeCommand> ||
+                                 std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
+                return SceneDescriptorInfo{item.outputWindow, item.displayWindow, item.pixelAspect};
+            } else if constexpr (std::is_same_v<T, GpuScenePointResampleCommand>) {
+                const auto source = expectedDescriptorOf(scene, item.input, depth + 1);
+                if (!source.has_value()) {
+                    return std::nullopt;
+                }
+                return SceneDescriptorInfo{item.outputWindow, item.displayWindow, item.pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneCompositionOutputCommand> ||
                                  std::is_same_v<T, GpuSceneSolidCommand>) {
                 return SceneDescriptorInfo{item.dataWindow, item.displayWindow, item.pixelAspect};
-            } else if constexpr (std::is_same_v<T, GpuSceneMergeCommand> ||
-                                 std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
-                return SceneDescriptorInfo{item.outputWindow, item.displayWindow, item.pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneUploadCommand>) {
                 return SceneDescriptorInfo{item.descriptor.dataWindow(),
                                            item.descriptor.displayWindow(),
@@ -222,101 +392,6 @@ expectedDescriptorOf(const PreparedGpuScene& scene, const GpuSceneCommandIndex i
             }
         },
         scene.commands()[index]);
-}
-
-[[nodiscard]] inline GpuSceneExecutorDiagnostic
-diagnosticFromSolid(const render::GpuSolidDiagnostic& diagnostic) {
-    switch (diagnostic.code) {
-    case render::GpuSolidDiagnosticCode::OverBudget:
-        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::OverBudget, diagnostic.message);
-    case render::GpuSolidDiagnosticCode::DeviceLost:
-        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceLost, diagnostic.message);
-    case render::GpuSolidDiagnosticCode::WrongThread:
-        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::WrongThread, diagnostic.message);
-    default:
-        break;
-    }
-    return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DispatchRefused, diagnostic.message);
-}
-
-[[nodiscard]] inline GpuSceneExecutorDiagnostic
-diagnosticFromComposite(const render::GpuCompositeDiagnostic& diagnostic) {
-    switch (diagnostic.code) {
-    case render::GpuCompositeDiagnosticCode::OverBudget:
-        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::OverBudget, diagnostic.message);
-    case render::GpuCompositeDiagnosticCode::DeviceLost:
-        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceLost, diagnostic.message);
-    case render::GpuCompositeDiagnosticCode::WrongThread:
-        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::WrongThread, diagnostic.message);
-    default:
-        break;
-    }
-    return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DispatchRefused, diagnostic.message);
-}
-
-[[nodiscard]] inline GpuSceneExecutorDiagnostic
-diagnosticFromUpload(const render::GpuImageUploadDiagnostic& diagnostic) {
-    switch (diagnostic.code) {
-    case render::GpuImageUploadDiagnosticCode::OverBudget:
-        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::OverBudget, diagnostic.message);
-    case render::GpuImageUploadDiagnosticCode::DeviceLost:
-        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceLost, diagnostic.message);
-    case render::GpuImageUploadDiagnosticCode::WrongThread:
-        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::WrongThread, diagnostic.message);
-    case render::GpuImageUploadDiagnosticCode::DeviceUnavailable:
-    case render::GpuImageUploadDiagnosticCode::AllocationFailed:
-        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
-                              diagnostic.message);
-    case render::GpuImageUploadDiagnosticCode::Unsupported:
-        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::Unsupported, diagnostic.message);
-    default:
-        break;
-    }
-    return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DispatchRefused, diagnostic.message);
-}
-
-enum class NativePoll : std::uint8_t { Pending, Ready, Failure, WrongThread };
-
-[[nodiscard]] inline NativePoll mapSolid(const render::GpuSolidPollResult result) noexcept {
-    switch (result) {
-    case render::GpuSolidPollResult::Pending:
-        return NativePoll::Pending;
-    case render::GpuSolidPollResult::Ready:
-        return NativePoll::Ready;
-    case render::GpuSolidPollResult::WrongThread:
-        return NativePoll::WrongThread;
-    case render::GpuSolidPollResult::Failure:
-        break;
-    }
-    return NativePoll::Failure;
-}
-
-[[nodiscard]] inline NativePoll mapComposite(const render::GpuCompositePollResult result) noexcept {
-    switch (result) {
-    case render::GpuCompositePollResult::Pending:
-        return NativePoll::Pending;
-    case render::GpuCompositePollResult::Ready:
-        return NativePoll::Ready;
-    case render::GpuCompositePollResult::WrongThread:
-        return NativePoll::WrongThread;
-    case render::GpuCompositePollResult::Failure:
-        break;
-    }
-    return NativePoll::Failure;
-}
-
-[[nodiscard]] inline NativePoll mapUpload(const render::GpuImageUploadPollResult result) noexcept {
-    switch (result) {
-    case render::GpuImageUploadPollResult::Pending:
-        return NativePoll::Pending;
-    case render::GpuImageUploadPollResult::Ready:
-        return NativePoll::Ready;
-    case render::GpuImageUploadPollResult::WrongThread:
-        return NativePoll::WrongThread;
-    case render::GpuImageUploadPollResult::Failure:
-        break;
-    }
-    return NativePoll::Failure;
 }
 
 } // namespace gpu_scene_executor_detail
@@ -342,6 +417,14 @@ struct GpuSceneExecutor::Impl final {
     std::unique_ptr<render::GpuSolid> solid;
     std::unique_ptr<render::GpuComposite> composite;
     std::unique_ptr<render::GpuImageUpload> upload;
+    std::unique_ptr<render::GpuAffine> affine;
+    std::unique_ptr<render::GpuBlend> blend;
+    std::unique_ptr<render::GpuPointResample> pointResample;
+    // Retained native vector-coverage producer. Created lazily on the owner thread the first time a
+    // command carries coverage geometry, and kept for the executor's lifetime (pipeline reuse). It
+    // outlives every consuming fill submission: beginCoveredResident co-owns the resident mask, and
+    // the executor holds the producer until that fill is proved retired.
+    std::unique_ptr<render::GpuPathCoverage> pathCoverage;
 
     GpuSceneExecutorJobState state = GpuSceneExecutorJobState::Idle;
     GpuSceneExecutorDiagnostic diagnostic;
@@ -362,8 +445,23 @@ struct GpuSceneExecutor::Impl final {
     // the op's own actual retained bytes to this.
     std::uint64_t liveBytesAtDispatch = 0;
 
-    enum class NativeKind : std::uint8_t { None, Solid, Composite, Upload };
+    enum class NativeKind : std::uint8_t {
+        None,
+        Solid,
+        Composite,
+        Upload,
+        Affine,
+        Blend,
+        Ocio,
+        PointResample,
+        PathCoverage,
+    };
     NativeKind nativeKind = NativeKind::None;
+    // In-flight OCIO program (borrowed from `ocioPrograms`; the map outlives the job).
+    render::GpuOcioProgram* nativeOcioProgram = nullptr;
+    // The in-flight OCIO job's transient allocation bytes, captured before the output is taken so
+    // the during-op peak ledger still sees it.
+    std::uint64_t nativeOcioLastJobBytes = 0;
     bool nativeInFlight = false;
     bool cancelRequested = false;
     bool cancelIssued = false;
@@ -389,9 +487,50 @@ struct GpuSceneExecutor::Impl final {
     [[nodiscard]] GpuSceneExecutorDiagnostic planCommand(GpuSceneCommandIndex index,
                                                          std::vector<std::uint8_t>& color);
     [[nodiscard]] GpuSceneExecutorDiagnostic startStep(const GpuSceneExecutorStep& step);
+    // Vector coverage, kept in gpu_scene_executor_coverage.cpp so this translation unit stays
+    // cohesive. `startCoveredStep` dispatches either the native GpuPathCoverage producer (geometry)
+    // or the host-bitmap covered fill (integer-grid text); `pollPathCoverage` advances the producer
+    // and, on Ready, starts the resident covered fill. `ensurePathCoverage` creates the retained
+    // producer on first use.
+    [[nodiscard]] GpuSceneExecutorDiagnostic ensurePathCoverage();
+    [[nodiscard]] GpuSceneExecutorDiagnostic startCoveredStep(const GpuSceneExecutorStep& step);
+    [[nodiscard]] GpuSceneExecutorPollResult pollPathCoverage();
     [[nodiscard]] GpuSceneExecutorDiagnostic finishNative(render::GpuImage produced);
     [[nodiscard]] GpuSceneExecutorDiagnostic completeNative();
     [[nodiscard]] GpuSceneExecutorPollResult pollNative();
+
+    // Point-resample execution, kept in gpu_scene_executor_point_resample.cpp so the execution
+    // translation unit stays cohesive. `startPointResampleStep` validates the step and dispatches
+    // one PointResampleV1 job; `takePointResampleOutput` returns the resident proxy output.
+    [[nodiscard]] GpuSceneExecutorDiagnostic
+    startPointResampleStep(const GpuSceneExecutorStep& step);
+    [[nodiscard]] std::optional<render::GpuImage> takePointResampleOutput();
+    // The point-resample native failure classification and lifecycle helpers, kept in the same
+    // translation unit so the generic execution poll/failure ladder stays a one-line dispatch.
+    [[nodiscard]] bool pointResampleDeviceLost() const noexcept;
+    [[nodiscard]] bool pointResampleCancelled() const noexcept;
+    void cancelPointResample() noexcept;
+    void discardPointResampleOutput() noexcept;
+
+    // OCIO-specific execution, kept in gpu_scene_executor_ocio.cpp so this translation unit stays
+    // cohesive. `acquireOcioProgram` returns the retained native program for the command identity,
+    // creating it on a cold identity and charging its ACTUAL retained allocation bytes.
+    [[nodiscard]] render::GpuOcioProgram* acquireOcioProgram(const PreparedGpuOcioCommand& command);
+    [[nodiscard]] GpuSceneExecutorDiagnostic startOcioStep(const GpuSceneExecutorStep& step);
+    [[nodiscard]] std::optional<render::GpuImage> takeOcioOutput();
+    [[nodiscard]] bool ocioProgramsUnretired() const noexcept;
+    void drainOcioPrograms() noexcept;
+    // Set by acquireOcioProgram on failure; startOcioStep returns it.
+    GpuSceneExecutorDiagnostic ocioAcquireDiagnostic;
+
+    struct OcioProgramEntry final {
+        std::unique_ptr<render::GpuOcioProgram> program;
+        std::uint64_t retainedBytes = 0;
+        std::uint64_t serial = 0;
+    };
+    std::map<core::Sha256Digest, OcioProgramEntry> ocioPrograms;
+    std::uint64_t ocioProgramBytes = 0;
+    std::uint64_t ocioProgramSerial = 0;
 };
 
 } // namespace bloom::runtime

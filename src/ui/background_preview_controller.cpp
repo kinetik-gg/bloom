@@ -60,6 +60,8 @@ BackgroundPreviewController::BackgroundPreviewController(
     });
     connect(&previewController_.frameCache(), &PreviewFrameCache::byteBudgetChanged, this,
             &BackgroundPreviewController::restart);
+    connect(&previewController_, &CompositionPreviewController::previewCachePurged, this,
+            &BackgroundPreviewController::suspendForCachePurge);
     idleTimer_.start();
 }
 
@@ -87,6 +89,16 @@ void BackgroundPreviewController::restart() {
     cursor_ = 0;
     considered_ = 0;
     exhausted_ = false;
+}
+
+void BackgroundPreviewController::suspendForCachePurge() {
+    // cancelActive() flags the in-flight result to be discarded when it lands (consumeReadyResult
+    // checks discardActive_) and exhausted_ parks the pass so the idle timer does not refill what
+    // the artist just purged. Any real restart trigger clears exhausted_ through restart().
+    cancelActive();
+    cursor_ = 0;
+    considered_ = 0;
+    exhausted_ = true;
 }
 
 void BackgroundPreviewController::setPlaying(const bool playing) {

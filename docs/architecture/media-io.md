@@ -45,11 +45,11 @@ Platforms without the process backend expose an unavailable preset with its reas
 
 | Bound | v0 value |
 | --- | --- |
-| Encoded file | 64 MiB |
-| Either dimension | 16,384 pixels |
-| Pixel count | 16,777,216 |
-| Decoder allocator live bytes | 256 MiB per thread |
-| Float image storage | 256 MiB per image, also subject to request budget |
+| Encoded file | streamed in bounded chunks; no whole-file cap |
+| Either dimension | codec-representable window (stb per-axis `STBI_MAX_DIMENSIONS` = 2^24); no fixed image ceiling |
+| Pixel count | codec sample-count limits; no fixed image ceiling |
+| Decoder allocator live bytes | thread-local, scoped to the request pixel budget (default 256 MiB) |
+| Float image storage | admitted against the request pixel budget (default 256 MiB), including bounded decode scratch |
 | Directory entries and sequence span | 100,000 each |
 | Decoded image LRU | 1 GiB per evaluator cache |
 | UI thumbnail cache | 512 RGBA8 images, at most 64 × 64 (8 MiB) |
@@ -440,8 +440,8 @@ thumbnail cache). It is the same store both consult: `decodeThroughDiskCache()`
 `$XDG_CACHE_HOME/bloom` or `$HOME/.cache/bloom`) plus a `media` leaf, or a `media/disk-cache-directory`
 QSettings override (an absolute path; anything else falls back to the platform default). The
 enable flag, directory, and byte budget are edited under **Edit → Preferences… → Memory & Caches**
-(the disk cache also has **Composition → Clear Media Cache…**); the operation-cache and RAM-preview
-budgets share that page. These values are read once at startup, so a change takes effect after
+(the disk cache can also be purged at any time from **Edit → Purge… → Purge media cache**); the
+operation-cache and RAM-preview budgets share that page. These values are read once at startup, so a change takes effect after
 restart. The owning reader is `bloom::ui::media_disk_cache_settings` for the disk cache and
 `preview_frame_cache.hpp`'s `ramPreviewByteBudgetFromSettings()`/`operationCacheByteBudgetFromSettings()`
 for the two memory ceilings.
@@ -501,8 +501,10 @@ compositions remain conservatively fully bypassed on an override (no read-only r
 for this slice.
 
 **Controls.** `media/disk-cache-enabled` (default on), `media/disk-cache-budget-bytes`, and
-`media/disk-cache-directory` in QSettings; "Clear Media Cache…" in the Composition menu asks for
-confirmation, then clears every entry and resets statistics. The window status bar's own disk-
+`media/disk-cache-directory` in QSettings; **Edit → Purge… → Purge media cache** clears every entry
+and resets statistics, together with the applicable in-memory decoded media, on the task system's
+BlockingIo lane (never the UI thread, and with no confirmation, since the caches are rebuildable).
+Source files are never read, written, or changed. The window status bar's own disk-
 cache cell (`mediaDiskCacheStatusText()`, beside the existing RAM-preview cache cell) reports a
 lightweight-polled hit rate and resident byte count, or "Disk cache off" when disabled -- a
 second, independent budget from the RAM preview and operation caches `animation-and-time.md`
@@ -593,17 +595,21 @@ The five records in `include/bloom/media/provider/contract.hpp` are frozen as fo
   `NoDeterminismClaim` is restricted to the explicitly limited Preview path in this slice.
   Component registration never registers or qualifies a pipeline automatically.
 
-The numeric v1 budgets below instantiate the resource categories described by this document;
-previous image limits are retained where applicable. Stricter qualified providers may reject
-requests within these ceilings. Expanding a ceiling requires a reviewed profile/protocol change.
+The numeric v1 budgets below instantiate the resource categories described by this document.
+Stricter qualified providers may reject requests within these ceilings. Expanding a ceiling requires
+a reviewed profile/protocol change. The in-process still-image decoder is governed separately and
+explicitly: its geometry is bounded only by the codec's representable window and integer overflow
+checks, the encoded file is streamed with no whole-file cap, and decoded RGBA32F storage plus
+bounded decode scratch must fit the caller's explicit `pixelBudget` (default 268435456 bytes)
+before any large allocation. Codec/device constraints, not an absolute image ceiling, are the limit.
 
 | Resource | v1 ceiling |
 | --- | --- |
 | UTF-8 string | 4096 bytes |
 | Streams, declarations, pipeline steps, registry entries | 256 each |
 | CPU planes | 4, with exact plane count/layout for each supported format |
-| Dimension / pixels | 16384 per dimension / 16777216 pixels |
-| CPU-plane storage including row padding | 256 MiB per product |
+| Dimension / pixels | codec-representable window and sample-count limits; no fixed image ceiling |
+| CPU-plane storage including row padding | explicit caller `pixelBudget` for the in-process image decoder (default 256 MiB) |
 | Wire frame excluding its length prefix | 257 MiB |
 | Audio | 64 named channels, 65536 samples per channel, 384000 Hz |
 | Default worker address space / open descriptors | 2 GiB / 64; core dumps disabled |

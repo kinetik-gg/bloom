@@ -330,6 +330,7 @@ target_sources(
     bloom_ui
     PRIVATE
         background_preview_controller.cpp
+        cache_purge_controller.cpp
         application_shutdown_coordinator.cpp
         composition_authoring.cpp
         composition_editor_support.cpp
@@ -445,6 +446,7 @@ target_sources(
             include/bloom/ui/acceleration_status.hpp
             include/bloom/ui/application_preferences.hpp
             include/bloom/ui/background_preview_controller.hpp
+            include/bloom/ui/cache_purge_controller.hpp
             include/bloom/ui/application_shutdown_coordinator.hpp
             include/bloom/ui/composition_authoring.hpp
             include/bloom/ui/composition_editors.hpp
@@ -556,6 +558,29 @@ if(BLOOM_RENDER_ENABLE_VULKAN AND BLOOM_QT_VULKAN_AVAILABLE AND DEFINED BLOOM_DE
         set(BLOOM_UI_VULKAN_AVAILABLE ON)
         target_link_libraries(bloom_ui PRIVATE Vulkan::Headers)
         target_compile_definitions(bloom_ui PRIVATE BLOOM_UI_HAS_VULKAN=1)
+    endif()
+endif()
+
+# The GPU final-render export provider resolves the SAME application-relative bundled Vulkan loader
+# the preview service already uses (apps/bloom/CMakeLists.txt copies it beside the executable and
+# defines these macros for main.cpp). src/ui re-runs the identical qualification so its own source
+# can construct the executable-relative path without a hardcoded build or system prefix; when no
+# qualified bundled loader exists, no macro is defined and the provider keeps the explicit
+# platform-loader/CPU fallback.
+if(UNIX
+   AND NOT APPLE
+   AND BLOOM_RENDER_ENABLE_VULKAN
+   AND DEFINED BLOOM_DEPENDENCY_MODE
+   AND BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
+    find_package(VulkanLoader QUIET CONFIG PATHS "${BLOOM_DEPENDENCY_PREFIX}" NO_DEFAULT_PATH)
+    if(TARGET Vulkan::Loader)
+        target_compile_definitions(
+            bloom_ui
+            PRIVATE
+                BLOOM_BUNDLED_VULKAN_LOADER=1
+                BLOOM_BUNDLED_VULKAN_LOADER_SUBDIR="bloom-vulkan"
+                BLOOM_BUNDLED_VULKAN_LOADER_NAME="libvulkan.so.1"
+        )
     endif()
 endif()
 

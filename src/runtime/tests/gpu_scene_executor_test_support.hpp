@@ -216,4 +216,132 @@ twoLayerPlan(const CompositionFormat compositionFormat, const LayerValues values
                         Color4d{0.125, 0.375, 0.75, 0.5}, valuesB, solidWidth, solidHeight, idBase);
 }
 
+// A wide merge: `layerCount` distinct full-size solids, each through its own translation-only
+// layer, merged bottom-to-top in one CompiledMerge and then composed. Distinct colors, positions
+// and opacities keep every foreground a different real image (no semantic alias), so the graph
+// genuinely pins several full-size layers at once and exposes the merge planning order.
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+wideMergePlan(const CompositionFormat compositionFormat, const std::uint32_t layerCount,
+              const std::uint64_t idBase) {
+    std::vector<CompiledOperation> operations;
+    std::vector<CompiledMergeInput> foregrounds;
+    std::uint64_t cursor = idBase;
+    for (std::uint32_t i = 0; i < layerCount; ++i) {
+        const auto solidOperation = static_cast<std::uint32_t>(operations.size());
+        const auto level = static_cast<double>(i);
+        operations.emplace_back(CompiledSolid{
+            bloom::document::NodeId::fromRaw(cursor++),
+            {bloom::document::ParameterId::fromRaw(cursor++),
+             Color4d{0.10 + 0.13 * level, 0.20 + 0.05 * level, 0.30 + 0.07 * level, 1.0}},
+            {bloom::document::ParameterId::fromRaw(cursor++),
+             static_cast<double>(compositionFormat.width())},
+            {bloom::document::ParameterId::fromRaw(cursor++),
+             static_cast<double>(compositionFormat.height())}});
+        const auto layerId = bloom::document::LayerId::fromRaw(cursor++);
+        const LayerIds ids{bloom::document::ParameterId::fromRaw(cursor++),
+                           bloom::document::ParameterId::fromRaw(cursor++),
+                           bloom::document::ParameterId::fromRaw(cursor++),
+                           bloom::document::ParameterId::fromRaw(cursor++),
+                           bloom::document::ParameterId::fromRaw(cursor++),
+                           bloom::document::ParameterId::fromRaw(cursor++)};
+        operations.emplace_back(
+            layerOutput(bloom::document::NodeId::fromRaw(cursor++), layerId,
+                        OperationIndex::fromRaw(solidOperation), ids,
+                        LayerValues{.position = {0.5 + 1.7 * level, 0.5 + 0.9 * level},
+                                    .opacity = 0.55 + 0.05 * level}));
+        foregrounds.push_back(CompiledMergeInput{bloom::document::LayerSlotId::fromRaw(cursor++),
+                                                 layerId,
+                                                 OperationIndex::fromRaw(solidOperation + 1)});
+    }
+    const auto mergeOperation = static_cast<std::uint32_t>(operations.size());
+    operations.emplace_back(
+        CompiledMerge{bloom::document::NodeId::fromRaw(cursor++), std::move(foregrounds)});
+    operations.emplace_back(CompiledCompositionOutput{bloom::document::NodeId::fromRaw(cursor++),
+                                                      OperationIndex::fromRaw(mergeOperation)});
+    return publish(CompiledCompositionPlanDefinition{
+        bloom::document::Revision::fromRaw(7), kProjectId, kCompositionId, compositionFormat,
+        std::move(operations), OperationIndex::fromRaw(mergeOperation + 1)});
+}
+
+// One vector leaf (text/shape) -> translation-only layer -> Normal merge -> output. The leaf is
+// passed by value so callers can build the exact CompiledText/CompiledShape they need.
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+vectorLeafPlan(const CompositionFormat compositionFormat, CompiledOperation leaf,
+               const LayerValues values, const std::uint64_t idBase) {
+    const LayerIds ids{bloom::document::ParameterId::fromRaw(idBase + 0),
+                       bloom::document::ParameterId::fromRaw(idBase + 1),
+                       bloom::document::ParameterId::fromRaw(idBase + 2),
+                       bloom::document::ParameterId::fromRaw(idBase + 3),
+                       bloom::document::ParameterId::fromRaw(idBase + 4),
+                       bloom::document::ParameterId::fromRaw(idBase + 5)};
+    std::vector<CompiledOperation> operations;
+    operations.push_back(std::move(leaf));
+    operations.emplace_back(layerOutput(bloom::document::NodeId::fromRaw(idBase + 67),
+                                        bloom::document::LayerId::fromRaw(idBase + 68),
+                                        OperationIndex::fromRaw(0), ids, values));
+    operations.emplace_back(CompiledMerge{
+        bloom::document::NodeId::fromRaw(idBase + 70),
+        std::vector<CompiledMergeInput>{CompiledMergeInput{
+            bloom::document::LayerSlotId::fromRaw(idBase + 71),
+            bloom::document::LayerId::fromRaw(idBase + 68), OperationIndex::fromRaw(1)}}});
+    operations.emplace_back(CompiledCompositionOutput{bloom::document::NodeId::fromRaw(idBase + 69),
+                                                      OperationIndex::fromRaw(2)});
+    return publish(CompiledCompositionPlanDefinition{
+        bloom::document::Revision::fromRaw(7), kProjectId, kCompositionId, compositionFormat,
+        std::move(operations), OperationIndex::fromRaw(3)});
+}
+
+[[nodiscard]] inline CompiledText makeText(const std::uint64_t idBase) {
+    return CompiledText{
+        bloom::document::NodeId::fromRaw(idBase + 60),
+        bloom::document::ParameterId::fromRaw(idBase + 61),
+        "BLOOM",
+        {bloom::document::ParameterId::fromRaw(idBase + 62), 10.0},
+        {bloom::document::ParameterId::fromRaw(idBase + 63), Color4d{0.8, 0.4, 0.2, 1.0}},
+        CompiledTextLayout{bloom::document::ParameterId::fromRaw(idBase + 64),
+                           0,
+                           {bloom::document::ParameterId::fromRaw(idBase + 65), 1.0},
+                           {bloom::document::ParameterId::fromRaw(idBase + 66), 0.0}}};
+}
+
+struct ShapeFixtureValues final {
+    bloom::document::ShapeKind kind = bloom::document::ShapeKind::Rectangle;
+    bloom::document::Vec2d size{9.0, 7.0};
+    double cornerRadius = 0.0;
+    std::int64_t points = 5;
+    double innerRatio = 0.5;
+    Color4d fillColor{0.6, 0.3, 0.15, 1.0};
+    bool fillEnabled = true;
+    Color4d strokeColor{0.1, 0.2, 0.9, 0.9};
+    bool strokeEnabled = false;
+    double strokeWidth = 0.0;
+};
+
+[[nodiscard]] inline CompiledShape makeShape(const ShapeFixtureValues& values,
+                                             const std::uint64_t idBase) {
+    CompiledShape shape;
+    shape.sourceNodeId = bloom::document::NodeId::fromRaw(idBase + 60);
+    shape.kind = values.kind;
+    shape.size = {bloom::document::ParameterId::fromRaw(idBase + 62), values.size};
+    shape.cornerRadius = values.cornerRadius;
+    shape.points = values.points;
+    shape.innerRatio = values.innerRatio;
+    shape.lineStart = {0.0, 0.0};
+    shape.lineEnd = {values.size.x, values.size.y};
+    shape.fillEnabled = values.fillEnabled;
+    shape.fillColor = {bloom::document::ParameterId::fromRaw(idBase + 63), values.fillColor};
+    shape.strokeEnabled = values.strokeEnabled;
+    shape.strokeColor = {bloom::document::ParameterId::fromRaw(idBase + 64), values.strokeColor};
+    shape.strokeWidth = {bloom::document::ParameterId::fromRaw(idBase + 65), values.strokeWidth};
+    if (values.kind == bloom::document::ShapeKind::Path) {
+        shape.path.closed = true;
+        shape.path.anchors = {
+            bloom::document::PathAnchor{bloom::document::Vec2d{0.0, 0.0}, {}, {}},
+            bloom::document::PathAnchor{bloom::document::Vec2d{values.size.x, 0.0}, {}, {}},
+            bloom::document::PathAnchor{
+                bloom::document::Vec2d{values.size.x * 0.5, values.size.y}, {}, {}}};
+    }
+    return shape;
+}
+
 } // namespace bloom::runtime::executor_test

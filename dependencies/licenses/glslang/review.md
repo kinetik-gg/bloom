@@ -17,11 +17,17 @@ Reviewed: 2026-09-19
   those two paths are excluded from the general permissive set. The Bison Exception 2.2 text is
   preserved exactly at `LICENSES/Bison-exception-2.2.txt` and inside `LICENSE.txt` (which also
   carries the NVIDIA and Khronos permissive notices).
-- No legal conclusion is asserted here. Whether the Bison Exception fully discharges GPL
-  obligations for a distributed binary is a qualify-time legal-review question. This intake is
-  **build-only**: the compiler binary is not part of the end-user application package, so the lock
-  records `linkage: executable` with an **empty `shippingRoles`** array (schema 1.3's build-only
-  form).
+- Distribution review: the `glslangValidator` binary and its build-time library set are staged as
+  the runtime GPU colour-compilation tool beside the desktop, CLI, and MCP executables under the
+  private `bloom-gpu-tools/` directory. The lock therefore records `linkage: executable` with
+  `shippingRoles: ["executable", "license"]` (schema 1.3's shipping form). Every staged binary
+  travels with the complete `LICENSES/` set and this review, plus a generated inventory binding the
+  executable digest to `bin/glslangValidator` in the qualified prefix.
+- The Bison Exception 2.2 is the basis on which the compiled `glslang_tab.cpp`/`.h` content is
+  distributed alongside the permissive set; the exact per-file mapping remains the upstream
+  `license-checker.cfg` and `REUSE.toml` bound beside this file. No legal conclusion beyond that
+  recorded mapping is asserted here; an independent counsel review of the exception remains a
+  qualify gate for a signed release, not a blocker for staging the reviewed binary.
 
 ## Reached Scope And Minimization
 
@@ -36,6 +42,9 @@ Reviewed: 2026-09-19
 | `ENABLE_GLSLANG_BINARIES` | `ON` | Builds the offline `glslang`/`glslangValidator` tool. |
 | `ENABLE_HLSL` | `OFF` | The unused HLSL front end is left out. |
 
-- The tool is invoked only at build/qualify time (for example to emit a fixed built-in OCIO display
-  shader); no runtime shader compilation is added in this pass. All test dependencies remain
-  unreached (`GLSLANG_TESTS=OFF` with no `External/googletest` in the archive).
+- The tool is the runtime backend for GPU colour compilation (for example generated OCIO display
+  shaders) and is also used at build/qualify time to regenerate the fixed built-in shaders. This
+  packaging slice stages the binary, its licenses, and its inventory; it adds no process or compiler
+  implementation, and the process invocation and its resource limits remain a separate runtime
+  contract. All test dependencies remain unreached (`GLSLANG_TESTS=OFF` with no
+  `External/googletest` in the archive).

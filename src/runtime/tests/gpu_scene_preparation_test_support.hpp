@@ -20,6 +20,9 @@
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
+#include "gpu_scene_coverage_geometry_test_support.hpp"
+#include "layer_parent_transform.hpp"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -79,7 +82,8 @@ class Expectations final {
     std::size_t failures_ = 0;
 };
 
-[[nodiscard]] std::string firstMismatch(const Rgba32fImage& replayed, const Rgba32fImage& cpu) {
+[[maybe_unused, nodiscard]] std::string firstMismatch(const Rgba32fImage& replayed,
+                                                      const Rgba32fImage& cpu) {
     if (replayed.pixels().size() != cpu.pixels().size()) {
         return "size " + std::to_string(replayed.pixels().size()) + " vs " +
                std::to_string(cpu.pixels().size());
@@ -131,8 +135,8 @@ format(const std::uint32_t width, const std::uint32_t height,
 
 // Checked constructors for the canonical test fixture values. These keep every call site free of an
 // unchecked optional dereference while preserving the fail-fast behaviour on an invalid fixture.
-[[nodiscard]] bloom::core::PixelAspectRatio pixelAspect(const std::uint64_t numerator,
-                                                        const std::uint64_t denominator) {
+[[maybe_unused, nodiscard]] bloom::core::PixelAspectRatio
+pixelAspect(const std::uint64_t numerator, const std::uint64_t denominator) {
     const auto value = bloom::core::PixelAspectRatio::create(numerator, denominator);
     if (!value.has_value()) {
         throw std::logic_error("test pixel aspect must be valid");
@@ -140,8 +144,8 @@ format(const std::uint32_t width, const std::uint32_t height,
     return *value;
 }
 
-[[nodiscard]] RationalTime rationalTime(const std::int64_t numerator,
-                                        const std::int64_t denominator) {
+[[maybe_unused, nodiscard]] RationalTime rationalTime(const std::int64_t numerator,
+                                                      const std::int64_t denominator) {
     const auto value = RationalTime::create(numerator, denominator);
     if (!value.has_value()) {
         throw std::logic_error("test rational time must be valid");
@@ -183,272 +187,8 @@ publish(CompiledCompositionPlanDefinition definition) {
     };
 }
 
-// A solid -> translation-only layer -> Normal merge -> output plan with two layers.
-[[maybe_unused, nodiscard]] std::shared_ptr<const CompiledCompositionPlan>
-twoLayerPlan(const CompositionFormat compositionFormat, const LayerValues a, const LayerValues b,
-             const double solidWidth, const double solidHeight, const std::uint64_t idBase) {
-    const LayerIds idsA{bloom::document::ParameterId::fromRaw(idBase + 0),
-                        bloom::document::ParameterId::fromRaw(idBase + 1),
-                        bloom::document::ParameterId::fromRaw(idBase + 2),
-                        bloom::document::ParameterId::fromRaw(idBase + 3),
-                        bloom::document::ParameterId::fromRaw(idBase + 4),
-                        bloom::document::ParameterId::fromRaw(idBase + 5)};
-    const LayerIds idsB{bloom::document::ParameterId::fromRaw(idBase + 6),
-                        bloom::document::ParameterId::fromRaw(idBase + 7),
-                        bloom::document::ParameterId::fromRaw(idBase + 8),
-                        bloom::document::ParameterId::fromRaw(idBase + 9),
-                        bloom::document::ParameterId::fromRaw(idBase + 10),
-                        bloom::document::ParameterId::fromRaw(idBase + 11)};
-    std::vector<CompiledOperation> operations;
-    operations.emplace_back(CompiledSolid{
-        kSolidNodeA,
-        {bloom::document::ParameterId::fromRaw(idBase + 20), Color4d{0.5, 0.25, 0.125, 1.0}},
-        {bloom::document::ParameterId::fromRaw(idBase + 21), solidWidth},
-        {bloom::document::ParameterId::fromRaw(idBase + 22), solidHeight}});
-    operations.emplace_back(layerOutput(kLayerNodeA, bloom::document::LayerId::fromRaw(idBase + 30),
-                                        OperationIndex::fromRaw(0), idsA, a));
-    operations.emplace_back(CompiledSolid{
-        bloom::document::NodeId::fromRaw(idBase + 40),
-        {bloom::document::ParameterId::fromRaw(idBase + 41), Color4d{0.125, 0.375, 0.75, 0.5}},
-        {bloom::document::ParameterId::fromRaw(idBase + 42), solidWidth},
-        {bloom::document::ParameterId::fromRaw(idBase + 43), solidHeight}});
-    operations.emplace_back(layerOutput(bloom::document::NodeId::fromRaw(idBase + 44),
-                                        bloom::document::LayerId::fromRaw(idBase + 45),
-                                        OperationIndex::fromRaw(2), idsB, b));
-    const CompiledMergeInput first{bloom::document::LayerSlotId::fromRaw(idBase + 50),
-                                   bloom::document::LayerId::fromRaw(idBase + 30),
-                                   OperationIndex::fromRaw(1)};
-    const CompiledMergeInput second{bloom::document::LayerSlotId::fromRaw(idBase + 51),
-                                    bloom::document::LayerId::fromRaw(idBase + 45),
-                                    OperationIndex::fromRaw(3)};
-    operations.emplace_back(CompiledMerge{bloom::document::NodeId::fromRaw(idBase + 52),
-                                          std::vector<CompiledMergeInput>{first, second}});
-    operations.emplace_back(CompiledCompositionOutput{bloom::document::NodeId::fromRaw(idBase + 53),
-                                                      OperationIndex::fromRaw(4)});
-    return publish(CompiledCompositionPlanDefinition{
-        bloom::document::Revision::fromRaw(7), kProjectId, kCompositionId, compositionFormat,
-        std::move(operations), OperationIndex::fromRaw(5)});
-}
+#include "gpu_scene_preparation_plan_builders.ipp"
 
-// --- Replay with the existing CPU primitives (test-only)
-// ------------------------------------------
+#include "gpu_scene_preparation_replay.ipp"
 
-[[nodiscard]] std::shared_ptr<const Rgba32fImage> freeze(Rgba32fImageBuilder& builder) {
-    auto frozen = std::move(builder).freeze();
-    return std::make_shared<const Rgba32fImage>(std::move(*frozen.value()));
-}
-
-[[nodiscard]] bool replayScene(const PreparedGpuScene& scene,
-                               std::vector<std::shared_ptr<const Rgba32fImage>>& images) {
-    constexpr std::size_t kBudget = 1U << 28U;
-    images.assign(scene.commands().size(), nullptr);
-    for (const auto& command : scene.commands()) {
-        if (const auto* solid = std::get_if<bloom::runtime::GpuSceneSolidCommand>(&command)) {
-            const auto descriptor = Rgba32fImageDescriptor::create(
-                solid->dataWindow, solid->displayWindow, solid->pixelAspect);
-            if (!descriptor) {
-                return false;
-            }
-            auto builder = Rgba32fImageBuilder::create(*descriptor.value(), kBudget);
-            if (!builder) {
-                return false;
-            }
-            for (std::int64_t y = solid->dataWindow.originY();
-                 y < solid->dataWindow.maxYExclusive(); ++y) {
-                auto row = builder.value()->row(y);
-                if (!row) {
-                    return false;
-                }
-                bloom::render::fillSolidRow(*row.value(), solid->pixel);
-            }
-            images[solid->index] = freeze(*builder.value());
-            continue;
-        }
-        if (const auto* translation =
-                std::get_if<bloom::runtime::GpuSceneTranslationCommand>(&command)) {
-            const auto* input = images[translation->input].get();
-            if (input == nullptr) {
-                return false;
-            }
-            const auto sourceView = input->view();
-            if (!sourceView) {
-                return false;
-            }
-            const auto params = bloom::render::TranslationOpacity::create(
-                translation->translationX, translation->translationY,
-                static_cast<double>(translation->opacity));
-            if (!params) {
-                return false;
-            }
-            const auto descriptor = Rgba32fImageDescriptor::create(
-                translation->outputWindow, input->descriptor()->displayWindow(),
-                input->descriptor()->pixelAspect());
-            if (!descriptor) {
-                return false;
-            }
-            auto builder = Rgba32fImageBuilder::create(*descriptor.value(), kBudget);
-            if (!builder) {
-                return false;
-            }
-            for (std::int64_t y = translation->outputWindow.originY();
-                 y < translation->outputWindow.maxYExclusive(); ++y) {
-                auto row = builder.value()->row(y);
-                if (!row) {
-                    return false;
-                }
-                if (const auto status = bloom::render::translateOpacityBilinearRow(
-                        *sourceView.value(), translation->outputWindow, y, *params.value(),
-                        *row.value())) {
-                    (void)status;
-                    return false;
-                }
-            }
-            images[translation->index] = freeze(*builder.value());
-            continue;
-        }
-        if (const auto* coverage =
-                std::get_if<bloom::runtime::GpuSceneCoverageSolidCommand>(&command)) {
-            const auto descriptor = Rgba32fImageDescriptor::create(
-                coverage->outputWindow, coverage->displayWindow, coverage->pixelAspect);
-            if (!descriptor) {
-                return false;
-            }
-            auto builder =
-                Rgba32fImageBuilder::create(*descriptor.value(), kBudget, Rgba32f::transparent());
-            if (!builder) {
-                return false;
-            }
-            const auto width = coverage->outputWindow.extent().width();
-            for (std::int64_t y = coverage->outputWindow.originY();
-                 y < coverage->outputWindow.maxYExclusive(); ++y) {
-                auto row = builder.value()->row(y);
-                if (!row) {
-                    return false;
-                }
-                const auto offset =
-                    static_cast<std::size_t>(y - coverage->outputWindow.originY()) * width;
-                const auto coverageRow =
-                    std::span<const std::uint8_t>(coverage->coverage->data() + offset, width);
-                if (const auto status = bloom::render::coverageSolidRow(
-                        coverageRow, coverage->pixel, *row.value())) {
-                    (void)status;
-                    return false;
-                }
-                for (auto& value : *row.value()) {
-                    const auto faded = Rgba32f::fromPremultiplied(
-                        value.red() * coverage->opacity, value.green() * coverage->opacity,
-                        value.blue() * coverage->opacity, value.alpha() * coverage->opacity);
-                    if (!faded) {
-                        return false;
-                    }
-                    value = *faded.value();
-                }
-            }
-            images[coverage->index] = freeze(*builder.value());
-            continue;
-        }
-        if (const auto* upload = std::get_if<bloom::runtime::GpuSceneUploadCommand>(&command)) {
-            // The upload command already carries the frozen converted source, so replay is an
-            // alias: this is exactly the immutability the native upload would rely on.
-            images[upload->index] = upload->image;
-            continue;
-        }
-        if (const auto* merge = std::get_if<bloom::runtime::GpuSceneMergeCommand>(&command)) {
-            const auto descriptor = Rgba32fImageDescriptor::create(
-                merge->outputWindow, merge->displayWindow, merge->pixelAspect);
-            if (!descriptor) {
-                return false;
-            }
-            auto builder =
-                Rgba32fImageBuilder::create(*descriptor.value(), kBudget, Rgba32f::transparent());
-            if (!builder) {
-                return false;
-            }
-            const auto destinationWindow = merge->outputWindow;
-            for (const auto foreground : merge->foregrounds) {
-                const auto* source = images[foreground].get();
-                if (source == nullptr) {
-                    continue;
-                }
-                const auto sourceView = source->view();
-                if (!sourceView) {
-                    return false;
-                }
-                const auto sourceWindow = source->descriptor()->dataWindow();
-                const auto firstColumn =
-                    std::max(sourceWindow.originX(), destinationWindow.originX());
-                const auto lastColumn =
-                    std::min(sourceWindow.maxXExclusive(), destinationWindow.maxXExclusive());
-                if (lastColumn <= firstColumn) {
-                    continue;
-                }
-                const auto sourceOffset = firstColumn - sourceWindow.originX();
-                const auto columnOffset = firstColumn - destinationWindow.originX();
-                const auto columnCount = static_cast<std::size_t>(lastColumn - firstColumn);
-                for (std::int64_t y = std::max(sourceWindow.originY(), destinationWindow.originY());
-                     y < std::min(sourceWindow.maxYExclusive(), destinationWindow.maxYExclusive());
-                     ++y) {
-                    auto sourceRow = sourceView.value()->row(y);
-                    auto destinationRow = builder.value()->row(y);
-                    if (!sourceRow || !destinationRow) {
-                        return false;
-                    }
-                    if (const auto status = bloom::render::sourceOverLinearRec709SceneRow(
-                            sourceRow.value()->subspan(static_cast<std::size_t>(sourceOffset),
-                                                       columnCount),
-                            destinationRow.value()->subspan(static_cast<std::size_t>(columnOffset),
-                                                            columnCount))) {
-                        (void)status;
-                        return false;
-                    }
-                }
-            }
-            images[merge->index] = freeze(*builder.value());
-            continue;
-        }
-        if (const auto* output =
-                std::get_if<bloom::runtime::GpuSceneCompositionOutputCommand>(&command)) {
-            const auto descriptor = Rgba32fImageDescriptor::create(
-                output->dataWindow, output->displayWindow, output->pixelAspect);
-            if (!descriptor) {
-                return false;
-            }
-            auto builder =
-                Rgba32fImageBuilder::create(*descriptor.value(), kBudget, Rgba32f::transparent());
-            if (!builder) {
-                return false;
-            }
-            if (output->input != bloom::runtime::kInvalidGpuSceneCommand) {
-                const auto* source = images[output->input].get();
-                if (source != nullptr) {
-                    const auto sourceWindow = source->descriptor()->dataWindow();
-                    const auto firstColumn =
-                        std::max(sourceWindow.originX(), output->dataWindow.originX());
-                    const auto lastColumn =
-                        std::min(sourceWindow.maxXExclusive(), output->dataWindow.maxXExclusive());
-                    const auto firstRow =
-                        std::max(sourceWindow.originY(), output->dataWindow.originY());
-                    const auto lastRow =
-                        std::min(sourceWindow.maxYExclusive(), output->dataWindow.maxYExclusive());
-                    if (lastColumn > firstColumn && lastRow > firstRow) {
-                        const auto count = static_cast<std::size_t>(lastColumn - firstColumn);
-                        const auto sourceOffset = firstColumn - sourceWindow.originX();
-                        const auto destinationOffset = firstColumn - output->dataWindow.originX();
-                        for (std::int64_t y = firstRow; y < lastRow; ++y) {
-                            const auto sourceView = source->view();
-                            auto sourceRow = sourceView.value()->row(y);
-                            auto destinationRow = builder.value()->row(y);
-                            std::copy_n(sourceRow.value()->begin() + sourceOffset, count,
-                                        destinationRow.value()->begin() + destinationOffset);
-                        }
-                    }
-                }
-            }
-            images[output->index] = freeze(*builder.value());
-            continue;
-        }
-        return false;
-    }
-    return true;
-}
 } // namespace

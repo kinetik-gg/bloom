@@ -205,7 +205,7 @@ CompositionPreviewController::selectedLayerBounds() const {
 bool CompositionPreviewController::isShuttingDown() const noexcept { return shuttingDown_; }
 
 bool CompositionPreviewController::backgroundWorkAllowed() const noexcept {
-    return !shuttingDown_ && !active_.has_value() && !pending_.has_value() &&
+    return !shuttingDown_ && !cachePurgeGate_ && !active_.has_value() && !pending_.has_value() &&
            !interactiveTimeChangeArmed_ && !session_.valueEditActive() &&
            session_.transformInteractionOverrides().empty() && !ramPreviewProgress_.has_value();
 }
@@ -643,6 +643,31 @@ void CompositionPreviewController::flushCadence() {
     submitPreview(std::move(request), state_.frame);
 }
 
+void CompositionPreviewController::purgePreviewCache() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (shuttingDown_) {
+        return;
+    }
+    // Detach every filler BEFORE the cache goes empty: a RAM preview run or background pass whose
+    // result is already in flight must discard it, not land it back into the freshly purged cache.
+    // RamPreviewController::cancel() and BackgroundPreviewController's handler both do exactly
+    // that.
+    emit previewCachePurged();
+    interactiveCadenceTimer_.stop();
+    interactiveSubmissionClock_.invalidate();
+    pending_.reset();
+    // Retire the foreground ask and drop its handle, so a result that completes after this point
+    // has no path back into the cache.
+    cancelAndDetachActive();
+    // Advance the generation so even a result observed in this same turn can never satisfy
+    // isCurrent(). The displayed frame is intentionally NOT cleared: it remains a valid picture,
+    // and the next requested frame is a cache miss that recomputes.
+    ++generation_;
+    preparationEstimate_.reset();
+    frameCache_->clear();
+    emit stateChanged();
+}
+
 void CompositionPreviewController::beginShutdown() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (shuttingDown_) {
@@ -669,11 +694,40 @@ void CompositionPreviewController::beginShutdown() {
     publish(std::move(cancelled));
 }
 
+void CompositionPreviewController::setCachePurgeGate(const bool gated) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (cachePurgeGate_ == gated) {
+        return;
+    }
+    cachePurgeGate_ = gated;
+    if (gated) {
+        // Cancel RAM preview and background fill for the WHOLE purge, for both the preview and the
+        // media command: their frames are derived from the caches being cleared, and leaving a run
+        // active would let it resubmit and repopulate what the purge removes. The gate flag then
+        // holds every later start/submission (backgroundWorkAllowed(), RamPreviewController::start,
+        // and requestPreview() below).
+        emit previewCachePurged();
+        interactiveCadenceTimer_.stop();
+        interactiveSubmissionClock_.invalidate();
+        pending_.reset();
+        cancelAndDetachActive();
+        return;
+    }
+    if (!shuttingDown_) {
+        // A time change or edit that arrived while gated was suppressed; ask for the current time
+        // now that the purge is done. This is a fresh generation and is expected to recompute.
+        requestPreview(false, PreviewRequestKind::Visible);
+    }
+}
+
 void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
                                                   const PreviewRequestKind kind,
                                                   const bool allowCachedFrame) {
     Q_ASSERT(QThread::currentThread() == thread());
 
+    if (cachePurgeGate_) {
+        return;
+    }
     if (active_.has_value() && active_->playbackOutstanding) {
         active_->playbackOutstanding = false;
         active_->handle.cancel();
@@ -802,9 +856,14 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         }
     }
 
-    if (kind == PreviewRequestKind::Playback &&
-        (active_.has_value() || pending_.has_value() || !preparationEstimate_.has_value() ||
-         *preparationEstimate_ > playbackBudget_ / 2)) {
+    // Playback admission. A frame already in flight is never queued behind: drop this tick and keep
+    // the previous picture. When the controller is IDLE, a Playback tick must still submit even
+    // when the measured preparation estimate says it cannot fit the tick. `preparationEstimate_` is
+    // only refreshed by a successful completion, so refusing to submit while idle starves the
+    // transport permanently: the estimate can never change, no frame is ever cached, and playback
+    // never progresses or recovers. One-active/one-newest is preserved because a non-idle tick
+    // still drops.
+    if (kind == PreviewRequestKind::Playback && (active_.has_value() || pending_.has_value())) {
         noteDroppedFrame();
         publishTerminal(PreviewActivity::Cancelled,
                         tr("Playback skipped this frame; showing the previous frame"));

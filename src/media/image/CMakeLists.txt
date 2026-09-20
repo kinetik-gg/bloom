@@ -8,7 +8,8 @@ else()
 endif()
 bloom_enable_strict_floating_point(bloom_media_stb_image)
 
-add_library(bloom_media_image STATIC exr_backend.cpp exr_backend.hpp image.cpp sequence.cpp)
+add_library(bloom_media_image STATIC exr_backend.cpp exr_backend.hpp image.cpp image_budget.hpp
+    sequence.cpp)
 target_sources(bloom_media_image PUBLIC FILE_SET HEADERS BASE_DIRS include
     FILES include/bloom/media/image.hpp)
 target_compile_features(bloom_media_image PUBLIC cxx_std_20)
@@ -28,4 +29,18 @@ if(BUILD_TESTING)
     target_include_directories(bloom_media_image_test PRIVATE ${PROJECT_SOURCE_DIR}/src/output/tests)
     bloom_enable_warnings(bloom_media_image_test)
     bloom_add_test(NAME bloom.media.image COMMAND bloom_media_image_test LABELS unit media)
+
+    add_executable(bloom_media_image_capacity_test tests/image_capacity_tests.cpp)
+    target_link_libraries(bloom_media_image_capacity_test PRIVATE bloom_media_image bloom_output
+        ZLIB::ZLIBSTATIC OpenEXR::OpenEXR)
+    target_include_directories(bloom_media_image_capacity_test PRIVATE ${PROJECT_SOURCE_DIR}/src/output/tests
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    bloom_enable_warnings(bloom_media_image_capacity_test)
+    # The fixture is deliberately real and large (6000x4000 = 24 Mpixel EXR/PNG written and decoded
+    # several times, plus a 20000-wide probe), so the unoptimized Debug Linux CI build needs well
+    # over the 30 s default even though the optimized macOS Release job finishes in ~8 s. Bound the
+    # wait per-test rather than widening the default for every test; this keeps the test mandatory on
+    # all platforms with the same large-image, overflow, and budget guarantees.
+    bloom_add_test(NAME bloom.media.image_capacity COMMAND bloom_media_image_capacity_test LABELS unit media
+                   TIMEOUT 180)
 endif()

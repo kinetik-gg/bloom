@@ -1,7 +1,10 @@
 #include <algorithm>
+#include <bloom/host/gpu_export_provider.hpp>
+#include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
@@ -15,6 +18,7 @@
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/audio_playback_session.hpp>
 #include <bloom/ui/background_preview_controller.hpp>
+#include <bloom/ui/cache_purge_controller.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_cpu_stage.hpp>
 #include <bloom/ui/composition_preview_gpu_scene_stage.hpp>
@@ -47,6 +51,8 @@
 #include <QSettings>
 #include <QTimer>
 
+#include <chrono>
+#include <filesystem>
 #include <memory>
 
 int main(int argc, char* argv[]) {
@@ -225,9 +231,26 @@ int main(int argc, char* argv[]) {
     // Open/SaveAs that changes the session base directory.
     auto gpuSceneCoverageCache = std::make_shared<bloom::runtime::GpuSceneCoverageCache>();
     auto gpuPreparedUploadCache = std::make_shared<bloom::runtime::GpuPreparedUploadCache>();
+    // The ONE shared runtime OCIO context resolver. It is INERT to construct (no hash/fs/OCIO/
+    // process work); the packaged glslangValidator/spirv-val paths come from the application's OWN
+    // packaging macros (never PATH, never a manual setup) and are qualified lazily on the GPU-scene
+    // CPU worker. The same resolver supplies the builder's effect/media/ACES context AND the
+    // general display program's preparer, so there is exactly one tool qualification and one
+    // program cache.
+    // Compose the ONE shared resolver from this target's packaged tools via the shared root helper,
+    // exactly like bloom-cli/bloom-mcp: non-relocated pins staged digests, relocated uses
+    // inventory.
+    std::shared_ptr<bloom::runtime::GpuOcioContextResolver> gpuOcioContextResolver =
+        bloom::host::makePackagedGpuOcioResolver(
+            std::filesystem::path(QCoreApplication::applicationFilePath().toStdString()));
+    if (gpuOcioContextResolver == nullptr) {
+        // No packaged tools: keep the inert fail-closed resolver so every affected request takes
+        // the CPU path, exactly as before.
+        gpuOcioContextResolver = std::make_shared<bloom::runtime::GpuOcioContextResolver>();
+    }
     auto gpuPreviewGpuSceneStage = bloom::ui::makeSessionRefreshingGpuSceneStage(
         snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, gpuSceneCoverageCache,
-        gpuPreparedUploadCache, compiledPlanCache);
+        gpuPreparedUploadCache, compiledPlanCache, gpuOcioContextResolver);
     auto gpuPreviewCpuStage = bloom::ui::makeCompositionPreviewCpuStage(
         snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, compiledPlanCache);
     auto gpuPreviewCpuDisplayFallback =
@@ -260,7 +283,41 @@ int main(int argc, char* argv[]) {
     bloom::ui::RamPreviewController ramPreviewController(
         compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline,
         nullptr, gpuPreviewDisplaySubmitter);
+    // The application-lifetime GPU final-render provider is created HERE, once, before the
+    // shutdown coordinator that will own its retirement ordering, so it outlives every coordinator
+    // callback and every export attempt. It reuses the same app-relative bundled loader the
+    // preview service uses. The coordinator signals the evaluator owner (non-blocking) at
+    // beginShutdown and polls genuine retirement completion from the UI event loop, so the UI
+    // never waits on the native owner even after task admission closes.
+    bloom::runtime::GpuProcessFrameEvaluatorOptions gpuExportOptions;
+    gpuExportOptions.enabled = bundledNativeLoader;
+    if (bundledNativeLoader) {
+        gpuExportOptions.loaderPath = gpuPreviewDisplayOptions.loaderPath;
+    }
+    // Reuse the ONE shared app OCIO context resolver built above from THIS target's own packaging
+    // definitions: the provider's CPU-worker bootstrap qualifies the tools once and publishes the
+    // same shared context for the export evaluator's media/effect transforms and output display, so
+    // preview and export share one tool qualification and one program cache. The media context is
+    // refreshed per request on the calling CPU worker so a session Open/SaveAs that moves the asset
+    // base directory is observed exactly as the preview path observes it.
+    gpuExportOptions.ocioResolver = gpuOcioContextResolver;
+    gpuExportOptions.mediaContextProvider = [&cpuEvaluator, gpuPreparedUploadCache] {
+        auto context = bloom::runtime::GpuSceneMediaContext::fromEvaluator(cpuEvaluator);
+        context.preparedUploadCache = gpuPreparedUploadCache;
+        return context;
+    };
+    auto gpuExportProvider = bloom::host::GpuExportProvider::create(gpuExportOptions);
+    gpuExportProvider->prepare(taskScheduler);
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);
+    shutdownCoordinator.setGpuExportRetirement(
+        [&gpuExportProvider] { gpuExportProvider->beginShutdown(); },
+        [&gpuExportProvider] {
+            if (!gpuExportProvider->retirementComplete()) {
+                return false;
+            }
+            gpuExportProvider->collectRetired();
+            return true;
+        });
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &ramPreviewController, &bloom::ui::RamPreviewController::beginShutdown);
@@ -292,7 +349,7 @@ int main(int argc, char* argv[]) {
     bloom::ui::FrameExportController frameExportController(
         compositionSession, taskScheduler, taskUiBridge, snapshotCompiler,
         projectHost.publicationCoordinator(), projectHost.artifactCoordinator(), {},
-        &qualifiedDisplayProcessorProvider);
+        &qualifiedDisplayProcessorProvider, gpuExportProvider);
 
     // The typed viewer GPU dependency context. Its presentation-client getter reads the cached
     // service capability, so an editor created before the async startup qualification finishes is
@@ -308,6 +365,10 @@ int main(int argc, char* argv[]) {
     bloom::ui::GpuViewerBootstrap gpuViewerBootstrap(
         taskScheduler, gpuPreviewDisplayOptions.loaderPath.string(),
         primaryScreen != nullptr ? primaryScreen->devicePixelRatio() : 1.0);
+    // The bootstrap installs the owner-resolved capacity plan through the poll below. Binding the
+    // shared frame cache is inert (no device query); until the owner resolves the device budget the
+    // configured sublimits installed above remain in force.
+    gpuViewerBootstrap.bindResidentCache(*previewFrameCache);
     bloom::ui::ViewerGpuDependencies viewerGpuDependencies = gpuViewerBootstrap.dependencies();
     bloom::ui::EditorRegistry editorRegistry;
     // Jobs is deliberately NOT registered (task F1, item F6). An editor in this registry is an
@@ -376,12 +437,24 @@ int main(int argc, char* argv[]) {
     // page follows Initializing -> Ready -> a later capability loss without any UI-thread device
     // probe. Declared before the window so it outlives the borrowed pointer the window holds.
     bloom::ui::CachedAccelerationStatusProvider accelerationStatus;
+    // Edit | Purge…: the async, off-UI purge of derived caches. It shares the one scheduler and
+    // TaskUiBridge the rest of the application already polls, clears the GPU-scene and prepared-
+    // upload stores the preview and media paths share, and reaches the evaluator's decoded-video
+    // cache through its narrow owning API. Declared before the window so it outlives it.
+    bloom::ui::CachePurgeController cachePurgeController(
+        taskScheduler, taskUiBridge, mediaDiskCache.get(), cpuEvaluator.operationCache().get(),
+        gpuPreparedUploadCache.get(), gpuSceneCoverageCache.get(),
+        [&cpuEvaluator] { cpuEvaluator.clearDecodedVideoCache(); },
+        [&previewController](const bool gated) { previewController.setCachePurgeGate(gated); },
+        [&gpuPreviewDisplayService](const std::chrono::milliseconds timeout) {
+            return gpuPreviewDisplayService.purgeRetainedCaches(timeout);
+        });
     // Native (server-side) window chrome only (task C1): MainWindow no longer takes a chrome mode
     // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,
                                  frameExportController, &ramPreviewController, &previewController,
                                  nullptr, &playback, cpuEvaluator.operationCache().get(),
-                                 mediaDiskCache.get(), &accelerationStatus);
+                                 mediaDiskCache.get(), &accelerationStatus, &cachePurgeController);
     // Settings the composition root owns take effect immediately: the window has already saved the
     // value, and these read the same keys back. Cache budgets and the disk cache are startup-read
     // and deliberately not re-applied here.

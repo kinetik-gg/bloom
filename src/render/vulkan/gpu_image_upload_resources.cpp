@@ -1,28 +1,9 @@
 #include "gpu_image_upload_private.hpp"
 
-#include <atomic>
 #include <cstdint>
 #include <utility>
 
 namespace bloom::render {
-namespace {
-
-std::atomic<std::int32_t> g_uploadQuarantineCount{0};
-std::atomic<bool> g_uploadTeardownIncomplete{false};
-constexpr std::int32_t kMaxUploadQuarantines = 4;
-
-} // namespace
-
-bool uploadQuarantineAllowed() noexcept {
-    return g_uploadQuarantineCount.load() < kMaxUploadQuarantines;
-}
-
-void noteUploadQuarantine() noexcept {
-    g_uploadQuarantineCount.fetch_add(1);
-    g_uploadTeardownIncomplete.store(true);
-}
-
-bool uploadTeardownIncomplete() noexcept { return g_uploadTeardownIncomplete.load(); }
 
 UploadStagingBuffer& UploadStagingBuffer::operator=(UploadStagingBuffer&& other) noexcept {
     if (this != &other) {

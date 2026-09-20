@@ -109,6 +109,28 @@ struct GpuOperationCapability final {
     std::vector<GpuDiagnostic> diagnostics;
 };
 
+// Typed source of a resolved device allocation budget. `MemoryBudget` is an actual available
+// figure the driver reported (VK_EXT_memory_budget through VMA); `DeviceLocalEstimate` is a
+// conservative nominal DEVICE_LOCAL heap figure used when no live budget is available (integrated
+// GPUs share host memory and drivers migrate blocks, so it is never a claim of free VRAM);
+// `Unavailable` means no budget could be resolved (null/stub device, foreign thread, or no heap).
+enum class GpuAllocationBudgetSource : std::uint8_t {
+    Unavailable,
+    MemoryBudget,
+    DeviceLocalEstimate,
+};
+
+// Immutable, owner-thread-resolved device allocation budget. `available_bytes` is the conservative
+// allocation budget a planner may build on; `device_local_bytes` is the summed DEVICE_LOCAL heap
+// size and is a diagnostic fact only, never an availability claim.
+struct GpuAllocationBudget final {
+    GpuAllocationBudgetSource source = GpuAllocationBudgetSource::Unavailable;
+    std::uint64_t device_local_bytes = 0;
+    std::uint64_t available_bytes = 0;
+
+    friend bool operator==(const GpuAllocationBudget&, const GpuAllocationBudget&) = default;
+};
+
 // Immutable, generation-scoped report. `Ready` means the bootstrap requirements needed to probe
 // and submit work passed; it grants no operation qualification.
 struct GpuCapabilityReport final {
@@ -203,6 +225,13 @@ class GpuDevice final {
     // portable-stub device. No allocation or native call is involved.
     [[nodiscard]] bool isOwnerThread() const noexcept;
     [[nodiscard]] const GpuCapabilityReport& capabilityReport() const noexcept;
+
+    // Owner-thread only. Resolves this generation's conservative allocation budget: the live VMA
+    // heap budget when VK_EXT_memory_budget was actually enabled, otherwise a nominal DEVICE_LOCAL
+    // estimate. Returns Unavailable for a non-owner thread, a null/moved-from or stub device, or a
+    // device that reported no memory. Unlike `device_memory_bytes` in the capability report (a
+    // summed heap-size diagnostic), this is a distinct permission to plan allocations.
+    [[nodiscard]] GpuAllocationBudget availableAllocationBudget() const noexcept;
 
     // Unique ownership identity for this exact GpuDevice generation. It is minted once per created
     // device from the same per-process monotonic counter that backs the presentation epoch, so two

@@ -9,9 +9,12 @@ target_sources(
         frame_export_publication.cpp
         frame_export_publication_naming.cpp
         frame_range_runner.cpp
+        gpu_export_provider.cpp
         sequence_export_runner.cpp
         output_analysis_attempt_runner.cpp
+        output_analysis_attempt_color_private.cpp
         project_session.cpp
+        project_session_creation.cpp
         publication_coordinator.cpp
         save_publication.cpp
         session_async_io.cpp
@@ -27,6 +30,8 @@ target_sources(
             include/bloom/host/copy_publication.hpp
             include/bloom/host/frame_export_publication.hpp
             include/bloom/host/frame_range_runner.hpp
+            include/bloom/host/gpu_export_provider.hpp
+            include/bloom/host/gpu_export_tool_package.hpp
             include/bloom/host/sequence_export_runner.hpp
             include/bloom/host/font_catalogue.hpp
             include/bloom/host/output_analysis_attempt_runner.hpp
@@ -230,11 +235,37 @@ if(BUILD_TESTING)
         add_executable(bloom_host_output_analysis_attempt_runner_test
                        tests/output_analysis_attempt_runner_tests.cpp)
         target_link_libraries(bloom_host_output_analysis_attempt_runner_test PRIVATE bloom_host)
+        # The provider factory test qualifies the REAL packaged GPU shader tools through the same
+        # GpuOcioContextResolver seam the desktop/CLI/MCP roots use; there is no manual compiler-path
+        # injection. A build without qualified tools runs only the typed CPU-fallback vectors.
+        target_compile_definitions(bloom_host_output_analysis_attempt_runner_test PRIVATE
+            "BLOOM_GPU_OCIO_CONTEXT_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_host_output_analysis_attempt_runner_test>\"")
+        include(BloomGpuShaderTools)
+        bloom_package_gpu_shader_tools(bloom_host_output_analysis_attempt_runner_test)
         bloom_enable_warnings(bloom_host_output_analysis_attempt_runner_test)
         bloom_add_test(
             NAME bloom.host.output-analysis-attempt-runner
             COMMAND bloom_host_output_analysis_attempt_runner_test
             LABELS unit host output persistence
+        )
+
+        # Host-side integration proof that a real GPU-provenance ProcessFrame produces the same
+        # canonical output semantic identity as the CPU oracle. It links the runtime evaluator and
+        # the runtime GPU test-support headers (reused fixture builders), keeping the output-identity
+        # assertion in bloom.host where the bloom_output dependency is legal. Same loader/
+        # --require-device contract as the runtime GPU fixture.
+        add_executable(bloom_host_gpu_process_frame_identity_test
+                       tests/gpu_process_frame_identity_tests.cpp)
+        target_include_directories(bloom_host_gpu_process_frame_identity_test
+            PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/tests")
+        target_link_libraries(bloom_host_gpu_process_frame_identity_test
+            PRIVATE bloom_host bloom_runtime_evaluator bloom_render)
+        bloom_enable_warnings(bloom_host_gpu_process_frame_identity_test)
+        bloom_enable_strict_floating_point(bloom_host_gpu_process_frame_identity_test)
+        bloom_add_test(
+            NAME bloom.host.gpu-process-frame-identity
+            COMMAND bloom_host_gpu_process_frame_identity_test
+            LABELS unit host output gpu render export
         )
 
         # Task F2 (issue #101): drives approveFrameExportV1()/executeExportPublication() against
@@ -248,6 +279,10 @@ if(BUILD_TESTING)
         # ZLIB::ZLIB link above.
         add_executable(bloom_host_sequence_export_runner_test ${PROJECT_SOURCE_DIR}/tests/sequence_export_runner_tests.cpp)
         target_link_libraries(bloom_host_sequence_export_runner_test PRIVATE bloom_host bloom_commands bloom_media_video)
+        target_include_directories(bloom_host_sequence_export_runner_test PRIVATE
+            "${PROJECT_SOURCE_DIR}/tests/support"
+            "${PROJECT_SOURCE_DIR}/src/runtime/include" "${PROJECT_SOURCE_DIR}/src/core/include"
+            "${PROJECT_SOURCE_DIR}/src/document/include" "${PROJECT_SOURCE_DIR}/src/render/include")
         add_dependencies(bloom_host_sequence_export_runner_test bloom-media-worker)
         bloom_enable_warnings(bloom_host_sequence_export_runner_test)
         bloom_add_test(NAME bloom.host.sequence-export COMMAND bloom_host_sequence_export_runner_test
@@ -257,11 +292,69 @@ if(BUILD_TESTING)
                        tests/frame_export_publication_tests.cpp)
         target_link_libraries(bloom_host_frame_export_publication_test PRIVATE bloom_host
                                                                                ZLIB::ZLIB)
+        target_include_directories(bloom_host_frame_export_publication_test PRIVATE
+            "${PROJECT_SOURCE_DIR}/tests/support"
+            "${PROJECT_SOURCE_DIR}/src/runtime/include" "${PROJECT_SOURCE_DIR}/src/core/include"
+            "${PROJECT_SOURCE_DIR}/src/document/include" "${PROJECT_SOURCE_DIR}/src/render/include")
+        # Qualified packaged shader tools for the real GPU DisplayRgba8 PNG route. When present the
+        # test prepares a real display command and asserts the GPU payload; when absent the CPU
+        # display path is the honest fallback and that half of the test is compiled out.
+        find_program(bloom_host_gpu_tools_glslang NAMES glslangValidator)
+        find_program(bloom_host_gpu_tools_spirv_val NAMES spirv-val)
+        if(bloom_host_gpu_tools_glslang AND bloom_host_gpu_tools_spirv_val)
+            get_filename_component(bloom_host_gpu_tools_dir
+                                   "${bloom_host_gpu_tools_glslang}" DIRECTORY)
+            target_compile_definitions(bloom_host_frame_export_publication_test PRIVATE
+                "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_host_gpu_tools_dir}\"")
+        endif()
         bloom_enable_warnings(bloom_host_frame_export_publication_test)
         bloom_add_test(
             NAME bloom.host.frame-export-publication
             COMMAND bloom_host_frame_export_publication_test
             LABELS unit host output persistence security
         )
+
+        # Export route-proof writers. These reuse the exact still/video harnesses above through an
+        # opt-in --route-proof-dir: the ordinary registrations stay byte-for-byte unchanged, and a
+        # writer invocation only publishes a proof after every parity/publication assertion passed.
+        # The build-owned proof directory and the gpu_route_proofs fixture (fresh nonce, known
+        # proof files cleared) live in src/runtime/tests; the runtime module still links no UI.
+        set(BLOOM_GPU_ROUTE_PROOF_DIR "${PROJECT_BINARY_DIR}/gpu-route-proofs")
+        set(BLOOM_HOST_ROUTE_PROOF_LOADER_ENV "")
+        if(UNIX AND NOT APPLE AND BLOOM_RENDER_ENABLE_VULKAN AND DEFINED BLOOM_DEPENDENCY_MODE
+           AND BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
+            find_package(VulkanLoader QUIET CONFIG PATHS "${BLOOM_DEPENDENCY_PREFIX}" NO_DEFAULT_PATH)
+            if(TARGET Vulkan::Loader)
+                list(APPEND BLOOM_HOST_ROUTE_PROOF_LOADER_ENV
+                     "BLOOM_TEST_VULKAN_LOADER=$<TARGET_FILE:Vulkan::Loader>")
+            endif()
+        endif()
+
+        bloom_add_test(
+            NAME bloom.host.export-route-proof.still
+            COMMAND bloom_host_frame_export_publication_test
+                    --route-proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}"
+            LABELS unit host output gpu contract
+            ENVIRONMENT ${BLOOM_HOST_ROUTE_PROOF_LOADER_ENV}
+            TIMEOUT 300
+        )
+        set_tests_properties(bloom.host.export-route-proof.still PROPERTIES
+            SKIP_RETURN_CODE 77
+            FIXTURES_REQUIRED gpu_route_proofs
+            FIXTURES_SETUP gpu_route_proof_writers)
+
+        bloom_add_test(
+            NAME bloom.host.export-route-proof.video
+            COMMAND bloom_host_sequence_export_runner_test
+                    "${CMAKE_CURRENT_BINARY_DIR}/sequence-export-proof-fixtures"
+                    --route-proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}"
+            LABELS unit host media output gpu contract
+            ENVIRONMENT ${BLOOM_HOST_ROUTE_PROOF_LOADER_ENV}
+            TIMEOUT 300
+        )
+        set_tests_properties(bloom.host.export-route-proof.video PROPERTIES
+            SKIP_RETURN_CODE 77
+            FIXTURES_REQUIRED gpu_route_proofs
+            FIXTURES_SETUP gpu_route_proof_writers)
     endif()
 endif()

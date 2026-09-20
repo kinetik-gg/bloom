@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-14
+Updated: 2026-09-20
 
 ## Purpose
 
@@ -47,6 +47,12 @@ hosts reach with a modifier — bare letters belong to tools.
 | `` ` `` | Maximize or restore the panel under the pointer |
 | `Alt` (held) | Reveal menu mnemonics |
 
+New project (`Ctrl+N`) and application startup begin **blank**: the project owns no composition, so
+every editor shows its empty state and the composition-dependent commands (Duplicate, Rename,
+Delete, Export Frame) are disabled. New Composition is the way to author the first one; creating it
+activates it. Deleting the final composition returns to that same blank project as one undoable
+command, and undo restores and reactivates the composition.
+
 ## Viewer
 
 Selected layers show their delivered-frame bounds polygon and anchor. Position moves the anchor in
@@ -63,7 +69,7 @@ playback also shows the overlay without re-rendering. Empty content or another c
 | View → Safe Areas / Centre Cross / Thirds / Rulers / Pixel Grid | Toggles display-only guides; Safe Areas uses the active composition's stored percentages |
 | View → Safe Area Preset | Applies Broadcast, HD, Cinema, Social, or validated Custom percentages in one undoable composition edit |
 | Select → All / None / Invert | Selects, clears, or inverts the current composition's layer boundaries |
-| Composition menu / selector trailing menu | New, Duplicate, Rename, and Delete Composition; Delete refuses the last composition |
+| Composition menu / selector trailing menu | New, Duplicate, Rename, and Delete Composition; Duplicate, Rename, and Delete are disabled while no composition is active, and Delete may remove the final composition (returning to the blank project) |
 | `Ctrl+0` | Fit |
 | `Ctrl+1` | Actual size (100%) |
 | Middle drag | Pan |
@@ -119,14 +125,14 @@ panel menus or the composition context menu.
 | --- | --- |
 | Search field text | Filters the tree by composition name, case-insensitively |
 | View > Expand All / Collapse All | Expands or collapses the asset tree |
-| Add > New Composition… | Opens the name, size, frame-rate, and duration dialog, then adds one composition through the command path |
+| Add > New Composition… | Opens the name, size, frame-rate, and duration dialog (duration entered in Frames or Seconds), then adds one composition through the command path |
 | Add > New Folder | Disabled; tooltip: `Folders arrive with asset organisation` |
 | Select > All / None | Selects all visible rows or clears the selection |
 | Double-click a composition | Switches the shared `CompositionSession` to that composition |
 | Right-click a composition | Open, Rename (inline), Duplicate, or Delete |
 | Footer: New Composition | Opens the same new-composition dialog |
 | Footer: New Folder / Import | Disabled; Import tooltip: `Image and sequence import arrives with the media pipeline` |
-| Footer: Delete | Deletes the active composition through one undoable command; the last composition is protected |
+| Footer: Delete | Deletes the active composition through one undoable command; deleting the final composition returns to the blank project and undo restores it |
 
 ## Nodes
 

@@ -702,9 +702,16 @@ are polled on the UI thread, and cache registration/removal serializes against c
 
 ### Memory pressure response
 
-Pressure means availability below the host reserve **or** swap use strictly above 25% of swap
-size. No swap configured means no swap-pressure signal. The ledger applies one ladder to all
-registered pools:
+Pressure means availability below the host reserve **or** meaningful active swap growth. Static
+occupancy is not pressure: a swap file can sit nearly full for the life of the boot while RAM is
+plentiful, so a high reading alone never trims. The ledger compares `SwapUsed` against the previous
+valid sample and asserts only when the rise exceeds a time-scaled threshold (at least 16 MiB, or
+4 MiB per second, over the interval); once an episode is active a quarter-sized sustaining
+threshold keeps it latched so a borderline value cannot flap. The first valid sample, a partly
+released sample, and a non-advancing or rolled-back clock rebaseline and assert nothing. Missing
+swap counters also assert no new pressure and drop the growth baseline, but they do not discard an
+active episode; the first valid sample after the gap is a fresh baseline. No swap configured means
+no swap-pressure signal. The ledger applies one ladder to all registered pools:
 
 1. The first pressure poll trims to 25% of effective budgets and reduces admission to the same
    limits immediately.

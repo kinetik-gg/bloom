@@ -70,6 +70,26 @@ GpuSceneExecutorCreateResult GpuSceneExecutor::create(render::GpuDevice& device,
         return {nullptr, makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
                                         upload.diagnostic.message)};
     }
+    auto affine = render::GpuAffine::create(
+        device, render::GpuAffineBudgets{budgets.maxImageBytes, budgets.maxAffineMetadataBytes});
+    if (!affine) {
+        return {nullptr, makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
+                                        affine.diagnostic.message)};
+    }
+    auto blend = render::GpuBlend::create(
+        device, render::GpuBlendBudgets{budgets.maxImageBytes, budgets.maxMetadataBytes});
+    if (!blend) {
+        return {nullptr, makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
+                                        blend.diagnostic.message)};
+    }
+    // The point resample's metadata is O(width + height) int32 indices, far smaller than the image;
+    // it is bounded by the per-operation metadata ceiling.
+    auto pointResample = render::GpuPointResample::create(
+        device, render::GpuPointResampleBudgets{budgets.maxImageBytes, budgets.maxMetadataBytes});
+    if (!pointResample) {
+        return {nullptr, makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
+                                        pointResample.diagnostic.message)};
+    }
     auto impl = std::make_unique<Impl>();
     impl->device = &device;
     impl->cache = &cache;
@@ -77,6 +97,9 @@ GpuSceneExecutorCreateResult GpuSceneExecutor::create(render::GpuDevice& device,
     impl->solid = std::move(solid.solid);
     impl->composite = std::move(composite.composite);
     impl->upload = std::move(upload.upload);
+    impl->affine = std::move(affine.affine);
+    impl->blend = std::move(blend.blend);
+    impl->pointResample = std::move(pointResample.resampler);
     return {std::unique_ptr<GpuSceneExecutor>(new GpuSceneExecutor(std::move(impl))), {}};
 }
 
@@ -99,7 +122,9 @@ GpuSceneExecutorCounters GpuSceneExecutor::counters() const noexcept {
     }
     auto snapshot = impl_->counters;
     snapshot.currentLiveImageBytes = impl_->liveBytes;
-    snapshot.peakLiveImageBytes = impl_->peakLiveBytes;
+    // clearJob() resets the per-job member peak on failure, so preserve the accumulated peak: a
+    // reported zero here means no peak was ever observed, never that a failure erased the evidence.
+    snapshot.peakLiveImageBytes = std::max(snapshot.peakLiveImageBytes, impl_->peakLiveBytes);
     return snapshot;
 }
 
@@ -209,8 +234,13 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::begin(std::shared_ptr<const Prepare
     std::uint64_t maxStepRequestedBytes = 0;
     for (const auto& step : impl.steps) {
         const std::optional<render::ImageWindow> window =
-            step.kind == GpuSceneExecutorStepKind::Translation ? step.outputWindow
-                                                               : step.solidDataWindow;
+            step.kind == GpuSceneExecutorStepKind::Translation ||
+                    step.kind == GpuSceneExecutorStepKind::Affine ||
+                    step.kind == GpuSceneExecutorStepKind::Blend ||
+                    step.kind == GpuSceneExecutorStepKind::PointResample ||
+                    step.kind == GpuSceneExecutorStepKind::OcioEffect
+                ? step.outputWindow
+                : step.solidDataWindow;
         if (!window.has_value()) {
             continue;
         }
@@ -279,6 +309,20 @@ GpuSceneExecutorPollResult GpuSceneExecutor::poll() {
                 impl.solid->cancel();
             } else if (impl.nativeKind == Impl::NativeKind::Upload) {
                 impl.upload->cancel();
+            } else if (impl.nativeKind == Impl::NativeKind::Affine) {
+                impl.affine->cancel();
+            } else if (impl.nativeKind == Impl::NativeKind::Blend) {
+                impl.blend->cancel();
+            } else if (impl.nativeKind == Impl::NativeKind::PointResample) {
+                impl.cancelPointResample();
+            } else if (impl.nativeKind == Impl::NativeKind::PathCoverage) {
+                if (impl.pathCoverage != nullptr) {
+                    impl.pathCoverage->cancel();
+                }
+            } else if (impl.nativeKind == Impl::NativeKind::Ocio) {
+                if (impl.nativeOcioProgram != nullptr) {
+                    impl.nativeOcioProgram->cancel();
+                }
             } else {
                 impl.composite->cancel();
             }
@@ -298,7 +342,13 @@ GpuSceneExecutorPollResult GpuSceneExecutor::poll() {
     }
     const auto started = impl.startStep(impl.steps[impl.cursor]);
     if (started.code != GpuSceneExecutorDiagnosticCode::None) {
-        impl.fail(started.code, started.message, false);
+        // Bounded accounting context: the step's own refusal is distinguished from the executor's
+        // per-request allowance and its remaining headroom without a second probe.
+        impl.fail(started.code,
+                  started.message + " [requestBudget=" + std::to_string(impl.requestBudget) +
+                      ", liveBytes=" + std::to_string(impl.liveBytes) +
+                      ", remaining=" + std::to_string(impl.remainingBudget()) + ']',
+                  false);
         return GpuSceneExecutorPollResult::Failure;
     }
     return GpuSceneExecutorPollResult::Pending;
@@ -346,6 +396,20 @@ void GpuSceneExecutor::cancel() noexcept {
             impl_->upload->cancel();
         } else if (impl_->nativeKind == Impl::NativeKind::Composite) {
             impl_->composite->cancel();
+        } else if (impl_->nativeKind == Impl::NativeKind::Affine) {
+            impl_->affine->cancel();
+        } else if (impl_->nativeKind == Impl::NativeKind::Blend) {
+            impl_->blend->cancel();
+        } else if (impl_->nativeKind == Impl::NativeKind::PointResample) {
+            impl_->cancelPointResample();
+        } else if (impl_->nativeKind == Impl::NativeKind::PathCoverage) {
+            if (impl_->pathCoverage != nullptr) {
+                impl_->pathCoverage->cancel();
+            }
+        } else if (impl_->nativeKind == Impl::NativeKind::Ocio) {
+            if (impl_->nativeOcioProgram != nullptr) {
+                impl_->nativeOcioProgram->cancel();
+            }
         }
         impl_->cancelIssued = true;
     }
@@ -358,7 +422,12 @@ bool GpuSceneExecutor::teardownDrainIncomplete() noexcept {
     // must not be reported incomplete.
     return render::GpuSolid::teardownDrainIncomplete() ||
            render::GpuComposite::teardownDrainIncomplete() ||
-           render::GpuImageUpload::teardownDrainIncomplete();
+           render::GpuImageUpload::teardownDrainIncomplete() ||
+           render::GpuAffine::teardownDrainIncomplete() ||
+           render::GpuBlend::teardownDrainIncomplete() ||
+           render::GpuPointResample::teardownDrainIncomplete() ||
+           render::GpuPathCoverage::teardownDrainIncomplete() ||
+           render::GpuOcioProgram::teardownDrainIncomplete();
 }
 
 // Folded additive accessor (declared in the public header). It introduces no field or layout

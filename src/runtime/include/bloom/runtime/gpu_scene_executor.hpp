@@ -40,6 +40,7 @@
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/gpu_solid.hpp>
+#include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
@@ -123,8 +124,30 @@ struct GpuSceneExecutorCounters final {
     // Native op begin() calls, by operation family.
     std::uint64_t solidDispatches = 0;
     std::uint64_t coveredSolidDispatches = 0;
+    // Native GpuPathCoverage begin() calls: the positive proof that a vector source's coverage was
+    // rasterized on the device (not a host mask). A warm scene whose covered output is cached runs
+    // zero of these.
+    std::uint64_t coverageDispatches = 0;
     std::uint64_t translationDispatches = 0;
     std::uint64_t sourceOverDispatches = 0;
+    // Distinct from the composite counters above: an affine placement (GpuAffine) and an explicit
+    // blend mode (GpuBlend) are their own operation families. An empty/unchanged warm scene tree
+    // runs zero of every one of these.
+    std::uint64_t affineDispatches = 0;
+    std::uint64_t blendDispatches = 0;
+    // One OCIO ProcessEffect dispatch. A warm scene whose OCIO command output is already cached
+    // runs zero of these.
+    std::uint64_t ocioEffectDispatches = 0;
+    // One PointResampleV1 dispatch. A warm scene whose resample output is already cached runs zero
+    // of these.
+    std::uint64_t pointResampleDispatches = 0;
+    // Bounded OCIO native-program cache: creations, warm reuses, evictions, and refusals.
+    std::uint64_t ocioProgramCreations = 0;
+    std::uint64_t ocioProgramReuses = 0;
+    std::uint64_t ocioProgramEvictions = 0;
+    std::uint64_t ocioProgramRefusals = 0;
+    // Actual VMA retained bytes currently charged to the OCIO program cache.
+    std::uint64_t ocioRetainedProgramBytes = 0;
     std::uint64_t dispatches = 0;
     std::uint64_t uploads = 0;
     std::uint64_t readbacks = 0;
@@ -166,13 +189,28 @@ struct GpuSceneExecutorProgress final {
 };
 
 struct GpuSceneExecutorBudgets final {
-    // Per-operation native image ceiling (also passed as the hard cap to the owned pipelines).
-    std::uint64_t maxImageBytes = 256ULL * 1024ULL * 1024ULL;
+    // Per-operation native image ceiling handed to the owned pipelines. This is a configured UPPER
+    // BOUND, not an allocation: it is capacity-sized so a large valid source is admitted, and each
+    // primitive validates the ACTUAL requested image against the device's real maxResourceSize in
+    // begin(). A permissive maximum never refuses pipeline creation.
+    std::uint64_t maxImageBytes = gpuProducerMaxImageBytes();
     // Metadata ceiling handed to the composite translation op.
     std::uint64_t maxMetadataBytes = 16ULL * 1024ULL * 1024ULL;
+    // Metadata ceiling for the affine sample buffer (16 bytes per output pixel). Affine's metadata
+    // is far larger than the composite's: a 1080p output needs ~33 MiB, so this default is chosen
+    // to actually fit 1080p plus a bounded margin. It is a real ceiling, never unlimited; the
+    // per-request live ledger and the native byte budget still bound the simultaneous peak.
+    std::uint64_t maxAffineMetadataBytes = 256ULL * 1024ULL * 1024ULL;
     // Structural ceilings validated before any Vulkan work.
     std::uint64_t maxCommands = 4096;
     std::uint64_t maxCoverageBytes = 256ULL * 1024ULL * 1024ULL;
+    // Bounded OCIO native-program cache: entry count and the sum of the programs' ACTUAL VMA
+    // retained allocation bytes (never a descriptor-declared sample estimate). The per-program
+    // ceilings are forwarded to render::GpuOcioProgram::create.
+    std::uint64_t maxOcioPrograms = 8;
+    std::uint64_t maxOcioRetainedProgramBytes = 256ULL * 1024ULL * 1024ULL;
+    std::uint64_t maxOcioOwnedBytesPerProgram = 512ULL * 1024ULL * 1024ULL;
+    std::uint64_t maxOcioLutBytesPerProgram = 256ULL * 1024ULL * 1024ULL;
     // A native job that has not retired by this deadline is cancelled and failed closed.
     std::uint64_t jobDeadlineMilliseconds = 5000;
 };

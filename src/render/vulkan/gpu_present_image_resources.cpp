@@ -84,17 +84,14 @@ void destroyImageVma(DeviceAllocatorState& control, VkImage& image,
 } // namespace
 
 PresentImagePipeline::~PresentImagePipeline() {
-    if (control == nullptr) {
-        return;
-    }
-    if (paramsMapped != nullptr && paramsAllocation != VK_NULL_HANDLE) {
-        vmaUnmapMemory(control->allocator, paramsAllocation);
-    }
-    destroyBufferVma(*control, paramsBuffer, paramsAllocation);
-    destroyBufferVma(*control, stagedOverlayBuffer, stagedOverlayAllocation);
-    if (overlayImage != VK_NULL_HANDLE) {
-        destroyImageVma(*control, overlayImage, overlayAllocation);
-    }
+    // Single dependency-ordered teardown shared with the rebuild path: dependents (framebuffers,
+    // views, pipeline, descriptor set, pipeline layout) are released before their dependencies, and
+    // the overlay image view is dropped before the VMA-owned overlay image it references. The
+    // params and staging buffers are host-visible and persistently mapped via
+    // VMA_ALLOCATION_CREATE_MAPPED_BIT, so they must not be explicitly unmapped: vmaDestroyBuffer
+    // releases their single creation mapping. The owning presenter only destroys this pipeline once
+    // the previous frame's render fence is proven complete.
+    resetDeviceResources();
 }
 
 void PresentImagePipeline::resetDeviceResources() noexcept {
@@ -116,9 +113,10 @@ void PresentImagePipeline::resetDeviceResources() noexcept {
     vertexShader = vk::raii::ShaderModule{nullptr};
 
     if (control != nullptr) {
-        if (paramsMapped != nullptr && paramsAllocation != VK_NULL_HANDLE) {
-            vmaUnmapMemory(control->allocator, paramsAllocation);
-        }
+        // paramsBuffer is host-visible and persistently mapped (VMA_ALLOCATION_CREATE_MAPPED_BIT):
+        // it is mapped for its whole lifetime, so there is no explicit vmaMapMemory to balance and
+        // vmaUnmapMemory must never be called for the creation mapping. vmaDestroyBuffer below
+        // releases that mapping.
         paramsMapped = nullptr;
         destroyBufferVma(*control, paramsBuffer, paramsAllocation);
         destroyBufferVma(*control, stagedOverlayBuffer, stagedOverlayAllocation);

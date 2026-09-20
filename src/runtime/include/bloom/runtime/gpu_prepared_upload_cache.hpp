@@ -25,6 +25,7 @@
 // It owns no GPU resource and never touches a decoder.
 
 #include <bloom/render/image.hpp>
+#include <bloom/runtime/gpu_memory_budget.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -37,16 +38,23 @@
 
 namespace bloom::runtime {
 
+// The live default is capacity-aware (gpuPreparedUploadCacheByteBudget()): an ample-memory machine
+// retains a large converted source instead of re-decoding it every request, and an explicitly tiny
+// assigned budget stays tiny.
 inline constexpr std::uint64_t kDefaultPreparedUploadCacheBytes = 128ULL * 1024ULL * 1024ULL;
 inline constexpr std::size_t kDefaultPreparedUploadCacheEntries = 4096;
 
 class GpuPreparedUploadCache final {
   public:
-    explicit GpuPreparedUploadCache(std::uint64_t maxBytes = kDefaultPreparedUploadCacheBytes,
+    explicit GpuPreparedUploadCache(std::uint64_t maxBytes = gpuPreparedUploadCacheByteBudget(),
                                     std::size_t maxEntries = kDefaultPreparedUploadCacheEntries);
 
     [[nodiscard]] std::shared_ptr<const render::Rgba32fImage> find(const std::string& key) noexcept;
     void store(std::string key, std::shared_ptr<const render::Rgba32fImage> image);
+    // Drops every retained upload, releasing the cache's own references. A caller already holding a
+    // converted image keeps it valid; only re-derivation is forced. Lifetime hit/miss counters are
+    // left intact. Thread-safe.
+    void clear();
 
     [[nodiscard]] std::uint64_t retainedBytes() const;
     [[nodiscard]] std::size_t entryCount() const;

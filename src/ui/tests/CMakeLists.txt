@@ -206,9 +206,51 @@ target_link_libraries(bloom_composition_preview_controller_test PRIVATE bloom_ui
 target_link_libraries(bloom_composition_preview_cpu_stage_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_preview_gpu_scene_stage_test PRIVATE bloom_ui)
 target_include_directories(bloom_composition_preview_gpu_scene_stage_test
-    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/tests")
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+# Production general-display stage path. It drives the ACTUAL makeSessionRefreshingGpuSceneStage
+# with the shared runtime GpuOcioContextResolver over the REAL packaged tools staged beside this
+# executable by bloom_package_gpu_shader_tools (no injected tool paths or preparer); without the
+# tools the general assertions are compiled out and the test is a clean pass.
+add_executable(bloom_composition_preview_gpu_scene_general_test
+    composition_preview_gpu_scene_general_tests.cpp)
+target_include_directories(bloom_composition_preview_gpu_scene_general_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_composition_preview_gpu_scene_general_test PRIVATE bloom_ui)
+target_compile_definitions(bloom_composition_preview_gpu_scene_general_test PRIVATE
+    "BLOOM_GPU_GENERAL_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_composition_preview_gpu_scene_general_test>\"")
+include(BloomGpuShaderTools)
+bloom_package_gpu_shader_tools(bloom_composition_preview_gpu_scene_general_test)
+bloom_enable_warnings(bloom_composition_preview_gpu_scene_general_test)
+bloom_add_test(
+    NAME bloom.ui.composition_preview_gpu_scene_general
+    COMMAND bloom_composition_preview_gpu_scene_general_test
+    LABELS ui gpu color
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
 target_link_libraries(bloom_gpu_preview_submitter_test PRIVATE bloom_ui)
 target_link_libraries(bloom_gpu_preview_app_test PRIVATE bloom_ui bloom_runtime_evaluator)
+# Desktop composition-root regression: the shared host packaged-tool helper supplies the expected
+# staged digests and qualifies the REAL tools staged beside this executable, so the default general
+# Neutral DisplayRgba8 program is available at 6000x4000. Mirrors apps/bloom/main.cpp exactly; no
+# device and no qualification bypass.
+add_executable(bloom_ui_gpu_preview_app_packaged_tools_test
+    gpu_preview_app_packaged_tools_tests.cpp)
+target_include_directories(bloom_ui_gpu_preview_app_packaged_tools_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_ui_gpu_preview_app_packaged_tools_test
+    PRIVATE bloom_runtime_evaluator bloom_host)
+include(BloomGpuShaderTools)
+bloom_package_gpu_shader_tools(bloom_ui_gpu_preview_app_packaged_tools_test)
+bloom_enable_warnings(bloom_ui_gpu_preview_app_packaged_tools_test)
+bloom_add_test(
+    NAME bloom.ui.gpu_preview_app_packaged_tools
+    COMMAND bloom_ui_gpu_preview_app_packaged_tools_test
+    LABELS ui gpu color
+    TIMEOUT 120
+)
+set_tests_properties(bloom.ui.gpu_preview_app_packaged_tools
+    PROPERTIES SKIP_RETURN_CODE 77)
 # bloom_ui_gpu_presentation_target_test adopts the borrowed VkInstance through Qt's public
 # QVulkanInstance, so it exists only where this build has both the pinned Vulkan headers and a Qt
 # build that shipped the Vulkan feature (BLOOM_UI_VULKAN_AVAILABLE, src/ui/CMakeLists.txt). On a Qt
@@ -791,6 +833,28 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+add_executable(bloom_project_host_empty_test project_host_empty_tests.cpp)
+target_link_libraries(bloom_project_host_empty_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_project_host_empty_test)
+bloom_add_test(
+    NAME bloom.ui.project-host-empty
+    COMMAND bloom_project_host_empty_test
+    LABELS ui integration
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+add_executable(bloom_composition_duration_test composition_duration_tests.cpp)
+target_link_libraries(bloom_composition_duration_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_composition_duration_test)
+bloom_add_test(
+    NAME bloom.ui.composition-duration
+    COMMAND bloom_composition_duration_test
+    LABELS ui integration
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 add_executable(bloom_ui_multi_selection_test composition_session_multi_selection_tests.cpp)
 target_link_libraries(bloom_ui_multi_selection_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_ui_multi_selection_test)
@@ -986,6 +1050,10 @@ bloom_add_test(
 # window_status_bar's own coverage there for the widget-level wiring).
 add_executable(bloom_media_disk_cache_settings_test media_disk_cache_settings_tests.cpp)
 target_link_libraries(bloom_media_disk_cache_settings_test PRIVATE bloom_ui)
+# The deterministic service-purge timeout test reaches the service's private owner-thread purge
+# state machine (no device needed), exactly as the resident GPU tests reach the same private root.
+target_include_directories(bloom_media_disk_cache_settings_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
 bloom_enable_warnings(bloom_media_disk_cache_settings_test)
 bloom_add_test(
     NAME bloom.ui.media-disk-cache-settings
@@ -1452,6 +1520,119 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         TIMEOUT 300
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
+
+    # Genuine GPU route-proof writers. These are the real production viewer and RAM-preview
+    # harnesses; each publishes its route proof into the build-owned run-scoped proof directory the
+    # runtime native acceptance gate reads. They are CTest fixture SETUP tests (their own fixtures
+    # are required by the gate) and they require the runtime `gpu_route_proofs` setup, so the order
+    # is: nonce setup -> writer(s) -> final contract gate. The gate lives in the runtime tree and
+    # never links the UI shell; only the writer fixtures are appended below. A Wayland platform is
+    # inherited (CI sets offscreen, so the writer skips and the gate reports the proof missing).
+    set(BLOOM_GPU_ROUTE_PROOF_DIR "${PROJECT_BINARY_DIR}/gpu-route-proofs")
+
+    add_executable(bloom_ui_gpu_viewer_route_proof_test
+        gpu_viewer_route_proof_tests.cpp
+        gpu_route_proof_harness_support.hpp
+        gpu_service_chain_fixture.hpp
+        gpu_vertical_proof_support.hpp)
+    target_include_directories(bloom_ui_gpu_viewer_route_proof_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/tests/support" "${PROJECT_SOURCE_DIR}/src/runtime"
+                ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    target_link_libraries(bloom_ui_gpu_viewer_route_proof_test
+        PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
+    bloom_enable_warnings(bloom_ui_gpu_viewer_route_proof_test)
+    bloom_enable_strict_floating_point(bloom_ui_gpu_viewer_route_proof_test)
+    bloom_add_test(
+        NAME bloom.ui.gpu_viewer_route_proof
+        COMMAND bloom_ui_gpu_viewer_route_proof_test
+                --proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}"
+                ${bloom_ui_gpu_viewer_service_chain_loader_args}
+        LABELS ui gpu viewer route-proof
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.ui.gpu_viewer_route_proof
+        PROPERTIES FIXTURES_REQUIRED gpu_route_proofs FIXTURES_SETUP gpu_route_proof_viewer)
+
+    add_executable(bloom_ui_gpu_ram_preview_route_proof_test
+        gpu_ram_preview_route_proof_tests.cpp
+        gpu_route_proof_harness_support.hpp
+        gpu_service_chain_fixture.hpp
+        gpu_vertical_proof_support.hpp)
+    target_include_directories(bloom_ui_gpu_ram_preview_route_proof_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/tests/support" "${PROJECT_SOURCE_DIR}/src/runtime"
+                ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    target_link_libraries(bloom_ui_gpu_ram_preview_route_proof_test
+        PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
+    bloom_enable_warnings(bloom_ui_gpu_ram_preview_route_proof_test)
+    bloom_enable_strict_floating_point(bloom_ui_gpu_ram_preview_route_proof_test)
+    bloom_add_test(
+        NAME bloom.ui.gpu_ram_preview_route_proof
+        COMMAND bloom_ui_gpu_ram_preview_route_proof_test
+                --proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}"
+                ${bloom_ui_gpu_viewer_service_chain_loader_args}
+        LABELS ui gpu ram route-proof
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.ui.gpu_ram_preview_route_proof
+        PROPERTIES FIXTURES_REQUIRED gpu_route_proofs FIXTURES_SETUP gpu_route_proof_ram)
+
+    # Independent native acceptance for direct manipulation ON the genuine GPU-resident viewer
+    # route: real blank project -> real first-composition/Solid commands -> real service resident
+    # frame -> viewer mouse select/drag/commit/undo, plus the resident overlay border and empty
+    # invitation pixel checks. It is not a proof writer and does not join the route-proof fixture
+    # order. Under normal CTest (offscreen) it skips with 77; the native supervisor passes
+    # --loader/--require-device under QT_QPA_PLATFORM=wayland.
+    add_executable(bloom_ui_viewer_resident_interaction_native_test
+        viewer_resident_interaction_native_tests.cpp
+        gpu_service_chain_fixture.hpp
+        gpu_vertical_proof_support.hpp)
+    target_include_directories(bloom_ui_viewer_resident_interaction_native_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    target_link_libraries(bloom_ui_viewer_resident_interaction_native_test
+        PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
+    bloom_enable_warnings(bloom_ui_viewer_resident_interaction_native_test)
+    bloom_enable_strict_floating_point(bloom_ui_viewer_resident_interaction_native_test)
+    bloom_add_test(
+        NAME bloom.ui.viewer_resident_interaction_native
+        COMMAND bloom_ui_viewer_resident_interaction_native_test
+                ${bloom_ui_gpu_viewer_service_chain_loader_args}
+        LABELS ui gpu viewer resident interaction native
+        TIMEOUT 300
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
+    set_tests_properties(bloom.ui.viewer_resident_interaction_native
+        PROPERTIES SKIP_RETURN_CODE 77)
+
+    # Bounded native acceptance for the resident viewer surface across a DOCUMENT REPLACEMENT
+    # (File > Open / New) while a live native target exists: genuine applied present for the swapped
+    # frame, cover hidden after ack, container inside the viewer, native input activation before and
+    # after, and the CPU-only hide/show transition through a composition-less rebind. Skips with 77
+    # off a real device.
+    add_executable(bloom_ui_viewer_resident_project_swap_native_test
+        viewer_resident_project_swap_native_tests.cpp
+        gpu_service_chain_fixture.hpp
+        gpu_vertical_proof_support.hpp)
+    target_include_directories(bloom_ui_viewer_resident_project_swap_native_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    target_link_libraries(bloom_ui_viewer_resident_project_swap_native_test
+        PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
+    bloom_enable_warnings(bloom_ui_viewer_resident_project_swap_native_test)
+    bloom_enable_strict_floating_point(bloom_ui_viewer_resident_project_swap_native_test)
+    bloom_add_test(
+        NAME bloom.ui.viewer_resident_project_swap_native
+        COMMAND bloom_ui_viewer_resident_project_swap_native_test
+                ${bloom_ui_gpu_viewer_service_chain_loader_args}
+        LABELS ui gpu viewer resident native
+        TIMEOUT 300
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
+    set_tests_properties(bloom.ui.viewer_resident_project_swap_native
+        PROPERTIES SKIP_RETURN_CODE 77)
+
+    # Final contract dependency order: the runtime native acceptance gate lists these two writer
+    # fixtures in its own FIXTURES_REQUIRED (src/runtime/tests/CMakeLists.txt), because a test may
+    # not set a property on a test that lives in another directory. CTest then runs, in order, the
+    # runtime nonce setup, these writers, and the gate that reads their proofs.
 endif()
 
 # Device-free ViewerEditor view-coordinate oracle: fit / zoom-about-cursor / pan pinned against an

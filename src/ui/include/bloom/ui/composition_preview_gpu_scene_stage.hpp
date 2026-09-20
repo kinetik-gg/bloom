@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/runtime/gpu_ocio_display_arm.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 #include <bloom/runtime/preview_gpu_scene_stage.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
@@ -27,9 +28,20 @@ namespace bloom::ui {
 // PreviewGpuSceneStageStatus::UnsupportedGpuSubset (a succeeded outcome) so the caller takes the
 // full original CPU path; a semantic compile rejection is the distinct
 // PreviewGpuSceneStageStatus::Unsupported.
+//
+// `displayProgramService` is the off-UI general-display seam. When non-null the stage derives the
+// request's exact color binding from its project color identity (config URI, expected revision,
+// working color space) and prepares the OCIO DisplayRgba8 command for THAT binding on this CPU
+// worker. It then validates the returned program's binding against the request before carrying it
+// on the stage: a program prepared for another config, working space, or display/view (even with
+// the same names) is refused and the request takes the CPU fallback. When null (the compute-only /
+// no-tools path) the stage leaves the general program null and the service uses its startup fast
+// path or the CPU fallback. The service resolves tools and configs lazily on first use, so this
+// factory performs no I/O and no UI-thread work.
 [[nodiscard]] runtime::PreviewGpuSceneStageFunction makeCompositionPreviewGpuSceneStage(
     const runtime::SnapshotCompiler& compiler, const runtime::CpuGpuSceneBuilder& builder,
     const runtime::QualifiedDisplayProcessorProvider& qualifiedProcessorProvider,
-    CompiledPlanCacheHandle planCache = nullptr);
+    CompiledPlanCacheHandle planCache = nullptr,
+    std::shared_ptr<const runtime::GpuDisplayProgramService> displayProgramService = nullptr);
 
 } // namespace bloom::ui

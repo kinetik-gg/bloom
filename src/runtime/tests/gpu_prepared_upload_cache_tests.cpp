@@ -180,17 +180,36 @@ void testRepeatedReplacementAndFindStaysConsistent(Expectations& expectations) {
 }
 
 void testCoverageCacheEviction(Expectations& expectations) {
-    constexpr std::size_t coverageBytes = 64;
-    auto cache = std::make_shared<GpuSceneCoverageCache>(2 * coverageBytes);
-    const auto coverage =
-        std::make_shared<const std::vector<std::uint8_t>>(coverageBytes, std::uint8_t{7});
-    cache->store("a", coverage);
-    cache->store("b", coverage);
-    cache->store("c", coverage);
-    expectations.expect(cache->retainedBytes() <= 2 * coverageBytes,
+    // The coverage cache now retains immutable PathRasterCoverageGeometry (row ranges + spans), not
+    // an R8 mask. Its accounting is the ACTUAL ranges + spans bytes.
+    auto geometry = std::make_shared<bloom::runtime::GpuSceneCoverageGeometry>();
+    geometry->width = 4;
+    geometry->height = 4;
+    geometry->rows.resize(std::size_t{4} * 4U);
+    geometry->spans.resize(8U);
+    const std::uint64_t bytes = bloom::runtime::gpuSceneCoverageGeometryBytes(*geometry);
+    expectations.expect(bytes == 16U * sizeof(bloom::render::PathRasterCoverageRange) +
+                                     8U * sizeof(bloom::render::PathRasterCoverageSpan),
+                        "the charged coverage bytes are the actual row ranges + spans");
+
+    auto cache = std::make_shared<GpuSceneCoverageCache>(2U * bytes);
+    cache->store("a", geometry);
+    cache->store("b", geometry);
+    expectations.expect(cache->entryCount() == 2 && cache->retainedBytes() == 2U * bytes,
+                        "two equal geometries are retained at the exact byte accounting");
+    cache->store("c", geometry);
+    expectations.expect(cache->retainedBytes() <= 2U * bytes && cache->entryCount() == 2,
                         "the coverage cache byte ceiling is never exceeded across eviction");
-    expectations.expect(cache->find("c") != nullptr && cache->find("c") != nullptr,
-                        "the surviving coverage entry is served after an eviction");
+    expectations.expect(cache->find("c") != nullptr && cache->find("c").get() == geometry.get(),
+                        "the most recent coverage entry serves the shared geometry identity");
+    expectations.expect(cache->find("a") == nullptr && cache->find("b") != nullptr,
+                        "the least-recently-used coverage entry was evicted");
+    // Re-storing the same identity under an existing key replaces in place with no extra bytes.
+    cache->store("c", geometry);
+    expectations.expect(cache->retainedBytes() == 2U * bytes && cache->entryCount() == 2,
+                        "replacing an existing key keeps the byte accounting unchanged");
+    expectations.expect(cache->find("c").get() == geometry.get(),
+                        "the replaced entry still serves the shared geometry identity");
 }
 
 } // namespace

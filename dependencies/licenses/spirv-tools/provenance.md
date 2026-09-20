@@ -26,6 +26,8 @@ Reviewed: 2026-09-19
 
 ## Status
 
-- NOT QUALIFIED. Acquisition provenance only. No production prefix manifest exists. This component
-  builds a build-only validator tool; no end-user runtime artifact ships from it.
+- NOT QUALIFIED. Acquisition provenance only. No production prefix manifest exists. The validator
+  now ships as the runtime GPU shader-validation tool staged under `bloom-gpu-tools/`; the lock
+  records its shipping roles and every staged binary is digest-bound to this acquisition by the
+  generated inventory.
 - Verify with `spirv-val --version` against this record when the tool is used.

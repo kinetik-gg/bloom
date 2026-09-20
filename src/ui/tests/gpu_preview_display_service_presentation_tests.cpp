@@ -37,6 +37,7 @@
 #include <source_location>
 #include <string>
 #include <string_view>
+#include <sys/resource.h>
 #include <thread>
 #include <utility>
 
@@ -205,6 +206,17 @@ awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds tim
         std::this_thread::sleep_for(500us);
     }
     return std::nullopt;
+}
+
+// Isolated-fixture total-process CPU. The caller measures this across a quiet window in which the
+// UI thread only sleeps, so a busy owner service thread would show up as roughly one full core.
+[[nodiscard]] double processCpuSeconds() {
+    struct rusage usage{};
+    static_cast<void>(getrusage(RUSAGE_SELF, &usage));
+    return static_cast<double>(usage.ru_utime.tv_sec) +
+           static_cast<double>(usage.ru_utime.tv_usec) * 1e-6 +
+           static_cast<double>(usage.ru_stime.tv_sec) +
+           static_cast<double>(usage.ru_stime.tv_usec) * 1e-6;
 }
 
 [[nodiscard]] bloom::document::Snapshot makeSnapshot(const std::uint64_t id, std::string name) {
@@ -473,6 +485,53 @@ int runTests(int argc, char** argv) {
         expectations.expect(snapshot.state == GpuPresentationTargetState::Active,
                             "a rejected foreign lease did not quarantine the target");
     }
+
+    // Idle acceptance: frames presented, target Active, no pending request. The owner must wait on
+    // its wake hook rather than poll at full rate. The UI thread only sleeps here, so the isolated
+    // fixture's total process CPU over the quiet window is a direct busy-spin probe.
+    const double cpuBeforeIdle = processCpuSeconds();
+    const auto idleStart = std::chrono::steady_clock::now();
+    std::this_thread::sleep_for(2500ms);
+    const auto idleEnd = std::chrono::steady_clock::now();
+    const double idleCpuSeconds = processCpuSeconds() - cpuBeforeIdle;
+    const double idleWallSeconds = std::chrono::duration<double>(idleEnd - idleStart).count();
+    const double idleCoreFraction = idleCpuSeconds / idleWallSeconds;
+    expectations.expect(idleCoreFraction < 0.05,
+                        "the idle Active target owner used <5% of one core (" +
+                            std::to_string(idleCoreFraction * 100.0) + "% over " +
+                            std::to_string(idleWallSeconds) + "s)");
+    expectations.expect(client->status(attached.target).state == GpuPresentationTargetState::Active,
+                        "the idle target stayed Active across the quiet window");
+    std::cout << "idle owner CPU: " << idleCoreFraction * 100.0 << "% of one core over "
+              << idleWallSeconds << "s\n";
+
+    // Prompt progress after idle: a new frame is woken and applied within a generous timeout, so a
+    // missing wake surfaces as a hang rather than a tight latency race.
+    expectations.expect(
+        client->update(attached.target, 5U, makeUpdate(lease, 400U, 300U)).accepted(),
+        "a new frame after idle is admitted");
+    expectations.expect(
+        waitUntil([&] { return client->status(attached.target).appliedSequence >= 5U; }, 15s),
+        "the new frame after idle was applied (the idle wait was woken, not missed)");
+
+    // Cancel path after idle. Whether the cancel wins the race against the owner pump or reports a
+    // stale sequence, the non-brittle contract is: an accepted cancel never presents, and a raced
+    // cancel is reported as stale.
+    const std::uint64_t presentsBeforeCancel = client->status(attached.target).presentCount;
+    expectations.expect(
+        client->update(attached.target, 6U, makeUpdate(lease, 400U, 300U)).accepted(),
+        "the to-be-cancelled update is admitted");
+    const auto cancelResult = client->cancel(attached.target, 6U);
+    if (cancelResult.code == GpuPresentationPortCode::Accepted) {
+        std::this_thread::sleep_for(200ms);
+        expectations.expect(client->status(attached.target).presentCount == presentsBeforeCancel,
+                            "an accepted cancel suppressed its present");
+    } else {
+        expectations.expect(cancelResult.code == GpuPresentationPortCode::StaleSequence,
+                            "a cancel that lost the race reports a stale sequence");
+    }
+    expectations.expect(client->status(attached.target).state == GpuPresentationTargetState::Active,
+                        "the cancel path did not quarantine the target");
 
     // Documented host order: retire the first live target and prove its surface safe to destroy
     // while the service is still running.

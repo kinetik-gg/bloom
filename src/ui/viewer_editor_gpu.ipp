@@ -1,3 +1,20 @@
+void paintViewerCompositionFrame(QPainter& painter, const QRectF& displayRect) {
+    painter.setPen(QPen(kit::color(kit::Color::CompositionFrame), kit::kCompositionFrameWidth));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(
+        displayRect.adjusted(0.0, 0.0, -kit::kCompositionFrameWidth, -kit::kCompositionFrameWidth));
+}
+
+void paintViewerEmptyInvitation(QPainter& painter, const QRectF& canvasRect,
+                                const QString& invitation) {
+    if (invitation.isEmpty()) {
+        return;
+    }
+    painter.setFont(kit::font(kit::TypeRole::Ui));
+    painter.setPen(kit::color(kit::Color::Muted));
+    painter.drawText(canvasRect, Qt::AlignCenter, invitation);
+}
+
 void ViewerEditor::setGpuPresentationDependencies(
     std::shared_ptr<runtime::GpuPresentationClient> client, runtime::TaskScheduler* scheduler,
     std::string vulkanLoaderPath, const double devicePixelRatio) {
@@ -88,6 +105,9 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
         const auto descriptor = render::ReferenceDisplayBufferDescriptor::create(
             resident->displayWindow, resident->pixelAspect);
         if (descriptor) {
+            // The composition frame is part of the CPU paint (paintViewerContent); the native
+            // overlay must draw it too or a resident composition has no visible bounds at all.
+            paintViewerCompositionFrame(painter, displayRect);
             const ViewerMapping mapping{displayRect, composition->format(),
                                         frame->desiredIdentity().resolution, resident->pixelAspect,
                                         *descriptor.value()};
@@ -102,6 +122,10 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
         paintCreation(painter);
         paintPathTools(painter);
         paintTextEditing(painter);
+        // The empty-state invitation is drawn by paintEvent() on the CPU path, which resident
+        // presentation skips entirely; record it here so an active composition with no layers still
+        // invites a layer instead of reading as a bare checkerboard.
+        paintViewerEmptyInvitation(painter, canvasRect(), emptyStateInvitation());
         painter.end();
         if (!picture.isNull()) {
             request.overlay.picture = picture;
@@ -181,20 +205,44 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequestForTest() {
 }
 
 void ViewerEditor::updateGpuResidentPresentation() {
+    if (gpuPresentationUpdating_) {
+        // Re-entrant request from a controller callback during the outer update: drop it. The outer
+        // call already owns the coherent surface/geometry transition. This is defensive only -- the
+        // reported repaint/OOM depth was never established -- and never weakens a safety gate.
+        return;
+    }
+    gpuPresentationUpdating_ = true;
+    updateGpuResidentPresentationBody();
+    gpuPresentationUpdating_ = false;
+}
+
+void ViewerEditor::updateGpuResidentPresentationBody() {
     if (gpuResident_ == nullptr) {
         return;
     }
     const auto frame = displayedFrame();
+    if (gpuNativeRetirePending_) {
+        // A retire-before-unmap is in flight for a live target. Until it genuinely succeeds the
+        // container must stay mapped and the cover must stay raised; never hide, never present.
+        return;
+    }
     if (frame == nullptr ||
         frame->provenance().provider != runtime::PreviewDisplayProvider::GpuResident) {
         residentActive_ = false;
+        if (gpuResident_->hasLiveTarget()) {
+            // A live target must be retired asynchronously BEFORE the container is hidden:
+            // unmapping the window-container child can silently replace/destroy the VkSurfaceKHR
+            // and latch the presenter into its terminal Retained state, refusing every later
+            // present. The cover keeps the last native image hidden while the surface stays mapped.
+            requestResidentNativeRetire();
+            return;
+        }
+        // Nothing native is live: hiding the container mutates no surface. Expose the host's own
+        // CPU paint, never a permanently visible cover.
         if (gpuContainer_ != nullptr) {
             gpuContainer_->hide();
         }
-        // No resident frame: expose the host's own CPU paint, never a permanently visible cover.
-        if (gpuResident_ != nullptr) {
-            gpuResident_->concealCpuCover();
-        }
+        gpuResident_->concealCpuCover();
         gpuPresentedFrame_ = frame;
         gpuPresentedTransform_ = transform_;
         return;
@@ -209,12 +257,13 @@ void ViewerEditor::updateGpuResidentPresentation() {
     }
     const bool intended = gpuResident_->present(*frame, request);
     if (!intended) {
-        // Refusal / unsupported / stale lease: keep or restore the CPU paint and hide the native
-        // container. Never claim a blank activation.
+        // Refusal / unsupported / stale lease: keep or restore the CPU paint. Never claim a blank
+        // activation. Do NOT hide the container here: the target is still live, and unmapping the
+        // window-container child can silently replace/destroy the surface. Raise the current CPU
+        // cover so no stale native frame is exposed while the target stays mapped and safe to
+        // retire later.
         residentActive_ = false;
-        if (gpuContainer_ != nullptr) {
-            gpuContainer_->hide();
-        }
+        gpuResident_->revealCpuCover(contentRect().toRect());
         return;
     }
     if (QWidget* container = gpuResident_->container(); container != nullptr) {
@@ -350,6 +399,16 @@ void ViewerEditor::forwardGpuInput(const ViewerGpuInputEvent& event) {
     const QPointF origin = gpuContainer_ != nullptr ? QPointF(gpuContainer_->pos()) : QPointF{};
     const QPointF local = event.local + origin;
     const QPointF global = event.global;
+    // Native present routes input through the presenter's QWindow, which is NOT a descendant the
+    // workspace's own widget event filter watches. Calling the handlers directly would therefore
+    // bypass both that filter (panel activation) and Qt's normal delivery. Re-dispatch through
+    // QCoreApplication::sendEvent() so application and receiver event filters see the event exactly
+    // as they would for a click on the widget itself; the viewer is the correct receiver because
+    // `local` was translated into its coordinates above.
+    const auto dispatch = [this](QEvent* forwarded) {
+        static_cast<void>(QCoreApplication::sendEvent(this, forwarded));
+        updateGpuResidentPresentation();
+    };
     switch (event.kind) {
     case ViewerGpuInputKind::MousePress:
     case ViewerGpuInputKind::MouseRelease:
@@ -360,28 +419,19 @@ void ViewerEditor::forwardGpuInput(const ViewerGpuInputEvent& event) {
                                                              : QEvent::MouseButtonDblClick;
         QMouseEvent forwarded(type, local, local, global, event.button, event.buttons,
                               event.modifiers);
-        if (type == QEvent::MouseButtonPress) {
-            mousePressEvent(&forwarded);
-        } else if (type == QEvent::MouseButtonRelease) {
-            mouseReleaseEvent(&forwarded);
-        } else {
-            mouseDoubleClickEvent(&forwarded);
-        }
-        updateGpuResidentPresentation();
+        dispatch(&forwarded);
         break;
     }
     case ViewerGpuInputKind::MouseMove: {
         QMouseEvent forwarded(QEvent::MouseMove, local, local, global, Qt::NoButton, event.buttons,
                               event.modifiers);
-        mouseMoveEvent(&forwarded);
-        updateGpuResidentPresentation();
+        dispatch(&forwarded);
         break;
     }
     case ViewerGpuInputKind::Wheel: {
         QWheelEvent forwarded(local, global, event.pixelDelta, event.angleDelta, event.buttons,
                               event.modifiers, event.scrollPhase, event.inverted);
-        wheelEvent(&forwarded);
-        updateGpuResidentPresentation();
+        dispatch(&forwarded);
         break;
     }
     case ViewerGpuInputKind::KeyPress:
@@ -389,19 +439,13 @@ void ViewerEditor::forwardGpuInput(const ViewerGpuInputEvent& event) {
         QKeyEvent forwarded(event.kind == ViewerGpuInputKind::KeyPress ? QEvent::KeyPress
                                                                        : QEvent::KeyRelease,
                             event.key, event.modifiers, event.text, event.autoRepeat);
-        if (event.kind == ViewerGpuInputKind::KeyPress) {
-            keyPressEvent(&forwarded);
-        } else {
-            QWidget::keyReleaseEvent(&forwarded);
-        }
-        updateGpuResidentPresentation();
+        dispatch(&forwarded);
         break;
     }
     case ViewerGpuInputKind::InputMethod: {
         QInputMethodEvent forwarded;
         forwarded.setCommitString(event.text);
-        inputMethodEvent(&forwarded);
-        updateGpuResidentPresentation();
+        dispatch(&forwarded);
         break;
     }
     case ViewerGpuInputKind::FocusIn:
@@ -416,7 +460,7 @@ void ViewerEditor::forwardGpuInput(const ViewerGpuInputEvent& event) {
         break;
     case ViewerGpuInputKind::Leave: {
         QEvent forwarded(QEvent::Leave);
-        leaveEvent(&forwarded);
+        dispatch(&forwarded);
         break;
     }
     case ViewerGpuInputKind::GrabMouse:
@@ -439,37 +483,6 @@ bool ViewerEditor::hasLiveNativeTarget() const {
     return gpuResident_ != nullptr && gpuResident_->hasLiveTarget();
 }
 
-EditorNativeSurface::PrepareOutcome
-ViewerEditor::prepareNativeSurfaceMutation(const std::uint64_t generation,
-                                           PrepareCallback completion) {
-    if (gpuResident_ == nullptr) {
-        if (completion) {
-            completion(generation, PrepareResult{true, "no native surface implementation"});
-        }
-        return EditorNativeSurface::PrepareOutcome::NoLiveTarget;
-    }
-    return gpuResident_->prepareForMutation(generation, completion);
-}
-
-void ViewerEditor::resumeNativeSurfaceAfterMutation() {
-    if (gpuResident_ != nullptr) {
-        gpuResident_->resumeAfterMutation();
-        residentActive_ = false;
-        gpuPresentedFrame_.reset();
-        cpuFallbackFrame_.reset();
-        cpuFallbackIdentity_.reset();
-        cpuFallbackFailedIdentity_.reset();
-        if (cpuFallbackTask_.has_value()) {
-            cpuFallbackTask_->cancel();
-            cpuFallbackTask_.reset();
-        }
-        if (gpuContainer_ != nullptr) {
-            gpuContainer_->hide();
-            gpuContainer_ = nullptr;
-        }
-    }
-}
-
 std::string ViewerEditor::nativeSurfaceDiagnostic() const {
     return gpuResident_ != nullptr ? gpuResident_->mutationDiagnostic()
                                    : std::string{"no native surface implementation"};
@@ -487,6 +500,22 @@ std::size_t ViewerEditor::gpuPresentAttemptCountForTest() const noexcept {
 
 std::size_t ViewerEditor::gpuPresentAcceptedCountForTest() const noexcept {
     return gpuResident_ != nullptr ? gpuResident_->acceptedPresentCount() : 0U;
+}
+
+std::uint64_t ViewerEditor::gpuNativeAppliedSequenceForTest() const noexcept {
+    return gpuResident_ != nullptr ? gpuResident_->nativeAppliedSequence() : 0U;
+}
+
+std::uint64_t ViewerEditor::gpuNativePresentCountForTest() const noexcept {
+    return gpuResident_ != nullptr ? gpuResident_->nativePresentCount() : 0U;
+}
+
+std::uint64_t ViewerEditor::gpuNativeLastEnqueuedSequenceForTest() const noexcept {
+    return gpuResident_ != nullptr ? gpuResident_->nativeLastEnqueuedSequence() : 0U;
+}
+
+bool ViewerEditor::gpuCpuCoverVisibleForTest() const noexcept {
+    return gpuResident_ != nullptr && gpuResident_->cpuCoverVisibleForTest();
 }
 
 std::string ViewerEditor::gpuPresentationDiagnosticForTest() const {

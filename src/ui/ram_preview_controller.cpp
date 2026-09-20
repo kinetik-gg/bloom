@@ -60,13 +60,18 @@ RamPreviewController::RamPreviewController(CompositionSession& session,
     // A range must not mix factors or policies when the viewer changes resolution mid-run.
     connect(&previewController_, &CompositionPreviewController::resolutionChanged, this,
             &RamPreviewController::cancel);
+    // "Purge preview cache" ends any run: every frame it would still land belongs to the generation
+    // the command just retired, and cancel() detaches them so none can repopulate the cleared
+    // cache.
+    connect(&previewController_, &CompositionPreviewController::previewCachePurged, this,
+            &RamPreviewController::cancel);
 }
 
 RamPreviewController::~RamPreviewController() { cancelAndDetachActive(); }
 
 void RamPreviewController::start() {
     Q_ASSERT(QThread::currentThread() == thread());
-    if (caching_ || shuttingDown_ || !preparation_) {
+    if (caching_ || shuttingDown_ || !preparation_ || previewController_.cachePurgeGateActive()) {
         return;
     }
     const auto* composition = session_.composition();

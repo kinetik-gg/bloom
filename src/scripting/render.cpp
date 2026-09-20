@@ -1,9 +1,11 @@
 #include <bloom/scripting/render.hpp>
 
 #include <bloom/host/frame_export_publication.hpp>
+#include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/output_analysis_attempt_runner.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 
+#include <chrono>
 #include <system_error>
 #include <thread>
 #include <utility>
@@ -50,7 +52,9 @@ await(runtime::TaskHandle<Value>& handle, const std::function<bool()>& cancelled
 exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& plan,
                const core::RationalTime time, const output::OutputPresetV1 preset,
                const std::filesystem::path& destination, std::filesystem::path scratchDirectory,
-               output::ExportResourceLedgerV1& ledger, const std::function<bool()>& cancelled) {
+               output::ExportResourceLedgerV1& ledger,
+               const std::shared_ptr<host::GpuExportProvider>& gpuProvider,
+               const std::function<bool()>& cancelled) {
     const auto failed = [](std::string diagnostic) {
         return RenderResult{.succeeded = false,
                             .publishedFrames = 0,
@@ -69,12 +73,13 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
                        .resolution = runtime::CompositionFormatResolution{},
                        .quality = runtime::EvaluationQuality::Reference,
                        .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
-                       .pixelStorageByteLimit = std::size_t{512} * 1024U * 1024U},
+                       .pixelStorageByteLimit = runtime::defaultGpuProcessFrameByteBudget()},
         .targetPath = destination,
         .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
         .owner = {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(1)},
         .preset = preset,
-        .displayProcessorProvider = nullptr};
+        .displayProcessorProvider = nullptr,
+        .gpuProvider = gpuProvider};
     auto attemptBegin = host::beginOutputAnalysisAttemptV1(scheduler, *artifacts, ledger,
                                                            std::move(attemptRequest));
     if (!attemptBegin) {
@@ -90,23 +95,42 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
             std::this_thread::yield();
         }
     }
+    // Carry the geniune native provenance this attempt observed (empty for a CPU fallback) on every
+    // result that consumes the completed attempt, including its failure and non-approvable paths.
+    std::optional<host::OutputAnalysisAttemptGpuProvenanceV1> gpuProvenance;
+    if (*outcome) {
+        gpuProvenance = outcome->gpuProvenance();
+    }
+    const auto finish = [&gpuProvenance](RenderResult result) {
+        if (gpuProvenance.has_value()) {
+            result.gpuEvaluatedFrames = gpuProvenance->gpuEvaluated() ? 1U : 0U;
+            result.gpuNativeDispatches = gpuProvenance->counters.nativeDispatches;
+            result.gpuReadbacks = gpuProvenance->counters.readbacks;
+            result.gpuReadbackSubmissions = gpuProvenance->readbackSubmissions;
+            result.gpuTransferredPayloads = gpuProvenance->transferredPayloads;
+            result.gpuProcessPayloadBytes = gpuProvenance->processPayloadBytes;
+            result.gpuEncodedPayloadBytes = gpuProvenance->encodedPayloadBytes;
+            result.gpuDeviceOwnershipEpoch = gpuProvenance->deviceOwnershipEpoch;
+        }
+        return result;
+    };
     if (!*outcome) {
-        return failed("The output analysis failed");
+        return finish(failed("The output analysis failed"));
     }
     const auto attempt = outcome->attempt();
     const auto digest =
         attempt == nullptr ? std::optional<core::Sha256Digest>{} : attempt->digest();
     if (attempt == nullptr || !attempt->approvable() || !digest.has_value()) {
-        return {.succeeded = false,
-                .preservationReport =
-                    attempt == nullptr ? "preservation report unavailable" : reportText(*attempt),
-                .diagnostic = "The preservation report is not approvable"};
+        return finish({.succeeded = false,
+                       .preservationReport = attempt == nullptr ? "preservation report unavailable"
+                                                                : reportText(*attempt),
+                       .diagnostic = "The preservation report is not approvable"});
     }
     auto approval = host::approveFrameExportV1(*publication, attempt, *digest);
     if (!approval) {
-        return {.succeeded = false,
-                .preservationReport = reportText(*attempt),
-                .diagnostic = "The export could not be approved"};
+        return finish({.succeeded = false,
+                       .preservationReport = reportText(*attempt),
+                       .diagnostic = "The export could not be approved"});
     }
     auto request = std::move(approval).takeRequest();
     auto requestShared = std::shared_ptr<host::FrameExportRequestV1>(std::move(request));
@@ -118,10 +142,9 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
     std::error_code scratchError;
     std::filesystem::create_directories(scratchDirectory, scratchError);
     if (scratchError) {
-        return RenderResult{.succeeded = false,
-                            .publishedFrames = 0,
-                            .preservationReport = reportText(*attempt),
-                            .diagnostic = "The export scratch directory could not be created"};
+        return finish({.succeeded = false,
+                       .preservationReport = reportText(*attempt),
+                       .diagnostic = "The export scratch directory could not be created"});
     }
     const auto scratch = std::move(scratchDirectory);
     runtime::TaskRequest taskRequest(
@@ -145,10 +168,9 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
                 .suggestedAction = "Inspect the preservation and publication diagnostics."});
         });
     if (!submission.accepted()) {
-        return RenderResult{.succeeded = false,
-                            .publishedFrames = 0,
-                            .preservationReport = reportText(*attempt),
-                            .diagnostic = "The export publication task could not start"};
+        return finish({.succeeded = false,
+                       .preservationReport = reportText(*attempt),
+                       .diagnostic = "The export publication task could not start"});
     }
     auto taskResult = await(submission.handle, cancelled);
     const bool publicationSucceeded =
@@ -156,10 +178,10 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
     const bool succeeded = taskResult.has_value() &&
                            taskResult->state() == runtime::TaskState::Succeeded &&
                            publicationSucceeded;
-    return {.succeeded = succeeded,
-            .publishedFrames = succeeded ? 1U : 0U,
-            .preservationReport = reportText(*attempt),
-            .diagnostic = succeeded ? std::string{} : "The export publication failed"};
+    return finish({.succeeded = succeeded,
+                   .publishedFrames = succeeded ? 1U : 0U,
+                   .preservationReport = reportText(*attempt),
+                   .diagnostic = succeeded ? std::string{} : "The export publication failed"});
 }
 
 [[nodiscard]] RenderResult compilePlan(const document::Snapshot& snapshot,
@@ -212,7 +234,8 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
 
 RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
                          const runtime::SnapshotCompiler& compiler, RenderRequest request,
-                         std::filesystem::path scratchDirectory) {
+                         std::filesystem::path scratchDirectory,
+                         std::shared_ptr<host::GpuExportProvider> injectedGpuProvider) {
     const auto failed = [](std::string diagnostic) {
         return RenderResult{.succeeded = false,
                             .publishedFrames = 0,
@@ -238,6 +261,29 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
         return compileResult;
     }
     output::ExportResourceLedgerV1 ledger;
+    // GPU final-render provider for this whole render. When the caller injects one (the
+    // server-lifetime MCP provider), it is reused and NOT retired here -- the owner manages its
+    // lifetime. Otherwise this call creates its own, bootstrapped once on the scheduler's worker
+    // (never on the calling thread) and retired with proof before returning. The unchanged CPU
+    // reference path is the fallback whenever the device is disabled, unavailable, or the scene is
+    // outside the prepared-GPU subset.
+    const bool ownsGpuProvider = injectedGpuProvider == nullptr;
+    auto gpuProvider =
+        ownsGpuProvider ? host::GpuExportProvider::create() : std::move(injectedGpuProvider);
+    gpuProvider->prepare(scheduler);
+    // Headless callers are synchronous request threads (never the UI event loop): retire a locally
+    // owned evaluator owner and prove completion before this provider is destroyed. An injected
+    // provider is deliberately left alone, so a repeated still render in one server does not retire
+    // the shared provider after every frame.
+    struct GpuProviderShutdownGuard final {
+        std::shared_ptr<host::GpuExportProvider> provider;
+        bool owns;
+        ~GpuProviderShutdownGuard() {
+            if (owns && provider != nullptr) {
+                static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+            }
+        }
+    } gpuProviderShutdown{gpuProvider, ownsGpuProvider};
     if (request.range.has_value()) {
         const auto [first, last] = *request.range;
         host::FrameRangeRequestV1 range{.destination = request.destination,
@@ -252,9 +298,21 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
             [&](const host::FrameRangeFrameV1& frame) {
                 const auto current =
                     exportWithPlan(session, scheduler, plan, frame.time, request.preset, frame.path,
-                                   scratchDirectory, ledger, request.cancelled);
+                                   scratchDirectory, ledger, gpuProvider, request.cancelled);
+                aggregate.gpuEvaluatedFrames += current.gpuEvaluatedFrames;
+                aggregate.gpuNativeDispatches += current.gpuNativeDispatches;
+                aggregate.gpuReadbacks += current.gpuReadbacks;
+                aggregate.gpuReadbackSubmissions += current.gpuReadbackSubmissions;
+                aggregate.gpuTransferredPayloads += current.gpuTransferredPayloads;
+                aggregate.gpuProcessPayloadBytes += current.gpuProcessPayloadBytes;
+                aggregate.gpuEncodedPayloadBytes += current.gpuEncodedPayloadBytes;
+                if (current.gpuDeviceOwnershipEpoch != 0) {
+                    aggregate.gpuDeviceOwnershipEpoch = current.gpuDeviceOwnershipEpoch;
+                }
                 if (!current.succeeded) {
-                    aggregate = current;
+                    aggregate.succeeded = false;
+                    aggregate.preservationReport = current.preservationReport;
+                    aggregate.diagnostic = current.diagnostic;
                     return false;
                 }
                 aggregate.publishedFrames += 1;
@@ -281,7 +339,7 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
         return failed("Frame is outside the composition range");
     }
     return exportWithPlan(session, scheduler, plan, *time, request.preset, request.destination,
-                          std::move(scratchDirectory), ledger, request.cancelled);
+                          std::move(scratchDirectory), ledger, gpuProvider, request.cancelled);
 }
 
 } // namespace bloom::scripting

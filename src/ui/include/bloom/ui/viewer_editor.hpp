@@ -162,6 +162,23 @@ struct ViewTransform final {
 [[nodiscard]] bool cpuFallbackCompletionIsCurrent(const runtime::PreviewRequestIdentity& completed,
                                                   const runtime::PreviewRequestIdentity& current);
 
+// The display descriptor a viewer gesture maps against, from the CPU packed view or, for the
+// GPU-resident arm, its lease geometry. Geometry only: no pixels are read, copied, or
+// reconstructed. Nullopt when neither source yields a descriptor; at most one is expected.
+[[nodiscard]] std::optional<render::ReferenceDisplayBufferDescriptor>
+viewerDisplayDescriptorForFrame(std::optional<runtime::PreviewDisplayBufferView> cpuView,
+                                std::optional<ResidentFrameGeometry> residentFrame) noexcept;
+
+// The composition-frame border and the active composition's empty-state invitation, painted exactly
+// as the CPU paint path draws them. The GPU-resident overlay recording is the only paint on the
+// resident route, so it shares these: a resident composition still shows its bounds and an empty
+// one still invites a layer. Kept as two functions (rather than one combined paint) because the CPU
+// path draws the border beneath the guides and the invitation above everything; both are directly
+// testable without a GPU device.
+void paintViewerCompositionFrame(QPainter& painter, const QRectF& displayRect);
+void paintViewerEmptyInvitation(QPainter& painter, const QRectF& canvasRect,
+                                const QString& invitation);
+
 // Returns a new (fitToWindow == false) transform stepped by `factor` (>1 zooms in, <1 zooms out)
 // such that the composition point under `screenPoint` -- expressed as `screenPoint`'s fractional
 // position across the CURRENT viewTransformedDisplayRect() -- lands under `screenPoint` again after
@@ -228,6 +245,10 @@ class ViewerEditor final : public QWidget,
     [[nodiscard]] ViewTransform viewTransformForTest() const noexcept;
     [[nodiscard]] QRectF canvasRectForTest() const { return canvasRect(); }
     [[nodiscard]] QRectF contentRectForTest() const { return contentRect(); }
+    // The invitation the empty canvas paints ("Create a composition to begin" with no active
+    // composition, "Create a layer to begin" for an active composition that has no layers, empty
+    // once there is content).
+    [[nodiscard]] QString emptyStateInvitationTextForTest() const { return emptyStateInvitation(); }
     [[nodiscard]] QString statusBarReadoutTextForTest() const;
     [[nodiscard]] kit::KDropdown* zoomDropdownForTest() const noexcept;
     // Task VIEW-1's own seams, on the same terms as the four above.
@@ -255,6 +276,17 @@ class ViewerEditor final : public QWidget,
     [[nodiscard]] bool gpuResidentConfiguredForTest() const noexcept;
     [[nodiscard]] std::size_t gpuPresentAttemptCountForTest() const noexcept;
     [[nodiscard]] std::size_t gpuPresentAcceptedCountForTest() const noexcept;
+    // Genuine owner-observed native present progress (read-only; mailbox admission does not advance
+    // it). A caller proving a specific request was presented waits until
+    // gpuNativeAppliedSequenceForTest() >= gpuNativeLastEnqueuedSequenceForTest().
+    [[nodiscard]] std::uint64_t gpuNativeAppliedSequenceForTest() const noexcept;
+    [[nodiscard]] std::uint64_t gpuNativePresentCountForTest() const noexcept;
+    [[nodiscard]] std::uint64_t gpuNativeLastEnqueuedSequenceForTest() const noexcept;
+    // Read-only native cover/container state: the native CPU cover must never stay visible once a
+    // genuine present is acknowledged (it would occlude the resident image and intercept input),
+    // and the container must be the viewer's live native child. No behavior change.
+    [[nodiscard]] bool gpuCpuCoverVisibleForTest() const noexcept;
+    [[nodiscard]] QWidget* gpuNativeContainerForTest() const noexcept { return gpuContainer_; }
     [[nodiscard]] std::string gpuPresentationDiagnosticForTest() const;
     void pollGpuResidentForTest();
     // Renders the actual cover handoff pixmap for the current CPU content (test seam).
@@ -262,10 +294,27 @@ class ViewerEditor final : public QWidget,
     // Test-only: inject the adapter's private port seam so a CPU-only fixture can drive the
     // controller without a device. The product never calls this.
     void setGpuPresentationPortForTest(std::shared_ptr<ViewerGpuPort> port);
+    // Test-only: simulate an internal or external retirement already in flight (no presenter
+    // needed), settle the internal one, and read the external completion generation, so the
+    // fold-in/refusal contract is testable without a device.
+    void simulateNativeRetireInFlightForTest();
+    void simulateExternalRetireInFlightForTest();
+    void finishSimulatedNativeRetireForTest(bool safeToMutate, const std::string& diagnostic = {});
+    // Drives the standalone external retirement completion (the queued body) with the given host
+    // generation, so the unsafe-clear / safe-preserve / stale contract is testable without a
+    // presenter.
+    void finishSimulatedExternalRetireForTest(std::uint64_t hostGeneration, bool safeToMutate,
+                                              const PrepareCallback& completion,
+                                              const std::string& diagnostic = {});
+    [[nodiscard]] std::uint64_t hostMutationGenerationForTest() const noexcept;
     // Test-only: the resident present request the viewer would submit for the current transform,
     // channel, and background. Device-free, so a test can prove the GPU surround matches the CPU
     // drawCanvasBackground() paint for every background mode.
     [[nodiscard]] ResidentPresentRequest buildResidentPresentRequestForTest();
+    // Test-only: drive one already-translated native input event through the real dispatch path so
+    // a test can prove it reaches receiver event filters (workspace panel activation) instead of
+    // only the handler.
+    void forwardGpuInputForTest(const ViewerGpuInputEvent& event) { forwardGpuInput(event); }
 
   signals:
     void probeChanged(ProbeReadout readout);
@@ -314,6 +363,9 @@ class ViewerEditor final : public QWidget,
     // The whole content area: right of the tool column, above the footer. The surround fills it.
     [[nodiscard]] QRectF contentRect() const;
     [[nodiscard]] QRectF canvasRect() const;
+    // The empty-canvas invitation for the current session: composition wording when no composition
+    // is active, layer wording when an active composition has no layers, empty once it has content.
+    [[nodiscard]] QString emptyStateInvitation() const;
 
     // describe no longer belongs to this widget's own geometry.
     [[nodiscard]] QRectF statusBarRect() const;
@@ -388,11 +440,36 @@ class ViewerEditor final : public QWidget,
     // through the adapter, records the overlays as an immutable QPicture for off-thread raster, and
     // forwards the native window input back through the real event handlers with the container
     // origin added exactly once.
+    //
+    // updateGpuResidentPresentation() is a re-entrancy-guarded dispatcher; the body is separate so
+    // a controller callback fired from a present cannot re-enter the surface/geometry transition.
     void updateGpuResidentPresentation();
+    void updateGpuResidentPresentationBody();
     void pollGpuResident();
     void requestResidentCpuFallback();
     void pollResidentCpuFallback();
     void forwardGpuInput(const ViewerGpuInputEvent& event);
+    // Retire-before-unmap for a live target on the blank/no-frame transition: raise the host's
+    // CURRENT CPU paint over the still-mapped container, request the adapter's async retire, and
+    // only clear the container and reset the adapter after a genuine SafeToMutate. A Retained or
+    // refused answer leaves the surface mapped and never fabricates safety.
+    void requestResidentNativeRetire();
+    // Completion of requestResidentNativeRetire(): drops the container handle BEFORE the presenter
+    // reset and resolves folded-in host mutations; Retained keeps everything mapped. Never runs
+    // inline from the presenter's retire stack.
+    void onResidentNativeRetireResult(std::uint64_t generation, bool safeToMutate,
+                                      const std::string& diagnostic);
+    // Delivers the standalone external mutation completion (the queued body). On an unsafe result
+    // it clears gpuHostMutationPending_ BEFORE invoking the host completion, because the host gate
+    // never resumes an unsafe entry and the completion may destroy this editor or start another
+    // generation. A safe result keeps the gate pending until resumeNativeSurfaceAfterMutation().
+    void onExternalNativeRetireResult(std::uint64_t generation, std::uint64_t hostGeneration,
+                                      bool safeToMutate, const std::string& diagnostic,
+                                      const PrepareCallback& completion);
+    // Resolves the single external mutation folded into an in-flight internal retirement; it is
+    // delivered during the queued internal resolution, never on the presenter's own stack.
+    void resolveGpuHostMutationWaiters(bool safeToMutate, const std::string& diagnostic);
+    void clearGpuContainer();
     [[nodiscard]] bool residentFrameIsDisplayed() const;
     // The frame the CPU paint path should draw: the live frame for a CPU arm, the same-request CPU
     // fallback (or the last CPU frame) while a resident present is pending/failed, and nothing
@@ -592,6 +669,24 @@ class ViewerEditor final : public QWidget,
     // is never reparented or destroyed while a target is live (the host gate retires first).
     std::unique_ptr<ViewerGpuResidentController> gpuResident_;
     QWidget* gpuContainer_ = nullptr;
+    // True only while the blank/no-frame transition is retiring a live target before it may unmap
+    // the container; the update path must not hide it or start a second retire while pending.
+    bool gpuNativeRetirePending_ = false;
+    // Bumped on every resolution, resume, or teardown so a stale queued retire is discarded.
+    std::uint64_t gpuNativeRetireGeneration_ = 0;
+    // True while an external EditorNativeSurface mutation owns the presenter's single retire slot.
+    bool gpuHostMutationPending_ = false;
+    // The single host request folded into an in-flight internal retirement; a second is refused.
+    struct GpuHostMutationWaiter final {
+        std::uint64_t generation = 0;
+        PrepareCallback completion;
+    };
+    std::optional<GpuHostMutationWaiter> gpuHostMutationWaiter_;
+    // Monotonic token for an external mutation's queued completion; bumping it discards a
+    // superseded delivery (the presenter invokes its callback inline, so it is queued).
+    std::uint64_t gpuHostMutationGeneration_ = 0;
+    // Defensive re-entrancy guard; the repaint/OOM report depth was never established.
+    bool gpuPresentationUpdating_ = false;
     QTimer* gpuResidentTimer_ = nullptr;
     bool residentActive_ = false;
     PreparedPreviewFrameHandle lastCpuFrame_;

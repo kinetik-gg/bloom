@@ -154,6 +154,15 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
     key.add(selection.frame != nullptr);
     key.add(selection.warning);
     selection.cacheKey = key.bytes();
+    // Decode-only identity for the raw codec-side preparation. It deliberately omits the input and
+    // working colour spaces, config revision, display and proxy so a changed working space reuses
+    // the decoded frame.
+    OperationKey decodeKey;
+    decodeKey.add(std::string{"gpu-raw-video-prep-v1"});
+    decodeKey.add(std::string(digest.begin(), digest.end()));
+    decodeKey.add(stream->id);
+    decodeKey.add(index);
+    selection.decodeKey = decodeKey.digest();
     return selection;
 }
 } // namespace bloom::runtime::detail
@@ -168,4 +177,5 @@ std::shared_ptr<detail::VideoSourceContext> CpuCompositionEvaluator::videoContex
 void CpuCompositionEvaluator::setVideoCacheByteBudget(std::size_t budget) const {
     videoContext()->cache.setByteBudget(budget);
 }
+void CpuCompositionEvaluator::clearDecodedVideoCache() const { videoContext()->cache.clear(); }
 } // namespace bloom::runtime

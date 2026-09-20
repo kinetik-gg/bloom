@@ -42,6 +42,14 @@ struct Work {
     std::optional<Unavailable> error;
     std::uint64_t encoded = 0;
     core::Sha256Hasher approvals;
+    std::uint64_t gpuEvaluatedFrames = 0;
+    std::uint64_t gpuNativeDispatches = 0;
+    std::uint64_t gpuReadbacks = 0;
+    std::uint64_t gpuReadbackSubmissions = 0;
+    std::uint64_t gpuTransferredPayloads = 0;
+    std::uint64_t gpuProcessPayloadBytes = 0;
+    std::uint64_t gpuEncodedPayloadBytes = 0;
+    std::uint64_t gpuDeviceOwnershipEpoch = 0;
     std::unique_ptr<output::OutputAnalysisAttemptTargetV1> target;
     std::optional<SequenceExportResultV1> result;
     explicit Work(SequenceExportRequestV1 r) : request(std::move(r)) {}
@@ -262,6 +270,14 @@ struct Work {
         SequenceExportResultV1 outcome;
         outcome.evidence = std::move(evidence);
         outcome.encodedFrames = encoded;
+        outcome.gpuEvaluatedFrames = gpuEvaluatedFrames;
+        outcome.gpuNativeDispatches = gpuNativeDispatches;
+        outcome.gpuReadbacks = gpuReadbacks;
+        outcome.gpuReadbackSubmissions = gpuReadbackSubmissions;
+        outcome.gpuTransferredPayloads = gpuTransferredPayloads;
+        outcome.gpuProcessPayloadBytes = gpuProcessPayloadBytes;
+        outcome.gpuEncodedPayloadBytes = gpuEncodedPayloadBytes;
+        outcome.gpuDeviceOwnershipEpoch = gpuDeviceOwnershipEpoch;
         if (guardResult.status() == PublicationGuardStatus::Entered) {
             auto guard = std::move(guardResult).takeGuard();
             outcome.publication = lease.publish(platform::PublicationDisposition::Proceed);
@@ -364,6 +380,14 @@ struct SequenceExportRunnerV1::State {
             fail({Error::InvalidValue, "Frame has no exact composition time"});
             return;
         }
+        // The per-frame preservation check compares the prepared float frame before encoding.
+#if defined(__APPLE__)
+        // The TIFF preset's adapter is unavailable on macOS (no FFmpeg worker), which made
+        // every video export unapprovable; use the always-available flat-EXR analyzer instead.
+        const auto preset = output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1;
+#else
+        const auto preset = output::OutputPresetV1::TiffRgba16SrgbV1;
+#endif
         OutputAnalysisAttemptRequestV1 request{
             .plan = work->plan,
             .evaluation = {.time = *time,
@@ -371,19 +395,13 @@ struct SequenceExportRunnerV1::State {
                            .resolution = runtime::CompositionFormatResolution{},
                            .quality = runtime::EvaluationQuality::Reference,
                            .colorIntent = work->colorIntent(),
-                           .pixelStorageByteLimit = 1024ULL * 1024U * 1024U,
+                           .pixelStorageByteLimit = runtime::defaultGpuProcessFrameByteBudget(),
                            .bypassLookNodes = false},
             .targetPath = work->request.range.destination,
             .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
             .owner = owner,
-        // The per-frame preservation check compares the prepared float frame before encoding.
-#if defined(__APPLE__)
-            // The TIFF preset's adapter is unavailable on macOS (no FFmpeg worker), which made
-            // every video export unapprovable; use the always-available flat-EXR analyzer instead.
-            .preset = output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1};
-#else
-            .preset = output::OutputPresetV1::TiffRgba16SrgbV1};
-#endif
+            .preset = preset,
+            .gpuProvider = work->request.gpuProvider};
         auto begin = beginOutputAnalysisAttemptV1(scheduler, artifacts, ledger, std::move(request));
         if (!begin) {
             fail({Error::Busy, "Frame analysis admission refused"});
@@ -478,6 +496,19 @@ void SequenceExportRunnerV1::poll() {
         if (!outcome)
             return;
         s.attemptRunner.reset();
+        if (const auto& provenance = outcome->gpuProvenance();
+            provenance.has_value() && provenance->gpuEvaluated()) {
+            ++s.work->gpuEvaluatedFrames;
+            s.work->gpuNativeDispatches += provenance->counters.nativeDispatches;
+            s.work->gpuReadbacks += provenance->counters.readbacks;
+            s.work->gpuReadbackSubmissions += provenance->readbackSubmissions;
+            s.work->gpuTransferredPayloads += provenance->transferredPayloads;
+            s.work->gpuProcessPayloadBytes += provenance->processPayloadBytes;
+            s.work->gpuEncodedPayloadBytes += provenance->encodedPayloadBytes;
+            if (provenance->deviceOwnershipEpoch != 0) {
+                s.work->gpuDeviceOwnershipEpoch = provenance->deviceOwnershipEpoch;
+            }
+        }
         if (s.work->isCancelled()) {
             s.fail({Error::Cancelled, "Composition export cancelled"});
             return;

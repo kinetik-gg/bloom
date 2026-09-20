@@ -11,6 +11,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
@@ -26,16 +27,23 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
+#include <bloom/render/display_buffer.hpp>
 #include <bloom/render/gpu_present_image.hpp>
+#include <bloom/render/image_types.hpp>
 #include <bloom/runtime/gpu_presentation_coordinator.hpp>
+#include <bloom/runtime/prepared_preview_frame.hpp>
+#include <bloom/ui/viewer_gpu_resident.hpp>
 
 #include "viewer_gpu_presenter_port.hpp"
 
 #include <QApplication>
+#include <QColor>
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QEvent>
 #include <QEventLoop>
 #include <QImage>
+#include <QPainter>
 #include <QPixmap>
 
 #include <chrono>
@@ -65,6 +73,21 @@ class Expectations final {
 
   private:
     int failures_ = 0;
+};
+
+// Counts MouseButtonPress events delivered to the widget it filters, proving native input is
+// re-dispatched through Qt (which runs receiver event filters) rather than only the handler.
+class PressFilter final : public QObject {
+  public:
+    int presses = 0;
+
+  protected:
+    bool eventFilter(QObject*, QEvent* event) override {
+        if (event->type() == QEvent::MouseButtonPress) {
+            ++presses;
+        }
+        return false;
+    }
 };
 
 // A port that reports no usable borrowed instance, so the presenter stays
@@ -251,9 +274,459 @@ void testViewerEditorResidentGateIsInertAndKeepsCpuPaint(Expectations& expectati
     expectations.expect(ui::cpuFallbackCompletionIsCurrent(newer, newer),
                         "the matching fallback completion is current");
 
+    // 7. Native-present input is re-dispatched through Qt, so a receiver event filter (the
+    // workspace's panel-activation filter) sees it. A direct mousePressEvent() call would bypass
+    // that filter entirely and leave the panel inactive even though the click landed.
+    PressFilter pressFilter;
+    viewer.installEventFilter(&pressFilter);
+    ui::ViewerGpuInputEvent press;
+    press.kind = ui::ViewerGpuInputKind::MousePress;
+    press.local = QPointF(12.0, 9.0);
+    press.global = QPointF(12.0, 9.0);
+    press.button = Qt::LeftButton;
+    press.buttons = Qt::LeftButton;
+    viewer.forwardGpuInputForTest(press);
+    expectations.expect(pressFilter.presses == 1,
+                        "forwarded native input runs receiver event filters, not just the handler");
+
+    // 8. With no live target the host may mutate synchronously; the completion is answered in the
+    // call (never queued, so a later request cannot supersede it).
+    bool externalCalled = false;
+    const auto externalOutcome = viewer.prepareNativeSurfaceMutation(
+        30, [&](const std::uint64_t generation, const ui::EditorNativeSurface::PrepareResult&) {
+            expectations.expect(generation == 30, "the no-live-target generation is echoed");
+            externalCalled = true;
+        });
+    expectations.expect(externalOutcome == ui::EditorNativeSurface::PrepareOutcome::NoLiveTarget,
+                        "with no live target the host may mutate synchronously");
+    expectations.expect(externalCalled,
+                        "the no-live-target completion is answered synchronously, not queued");
+
+    // 8b. While an EXTERNAL retirement is already pending, a duplicate request must be refused
+    // WITHOUT bumping the completion generation: superseding the first queued completion would hang
+    // the host gate.
+    viewer.simulateExternalRetireInFlightForTest();
+    const std::uint64_t externalGeneration = viewer.hostMutationGenerationForTest();
+    bool firstDuplicateCalled = false;
+    expectations.expect(
+        viewer.prepareNativeSurfaceMutation(
+            50,
+            [&](const std::uint64_t, const ui::EditorNativeSurface::PrepareResult&) {
+                firstDuplicateCalled = true;
+            }) == ui::EditorNativeSurface::PrepareOutcome::Refused,
+        "a duplicate external request is refused while one is already pending");
+    bool secondDuplicateCalled = false;
+    expectations.expect(
+        viewer.prepareNativeSurfaceMutation(
+            51,
+            [&](const std::uint64_t, const ui::EditorNativeSurface::PrepareResult&) {
+                secondDuplicateCalled = true;
+            }) == ui::EditorNativeSurface::PrepareOutcome::Refused,
+        "a further duplicate external request is also refused");
+    expectations.expect(viewer.hostMutationGenerationForTest() == externalGeneration,
+                        "a refused duplicate never advances the external completion generation");
+    expectations.expect(!firstDuplicateCalled && !secondDuplicateCalled,
+                        "refused duplicates are never answered as safe");
+    viewer.resumeNativeSurfaceAfterMutation();
+    expectations.expect(viewer.hostMutationGenerationForTest() != externalGeneration,
+                        "an external resume invalidates stale queued completions");
+
+    // 9. While an internal blank retirement owns the presenter's retire slot, a host request folds
+    // into it (RetirePending) and is answered later with the truthful result; a second concurrent
+    // request is refused explicitly rather than coalesced or answered as safe.
+    viewer.simulateNativeRetireInFlightForTest();
+    bool foldedCalled = false;
+    bool foldedSafe = false;
+    const auto folded = viewer.prepareNativeSurfaceMutation(
+        40, [&](const std::uint64_t generation, const ui::EditorNativeSurface::PrepareResult& r) {
+            expectations.expect(generation == 40, "the folded generation is echoed");
+            foldedCalled = true;
+            foldedSafe = r.safeToMutate;
+        });
+    expectations.expect(folded == ui::EditorNativeSurface::PrepareOutcome::RetirePending,
+                        "the host request folds into the in-flight internal retirement");
+    expectations.expect(!foldedCalled, "the folded completion is never delivered inline");
+    bool secondCalled = false;
+    const auto second = viewer.prepareNativeSurfaceMutation(
+        41, [&](const std::uint64_t, const ui::EditorNativeSurface::PrepareResult&) {
+            secondCalled = true;
+        });
+    expectations.expect(second == ui::EditorNativeSurface::PrepareOutcome::Refused,
+                        "a second concurrent host request is refused explicitly");
+    expectations.expect(!secondCalled, "the refused request is never answered as safe");
+    viewer.finishSimulatedNativeRetireForTest(true, "simulated retire");
+    expectations.expect(foldedCalled && foldedSafe,
+                        "the folded completion is delivered once with the truthful safe result");
+    expectations.expect(!secondCalled, "the refused request stays unanswered");
+    QApplication::processEvents();
+
     controller.beginShutdown();
     bridge.beginShutdown();
     (void)waitUntil([&] { return scheduler.isQuiescent(); });
+}
+
+// Regression for the standalone external retirement completion. The host retirement gate never
+// resumes an unsafe (Retained/unproven) entry, so the editor must clear its own mutation gate when
+// the queued external completion reports unsafe, and it must do so BEFORE the host completion runs
+// (that completion may destroy the editor or start another generation). A safe completion must keep
+// the gate pending until the host resumes, and a stale generation must be ignored. Device-free: the
+// completion handler is driven through the shared test seam, with no presenter and no device.
+void testViewerEditorExternalUnsafeCompletionClearsMutationGate(Expectations& expectations) {
+    auto newProject = makeTestProject("Viewer external unsafe completion");
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+
+    runtime::NodeDefinitionRegistry definitions;
+    expectations.expect(runtime::registerBuiltInNodeDefinitions(definitions),
+                        "the fixture registers built-in node definitions");
+    definitions.freeze();
+    runtime::SnapshotCompiler compiler(definitions);
+    const runtime::CpuCompositionEvaluator evaluator;
+    const runtime::CpuReferenceDisplayPreparer displayPreparer;
+    runtime::QualifiedDisplayProcessorProvider qualifiedProvider;
+    auto pipeline =
+        ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer, qualifiedProvider);
+    ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline);
+    // Stack lifetime (no Qt-parented heap widget): the analyzer's parent-ownership false positive
+    // cannot fire on a stack widget.
+    ui::ViewerEditor viewer(session, controller);
+    viewer.resize(320, 240);
+    viewer.show();
+
+    // 1. Unsafe external completion: the gate must be clear BEFORE the host completion observes it,
+    // so a later mutation is admitted instead of being refused forever by a latched gate. A live
+    // (Retained) target would keep the real presenter refusing new retires; that terminal safety is
+    // not simulated here.
+    viewer.simulateExternalRetireInFlightForTest();
+    const std::uint64_t unsafeGeneration = viewer.hostMutationGenerationForTest();
+    bool unsafeCalled = false;
+    bool admittedDuringCompletion = false;
+    viewer.finishSimulatedExternalRetireForTest(
+        unsafeGeneration, false,
+        [&](const std::uint64_t generation, const ui::EditorNativeSurface::PrepareResult& result) {
+            unsafeCalled = true;
+            expectations.expect(generation == unsafeGeneration,
+                                "the external completion echoes its generation");
+            expectations.expect(!result.safeToMutate, "an unsafe result is never reported safe");
+            admittedDuringCompletion =
+                viewer.prepareNativeSurfaceMutation(
+                    70, [](std::uint64_t, const ui::EditorNativeSurface::PrepareResult&) {}) ==
+                ui::EditorNativeSurface::PrepareOutcome::NoLiveTarget;
+        },
+        "the presentation owner is gone; the surface is retained");
+    expectations.expect(unsafeCalled, "the unsafe external completion reaches the host gate");
+    expectations.expect(admittedDuringCompletion,
+                        "the pending gate is cleared before the external completion runs");
+    bool afterUnsafeCalled = false;
+    expectations.expect(
+        viewer.prepareNativeSurfaceMutation(
+            71, [&](std::uint64_t,
+                    const ui::EditorNativeSurface::PrepareResult&) { afterUnsafeCalled = true; }) ==
+            ui::EditorNativeSurface::PrepareOutcome::NoLiveTarget,
+        "an unsafe external completion leaves the editor unlatched for later mutations");
+    expectations.expect(afterUnsafeCalled, "the unlatched mutation is answered");
+
+    // 2. Safe external completion: the gate stays pending until the host resumes, so a duplicate
+    // request is still refused and only resumeNativeSurfaceAfterMutation() releases it.
+    viewer.simulateExternalRetireInFlightForTest();
+    const std::uint64_t safeGeneration = viewer.hostMutationGenerationForTest();
+    bool safeCalled = false;
+    bool safeResult = false;
+    viewer.finishSimulatedExternalRetireForTest(
+        safeGeneration, true,
+        [&](const std::uint64_t, const ui::EditorNativeSurface::PrepareResult& result) {
+            safeCalled = true;
+            safeResult = result.safeToMutate;
+        },
+        "the surface is proven retired");
+    expectations.expect(safeCalled && safeResult, "the safe external completion is delivered");
+    bool duplicateCalled = false;
+    expectations.expect(viewer.prepareNativeSurfaceMutation(
+                            72,
+                            [&](std::uint64_t, const ui::EditorNativeSurface::PrepareResult&) {
+                                duplicateCalled = true;
+                            }) == ui::EditorNativeSurface::PrepareOutcome::Refused,
+                        "a safe external completion keeps the gate pending until the host resumes");
+    expectations.expect(!duplicateCalled, "the pending-gate duplicate is never answered as safe");
+    viewer.resumeNativeSurfaceAfterMutation();
+    expectations.expect(
+        viewer.prepareNativeSurfaceMutation(
+            73, [](std::uint64_t, const ui::EditorNativeSurface::PrepareResult&) {}) ==
+            ui::EditorNativeSurface::PrepareOutcome::NoLiveTarget,
+        "the host resume releases the gate after a safe external completion");
+
+    // 3. A stale external completion from a superseded generation is ignored: it neither delivers
+    // nor clears the current pending gate.
+    viewer.simulateExternalRetireInFlightForTest();
+    const std::uint64_t staleGeneration = viewer.hostMutationGenerationForTest();
+    viewer.simulateExternalRetireInFlightForTest();
+    bool staleCalled = false;
+    viewer.finishSimulatedExternalRetireForTest(
+        staleGeneration, false,
+        [&](std::uint64_t, const ui::EditorNativeSurface::PrepareResult&) { staleCalled = true; },
+        "a superseded retained result");
+    expectations.expect(!staleCalled, "a stale external completion is discarded");
+    bool currentDuplicateCalled = false;
+    expectations.expect(viewer.prepareNativeSurfaceMutation(
+                            74,
+                            [&](std::uint64_t, const ui::EditorNativeSurface::PrepareResult&) {
+                                currentDuplicateCalled = true;
+                            }) == ui::EditorNativeSurface::PrepareOutcome::Refused,
+                        "a stale completion never releases the current pending gate");
+    expectations.expect(!currentDuplicateCalled, "the current gate stays unanswered");
+    viewer.resumeNativeSurfaceAfterMutation();
+
+    controller.beginShutdown();
+    bridge.beginShutdown();
+    (void)waitUntil([&] { return scheduler.isQuiescent(); });
+}
+
+void testResidentFrameGeometryResolvesTheSameMappingDescriptor(Expectations& expectations) {
+    // Direct manipulation resolves its display descriptor from EITHER the CPU packed buffer view OR
+    // the GPU-resident lease's immutable geometry. A resident frame has no CPU buffer
+    // (displayBufferView() is nullopt by construction), so currentMapping() previously refused
+    // every resident gesture; this pins that the resident arm resolves geometry-only, with no
+    // readback and no fabricated buffer. A synthetic ResidentFrameGeometry is used because the
+    // production resident lease requires a real GPU device, but the descriptor depends only on the
+    // geometry the lease exposes.
+    const auto extent = render::ImageExtent::create(1920, 1080);
+    const auto window = render::ImageWindow::create(-2, 5, 1920, 1080);
+    expectations.expect(extent.hasValue() && window.hasValue(), "fixture geometry is valid");
+    if (!extent.hasValue() || !window.hasValue()) {
+        return;
+    }
+    const auto pixelAspect = core::PixelAspectRatio::square();
+    const auto expected =
+        render::ReferenceDisplayBufferDescriptor::create(*window.value(), pixelAspect);
+    expectations.expect(expected.hasValue(), "the fixture descriptor is valid");
+    if (!expected.hasValue()) {
+        return;
+    }
+
+    const runtime::PreviewDisplayBufferView cpuView{
+        .displayWindow = *window.value(),
+        .pixelAspect = pixelAspect,
+        .layout = render::PackedImageLayout{0, 0, 0},
+        .pixels = {},
+        .isOcioQualified = false,
+    };
+
+    const ui::ResidentFrameGeometry residentGeometry{
+        .displayExtent = *extent.value(),
+        .displayWindow = *window.value(),
+        .pixelAspect = pixelAspect,
+        .lease = {},
+    };
+
+    const auto fromCpu = ui::viewerDisplayDescriptorForFrame(cpuView, std::nullopt);
+    const auto fromResident = ui::viewerDisplayDescriptorForFrame(std::nullopt, residentGeometry);
+    expectations.expect(fromCpu.has_value() && fromResident.has_value(),
+                        "both the CPU buffer and the resident lease resolve a descriptor");
+    if (fromCpu.has_value() && fromResident.has_value()) {
+        expectations.expect(*fromCpu == *fromResident,
+                            "resident geometry maps exactly like the equivalent CPU buffer view");
+        expectations.expect(*fromResident == *expected.value(),
+                            "the resident descriptor is the lease's own geometry, not a readback");
+    }
+    expectations.expect(
+        !ui::viewerDisplayDescriptorForFrame(std::nullopt, std::nullopt).has_value(),
+        "neither source yields no descriptor");
+}
+
+void testCompositionFrameChromePaintsWithoutADevice(Expectations& expectations) {
+    // The resident overlay is the only paint on the GPU route; it records the same composition
+    // frame border and empty-state invitation the CPU path draws. Both are painted here with no
+    // device, so the shared helpers can never silently stop emitting visible ink.
+    const QRectF displayRect(30.0, 20.0, 180.0, 100.0);
+    const QRectF canvasRect(0.0, 0.0, 240.0, 140.0);
+
+    QImage canvas(240, 140, QImage::Format_ARGB32_Premultiplied);
+    canvas.fill(Qt::transparent);
+    QPainter painter(&canvas);
+    ui::paintViewerCompositionFrame(painter, displayRect);
+    ui::paintViewerEmptyInvitation(painter, canvasRect, QStringLiteral("Create a layer to begin"));
+    painter.end();
+    expectations.expect(canvas.pixelColor(30, 20).alpha() > 0,
+                        "the composition frame border paints visible ink");
+
+    bool invitationInk = false;
+    for (int y = 40; y < 100 && !invitationInk; ++y) {
+        for (int x = 40; x < 200; ++x) {
+            if (canvas.pixelColor(x, y).alpha() > 0) {
+                invitationInk = true;
+                break;
+            }
+        }
+    }
+    expectations.expect(invitationInk, "the empty-state invitation paints visible ink");
+
+    QImage bare(240, 140, QImage::Format_ARGB32_Premultiplied);
+    bare.fill(Qt::transparent);
+    QPainter barePainter(&bare);
+    ui::paintViewerCompositionFrame(barePainter, displayRect);
+    ui::paintViewerEmptyInvitation(barePainter, canvasRect, QString());
+    barePainter.end();
+    bool interiorInk = false;
+    for (int y = 40; y < 100 && !interiorInk; ++y) {
+        for (int x = 40; x < 200; ++x) {
+            if (bare.pixelColor(x, y).alpha() > 0) {
+                interiorInk = true;
+                break;
+            }
+        }
+    }
+    expectations.expect(!interiorInk,
+                        "an empty invitation paints no interior ink over the composition");
+}
+
+void testViewerEditorBlankCoverIsOpaqueCurrentCpuPaint(Expectations& expectations) {
+    // The native CPU cover raised during a blank/no-frame retirement must be the CURRENT CPU paint
+    // (the opaque canvas background), never a transparent or stale frame retained from the previous
+    // composition. A prior colored composition is displayed and painted first, so a regression that
+    // reuses the last CPU frame is caught; a from-empty test would only catch a null allocation.
+    document::Document blankDocument(document::Project(document::ProjectId::fromRaw(7), "Blank"));
+    commands::CommandStack blankCommands(blankDocument);
+    auto newProject = makeTestProject("Blank cover");
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    expectations.expect(
+        session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.9, 0.05, 0.85, 1.0}),
+        "the fixture authors a colored Solid so the prior frame is distinctive");
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+
+    runtime::NodeDefinitionRegistry definitions;
+    expectations.expect(runtime::registerBuiltInNodeDefinitions(definitions),
+                        "the fixture registers built-in node definitions");
+    definitions.freeze();
+    runtime::SnapshotCompiler compiler(definitions);
+    const runtime::CpuCompositionEvaluator evaluator;
+    const runtime::CpuReferenceDisplayPreparer displayPreparer;
+    runtime::QualifiedDisplayProcessorProvider qualifiedProvider;
+    auto pipeline =
+        ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer, qualifiedProvider);
+    ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline);
+    ui::ViewerEditor viewer(session, controller);
+    viewer.resize(320, 240);
+    viewer.show();
+    controller.requestRefresh();
+    expectations.expect(waitUntil([&] {
+                            const auto frame = controller.state().frame;
+                            return frame != nullptr &&
+                                   frame->provenance().provider !=
+                                       runtime::PreviewDisplayProvider::GpuResident;
+                        }),
+                        "a CPU frame is displayed before the blank rebind");
+    static_cast<void>(viewer.grab()); // paints the CPU frame, populating the last-CPU-frame cache
+    const QPixmap beforeCover = viewer.renderCpuCoverSnapshotForTest();
+    expectations.expect(!beforeCover.isNull(), "the composition cover snapshot renders");
+
+    session.rebind(blankDocument, blankCommands, document::CompositionId{});
+    expectations.expect(waitUntil([&] { return viewer.displayedFrameForTest() == nullptr; }),
+                        "the composition-less rebind clears the displayed frame");
+    QApplication::processEvents();
+    const QPixmap afterCover = viewer.renderCpuCoverSnapshotForTest();
+    expectations.expect(!afterCover.isNull(), "the blank-state cover snapshot renders");
+    if (!beforeCover.isNull() && !afterCover.isNull()) {
+        const QImage after = afterCover.toImage();
+        expectations.expect(after.pixelColor(after.width() / 2, after.height() / 2).alpha() == 255,
+                            "the blank-state cover is fully opaque");
+        expectations.expect(
+            after != beforeCover.toImage(),
+            "the blank-state cover does not retain the previous composition pixels");
+    }
+
+    controller.beginShutdown();
+    bridge.beginShutdown();
+    (void)waitUntil([&] { return scheduler.isQuiescent(); });
+}
+
+// Structural regression for the native CPU cover. Qt's QWidget::setAttribute(WA_NativeWindow)
+// calls parentWidget()->enforceNativeChildren(), which marks every child of that parent native.
+// The cover must therefore never be parented directly to the editor: a dedicated alien host (whose
+// only child is the cover) fences that promotion, and the cover sets WA_DontCreateNativeAncestors
+// before enabling WA_NativeWindow so the host and the editor chain stay alien. A repeated reveal
+// with an unchanged rect must also be stable: same cover object, no extra native children, and the
+// cover remains the host's topmost child.
+void testNativeCoverPromotionIsFencedAndStable(Expectations& expectations) {
+    QWidget root;
+    root.setObjectName(QStringLiteral("coverFenceRoot"));
+    // Stack children declared after root so they are destroyed before it and detach themselves from
+    // the parent chain (safe reverse destruction order); no child is heap-allocated, so an early
+    // return from an expectation cannot leak it.
+    QWidget editor(&root);
+    editor.setObjectName(QStringLiteral("coverFenceEditor"));
+    QWidget siblingA(&editor);
+    QWidget siblingB(&editor);
+    root.resize(240, 180);
+    root.show();
+    QApplication::processEvents();
+
+    expectations.expect(!editor.testAttribute(Qt::WA_NativeWindow) && editor.internalWinId() == 0,
+                        "the editor starts alien before any cover exists");
+    expectations.expect(!siblingA.testAttribute(Qt::WA_NativeWindow) &&
+                            !siblingB.testAttribute(Qt::WA_NativeWindow),
+                        "the editor siblings start alien before any cover exists");
+
+    ui::ViewerGpuResidentController controller;
+    ui::ViewerGpuResidentController::Dependencies dependencies;
+    dependencies.containerParent = &editor;
+    controller.setDependencies(std::move(dependencies));
+    controller.setCpuCoverSnapshot([] {
+        QPixmap snapshot(8, 6);
+        snapshot.fill(Qt::darkRed);
+        return snapshot;
+    });
+
+    const QRect coverRect(4, 6, 64, 48);
+    controller.revealCpuCover(coverRect);
+    QApplication::processEvents();
+
+    QWidget* cover = controller.cpuCoverForTest();
+    expectations.expect(cover != nullptr, "the CPU cover is constructed on reveal");
+    if (cover == nullptr) {
+        return;
+    }
+    expectations.expect(cover->internalWinId() != 0, "the cover itself is native");
+    expectations.expect(!editor.testAttribute(Qt::WA_NativeWindow) && editor.internalWinId() == 0,
+                        "constructing the cover does not promote the editor native");
+    expectations.expect(!siblingA.testAttribute(Qt::WA_NativeWindow) &&
+                            !siblingB.testAttribute(Qt::WA_NativeWindow),
+                        "constructing the cover does not promote the editor siblings native");
+
+    QWidget* coverHost = cover->parentWidget();
+    expectations.expect(coverHost != nullptr && coverHost != &editor,
+                        "the cover is fenced behind a dedicated alien host");
+    if (coverHost == nullptr || coverHost == &editor) {
+        return;
+    }
+    expectations.expect(!coverHost->testAttribute(Qt::WA_NativeWindow) &&
+                            coverHost->internalWinId() == 0,
+                        "the fence host itself stays alien");
+    const auto childrenBefore = coverHost->findChildren<QWidget*>(Qt::FindDirectChildrenOnly);
+    expectations.expect(childrenBefore.size() == 1,
+                        "the fence host contains only the native cover as a widget child");
+
+    controller.revealCpuCover(coverRect);
+    QApplication::processEvents();
+    expectations.expect(controller.cpuCoverForTest() == cover,
+                        "a repeated reveal with an unchanged rect reuses the same cover");
+    const auto childrenAfter = coverHost->findChildren<QWidget*>(Qt::FindDirectChildrenOnly);
+    expectations.expect(childrenAfter.size() == childrenBefore.size(),
+                        "a repeated reveal does not add native children to the host");
+    expectations.expect(!childrenAfter.isEmpty() && childrenAfter.last() == cover,
+                        "the cover stays the host's topmost child after a repeated reveal");
+
+    controller.concealCpuCover();
+    QApplication::processEvents();
+    expectations.expect(!controller.cpuCoverVisibleForTest(),
+                        "concealing hides the CPU cover (and its fence host)");
 }
 
 } // namespace
@@ -262,6 +735,11 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     Expectations expectations;
     testViewerEditorResidentGateIsInertAndKeepsCpuPaint(expectations);
+    testViewerEditorExternalUnsafeCompletionClearsMutationGate(expectations);
+    testResidentFrameGeometryResolvesTheSameMappingDescriptor(expectations);
+    testCompositionFrameChromePaintsWithoutADevice(expectations);
+    testViewerEditorBlankCoverIsOpaqueCurrentCpuPaint(expectations);
+    testNativeCoverPromotionIsFencedAndStable(expectations);
     if (expectations.failures() == 0) {
         std::cout << "PASS: actual ViewerEditor resident integration (CPU/inert gate)\n";
         return 0;

@@ -678,9 +678,17 @@ void testWindowStatusBarTrimsCachesUnderMemoryPressure(Expectations& expectation
             strip.cacheToolTipForTest().contains(QStringLiteral("Memory pressure")),
         "the tooltip exposes the effective cap, configured total, sample and state");
     poll(reserve * 2, 55);
+    strip.clearTransientMessage();
+    // A single high static swap reading is only a baseline, never pressure. A rising reading on the
+    // same poll as fresh memory pressure produces both notices in the documented order.
     strip.pollMemoryPressureForTest(
         {.availableBytes = reserve * 2, .swapTotalBytes = 4 * gib, .swapUsedBytes = 2 * gib},
         bloom::runtime::MemoryBudgetLedger::Clock::time_point{} + std::chrono::seconds(60));
+    expectations.expect(strip.messageTextForTest().isEmpty(),
+                        "swap pressure: a first static swap reading does not trim");
+    strip.pollMemoryPressureForTest(
+        {.availableBytes = reserve / 2, .swapTotalBytes = 4 * gib, .swapUsedBytes = 3 * gib},
+        bloom::runtime::MemoryBudgetLedger::Clock::time_point{} + std::chrono::seconds(65));
     expectations.expect(strip.messageTextForTest() ==
                             QStringLiteral("Memory pressure: caches trimmed"),
                         "swap pressure preserves the existing first notice");
@@ -690,20 +698,89 @@ void testWindowStatusBarTrimsCachesUnderMemoryPressure(Expectations& expectation
                         "swap pressure also produces its own distinct second notice");
 }
 
-// CACHE-2: "Clear Media Cache…" lives in the Composition menu beside RAM Preview, present (though
-// reporting "not enabled" if triggered) even for a window built without a disk cache -- see
-// confirmAndClearMediaDiskCache()'s own null handling. Not triggered here: it opens a modal
-// QMessageBox, which this offscreen suite has no driver for.
-void testClearMediaCacheActionExists(Expectations& expectations) {
+// CACHE-PURGE: Edit | Purge… carries exactly "Purge preview cache" and "Purge media cache", and the
+// old Composition | Clear Media Cache… command is gone. Both purge actions stay present and enabled
+// for a window built without any cache, matching the "report unavailability when it runs" rule.
+void testPurgeMenuActionsExistAndAreInTheEditMenu(Expectations& expectations) {
     bool ok = false;
     Fixture fixture(&ok);
-    expectations.expect(ok, "clear media cache: stand-in editors register");
+    expectations.expect(ok, "purge menu: stand-in editors register");
     MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
                       fixture.frameExportController);
-    auto* action =
-        window.findChild<QAction*>(QStringLiteral("compositionClearMediaDiskCacheAction"));
-    expectations.expect(action != nullptr && action->text() == QStringLiteral("Clear Media Cache…"),
-                        "clear media cache: the Composition menu carries the command");
+
+    auto* purgeMenu = window.findChild<QMenu*>(QStringLiteral("editPurgeMenu"));
+    expectations.expect(purgeMenu != nullptr, "purge menu: the Edit menu carries a Purge submenu");
+
+    QMenu* editMenu = nullptr;
+    for (QAction* action : window.menuBar()->actions()) {
+        if (action->text() == QStringLiteral("&Edit") && action->menu() != nullptr) {
+            editMenu = action->menu();
+        }
+    }
+    expectations.expect(editMenu != nullptr &&
+                            editMenu->actions().contains(purgeMenu->menuAction()),
+                        "purge menu: it lives in Edit, not Composition");
+
+    auto* previewAction = window.findChild<QAction*>(QStringLiteral("purgePreviewCacheAction"));
+    auto* mediaAction = window.findChild<QAction*>(QStringLiteral("purgeMediaCacheAction"));
+    expectations.expect(previewAction != nullptr &&
+                            previewAction->text() == QStringLiteral("Purge preview cache") &&
+                            previewAction->isEnabled(),
+                        "purge menu: the preview action has the exact label and is discoverable");
+    expectations.expect(mediaAction != nullptr &&
+                            mediaAction->text() == QStringLiteral("Purge media cache") &&
+                            mediaAction->isEnabled(),
+                        "purge menu: the media action has the exact label and is discoverable");
+    expectations.expect(window.findChild<QAction*>(
+                            QStringLiteral("compositionClearMediaDiskCacheAction")) == nullptr,
+                        "purge menu: the superseded Composition clear command is gone");
+}
+
+// CACHE-PURGE: triggering "Purge preview cache" has a real effect through the window wiring -- the
+// evaluator's derived operation results are dropped -- while the project revision, dirty state, and
+// undo history are unaffected (a purge is derived-cache maintenance, never a project edit). This
+// window is built without a purge controller, so it exercises the memory-only fallback; the
+// asynchronous controller path (disk store, video memory, GPU-scene stores) is asserted in
+// media_disk_cache_settings_tests.cpp.
+void testPurgePreviewCacheActionHasRealEffect(Expectations& expectations) {
+    bool ok = false;
+    Fixture fixture(&ok);
+    expectations.expect(ok, "purge preview: stand-in editors register");
+    bloom::runtime::MemoryBudgetLedger ledger(std::size_t{1} << 30U, std::size_t{1} << 30U);
+    bloom::runtime::OperationCache operationCache(std::size_t{1} << 20U, ledger);
+    operationCache.store("derived", bloom::document::Revision::fromRaw(1),
+                         {.image = {}, .values = {}, .bounds = {}});
+    operationCache.store("decoded", bloom::document::Revision::fromRaw(1),
+                         {.image = {}, .values = {}, .bounds = {}},
+                         bloom::runtime::OperationCacheEntryKind::DecodedMedia);
+    expectations.expect(operationCache.retainedBytes() > 0,
+                        "purge preview: the operation cache holds entries before the purge");
+
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
+                      fixture.frameExportController, nullptr, nullptr, nullptr, nullptr,
+                      &operationCache);
+
+    const auto revisionBefore = fixture.compositionSession.snapshot().revision();
+    const auto undoBefore = fixture.compositionSession.undoLabel();
+    const bool canUndoBefore = fixture.compositionSession.canUndo();
+
+    auto* action = window.findChild<QAction*>(QStringLiteral("purgePreviewCacheAction"));
+    expectations.expect(action != nullptr, "purge preview: the action exists to trigger");
+    action->trigger();
+
+    expectations.expect(
+        operationCache.retainedBytes(bloom::runtime::OperationCacheEntryKind::Operation) == 0,
+        "purge preview: derived operation results are dropped");
+    expectations.expect(
+        operationCache.retainedBytes(bloom::runtime::OperationCacheEntryKind::DecodedMedia) > 0,
+        "purge preview: decoded media is left for Purge media cache");
+    expectations.expect(fixture.compositionSession.snapshot().revision() == revisionBefore &&
+                            fixture.compositionSession.undoLabel() == undoBefore &&
+                            fixture.compositionSession.canUndo() == canUndoBefore,
+                        "purge preview: project revision and undo history are untouched");
+    expectations.expect(window.statusStrip()->messageTextForTest() ==
+                            QStringLiteral("Preview cache purged"),
+                        "purge preview: the status bar reports the completed purge");
 }
 
 // A transient notice clears itself; a persistent one does not. The five-second life is asserted by
@@ -849,7 +926,8 @@ int main(int argc, char** argv) {
     testWindowStatusBarTrimsCachesUnderMemoryPressure(expectations);
     testWindowStatusBarMessagesClearThemselves(expectations);
     testRejectedCommandsBecomeStatusBarNotices(expectations);
-    testClearMediaCacheActionExists(expectations);
+    testPurgeMenuActionsExistAndAreInTheEditMenu(expectations);
+    testPurgePreviewCacheActionHasRealEffect(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
 

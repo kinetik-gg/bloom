@@ -87,11 +87,16 @@ using bloom::runtime::ProxyResolution;
 using bloom::runtime::executor_test::Expectations;
 using bloom::runtime::executor_test::format;
 using bloom::runtime::executor_test::LayerValues;
+using bloom::runtime::executor_test::makeShape;
+using bloom::runtime::executor_test::makeText;
 using bloom::runtime::executor_test::pixelAspect;
 using bloom::runtime::executor_test::publish;
 using bloom::runtime::executor_test::requestFor;
+using bloom::runtime::executor_test::ShapeFixtureValues;
 using bloom::runtime::executor_test::twoLayerPlan;
 using bloom::runtime::executor_test::twoSolidPlan;
+using bloom::runtime::executor_test::vectorLeafPlan;
+using bloom::runtime::executor_test::wideMergePlan;
 
 using PlanPtr = std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>;
 
@@ -286,6 +291,28 @@ void expectParity(Expectations& expectations, GpuSceneExecutor& executor,
                         LayerValues{.position = {2.7, 2.4}}, 6.0, 5.0, 12000);
 }
 
+// A 6000x4000 RGBA32F solid (384 MB, above the legacy 256 MiB fixed ceiling) over an FHD
+// composition. It proves an actual native dispatch above 256 MiB when the configured maximum is
+// capacity-sized and the device's real maxResourceSize allows it.
+[[nodiscard]] PlanPtr largeSolidPlan() {
+    return twoLayerPlan(format(1920, 1080), LayerValues{.position = {960.0, 540.0}, .opacity = 1.0},
+                        LayerValues{.position = {3000.0, 2000.0}, .opacity = 0.5}, 6000.0, 4000.0,
+                        20000);
+}
+
+#ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+// The native retirement fault contracts need the first dispatched step to be a pipeline the
+// test-only fault seam instruments (GpuSolid/GpuComposite/GpuAffine/GpuBlend/GpuImageUpload). A
+// direct solid on the integer device grid emits the exact translation path over a reachable
+// SolidV1 source; a fractional solid now lowers to the native vector-coverage producer, which the
+// seam deliberately does not instrument. Keep this fixture on the integer device grid so the fault
+// tests fault a genuine native submission instead of racing an uninstrumented coverage dispatch.
+[[nodiscard]] PlanPtr nativeFaultPlan() {
+    return twoLayerPlan(format(16, 12), LayerValues{.position = {4.0, 3.5}},
+                        LayerValues{.position = {9.0, 7.5}, .opacity = 0.5}, 6.0, 5.0, 43000);
+}
+#endif
+
 // ---- individual tests --------------------------------------------------------------------------
 
 void testFixtures(Expectations& expectations, GpuSceneExecutor& executor,
@@ -367,6 +394,100 @@ void testCoveredByteExact(Expectations& expectations, GpuSceneExecutor& executor
                  "covered fill byte-exact behind a transparent top", true, true);
 }
 
+// Text and Shape vector leaves through the real native executor: the prepared coverage commands
+// dispatch CoveredSolidV1 on the device and are compared to the CPU oracle.
+void testVectorLeaves(Expectations& expectations, GpuSceneExecutor& executor,
+                      const CpuCompositionEvaluator& oracle) {
+    const auto textFractional = vectorLeafPlan(format(24, 16), makeText(70000),
+                                               LayerValues{.position = {12.3, 8.1}}, 70000);
+    expectParity(expectations, executor, oracle, textFractional, requestFor(*textFractional),
+                 "text fractional coverage", false, true);
+
+    const auto textProbe = CpuGpuSceneBuilder{}.build(textFractional, requestFor(*textFractional));
+    expectations.expect(textProbe.hasValue(), "text integer probe prepares");
+    if (textProbe) {
+        const auto centre = textProbe.scene->bounds()[0].output;
+        if (!centre.empty()) {
+            auto definition = textFractional->copyDefinition();
+            auto& layer = std::get<CompiledLayerOutput>(definition.operations[1]);
+            const auto positionId = layer.position.id;
+            layer.position = bloom::runtime::CompiledVec2Parameter{
+                positionId, bloom::document::Vec2d{(centre.left + centre.right) * 0.5,
+                                                   (centre.top + centre.bottom) * 0.5}};
+            const auto integerPlan = publish(std::move(definition));
+            expectParity(expectations, executor, oracle, integerPlan, requestFor(*integerPlan),
+                         "text integer-grid coverage", true, true);
+        }
+    }
+
+    std::uint64_t base = 71000;
+    for (const auto kind :
+         {bloom::document::ShapeKind::Rectangle, bloom::document::ShapeKind::Ellipse,
+          bloom::document::ShapeKind::Triangle, bloom::document::ShapeKind::Polygon,
+          bloom::document::ShapeKind::Star, bloom::document::ShapeKind::Path}) {
+        ShapeFixtureValues values;
+        values.kind = kind;
+        values.points = 6;
+        values.cornerRadius = 0.75;
+        const auto plan = vectorLeafPlan(format(24, 16), makeShape(values, base),
+                                         LayerValues{.position = {12.3, 8.1}}, base);
+        expectParity(expectations, executor, oracle, plan, requestFor(*plan),
+                     "shape fill native coverage", false, true);
+        base += 100;
+    }
+    for (const double opacity : {1.0, 0.65}) {
+        ShapeFixtureValues values;
+        values.kind = bloom::document::ShapeKind::Ellipse;
+        values.strokeEnabled = true;
+        values.strokeWidth = 2.0;
+        values.fillColor = Color4d{0.7, 0.2, 0.1, 0.8};
+        values.strokeColor = Color4d{0.1, 0.4, 0.9, 0.6};
+        const auto plan =
+            vectorLeafPlan(format(24, 16), makeShape(values, base),
+                           LayerValues{.position = {9.7, 6.2}, .opacity = opacity}, base);
+        expectParity(expectations, executor, oracle, plan, requestFor(*plan),
+                     "shape fill+stroke native coverage", false, true);
+        base += 100;
+    }
+    {
+        ShapeFixtureValues values;
+        values.kind = bloom::document::ShapeKind::Star;
+        values.points = 7;
+        values.innerRatio = 0.4;
+        values.strokeEnabled = true;
+        values.strokeWidth = 1.0;
+        const auto plan = vectorLeafPlan(format(11, 7, pixelAspect(4, 3)), makeShape(values, base),
+                                         LayerValues{.position = {5.3, 3.1}}, base);
+        const auto extent = bloom::render::ImageExtent::create(7, 5);
+        auto request = requestFor(*plan);
+        request.resolution = ProxyResolution{*extent.value()};
+        expectParity(expectations, executor, oracle, plan, request,
+                     "shape star native coverage proxy PAR", false, true);
+        base += 100;
+    }
+    {
+        ShapeFixtureValues values;
+        values.kind = bloom::document::ShapeKind::Line;
+        values.strokeEnabled = true;
+        values.strokeWidth = 1.5;
+        const auto plan = vectorLeafPlan(format(24, 16), makeShape(values, base),
+                                         LayerValues{.position = {12.3, 8.1}}, base);
+        expectParity(expectations, executor, oracle, plan, requestFor(*plan),
+                     "line stroke-only native coverage", false, true);
+        base += 100;
+    }
+    {
+        ShapeFixtureValues values;
+        values.kind = bloom::document::ShapeKind::Ellipse;
+        values.fillEnabled = false;
+        values.strokeEnabled = true;
+        values.strokeWidth = 2.5;
+        const auto plan = vectorLeafPlan(format(24, 16), makeShape(values, base),
+                                         LayerValues{.position = {12.3, 8.1}}, base);
+        expectParity(expectations, executor, oracle, plan, requestFor(*plan),
+                     "ellipse stroke-only native coverage", false, true);
+    }
+}
 #include "gpu_scene_executor_cache_tests.ipp"
 
 #include "gpu_scene_executor_execution_tests.ipp"
@@ -419,23 +540,28 @@ int main(const int argc, char** argv) {
         auto executor = GpuSceneExecutor::create(*device.device, *cache.cache);
         expectations.expect(executor.hasValue(), "the parity executor is created");
         if (!executor) {
-            std::cerr << "FAIL: the parity executor could not be created\n";
+            std::cerr << "FAIL: the parity executor could not be created: "
+                      << executor.diagnostic.message << '\n';
             return 1;
         }
 
         testFixtures(expectations, *executor.executor, oracle);
         testEmptyInactive(expectations, *executor.executor, oracle);
         testCoveredByteExact(expectations, *executor.executor, oracle);
+        testVectorLeaves(expectations, *executor.executor, oracle);
         testWarmCache(expectations, *device.device);
         testChangedTopRetainsLower(expectations, *device.device);
         testSameContentDifferentIdentities(expectations, *device.device);
         testCancellation(expectations, *device.device);
         testTinyBudget(expectations, *device.device);
+        testPermissiveMaximum(expectations, *device.device);
+        testLargeImageNative(expectations, *device.device);
         testStructureRefusal(expectations, *device.device);
         testForeignDeviceAndThread(expectations, *device.device, *cache.cache,
                                    foreignDevice ? foreignDevice.device.get() : nullptr);
         testOutputCacheHitDescriptorValidation(expectations, *device.device);
         testLiveBudgetLongGraph(expectations, *device.device);
+        testWideMergeLivePeakBound(expectations, *device.device, oracle);
         testTightBudgetWithCachedInputs(expectations, *device.device);
         testAliasedInputChargedOnce(expectations, *device.device);
         testNativeOwnershipDuringTeardown(expectations, *device.device);

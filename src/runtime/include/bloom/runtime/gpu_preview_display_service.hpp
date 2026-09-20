@@ -21,7 +21,9 @@
 
 #include <bloom/render/gpu_neutral_display.hpp>
 #include <bloom/render/gpu_resident_display.hpp>
+#include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/runtime/gpu_presentation_coordinator.hpp>
+#include <bloom/runtime/gpu_preview_resident_capacity.hpp>
 #include <bloom/runtime/gpu_resident_frame_lease.hpp>
 #include <bloom/runtime/gpu_resident_preview_qualification.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
@@ -131,6 +133,12 @@ struct GpuPreviewDisplayServiceCounters final {
     // Requests that took the full original CPU path (unsupported subset, non-neutral, over budget,
     // unavailable presentation, lease pressure, or a resident-native failure).
     std::uint64_t cpuFallbacks = 0;
+    // GPU parent submissions refused by the scheduler's bounded per-request admission (the derived
+    // host default or an explicit configured capacity) BEFORE any stage work. Non-zero means a
+    // request the display stage could have handled was forced onto the CPU by ADMISSION, not by
+    // device capability; this makes an admission mismatch observable instead of a silent
+    // cpuFallbacks increase.
+    std::uint64_t gpuAdmissionRefusals = 0;
     // FULL-FRAME host readbacks performed by the resident route. Always zero: the only host read on
     // the normal resident path is the resident display's 4-byte status word, counted separately
     // below. This field is an explicit negative assertion hook for "no CPU buffer / no packed
@@ -171,6 +179,11 @@ struct GpuPreviewDisplayServiceStatus final {
     // report's own eligible()/eligibleFor() — not the packed report — decides resident selection.
     std::shared_ptr<const GpuResidentPreviewQualificationReport> residentQualification;
     std::string residentDetail;
+    // Immutable, owner-resolved resident-route capacity and its shared partition. Default
+    // constructed (Unknown/all-zero) until the owner resolves it after device creation; the UI
+    // installs the resolved cache sublimit through the EXISTING status poll and never queries a
+    // device itself.
+    GpuResidentCapacityPlan residentCapacityPlan;
     GpuPreviewDisplayServiceCounters counters;
 
     // Presentation capability of this service generation. NotRequested for the default Disabled
@@ -192,9 +205,10 @@ struct GpuPreviewDisplayServiceStatus final {
 // scheduler GPU executor and every request takes the ordinary CPU path. `loaderPath` is the
 // explicit native loader override (empty means the platform loader); the service never hardcodes a
 // workspace or build path. `previewByteAllowance` is the full per-request byte allowance reserved
-// as GPU request-owned admission (512 MiB default; a 1 GiB scheduler request-owned capacity admits
-// two). `nativeBudgets` bounds the native pipeline's persistent buffers separately (160 MiB
-// default). `readyStageQueueCapacity` bounds stages waiting for the one native job.
+// as GPU request-owned admission (capacity-aware by default via gpuPreviewRequestByteAllowance();
+// a 1 GiB scheduler request-owned capacity admits two). `nativeBudgets` bounds the native
+// pipeline's persistent buffers separately (160 MiB default). `readyStageQueueCapacity` bounds
+// stages waiting for the one native job.
 struct GpuPreviewDisplayServiceOptions final {
     bool enabled = false;
     std::filesystem::path loaderPath;
@@ -214,7 +228,7 @@ struct GpuPreviewDisplayServiceOptions final {
     GpuResidentPreviewBudgets residentQualificationBudgets{};
     // Bounded presentation coordinator admission/overlay/drain options.
     GpuPresentationCoordinatorOptions presentationCoordinator{};
-    std::size_t previewByteAllowance = std::size_t{512} * 1024U * 1024U;
+    std::size_t previewByteAllowance = gpuPreviewRequestByteAllowance();
     render::GpuNeutralDisplayBudgets nativeBudgets{};
     // Bounded per-native-dispatch deadline. Expiry drains/quarantines the native pipeline on
     // the owner thread, disables GPU, and takes the same-frame CPU fallback (or cancels).
@@ -260,6 +274,15 @@ class GpuPreviewDisplayService final {
            const std::vector<SnapshotParameterOverride>& overrides);
 
     [[nodiscard]] GpuPreviewDisplayServiceStatus status() const;
+
+    // Owner-thread clear of the resident GPU scene cache's retained operation/output images. Must
+    // be called from a worker thread, never the UI thread: it posts the clear to the service owner
+    // thread and waits there (bounded by `timeout`). Clearing drops only the cache's own
+    // references, so a displayed or exported lease that still pins an image stays valid -- no live
+    // lease is invalidated and no native object is destroyed. Returns true when the clear ran (or
+    // this service has no resident route), false when the service is shutting down or the wait
+    // expired.
+    [[nodiscard]] bool purgeRetainedCaches(std::chrono::milliseconds timeout) noexcept;
 
     // Non-blocking. Closes admission for this service's own tasks, requests cancellation on the
     // tasks it submitted (including ordinary CPU fallback roots), and wakes the service thread.

@@ -68,10 +68,14 @@ void testCancellation(Expectations& expectations, GpuDevice& device) {
                                 !executor.executor->deviceLost(),
                             "cancel-live: a proven cancellation needs no owner drain");
     }
-    const auto plan = basicPlan();
+    // Recovery on the vector-coverage path specifically: the same fractional scene that was
+    // cancelled live above must still dispatch its native coverage producer and publish.
+    const auto plan = fractionalPlan();
     const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
     const auto recovered = runScene(*executor.executor, prepared.scene, kSceneBudget);
     expectations.expect(recovered.ready, "cancel: the executor is usable after cancellation");
+    expectations.expect(executor.executor->counters().coverageDispatches > 0,
+                        "cancel: the coverage producer recovers and dispatches after cancellation");
 }
 
 void testTinyBudget(Expectations& expectations, GpuDevice& device) {
@@ -85,7 +89,8 @@ void testTinyBudget(Expectations& expectations, GpuDevice& device) {
     if (!executor) {
         return;
     }
-    const auto plan = basicPlan();
+    // The vector-coverage path: a tiny budget must be refused before any GpuPathCoverage dispatch.
+    const auto plan = fractionalPlan();
     const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
     expectations.expect(prepared.hasValue(), "budget: the scene prepares");
     if (!prepared) {
@@ -94,12 +99,101 @@ void testTinyBudget(Expectations& expectations, GpuDevice& device) {
     const auto refused = executor.executor->begin(prepared.scene, 1);
     expectations.expect(refused.code == GpuSceneExecutorDiagnosticCode::OverBudget,
                         "budget: a tiny request budget is refused before Vulkan");
+    expectations.expect(executor.executor->counters().coverageDispatches == 0,
+                        "budget: a refused coverage scene dispatched no native producer");
     expectations.expect(executor.executor->state() == GpuSceneExecutorJobState::Idle,
                         "budget: a refusal leaves the executor idle");
     expectations.expect(executor.executor->counters().budgetRefusals >= 1,
                         "budget: the refusal is counted");
     const auto retried = runScene(*executor.executor, prepared.scene, kSceneBudget);
     expectations.expect(retried.ready, "budget: the executor remains usable with a real budget");
+}
+
+// A configured maximum is an upper bound, not an allocation request. A huge configured maximum
+// must never refuse the pipeline or a small request, and a configured maximum below the actual
+// request must refuse that request cleanly while leaving the executor usable.
+void testPermissiveMaximum(Expectations& expectations, GpuDevice& device) {
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    expectations.expect(cache.hasValue(), "permissive: cache created");
+    if (!cache) {
+        return;
+    }
+
+    // Huge configured maximum, small actual request: creation and dispatch succeed.
+    GpuSceneExecutorBudgets huge;
+    huge.maxImageBytes = std::uint64_t{1} << 62;
+    huge.maxMetadataBytes = std::uint64_t{1} << 62;
+    huge.maxAffineMetadataBytes = std::uint64_t{1} << 62;
+    auto permissive = GpuSceneExecutor::create(device, *cache.cache, huge);
+    expectations.expect(permissive.hasValue(),
+                        "permissive: a huge configured maximum does not refuse the executor");
+    if (permissive) {
+        const auto plan = basicPlan();
+        const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+        expectations.expect(prepared.hasValue(), "permissive: the small scene prepares");
+        if (prepared) {
+            const auto run = runScene(*permissive.executor, prepared.scene, kSceneBudget);
+            expectations.expect(run.ready,
+                                "permissive: a small request runs under a huge configured maximum");
+        }
+    }
+
+    // Tiny configured maximum: the pipeline is still created (no whole-renderer refusal), and an
+    // actual request above the configured maximum is refused cleanly. A fresh cache prevents a
+    // content-cache hit from cutting the subtree before the per-step budget is enforced.
+    auto limitedCache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    expectations.expect(limitedCache.hasValue(), "permissive: the limited cache is created");
+    if (!limitedCache) {
+        return;
+    }
+    GpuSceneExecutorBudgets tiny;
+    tiny.maxImageBytes = 1;
+    auto limited = GpuSceneExecutor::create(device, *limitedCache.cache, tiny);
+    expectations.expect(limited.hasValue(),
+                        "permissive: a tiny configured maximum still creates the executor");
+    if (limited) {
+        const auto plan = basicPlan();
+        const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+        expectations.expect(prepared.hasValue(), "permissive: the scene prepares under a tiny max");
+        if (prepared) {
+            const auto refused = runScene(*limited.executor, prepared.scene, kSceneBudget);
+            expectations.expect(!refused.ready,
+                                "permissive: an oversized actual request is refused, not rendered");
+            expectations.expect(refused.image == nullptr,
+                                "permissive: the refusal publishes no image");
+        }
+    }
+}
+
+// An actual 6000x4000 RGBA32F solid (384 MB) must dispatch natively when the configured maximum is
+// capacity-sized and the device's real maxResourceSize allows it. This is the >256 MiB gate.
+void testLargeImageNative(Expectations& expectations, GpuDevice& device) {
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    expectations.expect(cache.hasValue(), "large: cache created");
+    if (!cache) {
+        return;
+    }
+    auto executor = GpuSceneExecutor::create(device, *cache.cache);
+    expectations.expect(executor.hasValue(), "large: executor created");
+    if (!executor) {
+        return;
+    }
+    const auto plan = largeSolidPlan();
+    const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+    expectations.expect(prepared.hasValue(), "large: the 6000x4000 scene prepares");
+    if (!prepared) {
+        return;
+    }
+    const auto run = runScene(*executor.executor, prepared.scene, kSceneBudget);
+    expectations.expect(run.ready, "large: the 6000x4000 solid dispatches natively");
+    if (run.ready) {
+        expectations.expect(
+            run.countersAtReady.solidDispatches + run.countersAtReady.coveredSolidDispatches +
+                    run.countersAtReady.translationDispatches +
+                    run.countersAtReady.sourceOverDispatches + run.countersAtReady.uploads >
+                0,
+            "large: at least one native operation ran for the 384 MB image");
+    }
 }
 
 void testStructureRefusal(Expectations& expectations, GpuDevice& device) {
@@ -285,6 +379,74 @@ void testTightBudgetWithCachedInputs(Expectations& expectations, GpuDevice& devi
     const auto recovered = runScene(*exec.executor, moved.scene, kSceneBudget);
     expectations.expect(recovered.ready,
                         "cached-budget: the executor is usable with a real budget");
+}
+
+// A wide merge of several DISTINCT full-size layers must stay within a live-peak bound of
+// accumulator + one foreground + the next output. The retired order planned every foreground
+// subtree first, so a full-size layer was pinned per layer until its source-over ran and a
+// six-layer merge needed roughly eight frames; the interleaved planner holds about three. The
+// bound is a measured per-step native peak (independent of hardware VMA padding), so this test
+// accepts the interleaved order and refuses the old one. The constrained run must still reach
+// Ready and match the CPU oracle pixel for pixel.
+void testWideMergeLivePeakBound(Expectations& expectations, GpuDevice& device,
+                                const CpuCompositionEvaluator& oracle) {
+    constexpr std::uint32_t kLayerCount = 6;
+    constexpr std::uint64_t kPeakFrameBound = 4;
+    const auto plan = wideMergePlan(format(256, 192), kLayerCount, 41000);
+    const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+    expectations.expect(prepared.hasValue(), "wide: the scene prepares");
+    if (!prepared) {
+        return;
+    }
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{1});
+    auto exec = GpuSceneExecutor::create(device, *cache.cache);
+    expectations.expect(cache.hasValue() && exec.hasValue(), "wide: harness created");
+    if (!cache || !exec) {
+        return;
+    }
+    const auto probe = runScene(*exec.executor, prepared.scene, kSceneBudget);
+    expectations.expect(probe.ready, "wide: the unbounded probe completes");
+    if (!probe.ready) {
+        return;
+    }
+    const auto perStepPeak = probe.countersAtReady.peakStepImageBytes;
+    expectations.expect(perStepPeak > 0, "wide: the probe measured a native per-step allocation");
+    if (perStepPeak == 0) {
+        return;
+    }
+    const auto budget = kPeakFrameBound * perStepPeak;
+    const auto run = runScene(*exec.executor, prepared.scene, budget);
+    expectations.expect(run.ready, "wide: the constrained live-peak budget is accepted");
+    if (!run.ready) {
+        return;
+    }
+    expectations.expect(run.countersAtReady.peakLiveImageBytes <= budget,
+                        "wide: the live peak stays within the constrained budget");
+    expectations.expect(run.countersAtReady.cumulativeProducedImageBytes > budget,
+                        "wide: cumulative allocation exceeds the constrained live budget");
+    expectations.expect(run.countersAtReady.intermediatePinsReleased > 0,
+                        "wide: intermediates are released at their last consumer");
+
+    auto oracleRequest = requestFor(*plan);
+    oracleRequest.bypassOperationCache = true;
+    const auto frame = oracle.evaluate(plan, oracleRequest, {});
+    expectations.expect(frame.frame() != nullptr, "wide: the CPU oracle evaluates");
+    if (frame.frame() == nullptr) {
+        return;
+    }
+    const auto& cpuImage = frame.frame()->processImage();
+    const GpuImageReadback readback = readbackResidentImage(*run.image, kReadbackBudget);
+    expectations.expect(readback.hasValue(), "wide: the test readback succeeds");
+    if (!readback) {
+        return;
+    }
+    expectations.expect(readback.pixels.size() == cpuImage.pixels().size(),
+                        "wide: the pixel count matches the CPU frame");
+    if (readback.pixels.size() != cpuImage.pixels().size()) {
+        return;
+    }
+    expectations.expect(pixelsClose(readback.pixels, cpuImage.pixels()),
+                        "wide: pixels are within the 2e-6 process gate");
 }
 
 // Two identical solids share one semantic key and resolve to the same cached image: the alias is

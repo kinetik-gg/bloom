@@ -1276,6 +1276,90 @@ void testRamRunFiniteClipRange(Expectations& expectations) {
 
 } // namespace
 
+// CACHE-PURGE: "Purge preview cache" retires in-flight work, clears the retained frames and the
+// GPU-resident accounting, leaves the displayed frame valid, and makes the next requested frame
+// recompute. No project revision or undo entry is produced.
+void testPurgePreviewCacheRetiresInFlightAndRecomputes(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Purge preview", time(1)));
+    expectations.expect(fixture.session.addSolidLayer("Purge", {0.2, 0.4, 0.8, 1.0}),
+                        "purge fixture creates selected content");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "purge fixture renders its first frame");
+    const auto displayed = fixture.controller.state().frame;
+    expectations.expect(displayed != nullptr && fixture.frameCache->size() > 0,
+                        "purge fixture retains the first frame");
+
+    // A second request is in flight, paused on the worker, when the purge runs. Gate the NEXT
+    // preparation rather than a fixed ordinal: startup may already have used more than one.
+    fixture.gateAtCall = static_cast<int>(fixture.preparationCount.load());
+    fixture.controller.requestRefresh();
+    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
+                        "purge fixture has a gated in-flight request");
+
+    const auto revisionBefore = fixture.session.snapshot().revision();
+    const bool canUndoBefore = fixture.session.canUndo();
+    fixture.controller.purgePreviewCache();
+
+    expectations.expect(fixture.frameCache->size() == 0 &&
+                            fixture.frameCache->residentBytes() == 0 &&
+                            fixture.frameCache->gpuResidentBytes() == 0,
+                        "purge clears the retained frames and the resident accounting");
+    expectations.expect(fixture.controller.state().frame == displayed,
+                        "purge leaves the already-displayed frame valid");
+    expectations.expect(fixture.session.snapshot().revision() == revisionBefore &&
+                            fixture.session.canUndo() == canUndoBefore,
+                        "purge never mutates project truth or undo history");
+
+    fixture.gate.release();
+    for (int turn = 0; turn < 50; ++turn) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+    expectations.expect(fixture.frameCache->size() == 0,
+                        "a result completing after purge cannot repopulate the cache");
+
+    const auto preparationsBefore = fixture.preparationCount.load();
+    expectations.expect(fixture.session.setCurrentTime(time(1, 25)),
+                        "purge fixture moves to a new time");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the requested frame renders again");
+    expectations.expect(fixture.preparationCount.load() > preparationsBefore,
+                        "the next requested frame recomputes after a purge");
+    finishFixture(fixture, expectations);
+}
+
+// CACHE-PURGE: the purge gate cancels an ACTIVE RAM preview and denies background fill for the
+// whole purge, for both the preview and media commands (the media command gates through the same
+// controller callback). A run left active would resubmit and repopulate what the purge removes.
+void testCachePurgeGateCancelsRamPreviewAndBackground(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Purge gate", time(24, 25)));
+    expectations.expect(animateSolidLayer(fixture.session),
+                        "purge gate fixture is animated across its range");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "purge gate fixture renders its first frame");
+
+    fixture.gateAtCall = static_cast<int>(fixture.preparationCount.load());
+    ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
+                                        fixture.bridge, fixture.countingPipeline());
+    ramPreview.start();
+    expectations.expect(ramPreview.isCaching(), "purge gate: a RAM preview is caching");
+    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
+                        "purge gate: a RAM frame is genuinely in flight");
+
+    fixture.controller.setCachePurgeGate(true);
+    expectations.expect(fixture.controller.cachePurgeGateActive(),
+                        "purge gate: the gate is active");
+    expectations.expect(!ramPreview.isCaching(),
+                        "purge gate: an active RAM preview is cancelled by the gate");
+    expectations.expect(!fixture.controller.backgroundWorkAllowed(),
+                        "purge gate: background fill is denied while the gate is held");
+    fixture.gate.release();
+
+    fixture.controller.setCachePurgeGate(false);
+    expectations.expect(!fixture.controller.cachePurgeGateActive(),
+                        "purge gate: the gate is released when the purge finishes");
+    finishFixture(fixture, expectations);
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -1303,6 +1387,8 @@ int main(int argc, char** argv) {
         testRamRunAdaptsToRangeEditWhileActive(expectations);
         testRamRunFiniteClipRange(expectations);
         testRamRunReusesBothHalvesAfterSplit(expectations);
+        testPurgePreviewCacheRetiresInFlightAndRecomputes(expectations);
+        testCachePurgeGateCancelsRamPreviewAndBackground(expectations);
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return 1;

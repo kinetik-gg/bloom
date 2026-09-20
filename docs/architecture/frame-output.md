@@ -16,7 +16,29 @@ export command's preset choice) are implemented. MEDIA-4 enables TIFF through th
 and adds ProRes MOV, DNxHR MXF and PCM WAV composition export. The supervised external-config
 helper and non-built-in locator kinds remain pending color-side work.
 
-Updated: 2026-09-17
+The GPU final-render route is now wired through ONE application-owned, cheap-to-construct
+`bloom::host::GpuExportProvider`: every existing output-analysis caller (desktop frame export,
+frame-range/video sequence export, headless scripting, and MCP) shares the same lazily bootstrapped
+`runtime::GpuProcessFrameEvaluator`, and the async attempt retains the provider so an in-flight
+evaluation never borrows a UI-owned object. The attempt graph defers its Evaluating stage until the
+provider's off-thread bootstrap is terminal, so the first export on a supported device is genuinely
+GPU rather than a CPU fallback that raced the bootstrap. The blocking CPU color stage resolves the
+general output-colour production context -- the OCIO display/effect program -- and prepares the
+immutable GPU output command from the exact resolved processor; the provider's one combined final
+readback transfers the unchanged process payload plus, when present, the encoded output (an RGBA32F
+process effect or straight RGBA8 display) in a single submission. A completed attempt records native
+provenance and counters (status, native dispatches, one final combined readback) for diagnostics
+only; this never enters the report, the approval digest, or the resource ledger. The CPU reference
+evaluator remains the correctness oracle and the explicit `Disabled`/unavailable fallback,
+unsupported scenes stay typed `UnsupportedGpuSubset`, and no operation qualification is changed.
+Provider/evaluator teardown is always handed to a scheduled worker, never joined on the caller or UI
+thread. Encoding, file writing, and the font load/shaping and geometry resolution that feed text
+remain CPU host preparation at this boundary: the GPU route evaluates and composites pixels but does
+not move codec or font work onto the device. A 6000x4000 media+CST+text export has locally verified
+native execution. `docs/architecture/gpu-backend.md` remains the owning document for GPU
+qualification policy.
+
+Updated: 2026-09-20
 
 ## Working-Space Output Contract
 
@@ -28,9 +50,11 @@ intent and is part of the process/output semantic identity for generalized proje
 PNG and TIFF use the qualified OCIO transform from the effective working space to the config's
 default display/view. Their analysis binds that processor and config revision. EXR defaults to
 unchanged working-space pixels, but `FlatExrRgba32fOptionsV1::outputColorSpaceId` can name an output
-space in the exact config. `CpuColorSpaceProcessor` converts working → output before encoding;
-`colorInteropID` and `chromaticities` describe the output space. An unavailable transform or
-unsupported chromaticity mapping fails before staging.
+space in the exact config. The CPU reference path converts working → output with
+`CpuColorSpaceProcessor` before encoding, while the GPU export route resolves the same qualified
+processor as an immutable GPU output command and consumes its encoded result. `colorInteropID` and
+`chromaticities` describe the output space. An unavailable transform or unsupported chromaticity
+mapping fails before staging.
 
 ## Purpose
 
@@ -762,8 +786,9 @@ An approved `FrameExportRequest` captures:
 
 - one completed approvable `OutputAnalysisAttempt`, retaining its captured document snapshot and
   revision, project/composition/output/time identity, exact frame-bound process identity and frame,
-  owning report, preset/profile, adapter provenance, canonical target preflight, and qualified PNG
-  display-processor handle and identity when applicable;
+  owning report, preset/profile, adapter provenance, canonical target preflight, qualified PNG
+  display-processor handle and identity when applicable, and the optional GPU-encoded display
+  payload bound to that identity and the frame's process-pixel digest;
 - the exact `OutputAnalysisDigest` approved by the artist or headless policy, which must byte-equal
   the retained attempt's digest;
 - publication-intent ID, overwrite policy, resource/time limits, and any destination option that
@@ -792,10 +817,12 @@ One approved foreground export job has this explicit dependency graph:
 
 1. CPU output preflight validates the retained attempt/request binding and checked aggregate
    resources without reevaluating the composition or rehashing the process frame.
-2. For PNG, dependent output preparation applies the retained qualified built-in processor on CPU
-   in bounded chunks or drives bounded helper slabs for the retained external-config processor,
-   then produces one immutable prepared display/output frame; EXR exposes rows from the retained
-   process frame directly.
+2. For PNG, dependent output preparation consumes the attempt's retained GPU-encoded straight-RGBA8
+   display payload directly when the GPU route produced one, so no CPU per-pixel display conversion
+   runs; otherwise it applies the retained qualified built-in processor on CPU in bounded chunks or
+   drives bounded helper slabs for the retained external-config processor. Either way it produces
+   one immutable prepared display/output frame; EXR exposes rows from the retained process frame
+   directly.
 3. Blocking-I/O publication asks the shared `StagedArtifactCoordinator` for a
    `StagedArtifactLease`, revalidates the retained target preflight, writes, reopens, verifies,
    hashes, then enters its short atomic-publication section.
@@ -949,9 +976,11 @@ The first artist-visible checkpoint is a Jobs entry that renders one frame, pres
 preservation report before approval, progresses without blocking interaction, and opens only a
 verified atomically published PNG or EXR.
 
-This document is an accepted implementation contract. Output adapters, preset conversion,
-staged-format verification, the publication coordinator, and qualified PNG/OpenEXR dependency
-profiles remain pending Batches 5–7 implementation.
+This document is an accepted implementation contract. The version 1 output adapters, preset
+conversion, staged-format verification, the publication coordinator, the general GPU output-colour
+production context, and large-frame (6000x4000) GPU export described here are implemented, with
+locally verified native execution. Still pending: a supervised external-config colour helper and
+non-built-in locator kinds.
 
 Primary references:
 

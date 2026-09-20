@@ -21,7 +21,10 @@
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/gpu_resident_preview_product.hpp>
 #include <bloom/runtime/gpu_resident_preview_qualification.hpp>
+#include <bloom/ui/composition_preview_controller.hpp>
+#include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
+#include <bloom/ui/window_status_bar.hpp>
 
 #include <QCoreApplication>
 
@@ -421,6 +424,24 @@ int main(int argc, char** argv) {
                                 residentHandle->retainedByteCost(),
                             "frameByteCost uses the resident retained cost");
 
+        // Status-bar colour chip: the resident frame's immutable provenance is the truth, not a CPU
+        // display buffer it deliberately does not have. A live GpuResident lease reports the GPU
+        // route; a preview failure keeps precedence over that GPU label.
+        bloom::ui::CompositionPreviewState residentState;
+        residentState.activity = bloom::ui::PreviewActivity::Ready;
+        residentState.frame = productHandle;
+        const auto residentChip = bloom::ui::previewColorState(residentState);
+        expectations.expect(residentChip.text == QStringLiteral("GPU resident") &&
+                                residentChip.colorToken == bloom::ui::kit::Color::Ok,
+                            "a valid GpuResident frame reports the GPU resident chip");
+        auto failedState = residentState;
+        failedState.activity = bloom::ui::PreviewActivity::Failed;
+        failedState.message = QStringLiteral("resident failed");
+        const auto failedChip = bloom::ui::previewColorState(failedState);
+        expectations.expect(failedChip.text == QStringLiteral("resident failed") &&
+                                failedChip.colorToken == bloom::ui::kit::Color::Error,
+                            "preview failure precedence overrides the resident GPU label");
+
         auto restamped = identity;
         restamped.requestGeneration = 2;
         auto taken = cache.take(restamped);
@@ -488,6 +509,12 @@ int main(int argc, char** argv) {
         // Invalidation: a dead lease must never be a hit, never listed, never inserted.
         registry->invalidateAll();
         expectations.expect(!residentHandle->isDisplayValid(), "the lease is now invalid");
+        // The same frame now has a dead lease: the chip must not claim the GPU and must not fall
+        // back to a CPU "Reference (unqualified)" claim either.
+        const auto deadChip = bloom::ui::previewColorState(residentState);
+        expectations.expect(deadChip.text == QStringLiteral("Color state unavailable") &&
+                                deadChip.colorToken == bloom::ui::kit::Color::Warn,
+                            "an invalidated resident lease is never labelled GPU or CPU reference");
         expectations.expect(!cache.contains(key), "contains() hides an invalidated resident entry");
         expectations.expect(cache.take(restamped) == nullptr,
                             "take() is a miss for an invalidated resident entry");

@@ -44,6 +44,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <functional>
 #include <iostream>
 #include <limits>
@@ -338,6 +339,72 @@ void testCachedFramesAdvanceOneFrameWithoutCatchUpSkipping(Expectations& expecta
     expectations.expect(fixture.controller.droppedFrameCount() == 0 ||
                             !fixture.controller.isCountingDroppedFrames(),
                         "the frame-accurate clock never asks the preview path to drop anything");
+    finishFixture(fixture, expectations);
+}
+
+// A cold, uncached range whose measured preparation does not fit the tick must still make progress
+// when the preview controller is idle. The estimate is the maximum observed duration and is only
+// refreshed by a successful completion, so a hard estimate gate with no idle escape starves every
+// Playback tick forever: the playhead moves (tick() writes session time first) while the viewer
+// keeps the previous frame. This is the admission-starvation regression.
+void testSlowPlaybackStillSubmitsWhenIdle(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Slow Playback Admission", time(4)));
+    expectations.expect(waitUntil([&] {
+                            return fixture.controller.state().activity !=
+                                   ui::PreviewActivity::Rendering;
+                        }),
+                        "the initial preview reaches a terminal activity before playback");
+
+    const auto identity = fixture.controller.state().desiredIdentity;
+    expectations.expect(identity.has_value(), "the initial preview published its identity");
+    if (identity.has_value()) {
+        const auto key = fixture.controller.cacheKeyForTime(identity->time);
+        expectations.expect(key.has_value() &&
+                                *key == ui::PreviewFrameCacheKey::forIdentity(*identity),
+                            "the regression identity is one recordPreparationDuration accepts");
+        // A measured preparation that cannot fit the 16 ms tick (half-tick threshold is 8 ms).
+        fixture.controller.recordPreparationDuration(*identity, 40ms);
+    }
+
+    ManualClock clock;
+    ui::PlaybackController playback(
+        fixture.session, fixture.controller, [&clock] { return clock.now; }, 16ms);
+    playback.play();
+
+    clock.advance(40'000'000ns);
+    playback.tick();
+    const auto first = fixture.controller.state();
+    expectations.expect(first.activity == ui::PreviewActivity::Rendering,
+                        "a slow idle playback tick still submits a frame instead of starving");
+
+    expectations.expect(waitUntil([&] {
+                            return fixture.controller.state().activity !=
+                                   ui::PreviewActivity::Rendering;
+                        }),
+                        "the slow playback frame reaches a terminal activity");
+
+    // Slow but admitted: the cold frame still enters the RAM cache, so a later pass over the range
+    // becomes cached hits rather than starving again.
+    if (first.desiredIdentity.has_value()) {
+        const auto firstKey = fixture.controller.cacheKeyForTime(first.desiredIdentity->time);
+        expectations.expect(firstKey.has_value() &&
+                                fixture.controller.frameCache().contains(*firstKey),
+                            "an admitted slow playback frame fills the RAM cache");
+    }
+
+    clock.advance(40'000'000ns);
+    playback.tick();
+    const auto second = fixture.controller.state();
+    expectations.expect(second.activity == ui::PreviewActivity::Rendering,
+                        "slow non-cached playback keeps progressing on later idle ticks");
+    expectations.expect(first.desiredIdentity.has_value() && second.desiredIdentity.has_value() &&
+                            first.desiredIdentity->time != second.desiredIdentity->time &&
+                            second.desiredIdentity->sourceRevision ==
+                                fixture.session.snapshot().revision(),
+                        "successive playback requests advance time and carry the live revision");
+
+    playback.pause();
     finishFixture(fixture, expectations);
 }
 
@@ -1127,13 +1194,14 @@ void testTimeReadoutFormatsFrameExactTimeAndResetsOnCompositionSwitch(Expectatio
 
 } // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) try {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     Expectations expectations;
     testWorkAreaLoop(expectations);
     testPlayAdvancesExactFrameTimesAndDropsFrames(expectations);
     testCachedFramesAdvanceOneFrameWithoutCatchUpSkipping(expectations);
+    testSlowPlaybackStillSubmitsWhenIdle(expectations);
     testLoopWrapExactAfterManyWraps(expectations);
     testPauseFreezesAndResumeUsesCurrentSessionTime(expectations);
     testScrubDuringPlaybackPauses(expectations);
@@ -1151,4 +1219,7 @@ int main(int argc, char** argv) {
     testArrowKeysOnLayerStackStillNavigateAndStepIsSuppressed(expectations);
     testTimeReadoutFormatsFrameExactTimeAndResetsOnCompositionSwitch(expectations);
     return expectations.failures() == 0 ? 0 : 1;
+} catch (const std::exception& error) {
+    std::cerr << "FAIL: playback regression threw: " << error.what() << '\n';
+    return 1;
 }

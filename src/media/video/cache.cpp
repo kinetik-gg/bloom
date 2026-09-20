@@ -49,6 +49,11 @@ void DecodedVideoCache::store(const FrameKey& key,
 void DecodedVideoCache::setByteBudget(const std::size_t budget) {
     static_cast<void>(ledger_.setCacheCeiling(this, budget));
 }
+void DecodedVideoCache::clear() {
+    std::lock_guard lock(mutex_);
+    entries_.clear();
+    resident_ = 0;
+}
 std::size_t DecodedVideoCache::residentBytes() const {
     std::lock_guard lock(mutex_);
     return resident_;

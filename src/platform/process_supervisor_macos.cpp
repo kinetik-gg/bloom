@@ -250,6 +250,25 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
     output[1] = Fd{};
     gate[0] = Fd{};
     auto child = std::unique_ptr<ProcessSupervisor>(new ProcessSupervisor(std::move(state)));
+    // A fast external tool never calls processWorkerBootstrap, so unlike a trusted worker it does
+    // not wait on the gate: it may exit before the parent writes the ready byte, and the write
+    // then reports EPIPE on closed pipes. A WNOHANG probe recognizes an already-finished child so
+    // the write is skipped instead of failing the launch; its output and exit status still gate
+    // the caller.
+    auto childExited = [&]() -> bool {
+        while (true) {
+            const auto result = ::waitpid(child->state_->pid, &child->state_->status, WNOHANG);
+            if (result == child->state_->pid || (result < 0 && errno == ECHILD)) {
+                child->state_->reaped = true;
+                return true;
+            }
+            if (result == 0)
+                return false;
+            if (errno != EINTR)
+                return false;
+        }
+    };
+    const bool released = childExited();
     for (const int fd : {child->state_->input.get(), child->state_->output.get()}) {
         const int flags = ::fcntl(fd, F_GETFL);
         if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0)
@@ -258,9 +277,11 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
     // The gate keeps the worker protocol identical to Linux: the child's bootstrap waits for 'R'
     // before loading provider code. macOS has no kernel rlimit to install between spawn and the
     // ready byte, so the byte simply releases the child.
-    constexpr char ready = 'R';
-    if (pipeWrite(gate[1].get(), &ready, 1) != 1)
-        return ProcessFailure{ProcessError::Spawn, errno};
+    if (!released) {
+        constexpr char ready = 'R';
+        if (pipeWrite(gate[1].get(), &ready, 1) != 1 && !childExited())
+            return ProcessFailure{ProcessError::Spawn, errno};
+    }
     return child;
 }
 ProcessResult<std::size_t> ProcessSupervisor::write(std::span<const std::byte> bytes,

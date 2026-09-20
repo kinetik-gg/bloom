@@ -21,6 +21,33 @@ from pathlib import Path
 HEADER_SUFFIXES = {".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp"}
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".mm"}
 
+# Deliberate compilation-failure fixtures. The mandatory
+# bloom.runtime.gpu_coverage_contract_mutation_proof CTest builds each of these EXCLUDE_FROM_ALL
+# targets and reason-checks that it fails to compile, proving a new unclassified operation,
+# image-effect kernel, or feature enumerator is a build failure rather than an escape. clang-tidy
+# would report the intentional diagnostic as a failure, so these exact fixtures are never routed
+# to it. This is diagnostic routing, not a coverage exemption: the probes, their required switches,
+# and the CTest are unchanged.
+NEGATIVE_PROBE_FIXTURES = (
+    "src/runtime/tests/gpu_coverage_contract_negative_probe.cpp",
+    "src/runtime/tests/gpu_coverage_contract_effect_negative_probe.cpp",
+    "src/runtime/tests/gpu_coverage_contract_feature_negative_probe.cpp",
+)
+
+
+def repository_root() -> Path:
+    completed = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode == 0:
+        root = Path(completed.stdout.strip())
+        if root.is_dir():
+            return root.resolve()
+    return Path.cwd().resolve()
+
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -52,6 +79,10 @@ def changed_paths(arguments: argparse.Namespace) -> list[Path]:
 def select_units(database: Path, changed: list[Path]) -> list[Path]:
     entries = json.loads(database.read_text(encoding="utf-8"))
     units = {Path(entry["file"]).resolve() for entry in entries}
+
+    # The mutation-proof fixtures are required to fail compilation; never route them to clang-tidy.
+    root = repository_root()
+    units.difference_update((root / fixture).resolve() for fixture in NEGATIVE_PROBE_FIXTURES)
 
     selected: set[Path] = set()
     headers: list[Path] = []
@@ -100,6 +131,9 @@ def run_one(
             f"--checks={checks}",
             "--warnings-as-errors=*",
             f"--header-filter={header_filter}",
+            # Keep upstream vendor bytes outside Bloom diagnostics, as bloom-format-check does.
+            # The adapter translation unit itself is still checked.
+            "--exclude-header-filter=/third_party/",
             "-p",
             str(database.parent),
             str(unit),

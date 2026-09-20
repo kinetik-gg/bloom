@@ -1,10 +1,13 @@
 #pragma once
 
 #include "json.hpp"
+#include <bloom/host/gpu_export_provider.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/scripting/facade.hpp>
 
 #include <atomic>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <optional>
 
@@ -13,6 +16,7 @@ namespace bloom::mcp {
 class Server final {
   public:
     explicit Server(std::unique_ptr<scripting::Session> session);
+    ~Server();
     [[nodiscard]] std::optional<std::string> handle(std::string_view message);
     [[nodiscard]] bool interceptCancellation(std::string_view message);
     [[nodiscard]] static std::string error(yyjson_val* id, int code, std::string_view message);
@@ -31,6 +35,14 @@ class Server final {
     std::unique_ptr<scripting::Session> session_;
     scripting::Facade facade_;
     runtime::TaskScheduler scheduler_;
+    // Evaluator-owned media caches/base directory for the GPU scene builder. Declared before the
+    // provider so it outlives every request the provider serves (locals/members destruct in reverse
+    // declaration order).
+    runtime::CpuCompositionEvaluator gpuMediaEvaluator_;
+    // Server-lifetime GPU final-render provider. It outlives every render request the server
+    // serves, so a request never owns the device bootstrap and an interrupted request can never
+    // dangle a shared handle. Prepared once on the server's own scheduler worker.
+    std::shared_ptr<host::GpuExportProvider> gpuExportProvider_;
     std::deque<std::pair<std::uint64_t, commands::CommandEvent>> events_;
     std::uint64_t sequence_ = 0;
     scripting::Subscription subscription_;

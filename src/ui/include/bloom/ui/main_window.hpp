@@ -24,6 +24,7 @@ namespace bloom::ui {
 
 struct ApplicationPreferences;
 class AccelerationStatusProvider;
+class CachePurgeController;
 class CompositionPreviewController;
 class CompositionSession;
 class EditorRegistry;
@@ -67,12 +68,13 @@ class MainWindow final : public QMainWindow {
     // `operationCache` feeds the window status bar's combined cache cell with hit/miss/retained-
     // byte statistics for the evaluator's shared operation cache, appended beside the RAM preview
     // text. Null leaves that cell showing only the RAM preview account.
-    // `mediaDiskCache` feeds the Composition menu's "Clear Media Cache…" command and the window
-    // status bar's disk-cache cell (docs/architecture/media-io.md "Disk cache"). Null leaves the
-    // menu item present but reporting "not enabled" rather than absent, matching `ramPreview`'s
-    // own null convention above.
-    // `accelerationStatus` feeds the Preferences window's read-only Performance page. Null reports
-    // the CPU-only truth. Borrowed and must outlive the window.
+    // `mediaDiskCache` feeds the window status bar's disk-cache cell (docs/architecture/media-io.md
+    // "Disk cache"). Null reports the cell as off.
+    // `cachePurgeController` owns the Edit | Purge… commands' asynchronous, off-UI purge. Null
+    // leaves both commands present but reporting that no purge task system is available, rather
+    // than doing the heavy media clear on the UI thread. `accelerationStatus` feeds the Preferences
+    // window's read-only Performance page. Null reports the CPU-only truth. Borrowed and must
+    // outlive the window.
     MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
                ProjectHost& projectHost, FrameExportController& frameExportController,
                RamPreviewController* ramPreview = nullptr,
@@ -80,7 +82,8 @@ class MainWindow final : public QMainWindow {
                PlaybackController* playbackController = nullptr,
                runtime::OperationCache* operationCache = nullptr,
                media::cache::MediaDiskCache* mediaDiskCache = nullptr,
-               const AccelerationStatusProvider* accelerationStatus = nullptr);
+               const AccelerationStatusProvider* accelerationStatus = nullptr,
+               CachePurgeController* cachePurgeController = nullptr);
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);
@@ -118,6 +121,10 @@ class MainWindow final : public QMainWindow {
     void createCompositionMenu(QMenu& compositionMenu);
     void createViewMenu(QMenu& viewMenu);
     void createHelpMenu(QMenu& helpMenu);
+    // Edit | Purge… command bodies. Neither touches project truth, the command stack, or undo.
+    void purgePreviewCache();
+    void purgeMediaCache();
+    void updatePurgeActions();
     void createEditorLayout(const EditorRegistry& editorRegistry);
     void createCentralStack();
     QWidget* createReadOnlyPlaceholderPage();
@@ -148,12 +155,15 @@ class MainWindow final : public QMainWindow {
     runtime::OperationCache* operationCache_ = nullptr;
     // Borrowed, may be null; owned by the application composition root.
     media::cache::MediaDiskCache* mediaDiskCache_ = nullptr;
+    // Borrowed, may be null; owned by the application composition root.
+    CachePurgeController* cachePurgeController_ = nullptr;
     // Borrowed, may be null; null means the Performance page reports the CPU-only truth.
     const AccelerationStatusProvider* accelerationStatus_ = nullptr;
     QMenuBar* menuBar_ = nullptr;
     QMenu* windowMenu_ = nullptr;
     QMenu* viewMenu_ = nullptr;
     QMenu* compositionMenu_ = nullptr;
+    QMenu* purgeMenu_ = nullptr;
     QStackedWidget* centralStack_ = nullptr;
     // A kit strip under the workspace, NOT QMainWindow::statusBar(): that brings its own chrome,
     // size grip and item model, none of which the Kinetik language wants.
@@ -193,7 +203,8 @@ class MainWindow final : public QMainWindow {
     QAction* viewAudioEnabledAction_ = nullptr;
     QAction* reportIssueAction_ = nullptr;
     QAction* openSourceLicensesAction_ = nullptr;
-    QAction* clearMediaDiskCacheAction_ = nullptr;
+    QAction* purgePreviewCacheAction_ = nullptr;
+    QAction* purgeMediaCacheAction_ = nullptr;
     bool workspaceLayoutWritable_ = true;
     bool shutdownRequested_ = false;
     bool shutdownComplete_ = false;

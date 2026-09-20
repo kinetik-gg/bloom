@@ -148,6 +148,7 @@ endif()
 
 set(BLOOM_GLSLANG_VALIDATOR "")
 set(BLOOM_SPIRV_VAL "")
+set(BLOOM_SPIRV_DIS "")
 if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/bin")
     find_program(bloom_locked_glslang_validator
         NAMES glslangValidator
@@ -157,8 +158,13 @@ if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/
         NAMES spirv-val
         HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
         NO_DEFAULT_PATH)
+    find_program(bloom_locked_spirv_dis
+        NAMES spirv-dis
+        HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
+        NO_DEFAULT_PATH)
     set(BLOOM_GLSLANG_VALIDATOR "${bloom_locked_glslang_validator}")
     set(BLOOM_SPIRV_VAL "${bloom_locked_spirv_val}")
+    set(BLOOM_SPIRV_DIS "${bloom_locked_spirv_dis}")
 endif()
 if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
     set(bloom_neutral_display_generated_spv
@@ -242,6 +248,81 @@ if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
 else()
     message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
         "solid.comp digest is still enforced.")
+endif()
+
+# --- Fixed GpuPathCoverage shader: source pin and regeneration check -----------------------------
+#
+# Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe (no new
+# generator, and the portable variant is checked to declare no Float64/Int64). The checked-in .comp is
+# pinned here, the manifest must bind that source digest, and, when the locked
+# glslangValidator/spirv-val are present, configure recompiles it and confirms the SPIR-V digest
+# embedded in path_coverage_spirv.inc. Runtime code never compiles or loads a shader.
+set(BLOOM_PATH_COVERAGE_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/path_coverage.comp")
+set(BLOOM_PATH_COVERAGE_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/path_coverage.manifest")
+set(BLOOM_PATH_COVERAGE_INC "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/path_coverage_spirv.inc")
+set(BLOOM_PATH_COVERAGE_COMP_SHA256
+    "5dd4e2486ddea9750b6755997c77816cce7c3b4ef83a6ce1a5d59fb21c932219")
+set(BLOOM_PATH_COVERAGE_SPV_SHA256
+    "f5aff832e47c64e42c95d0ae10429a5434e28566ccc1eb8d8c8d33e456bf2a4a")
+
+file(SHA256 "${BLOOM_PATH_COVERAGE_COMP}" bloom_path_coverage_comp_sha256)
+if(NOT bloom_path_coverage_comp_sha256 STREQUAL BLOOM_PATH_COVERAGE_COMP_SHA256)
+    message(FATAL_ERROR
+        "path_coverage.comp SHA-256 mismatch: measured ${bloom_path_coverage_comp_sha256}, pinned "
+        "${BLOOM_PATH_COVERAGE_COMP_SHA256}. Regenerate only through the tools/gpu-shaders recipe and "
+        "update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_PATH_COVERAGE_MANIFEST}" bloom_path_coverage_manifest_text)
+if(NOT bloom_path_coverage_manifest_text MATCHES "${BLOOM_PATH_COVERAGE_COMP_SHA256}")
+    message(FATAL_ERROR "path_coverage.manifest does not bind the pinned path_coverage.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_path_coverage_generated_spv "${CMAKE_CURRENT_BINARY_DIR}/path_coverage.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_PATH_COVERAGE_COMP}" -o "${bloom_path_coverage_generated_spv}"
+        RESULT_VARIABLE bloom_path_coverage_glslang_result)
+    if(NOT bloom_path_coverage_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile path_coverage.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2 "${bloom_path_coverage_generated_spv}"
+        RESULT_VARIABLE bloom_path_coverage_spirv_val_result)
+    if(NOT bloom_path_coverage_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated GpuPathCoverage SPIR-V.")
+    endif()
+    if(BLOOM_SPIRV_DIS)
+        set(bloom_path_coverage_generated_spvasm
+            "${CMAKE_CURRENT_BINARY_DIR}/path_coverage.generated.spvasm")
+        execute_process(
+            COMMAND "${BLOOM_SPIRV_DIS}" "${bloom_path_coverage_generated_spv}" -o
+                    "${bloom_path_coverage_generated_spvasm}"
+            RESULT_VARIABLE bloom_path_coverage_spirv_dis_result)
+        if(NOT bloom_path_coverage_spirv_dis_result EQUAL 0)
+            message(FATAL_ERROR "spirv-dis failed to disassemble the GpuPathCoverage SPIR-V.")
+        endif()
+        file(READ "${bloom_path_coverage_generated_spvasm}" bloom_path_coverage_spvasm_text)
+        if(bloom_path_coverage_spvasm_text MATCHES "OpCapability Float64" OR
+           bloom_path_coverage_spvasm_text MATCHES "OpCapability Int64" OR
+           bloom_path_coverage_spvasm_text MATCHES "OpTypeFloat 64" OR
+           bloom_path_coverage_spvasm_text MATCHES "OpTypeInt 64")
+            message(FATAL_ERROR
+                "the GpuPathCoverage SPIR-V declares a forbidden Float64/Int64 capability or type; "
+                "the coverage kernel must stay pure integer sample counting.")
+        endif()
+    endif()
+    file(SHA256 "${bloom_path_coverage_generated_spv}" bloom_path_coverage_spv_sha256)
+    if(NOT bloom_path_coverage_spv_sha256 STREQUAL BLOOM_PATH_COVERAGE_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated GpuPathCoverage SPIR-V SHA-256 ${bloom_path_coverage_spv_sha256} does not "
+            "match the embedded ${BLOOM_PATH_COVERAGE_SPV_SHA256}; the checked-in .comp and "
+            "path_coverage_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: path_coverage.comp regenerated and SPIR-V-validated "
+        "(${bloom_path_coverage_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "path_coverage.comp digest is still enforced.")
 endif()
 
 # --- Fixed TranslationOpacityBilinearV1 shader: source pin and regeneration check ----------------
@@ -360,6 +441,335 @@ if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
 else()
     message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
         "source_over.comp digest is still enforced.")
+endif()
+
+# --- Fixed AffineBilinearV1 shader: source pin and regeneration check ----------------------------
+#
+# Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe. The checked-in
+# .comp is pinned here, the manifest must bind that source digest, and, when the locked
+# glslangValidator/spirv-val are present, configure recompiles it and confirms the SPIR-V digest
+# embedded in affine_bilinear_spirv.inc. Runtime code never compiles or loads a shader.
+set(BLOOM_AFFINE_BILINEAR_COMP
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/affine_bilinear.comp")
+set(BLOOM_AFFINE_BILINEAR_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/affine_bilinear.manifest")
+set(BLOOM_AFFINE_BILINEAR_INC
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/affine_bilinear_spirv.inc")
+set(BLOOM_AFFINE_BILINEAR_COMP_SHA256
+    "8b728e94e85e2d83bd7604e43062f371f0d8578d5a71f06691df30bf747fdd54")
+set(BLOOM_AFFINE_BILINEAR_SPV_SHA256
+    "3db9745132a3ee0721675dddf5f8d041f4e89eb4a2e5fed0410f80d6468facef")
+
+file(SHA256 "${BLOOM_AFFINE_BILINEAR_COMP}" bloom_affine_bilinear_comp_sha256)
+if(NOT bloom_affine_bilinear_comp_sha256 STREQUAL BLOOM_AFFINE_BILINEAR_COMP_SHA256)
+    message(FATAL_ERROR
+        "affine_bilinear.comp SHA-256 mismatch: measured ${bloom_affine_bilinear_comp_sha256}, "
+        "pinned ${BLOOM_AFFINE_BILINEAR_COMP_SHA256}. Regenerate only through the tools/gpu-shaders "
+        "recipe and update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_AFFINE_BILINEAR_MANIFEST}" bloom_affine_bilinear_manifest_text)
+if(NOT bloom_affine_bilinear_manifest_text MATCHES "${BLOOM_AFFINE_BILINEAR_COMP_SHA256}")
+    message(FATAL_ERROR
+        "affine_bilinear.manifest does not bind the pinned affine_bilinear.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_affine_bilinear_generated_spv
+        "${CMAKE_CURRENT_BINARY_DIR}/affine_bilinear.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_AFFINE_BILINEAR_COMP}" -o "${bloom_affine_bilinear_generated_spv}"
+        RESULT_VARIABLE bloom_affine_bilinear_glslang_result)
+    if(NOT bloom_affine_bilinear_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile affine_bilinear.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2
+                "${bloom_affine_bilinear_generated_spv}"
+        RESULT_VARIABLE bloom_affine_bilinear_spirv_val_result)
+    if(NOT bloom_affine_bilinear_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated AffineBilinearV1 SPIR-V.")
+    endif()
+    file(SHA256 "${bloom_affine_bilinear_generated_spv}" bloom_affine_bilinear_spv_sha256)
+    if(NOT bloom_affine_bilinear_spv_sha256 STREQUAL BLOOM_AFFINE_BILINEAR_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated AffineBilinearV1 SPIR-V SHA-256 ${bloom_affine_bilinear_spv_sha256} does "
+            "not match the embedded ${BLOOM_AFFINE_BILINEAR_SPV_SHA256}; the checked-in .comp and "
+            "affine_bilinear_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: affine_bilinear.comp regenerated and SPIR-V-validated "
+        "(${bloom_affine_bilinear_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "affine_bilinear.comp digest is still enforced.")
+endif()
+
+# --- Fixed PointResampleV1 shader: source pin and regeneration check -----------------------------
+#
+# Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe. The checked-in
+# .comp is pinned here, the manifest must bind that source digest, and, when the locked
+# glslangValidator/spirv-val are present, configure recompiles it and confirms the SPIR-V digest
+# embedded in point_resample_spirv.inc. Runtime code never compiles or loads a shader.
+set(BLOOM_POINT_RESAMPLE_COMP
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/point_resample.comp")
+set(BLOOM_POINT_RESAMPLE_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/point_resample.manifest")
+set(BLOOM_POINT_RESAMPLE_INC
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/point_resample_spirv.inc")
+set(BLOOM_POINT_RESAMPLE_COMP_SHA256
+    "9cad004e3e4a28f282c2ca6c0f088c42cc6d7bec8c9dba9d0e727ecf365705b8")
+set(BLOOM_POINT_RESAMPLE_SPV_SHA256
+    "4c053f341d4c23b84cf1717ef3d2a523347ae84f9e7638dd3c75410c9eeaa4a6")
+
+file(SHA256 "${BLOOM_POINT_RESAMPLE_COMP}" bloom_point_resample_comp_sha256)
+if(NOT bloom_point_resample_comp_sha256 STREQUAL BLOOM_POINT_RESAMPLE_COMP_SHA256)
+    message(FATAL_ERROR
+        "point_resample.comp SHA-256 mismatch: measured ${bloom_point_resample_comp_sha256}, "
+        "pinned ${BLOOM_POINT_RESAMPLE_COMP_SHA256}. Regenerate only through the tools/gpu-shaders "
+        "recipe and update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_POINT_RESAMPLE_MANIFEST}" bloom_point_resample_manifest_text)
+if(NOT bloom_point_resample_manifest_text MATCHES "${BLOOM_POINT_RESAMPLE_COMP_SHA256}")
+    message(FATAL_ERROR
+        "point_resample.manifest does not bind the pinned point_resample.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_point_resample_generated_spv
+        "${CMAKE_CURRENT_BINARY_DIR}/point_resample.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_POINT_RESAMPLE_COMP}" -o "${bloom_point_resample_generated_spv}"
+        RESULT_VARIABLE bloom_point_resample_glslang_result)
+    if(NOT bloom_point_resample_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile point_resample.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2
+                "${bloom_point_resample_generated_spv}"
+        RESULT_VARIABLE bloom_point_resample_spirv_val_result)
+    if(NOT bloom_point_resample_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated PointResampleV1 SPIR-V.")
+    endif()
+    if(BLOOM_SPIRV_DIS)
+        set(bloom_point_resample_generated_spvasm
+            "${CMAKE_CURRENT_BINARY_DIR}/point_resample.generated.spvasm")
+        execute_process(
+            COMMAND "${BLOOM_SPIRV_DIS}" "${bloom_point_resample_generated_spv}" -o
+                    "${bloom_point_resample_generated_spvasm}"
+            RESULT_VARIABLE bloom_point_resample_spirv_dis_result)
+        if(NOT bloom_point_resample_spirv_dis_result EQUAL 0)
+            message(FATAL_ERROR "spirv-dis failed to disassemble the PointResampleV1 SPIR-V.")
+        endif()
+        file(READ "${bloom_point_resample_generated_spvasm}" bloom_point_resample_spvasm_text)
+        if(bloom_point_resample_spvasm_text MATCHES "OpCapability Float64" OR
+           bloom_point_resample_spvasm_text MATCHES "OpCapability Int64" OR
+           bloom_point_resample_spvasm_text MATCHES "OpTypeFloat 64" OR
+           bloom_point_resample_spvasm_text MATCHES "OpTypeInt 64")
+            message(FATAL_ERROR
+                "the PointResampleV1 SPIR-V declares a forbidden Float64/Int64 capability or "
+                "type; it must run on standard Float32 hardware without shaderFloat64.")
+        endif()
+    endif()
+    file(SHA256 "${bloom_point_resample_generated_spv}" bloom_point_resample_spv_sha256)
+    if(NOT bloom_point_resample_spv_sha256 STREQUAL BLOOM_POINT_RESAMPLE_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated PointResampleV1 SPIR-V SHA-256 ${bloom_point_resample_spv_sha256} does "
+            "not match the embedded ${BLOOM_POINT_RESAMPLE_SPV_SHA256}; the checked-in .comp and "
+            "point_resample_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: point_resample.comp regenerated, SPIR-V-validated, and "
+        "capability-checked (${bloom_point_resample_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "point_resample.comp digest is still enforced.")
+endif()
+
+# --- Fixed BlendV1 shader: source pin and regeneration check -------------------------------------
+#
+# Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe. The checked-in
+# .comp is pinned here, the manifest must bind that source digest, and, when the locked
+# glslangValidator/spirv-val are present, configure recompiles it and confirms the SPIR-V digest
+# embedded in blend_spirv.inc. Runtime code never compiles or loads a shader.
+set(BLOOM_BLEND_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend.comp")
+set(BLOOM_BLEND_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend.manifest")
+set(BLOOM_BLEND_INC "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_spirv.inc")
+set(BLOOM_BLEND_COMP_SHA256
+    "d9168cc4915ae1fd31a984b00f198e68e85e2c67d1a755ca8c18ba886c873410")
+set(BLOOM_BLEND_SPV_SHA256
+    "4b9cc2009f9a1fcbdc05558bbbbb9e9aeb7573a4fc88a8127e25e22bc6c208f8")
+
+file(SHA256 "${BLOOM_BLEND_COMP}" bloom_blend_comp_sha256)
+if(NOT bloom_blend_comp_sha256 STREQUAL BLOOM_BLEND_COMP_SHA256)
+    message(FATAL_ERROR
+        "blend.comp SHA-256 mismatch: measured ${bloom_blend_comp_sha256}, pinned "
+        "${BLOOM_BLEND_COMP_SHA256}. Regenerate only through the tools/gpu-shaders recipe and update "
+        "the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_BLEND_MANIFEST}" bloom_blend_manifest_text)
+if(NOT bloom_blend_manifest_text MATCHES "${BLOOM_BLEND_COMP_SHA256}")
+    message(FATAL_ERROR "blend.manifest does not bind the pinned blend.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_blend_generated_spv "${CMAKE_CURRENT_BINARY_DIR}/blend.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_BLEND_COMP}" -o "${bloom_blend_generated_spv}"
+        RESULT_VARIABLE bloom_blend_glslang_result)
+    if(NOT bloom_blend_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile blend.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2 "${bloom_blend_generated_spv}"
+        RESULT_VARIABLE bloom_blend_spirv_val_result)
+    if(NOT bloom_blend_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated BlendV1 SPIR-V.")
+    endif()
+    file(SHA256 "${bloom_blend_generated_spv}" bloom_blend_spv_sha256)
+    if(NOT bloom_blend_spv_sha256 STREQUAL BLOOM_BLEND_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated BlendV1 SPIR-V SHA-256 ${bloom_blend_spv_sha256} does not match the "
+            "embedded ${BLOOM_BLEND_SPV_SHA256}; the checked-in .comp and blend_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: blend.comp regenerated and SPIR-V-validated "
+        "(${bloom_blend_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "blend.comp digest is still enforced.")
+endif()
+
+# --- Fixed BlendV1 Float64 shader: source pin and regeneration check -----------------------------
+#
+# The exact-arithmetic companion to blend.comp, used only when the device advertised and enabled the
+# core shaderFloat64 feature. Same offline recipe and pins.
+set(BLOOM_BLEND_F64_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_f64.comp")
+set(BLOOM_BLEND_F64_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_f64.manifest")
+set(BLOOM_BLEND_F64_INC "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_f64_spirv.inc")
+set(BLOOM_BLEND_F64_COMP_SHA256
+    "80b1805269f394051a86231638cf0fcc5fa46a31fd1299a7def14e81ecfc7c91")
+set(BLOOM_BLEND_F64_SPV_SHA256
+    "a910e190a05875c22f16d1571dea9e05496b32d5a588ede8cc8d95520ea7dbcf")
+
+file(SHA256 "${BLOOM_BLEND_F64_COMP}" bloom_blend_f64_comp_sha256)
+if(NOT bloom_blend_f64_comp_sha256 STREQUAL BLOOM_BLEND_F64_COMP_SHA256)
+    message(FATAL_ERROR
+        "blend_f64.comp SHA-256 mismatch: measured ${bloom_blend_f64_comp_sha256}, pinned "
+        "${BLOOM_BLEND_F64_COMP_SHA256}. Regenerate only through the tools/gpu-shaders recipe and "
+        "update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_BLEND_F64_MANIFEST}" bloom_blend_f64_manifest_text)
+if(NOT bloom_blend_f64_manifest_text MATCHES "${BLOOM_BLEND_F64_COMP_SHA256}")
+    message(FATAL_ERROR "blend_f64.manifest does not bind the pinned blend_f64.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_blend_f64_generated_spv "${CMAKE_CURRENT_BINARY_DIR}/blend_f64.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_BLEND_F64_COMP}" -o "${bloom_blend_f64_generated_spv}"
+        RESULT_VARIABLE bloom_blend_f64_glslang_result)
+    if(NOT bloom_blend_f64_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile blend_f64.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2 "${bloom_blend_f64_generated_spv}"
+        RESULT_VARIABLE bloom_blend_f64_spirv_val_result)
+    if(NOT bloom_blend_f64_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated BlendV1 Float64 SPIR-V.")
+    endif()
+    file(SHA256 "${bloom_blend_f64_generated_spv}" bloom_blend_f64_spv_sha256)
+    if(NOT bloom_blend_f64_spv_sha256 STREQUAL BLOOM_BLEND_F64_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated BlendV1 Float64 SPIR-V SHA-256 ${bloom_blend_f64_spv_sha256} does not "
+            "match the embedded ${BLOOM_BLEND_F64_SPV_SHA256}; the checked-in .comp and "
+            "blend_f64_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: blend_f64.comp regenerated and SPIR-V-validated "
+        "(${bloom_blend_f64_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "blend_f64.comp digest is still enforced.")
+endif()
+
+# --- Portable BlendV1 Float32 shader: source pin, capability, and regeneration check ------------
+#
+# The compensated-Float32 companion for the six general modes, used on devices without the core
+# shaderFloat64 feature. It must declare no Float64/Int64 capability or 64-bit type, so configure
+# disassembles the regenerated SPIR-V with spirv-dis and rejects either. The checked-in .comp is
+# pinned here, the manifest must bind that source digest, and, when the locked glslangValidator/
+# spirv-val are present, configure recompiles it and confirms the SPIR-V digest embedded in
+# blend_portable_spirv.inc. Runtime code never compiles or loads a shader. The deterministic
+# regeneration path is the standalone tools/gpu-shaders project: its
+# bloom_gpu_blend_spirv_generator (embed_blend_spirv.cpp) writes the checked-in .inc and manifest
+# pins and its bloom_gpu_blend_spirv_verify target --checks and regenerates every blend family.
+set(BLOOM_BLEND_PORTABLE_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_portable.comp")
+set(BLOOM_BLEND_PORTABLE_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_portable.manifest")
+set(BLOOM_BLEND_PORTABLE_INC
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_portable_spirv.inc")
+set(BLOOM_BLEND_PORTABLE_COMP_SHA256
+    "7b9234c2d33ccdf5cbcab8f7c8502542d6a35ed9e0740e850a1694c9f3bbad0d")
+set(BLOOM_BLEND_PORTABLE_SPV_SHA256
+    "41c0272525b19c8dd43439244411b078e6c2936926fd8456c33fabf60cf68841")
+
+file(SHA256 "${BLOOM_BLEND_PORTABLE_COMP}" bloom_blend_portable_comp_sha256)
+if(NOT bloom_blend_portable_comp_sha256 STREQUAL BLOOM_BLEND_PORTABLE_COMP_SHA256)
+    message(FATAL_ERROR
+        "blend_portable.comp SHA-256 mismatch: measured ${bloom_blend_portable_comp_sha256}, pinned "
+        "${BLOOM_BLEND_PORTABLE_COMP_SHA256}. Regenerate only through the tools/gpu-shaders recipe "
+        "and update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_BLEND_PORTABLE_MANIFEST}" bloom_blend_portable_manifest_text)
+if(NOT bloom_blend_portable_manifest_text MATCHES "${BLOOM_BLEND_PORTABLE_COMP_SHA256}")
+    message(FATAL_ERROR "blend_portable.manifest does not bind the pinned blend_portable.comp "
+        "SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_blend_portable_generated_spv
+        "${CMAKE_CURRENT_BINARY_DIR}/blend_portable.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_BLEND_PORTABLE_COMP}" -o "${bloom_blend_portable_generated_spv}"
+        RESULT_VARIABLE bloom_blend_portable_glslang_result)
+    if(NOT bloom_blend_portable_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile blend_portable.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2
+                "${bloom_blend_portable_generated_spv}"
+        RESULT_VARIABLE bloom_blend_portable_spirv_val_result)
+    if(NOT bloom_blend_portable_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated portable BlendV1 SPIR-V.")
+    endif()
+    if(BLOOM_SPIRV_DIS)
+        set(bloom_blend_portable_generated_spvasm
+            "${CMAKE_CURRENT_BINARY_DIR}/blend_portable.generated.spvasm")
+        execute_process(
+            COMMAND "${BLOOM_SPIRV_DIS}" "${bloom_blend_portable_generated_spv}" -o
+                    "${bloom_blend_portable_generated_spvasm}"
+            RESULT_VARIABLE bloom_blend_portable_spirv_dis_result)
+        if(NOT bloom_blend_portable_spirv_dis_result EQUAL 0)
+            message(FATAL_ERROR "spirv-dis failed to disassemble the portable BlendV1 SPIR-V.")
+        endif()
+        file(READ "${bloom_blend_portable_generated_spvasm}" bloom_blend_portable_spvasm_text)
+        if(bloom_blend_portable_spvasm_text MATCHES "OpCapability Float64" OR
+           bloom_blend_portable_spvasm_text MATCHES "OpCapability Int64" OR
+           bloom_blend_portable_spvasm_text MATCHES "OpTypeFloat 64" OR
+           bloom_blend_portable_spvasm_text MATCHES "OpTypeInt 64")
+            message(FATAL_ERROR
+                "the portable BlendV1 SPIR-V declares a forbidden Float64/Int64 capability or type; "
+                "it must run on standard Float32 hardware.")
+        endif()
+    endif()
+    file(SHA256 "${bloom_blend_portable_generated_spv}" bloom_blend_portable_spv_sha256)
+    if(NOT bloom_blend_portable_spv_sha256 STREQUAL BLOOM_BLEND_PORTABLE_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated portable BlendV1 SPIR-V SHA-256 ${bloom_blend_portable_spv_sha256} does "
+            "not match the embedded ${BLOOM_BLEND_PORTABLE_SPV_SHA256}; the checked-in .comp and "
+            "blend_portable_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: blend_portable.comp regenerated, SPIR-V-validated, and "
+        "capability-checked (${bloom_blend_portable_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "blend_portable.comp digest is still enforced.")
 endif()
 
 # --- Fixed CoveredSolidV1 resident-image shader: source pin and regeneration check ---------------
@@ -536,6 +946,10 @@ if(BLOOM_RENDER_ENABLE_VULKAN AND DEFINED BLOOM_DEPENDENCY_MODE)
             "building the CPU-unavailable GPU device stub.")
     endif()
 endif()
+# Exported so sibling directories (e.g. src/color) can register GPU-native test targets only when
+# the real Vulkan backend is compiled; a CPU-stub build must not link Vulkan-only test helpers.
+set(BLOOM_RENDER_VULKAN_AVAILABLE "${BLOOM_RENDER_VULKAN_AVAILABLE}" CACHE INTERNAL
+    "bloom_render compiled the real Vulkan backend")
 
 # VMA's implementation is isolated in its own object target, exactly like the vendored stb_truetype
 # target above: third-party code gets its own warning profile and never inherits Bloom's
@@ -562,8 +976,11 @@ target_sources(
     PRIVATE
         cpu_image_primitives.cpp
         display_buffer.cpp
+        gpu_affine_host.cpp
+        gpu_point_resample_host.cpp
         image.cpp
         image_types.cpp
+        ocio_gpu_program.cpp
         text_glyph_source.hpp
         text_raster.cpp
         path_raster.cpp
@@ -574,15 +991,24 @@ target_sources(
             include/bloom/render/cpu_image_primitives.hpp
             include/bloom/render/display_buffer.hpp
             include/bloom/render/embedded_fonts.hpp
+            include/bloom/render/gpu_affine.hpp
+            include/bloom/render/gpu_blend.hpp
             include/bloom/render/gpu_composite.hpp
             include/bloom/render/gpu_device.hpp
             include/bloom/render/gpu_image.hpp
             include/bloom/render/gpu_image_upload.hpp
             include/bloom/render/gpu_neutral_display.hpp
+            include/bloom/render/gpu_ocio_program.hpp
+            include/bloom/render/gpu_output_color_readback.hpp
+            include/bloom/render/gpu_path_coverage.hpp
             include/bloom/render/gpu_present_image.hpp
+            include/bloom/render/ocio_gpu_program.hpp
             include/bloom/render/gpu_presentation_target.hpp
+            include/bloom/render/gpu_point_resample.hpp
             include/bloom/render/gpu_presentation_types.hpp
+            include/bloom/render/gpu_process_readback.hpp
             include/bloom/render/gpu_resident_display.hpp
+            include/bloom/render/gpu_shader_artifact.hpp
             include/bloom/render/gpu_solid.hpp
             include/bloom/render/image.hpp
             include/bloom/render/image_types.hpp
@@ -595,38 +1021,81 @@ target_sources(
 # the desktop application.
 if(BLOOM_RENDER_VULKAN_AVAILABLE)
     target_sources(bloom_render PRIVATE
+        vulkan/gpu_affine.cpp
+        vulkan/gpu_affine_fault.hpp
+        vulkan/gpu_affine_private.hpp
+        vulkan/gpu_affine_resources.cpp
+        vulkan/gpu_affine_retirement.cpp
+        vulkan/gpu_blend.cpp
+        vulkan/gpu_blend_fault.hpp
+        vulkan/gpu_blend_private.hpp
+        vulkan/gpu_blend_resources.cpp
+        vulkan/gpu_blend_retirement.cpp
+        vulkan/gpu_bounded_retirement.hpp
         vulkan/gpu_composite.cpp
+        vulkan/gpu_composite_fault.hpp
         vulkan/gpu_composite_private.hpp
         vulkan/gpu_composite_resources.cpp
+        vulkan/gpu_composite_retirement.cpp
         vulkan/gpu_device.cpp
         vulkan/gpu_device_bootstrap.cpp
         vulkan/gpu_device_private.hpp
         vulkan/gpu_image.cpp
         vulkan/gpu_image_private.hpp
         vulkan/gpu_image_upload.cpp
+        vulkan/gpu_image_upload_fault.hpp
         vulkan/gpu_image_upload_private.hpp
         vulkan/gpu_image_upload_resources.cpp
+        vulkan/gpu_image_upload_retirement.cpp
         vulkan/gpu_neutral_display.cpp
         vulkan/gpu_neutral_display_private.hpp
         vulkan/gpu_neutral_display_resources.cpp
+        vulkan/gpu_ocio_program.cpp
+        vulkan/gpu_ocio_program_api.cpp
+        vulkan/gpu_ocio_program_dispatch.cpp
+        vulkan/gpu_ocio_program_private.hpp
+        vulkan/gpu_ocio_program_resources.cpp
+        vulkan/gpu_output_color_readback.cpp
+        vulkan/gpu_point_resample.cpp
+        vulkan/gpu_point_resample_private.hpp
+        vulkan/gpu_point_resample_resources.cpp
         vulkan/gpu_present_image.cpp
         vulkan/gpu_present_image_private.hpp
         vulkan/gpu_present_image_resources.cpp
         vulkan/gpu_presentation_target.cpp
         vulkan/gpu_presentation_target_private.hpp
         vulkan/gpu_presentation_target_resources.cpp
+        vulkan/gpu_process_readback.cpp
         vulkan/gpu_resident_display.cpp
         vulkan/gpu_resident_display_private.hpp
+        vulkan/gpu_resident_display_readback.cpp
+        vulkan/gpu_resident_display_readback_private.hpp
         vulkan/gpu_resident_display_resources.cpp
         vulkan/gpu_solid.cpp
         vulkan/gpu_solid_covered.cpp
+        vulkan/gpu_solid_fault.hpp
         vulkan/gpu_solid_private.hpp
+        vulkan/gpu_solid_retirement.cpp
+        vulkan/gpu_path_coverage.cpp
+        vulkan/gpu_path_coverage_lifecycle.cpp
+        vulkan/gpu_path_coverage_resources.cpp
+        vulkan/gpu_path_coverage_fault.hpp
+        vulkan/gpu_path_coverage_private.hpp
+        vulkan/shaders/path_coverage.comp
+        vulkan/shaders/path_coverage.manifest
+        vulkan/shaders/path_coverage_spirv.inc
         vulkan/shaders/neutral_display.comp
         vulkan/shaders/neutral_display.manifest
         vulkan/shaders/neutral_display_spirv.inc
         vulkan/shaders/solid.comp
         vulkan/shaders/solid.manifest
         vulkan/shaders/solid_spirv.inc
+        vulkan/shaders/affine_bilinear.comp
+        vulkan/shaders/affine_bilinear.manifest
+        vulkan/shaders/affine_bilinear_spirv.inc
+        vulkan/shaders/point_resample.comp
+        vulkan/shaders/point_resample.manifest
+        vulkan/shaders/point_resample_spirv.inc
         vulkan/shaders/solid_covered.comp
         vulkan/shaders/solid_covered.manifest
         vulkan/shaders/solid_covered_spirv.inc
@@ -636,19 +1105,34 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/shaders/source_over.comp
         vulkan/shaders/source_over.manifest
         vulkan/shaders/source_over_spirv.inc
+        vulkan/shaders/blend.comp
+        vulkan/shaders/blend.manifest
+        vulkan/shaders/blend_spirv.inc
+        vulkan/shaders/blend_f64.comp
+        vulkan/shaders/blend_f64.manifest
+        vulkan/shaders/blend_f64_spirv.inc
+        vulkan/shaders/blend_portable.comp
+        vulkan/shaders/blend_portable.manifest
+        vulkan/shaders/blend_portable_spirv.inc
         vulkan/shaders/viewer_present.vert
         vulkan/shaders/viewer_present.frag
         vulkan/shaders/viewer_present.manifest
         vulkan/shaders/viewer_present_spirv.inc
     )
 else()
-    target_sources(bloom_render PRIVATE gpu_composite_stub.cpp gpu_device_stub.cpp
+    target_sources(bloom_render PRIVATE gpu_affine_stub.cpp gpu_blend_stub.cpp
+                                     gpu_composite_stub.cpp gpu_device_stub.cpp
                                      gpu_image_upload_stub.cpp gpu_neutral_display_stub.cpp
+                                     gpu_point_resample_stub.cpp
+                                     gpu_ocio_program_stub.cpp
+                                     gpu_output_color_readback_stub.cpp
                                      gpu_present_image_stub.cpp gpu_presentation_target_stub.cpp
-                                     gpu_resident_display_stub.cpp gpu_solid_stub.cpp)
+                                     gpu_process_readback_stub.cpp gpu_resident_display_stub.cpp
+                                     gpu_solid_stub.cpp gpu_path_coverage_stub.cpp)
 endif()
 
 target_compile_features(bloom_render PUBLIC cxx_std_20)
+target_include_directories(bloom_render PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(
     bloom_render
     PUBLIC bloom_core
@@ -668,5 +1152,30 @@ bloom_enable_warnings(bloom_render)
 bloom_enable_strict_floating_point(bloom_render)
 
 if(BUILD_TESTING)
+    # Test-only fault setters, deliberately NOT part of bloom_render: production targets never link
+    # this library, so shipping builds cannot expose fault behavior. The setters call into the
+    # Vulkan resource translation unit, so they exist only when the real backend is compiled.
+    if(BLOOM_RENDER_VULKAN_AVAILABLE)
+        add_library(bloom_render_ocio_test_faults STATIC vulkan/gpu_ocio_program_fault_test.cpp)
+        target_compile_features(bloom_render_ocio_test_faults PUBLIC cxx_std_20)
+        target_include_directories(bloom_render_ocio_test_faults PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/vulkan")
+        bloom_enable_warnings(bloom_render_ocio_test_faults)
+
+        # Same pattern for the combined output-colour readback fault seam.
+        add_library(bloom_render_output_color_readback_test_faults STATIC
+            vulkan/gpu_output_color_readback_fault_test.cpp)
+        target_compile_features(bloom_render_output_color_readback_test_faults PUBLIC cxx_std_20)
+        target_include_directories(bloom_render_output_color_readback_test_faults PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/vulkan")
+        bloom_enable_warnings(bloom_render_output_color_readback_test_faults)
+        # Same pattern for the PointResampleV1 lifecycle fault seam.
+        add_library(bloom_render_point_resample_test_faults STATIC
+            vulkan/gpu_point_resample_fault_test.cpp)
+        target_compile_features(bloom_render_point_resample_test_faults PUBLIC cxx_std_20)
+        target_include_directories(bloom_render_point_resample_test_faults PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/vulkan")
+        bloom_enable_warnings(bloom_render_point_resample_test_faults)
+    endif()
     add_subdirectory(tests)
 endif()

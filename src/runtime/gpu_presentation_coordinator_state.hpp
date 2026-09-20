@@ -126,6 +126,12 @@ struct CoordinatorState {
     bool valid = false;
     bool shuttingDown = false;
     std::size_t shutdownPumps = 0;
+    // Owner-thread dirty flag. The mailbox shutdown summary is recomputed and republished only when
+    // an owner state change can alter it, so an idle pump performs no mailbox lock, no status
+    // traversal, and no string churn. `lastShutdownStatus` is the value published by the last dirty
+    // pump and is valid on the owner thread even between pumps.
+    bool shutdownStatusDirty = true;
+    GpuPresentationShutdownStatus lastShutdownStatus;
     std::shared_ptr<detail::GpuPresentationMailbox> mailbox;
     std::shared_ptr<GpuPresentationClient> client;
     std::map<GpuPresentationTargetId, Entry> entries;
@@ -170,6 +176,9 @@ struct CoordinatorState {
             }
             wake = mailbox->wake;
         }
+        // A published state change can alter the owner shutdown summary, so the next pump must
+        // recompute and republish it.
+        shutdownStatusDirty = true;
         if (wake) {
             wake();
         }
@@ -248,7 +257,12 @@ struct CoordinatorState {
     }
 
     void ingestRequests() {
-        std::function<void()> wake;
+        // Owner-side ingest never invokes the wake hook. The UI client already invokes it
+        // synchronously on every enqueuing call, and wake-on-drain is what turned the owner loop
+        // into a busy spin: each pump re-armed its own wake generation and the following wait could
+        // never sleep. Ingest only marks the shutdown summary dirty when it changed the retained
+        // entry set.
+        bool entrySetChanged = false;
         {
             std::lock_guard lock(mailbox->mutex);
             // Drain terminal acknowledgements. A request for a live/unproven target stays pending
@@ -263,6 +277,7 @@ struct CoordinatorState {
                 if (forgettable(entryIt->second)) {
                     entries.erase(entryIt);
                     it = mailbox->forgetRequested.erase(it);
+                    entrySetChanged = true;
                     continue;
                 }
                 ++it;
@@ -277,6 +292,7 @@ struct CoordinatorState {
                     entry.description.height = slot.attachHeight;
                     entry.surfaceKey = {slot.surface.epoch.value, slot.surface.surface_bits};
                     entries[id] = std::move(entry);
+                    entrySetChanged = true;
                     continue;
                 }
                 const auto entryIt = entries.find(id);
@@ -309,10 +325,9 @@ struct CoordinatorState {
                     slot.update.reset();
                 }
             }
-            wake = mailbox->wake;
         }
-        if (wake) {
-            wake();
+        if (entrySetChanged) {
+            shutdownStatusDirty = true;
         }
     }
 
@@ -323,8 +338,14 @@ struct CoordinatorState {
 
     // Owner-thread summary of retained targets. Never called off the owner thread.
     [[nodiscard]] GpuPresentationShutdownStatus computeShutdownStatus() const;
-    // Publishes the owner summary into the mailbox for synchronized off-owner reads.
+    // Publishes the owner summary into the mailbox for synchronized off-owner reads. Only rewrites
+    // the mailbox when an owner state change has marked the summary dirty.
     void publishShutdownSnapshot();
+    // Owner-thread. True while at least one admitted target still needs the owner to drive it
+    // (attach/resize/retire progress, an extracted pending update/resize/retire, an acquired image
+    // awaiting present, or an un-ingested client request). False for a stable idle Active target,
+    // so a driver loop can wait on its wake hook instead of polling at full rate.
+    [[nodiscard]] bool hasPendingWork() const;
 
     void pumpOnce();
 };

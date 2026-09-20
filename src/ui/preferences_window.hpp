@@ -105,12 +105,9 @@ class PreferencesWindow final : public QDialog {
 
     QLabel* performanceBackendValue_ = nullptr;
     QLabel* performanceStateValue_ = nullptr;
-    QLabel* performanceRouteValue_ = nullptr;
     QLabel* performancePresentationValue_ = nullptr;
     QLabel* performanceDeviceValue_ = nullptr;
     QLabel* performanceDriverValue_ = nullptr;
-    QLabel* performanceOperations_ = nullptr;
-    QLabel* performanceSummary_ = nullptr;
     QWidget* performanceDeviceRow_ = nullptr;
     QWidget* performanceDriverRow_ = nullptr;
     QTimer* performanceRefreshTimer_ = nullptr;

@@ -2,9 +2,8 @@
 
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/platform/cache_directory.hpp>
+#include <bloom/runtime/operation_cache.hpp>
 
-#include <QMessageBox>
-#include <QObject>
 #include <QSettings>
 #include <QString>
 
@@ -64,28 +63,22 @@ makeMediaDiskCacheFromSettings(const QSettings& settings) {
     return std::make_unique<media::cache::MediaDiskCache>(config);
 }
 
-bool confirmAndClearMediaDiskCache(QWidget* const parent,
-                                   media::cache::MediaDiskCache* const cache) {
-    if (cache == nullptr) {
-        QMessageBox::information(parent, QObject::tr("Clear Media Cache"),
-                                 QObject::tr("The media disk cache is not enabled for this "
-                                             "session."));
-        return false;
+bool purgeMediaCaches(media::cache::MediaDiskCache* const cache,
+                      runtime::OperationCache* const operationCache) {
+    bool cleared = false;
+    if (cache != nullptr) {
+        // Removes every on-disk entry and resets the disk cache statistics. No source file is
+        // consulted: the store is content-addressed and holds decoded pixels only.
+        cache->clear();
+        cleared = true;
     }
-    const auto stats = cache->statistics();
-    const auto question =
-        stats.entryCount == 0
-            ? QObject::tr("The media disk cache is already empty. Clear it anyway?")
-            : QObject::tr("Clear %1 cached frames from disk? Scrubbing will decode again on next "
-                          "use.")
-                  .arg(stats.entryCount);
-    const auto choice =
-        QMessageBox::question(parent, QObject::tr("Clear Media Cache"), question,
-                              QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
-    if (choice != QMessageBox::Yes)
-        return false;
-    cache->clear();
-    return true;
+    if (operationCache != nullptr) {
+        // The evaluator's in-memory decoded-still-image entries. Derived operation results are
+        // deliberately outside "decoded media" here.
+        operationCache->clearDecodedMedia();
+        cleared = true;
+    }
+    return cleared;
 }
 
 } // namespace bloom::ui

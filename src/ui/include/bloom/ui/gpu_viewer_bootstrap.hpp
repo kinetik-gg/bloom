@@ -20,8 +20,10 @@
 
 #include <bloom/render/gpu_presentation_types.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_ocio_display_arm.hpp>
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
+#include <bloom/runtime/gpu_preview_resident_capacity.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 #include <bloom/runtime/preview_gpu_scene_stage.hpp>
@@ -51,7 +53,15 @@ class PreviewFrameCache;
 // lease-registry caps, so the cache evicts LRU resident entries before the registry can ever refuse
 // a publishable lease. Every field is finite: no live lease/pin is invalidated, over-budget
 // publications are refused by the service, and the same request takes the CPU fallback.
+//
+// This plan is the CONFIGURED upper bound derived from the artist's RAM-preview budget before any
+// device exists. It is never raised above that explicit ceiling, and a tiny/zero budget stays tiny
+// (no floor forcing a resident route the artist did not ask for). The real device budget is
+// resolved later on the GPU owner and clamped into `runtime::GpuResidentCapacityPlan`, which the
+// bootstrap installs through the existing status poll.
 struct GpuResidentBudgetPlan final {
+    // Total configured resident pool (lease + scene + request).
+    std::uint64_t residentPoolBytes = 0;
     // GPU-resident sublimits inside the overall (unchanged) UI cache budget.
     std::uint64_t cacheBytes = 0;
     std::size_t cacheEntries = 0;
@@ -60,27 +70,36 @@ struct GpuResidentBudgetPlan final {
     std::uint64_t leaseBytes = 0;
     std::size_t leaseEntries = 0;
     std::uint64_t sceneCacheBytes = 0;
+    // Per-request LIVE pinned admission headroom (shared with the other ledgers).
+    std::uint64_t requestBytes = 0;
 
     friend bool operator==(const GpuResidentBudgetPlan&, const GpuResidentBudgetPlan&) = default;
 };
 
 // The cache sublimits and the registry caps are derived together from
-// `previewFrameCacheByteBudget`. A tiny/zero value yields a bounded positive plan; a huge value is
-// capped conservatively (a large RAM cache is NOT treated as usable VRAM). No intermediate product
-// can overflow.
+// `previewFrameCacheByteBudget`, the artist's explicit ceiling. The partition is pure and cannot
+// overflow; capacity clamping happens on the owner thread and is exposed through the status poll.
 [[nodiscard]] GpuResidentBudgetPlan
 gpuResidentBudgetPlanFor(std::size_t previewFrameCacheByteBudget) noexcept;
 
-// Applies the plan to the existing service options. It never enables the service and never changes
-// the per-request allowance, native budgets, or presentation mode.
+// Applies the configured plan to the existing service options. It never enables the service and
+// never changes native budgets or presentation mode. The per-request allowance is only ever
+// lowered to the plan's shared request share.
 void applyGpuResidentBudgetPlan(runtime::GpuPreviewDisplayServiceOptions& options,
                                 const GpuResidentBudgetPlan& plan) noexcept;
 
-// Installs the plan's additive GPU-resident sublimits on the shared frame cache. The overall CPU
-// cache budget is untouched; only the bounded resident subset is capped, and it evicts LRU resident
-// entries (never invalidating a live lease) when it is exceeded.
+// Installs the configured plan's additive GPU-resident sublimits on the shared frame cache. The
+// overall CPU cache budget is untouched; only the bounded resident subset is capped, and it evicts
+// LRU resident entries (never invalidating a live lease) when it is exceeded.
 void applyGpuResidentCacheLimits(PreviewFrameCache& cache,
                                  const GpuResidentBudgetPlan& plan) noexcept;
+
+// Installs the owner-resolved, capacity-clamped plan from the service status. The bootstrap calls
+// this through the existing poll exactly when the resolved capacity changes, so a device that can
+// host a larger resident subset raises the cache limit and a smaller one lowers it without ever
+// touching a device from the UI thread.
+void applyGpuResidentCacheLimits(PreviewFrameCache& cache,
+                                 const runtime::GpuResidentCapacityPlan& plan) noexcept;
 
 // The Wayland presentation bootstrap is requested only when the native loader was actually packaged
 // AND the live platform is Wayland. Every other platform/session keeps the compute-only or
@@ -108,12 +127,21 @@ gpuSceneMediaContextFor(const runtime::CpuCompositionEvaluator& evaluator,
 // freshly copied media context (sharing the coverage + prepared-upload caches) and immediately
 // invokes the existing stage function while that builder is alive. This is the
 // media-follows-session seam; the evaluator's canonical accessors are internally locked.
+//
+// `ocioContextResolver` is the ONE shared, inert runtime::GpuOcioContextResolver. It is resolved on
+// this CPU worker per request (idempotent after the first success) and supplies BOTH the builder's
+// GpuSceneOcioContext (its single shared GpuOcioProgramPreparer and the validated executable-
+// relative tool paths, enabling effects/media/arbitrary ACES working space) and the SAME preparer
+// to the general display program service. A null resolver or a failed resolve keeps the builder's
+// default fail-closed context and every affected request takes the CPU fallback with a reason.
+// Nothing here resolves tools, hashes, or compiles on the UI thread.
 [[nodiscard]] runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
     const runtime::SnapshotCompiler& compiler, const runtime::CpuCompositionEvaluator& evaluator,
-    const runtime::QualifiedDisplayProcessorProvider& qualifiedProcessorProvider,
+    const runtime::QualifiedDisplayProcessorProvider& qualifiedDisplayProcessorProvider,
     std::shared_ptr<runtime::GpuSceneCoverageCache> coverageCache,
     std::shared_ptr<runtime::GpuPreparedUploadCache> uploadCache,
-    CompiledPlanCacheHandle planCache = nullptr);
+    CompiledPlanCacheHandle planCache = nullptr,
+    std::shared_ptr<runtime::GpuOcioContextResolver> ocioContextResolver = nullptr);
 
 // Owns the cached presentation capability for the whole application. It is not a QObject, holds no
 // native handle, and never blocks. The application refreshes it from the EXISTING TaskUiBridge poll
@@ -126,9 +154,15 @@ class GpuViewerBootstrap final {
     GpuViewerBootstrap(runtime::TaskScheduler& scheduler, std::string vulkanLoaderPath,
                        double devicePixelRatio);
 
+    // Inert, UI-thread-safe: binds the shared frame cache whose GPU-resident sublimit follows the
+    // owner-resolved capacity. It queries no device and starts no work; call it once during startup
+    // before the poll begins.
+    void bindResidentCache(PreviewFrameCache& cache) noexcept;
+
     // Cheap, UI-thread-safe: reads only the already-published status. Updates the cached client and
     // invokes the publication sink exactly when the usable client changed -- including a change to
-    // null when the capability is lost.
+    // null when the capability is lost. It also installs the owner-resolved resident cache limit
+    // when that immutable plan changes.
     void refreshFromStatus(const runtime::GpuPreviewDisplayServiceStatus& status);
 
     [[nodiscard]] ViewerGpuDependencies dependencies() const;
@@ -147,6 +181,12 @@ class GpuViewerBootstrap final {
     bool active_ = false;
     std::uint64_t publicationCount_ = 0;
     std::function<void(const ViewerGpuDependencies&)> sink_;
+
+    // Borrowed; the application owns the frame cache and outlives this bootstrap.
+    PreviewFrameCache* residentCache_ = nullptr;
+    // Last capacity plan installed on `residentCache_`. The default (all-zero) never matches a
+    // positive resolved plan, so the first publication always installs.
+    runtime::GpuResidentCapacityPlan appliedResidentPlan_{};
 };
 
 } // namespace bloom::ui

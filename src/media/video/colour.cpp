@@ -41,18 +41,21 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
              const std::shared_ptr<const bloom::color::CpuColorSpaceProcessor>& processor,
              render::Rgba32fImageDescriptor composition, const double horizontalScale,
              const double verticalScale, const std::size_t byteBudget,
-             const std::function<bool()>& cancel) {
+             const std::function<bool()>& cancel, const bool configManaged,
+             const bool applyProcessor) {
     if (!valid(frame) || overrideTransfer > 3 || !std::isfinite(horizontalScale) ||
         !std::isfinite(verticalScale) || horizontalScale <= 0 || horizontalScale > 1 ||
         verticalScale <= 0 || verticalScale > 1)
         return Unavailable{Error::InvalidValue, "Invalid video colour request"};
+    if (configManaged && applyProcessor && processor == nullptr)
+        return Unavailable{Error::InvalidValue,
+                           "A config-managed video conversion needs a colour processor"};
     const auto& tags = frame.colour;
     if (tags.primaries == 9 || tags.transfer == 16 || tags.transfer == 18 || tags.matrix == 9 ||
         tags.matrix == 10)
         return Unavailable{
             Error::Unavailable,
             "Rec.2020, HLG and PQ video are not supported by this preview colour path"};
-    const bool configManaged = processor != nullptr;
     const auto transfer = configManaged           ? 8
                           : overrideTransfer == 1 ? 13
                           : overrideTransfer >= 2 ? 8
@@ -115,7 +118,7 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
                 (*row.value())[x] = *pixel.value();
             }
         }
-        if (configManaged && !processor->apply(convertedRow))
+        if (configManaged && applyProcessor && !processor->apply(convertedRow))
             return Unavailable{Error::Unavailable, "Input colour conversion failed"};
         if (configManaged) {
             for (std::uint32_t x = 0; x < w; ++x) {
@@ -178,7 +181,8 @@ videoToSceneLinear(const FrameProduct& frame, std::uint32_t overrideTransfer,
                    double verticalScale, std::size_t byteBudget,
                    const std::function<bool()>& cancel) {
     return convertVideo(frame, overrideTransfer, {}, {}, composition, horizontalScale,
-                        verticalScale, byteBudget, cancel);
+                        verticalScale, byteBudget, cancel, /*configManaged=*/false,
+                        /*applyProcessor=*/false);
 }
 
 media::provider::Result<render::Rgba32fImage>
@@ -188,7 +192,21 @@ videoToSceneLinear(const FrameProduct& frame, const std::uint32_t overrideTransf
                    render::Rgba32fImageDescriptor composition, const double horizontalScale,
                    const double verticalScale, const std::size_t byteBudget,
                    const std::function<bool()>& cancel) {
+    const bool configManaged = processor != nullptr;
     return convertVideo(frame, overrideTransfer, inputColorSpaceId, processor, composition,
-                        horizontalScale, verticalScale, byteBudget, cancel);
+                        horizontalScale, verticalScale, byteBudget, cancel, configManaged,
+                        /*applyProcessor=*/configManaged);
+}
+
+media::provider::Result<render::Rgba32fImage>
+videoToInputColorSpace(const FrameProduct& frame, const std::uint32_t overrideTransfer,
+                       const std::string_view inputColorSpaceId,
+                       render::Rgba32fImageDescriptor composition, const double horizontalScale,
+                       const double verticalScale, const std::size_t byteBudget,
+                       const std::function<bool()>& cancel) {
+    return convertVideo(frame, overrideTransfer, inputColorSpaceId, {}, composition,
+                        horizontalScale, verticalScale, byteBudget, cancel,
+                        /*configManaged=*/!inputColorSpaceId.empty(),
+                        /*applyProcessor=*/false);
 }
 } // namespace bloom::media::video

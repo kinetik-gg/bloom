@@ -2,8 +2,14 @@
 
 #include "gpu_media_preparation.hpp"
 #include "gpu_scene_coverage.hpp"
+#include "gpu_scene_effect_emission.hpp"
+#include "gpu_scene_layer_emission.hpp"
 #include "gpu_scene_media_layer.hpp"
+#include "gpu_scene_nested.hpp"
+#include "gpu_scene_preparation_builders.hpp"
+#include "gpu_scene_preparation_leaf_emission.hpp"
 #include "gpu_scene_preparation_private.hpp"
+#include "gpu_scene_vector_emission.hpp"
 
 #include "operation_key.hpp"
 #include <bloom/core/blend_mode.hpp>
@@ -32,28 +38,39 @@ namespace {
     return {nullptr, PreparedGpuSceneDiagnostic{code, std::move(message), statistics}};
 }
 
-[[nodiscard]] bool isSubsetOperation(const CompiledOperation& operation) noexcept {
+// The CPU evaluator's vector chain: a solid/text/shape leaf, the composed author-space matrix every
+// enclosing layer multiplied into it, and the accumulated layer opacity. It is propagated through a
+// Layer Output exactly as the evaluator does, so a layer fed by another vector layer rasterizes the
+// ORIGINAL leaf geometry through the full chain rather than resampling an intermediate raster.
+// Defined in gpu_scene_effect_emission.hpp so an identity image effect can propagate it unchanged.
+using detail::GpuSceneVectorChain;
+
+// Operations whose pixels are colour-space agnostic under any resolvable working space, verified
+// against the CPU reference:
+//  * Solid / Text / Shape authored colours are numeric values in the effective working space; the
+//    CPU evaluator only premultiplies them (render::solidPixelFromStraightLinearRec709Scene is a
+//    pure premultiply, no working-space transform), and the GPU solid / coverage commands store the
+//    same premultiplied values, so they are correct for any working space.
+//  * Layer Output / Affine / Translation / Merge / Blend operate on already-resolved premultiplied
+//    values and are colour-space agnostic.
+//  * Image Source / Video Source are decoded raw and converted to the working space through a real
+//    input->working OCIO ProcessEffect command.
+//  * Image Effect resolves its from/to ids in the effective working space.
+//  * A nested composition inherits the working space; the composition output is a passthrough.
+// An operation not listed here is refused for a non-neutral working space, so a future
+// working-space-specific operation cannot silently mis-colour.
+[[nodiscard]] bool isWorkingSpaceAgnosticOperation(const CompiledOperation& operation) noexcept {
     return std::holds_alternative<CompiledSolid>(operation) ||
+           std::holds_alternative<CompiledText>(operation) ||
+           std::holds_alternative<CompiledShape>(operation) ||
            std::holds_alternative<CompiledImageSource>(operation) ||
            std::holds_alternative<CompiledVideoSource>(operation) ||
+           std::holds_alternative<CompiledImageEffect>(operation) ||
            std::holds_alternative<CompiledLayerOutput>(operation) ||
            std::holds_alternative<CompiledMerge>(operation) ||
+           std::holds_alternative<CompiledCompositionSource>(operation) ||
            std::holds_alternative<CompiledCompositionOutput>(operation);
 }
-
-void addWindow(detail::OperationKey& key, const render::ImageWindow window) {
-    key.add(window.originX());
-    key.add(window.originY());
-    key.add(window.extent().width());
-    key.add(window.extent().height());
-}
-
-void addPixelAspect(detail::OperationKey& key, const core::PixelAspectRatio ratio) {
-    key.add(ratio.numerator());
-    key.add(ratio.denominator());
-}
-
-[[nodiscard]] std::string keyDigest(detail::OperationKey& key) { return key.digest(); }
 
 } // namespace
 
@@ -85,12 +102,17 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                       "Compiled plan semantics are unsupported");
     }
     if (request.quality != EvaluationQuality::Reference ||
-        request.colorIntent.workingColorSpaceId != kLinearRec709SceneColorSpaceId ||
-        request.colorIntent.workingColorSpaceId.find('\0') != std::string_view::npos ||
-        request.roi) {
+        request.colorIntent.workingColorSpaceId.find('\0') != std::string_view::npos) {
         return failed(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
-                      "Only Reference quality, lin_rec709_scene, and no ROI are prepared");
+                      "Only Reference quality is prepared");
     }
+    // The non-media prepared subset (solid pixels, vector coverage, image effects) assumes
+    // lin_rec709_scene pixel semantics, so a different working space is refused for it. A
+    // media-only scene carries no such operation: its pixels are resolved through the exact
+    // configured input->working OCIO transform, so an ACES scene-linear working space (or any other
+    // resolvable one) is prepared. The reachable-subset check runs below.
+    const bool neutralWorkingSpace =
+        request.colorIntent.workingColorSpaceId == kLinearRec709SceneColorSpaceId;
     if (plan->operations().empty() || request.output.value() >= plan->operations().size() ||
         request.output != plan->output() ||
         !std::holds_alternative<CompiledCompositionOutput>(
@@ -103,36 +125,22 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     }
 
     const std::size_t operationCount = plan->operations().size();
-    std::vector<bool> reachable(operationCount, false);
-    std::vector<std::size_t> pending{request.output.value()};
-    while (!pending.empty()) {
-        const auto index = pending.back();
-        pending.pop_back();
-        if (index >= operationCount) {
-            return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                          "Plan references an invalid operation");
-        }
-        if (reachable[index]) {
-            continue;
-        }
-        reachable[index] = true;
-        detail::forEachInput(plan->operations()[index], [&pending](const OperationIndex input) {
-            pending.push_back(input.value());
-        });
+    // The reachable-operation subset classifier is extracted to gpu_scene_preparation_builders.hpp.
+    std::vector<bool> reachable;
+    if (const auto error = detail::computeReachablePreparedOperations(*plan, request.output.value(),
+                                                                      cancellation, reachable)) {
+        return failed(error->code, error->message);
     }
-    for (std::size_t index = 0; index < operationCount; ++index) {
-        if (!reachable[index]) {
-            continue;
-        }
-        const auto& operation = plan->operations()[index];
-        if (!isSubsetOperation(operation)) {
-            return failed(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
-                          "A reachable operation is outside the prepared subset");
-        }
-        if (const auto* layer = std::get_if<CompiledLayerOutput>(&operation);
-            layer && layer->parent) {
-            return failed(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
-                          "A parented layer is not prepared");
+    // A non-neutral working space is admitted for every operation whose pixels the CPU reference
+    // resolves in the effective working space (see isWorkingSpaceAgnosticOperation). The display
+    // consumer remains a separate lane.
+    if (!neutralWorkingSpace) {
+        for (std::size_t index = 0; index < operationCount; ++index) {
+            if (reachable[index] && !isWorkingSpaceAgnosticOperation(plan->operations()[index])) {
+                return failed(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
+                              "A non-lin_rec709_scene working space reached an operation without "
+                              "verified working-space semantics");
+            }
         }
     }
 
@@ -144,8 +152,16 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         const auto code = checked.diagnostic.has_value()
                               ? checked.diagnostic->code
                               : EvaluationDiagnosticCode::InternalInvariant;
-        std::string message = checked.diagnostic.has_value() ? checked.diagnostic->summary
-                                                             : std::string{"Preflight failed"};
+        std::string message;
+        if (checked.diagnostic.has_value()) {
+            message = checked.diagnostic->summary;
+            if (message.empty()) {
+                message = checked.diagnostic->detail;
+            }
+        }
+        if (message.empty()) {
+            message = "Preflight failed";
+        }
         return failed(code == EvaluationDiagnosticCode::PixelStorageBudgetExceeded
                           ? PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded
                           : PreparedGpuSceneDiagnosticCode::PreflightFailure,
@@ -169,8 +185,6 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
 
     const double hScale = resolved.horizontalScale;
     const double vScale = resolved.verticalScale;
-    const double authorWidth = static_cast<double>(plan->format().width());
-    const double authorHeight = static_cast<double>(plan->format().height());
 
     // Screen every reachable layer for an unsupported blend or transform BEFORE any media leaf is
     // resolved or decoded, so a graph containing an unsupported layer never prepares -- and never
@@ -191,6 +205,15 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     std::vector<EvaluatedOperationBounds> bounds(operationCount);
     std::vector<std::optional<render::ImageWindow>> outputWindowOf(operationCount);
     std::vector<std::string> keyOf(operationCount);
+    // Per-operation author-space composed layer matrix (parent*child) and vector chain, exactly as
+    // the CPU evaluator computes them in operation order before it evaluates any layer.
+    std::vector<std::optional<detail::LayerMatrix>> layerMatrices(operationCount);
+    std::vector<std::optional<GpuSceneVectorChain>> vectors(operationCount);
+    // Reachable text leaves publish no command of their own; the Layer Output that consumes one
+    // builds the coverage command from the layer matrix. This records that consumption so a text
+    // that reaches the output by any other route fails closed instead of silently disappearing.
+    std::vector<bool> textConsumed(operationCount, false);
+    std::vector<bool> shapeConsumed(operationCount, false);
 
     const auto emit = [&](GpuSceneCommand command) -> GpuSceneCommandIndex {
         const auto index = static_cast<GpuSceneCommandIndex>(commands.size());
@@ -199,14 +222,18 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         return index;
     };
 
-    // Concurrently-held budget: every prepared command's resident output PLUS each unique coverage
-    // raster (shared_ptr identity counts once, so a cache alias is not double charged) must fit the
-    // request's pixel allowance. Overflow-checked with subtraction-only comparators. The coverage
-    // cache's own retained-byte budget is separate ownership accounting and is not charged here.
+    // The prepared scene RETAINS only host allocations: the frozen upload images and the coverage
+    // rasters. Every other command (solid, translation, affine, blend, merge, composition output)
+    // is a window + transform description whose RGBA32F output is allocated at executor time under
+    // the executor's own LIVE-pin budget. Summing those mutually exclusive output lifetimes into
+    // one per-request total refuses graphs the executor -- and the CPU reference -- can actually
+    // run (for example a 4608x3164 source over an FHD solid and text). Only the retained host set
+    // is bounded here; GPU residency is bounded by GpuSceneExecutor::begin(scene, budget), which
+    // takes the honest CPU fallback on refusal. Overflow-checked with subtraction-only comparators.
     const std::uint64_t allowance = request.pixelStorageByteLimit;
-    std::uint64_t chargedBytes = 0;
+    std::uint64_t retainedBytes = 0;
     std::unordered_set<const void*> countedCoverage;
-    const auto charge =
+    const auto chargeRetained =
         [&](const std::uint64_t width, const std::uint64_t height,
             const std::uint64_t bytesPerPixel) -> std::optional<detail::GpuSceneLeafFailure> {
         if (width == 0 || height == 0) {
@@ -220,24 +247,43 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
                 "Prepared command size overflows"};
         }
-        if (chargedBytes > allowance || *bytes > allowance - chargedBytes) {
+        if (retainedBytes > allowance || *bytes > allowance - retainedBytes) {
             return detail::GpuSceneLeafFailure{
                 PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
                 "Prepared scene exceeds the request pixel allowance"};
         }
-        chargedBytes += *bytes;
+        retainedBytes += *bytes;
         return std::nullopt;
     };
-    const auto chargeCoverage =
-        [&](const std::shared_ptr<const std::vector<std::uint8_t>>& coverage,
-            const std::uint64_t width,
-            const std::uint64_t height) -> std::optional<detail::GpuSceneLeafFailure> {
-        if (coverage == nullptr || !countedCoverage.insert(coverage.get()).second) {
+    // GPU-transient outputs are not summed here; the executor's live-pin ledger bounds them.
+    const auto chargeTransient = [](const std::uint64_t, const std::uint64_t, const std::uint64_t)
+        -> std::optional<detail::GpuSceneLeafFailure> { return std::nullopt; };
+    // Charge the ACTUAL retained host coverage bytes once per unique representation, with the exact
+    // helper the nested child total uses. It is never width*height*1: the geometry retains O(rows)
+    // ranges plus spans, so a simple full-width vector is far smaller than its R8 mask and a
+    // complexity-heavy one can be larger.
+    const auto chargeCoverage = [&](const GpuSceneCoverageSolidCommand& command)
+        -> std::optional<detail::GpuSceneLeafFailure> {
+        const void* coverageIdentity = command.coverageIdentity();
+        if (coverageIdentity == nullptr || !countedCoverage.insert(coverageIdentity).second) {
             return std::nullopt;
         }
-        return charge(width, height, sizeof(std::uint8_t));
+        const std::uint64_t bytes = detail::gpuSceneCoverageHostBytes(command);
+        if (retainedBytes > allowance || bytes > allowance - retainedBytes) {
+            return detail::GpuSceneLeafFailure{
+                PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
+                "Prepared scene exceeds the request pixel allowance"};
+        }
+        retainedBytes += bytes;
+        return std::nullopt;
     };
 
+    // Test-only checkpoint (empty in production): a test can pause preparation here, request
+    // cancellation, then release it so the per-operation cancellation check below observes a
+    // genuinely mid-build request deterministically.
+    if (checkpoint_) {
+        checkpoint_();
+    }
     for (std::size_t index = 0; index < operationCount; ++index) {
         if (!reachable[index]) {
             continue;
@@ -249,166 +295,188 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         const auto& operation = plan->operations()[index];
 
         if (const auto* solid = std::get_if<CompiledSolid>(&operation)) {
-            const auto color = detail::resolveParameter(solid->color, *plan, resolved);
-            const auto width = detail::resolveParameter(solid->width, *plan, resolved);
-            const auto height = detail::resolveParameter(solid->height, *plan, resolved);
-            if (!color || !width || !height || width->value < 1.0 || height->value < 1.0) {
-                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                              "Solid parameters are not evaluable");
-            }
-            const auto pixel = render::solidPixelFromStraightLinearRec709Scene(color->value);
-            if (!pixel) {
-                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                              "Solid colour is not evaluable");
-            }
-            double exactWidth = static_cast<double>(fullWindow.extent().width());
-            double exactHeight = static_cast<double>(fullWindow.extent().height());
-            if (width->value != authorWidth) {
-                exactWidth = width->value * hScale;
-            }
-            if (height->value != authorHeight) {
-                exactHeight = height->value * vScale;
-            }
-            const auto w = std::ceil(exactWidth);
-            const auto h = std::ceil(exactHeight);
-            if (!std::isfinite(w) || !std::isfinite(h) || w > 16777216.0 || h > 16777216.0) {
-                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                              "Solid dimensions exceed the supported extent");
-            }
-            const auto window = render::ImageWindow::create(0, 0, static_cast<std::uint64_t>(w),
-                                                            static_cast<std::uint64_t>(h));
-            if (!window) {
-                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                              "Solid bounds are invalid");
-            }
-            const auto descriptor = render::Rgba32fImageDescriptor::create(
-                *window.value(), fullDisplayWindow, fullPixelAspect);
-            if (!descriptor) {
-                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                              "Solid descriptor is invalid");
-            }
-            const auto solidWindow = descriptor.value()->dataWindow();
-            const auto solidDisplay = descriptor.value()->displayWindow();
-            const auto solidAspect = descriptor.value()->pixelAspect();
-            auto& entry = bounds[index];
-            entry.local = detail::boundsForWindow(solidWindow, hScale, vScale);
-            entry.local.right = width->value;
-            entry.local.bottom = height->value;
-            entry.output = entry.local;
-            outputWindowOf[index] = solidWindow;
-
-            detail::OperationKey key;
-            key.add(std::string{"gpu-solid-v1"});
-            key.add(std::bit_cast<std::uint32_t>(pixel.value()->red()));
-            key.add(std::bit_cast<std::uint32_t>(pixel.value()->green()));
-            key.add(std::bit_cast<std::uint32_t>(pixel.value()->blue()));
-            key.add(std::bit_cast<std::uint32_t>(pixel.value()->alpha()));
-            addWindow(key, solidWindow);
-            addWindow(key, solidDisplay);
-            addPixelAspect(key, solidAspect);
-            key.add(std::string{detail::kGpuSolidSpirvSha256});
-            keyOf[index] = keyDigest(key);
-
-            if (const auto error = charge(solidWindow.extent().width(),
-                                          solidWindow.extent().height(), sizeof(render::Rgba32f))) {
+            if (const auto error = detail::emitSolidCommand(
+                    *solid, *plan, resolved, index, operationIndex, fullWindow, fullDisplayWindow,
+                    fullPixelAspect, hScale, vScale, emit, chargeTransient, commandForOperation,
+                    keyOf, outputWindowOf, bounds, vectors)) {
                 return failed(error->code, error->message);
             }
-            GpuSceneSolidCommand command{.sourceOperation = operationIndex,
-                                         .pixel = *pixel.value(),
-                                         .dataWindow = solidWindow,
-                                         .displayWindow = solidDisplay,
-                                         .pixelAspect = solidAspect,
-                                         .semanticKey = keyOf[index]};
-            commandForOperation[index] = emit(std::move(command));
             continue;
         }
 
-        if (const auto* image = std::get_if<CompiledImageSource>(&operation)) {
-            const auto remainingBudget = allowance > chargedBytes ? allowance - chargedBytes : 0;
+        if (std::holds_alternative<CompiledText>(operation) ||
+            std::holds_alternative<CompiledShape>(operation)) {
+            // A text or shape leaf emits no command of its own: the Layer Output that consumes it
+            // builds the vector-coverage command from the layer matrix. Consumption is recorded
+            // there and checked after the loop, so a vector leaf reaching the output by any other
+            // route fails closed. Its own evaluated bounds are still published here so the prepared
+            // scene's bounds match the CPU frame exactly, leaf included.
+            if (const auto error = detail::publishVectorLeafBounds(
+                    operation, *plan, resolved, allowance, hScale, vScale, cancellation, index,
+                    outputWindowOf, bounds)) {
+                return failed(error->code, error->message, mediaStatistics);
+            }
+            vectors[index] = GpuSceneVectorChain{index, {}, 1.0};
+            continue;
+        }
+
+        if (std::holds_alternative<CompiledImageSource>(operation) ||
+            std::holds_alternative<CompiledVideoSource>(operation)) {
+            // The RAW upload is host-retained (charged against `retainedBytes`); the point-resample
+            // and OCIO outputs are GPU-transient and charged through `chargeTransient` (a no-op
+            // under main's host-only accounting, where the executor's live-pin ledger bounds GPU
+            // residency).
+            const auto remainingBudget = allowance > retainedBytes ? allowance - retainedBytes : 0;
             detail::GpuSceneUploadLeafResult leaf;
-            const auto error = detail::buildImageUploadLeaf(
-                *image, request, *plan, resolved, mediaContext_, remainingBudget, hScale, vScale,
-                charge, cancellation, mediaStatistics, leaf);
+            const auto error = detail::buildAndEmitMediaLeaf(
+                operation, operationIndex, request, *plan, resolved, mediaContext_, ocioContext_,
+                remainingBudget, hScale, vScale, chargeRetained, chargeTransient, cancellation,
+                mediaStatistics, emit, outputWindowOf[index], commandForOperation[index],
+                keyOf[index], leaf);
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
             }
             bounds[index] = leaf.bounds;
-            outputWindowOf[index] = leaf.outputWindow;
-            keyOf[index] = leaf.semanticKey;
-            if (!leaf.descriptor.has_value()) {
-                return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                              "the upload leaf produced no image descriptor");
-            }
-            GpuSceneUploadCommand command{.sourceOperation = operationIndex,
-                                          .image = std::move(leaf.image),
-                                          .descriptor = *leaf.descriptor,
-                                          .semanticKey = leaf.semanticKey};
-            commandForOperation[index] = emit(std::move(command));
             continue;
         }
 
-        if (const auto* video = std::get_if<CompiledVideoSource>(&operation)) {
-            const auto remainingBudget = allowance > chargedBytes ? allowance - chargedBytes : 0;
-            detail::GpuSceneUploadLeafResult leaf;
-            const auto error = detail::buildVideoUploadLeaf(
-                *video, request, *plan, resolved, mediaContext_, remainingBudget, hScale, vScale,
-                charge, cancellation, mediaStatistics, leaf);
+        if (const auto* effect = std::get_if<CompiledImageEffect>(&operation)) {
+            const detail::GpuSceneEffectEmissionContext effectContext{
+                .plan = plan.get(),
+                .request = &request,
+                .resolved = &resolved,
+                .vectors = &vectors,
+                .commandForOperation = &commandForOperation,
+                .keyOf = &keyOf,
+                .outputWindowOf = &outputWindowOf,
+                .bounds = &bounds,
+                .commands = &commands,
+                .fullDisplayWindow = fullDisplayWindow,
+                .fullPixelAspect = fullPixelAspect,
+                .hScale = hScale,
+                .vScale = vScale,
+                .allowance = allowance,
+                .assetBaseDirectory = mediaContext_.assetBaseDirectory,
+                .coverageCache = coverageCache_,
+            };
+            if (const auto error = detail::emitImageEffectOperation(
+                    *effect, operationIndex, effectContext, ocioContext_, cancellation, emit,
+                    chargeTransient, chargeCoverage, commandForOperation, keyOf, outputWindowOf,
+                    bounds, vectors, textConsumed, shapeConsumed)) {
+                return failed(error->code, error->message, mediaStatistics);
+            }
+            continue;
+        }
+
+        if (const auto* source = std::get_if<CompiledCompositionSource>(&operation)) {
+            // A nested composition is prepared by recursively building the CHILD plan with this
+            // same production builder and splicing its genuine GPU commands into this list. The
+            // child's terminal Composition Output command is aliased as this operation's image; the
+            // child's content-addressed command keys are preserved, so an unrelated child edit
+            // still reuses every untouched branch. No finished child frame is ever CPU-uploaded.
+            detail::GpuSceneNestedResult nested;
+            const auto error = detail::prepareNestedComposition(
+                *source, *plan, request, resolved, hScale, vScale, detail::nestedCompositionDepth(),
+                allowance, retainedBytes, cancellation,
+                [this](const std::shared_ptr<const CompiledCompositionPlan>& childPlan,
+                       const EvaluationRequest& childRequest, const CancellationToken& cancel) {
+                    return build(childPlan, childRequest, cancel);
+                },
+                commands, nested);
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
             }
-            bounds[index] = leaf.bounds;
-            outputWindowOf[index] = leaf.outputWindow;
-            keyOf[index] = leaf.semanticKey;
-            if (!leaf.descriptor.has_value()) {
+            if (!nested.outputWindow.has_value()) {
                 return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                              "the upload leaf produced no image descriptor");
+                              "Nested composition published no output window", mediaStatistics);
             }
-            GpuSceneUploadCommand command{.sourceOperation = operationIndex,
-                                          .image = std::move(leaf.image),
-                                          .descriptor = *leaf.descriptor,
-                                          .semanticKey = leaf.semanticKey};
-            commandForOperation[index] = emit(std::move(command));
+            bounds[index] = nested.bounds;
+            outputWindowOf[index] = *nested.outputWindow;
+            keyOf[index] = nested.outputKey;
+            commandForOperation[index] = nested.outputCommand;
             continue;
         }
 
         if (const auto* layer = std::get_if<CompiledLayerOutput>(&operation)) {
-            // The CPU Layer Output stage publishes no image and no bounds outside its active range.
-            if (request.time < layer->inPoint ||
-                (layer->outPoint.has_value() && request.time >= *layer->outPoint)) {
-                continue;
-            }
             const auto position = detail::resolveParameter(layer->position, *plan, resolved);
             const auto anchor = detail::resolveParameter(layer->anchor, *plan, resolved);
             const auto scale = detail::resolveParameter(layer->scale, *plan, resolved);
             const auto rotation = detail::resolveParameter(layer->rotation, *plan, resolved);
             const auto opacity = detail::resolveParameter(layer->opacity, *plan, resolved);
-            const auto blend = detail::resolveParameter(*layer, resolved);
-            if (!position || !anchor || !scale || !rotation || !opacity || !blend) {
+            if (!position || !anchor || !scale || !rotation || !opacity) {
                 return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                               "Layer parameters are not evaluable");
             }
-            if (*blend != core::BlendMode::Normal) {
-                return failed(PreparedGpuSceneDiagnosticCode::UnsupportedBlend,
-                              "Only Normal blending is prepared");
+            const std::size_t inputIndexValue = layer->input.value();
+            if (inputIndexValue >= operationCount) {
+                return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                              "Layer input is invalid");
             }
-            // Only a direct solid or media source is in this subset. A layer fed by another layer
-            // (or a merge) would build a nested vector chain, which is deliberately NOT
-            // approximated here. A solid takes the vector-coverage path; media always takes the
-            // raster translation path, exactly as the CPU evaluator does.
-            const auto& inputOperation = plan->operations()[layer->input.value()];
-            const auto* solidInput = std::get_if<CompiledSolid>(&inputOperation);
-            const bool mediaInput = std::holds_alternative<CompiledImageSource>(inputOperation) ||
-                                    std::holds_alternative<CompiledVideoSource>(inputOperation);
-            if (solidInput == nullptr && !mediaInput) {
-                return failed(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
-                              "A layer fed by a non-source input is not prepared");
+            // The input's command, window and authored content bounds. A vector leaf (solid, text,
+            // shape) published them when it was reached; a merge or another layer published its own
+            // raster command and bounds. A parent chain is resolved through the parent matrix.
+            const auto& inputVec = vectors[inputIndexValue];
+            const GpuSceneCommandIndex inputIndex = commandForOperation[inputIndexValue];
+            std::optional<render::ImageWindow> sourceWindowHolder;
+            ContentBounds inputLocal;
+            if (inputVec.has_value()) {
+                const auto& leafWindow = outputWindowOf[inputIndexValue];
+                if (!leafWindow) {
+                    continue;
+                }
+                sourceWindowHolder = *leafWindow;
+                inputLocal = bounds[inputIndexValue].output;
+            } else {
+                const auto& inputWindow = outputWindowOf[inputIndexValue];
+                if (inputIndex == kInvalidGpuSceneCommand || !inputWindow) {
+                    continue;
+                }
+                sourceWindowHolder = *inputWindow;
+                inputLocal = bounds[inputIndexValue].output;
             }
-            const auto inputIndex = commandForOperation[layer->input.value()];
-            const auto& inputWindow = outputWindowOf[layer->input.value()];
-            if (inputIndex == kInvalidGpuSceneCommand || !inputWindow) {
+            // The CPU evaluator builds the matrix from the input's CONTENT-BOUNDS centre, composes
+            // the parent matrix (which retains shear and inherits neither visibility nor opacity),
+            // and records it for every layer whether or not the layer is active. The layer's own
+            // published bounds are only written inside its active range, exactly as on the CPU.
+            const auto centre = inputLocal.centre();
+            const auto authoredMatrix = detail::LayerMatrix::authored(
+                position->value, {centre.x + anchor->value.x, centre.y + anchor->value.y},
+                scale->value, rotation->value);
+            detail::LayerMatrix composed = authoredMatrix;
+            if (layer->parent) {
+                const auto parentIndex = layer->parent->value();
+                if (parentIndex >= operationCount) {
+                    return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                                  "Layer parent matrix is unavailable");
+                }
+                const auto& parentMatrix = layerMatrices[parentIndex];
+                if (!parentMatrix.has_value()) {
+                    return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                                  "Layer parent matrix is unavailable");
+                }
+                composed = parentMatrix->times(authoredMatrix);
+            }
+            layerMatrices[index] = composed;
+            std::optional<detail::GpuSceneVectorChain> chained;
+            if (inputVec.has_value()) {
+                chained = GpuSceneVectorChain{inputVec->source, composed.times(inputVec->matrix),
+                                              inputVec->opacity * opacity->value};
+                vectors[index] = *chained;
+            }
+            // The CPU Layer Output stage publishes no image and no bounds outside its active range.
+            if (request.time < layer->inPoint ||
+                (layer->outPoint.has_value() && request.time >= *layer->outPoint)) {
                 continue;
             }
-            const auto sourceWindow = *inputWindow;
+            if (scale->value.x == 0.0 || scale->value.y == 0.0 || inputLocal.empty()) {
+                continue;
+            }
+            auto& geometry = bounds[index];
+            geometry.layerId = layer->layerId;
+            geometry.local = inputLocal;
+            const auto sourceWindow = *sourceWindowHolder;
+            const auto bufferCentre =
+                detail::boundsForWindow(sourceWindow, hScale, vScale).centre();
             render::LayerTransform::Authored authored{
                 .anchorX = anchor->value.x,
                 .anchorY = anchor->value.y,
@@ -417,18 +485,6 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 .rotationDegrees = rotation->value,
                 .opacity = opacity->value,
             };
-            if (authored.scaleX == 0.0 || authored.scaleY == 0.0) {
-                continue;
-            }
-            auto& geometry = bounds[index];
-            geometry.layerId = layer->layerId;
-            geometry.local = bounds[layer->input.value()].output;
-            if (geometry.local.empty()) {
-                continue;
-            }
-            const auto centre = geometry.local.centre();
-            const auto bufferCentre =
-                detail::boundsForWindow(sourceWindow, hScale, vScale).centre();
             authored.translationX = position->value.x - centre.x - anchor->value.x;
             authored.translationY = position->value.y - centre.y - anchor->value.y;
             authored.anchorX = centre.x - bufferCentre.x + anchor->value.x;
@@ -444,19 +500,29 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                               "Layer transform is not evaluable");
             }
-            if (!transform.value()->isTranslationOnly()) {
-                return failed(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
-                              "Only translation-only layers are prepared");
+            std::optional<detail::ParentedLayerTransform> parented;
+            if (layer->parent) {
+                parented.emplace(composed, sourceWindow, hScale, vScale,
+                                 static_cast<float>(opacity->value));
+                if (!parented->finite()) {
+                    return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                                  "Parented transform exceeds the supported numeric range");
+                }
+                if (!parented->invertible()) {
+                    continue;
+                }
             }
             const auto workingWindow =
                 render::ImageWindow::create(-16777216, -16777216, 33554432, 33554432);
-            const auto layerWindow = transform.value()->supportBounds(*workingWindow.value());
+            const auto layerWindow = parented
+                                         ? parented->supportBounds(*workingWindow.value())
+                                         : transform.value()->supportBounds(*workingWindow.value());
             if (!layerWindow) {
                 continue;
             }
             const auto& transformValue = *transform.value();
             const auto forward = [&](const double x, const double y) {
-                return transformValue.forwardMap(x, y);
+                return parented ? parented->forwardMap(x, y) : transformValue.forwardMap(x, y);
             };
             const auto map = [&](const document::Vec2d point) {
                 const auto mapped =
@@ -479,201 +545,117 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             geometry.anchor = map({centre.x + anchor->value.x, centre.y + anchor->value.y});
             outputWindowOf[index] = *layerWindow;
 
-            // The CPU evaluator keys the vector chain by the authored matrix built from the input's
-            // CONTENT-BOUNDS centre (not the pixel-area centre), and uses the raster coverage path
-            // whenever its device translation is not on the integer grid.
-            const auto matrixPivot = geometry.local.centre();
-            const auto matrix = detail::LayerMatrix::authored(
-                position->value, {matrixPivot.x + anchor->value.x, matrixPivot.y + anchor->value.y},
-                scale->value, rotation->value);
-            const bool nativeGrid = matrix.a == 1 && matrix.b == 0 && matrix.c == 0 &&
-                                    matrix.d == 1 &&
-                                    matrix.x * hScale == std::floor(matrix.x * hScale) &&
-                                    matrix.y * vScale == std::floor(matrix.y * vScale);
+            const auto isNativeGrid = [&](const detail::LayerMatrix& matrix) {
+                return matrix.a == 1 && matrix.b == 0 && matrix.c == 0 && matrix.d == 1 &&
+                       matrix.x * hScale == std::floor(matrix.x * hScale) &&
+                       matrix.y * vScale == std::floor(matrix.y * vScale);
+            };
+            const bool nativeGrid = isNativeGrid(composed);
+            // The full AUTHOR-space chain matrix the CPU rasterizes through: the enclosing layers'
+            // composed matrix multiplied into the input's own chain. For a direct leaf this is just
+            // the layer's own matrix.
+            const detail::LayerMatrix chainMatrix =
+                chained.has_value() ? chained->matrix : composed;
 
-            // Media has no vector chain, so the CPU evaluator always resamples it with the raster
-            // (bilinear) path regardless of whether the device translation is on the integer grid;
-            // the translation command reproduces that path exactly. Solids keep the coverage path
-            // whenever the grid is fractional.
-            if (nativeGrid || mediaInput) {
-                const auto device = transformValue.translationOnlyDeviceTranslation();
-                if (!device.has_value()) {
-                    return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                                  "Translation-only transform lost its device translation");
+            if (inputVec.has_value()) {
+                // A vector layer (direct leaf or a chain through enclosing layers) is rasterized by
+                // the CPU evaluator's PathRaster through the FULL composed matrix, never resampled
+                // as an intermediate raster. A direct solid on the integer grid keeps the exact
+                // optimized translation command; every other vector layer emits coverage.
+                const std::size_t chainSource = inputVec->source;
+                const auto& leafOperation = plan->operations()[chainSource];
+                const bool direct = chainSource == inputIndexValue;
+                if (direct && !layer->parent &&
+                    std::holds_alternative<CompiledSolid>(leafOperation) && nativeGrid) {
+                    const auto delta = detail::translationOnlyDeviceDelta(
+                        transformValue, sourceWindow, *layerWindow);
+                    if (!delta.has_value()) {
+                        return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                                      "Translation-only transform lost its device translation");
+                    }
+                    if (const auto error = detail::emitTranslationOpacityCommand(
+                            inputIndex, keyOf[inputIndexValue], sourceWindow, *layerWindow,
+                            delta->first, delta->second, opacity->value, fullPixelAspect,
+                            operationIndex, chargeTransient, emit, commandForOperation[index],
+                            keyOf[index])) {
+                        return failed(error->code, error->message);
+                    }
+                    continue;
                 }
-                const double gpuTranslationX =
-                    device->x - (static_cast<double>(layerWindow->originX()) -
-                                 static_cast<double>(sourceWindow.originX()));
-                const double gpuTranslationY =
-                    device->y - (static_cast<double>(layerWindow->originY()) -
-                                 static_cast<double>(sourceWindow.originY()));
-                detail::OperationKey key;
-                key.add(std::string{"gpu-translation-opacity-v1"});
-                key.add(keyOf[layer->input.value()]);
-                key.add(gpuTranslationX);
-                key.add(gpuTranslationY);
-                key.add(std::bit_cast<std::uint32_t>(static_cast<float>(opacity->value)));
-                addWindow(key, sourceWindow);
-                addWindow(key, *layerWindow);
-                addPixelAspect(key, fullPixelAspect);
-                key.add(std::string{detail::kGpuTranslationOpacitySpirvSha256});
-                keyOf[index] = keyDigest(key);
-
-                if (const auto error =
-                        charge(layerWindow->extent().width(), layerWindow->extent().height(),
-                               sizeof(render::Rgba32f))) {
+                GpuSceneCommandIndex composedIndex = kInvalidGpuSceneCommand;
+                std::string semanticKey;
+                bool consumedTextLeaf = false;
+                bool consumedShapeLeaf = false;
+                const bool leafPath = direct && nativeGrid;
+                if (const auto error = detail::emitVectorLeafLayer(
+                        leafOperation, *plan, resolved, chainMatrix, *layerWindow,
+                        fullDisplayWindow, fullPixelAspect, hScale, vScale,
+                        inputVec->opacity * opacity->value, leafPath && nativeGrid, allowance,
+                        operationIndex, &transformValue, coverageCache_, cancellation, emit,
+                        chargeTransient, chargeCoverage, composedIndex, semanticKey,
+                        consumedTextLeaf, consumedShapeLeaf)) {
                     return failed(error->code, error->message);
                 }
-                GpuSceneTranslationCommand command{.sourceOperation = operationIndex,
-                                                   .input = inputIndex,
-                                                   .sourceWindow = sourceWindow,
-                                                   .outputWindow = *layerWindow,
-                                                   .translationX = gpuTranslationX,
-                                                   .translationY = gpuTranslationY,
-                                                   .opacity = static_cast<float>(opacity->value),
-                                                   .semanticKey = keyOf[index]};
-                commandForOperation[index] = emit(std::move(command));
+                keyOf[index] = semanticKey;
+                commandForOperation[index] = composedIndex;
+                textConsumed[chainSource] = textConsumed[chainSource] || consumedTextLeaf;
+                shapeConsumed[chainSource] = shapeConsumed[chainSource] || consumedShapeLeaf;
                 continue;
             }
 
-            // Fractional device grid: the CPU composes this layer through its vector-coverage path.
-            GpuSceneCoverageSolidCommand coverageCommand{
-                .index = kInvalidGpuSceneCommand,
-                .sourceOperation = operationIndex,
-                .pixel = render::Rgba32f::transparent(),
-                .opacity = 1.0F,
-                .coverage = nullptr,
-                .outputWindow = *layerWindow,
-                .displayWindow = fullDisplayWindow,
-                .pixelAspect = fullPixelAspect,
-                .geometryKey = {},
-                .semanticKey = {},
-            };
-            const auto chargeResidentBytes = [&](const std::uint64_t width,
-                                                 const std::uint64_t height,
-                                                 const std::uint64_t bytesPerPixel)
-                -> std::optional<detail::GpuSceneLeafFailure> {
-                return charge(width, height, bytesPerPixel);
-            };
-            if (const auto error = detail::buildCoverageSolidLeaf(
-                    *solidInput, *plan, resolved, matrix, *layerWindow, fullDisplayWindow,
-                    fullPixelAspect, hScale, vScale, opacity->value, coverageCache_,
-                    chargeResidentBytes, cancellation, coverageCommand)) {
+            // A raster input (media, merge, or another raster layer). The exact translation path is
+            // retained when it applies; every other affine appears on the accepted GpuAffine
+            // command so rotation, nonuniform/signed scale, anchor and any parent-composed shear
+            // are exact.
+            if (!layer->parent) {
+                if (const auto delta = detail::translationOnlyDeviceDelta(
+                        transformValue, sourceWindow, *layerWindow)) {
+                    if (const auto error = detail::emitTranslationOpacityCommand(
+                            inputIndex, keyOf[inputIndexValue], sourceWindow, *layerWindow,
+                            delta->first, delta->second, opacity->value, fullPixelAspect,
+                            operationIndex, chargeTransient, emit, commandForOperation[index],
+                            keyOf[index])) {
+                        return failed(error->code, error->message);
+                    }
+                    continue;
+                }
+            }
+            if (const auto error = detail::emitAffineLayerCommand(
+                    inputIndex, keyOf[inputIndexValue], sourceWindow, *layerWindow, composed,
+                    hScale, vScale, opacity->value, fullPixelAspect, operationIndex,
+                    chargeTransient, emit, commandForOperation[index], keyOf[index])) {
                 return failed(error->code, error->message);
             }
-            if (const auto error =
-                    chargeCoverage(coverageCommand.coverage, layerWindow->extent().width(),
-                                   layerWindow->extent().height())) {
-                return failed(error->code, error->message);
-            }
-            keyOf[index] = coverageCommand.semanticKey;
-            coverageCommand.sourceOperation = operationIndex;
-            commandForOperation[index] = emit(std::move(coverageCommand));
             continue;
         }
 
         if (const auto* stack = std::get_if<CompiledMerge>(&operation)) {
-            ContentBounds storage;
-            for (const auto& entry : stack->entries) {
-                bounds[index].local =
-                    detail::unionBounds(bounds[index].local, bounds[entry.input.value()].output);
-                const auto& entryWindow = outputWindowOf[entry.input.value()];
-                if (entryWindow) {
-                    storage = detail::unionBounds(storage,
-                                                  detail::boundsForWindow(*entryWindow, 1.0, 1.0));
-                }
-            }
-            bounds[index].output = bounds[index].local;
-            auto descriptor = resolved.imageDescriptor;
-            if (!storage.empty()) {
-                const auto window = render::ImageWindow::create(
-                    static_cast<std::int64_t>(storage.left), static_cast<std::int64_t>(storage.top),
-                    static_cast<std::uint64_t>(storage.right - storage.left),
-                    static_cast<std::uint64_t>(storage.bottom - storage.top));
-                if (!window) {
-                    return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                                  "Merge bounds are invalid");
-                }
-                const auto local = render::Rgba32fImageDescriptor::create(
-                    *window.value(), descriptor.displayWindow(), descriptor.pixelAspect());
-                if (!local) {
-                    return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                                  "Merge descriptor is invalid");
-                }
-                descriptor = *local.value();
-            }
-            outputWindowOf[index] = descriptor.dataWindow();
-
-            std::vector<GpuSceneCommandIndex> foregrounds;
-            detail::OperationKey key;
-            key.add(std::string{"gpu-source-over-chain-v1"});
-            for (auto entry = stack->entries.rbegin(); entry != stack->entries.rend(); ++entry) {
-                if (const auto* layerOutput =
-                        std::get_if<CompiledLayerOutput>(&plan->operations()[entry->input.value()]);
-                    layerOutput != nullptr && entry->layerId.isValid()) {
-                    const auto blend = detail::resolveParameter(*layerOutput, resolved);
-                    if (!blend || *blend != core::BlendMode::Normal) {
-                        return failed(PreparedGpuSceneDiagnosticCode::UnsupportedBlend,
-                                      "Only Normal merge entries are prepared");
-                    }
-                }
-                const auto inner = commandForOperation[entry->input.value()];
-                if (inner == kInvalidGpuSceneCommand) {
-                    continue;
-                }
-                foregrounds.push_back(inner);
-                key.add(keyOf[entry->input.value()]);
-            }
-            addWindow(key, descriptor.dataWindow());
-            addWindow(key, descriptor.displayWindow());
-            addPixelAspect(key, descriptor.pixelAspect());
-            key.add(std::string{detail::kGpuSourceOverSpirvSha256});
-            keyOf[index] = keyDigest(key);
-
-            if (const auto error =
-                    charge(descriptor.dataWindow().extent().width(),
-                           descriptor.dataWindow().extent().height(), sizeof(render::Rgba32f))) {
+            if (const auto error = detail::emitMergeCommand(
+                    *stack, *plan, resolved, index, bounds, outputWindowOf, commandForOperation,
+                    keyOf, operationIndex, emit, chargeTransient)) {
                 return failed(error->code, error->message);
             }
-            GpuSceneMergeCommand command{.sourceOperation = operationIndex,
-                                         .foregrounds = std::move(foregrounds),
-                                         .outputWindow = descriptor.dataWindow(),
-                                         .displayWindow = descriptor.displayWindow(),
-                                         .pixelAspect = descriptor.pixelAspect(),
-                                         .semanticKey = keyOf[index]};
-            commandForOperation[index] = emit(std::move(command));
             continue;
         }
 
         if (const auto* output = std::get_if<CompiledCompositionOutput>(&operation)) {
-            bounds[index] = bounds[output->input.value()];
-            const auto inner = commandForOperation[output->input.value()];
-            detail::OperationKey key;
-            key.add(std::string{"gpu-composition-output-v1"});
-            key.add(inner == kInvalidGpuSceneCommand ? std::string{"none"}
-                                                     : keyOf[output->input.value()]);
-            addWindow(key, resolved.imageDescriptor.dataWindow());
-            addPixelAspect(key, resolved.imageDescriptor.pixelAspect());
-            keyOf[index] = keyDigest(key);
-
-            if (const auto error = charge(resolved.imageDescriptor.dataWindow().extent().width(),
-                                          resolved.imageDescriptor.dataWindow().extent().height(),
-                                          sizeof(render::Rgba32f))) {
+            if (const auto error = detail::emitCompositionOutputCommand(
+                    *output, resolved, index, operationIndex, emit, chargeTransient,
+                    commandForOperation, keyOf, bounds)) {
                 return failed(error->code, error->message);
             }
-            GpuSceneCompositionOutputCommand command{
-                .sourceOperation = operationIndex,
-                .input = inner,
-                .dataWindow = resolved.imageDescriptor.dataWindow(),
-                .displayWindow = resolved.imageDescriptor.displayWindow(),
-                .pixelAspect = resolved.imageDescriptor.pixelAspect(),
-                .semanticKey = keyOf[index]};
-            commandForOperation[index] = emit(std::move(command));
             continue;
         }
 
         return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
                       "Reachable operation was not handled");
+    }
+
+    // A reachable vector leaf that no prepared layer consumed has no representation in this subset;
+    // fail closed rather than publish a scene whose output silently omits it.
+    if (detail::hasUnconsumedVectorLeaf(*plan, reachable, textConsumed, shapeConsumed)) {
+        return failed(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                      "A vector source not consumed by a prepared layer is not prepared");
     }
 
     ProcessFrameIdentity identity{

@@ -22,6 +22,7 @@ namespace {
 
 using bloom::render::GpuBorrowedSurface;
 using bloom::render::GpuPresentationEpoch;
+using bloom::render::GpuPresentationTargetCode;
 using bloom::runtime::GpuPresentationClient;
 using bloom::runtime::GpuPresentationCoordinatorOptions;
 using bloom::runtime::GpuPresentationPortCode;
@@ -183,6 +184,106 @@ void testPortFuseAndRetainedBound(Expectations& expectations) {
     resetQuarantineForTesting();
 }
 
+void testOwnerPumpIdleDoesNotSelfWake(Expectations& expectations) {
+    auto mailbox = std::make_shared<GpuPresentationMailbox>();
+    int wakeCalls = 0;
+    mailbox->wake = [&wakeCalls] { ++wakeCalls; };
+    CoordinatorState state(nullptr, nullptr, GpuPresentationCoordinatorOptions{});
+    state.mailbox = mailbox;
+
+    // One proven-terminal record: the owner still traverses it every pump, but a stable terminal
+    // target needs no drive and publishes no state change.
+    auto& retired = state.entries[7U];
+    retired.id = 7U;
+    retired.state = GpuPresentationTargetState::Retired;
+
+    expectations.expect(!state.hasPendingWork(), "an idle terminal owner has no pending work");
+    for (int pump = 0; pump < 64; ++pump) {
+        state.pumpOnce();
+    }
+    // The regression: the owner ingest used to invoke the wake hook on every pump, so the service
+    // loop's own wait predicate was re-armed before it could sleep and the loop span at full rate.
+    expectations.expect(wakeCalls == 0,
+                        "an idle owner pump never invokes the wake hook (the busy-loop predicate)");
+
+    // A client request is what re-arms the owner: the client-side enqueue invokes the wake hook
+    // exactly once, and the owner then reports pending work until it drives the request.
+    auto client = GpuPresentationClient::createForTesting(mailbox);
+    const auto attached = client->attach(surface(0xBEEFULL, 1ULL), 64U, 64U);
+    expectations.expect(attached.code == GpuPresentationPortCode::Accepted,
+                        "an idle owner admits a new surface attach");
+    expectations.expect(wakeCalls == 1, "the client enqueue wakes the owner, not the owner drain");
+    expectations.expect(state.hasPendingWork(),
+                        "an un-ingested attach is reported as pending work");
+    state.ingestRequests();
+    expectations.expect(state.hasPendingWork(),
+                        "an ingested attaching target still needs the owner to drive it");
+}
+
+void testCachedShutdownSummaryTransitions(Expectations& expectations) {
+    auto mailbox = std::make_shared<GpuPresentationMailbox>();
+    CoordinatorState state(nullptr, nullptr, GpuPresentationCoordinatorOptions{});
+    state.mailbox = mailbox;
+
+    // Initial publication: accepting and drained with no targets.
+    state.publishShutdownSnapshot();
+    expectations.expect(state.lastShutdownStatus.drained && state.lastShutdownStatus.accepting,
+                        "an empty owner summary is drained and accepting");
+
+    // New attach: an Attaching target is unproven, so the cached summary must flip to un-drained.
+    auto client = GpuPresentationClient::createForTesting(mailbox);
+    expectations.expect(client->attach(surface(0x1234ULL, 1ULL), 32U, 32U).accepted(),
+                        "the attach is admitted");
+    state.ingestRequests();
+    state.publishShutdownSnapshot();
+    expectations.expect(!state.lastShutdownStatus.drained &&
+                            state.lastShutdownStatus.unprovenTargets == 1U,
+                        "an attaching target updates the cached summary to un-drained/unproven");
+
+    // Terminal retire through the ordinary publish path.
+    const auto id = state.entries.begin()->first;
+    state.entries[id].state = GpuPresentationTargetState::Retired;
+    state.publish(state.entries[id], GpuPresentationTargetState::Retired, true,
+                  GpuPresentationTargetCode::Retired, {});
+    state.publishShutdownSnapshot();
+    expectations.expect(state.lastShutdownStatus.drained &&
+                            state.lastShutdownStatus.retiredTargets == 1U,
+                        "a retired target updates the cached summary to drained/retired");
+
+    // beginShutdown closes acceptance and must dirty the cached summary.
+    {
+        std::lock_guard lock(mailbox->mutex);
+        mailbox->accepting = false;
+    }
+    state.shuttingDown = true;
+    state.shutdownStatusDirty = true;
+    state.publishShutdownSnapshot();
+    expectations.expect(!state.lastShutdownStatus.accepting,
+                        "beginShutdown updates the cached summary to non-accepting");
+
+    // forget: the terminal record is erased and the cached count must not go stale.
+    {
+        std::lock_guard lock(mailbox->mutex);
+        mailbox->forgetRequested.insert(id);
+    }
+    state.ingestRequests();
+    state.publishShutdownSnapshot();
+    expectations.expect(state.lastShutdownStatus.retiredTargets == 0U,
+                        "forget updates the cached retired count");
+
+    // Quarantine / device-failed state retains a target and keeps the summary un-drained.
+    auto& quarantined = state.entries[99U];
+    quarantined.id = 99U;
+    quarantined.state = GpuPresentationTargetState::Quarantined;
+    state.publish(quarantined, GpuPresentationTargetState::Quarantined, false,
+                  GpuPresentationTargetCode::DriverUnavailable, "device lost");
+    state.publishShutdownSnapshot();
+    expectations.expect(state.lastShutdownStatus.quarantinedTargets == 1U &&
+                            state.lastShutdownStatus.activeTargets == 1U &&
+                            !state.lastShutdownStatus.drained,
+                        "a quarantined (device-failed) target keeps the summary un-drained");
+}
+
 void testOwnerForgetDrain(Expectations& expectations) {
     auto mailbox = std::make_shared<GpuPresentationMailbox>();
     constexpr GpuPresentationTargetId kProven = 42U;
@@ -318,6 +419,8 @@ void testResetRefusesRealCommittedGeneration(Expectations& expectations) {
 
 int run() {
     Expectations expectations;
+    testOwnerPumpIdleDoesNotSelfWake(expectations);
+    testCachedShutdownSummaryTransitions(expectations);
     testReservationBounds(expectations);
     testPortFuseAndRetainedBound(expectations);
     testOwnerForgetDrain(expectations);

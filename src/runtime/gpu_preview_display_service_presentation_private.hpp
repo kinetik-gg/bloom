@@ -31,6 +31,14 @@ struct PreviewDisplayPresentation final {
     std::shared_ptr<GpuPresentationClient> client;
     bool available = false;
     std::string detail;
+    // Owner-thread shadow of the last values copied under the service state mutex, so an idle owner
+    // pump does not relock and republish an identical snapshot. Never read off the owner thread.
+    render::GpuPresentationAvailability publishedAvailability =
+        render::GpuPresentationAvailability::NotRequested;
+    std::string publishedDetail;
+    std::shared_ptr<GpuPresentationClient> publishedClient;
+    GpuPresentationShutdownStatus publishedShutdown;
+    bool publishedOnce = false;
 };
 
 // Owner-thread. Creates the registry + coordinator for this service's device when presentation mode

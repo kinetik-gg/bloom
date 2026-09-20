@@ -12,7 +12,9 @@
 #include <bloom/render/gpu_neutral_display.hpp>
 #include <bloom/render/gpu_resident_display.hpp>
 #include <bloom/runtime/gpu_neutral_display_qualification.hpp>
+#include <bloom/runtime/gpu_ocio_display_arm.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
+#include <bloom/runtime/gpu_preview_resident_capacity.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 
@@ -26,6 +28,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -35,6 +38,22 @@ namespace bloom::runtime {
 class CpuCompositionEvaluator;
 
 namespace detail {
+
+struct PreviewDisplayServiceCore;
+// Defined in gpu_preview_display_service_resident.cpp. Owner-thread teardown of the service's
+// native ownership: retire presentation, then the resident route, then the packed display and
+// device.
+void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core);
+// Defined in gpu_preview_display_service_cache_purge.cpp. Runs on the service owner thread: claims
+// a pending resident-cache purge under `cachePurgeMutex`, clears the scene cache, and publishes
+// completion. A withdrawn (timed-out) request is never cleared.
+void processServiceCachePurge(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
+// Defined in gpu_preview_display_service_cache_purge.cpp. Worker-thread side: queues a purge and
+// waits, bounded by `timeout`, for the owner to claim and clear it. A timeout withdraws the still-
+// pending request and returns false; it can never leave a clear to run after it returns. Returns
+// true when the clear completed (or the service has no resident route).
+[[nodiscard]] bool purgeServiceCaches(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                                      std::chrono::milliseconds timeout) noexcept;
 
 inline constexpr std::size_t kMaxAcceptedServiceRoots = 512;
 
@@ -64,7 +83,13 @@ struct PreviewDisplayStageRecord final {
     TaskSourceVersion sourceVersion;
     std::optional<std::string> childCoalescingKey;
     std::size_t requestOwnedBytes = 0;
+    // The caller's HOST pixel-storage ceiling: decoding and the CPU fallback. Never lowered to the
+    // device share.
     std::size_t pixelStorageByteLimit = 0;
+    // The DEVICE-stage admission budget: `previewByteAllowance()` already clamped to the owner
+    // device pool and the scheduler request-owned capacity. The GPU executor/display/product all
+    // charge this, so a large host ceiling alone can never refuse the GPU.
+    std::size_t gpuByteAllowance = 0;
     // Retained only for the resident route so a GPU-subset refusal or a resident native failure can
     // take the SAME full original CPU path (compile + evaluate + display) without re-asking the
     // caller. The packed path keeps its own evaluated stage instead.
@@ -121,6 +146,19 @@ struct PreviewDisplayServiceCore final {
     std::unique_ptr<GpuSceneCache> residentSceneCache;
     std::unique_ptr<GpuSceneExecutor> residentExecutor;
     std::unique_ptr<render::GpuResidentDisplay> residentDisplay;
+    // Owner-thread effective budgets after the device capacity was resolved and clamped. Seeded
+    // from the configured options and never raised; the resident registry and scene cache are
+    // created from these so a device that cannot host the configured route is bounded before
+    // construction.
+    GpuResidentFrameLeaseBudgets effectiveResidentLeaseBudgets;
+    GpuSceneCacheBudgets effectiveResidentSceneCacheBudgets;
+    // General display arm: the exact OCIO DisplayRgba8 executor for a request whose display/view is
+    // not the startup self-qualified Neutral pair. Created lazily on the owner thread the first
+    // time a stage carries a per-request display program, and reused for every such frame.
+    std::unique_ptr<GpuOcioDisplayArm> residentGeneralDisplay;
+    // The command identity of the general display program that produced the last published frame.
+    // Owner-thread only; used so a display/view change is visible as a distinct program.
+    core::Sha256Digest publishedGeneralDisplayIdentity{};
     // Genuine immutable resident qualification report, produced on the owner thread at startup
     // independently of the packed readback qualification. Never fabricated.
     std::shared_ptr<const GpuResidentPreviewQualificationReport> residentQualification;
@@ -168,6 +206,13 @@ struct PreviewDisplayServiceCore final {
     // Resident route published snapshot (owner-written, UI-readable).
     std::shared_ptr<const GpuResidentPreviewQualificationReport> publishedResidentQualification;
     std::string publishedResidentDetail;
+    // Owner-resolved capacity/partition snapshot. Default Unknown/all-zero until the owner resolves
+    // it; the UI reads it locklessly with the rest of status().
+    GpuResidentCapacityPlan publishedResidentCapacityPlan;
+    // Effective per-request admission allowance after the capacity clamp. Seeded from the
+    // configured options on the constructing thread; the owner may lower it once. Read atomically
+    // by submit() (any thread) and by the owner-thread resident stages.
+    std::atomic<std::uint64_t> effectivePreviewByteAllowance{0};
     // Bounded cached counters, owner-written atomics and read locklessly/under lock by status().
     std::atomic<std::uint64_t> counterResidentGraphJobs{0};
     std::atomic<std::uint64_t> counterNativeDispatches{0};
@@ -176,6 +221,7 @@ struct PreviewDisplayServiceCore final {
     std::atomic<std::uint64_t> counterGpuCacheHits{0};
     std::atomic<std::uint64_t> counterGpuCacheMisses{0};
     std::atomic<std::uint64_t> counterCpuFallbacks{0};
+    std::atomic<std::uint64_t> counterGpuAdmissionRefusals{0};
     std::atomic<std::uint64_t> counterFullFrameReadbacks{0};
     std::atomic<std::uint64_t> counterDisplayStatusReads{0};
     std::atomic<std::uint64_t> counterResidentLeaseRefusals{0};
@@ -189,6 +235,22 @@ struct PreviewDisplayServiceCore final {
     std::uint64_t wakeGeneration = 0;
     std::atomic_bool stopping{false};
     std::atomic_bool shutdownRequested{false};
+
+    // "Purge preview cache": any worker thread may request an owner-thread clear of the resident
+    // scene cache's retained operation/output images. The owner clears (dropping only the cache's
+    // own references, so any outstanding pin/lease survives) and signals completion. No native
+    // object is destroyed off the owner thread, and no live lease is invalidated.
+    //
+    // A SINGLE mutex serializes request/claim/clear/cancel. The owner holds `cachePurgeMutex`
+    // across the claim and the clear, so a caller that times out can only withdraw a still-pending
+    // request or else block until the clear has completed -- it can never observe "timed out" and
+    // then let the owner clear afterwards. `cachePurgePending` is cleared when the owner claims the
+    // request or when a timed-out caller withdraws it, so a completed request can never poison the
+    // next one. The public API is serial: a request is rejected while one is pending.
+    std::mutex cachePurgeMutex;
+    std::condition_variable cachePurgeCondition;
+    bool cachePurgePending = false;
+    std::uint64_t cachePurgeCompleted = 0;
 
     // Service-thread-owned stage bookkeeping.
     std::vector<std::shared_ptr<PreviewDisplayStageRecord>> stages;
@@ -246,6 +308,13 @@ struct PreviewDisplayServiceCore final {
         return qualification;
     }
 
+    // Effective per-request admission allowance. Never above the configured value; the owner lowers
+    // it exactly once after resolving the device capacity.
+    [[nodiscard]] std::size_t previewByteAllowance() const noexcept {
+        return static_cast<std::size_t>(
+            effectivePreviewByteAllowance.load(std::memory_order_relaxed));
+    }
+
     void publishState(GpuPreviewDisplayServiceState next, bool available,
                       GpuPreviewDisplayServiceDiagnostic nextDiagnostic,
                       std::shared_ptr<const GpuNeutralDisplayQualificationReport> report) {
@@ -267,24 +336,33 @@ struct PreviewDisplayServiceCore final {
 void runGpuStartup(const std::shared_ptr<PreviewDisplayServiceCore>& core, TaskContext& context,
                    GpuTaskCompletion<int> completion);
 
+// Owner thread. Resolves the device allocation budget and clamps the configured resident route to
+// the shared pool, storing the effective lease/scene/request budgets and publishing the immutable
+// plan for the UI status poll. Must run after the device exists and BEFORE the presentation
+// registry and resident scene cache are created. Skipped for the packed-only service.
+void resolveResidentCapacity(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
+
 // GPU parent starter payload (runs on the service thread): submit the CPU stage child, retain the
 // final completion, and return immediately.
 struct PreviewStageSubmission final {
     PreviewStageSubmission(document::Snapshot snapshotValue, PreviewRequestIdentity identityValue,
                            std::size_t pixelStorageByteLimitValue,
+                           std::size_t gpuByteAllowanceValue,
                            std::vector<SnapshotParameterOverride> overridesValue,
                            TaskPriority priorityValue, TaskOwner ownerValue,
                            std::optional<TaskGroupId> groupIdValue,
                            TaskSourceVersion sourceVersionValue,
                            std::optional<std::string> coalescingKeyValue)
         : snapshot(std::move(snapshotValue)), identity(std::move(identityValue)),
-          pixelStorageByteLimit(pixelStorageByteLimitValue), overrides(std::move(overridesValue)),
+          pixelStorageByteLimit(pixelStorageByteLimitValue),
+          gpuByteAllowance(gpuByteAllowanceValue), overrides(std::move(overridesValue)),
           priority(priorityValue), owner(ownerValue), groupId(groupIdValue),
           sourceVersion(sourceVersionValue), coalescingKey(std::move(coalescingKeyValue)) {}
 
     document::Snapshot snapshot;
     PreviewRequestIdentity identity;
     std::size_t pixelStorageByteLimit = 0;
+    std::size_t gpuByteAllowance = 0;
     std::vector<SnapshotParameterOverride> overrides;
     TaskPriority priority = TaskPriority::Background;
     TaskOwner owner;
@@ -391,6 +469,17 @@ struct PreviewDisplayBenchmarkSample final {
 [[nodiscard]] std::vector<PreviewDisplayBenchmarkSample>
 runGpuPreviewDisplayBenchmark(const std::filesystem::path& loader);
 
+// Test-only result of one owner-thread sparse copy out of a resident frame lease. `pixels` is one
+// entry per requested coordinate. The sparse byte and submission totals this represents are
+// test-only and are never folded into the production full-frame readback counters.
+struct ResidentSparseSampleResult final {
+    bool ran = false;
+    std::string diagnostic;
+    std::vector<render::Rgba8> pixels;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+
 // Narrow test access hook. Tests may hold a completion/child retirement open to prove accounting is
 // not released early. It fabricates nothing about qualification.
 struct GpuPreviewDisplayServiceTestAccess final {
@@ -421,6 +510,15 @@ struct GpuPreviewDisplayServiceTestAccess final {
     }
     static bool residentRouteAvailable(const PreviewDisplayServiceCore& core) {
         return core.residentExecutor != nullptr && core.residentDisplay != nullptr;
+    }
+    // General-display probes (read-only, owner-created state). `generalDisplayActive` is true once
+    // the service lazily created the OCIO display arm for a request; `generalDisplayIdentity` is
+    // the exact DisplayRgba8 command identity of the last published general frame.
+    static bool generalDisplayActive(const PreviewDisplayServiceCore& core) {
+        return core.residentGeneralDisplay != nullptr;
+    }
+    static core::Sha256Digest generalDisplayIdentity(const PreviewDisplayServiceCore& core) {
+        return core.publishedGeneralDisplayIdentity;
     }
     static std::shared_ptr<PreviewDisplayServiceCore>
     coreOf(const GpuPreviewDisplayService& service);
@@ -454,6 +552,15 @@ struct GpuPreviewDisplayServiceTestAccess final {
                                                            PresentationTestLeaseResult& out,
                                                            std::chrono::milliseconds timeout,
                                                            bool foreign = false);
+
+    // Test-only: run one owner-thread task that pins `lease` in the service registry and copies
+    // EXACTLY the requested pixels out of the resident RGBA8 display image. This is the sparse
+    // counterpart of the debug full-frame readback: it is never a full-frame transfer, it runs on
+    // the device owner thread, and it touches no production counter.
+    [[nodiscard]] static bool
+    sampleResidentFrameSparse(GpuPreviewDisplayService& service, const GpuResidentFrameLease& lease,
+                              std::span<const render::ImagePixelCoordinate> coordinates,
+                              ResidentSparseSampleResult& out, std::chrono::milliseconds timeout);
 };
 
 } // namespace detail

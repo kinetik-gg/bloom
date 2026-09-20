@@ -78,23 +78,71 @@ void sequence() {
     expect(ledger.cacheByteBudget(&operation) == 0, "removed participants cannot be called again");
 }
 
-void swapAndCeilings() {
+void swapActivityPolicy() {
+    constexpr auto ample = std::size_t{40} * gib;
+    const auto swapSample = [ample](const std::size_t used) {
+        return bloom::runtime::MachineMemorySample{
+            .availableBytes = ample, .swapTotalBytes = 4 * gib, .swapUsedBytes = used};
+    };
     MemoryBudgetLedger ledger(60 * gib, 60 * gib);
     ledger.setConfiguredTotal(16 * gib);
-    auto state = ledger.poll(
-        {.availableBytes = 40 * gib, .swapTotalBytes = 4 * gib, .swapUsedBytes = gib}, at(0));
-    expect(state.effectiveBytes == 16 * gib && !state.swapPressure,
-           "25 percent swap is not pressure");
-    state = ledger.poll(
-        {.availableBytes = 40 * gib, .swapTotalBytes = 4 * gib, .swapUsedBytes = gib + 1}, at(5));
+    // A swap file that was filled long ago and no longer changes is not ongoing thrashing, however
+    // full it is; the first reading is only a baseline.
+    auto state = ledger.poll(swapSample(4 * gib * 9 / 10), at(0));
+    expect(!state.swapPressure && !state.memoryPressure && state.retentionPercent == 100,
+           "a first static swap reading is a baseline, not pressure");
+    state = ledger.poll(swapSample(4 * gib * 9 / 10), at(5));
+    expect(!state.swapPressure && state.effectiveBytes == 16 * gib && state.retentionPercent == 100,
+           "static 90 percent swap with ample RAM never trims the caches");
+    // Active growth is the signal, even while available memory looks healthy.
+    state = ledger.poll(swapSample(4 * gib * 9 / 10 + gib), at(10));
     expect(state.swapPressure && !state.memoryPressure && state.swapNotice && state.memoryNotice &&
                state.retentionPercent == 25,
-           "swap alone triggers pressure above 25 percent");
-    state = ledger.poll(
-        {.availableBytes = 40 * gib, .swapTotalBytes = 4 * gib, .swapUsedBytes = 2 * gib}, at(10));
-    expect(state.retentionPercent == 10 && !state.swapNotice, "persistent swap escalates once");
-    state = ledger.poll({.availableBytes = 2 * gib}, at(15));
-    expect(state.effectiveBytes == 3 * gib, "overrides are ceilings, never guaranteed allocations");
+           "actively rising swap trims the caches");
+    state = ledger.poll(swapSample(4 * gib * 9 / 10 + 2 * gib), at(15));
+    expect(state.retentionPercent == 10 && !state.swapNotice,
+           "persistent swap growth escalates once");
+    // Once growth stops, the episode clears through the ordinary recovery hold and ladder. High
+    // static occupancy does not block recovery.
+    state = ledger.poll(swapSample(4 * gib * 9 / 10 + 2 * gib), at(20));
+    expect(!state.swapPressure && state.retentionPercent == 10,
+           "a static reading after an episode starts the recovery hold");
+    state = ledger.poll(swapSample(4 * gib * 9 / 10 + 2 * gib), at(29));
+    expect(state.retentionPercent == 10, "no early restore");
+    state = ledger.poll(swapSample(4 * gib * 9 / 10 + 2 * gib), at(30));
+    expect(state.retentionPercent == 25, "ample RAM recovers a previously pressured cache");
+    state = ledger.poll(swapSample(4 * gib * 9 / 10 + 2 * gib), at(40));
+    expect(state.retentionPercent == 50, "recovery continues through the ladder");
+    state = ledger.poll(swapSample(4 * gib * 9 / 10 + 2 * gib), at(50));
+    expect(state.retentionPercent == 100, "recovery reaches full admission");
+    // Releasing swap rebaselines, so a later rise is measured from the new low.
+    state = ledger.poll(swapSample(gib), at(60));
+    expect(!state.swapPressure, "a released sample rebaselines without pressure");
+    state = ledger.poll(swapSample(gib + std::size_t{4} * 1024 * 1024), at(65));
+    expect(!state.swapPressure, "small background churn below the entry threshold is ignored");
+    // Clock rollback and a first sample are deterministic and never manufacture growth.
+    state = ledger.poll(swapSample(2 * gib), at(60));
+    expect(!state.swapPressure, "a rolled-back timestamp establishes a fresh baseline");
+    state = ledger.poll(swapSample(3 * gib), at(70));
+    expect(state.swapPressure, "real growth from the rebaselined sample is still detected");
+    // Bounded hysteresis: a smaller sustained rise keeps an active episode latched, while a static
+    // reading releases it.
+    state = ledger.poll(swapSample(3 * gib + std::size_t{8} * 1024 * 1024), at(75));
+    expect(state.swapPressure, "a smaller sustained rise keeps an active episode latched");
+    state = ledger.poll(swapSample(3 * gib + std::size_t{8} * 1024 * 1024), at(80));
+    expect(!state.swapPressure, "a static reading releases the latched episode");
+    // Missing counters cannot assert recovery from a live episode, and a returning valid sample is
+    // a fresh baseline rather than a spike measured against the intervening gap.
+    state = ledger.poll(swapSample(4 * gib), at(85));
+    expect(state.swapPressure, "a further rise keeps the episode active");
+    state = ledger.poll({.availableBytes = ample}, at(90));
+    expect(state.swapPressure && !state.memoryPressure,
+           "missing swap counters cannot assert recovery");
+    state = ledger.poll(swapSample(4 * gib), at(95));
+    expect(!state.swapPressure, "a valid sample after missing counters is a fresh baseline");
+}
+
+void ceilings() {
     MemoryBudgetLedger small(16 * gib, 16 * gib);
     expect(small.state().effectiveBytes == 8 * gib, "16 GiB machines start at an 8 GiB cap");
     small.setConfiguredTotal(std::numeric_limits<std::size_t>::max());
@@ -102,8 +150,14 @@ void swapAndCeilings() {
     std::size_t tiny = 0;
     small.registerCache(&tiny, 1024, [] { return 0; }, [&](std::size_t bytes) { tiny = bytes; });
     small.setConfiguredTotal(1024);
-    state = small.poll({.availableBytes = 16 * gib}, at(0));
+    auto state = small.poll({.availableBytes = 16 * gib}, at(0));
     expect(state.effectiveBytes == 3 * gib && tiny <= 1024, "floor never enlarges small overrides");
+    MemoryBudgetLedger busy(60 * gib, 60 * gib);
+    busy.setConfiguredTotal(16 * gib);
+    state = busy.poll({.availableBytes = 40 * gib}, at(0));
+    const auto trimmed = busy.poll({.availableBytes = 2 * gib}, at(5));
+    expect(trimmed.memoryPressure && trimmed.effectiveBytes == 3 * gib,
+           "low RAM trims even with no swap data, so overrides stay ceilings");
 }
 void machineExamplesAndOverflow() {
     MemoryBudgetLedger sixteen(16 * gib, 16 * gib);
@@ -129,7 +183,8 @@ void machineExamplesAndOverflow() {
 
 int main() {
     sequence();
-    swapAndCeilings();
+    swapActivityPolicy();
+    ceilings();
     machineExamplesAndOverflow();
     return failures == 0 ? 0 : 1;
 }

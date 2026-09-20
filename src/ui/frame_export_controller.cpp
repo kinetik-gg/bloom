@@ -13,6 +13,7 @@
 #include <bloom/document/project.hpp>
 #include <bloom/render/image.hpp>
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileDialog>
 #include <QInputDialog>
@@ -48,6 +49,21 @@ namespace {
         base = QDir::tempPath();
     }
     return std::filesystem::path(base.toStdString()) / "Bloom" / "export-scratch";
+}
+
+// The export bridge's loader path. It reuses exactly the application-relative bundled loader the
+// preview service already resolves in apps/bloom/main.cpp: the executable's own directory, never a
+// build or system prefix. When this build packaged no loader, the path stays empty and the provider
+// uses the existing platform-loader/CPU fallback -- the same explicit unavailable path the preview
+// service takes.
+[[nodiscard]] runtime::GpuProcessFrameEvaluatorOptions gpuExportOptions() {
+    runtime::GpuProcessFrameEvaluatorOptions options;
+#ifdef BLOOM_BUNDLED_VULKAN_LOADER
+    options.loaderPath =
+        std::filesystem::path(QCoreApplication::applicationDirPath().toStdString()) /
+        BLOOM_BUNDLED_VULKAN_LOADER_SUBDIR / BLOOM_BUNDLED_VULKAN_LOADER_NAME;
+#endif
+    return options;
 }
 
 [[nodiscard]] QString
@@ -214,15 +230,25 @@ FrameExportController::FrameExportController(
     const runtime::SnapshotCompiler& compiler, host::PublicationCoordinator& publicationCoordinator,
     platform::StagedArtifactCoordinator& artifactCoordinator,
     std::filesystem::path scratchDirectory,
-    runtime::QualifiedDisplayProcessorProvider* const displayProcessorProvider, QObject* parent)
+    runtime::QualifiedDisplayProcessorProvider* const displayProcessorProvider,
+    std::shared_ptr<host::GpuExportProvider> gpuExportProvider, QObject* parent)
     : QObject(parent), session_(session), scheduler_(scheduler), taskUiBridge_(taskUiBridge),
       compiler_(compiler), publicationCoordinator_(publicationCoordinator),
       artifactCoordinator_(artifactCoordinator),
       displayProcessorProvider_(displayProcessorProvider),
+      gpuExportProvider_(gpuExportProvider != nullptr
+                             ? std::move(gpuExportProvider)
+                             : host::GpuExportProvider::create(gpuExportOptions())),
       scratchDirectory_(scratchDirectory.empty() ? defaultExportScratchDirectory()
                                                  : std::move(scratchDirectory)) {
     std::error_code error;
     std::filesystem::create_directories(scratchDirectory_, error);
+
+    // Non-blocking: schedules the one-time device bootstrap on the shared scheduler's worker and
+    // returns immediately, so the UI thread never waits on device creation. The attempt runner
+    // defers its first evaluation until this bootstrap is terminal, so the first export is GPU when
+    // a device exists rather than a CPU fallback that raced the bootstrap.
+    gpuExportProvider_->prepare(scheduler_);
 
     connect(&taskUiBridge_, &TaskUiBridge::snapshotsPolled, this, &FrameExportController::pollOnce);
 
@@ -662,11 +688,11 @@ void FrameExportController::handleCompileResult(CompileHandle& compiling) {
 bool FrameExportController::beginAttempt(
     const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
     const core::RationalTime time) {
-    // The evaluation memory budget reuses CompositionPreviewController's own default (composition_
-    // preview_controller.hpp's kDefaultPreviewPixelStorageByteLimit): the same working-set bound
-    // the viewer's own full-resolution preview already runs under for this composition, not a new
-    // invented number. This is distinct from (and independent of) the export job's own resource
-    // ledger admission below, which governs retained/staged export bytes, not evaluator scratch.
+    // The evaluation memory budget is the host-availability-derived GPU/CPU export budget: a
+    // conservative share of currently-available RAM, floored and capped (never unbounded), so the
+    // gate is open for a large composition while one export cannot plan to own the machine. This is
+    // distinct from (and independent of) the export job's own resource ledger admission below,
+    // which governs retained/staged export bytes, not evaluator scratch.
     //
     // `time` is the ONLY thing a sequence varies per frame: every frame is evaluated at its own
     // exact rational time, never at an accumulated one, which is exactly what makes an exported
@@ -678,13 +704,14 @@ bool FrameExportController::beginAttempt(
                        .resolution = runtime::CompositionFormatResolution{},
                        .quality = runtime::EvaluationQuality::Reference,
                        .colorIntent = session_.colorIntent(),
-                       .pixelStorageByteLimit = kDefaultPreviewPixelStorageByteLimit,
+                       .pixelStorageByteLimit = runtime::defaultGpuProcessFrameByteBudget(),
                        .bypassLookNodes = sequence_ && sequence_->bypassLookNodes},
         .targetPath = pendingDestination_,
         .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
         .owner = {.kind = runtime::TaskOwnerKind::Export, .id = runtime::TaskOwnerId::fromRaw(1)},
         .preset = pendingPreset_,
-        .displayProcessorProvider = displayProcessorProvider_};
+        .displayProcessorProvider = displayProcessorProvider_,
+        .gpuProvider = gpuExportProvider_};
 
     auto begin = host::beginOutputAnalysisAttemptV1(scheduler_, artifactCoordinator_, *ledger_,
                                                     std::move(request));
