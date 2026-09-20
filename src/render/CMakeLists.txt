@@ -148,6 +148,7 @@ endif()
 
 set(BLOOM_GLSLANG_VALIDATOR "")
 set(BLOOM_SPIRV_VAL "")
+set(BLOOM_SPIRV_DIS "")
 if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/bin")
     find_program(bloom_locked_glslang_validator
         NAMES glslangValidator
@@ -157,8 +158,13 @@ if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/
         NAMES spirv-val
         HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
         NO_DEFAULT_PATH)
+    find_program(bloom_locked_spirv_dis
+        NAMES spirv-dis
+        HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
+        NO_DEFAULT_PATH)
     set(BLOOM_GLSLANG_VALIDATOR "${bloom_locked_glslang_validator}")
     set(BLOOM_SPIRV_VAL "${bloom_locked_spirv_val}")
+    set(BLOOM_SPIRV_DIS "${bloom_locked_spirv_dis}")
 endif()
 if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
     set(bloom_neutral_display_generated_spv
@@ -527,6 +533,88 @@ else()
         "blend_f64.comp digest is still enforced.")
 endif()
 
+# --- Portable BlendV1 Float32 shader: source pin, capability, and regeneration check ------------
+#
+# The compensated-Float32 companion for the six general modes, used on devices without the core
+# shaderFloat64 feature. It must declare no Float64/Int64 capability or 64-bit type, so configure
+# disassembles the regenerated SPIR-V with spirv-dis and rejects either. The checked-in .comp is
+# pinned here, the manifest must bind that source digest, and, when the locked glslangValidator/
+# spirv-val are present, configure recompiles it and confirms the SPIR-V digest embedded in
+# blend_portable_spirv.inc. Runtime code never compiles or loads a shader. The deterministic
+# regeneration path is tools/gpu-shaders/embed_blend_spirv.py.
+set(BLOOM_BLEND_PORTABLE_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_portable.comp")
+set(BLOOM_BLEND_PORTABLE_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_portable.manifest")
+set(BLOOM_BLEND_PORTABLE_INC
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/blend_portable_spirv.inc")
+set(BLOOM_BLEND_PORTABLE_COMP_SHA256
+    "7b9234c2d33ccdf5cbcab8f7c8502542d6a35ed9e0740e850a1694c9f3bbad0d")
+set(BLOOM_BLEND_PORTABLE_SPV_SHA256
+    "41c0272525b19c8dd43439244411b078e6c2936926fd8456c33fabf60cf68841")
+
+file(SHA256 "${BLOOM_BLEND_PORTABLE_COMP}" bloom_blend_portable_comp_sha256)
+if(NOT bloom_blend_portable_comp_sha256 STREQUAL BLOOM_BLEND_PORTABLE_COMP_SHA256)
+    message(FATAL_ERROR
+        "blend_portable.comp SHA-256 mismatch: measured ${bloom_blend_portable_comp_sha256}, pinned "
+        "${BLOOM_BLEND_PORTABLE_COMP_SHA256}. Regenerate only through the tools/gpu-shaders recipe "
+        "and update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_BLEND_PORTABLE_MANIFEST}" bloom_blend_portable_manifest_text)
+if(NOT bloom_blend_portable_manifest_text MATCHES "${BLOOM_BLEND_PORTABLE_COMP_SHA256}")
+    message(FATAL_ERROR "blend_portable.manifest does not bind the pinned blend_portable.comp "
+        "SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_blend_portable_generated_spv
+        "${CMAKE_CURRENT_BINARY_DIR}/blend_portable.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_BLEND_PORTABLE_COMP}" -o "${bloom_blend_portable_generated_spv}"
+        RESULT_VARIABLE bloom_blend_portable_glslang_result)
+    if(NOT bloom_blend_portable_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile blend_portable.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2
+                "${bloom_blend_portable_generated_spv}"
+        RESULT_VARIABLE bloom_blend_portable_spirv_val_result)
+    if(NOT bloom_blend_portable_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated portable BlendV1 SPIR-V.")
+    endif()
+    if(BLOOM_SPIRV_DIS)
+        set(bloom_blend_portable_generated_spvasm
+            "${CMAKE_CURRENT_BINARY_DIR}/blend_portable.generated.spvasm")
+        execute_process(
+            COMMAND "${BLOOM_SPIRV_DIS}" "${bloom_blend_portable_generated_spv}" -o
+                    "${bloom_blend_portable_generated_spvasm}"
+            RESULT_VARIABLE bloom_blend_portable_spirv_dis_result)
+        if(NOT bloom_blend_portable_spirv_dis_result EQUAL 0)
+            message(FATAL_ERROR "spirv-dis failed to disassemble the portable BlendV1 SPIR-V.")
+        endif()
+        file(READ "${bloom_blend_portable_generated_spvasm}" bloom_blend_portable_spvasm_text)
+        if(bloom_blend_portable_spvasm_text MATCHES "OpCapability Float64" OR
+           bloom_blend_portable_spvasm_text MATCHES "OpCapability Int64" OR
+           bloom_blend_portable_spvasm_text MATCHES "OpTypeFloat 64" OR
+           bloom_blend_portable_spvasm_text MATCHES "OpTypeInt 64")
+            message(FATAL_ERROR
+                "the portable BlendV1 SPIR-V declares a forbidden Float64/Int64 capability or type; "
+                "it must run on standard Float32 hardware.")
+        endif()
+    endif()
+    file(SHA256 "${bloom_blend_portable_generated_spv}" bloom_blend_portable_spv_sha256)
+    if(NOT bloom_blend_portable_spv_sha256 STREQUAL BLOOM_BLEND_PORTABLE_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated portable BlendV1 SPIR-V SHA-256 ${bloom_blend_portable_spv_sha256} does "
+            "not match the embedded ${BLOOM_BLEND_PORTABLE_SPV_SHA256}; the checked-in .comp and "
+            "blend_portable_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: blend_portable.comp regenerated, SPIR-V-validated, and "
+        "capability-checked (${bloom_blend_portable_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "blend_portable.comp digest is still enforced.")
+endif()
+
 # --- Fixed CoveredSolidV1 resident-image shader: source pin and regeneration check ---------------
 #
 # Offline artifact from the same tools/gpu-shaders compile/validate/embed recipe (no new generator).
@@ -833,6 +921,9 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/shaders/blend_f64.comp
         vulkan/shaders/blend_f64.manifest
         vulkan/shaders/blend_f64_spirv.inc
+        vulkan/shaders/blend_portable.comp
+        vulkan/shaders/blend_portable.manifest
+        vulkan/shaders/blend_portable_spirv.inc
         vulkan/shaders/viewer_present.vert
         vulkan/shaders/viewer_present.frag
         vulkan/shaders/viewer_present.manifest

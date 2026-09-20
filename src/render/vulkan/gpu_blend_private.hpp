@@ -15,6 +15,7 @@
 #include "gpu_composite_private.hpp"
 #include "gpu_image_private.hpp"
 #include "shaders/blend_f64_spirv.inc"
+#include "shaders/blend_portable_spirv.inc"
 #include "shaders/blend_spirv.inc"
 
 #ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
@@ -68,14 +69,18 @@ struct GpuBlend::Impl final {
     std::thread::id owner;
     std::shared_ptr<vulkan_detail::DeviceAllocatorState> control;
     GpuBlendBudgets budgets;
+    GpuBlendKernelPolicy policy = GpuBlendKernelPolicy::Auto;
     std::uint32_t expectedGeneration = 0;
 
-    // pipeline is the Float32 blend.comp kernel (Normal/Add, and every mode on a device without
-    // shaderFloat64). pipelineF64 is the exact Float64 kernel, built only when the device
-    // advertised and enabled shaderFloat64; f64Available records whether it exists.
+    // pipeline is the exact Float32 blend.comp kernel for Normal/Add. pipelineF64 is the exact
+    // Float64 kernel for the six general modes, built only when the device advertised and enabled
+    // shaderFloat64. pipelinePortable is the compensated-Float32 general-mode kernel, built
+    // whenever the Float64 companion is not selected. `generalUsesF64` records which of the two the
+    // six general modes dispatch, and therefore which identity the executor keys them under.
     CompositePipeline pipeline;
     CompositePipeline pipelineF64;
-    bool f64Available = false;
+    CompositePipeline pipelinePortable;
+    bool generalUsesF64 = false;
     vk::raii::DescriptorPool descriptorPool{nullptr};
     vk::raii::DescriptorSet descriptorSet{nullptr};
     vk::raii::CommandPool commandPool{nullptr};

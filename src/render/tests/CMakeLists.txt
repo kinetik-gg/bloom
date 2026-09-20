@@ -144,7 +144,8 @@ target_include_directories(bloom_render_gpu_blend_kernel_test
 target_compile_definitions(bloom_render_gpu_blend_kernel_test
     PRIVATE
         "BLOOM_BLEND_SPV_SHA256=\"4b9cc2009f9a1fcbdc05558bbbbb9e9aeb7573a4fc88a8127e25e22bc6c208f8\""
-        "BLOOM_BLEND_F64_SPV_SHA256=\"a910e190a05875c22f16d1571dea9e05496b32d5a588ede8cc8d95520ea7dbcf\"")
+        "BLOOM_BLEND_F64_SPV_SHA256=\"a910e190a05875c22f16d1571dea9e05496b32d5a588ede8cc8d95520ea7dbcf\""
+        "BLOOM_BLEND_PORTABLE_SPV_SHA256=\"41c0272525b19c8dd43439244411b078e6c2936926fd8456c33fabf60cf68841\"")
 bloom_enable_warnings(bloom_render_gpu_blend_kernel_test)
 bloom_enable_strict_floating_point(bloom_render_gpu_blend_kernel_test)
 bloom_add_test(
@@ -160,6 +161,7 @@ bloom_add_test(
 if(BLOOM_RENDER_VULKAN_AVAILABLE)
     add_executable(bloom_render_gpu_blend_test
         gpu_blend_native_tests.cpp
+        gpu_blend_portable_native_tests.cpp
         gpu_blend_benchmark_tests.cpp
         gpu_blend_native_support.hpp)
     target_link_libraries(bloom_render_gpu_blend_test PRIVATE bloom_render)
@@ -173,6 +175,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         PRIVATE
             "BLOOM_BLEND_SPV_SHA256=\"4b9cc2009f9a1fcbdc05558bbbbb9e9aeb7573a4fc88a8127e25e22bc6c208f8\""
             "BLOOM_BLEND_F64_SPV_SHA256=\"a910e190a05875c22f16d1571dea9e05496b32d5a588ede8cc8d95520ea7dbcf\""
+            "BLOOM_BLEND_PORTABLE_SPV_SHA256=\"41c0272525b19c8dd43439244411b078e6c2936926fd8456c33fabf60cf68841\""
             BLOOM_RENDER_TEST_VULKAN_BACKEND=1)
     bloom_enable_warnings(bloom_render_gpu_blend_test)
     bloom_enable_strict_floating_point(bloom_render_gpu_blend_test)

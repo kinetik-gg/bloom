@@ -16,13 +16,42 @@
 namespace bloom::runtime {
 namespace {
 
+using gpu_scene_executor_detail::affineFieldsFinite;
 using gpu_scene_executor_detail::cachedDescriptorMatches;
 using gpu_scene_executor_detail::checkedImageBytes;
-using gpu_scene_executor_detail::affineFieldsFinite;
-using gpu_scene_executor_detail::effectiveCommandKey;
 using gpu_scene_executor_detail::descriptorMatches;
+using gpu_scene_executor_detail::effectiveCommandKey;
 using gpu_scene_executor_detail::expectedDescriptorOf;
 using gpu_scene_executor_detail::makeDiagnostic;
+
+// The ACTUAL BlendV1 artifact token, delegated to the render-owned canonical identity. It selects
+// the pipeline the native op really built from the device's shaderFloat64 capability and the
+// GpuBlend kernel policy: exact Float32 for Normal/Add, the exact Float64 companion for the six
+// general modes when selected, and the portable compensated-Float32 kernel otherwise. A
+// producer-supplied `artifactDigest` is never consulted, so an adversarially wrong digest still
+// cannot point the cache at another shader's output.
+[[nodiscard]] std::string actualBlendArtifactToken(const render::GpuBlend& blend,
+                                                   const core::BlendMode mode) {
+    return std::string(blend.shaderIdentity(mode));
+}
+
+// Effective, executor-owned semantic key, and the single authoritative BlendV1 artifact selection.
+// Blend commands are keyed here from the actual portable/Float64/Float32 pipeline; every other
+// command keeps the shared canonicalization. The blend input keys and geometry are still recomputed
+// from declared fields, never trusted from the producer.
+[[nodiscard]] std::string effectiveCommandKey(const GpuSceneCommand& command,
+                                              const render::GpuBlend* blend) {
+    if (const auto* blendCommand = std::get_if<GpuSceneBlendCommand>(&command)) {
+        if (blend == nullptr) {
+            return {};
+        }
+        return makeGpuSceneBlendSemanticKey(blendCommand->sourceKey, blendCommand->destinationKey,
+                                            blendCommand->mode, blendCommand->sourceWindow,
+                                            blendCommand->outputWindow, blendCommand->pixelAspect,
+                                            actualBlendArtifactToken(*blend, blendCommand->mode));
+    }
+    return effectiveCommandKey(command);
+}
 
 } // namespace
 
@@ -46,7 +75,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
     color[index] = 1;
     const GpuSceneCommand& command = scene->commands()[index];
     const bool isOutput = index == scene->outputCommand();
-    const std::string key = effectiveCommandKey(command);
+    const std::string key = effectiveCommandKey(command, blend.get());
 
     if (auto hit = cache->find(key)) {
         if (!hit->isValid() || !hit->isBoundTo(*device)) {

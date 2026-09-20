@@ -366,6 +366,26 @@ void runBlendMatrix(Expectations& expectations, GpuDevice& device, GpuSceneCache
     }
 }
 
+// The render-owned canonical identity is the single source of truth the executor keys blends under.
+// It must include the portable compensated-Float32 token, not only the exact Float64 one, so a
+// device without shaderFloat64 (or a forced portable policy) can never collide with the exact path.
+void runBlendIdentitySelection(Expectations& expectations) {
+    using bloom::render::gpuBlendShaderIdentity;
+    expectations.expect(gpuBlendShaderIdentity(BlendMode::Normal, true) == "blend-v1-f32" &&
+                            gpuBlendShaderIdentity(BlendMode::Normal, false) == "blend-v1-f32",
+                        "blend identity: Normal is always the exact Float32 kernel");
+    expectations.expect(gpuBlendShaderIdentity(BlendMode::Add, true) == "blend-v1-f32" &&
+                            gpuBlendShaderIdentity(BlendMode::Add, false) == "blend-v1-f32",
+                        "blend identity: Add is always the exact Float32 kernel");
+    for (const auto mode : {BlendMode::Multiply, BlendMode::Screen, BlendMode::Overlay,
+                            BlendMode::Darken, BlendMode::Lighten, BlendMode::Difference}) {
+        expectations.expect(gpuBlendShaderIdentity(mode, true) == "blend-v1-f64",
+                            "blend identity: general mode selects the exact Float64 companion");
+        expectations.expect(gpuBlendShaderIdentity(mode, false) == "blend-v1-f32-portable",
+                            "blend identity: general mode selects the portable Float32 kernel");
+    }
+}
+
 void runAffineInvalidationAndCancel(Expectations& expectations, GpuDevice& device,
                                     GpuSceneCache& cache) {
     const auto sourceWindow = window(5, -1, 20, 14);
@@ -473,7 +493,8 @@ void runBlendInvalidationAndCancel(Expectations& expectations, GpuDevice& device
     }
     auto source = std::make_shared<const Rgba32fImage>(std::move(*sourceImage));
     auto destination = std::make_shared<const Rgba32fImage>(std::move(*destImage));
-    const auto makeScene = [&](const BlendMode mode, const std::string& suffix) {
+    const auto makeScene = [&](const BlendMode mode, const std::string& suffix,
+                               const std::string& advisoryDigest) {
         const GpuSceneBlendCommand blend{.index = 2,
                                          .sourceOperation = OperationIndex::fromRaw(0),
                                          .source = 0,
@@ -484,7 +505,7 @@ void runBlendInvalidationAndCancel(Expectations& expectations, GpuDevice& device
                                          .sourceWindow = geometry,
                                          .outputWindow = geometry,
                                          .pixelAspect = aspect,
-                                         .artifactDigest = "adversarially-wrong-digest",
+                                         .artifactDigest = advisoryDigest,
                                          .semanticKey = "advisory-" + suffix};
         std::vector<GpuSceneCommand> commands;
         commands.emplace_back(uploadCommand(0, source, "bi-src"));
@@ -494,9 +515,12 @@ void runBlendInvalidationAndCancel(Expectations& expectations, GpuDevice& device
         return GpuSceneFixtureBuilder::make(std::move(commands), 3,
                                             descriptorFor(geometry, geometry, aspect));
     };
-    const auto sceneA = makeScene(BlendMode::Normal, "a");
-    const auto sceneB = makeScene(BlendMode::Add, "b");
-    const auto sceneC = makeScene(BlendMode::Multiply, "c");
+    const auto sceneA = makeScene(BlendMode::Normal, "a", "adversarially-wrong-digest");
+    const auto sceneB = makeScene(BlendMode::Add, "b", "adversarially-wrong-digest");
+    const auto sceneC = makeScene(BlendMode::Multiply, "c", "adversarially-wrong-digest");
+    // The producer-supplied artifact digest is advisory and must never enter the effective key: the
+    // same command with a different bogus digest is a cache hit, not a re-dispatch or a new key.
+    const auto sceneBAdvisory = makeScene(BlendMode::Add, "b", "a-different-wrong-digest");
 
     auto executor = GpuSceneExecutor::create(device, cache);
     expectations.expect(executor.hasValue(), "blend-inval: executor creates");
@@ -519,6 +543,13 @@ void runBlendInvalidationAndCancel(Expectations& expectations, GpuDevice& device
                         "blend-inval: changed mode preserves upstream upload cache");
     expectations.expect(counters.blendDispatches == blendAfterA + 1,
                         "blend-inval: changed mode dirties only the blend descendant");
+
+    const auto advisory = runScene(*executor.executor, sceneBAdvisory, budget, false);
+    expectations.expect(advisory.pollResult == GpuSceneExecutorPollResult::Ready,
+                        "blend-inval: advisory-digest variant ready");
+    counters = executor.executor->counters();
+    expectations.expect(counters.blendDispatches == blendAfterA + 1,
+                        "blend-inval: an advisory artifact digest never re-keys the blend");
 
     const auto beforeCancel = executor.executor->counters().blendDispatches;
     const auto begin = executor.executor->begin(sceneC, budget);
@@ -598,6 +629,7 @@ int main(int argc, char** argv) {
                                     "foreign: refusal is InvalidArgument");
             }
         }
+        runBlendIdentitySelection(expectations);
         runAffine(expectations, *device.device, *cache.cache);
         runBlendMatrix(expectations, *device.device, *cache.cache);
         runAffineInvalidationAndCancel(expectations, *device.device, *cache.cache);

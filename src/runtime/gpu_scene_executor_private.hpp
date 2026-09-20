@@ -148,16 +148,6 @@ inline const std::string kEmptyCommandKey;
 // The single AffineBilinearV1 artifact token. Affine has one shader, so its effective pin is fixed.
 inline const std::string kAffineArtifactToken = "affine-bilinear-v1";
 
-// The native selection rule, mirroring gpu_blend.cpp exactly: Normal and Add always use the Float32
-// kernel; the six general separable modes need the Float64 companion and are refused by the native
-// op when the device lacks shaderFloat64. The effective pin is therefore a pure function of `mode`,
-// so a producer-supplied digest can never point the cache at another shader's output.
-[[nodiscard]] inline const std::string& effectiveBlendArtifactToken(const core::BlendMode mode) {
-    static const std::string f32 = "blend-v1-f32";
-    static const std::string f64 = "blend-v1-f64";
-    return (mode == core::BlendMode::Normal || mode == core::BlendMode::Add) ? f32 : f64;
-}
-
 [[nodiscard]] inline bool affineFieldsFinite(const GpuSceneAffineCommand& affine) noexcept {
     return std::isfinite(affine.matrix.a) && std::isfinite(affine.matrix.b) &&
            std::isfinite(affine.matrix.tx) && std::isfinite(affine.matrix.c) &&
@@ -165,24 +155,23 @@ inline const std::string kAffineArtifactToken = "affine-bilinear-v1";
            std::isfinite(affine.opacity);
 }
 
-// Effective, executor-owned semantic key. Affine and blend are RECOMPUTED from their declared
-// fields and the actual device selection rule; a producer-supplied semanticKey or artifactDigest is
-// never trusted for a lookup or an insertion. Empty means the command is not keyable (malformed);
-// the caller refuses it rather than silently using a weaker key.
+// Effective, executor-owned semantic key for every command except blend. Affine is RECOMPUTED from
+// its declared fields; a producer-supplied semanticKey is never trusted for a lookup or an
+// insertion. Blend commands are keyed by the planner's authoritative overload, which alone knows
+// the actual selected pipeline; they must not reach this fallback, so an empty result is returned
+// for a blend rather than its advisory key. Empty also means the command is not keyable
+// (malformed); the caller refuses it rather than silently using a weaker key.
 [[nodiscard]] inline std::string effectiveCommandKey(const GpuSceneCommand& command) {
     if (const auto* affine = std::get_if<GpuSceneAffineCommand>(&command)) {
         if (!affineFieldsFinite(*affine)) {
             return {};
         }
-        return makeGpuSceneAffineSemanticKey(affine->inputKey, affine->sourceWindow,
-                                             affine->matrix, affine->opacity, affine->outputWindow,
+        return makeGpuSceneAffineSemanticKey(affine->inputKey, affine->sourceWindow, affine->matrix,
+                                             affine->opacity, affine->outputWindow,
                                              affine->pixelAspect, kAffineArtifactToken);
     }
-    if (const auto* blend = std::get_if<GpuSceneBlendCommand>(&command)) {
-        return makeGpuSceneBlendSemanticKey(blend->sourceKey, blend->destinationKey, blend->mode,
-                                            blend->sourceWindow, blend->outputWindow,
-                                            blend->pixelAspect,
-                                            effectiveBlendArtifactToken(blend->mode));
+    if (std::get_if<GpuSceneBlendCommand>(&command) != nullptr) {
+        return {};
     }
     return commandKey(command);
 }
@@ -195,10 +184,10 @@ inline const std::string kAffineArtifactToken = "affine-bilinear-v1";
 // Full descriptor match for a produced image against a scene command. A translation's display
 // window and pixel aspect are preserved from its resolved input image, so that input is passed when
 // it is known.
-[[nodiscard]] inline bool descriptorMatches(const GpuSceneCommand& command,
-                                            const render::GpuImage& image,
-                                            const render::GpuImage* translationInput,
-                                            const render::GpuImage* backdropInput = nullptr) noexcept {
+[[nodiscard]] inline bool
+descriptorMatches(const GpuSceneCommand& command, const render::GpuImage& image,
+                  const render::GpuImage* translationInput,
+                  const render::GpuImage* backdropInput = nullptr) noexcept {
     if (const auto* solid = std::get_if<GpuSceneSolidCommand>(&command)) {
         return windowsEqual(image.dataWindow(), solid->dataWindow) &&
                windowsEqual(image.displayWindow(), solid->displayWindow) &&

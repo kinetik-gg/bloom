@@ -23,10 +23,23 @@ GpuBlend::GpuBlend(GpuBlend&& other) noexcept = default;
 GpuBlend& GpuBlend::operator=(GpuBlend&& other) noexcept = default;
 GpuBlend::~GpuBlend() = default;
 
-GpuBlendCreateResult GpuBlend::create(GpuDevice&, const GpuBlendBudgets&) {
+GpuBlendCreateResult GpuBlend::create(GpuDevice&, const GpuBlendBudgets&, GpuBlendKernelPolicy) {
     return {nullptr,
             {GpuBlendDiagnosticCode::DeviceUnavailable,
              "Bloom was built without Vulkan dependencies; GPU blending is unavailable"}};
+}
+
+std::string_view gpuBlendShaderIdentity(const core::BlendMode mode,
+                                        const bool float64Selected) noexcept {
+    if (mode == core::BlendMode::Normal || mode == core::BlendMode::Add) {
+        return "blend-v1-f32";
+    }
+    return float64Selected ? std::string_view{"blend-v1-f64"}
+                           : std::string_view{"blend-v1-f32-portable"};
+}
+
+std::string_view GpuBlend::shaderIdentity(core::BlendMode mode) const noexcept {
+    return gpuBlendShaderIdentity(mode, false);
 }
 
 GpuBlendJobState GpuBlend::state() const noexcept { return GpuBlendJobState::Idle; }
