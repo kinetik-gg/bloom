@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -19,6 +20,7 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace bloom::color::ocio_gpu_native_test {
@@ -243,6 +245,22 @@ makeProgram(bloom::render::GpuDevice& device, bloom::render::OcioGpuProgramDesc 
         return std::nullopt;
     }
     return std::shared_ptr<GpuOcioProgram>(std::move(created.program));
+}
+
+bloom::render::GpuOcioProgramPollResult
+awaitOcioCompletion(bloom::render::GpuOcioProgram& program, Expectations& expectations) {
+    // Finite ceiling: ~20 s of 1 ms ticks. A job that has not retired by then is a failure, never a
+    // hang. This is a bounded wait, not a naked busy loop.
+    constexpr int kMaxAttempts = 20000;
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+        const auto result = program.poll();
+        if (result != bloom::render::GpuOcioProgramPollResult::Pending) {
+            return result;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    expectations.expect(false, "the native OCIO job retires within the bounded poll window");
+    return bloom::render::GpuOcioProgramPollResult::Pending;
 }
 
 std::uint8_t quantize(const double value) {

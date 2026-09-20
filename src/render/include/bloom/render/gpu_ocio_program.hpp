@@ -16,7 +16,11 @@
 // OCIO declared; Bloom I/O occupies set 1. Textures are uploaded once per program+device generation
 // and are never re-resampled or approximated. Uniform bytes are an exact caller snapshot written
 // into the mapped UBO before dispatch. Owner-thread begin/poll/take/cancel/destruction; one
-// outstanding job; no resource is destroyed while its submission is unretired.
+// outstanding job; no resource is destroyed or resized while its submission is unretired. The
+// packed display buffer is persistent per program and is grown or shrunk to the current input
+// geometry only after the previous submission's fence is proven retired; a begin whose
+// `byteBudget` cannot cover the actual VMA bytes of the job's output (and packed buffer on the
+// display arm) is refused typed before anything is submitted or published.
 
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
@@ -40,6 +44,8 @@ enum class GpuOcioProgramDiagnosticCode : std::uint8_t {
     InvalidArgument,
     Unsupported,
     OverBudget,
+    // A job is already in flight, or a previous submission's fence retirement is not proven. No new
+    // job may be admitted and no owned resource may be resized/destroyed until it retires.
     Busy,
     WrongThread,
     DeviceUnavailable,
@@ -59,9 +65,10 @@ struct GpuOcioProgramDiagnostic final {
                            const GpuOcioProgramDiagnostic&) = default;
 };
 
-// `maxOwnedBytes` bounds this program's persistent LUT/UBO bytes plus one job's transient packed
-// buffer; `maxLutBytes` bounds the aggregate sampled-texture bytes. Both are checked before every
-// allocation.
+// `maxOwnedBytes` bounds this program's persistent LUT/UBO/status bytes plus one job's resident
+// output image and (display arm) packed buffer; `maxLutBytes` bounds the aggregate sampled-texture
+// bytes. Both are checked against the actual VMA allocation sizes before every allocation and again
+// before submission.
 struct GpuOcioProgramBudgets final {
     std::uint64_t maxOwnedBytes = 512ULL * 1024ULL * 1024ULL;
     std::uint64_t maxLutBytes = 256ULL * 1024ULL * 1024ULL;
@@ -93,7 +100,11 @@ class GpuOcioProgram final {
 
     // Ownership of `input` is retained for the whole job. `uniformBytes` is the complete UBO
     // snapshot; an empty span selects the descriptor's immutable snapshot and must match
-    // uniformBufferSize exactly. Returns None when the job was accepted and submitted.
+    // uniformBufferSize exactly. `byteBudget` must cover the actual VMA bytes of this job's
+    // resident output image plus, on the display arm, the packed buffer; an undersized budget is
+    // refused OverBudget before anything is submitted or published. Input geometry may change
+    // between jobs on the same program; the packed buffer is resized only after the prior
+    // submission is proven retired. Returns None when the job was accepted and submitted.
     [[nodiscard]] GpuOcioProgramDiagnostic beginEffect(std::shared_ptr<const GpuImage> input,
                                                        std::span<const std::byte> uniformBytes,
                                                        std::uint64_t byteBudget);
@@ -111,8 +122,11 @@ class GpuOcioProgram final {
     [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
     // Actual VMA bytes of the persistent LUT textures + uniform buffer + status buffer owned by
     // this program (allocator rounding included), for a program-cache byte charge. Distinct from
-    // lastJobAllocationBytes(), which is the transient per-job output charge. Owner-thread only.
+    // lastJobAllocationBytes(), which is the current job's output charge. Owner-thread only.
     [[nodiscard]] std::uint64_t retainedAllocationBytes() const noexcept;
+    // Actual VMA bytes of the most recent job's resident output image plus, on the display arm, the
+    // packed buffer. Nonzero for both arms after an accepted job; zero before any job and after a
+    // job is cleared. Owner-thread only.
     [[nodiscard]] std::uint64_t lastJobAllocationBytes() const noexcept;
 
     void cancel() noexcept;
