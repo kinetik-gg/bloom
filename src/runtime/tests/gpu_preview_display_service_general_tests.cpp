@@ -377,12 +377,19 @@ int run(const int argc, char** argv) {
 
         TaskScheduler defaultScheduler(TaskSchedulerConfig::defaults());
         GpuPreviewDisplayServiceOptions defaultOptions = serviceOptions(options.loaderPath);
-        defaultOptions.residentLeaseBudgets.maxBytes = 4ULL * kGib;
-        defaultOptions.residentSceneCacheBudgets.maxRetainedBytes = 4ULL * kGib;
-        defaultOptions.residentExecutorBudgets.maxImageBytes = 2ULL * kGib;
-        defaultOptions.residentExecutorBudgets.maxOcioRetainedProgramBytes = 2ULL * kGib;
-        defaultOptions.residentExecutorBudgets.maxOcioOwnedBytesPerProgram = 2ULL * kGib;
-        defaultOptions.previewByteAllowance = 2ULL * kGib;
+        // Same configured resident plan the application derives from the artist's frame-cache
+        // ceiling. The former ad-hoc 4/4/2 GiB triplet bypassed the configured split; under the
+        // device clamp it proportionally shrank the request ledger below a full-resolution
+        // transient and refused a request the approved 50/20/30 plan admits. This is the
+        // production derivation, never a widened ceiling.
+        const auto defaultLedgerAllocation = bloom::runtime::processMemoryBudgetLedger().allocate();
+        const auto defaultConfiguredPlan = bloom::runtime::gpuResidentCapacityPlanConfigured(
+            defaultLedgerAllocation.previewFrameCacheByteBudget);
+        defaultOptions.residentLeaseBudgets.maxBytes = defaultConfiguredPlan.leaseBytes;
+        defaultOptions.residentSceneCacheBudgets.maxRetainedBytes =
+            defaultConfiguredPlan.sceneCacheBytes;
+        defaultOptions.residentExecutorBudgets = bloom::runtime::GpuSceneExecutorBudgets{};
+        defaultOptions.previewByteAllowance = defaultConfiguredPlan.requestBytes;
         GpuPreviewDisplayService defaultService(
             defaultScheduler, generalStageFunction(bigPlan, builder, programService, processor),
             generalCpuStageFunction(bigPlan, processor, evaluator), generalFallback(processor),
