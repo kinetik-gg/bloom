@@ -1122,6 +1122,26 @@ bloom_add_test(
     TIMEOUT 300
 )
 
+# Bounded shared runtime OCIO context resolver (bloom/runtime/gpu_ocio_context.hpp). The focused
+# vectors use the REAL tools staged beside this test executable by bloom_package_gpu_shader_tools
+# (the same packaging the desktop/CLI/MCP targets use) through the same BLOOM_GPU_TOOLS_* compile
+# definitions; there are no fake tool paths. A build without qualified tools still runs the
+# typed-refusal (CPU-fallback) vectors.
+add_executable(bloom_runtime_gpu_ocio_context_test gpu_ocio_context_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_ocio_context_test
+    PRIVATE bloom_runtime_evaluator bloom_color_gpu_shader)
+target_compile_definitions(bloom_runtime_gpu_ocio_context_test PRIVATE
+    "BLOOM_GPU_OCIO_CONTEXT_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_ocio_context_test>\"")
+bloom_enable_warnings(bloom_runtime_gpu_ocio_context_test)
+include(BloomGpuShaderTools)
+bloom_package_gpu_shader_tools(bloom_runtime_gpu_ocio_context_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_ocio_context
+    COMMAND bloom_runtime_gpu_ocio_context_test
+    LABELS runtime unit gpu color
+    TIMEOUT 300
+)
+
 # Native acceptance for the runtime OCIO executor: real extracted/compiled OCIO CST + display +
 # view-adjust programs dispatched through the owner-thread executor and compared against the actual
 # unchanged CPU OCIO oracle, with warm zero-compile/zero-upload, invalidation, cancellation, and an
