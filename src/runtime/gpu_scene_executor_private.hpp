@@ -9,11 +9,14 @@
 // This header owns the shared step vocabulary, the small pure helpers, and the Impl definition.
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/render/gpu_affine.hpp>
+#include <bloom/render/gpu_blend.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -38,6 +41,8 @@ enum class GpuSceneExecutorStepKind : std::uint8_t {
     Upload,
     Translation, // GpuComposite::beginTranslation: a translation command or a composition copy.
     SourceOver,  // GpuComposite::beginSourceOver: one merge layer.
+    Affine,      // GpuAffine::beginAffineMatrix: a general composed affine placement.
+    Blend,       // GpuBlend::beginBlend: one explicit two-input blend mode.
 };
 
 // One native step. `command` is the scene command this step completes (kInvalid for an intermediate
@@ -72,6 +77,12 @@ struct GpuSceneExecutorStep final {
     double translationX = 0.0;
     double translationY = 0.0;
     float translationOpacity = 1.0F;
+    // Affine: the exact composed placement and the already-rounded opacity. The input is `input`,
+    // the output data window is `outputWindow`.
+    render::GpuAffineMatrix affineMatrix;
+    float affineOpacity = 1.0F;
+    // Blend: `input` is the foreground source, `destination` the backdrop.
+    core::BlendMode blendMode = core::kDefaultBlendMode;
 };
 
 namespace gpu_scene_executor_detail {
@@ -125,7 +136,55 @@ inline const std::string kEmptyCommandKey;
     if (const auto* output = std::get_if<GpuSceneCompositionOutputCommand>(&command)) {
         return output->semanticKey;
     }
+    if (const auto* affine = std::get_if<GpuSceneAffineCommand>(&command)) {
+        return affine->semanticKey;
+    }
+    if (const auto* blend = std::get_if<GpuSceneBlendCommand>(&command)) {
+        return blend->semanticKey;
+    }
     return kEmptyCommandKey;
+}
+
+// The single AffineBilinearV1 artifact token. Affine has one shader, so its effective pin is fixed.
+inline const std::string kAffineArtifactToken = "affine-bilinear-v1";
+
+// The native selection rule, mirroring gpu_blend.cpp exactly: Normal and Add always use the Float32
+// kernel; the six general separable modes need the Float64 companion and are refused by the native
+// op when the device lacks shaderFloat64. The effective pin is therefore a pure function of `mode`,
+// so a producer-supplied digest can never point the cache at another shader's output.
+[[nodiscard]] inline const std::string& effectiveBlendArtifactToken(const core::BlendMode mode) {
+    static const std::string f32 = "blend-v1-f32";
+    static const std::string f64 = "blend-v1-f64";
+    return (mode == core::BlendMode::Normal || mode == core::BlendMode::Add) ? f32 : f64;
+}
+
+[[nodiscard]] inline bool affineFieldsFinite(const GpuSceneAffineCommand& affine) noexcept {
+    return std::isfinite(affine.matrix.a) && std::isfinite(affine.matrix.b) &&
+           std::isfinite(affine.matrix.tx) && std::isfinite(affine.matrix.c) &&
+           std::isfinite(affine.matrix.d) && std::isfinite(affine.matrix.ty) &&
+           std::isfinite(affine.opacity);
+}
+
+// Effective, executor-owned semantic key. Affine and blend are RECOMPUTED from their declared
+// fields and the actual device selection rule; a producer-supplied semanticKey or artifactDigest is
+// never trusted for a lookup or an insertion. Empty means the command is not keyable (malformed);
+// the caller refuses it rather than silently using a weaker key.
+[[nodiscard]] inline std::string effectiveCommandKey(const GpuSceneCommand& command) {
+    if (const auto* affine = std::get_if<GpuSceneAffineCommand>(&command)) {
+        if (!affineFieldsFinite(*affine)) {
+            return {};
+        }
+        return makeGpuSceneAffineSemanticKey(affine->inputKey, affine->sourceWindow,
+                                             affine->matrix, affine->opacity, affine->outputWindow,
+                                             affine->pixelAspect, kAffineArtifactToken);
+    }
+    if (const auto* blend = std::get_if<GpuSceneBlendCommand>(&command)) {
+        return makeGpuSceneBlendSemanticKey(blend->sourceKey, blend->destinationKey, blend->mode,
+                                            blend->sourceWindow, blend->outputWindow,
+                                            blend->pixelAspect,
+                                            effectiveBlendArtifactToken(blend->mode));
+    }
+    return commandKey(command);
 }
 
 [[nodiscard]] inline bool windowsEqual(const std::optional<render::ImageWindow> lhs,
@@ -138,7 +197,8 @@ inline const std::string kEmptyCommandKey;
 // it is known.
 [[nodiscard]] inline bool descriptorMatches(const GpuSceneCommand& command,
                                             const render::GpuImage& image,
-                                            const render::GpuImage* translationInput) noexcept {
+                                            const render::GpuImage* translationInput,
+                                            const render::GpuImage* backdropInput = nullptr) noexcept {
     if (const auto* solid = std::get_if<GpuSceneSolidCommand>(&command)) {
         return windowsEqual(image.dataWindow(), solid->dataWindow) &&
                windowsEqual(image.displayWindow(), solid->displayWindow) &&
@@ -174,12 +234,32 @@ inline const std::string kEmptyCommandKey;
                windowsEqual(image.displayWindow(), upload->descriptor.displayWindow()) &&
                image.pixelAspect() == upload->descriptor.pixelAspect();
     }
+    if (const auto* affine = std::get_if<GpuSceneAffineCommand>(&command)) {
+        if (!windowsEqual(image.dataWindow(), affine->outputWindow)) {
+            return false;
+        }
+        if (translationInput != nullptr) {
+            return image.displayWindow() == translationInput->displayWindow() &&
+                   image.pixelAspect() == translationInput->pixelAspect();
+        }
+        return true;
+    }
+    if (const auto* blend = std::get_if<GpuSceneBlendCommand>(&command)) {
+        if (!windowsEqual(image.dataWindow(), blend->outputWindow)) {
+            return false;
+        }
+        if (backdropInput != nullptr) {
+            return image.displayWindow() == backdropInput->displayWindow() &&
+                   image.pixelAspect() == backdropInput->pixelAspect();
+        }
+        return true;
+    }
     return false;
 }
 
 [[nodiscard]] inline bool cachedDescriptorMatches(const GpuSceneCommand& command,
                                                   const render::GpuImage& image) noexcept {
-    return descriptorMatches(command, image, nullptr);
+    return descriptorMatches(command, image, nullptr, nullptr);
 }
 
 struct SceneDescriptorInfo final {
@@ -207,6 +287,19 @@ expectedDescriptorOf(const PreparedGpuScene& scene, const GpuSceneCommandIndex i
                     return std::nullopt;
                 }
                 return SceneDescriptorInfo{item.outputWindow, source->display, source->pixelAspect};
+            } else if constexpr (std::is_same_v<T, GpuSceneAffineCommand>) {
+                const auto source = expectedDescriptorOf(scene, item.input, depth + 1);
+                if (!source.has_value()) {
+                    return std::nullopt;
+                }
+                return SceneDescriptorInfo{item.outputWindow, source->display, source->pixelAspect};
+            } else if constexpr (std::is_same_v<T, GpuSceneBlendCommand>) {
+                const auto backdrop = expectedDescriptorOf(scene, item.destination, depth + 1);
+                if (!backdrop.has_value()) {
+                    return std::nullopt;
+                }
+                return SceneDescriptorInfo{item.outputWindow, backdrop->display,
+                                           backdrop->pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneCompositionOutputCommand> ||
                                  std::is_same_v<T, GpuSceneSolidCommand>) {
                 return SceneDescriptorInfo{item.dataWindow, item.displayWindow, item.pixelAspect};
@@ -275,6 +368,50 @@ diagnosticFromUpload(const render::GpuImageUploadDiagnostic& diagnostic) {
     return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DispatchRefused, diagnostic.message);
 }
 
+[[nodiscard]] inline GpuSceneExecutorDiagnostic
+diagnosticFromAffine(const render::GpuAffineDiagnostic& diagnostic) {
+    switch (diagnostic.code) {
+    case render::GpuAffineDiagnosticCode::OverBudget:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::OverBudget, diagnostic.message);
+    case render::GpuAffineDiagnosticCode::DeviceLost:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceLost, diagnostic.message);
+    case render::GpuAffineDiagnosticCode::WrongThread:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::WrongThread, diagnostic.message);
+    case render::GpuAffineDiagnosticCode::DeviceUnavailable:
+    case render::GpuAffineDiagnosticCode::AllocationFailed:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
+                              diagnostic.message);
+    case render::GpuAffineDiagnosticCode::Unsupported:
+    case render::GpuAffineDiagnosticCode::ShaderRejected:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::Unsupported, diagnostic.message);
+    default:
+        break;
+    }
+    return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DispatchRefused, diagnostic.message);
+}
+
+[[nodiscard]] inline GpuSceneExecutorDiagnostic
+diagnosticFromBlend(const render::GpuBlendDiagnostic& diagnostic) {
+    switch (diagnostic.code) {
+    case render::GpuBlendDiagnosticCode::OverBudget:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::OverBudget, diagnostic.message);
+    case render::GpuBlendDiagnosticCode::DeviceLost:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceLost, diagnostic.message);
+    case render::GpuBlendDiagnosticCode::WrongThread:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::WrongThread, diagnostic.message);
+    case render::GpuBlendDiagnosticCode::DeviceUnavailable:
+    case render::GpuBlendDiagnosticCode::AllocationFailed:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
+                              diagnostic.message);
+    case render::GpuBlendDiagnosticCode::Unsupported:
+    case render::GpuBlendDiagnosticCode::ShaderRejected:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::Unsupported, diagnostic.message);
+    default:
+        break;
+    }
+    return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DispatchRefused, diagnostic.message);
+}
+
 enum class NativePoll : std::uint8_t { Pending, Ready, Failure, WrongThread };
 
 [[nodiscard]] inline NativePoll mapSolid(const render::GpuSolidPollResult result) noexcept {
@@ -319,6 +456,34 @@ enum class NativePoll : std::uint8_t { Pending, Ready, Failure, WrongThread };
     return NativePoll::Failure;
 }
 
+[[nodiscard]] inline NativePoll mapAffine(const render::GpuAffinePollResult result) noexcept {
+    switch (result) {
+    case render::GpuAffinePollResult::Pending:
+        return NativePoll::Pending;
+    case render::GpuAffinePollResult::Ready:
+        return NativePoll::Ready;
+    case render::GpuAffinePollResult::WrongThread:
+        return NativePoll::WrongThread;
+    case render::GpuAffinePollResult::Failure:
+        break;
+    }
+    return NativePoll::Failure;
+}
+
+[[nodiscard]] inline NativePoll mapBlend(const render::GpuBlendPollResult result) noexcept {
+    switch (result) {
+    case render::GpuBlendPollResult::Pending:
+        return NativePoll::Pending;
+    case render::GpuBlendPollResult::Ready:
+        return NativePoll::Ready;
+    case render::GpuBlendPollResult::WrongThread:
+        return NativePoll::WrongThread;
+    case render::GpuBlendPollResult::Failure:
+        break;
+    }
+    return NativePoll::Failure;
+}
+
 } // namespace gpu_scene_executor_detail
 
 struct GpuSceneExecutor::Impl final {
@@ -342,6 +507,8 @@ struct GpuSceneExecutor::Impl final {
     std::unique_ptr<render::GpuSolid> solid;
     std::unique_ptr<render::GpuComposite> composite;
     std::unique_ptr<render::GpuImageUpload> upload;
+    std::unique_ptr<render::GpuAffine> affine;
+    std::unique_ptr<render::GpuBlend> blend;
 
     GpuSceneExecutorJobState state = GpuSceneExecutorJobState::Idle;
     GpuSceneExecutorDiagnostic diagnostic;
@@ -362,7 +529,7 @@ struct GpuSceneExecutor::Impl final {
     // the op's own actual retained bytes to this.
     std::uint64_t liveBytesAtDispatch = 0;
 
-    enum class NativeKind : std::uint8_t { None, Solid, Composite, Upload };
+    enum class NativeKind : std::uint8_t { None, Solid, Composite, Upload, Affine, Blend };
     NativeKind nativeKind = NativeKind::None;
     bool nativeInFlight = false;
     bool cancelRequested = false;

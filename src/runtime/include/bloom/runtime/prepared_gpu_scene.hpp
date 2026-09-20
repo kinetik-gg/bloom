@@ -26,13 +26,18 @@
 // CPU path. Animated and driven parameters are supported because they are resolved by the real
 // preflight, never assumed.
 
+#include <bloom/core/blend_mode.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/render/gpu_affine.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/evaluation.hpp>
 
 #include <cstdint>
+#include <charconv>
+#include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -189,9 +194,165 @@ struct GpuSceneUploadCommand final {
     std::string semanticKey;
 };
 
+// A complete composed affine placement of one resident input: the accepted AffineBilinearV1
+// `beginAffineMatrix` form, which covers rotation, uniform/nonuniform/negative scale, anchor plus
+// translation, and any precomposed parent matrix including shear. Source-local pixel-centre
+// coordinates (0-based within the input's data window) map to absolute output coordinates through
+// `matrix`; the output display window and pixel aspect are preserved from the input. The matrix is
+// the exact Float64 composed matrix the CPU parent-aware oracle uses, so no node/plan/revision
+// identity appears in the key.
+struct GpuSceneAffineCommand final {
+    GpuSceneCommandIndex index = kInvalidGpuSceneCommand;
+    OperationIndex sourceOperation = OperationIndex::fromRaw(0);
+    GpuSceneCommandIndex input = kInvalidGpuSceneCommand;
+    // The input's own semantic key, carried explicitly so the executor can canonicalize the
+    // effective key from fields (never trusting a producer-supplied combined key).
+    std::string inputKey;
+    // The input data window (source-local layout) and the output data window.
+    render::ImageWindow sourceWindow;
+    render::ImageWindow outputWindow;
+    render::GpuAffineMatrix matrix;
+    // Already rounded once to Float32 exactly as the CPU primitive does; finite in [0, 1].
+    float opacity = 1.0F;
+    // Output pixel aspect (inherited from the input).
+    core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
+    // Diagnostics/back-compat only: the executor NEVER uses this for a cache lookup or insertion;
+    // it recomputes the effective key from the fields above and the actual device selection.
+    std::string semanticKey;
+};
+
+// A BlendV1 composite of two resident inputs under an explicit core::BlendMode. `source` is the
+// foreground and `destination` the backdrop; the output data window is the destination data window,
+// and the destination display window and pixel aspect are preserved. The key carries the actually
+// used shader artifact digest (Float32 vs the capability-gated Float64 companion) so a device
+// capability change never serves a wrongly keyed image, and it always carries the explicit mode so
+// a non-Normal blend can never be silently keyed as Normal.
+struct GpuSceneBlendCommand final {
+    GpuSceneCommandIndex index = kInvalidGpuSceneCommand;
+    OperationIndex sourceOperation = OperationIndex::fromRaw(0);
+    GpuSceneCommandIndex source = kInvalidGpuSceneCommand;
+    GpuSceneCommandIndex destination = kInvalidGpuSceneCommand;
+    // The two inputs' own semantic keys, carried explicitly so the executor can canonicalize the
+    // effective key from fields instead of trusting a producer-supplied combined key.
+    std::string sourceKey;
+    std::string destinationKey;
+    core::BlendMode mode = core::kDefaultBlendMode;
+    // The source data window and the output data window (== destination data window).
+    render::ImageWindow sourceWindow;
+    render::ImageWindow outputWindow;
+    // Destination display window and pixel aspect are preserved onto the output.
+    core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
+    // The SHA-256 of the checked-in shader artifact the producer believes was dispatched. Advisory
+    // only: the executor canonicalizes the effective f32/f64 pin from `mode` and the native
+    // selection rule, so an arbitrary value here can never bless another shader's cached output.
+    std::string artifactDigest;
+    std::string semanticKey;
+};
+
 using GpuSceneCommand =
     std::variant<GpuSceneSolidCommand, GpuSceneTranslationCommand, GpuSceneCoverageSolidCommand,
-                 GpuSceneUploadCommand, GpuSceneMergeCommand, GpuSceneCompositionOutputCommand>;
+                 GpuSceneUploadCommand, GpuSceneMergeCommand, GpuSceneCompositionOutputCommand,
+                 GpuSceneAffineCommand, GpuSceneBlendCommand>;
+
+// Canonical, construction-time semantic key builders. Producer code (the scene builder / graph
+// worker) must call these rather than hand-format a key, so two independent producers agree and a
+// missing field is impossible. Both fold the input command keys, the resolved geometry window, the
+// output pixel aspect, the operation kind tag, and the ACTUAL shader artifact digest. The blend
+// helper takes `mode` explicitly; there is deliberately no default argument, so a caller cannot
+// silently key every blend as Normal.
+namespace gpu_scene_key_detail {
+
+inline void appendSemanticDouble(std::string& out, double value) {
+    // Locale-independent and round-trip exact. std::to_chars never consults the C++ locale, so a
+    // comma-decimal locale cannot split a key; NaN/Inf are rejected by the caller before keying.
+    if (value == 0.0) {
+        value = 0.0;
+    }
+    char buffer[40];
+    const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value,
+                                      std::chars_format::general);
+    if (result.ec == std::errc{}) {
+        out.append(buffer, static_cast<std::size_t>(result.ptr - buffer));
+    }
+}
+
+inline void appendSemanticWindow(std::string& out, const render::ImageWindow& window) {
+    out.push_back('|');
+    appendSemanticDouble(out, static_cast<double>(window.originX()));
+    out.push_back(',');
+    appendSemanticDouble(out, static_cast<double>(window.originY()));
+    out.push_back(',');
+    out.append(std::to_string(window.extent().width()));
+    out.push_back('x');
+    out.append(std::to_string(window.extent().height()));
+}
+
+inline void appendSemanticPixelAspect(std::string& out,
+                                      const core::PixelAspectRatio& pixelAspect) {
+    out.append("|par=");
+    out.append(std::to_string(pixelAspect.numerator()));
+    out.push_back('/');
+    out.append(std::to_string(pixelAspect.denominator()));
+}
+
+inline void appendSemanticFloatBits(std::string& out, float value) {
+    std::uint32_t bits = 0;
+    static_assert(sizeof(bits) == sizeof(value));
+    std::memcpy(&bits, &value, sizeof(bits));
+    out.push_back('|');
+    out.append(std::to_string(bits));
+}
+
+} // namespace gpu_scene_key_detail
+
+[[nodiscard]] inline std::string
+makeGpuSceneAffineSemanticKey(const std::string& inputKey,
+                              const render::ImageWindow& sourceWindow, const render::GpuAffineMatrix& matrix,
+                              const float opacity, const render::ImageWindow& outputWindow,
+                              const core::PixelAspectRatio& pixelAspect,
+                              const std::string& artifactDigest) {
+    std::string key = "affine-bilinear-v1|in=";
+    key.append(inputKey);
+    gpu_scene_key_detail::appendSemanticWindow(key, sourceWindow);
+    key.append("|m=");
+    gpu_scene_key_detail::appendSemanticDouble(key, matrix.a);
+    key.push_back(',');
+    gpu_scene_key_detail::appendSemanticDouble(key, matrix.b);
+    key.push_back(',');
+    gpu_scene_key_detail::appendSemanticDouble(key, matrix.tx);
+    key.push_back(',');
+    gpu_scene_key_detail::appendSemanticDouble(key, matrix.c);
+    key.push_back(',');
+    gpu_scene_key_detail::appendSemanticDouble(key, matrix.d);
+    key.push_back(',');
+    gpu_scene_key_detail::appendSemanticDouble(key, matrix.ty);
+    gpu_scene_key_detail::appendSemanticFloatBits(key, opacity);
+    gpu_scene_key_detail::appendSemanticWindow(key, outputWindow);
+    gpu_scene_key_detail::appendSemanticPixelAspect(key, pixelAspect);
+    key.append("|artifact=");
+    key.append(artifactDigest);
+    return key;
+}
+
+[[nodiscard]] inline std::string
+makeGpuSceneBlendSemanticKey(const std::string& sourceKey, const std::string& destinationKey,
+                             const core::BlendMode mode, const render::ImageWindow& sourceWindow,
+                             const render::ImageWindow& outputWindow,
+                             const core::PixelAspectRatio& pixelAspect,
+                             const std::string& artifactDigest) {
+    std::string key = "blend-v1|src=";
+    key.append(sourceKey);
+    key.append("|dst=");
+    key.append(destinationKey);
+    key.append("|mode=");
+    key.append(std::to_string(static_cast<unsigned>(mode)));
+    gpu_scene_key_detail::appendSemanticWindow(key, sourceWindow);
+    gpu_scene_key_detail::appendSemanticWindow(key, outputWindow);
+    gpu_scene_key_detail::appendSemanticPixelAspect(key, pixelAspect);
+    key.append("|artifact=");
+    key.append(artifactDigest);
+    return key;
+}
 
 // Shared, bounded CPU-side store of already converted and frozen source uploads. It keys ONLY on
 // the source semantic key -- validated source identity, interpretation/colour configuration, and
@@ -255,6 +416,10 @@ class PreparedGpuScene final {
 
   private:
     friend class CpuGpuSceneBuilder;
+    // Proof-only fixture seam: constructs deliberately controlled command lists for native executor
+    // tests. Declared here (never defined in production) so no mutable production creation API is
+    // exposed; the definition lives only in the test translation unit.
+    friend struct GpuSceneFixtureBuilder;
 
     PreparedGpuScene(std::vector<GpuSceneCommand> commands,
                      std::vector<GpuSceneCommandIndex> commandForOperation,

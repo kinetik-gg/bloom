@@ -18,7 +18,8 @@ namespace {
 
 using gpu_scene_executor_detail::cachedDescriptorMatches;
 using gpu_scene_executor_detail::checkedImageBytes;
-using gpu_scene_executor_detail::commandKey;
+using gpu_scene_executor_detail::affineFieldsFinite;
+using gpu_scene_executor_detail::effectiveCommandKey;
 using gpu_scene_executor_detail::descriptorMatches;
 using gpu_scene_executor_detail::expectedDescriptorOf;
 using gpu_scene_executor_detail::makeDiagnostic;
@@ -45,7 +46,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
     color[index] = 1;
     const GpuSceneCommand& command = scene->commands()[index];
     const bool isOutput = index == scene->outputCommand();
-    const std::string& key = commandKey(command);
+    const std::string key = effectiveCommandKey(command);
 
     if (auto hit = cache->find(key)) {
         if (!hit->isValid() || !hit->isBoundTo(*device)) {
@@ -182,6 +183,75 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.translationX = translation->translationX;
         step.translationY = translation->translationY;
         step.translationOpacity = translation->opacity;
+        steps.push_back(std::move(step));
+        color[index] = 2;
+        return {};
+    }
+
+    if (const auto* affineCommand = std::get_if<GpuSceneAffineCommand>(&command)) {
+        if (!affineFieldsFinite(*affineCommand)) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "an affine command has a non-finite matrix or opacity");
+        }
+        if (const auto plan = planCommand(affineCommand->input, color);
+            plan.code != GpuSceneExecutorDiagnosticCode::None) {
+            return plan;
+        }
+        if (color[affineCommand->input] != 2) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                  "an affine input was not planned");
+        }
+        std::uint64_t bytes = 0;
+        if (!checkedImageBytes(affineCommand->outputWindow, bytes)) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "an affine command has an empty output window");
+        }
+        GpuSceneExecutorStep step;
+        step.kind = GpuSceneExecutorStepKind::Affine;
+        step.command = index;
+        step.input = affineCommand->input;
+        step.cacheKey = key;
+        step.cacheOnComplete = true;
+        step.outputWindow = affineCommand->outputWindow;
+        step.affineMatrix = affineCommand->matrix;
+        step.affineOpacity = affineCommand->opacity;
+        steps.push_back(std::move(step));
+        color[index] = 2;
+        return {};
+    }
+
+    if (const auto* blendCommand = std::get_if<GpuSceneBlendCommand>(&command)) {
+        if (const auto plan = planCommand(blendCommand->source, color);
+            plan.code != GpuSceneExecutorDiagnosticCode::None) {
+            return plan;
+        }
+        if (const auto plan = planCommand(blendCommand->destination, color);
+            plan.code != GpuSceneExecutorDiagnosticCode::None) {
+            return plan;
+        }
+        if (color[blendCommand->source] != 2 || color[blendCommand->destination] != 2) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                  "a blend input was not planned");
+        }
+        std::uint64_t bytes = 0;
+        if (!checkedImageBytes(blendCommand->outputWindow, bytes)) {
+            color[index] = 2;
+            return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                  "a blend command has an empty output window");
+        }
+        GpuSceneExecutorStep step;
+        step.kind = GpuSceneExecutorStepKind::Blend;
+        step.command = index;
+        step.input = blendCommand->source;
+        step.destination = blendCommand->destination;
+        step.cacheKey = key;
+        step.cacheOnComplete = true;
+        step.outputWindow = blendCommand->outputWindow;
+        step.blendMode = blendCommand->mode;
         steps.push_back(std::move(step));
         color[index] = 2;
         return {};

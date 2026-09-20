@@ -125,6 +125,11 @@ struct GpuSceneExecutorCounters final {
     std::uint64_t coveredSolidDispatches = 0;
     std::uint64_t translationDispatches = 0;
     std::uint64_t sourceOverDispatches = 0;
+    // Distinct from the composite counters above: an affine placement (GpuAffine) and an explicit
+    // blend mode (GpuBlend) are their own operation families. An empty/unchanged warm scene tree
+    // runs zero of every one of these.
+    std::uint64_t affineDispatches = 0;
+    std::uint64_t blendDispatches = 0;
     std::uint64_t dispatches = 0;
     std::uint64_t uploads = 0;
     std::uint64_t readbacks = 0;
@@ -170,6 +175,11 @@ struct GpuSceneExecutorBudgets final {
     std::uint64_t maxImageBytes = 256ULL * 1024ULL * 1024ULL;
     // Metadata ceiling handed to the composite translation op.
     std::uint64_t maxMetadataBytes = 16ULL * 1024ULL * 1024ULL;
+    // Metadata ceiling for the affine sample buffer (16 bytes per output pixel). Affine's metadata
+    // is far larger than the composite's: a 1080p output needs ~33 MiB, so this default is chosen
+    // to actually fit 1080p plus a bounded margin. It is a real ceiling, never unlimited; the
+    // per-request live ledger and the native byte budget still bound the simultaneous peak.
+    std::uint64_t maxAffineMetadataBytes = 256ULL * 1024ULL * 1024ULL;
     // Structural ceilings validated before any Vulkan work.
     std::uint64_t maxCommands = 4096;
     std::uint64_t maxCoverageBytes = 256ULL * 1024ULL * 1024ULL;

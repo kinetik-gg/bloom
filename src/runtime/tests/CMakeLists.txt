@@ -685,3 +685,29 @@ bloom_add_test(
     LABELS runtime unit gpu render
     TIMEOUT 180
 )
+
+# Real-device executor parity for the new affine + blend scene commands: real PreparedGpuScene
+# (proof-only friend fixture) -> production GpuSceneExecutor -> readback vs the CPU affine/blend
+# oracles, with family counters, warm-zero-dispatch, and budget refusal. Same loader/--require-device
+# contract; skips cleanly without a device.
+add_executable(bloom_runtime_gpu_affine_blend_executor_test
+    gpu_affine_blend_executor_native_tests.cpp
+)
+target_include_directories(
+    bloom_runtime_gpu_affine_blend_executor_test
+    PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/render/tests"
+        "${PROJECT_SOURCE_DIR}/src/runtime"
+)
+target_link_libraries(
+    bloom_runtime_gpu_affine_blend_executor_test
+    PRIVATE bloom_runtime_evaluator bloom_render
+)
+bloom_enable_warnings(bloom_runtime_gpu_affine_blend_executor_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_affine_blend_executor_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_affine_blend_executor
+    COMMAND bloom_runtime_gpu_affine_blend_executor_test
+    LABELS runtime unit gpu render
+    TIMEOUT 300
+)
