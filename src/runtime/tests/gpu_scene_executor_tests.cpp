@@ -87,11 +87,15 @@ using bloom::runtime::ProxyResolution;
 using bloom::runtime::executor_test::Expectations;
 using bloom::runtime::executor_test::format;
 using bloom::runtime::executor_test::LayerValues;
+using bloom::runtime::executor_test::makeShape;
+using bloom::runtime::executor_test::makeText;
 using bloom::runtime::executor_test::pixelAspect;
 using bloom::runtime::executor_test::publish;
 using bloom::runtime::executor_test::requestFor;
+using bloom::runtime::executor_test::ShapeFixtureValues;
 using bloom::runtime::executor_test::twoLayerPlan;
 using bloom::runtime::executor_test::twoSolidPlan;
+using bloom::runtime::executor_test::vectorLeafPlan;
 
 using PlanPtr = std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>;
 
@@ -367,6 +371,100 @@ void testCoveredByteExact(Expectations& expectations, GpuSceneExecutor& executor
                  "covered fill byte-exact behind a transparent top", true, true);
 }
 
+// Text and Shape vector leaves through the real native executor: the prepared coverage commands
+// dispatch CoveredSolidV1 on the device and are compared to the CPU oracle.
+void testVectorLeaves(Expectations& expectations, GpuSceneExecutor& executor,
+                      const CpuCompositionEvaluator& oracle) {
+    const auto textFractional = vectorLeafPlan(format(24, 16), makeText(70000),
+                                               LayerValues{.position = {12.3, 8.1}}, 70000);
+    expectParity(expectations, executor, oracle, textFractional, requestFor(*textFractional),
+                 "text fractional coverage", false, true);
+
+    const auto textProbe = CpuGpuSceneBuilder{}.build(textFractional, requestFor(*textFractional));
+    expectations.expect(textProbe.hasValue(), "text integer probe prepares");
+    if (textProbe) {
+        const auto centre = textProbe.scene->bounds()[0].output;
+        if (!centre.empty()) {
+            auto definition = textFractional->copyDefinition();
+            auto& layer = std::get<CompiledLayerOutput>(definition.operations[1]);
+            const auto positionId = layer.position.id;
+            layer.position = bloom::runtime::CompiledVec2Parameter{
+                positionId, bloom::document::Vec2d{(centre.left + centre.right) * 0.5,
+                                                   (centre.top + centre.bottom) * 0.5}};
+            const auto integerPlan = publish(std::move(definition));
+            expectParity(expectations, executor, oracle, integerPlan, requestFor(*integerPlan),
+                         "text integer-grid coverage", true, true);
+        }
+    }
+
+    std::uint64_t base = 71000;
+    for (const auto kind :
+         {bloom::document::ShapeKind::Rectangle, bloom::document::ShapeKind::Ellipse,
+          bloom::document::ShapeKind::Triangle, bloom::document::ShapeKind::Polygon,
+          bloom::document::ShapeKind::Star, bloom::document::ShapeKind::Path}) {
+        ShapeFixtureValues values;
+        values.kind = kind;
+        values.points = 6;
+        values.cornerRadius = 0.75;
+        const auto plan = vectorLeafPlan(format(24, 16), makeShape(values, base),
+                                         LayerValues{.position = {12.3, 8.1}}, base);
+        expectParity(expectations, executor, oracle, plan, requestFor(*plan),
+                     "shape fill native coverage", false, true);
+        base += 100;
+    }
+    for (const double opacity : {1.0, 0.65}) {
+        ShapeFixtureValues values;
+        values.kind = bloom::document::ShapeKind::Ellipse;
+        values.strokeEnabled = true;
+        values.strokeWidth = 2.0;
+        values.fillColor = Color4d{0.7, 0.2, 0.1, 0.8};
+        values.strokeColor = Color4d{0.1, 0.4, 0.9, 0.6};
+        const auto plan =
+            vectorLeafPlan(format(24, 16), makeShape(values, base),
+                           LayerValues{.position = {9.7, 6.2}, .opacity = opacity}, base);
+        expectParity(expectations, executor, oracle, plan, requestFor(*plan),
+                     "shape fill+stroke native coverage", false, true);
+        base += 100;
+    }
+    {
+        ShapeFixtureValues values;
+        values.kind = bloom::document::ShapeKind::Star;
+        values.points = 7;
+        values.innerRatio = 0.4;
+        values.strokeEnabled = true;
+        values.strokeWidth = 1.0;
+        const auto plan = vectorLeafPlan(format(11, 7, pixelAspect(4, 3)), makeShape(values, base),
+                                         LayerValues{.position = {5.3, 3.1}}, base);
+        const auto extent = bloom::render::ImageExtent::create(7, 5);
+        auto request = requestFor(*plan);
+        request.resolution = ProxyResolution{*extent.value()};
+        expectParity(expectations, executor, oracle, plan, request,
+                     "shape star native coverage proxy PAR", false, true);
+        base += 100;
+    }
+    {
+        ShapeFixtureValues values;
+        values.kind = bloom::document::ShapeKind::Line;
+        values.strokeEnabled = true;
+        values.strokeWidth = 1.5;
+        const auto plan = vectorLeafPlan(format(24, 16), makeShape(values, base),
+                                         LayerValues{.position = {12.3, 8.1}}, base);
+        expectParity(expectations, executor, oracle, plan, requestFor(*plan),
+                     "line stroke-only native coverage", false, true);
+        base += 100;
+    }
+    {
+        ShapeFixtureValues values;
+        values.kind = bloom::document::ShapeKind::Ellipse;
+        values.fillEnabled = false;
+        values.strokeEnabled = true;
+        values.strokeWidth = 2.5;
+        const auto plan = vectorLeafPlan(format(24, 16), makeShape(values, base),
+                                         LayerValues{.position = {12.3, 8.1}}, base);
+        expectParity(expectations, executor, oracle, plan, requestFor(*plan),
+                     "ellipse stroke-only native coverage", false, true);
+    }
+}
 #include "gpu_scene_executor_cache_tests.ipp"
 
 #include "gpu_scene_executor_execution_tests.ipp"
@@ -426,6 +524,7 @@ int main(const int argc, char** argv) {
         testFixtures(expectations, *executor.executor, oracle);
         testEmptyInactive(expectations, *executor.executor, oracle);
         testCoveredByteExact(expectations, *executor.executor, oracle);
+        testVectorLeaves(expectations, *executor.executor, oracle);
         testWarmCache(expectations, *device.device);
         testChangedTopRetainsLower(expectations, *device.device);
         testSameContentDifferentIdentities(expectations, *device.device);

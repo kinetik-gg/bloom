@@ -13,6 +13,8 @@ namespace {
 
 [[nodiscard]] bool isSubsetOperation(const CompiledOperation& operation) noexcept {
     return std::holds_alternative<CompiledSolid>(operation) ||
+           std::holds_alternative<CompiledText>(operation) ||
+           std::holds_alternative<CompiledShape>(operation) ||
            std::holds_alternative<CompiledImageSource>(operation) ||
            std::holds_alternative<CompiledVideoSource>(operation) ||
            std::holds_alternative<CompiledLayerOutput>(operation) ||
@@ -20,11 +22,13 @@ namespace {
            std::holds_alternative<CompiledCompositionOutput>(operation);
 }
 
-// A leaf whose pixels are an uploadable frozen source image: a direct solid (vector-coverage path)
-// or a media source (raster-translation path). Anything else feeding a Layer Output would build a
-// nested chain this slice deliberately does not approximate.
+// A leaf whose pixels a Layer Output can be built from: a direct solid or text (vector-coverage
+// path) or a media source (raster-translation path). Anything else feeding a Layer Output would
+// build a nested chain this slice deliberately does not approximate.
 [[nodiscard]] bool isLeafSource(const CompiledOperation& operation) noexcept {
     return std::holds_alternative<CompiledSolid>(operation) ||
+           std::holds_alternative<CompiledText>(operation) ||
+           std::holds_alternative<CompiledShape>(operation) ||
            std::holds_alternative<CompiledImageSource>(operation) ||
            std::holds_alternative<CompiledVideoSource>(operation);
 }

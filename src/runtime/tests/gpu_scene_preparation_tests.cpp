@@ -10,6 +10,7 @@ void checkParity(Expectations& expectations, const CpuCompositionEvaluator& eval
     const auto prepared = builder.build(plan, request);
     expectations.expect(prepared.hasValue(), label + ": prepares");
     if (!prepared) {
+        std::cerr << label << " diagnostic: " << prepared.diagnostic.message << "\n";
         return;
     }
     // Evaluate the oracle uncached: the evaluator's semantic cache deliberately ignores node and
@@ -40,6 +41,108 @@ void checkParity(Expectations& expectations, const CpuCompositionEvaluator& eval
         replayed == nullptr
             ? label + ": replay produced no image"
             : label + ": pixel parity " + firstMismatch(*replayed, frame.frame()->processImage()));
+}
+
+// A text -> translation-only layer -> output plan. Text is a single premultiplied colour through an
+// 8-bit glyph coverage, so it must prepare through the same CoveredSolidV1 coverage command a
+// fractional solid uses, with the real render::textOutlines geometry.
+void testTextCoverage(Expectations& expectations, const CpuCompositionEvaluator& evaluator) {
+    const auto plan = textPlan(format(24, 16), LayerValues{.position = {12.3, 8.1}}, 50000);
+    const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+    expectations.expect(prepared.hasValue(), "a fractional text layer prepares");
+    if (!prepared) {
+        std::cerr << "text diagnostic: " << prepared.diagnostic.message << "\n";
+        return;
+    }
+    bool sawCoverage = false;
+    for (const auto& command : prepared.scene->commands()) {
+        sawCoverage = sawCoverage ||
+                      std::holds_alternative<bloom::runtime::GpuSceneCoverageSolidCommand>(command);
+    }
+    expectations.expect(sawCoverage, "text prepares a native coverage command");
+    checkParity(expectations, evaluator, plan, requestFor(*plan), "text fractional coverage");
+
+    // Integer device grid: place the layer so the translation is exactly integral. The text leaf
+    // bounds do not depend on the layer position, so they are read from the probe above.
+    const auto centre = prepared.scene->bounds()[0].output;
+    if (!centre.empty()) {
+        auto definition = plan->copyDefinition();
+        auto& layer = std::get<CompiledLayerOutput>(definition.operations[1]);
+        const auto positionId = layer.position.id;
+        layer.position = CompiledVec2Parameter{
+            positionId, bloom::document::Vec2d{(centre.left + centre.right) * 0.5,
+                                               (centre.top + centre.bottom) * 0.5}};
+        const auto integerPlan = publish(std::move(definition));
+        checkParity(expectations, evaluator, integerPlan, requestFor(*integerPlan),
+                    "text integer-grid coverage");
+    }
+}
+
+void testShapeCoverage(Expectations& expectations, const CpuCompositionEvaluator& evaluator) {
+    using Kind = bloom::document::ShapeKind;
+    std::uint64_t base = 60000;
+    for (const auto kind :
+         {Kind::Rectangle, Kind::Ellipse, Kind::Triangle, Kind::Polygon, Kind::Star, Kind::Path}) {
+        ShapeValues shapeValues;
+        shapeValues.kind = kind;
+        shapeValues.points = 6;
+        shapeValues.cornerRadius = 0.75;
+        const auto plan =
+            shapePlan(format(24, 16), LayerValues{.position = {12.3, 8.1}}, shapeValues, base);
+        checkParity(expectations, evaluator, plan, requestFor(*plan), "shape fill coverage");
+        base += 100;
+    }
+    // Line suppresses the fill entirely; it is a stroke-only shape.
+    {
+        ShapeValues v;
+        v.kind = Kind::Line;
+        v.strokeEnabled = true;
+        v.strokeWidth = 1.5;
+        const auto plan = shapePlan(format(24, 16), LayerValues{.position = {12.3, 8.1}}, v, base);
+        checkParity(expectations, evaluator, plan, requestFor(*plan), "line stroke-only coverage");
+        base += 100;
+    }
+    // Closed stroke-only shape.
+    {
+        ShapeValues v;
+        v.kind = Kind::Ellipse;
+        v.fillEnabled = false;
+        v.strokeEnabled = true;
+        v.strokeWidth = 2.5;
+        const auto plan = shapePlan(format(24, 16), LayerValues{.position = {12.3, 8.1}}, v, base);
+        checkParity(expectations, evaluator, plan, requestFor(*plan),
+                    "ellipse stroke-only coverage");
+        base += 100;
+    }
+
+    // Fill + stroke: exercises the SourceOver merge and, at opacity != 1, the post-opacity pass.
+    for (const double opacity : {1.0, 0.65}) {
+        ShapeValues v;
+        v.kind = Kind::Ellipse;
+        v.strokeEnabled = true;
+        v.strokeWidth = 2.0;
+        v.fillColor = Color4d{0.7, 0.2, 0.1, 0.8};
+        v.strokeColor = Color4d{0.1, 0.4, 0.9, 0.6};
+        const auto plan = shapePlan(
+            format(24, 16), LayerValues{.position = {9.7, 6.2}, .opacity = opacity}, v, base);
+        checkParity(expectations, evaluator, plan, requestFor(*plan), "shape fill+stroke coverage");
+        base += 100;
+    }
+    // Non-square PAR proxy.
+    {
+        ShapeValues v;
+        v.kind = Kind::Star;
+        v.points = 7;
+        v.innerRatio = 0.4;
+        v.strokeEnabled = true;
+        v.strokeWidth = 1.0;
+        const auto plan = shapePlan(format(11, 7, pixelAspect(4, 3)),
+                                    LayerValues{.position = {5.3, 3.1}}, v, base);
+        const auto extent = bloom::render::ImageExtent::create(7, 5);
+        auto request = requestFor(*plan);
+        request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+        checkParity(expectations, evaluator, plan, request, "star proxy non-square PAR");
+    }
 }
 
 void testBasicAndMerge(Expectations& expectations, const CpuCompositionEvaluator& evaluator) {
@@ -383,21 +486,17 @@ void testUnsupported(Expectations& expectations) {
                                              PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
                             "a parented layer is refused");
     }
-    // An unsupported operation kind (Text).
+    // An operation kind still outside the prepared subset (nested Composition Source).
     {
         auto definition = solidPlan->copyDefinition();
-        definition.operations[0] = bloom::runtime::CompiledText{
-            bloom::document::NodeId::fromRaw(6000),
-            bloom::document::ParameterId::fromRaw(6001),
-            "x",
-            {bloom::document::ParameterId::fromRaw(6002), 12.0},
-            {bloom::document::ParameterId::fromRaw(6003), Color4d{1, 1, 1, 1}},
-            bloom::runtime::CompiledTextLayout{bloom::document::ParameterId::fromRaw(6004),
-                                               0,
-                                               {bloom::document::ParameterId::fromRaw(6005), 1.0},
-                                               {bloom::document::ParameterId::fromRaw(6006), 0.0}}};
-        const auto text = publish(std::move(definition));
-        const auto prepared = builder.build(text, requestFor(*text));
+        definition.operations[0] = bloom::runtime::CompiledCompositionSource{
+            bloom::document::NodeId::fromRaw(6000), 0,
+            bloom::runtime::CompiledCompositionTimeMapping{
+                {bloom::document::ParameterId::fromRaw(6001), 0.0},
+                {bloom::document::ParameterId::fromRaw(6002), 1.0},
+                0}};
+        const auto nested = publish(std::move(definition));
+        const auto prepared = builder.build(nested, requestFor(*nested));
         expectations.expect(!prepared && prepared.diagnostic.code ==
                                              PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                             "an out-of-subset operation is refused before any resolution");
@@ -421,6 +520,8 @@ int main() {
         testInactiveAndMuteSolo(expectations, evaluator);
         testBudgetRefusal(expectations);
         testKeyStability(expectations);
+        testTextCoverage(expectations, evaluator);
+        testShapeCoverage(expectations, evaluator);
         testUnsupported(expectations);
         if (!expectations.ok()) {
             std::cerr << "FAIL: GPU scene preparation expectations failed\n";

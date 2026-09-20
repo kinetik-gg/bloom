@@ -216,4 +216,85 @@ twoLayerPlan(const CompositionFormat compositionFormat, const LayerValues values
                         Color4d{0.125, 0.375, 0.75, 0.5}, valuesB, solidWidth, solidHeight, idBase);
 }
 
+// One vector leaf (text/shape) -> translation-only layer -> Normal merge -> output. The leaf is
+// passed by value so callers can build the exact CompiledText/CompiledShape they need.
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+vectorLeafPlan(const CompositionFormat compositionFormat, CompiledOperation leaf,
+               const LayerValues values, const std::uint64_t idBase) {
+    const LayerIds ids{bloom::document::ParameterId::fromRaw(idBase + 0),
+                       bloom::document::ParameterId::fromRaw(idBase + 1),
+                       bloom::document::ParameterId::fromRaw(idBase + 2),
+                       bloom::document::ParameterId::fromRaw(idBase + 3),
+                       bloom::document::ParameterId::fromRaw(idBase + 4),
+                       bloom::document::ParameterId::fromRaw(idBase + 5)};
+    std::vector<CompiledOperation> operations;
+    operations.push_back(std::move(leaf));
+    operations.emplace_back(layerOutput(bloom::document::NodeId::fromRaw(idBase + 67),
+                                        bloom::document::LayerId::fromRaw(idBase + 68),
+                                        OperationIndex::fromRaw(0), ids, values));
+    operations.emplace_back(CompiledMerge{
+        bloom::document::NodeId::fromRaw(idBase + 70),
+        std::vector<CompiledMergeInput>{CompiledMergeInput{
+            bloom::document::LayerSlotId::fromRaw(idBase + 71),
+            bloom::document::LayerId::fromRaw(idBase + 68), OperationIndex::fromRaw(1)}}});
+    operations.emplace_back(CompiledCompositionOutput{bloom::document::NodeId::fromRaw(idBase + 69),
+                                                      OperationIndex::fromRaw(2)});
+    return publish(CompiledCompositionPlanDefinition{
+        bloom::document::Revision::fromRaw(7), kProjectId, kCompositionId, compositionFormat,
+        std::move(operations), OperationIndex::fromRaw(3)});
+}
+
+[[nodiscard]] inline CompiledText makeText(const std::uint64_t idBase) {
+    return CompiledText{
+        bloom::document::NodeId::fromRaw(idBase + 60),
+        bloom::document::ParameterId::fromRaw(idBase + 61),
+        "BLOOM",
+        {bloom::document::ParameterId::fromRaw(idBase + 62), 10.0},
+        {bloom::document::ParameterId::fromRaw(idBase + 63), Color4d{0.8, 0.4, 0.2, 1.0}},
+        CompiledTextLayout{bloom::document::ParameterId::fromRaw(idBase + 64),
+                           0,
+                           {bloom::document::ParameterId::fromRaw(idBase + 65), 1.0},
+                           {bloom::document::ParameterId::fromRaw(idBase + 66), 0.0}}};
+}
+
+struct ShapeFixtureValues final {
+    bloom::document::ShapeKind kind = bloom::document::ShapeKind::Rectangle;
+    bloom::document::Vec2d size{9.0, 7.0};
+    double cornerRadius = 0.0;
+    std::int64_t points = 5;
+    double innerRatio = 0.5;
+    Color4d fillColor{0.6, 0.3, 0.15, 1.0};
+    bool fillEnabled = true;
+    Color4d strokeColor{0.1, 0.2, 0.9, 0.9};
+    bool strokeEnabled = false;
+    double strokeWidth = 0.0;
+};
+
+[[nodiscard]] inline CompiledShape makeShape(const ShapeFixtureValues& values,
+                                             const std::uint64_t idBase) {
+    CompiledShape shape;
+    shape.sourceNodeId = bloom::document::NodeId::fromRaw(idBase + 60);
+    shape.kind = values.kind;
+    shape.size = {bloom::document::ParameterId::fromRaw(idBase + 62), values.size};
+    shape.cornerRadius = values.cornerRadius;
+    shape.points = values.points;
+    shape.innerRatio = values.innerRatio;
+    shape.lineStart = {0.0, 0.0};
+    shape.lineEnd = {values.size.x, values.size.y};
+    shape.fillEnabled = values.fillEnabled;
+    shape.fillColor = {bloom::document::ParameterId::fromRaw(idBase + 63), values.fillColor};
+    shape.strokeEnabled = values.strokeEnabled;
+    shape.strokeColor = {bloom::document::ParameterId::fromRaw(idBase + 64), values.strokeColor};
+    shape.strokeWidth = {bloom::document::ParameterId::fromRaw(idBase + 65), values.strokeWidth};
+    if (values.kind == bloom::document::ShapeKind::Path) {
+        shape.path.closed = true;
+        shape.path.anchors = {
+            bloom::document::PathAnchor{bloom::document::Vec2d{0.0, 0.0}, {}, {}},
+            bloom::document::PathAnchor{bloom::document::Vec2d{values.size.x, 0.0}, {}, {}},
+            bloom::document::PathAnchor{
+                bloom::document::Vec2d{values.size.x * 0.5, values.size.y}, {}, {}}};
+    }
+    return shape;
+}
+
 } // namespace bloom::runtime::executor_test

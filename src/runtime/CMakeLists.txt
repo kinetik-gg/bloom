@@ -82,6 +82,7 @@ target_sources(
         gpu_scene_preparation_private.hpp
         gpu_scene_preparation_common.hpp
         gpu_scene_coverage.cpp
+        gpu_scene_shape_coverage.cpp
         gpu_scene_coverage.hpp
         gpu_scene_coverage_cache.cpp
         gpu_media_preparation.cpp
