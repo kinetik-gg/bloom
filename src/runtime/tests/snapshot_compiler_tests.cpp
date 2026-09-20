@@ -117,6 +117,7 @@ struct ProjectOptions final {
     bool secondLayer = true;
     bool reverseInsertion = false;
     bool omitFirstSourceEdge = false;
+    bool omitOutputEdge = false;
     std::string firstSourcePort = std::string(document::kSolidSourceOutputPort);
     document::CompositionFormat format;
 };
@@ -209,9 +210,11 @@ struct ProjectOptions final {
                          LayerStackInputRef{kStackNode, kSecondSlot,
                                             std::string(kLayerStackContentInputRole)}});
     }
-    edges.push_back({kOutputEdge,
-                     {kStackNode, std::string(kLayerStackOutputPort)},
-                     NodeInputRef{kOutputNode, std::string(kCompositionOutputInputPort)}});
+    if (!options.omitOutputEdge) {
+        edges.push_back({kOutputEdge,
+                         {kStackNode, std::string(kLayerStackOutputPort)},
+                         NodeInputRef{kOutputNode, std::string(kCompositionOutputInputPort)}});
+    }
     if (options.reverseInsertion) {
         std::ranges::reverse(edges);
     }
@@ -1135,6 +1138,69 @@ void testReachableSchemaDiagnostics(Expectations& expectations) {
                         "unexpected binding is rejected by the registered evaluator schema");
 }
 
+void testUnconnectedCompositionOutputIsTransparent(Expectations& expectations) {
+    runtime::NodeDefinitionRegistry registry;
+    populateRegistry(registry);
+    registry.freeze();
+
+    // A disconnected Composition Output image port is an ordinary edit state, not a topology
+    // failure. The graph still validates as document truth; the compiler lowers the output to the
+    // existing empty-image path, and the CPU reference produces a transparent composition.
+    auto disconnectedOptions = singleLayerOptions();
+    disconnectedOptions.omitOutputEdge = true;
+    const auto disconnected =
+        compile(makeProject(std::move(disconnectedOptions)), registry);
+    expectations.expect(
+        disconnected.status == runtime::SnapshotCompileStatus::Compiled,
+        "a disconnected Composition Output compiles instead of failing the topology");
+    expectations.expect(
+        !hasDiagnostic(disconnected, runtime::CompileDiagnosticCode::MissingInput, kOutputNode) &&
+            !hasDiagnostic(disconnected, runtime::CompileDiagnosticCode::InvalidCompositionOutput,
+                           kOutputNode),
+        "a disconnected Composition Output reports no missing/invalid-output diagnostic");
+
+    if (disconnected.plan != nullptr && disconnected.plan->operations().size() >= 2 &&
+        disconnected.plan->output().value() < disconnected.plan->operations().size()) {
+        const auto& operations = disconnected.plan->operations();
+        const auto* output =
+            std::get_if<runtime::CompiledCompositionOutput>(&operations[disconnected.plan->output().value()]);
+        const bool emptyInput =
+            output != nullptr &&
+            output->input.value() < operations.size() &&
+            std::holds_alternative<runtime::CompiledMerge>(operations[output->input.value()]) &&
+            std::get<runtime::CompiledMerge>(operations[output->input.value()]).entries.empty();
+        expectations.expect(emptyInput,
+                            "the disconnected output is fed by an empty Merge, not a layer");
+
+        runtime::CpuCompositionEvaluator evaluator;
+        const auto evaluated =
+            evaluator.evaluate(disconnected.plan,
+                               {.time = core::RationalTime::fromInteger(0),
+                                .output = disconnected.plan->output(),
+                                .resolution = runtime::CompositionFormatResolution{},
+                                .quality = runtime::EvaluationQuality::Reference,
+                                .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
+                                .pixelStorageByteLimit = 1U << 28U},
+                               runtime::CancellationToken{});
+        const auto frame = evaluated.frame();
+        expectations.expect(frame != nullptr && evaluated.diagnostics().empty(),
+                            "the disconnected composition still renders a reference frame");
+        if (frame != nullptr) {
+            const auto pixels = frame->processImage().pixels();
+            expectations.expect(
+                !pixels.empty() && pixels.front() == render::Rgba32f::transparent(),
+                "the disconnected composition's reference output is transparent");
+        }
+    }
+
+    // Reconnecting (the ordinary fixture) restores the content-bearing output, so transparent is
+    // not a blanket masking of compilation failures.
+    const auto reconnected = compile(makeProject(singleLayerOptions()), registry);
+    expectations.expect(reconnected.status == runtime::SnapshotCompileStatus::Compiled &&
+                            reconnected.plan != nullptr,
+                        "reconnecting the Composition Output restores the compiled content");
+}
+
 void testTypedParameterDiagnostics(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
     populateRegistry(registry);
@@ -1866,6 +1932,7 @@ int main() {
         testCustomSolidLoweringRemainsSupported(expectations);
         testReachabilityAndUnsupportedNodes(expectations);
         testReachableSchemaDiagnostics(expectations);
+        testUnconnectedCompositionOutputIsTransparent(expectations);
         testTypedParameterDiagnostics(expectations);
         testParameterSourcesAndDiagnosticIds(expectations);
         testBlendModeLowersFromItsStoredInteger(expectations);

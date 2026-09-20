@@ -309,9 +309,12 @@ lower(const std::vector<document::NodeId>& order) {
             continue;
         }
         const auto* outputEdge = fixedInputEdge(nodeId, document::kCompositionOutputInputPort);
+        // An unconnected composition output draws nothing, whether or not it is muted. Like a Layer
+        // Output with no content ("added but not yet fed"), a disconnected output is an ordinary
+        // edit state: the whole composition renders transparent rather than failing the compile on a
+        // required input and leaving the previous frame on screen.
         if (definition->second->lowering == runtime::NodeLoweringKind::CompositionOutput &&
-            ((isMuted(nodeId) && outputEdge == nullptr) ||
-             (outputEdge && emptyImages_.contains(outputEdge->source.nodeId)))) {
+            (outputEdge == nullptr || emptyImages_.contains(outputEdge->source.nodeId))) {
             const auto empty = runtime::OperationIndex::fromRaw(operations.size());
             operations.emplace_back(runtime::CompiledMerge{nodeId, {}});
             indices.emplace(nodeId, runtime::OperationIndex::fromRaw(operations.size()));

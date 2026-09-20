@@ -281,6 +281,23 @@ void testStructuralLoweringsRequireCanonicalKeys(Expectations& expectations) {
         expectations.expect(sourcingOutput.registerDefinition(std::move(spoof)) ==
                                 runtime::NodeRegistrationStatus::InvalidDefinition,
                             "and a definition that gives it one is refused");
+
+        // The image input is OPTIONAL, mirroring the Layer Output content port: a disconnected
+        // Output is an empty composition that draws nothing, not a required-input failure. The
+        // registry refuses a definition that claims it is required, so optionality is a registry
+        // fact rather than an editor convention.
+        expectations.expect(
+            output.inputs.size() == 2 &&
+                output.inputs[0].name == document::kCompositionOutputInputPort &&
+                output.inputs[0].valueKind == runtime::SocketValueKind::Image &&
+                !output.inputs[0].required,
+            "the composition Output image input is optional");
+        runtime::NodeDefinitionRegistry requiredImageOutput;
+        auto requiredSpoof = output;
+        requiredSpoof.inputs[0].required = true;
+        expectations.expect(requiredImageOutput.registerDefinition(std::move(requiredSpoof)) ==
+                                runtime::NodeRegistrationStatus::InvalidDefinition,
+                            "a definition that requires the Output image input is refused");
     }
 
     for (const auto& testCase : cases) {
