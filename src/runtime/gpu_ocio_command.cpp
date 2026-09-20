@@ -21,6 +21,13 @@ void appendDigest(std::vector<std::byte>& bytes, const core::Sha256Digest& diges
     }
 }
 
+void appendText(std::vector<std::byte>& bytes, const std::string_view text) {
+    appendBigEndian(bytes, text.size(), 4);
+    for (const char character : text) {
+        bytes.push_back(static_cast<std::byte>(static_cast<unsigned char>(character)));
+    }
+}
+
 [[nodiscard]] std::uint64_t retainedResourceBytes(const render::OcioGpuProgramDesc& program,
                                                   const std::size_t spirvBytes) noexcept {
     std::uint64_t total = 0;
@@ -83,12 +90,12 @@ computeGpuOcioCommandIdentity(const GpuOcioCommandIdentityParts& parts) noexcept
     static constexpr std::string_view kDomain = "BloomGpuOcioCommandIdentity";
     std::vector<std::byte> bytes;
     bytes.reserve(kDomain.size() + 1 + 2 + 1 + 4 + 4 + 32 + 32 + 32 + 8 +
-                  parts.uniformSnapshot.size() + 32);
+                  parts.uniformSnapshot.size() + 32 + 4 + parts.wrapperVersion.size());
     for (const char character : kDomain) {
         bytes.push_back(static_cast<std::byte>(static_cast<unsigned char>(character)));
     }
     bytes.push_back(std::byte{0});
-    appendBigEndian(bytes, 1, 2);
+    appendBigEndian(bytes, 2, 2);
     appendBigEndian(bytes, static_cast<std::uint64_t>(parts.encoding), 1);
     appendBigEndian(bytes, parts.geometry.width, 4);
     appendBigEndian(bytes, parts.geometry.height, 4);
@@ -98,24 +105,24 @@ computeGpuOcioCommandIdentity(const GpuOcioCommandIdentityParts& parts) noexcept
     appendBigEndian(bytes, parts.uniformSnapshot.size(), 8);
     bytes.insert(bytes.end(), parts.uniformSnapshot.begin(), parts.uniformSnapshot.end());
     appendDigest(bytes, parts.artifactDigest);
+    appendText(bytes, parts.wrapperVersion);
     const auto digest = core::Sha256Hasher::hash(bytes);
     return digest.has_value() ? *digest : core::Sha256Digest{};
 }
 
-PreparedGpuOcioCommand::PreparedGpuOcioCommand(render::OcioGpuProgramDesc program,
-                                               render::CompiledGpuShader artifact,
-                                               const GpuOcioOutputEncoding encoding,
-                                               const GpuOcioCommandGeometry geometry,
-                                               std::vector<std::uint32_t> spirvWords,
-                                               core::Sha256Digest identity,
-                                               const std::uint64_t retainedBytes) noexcept
+PreparedGpuOcioCommand::PreparedGpuOcioCommand(
+    render::OcioGpuProgramDesc program, render::CompiledGpuShader artifact,
+    const GpuOcioOutputEncoding encoding, const GpuOcioCommandGeometry geometry,
+    std::vector<std::uint32_t> spirvWords, core::Sha256Digest identity, std::string wrapperVersion,
+    const std::uint64_t retainedBytes) noexcept
     : program_(std::move(program)), artifact_(std::move(artifact)), encoding_(encoding),
       geometry_(geometry), spirvWords_(std::move(spirvWords)), identity_(identity),
-      retainedBytes_(retainedBytes) {}
+      wrapperVersion_(std::move(wrapperVersion)), retainedBytes_(retainedBytes) {}
 
 GpuOcioCommandResult PreparedGpuOcioCommand::prepare(render::OcioGpuProgramDesc program,
                                                      render::CompiledGpuShader artifact,
-                                                     const GpuOcioCommandGeometry geometry) {
+                                                     const GpuOcioCommandGeometry geometry,
+                                                     const std::string_view wrapperVersion) {
     if (geometry.width == 0 || geometry.height == 0) {
         return failure(GpuOcioCommandError::InvalidGeometry);
     }
@@ -123,12 +130,16 @@ GpuOcioCommandResult PreparedGpuOcioCommand::prepare(render::OcioGpuProgramDesc 
     if (pixelCount == 0 || pixelCount > std::numeric_limits<std::uint32_t>::max()) {
         return failure(GpuOcioCommandError::InvalidGeometry);
     }
+    // The specific uniform-snapshot check precedes the general descriptor validation so a tampered
+    // snapshot keeps its precise typed diagnostic. It is strictly narrower than the descriptor
+    // validator's own snapshot-size invariant (which also rejects an empty snapshot against a
+    // non-zero declared size), so no tamper case is weakened: every mismatch is still refused, just
+    // with the more specific code.
+    if (program.uniformBufferData.size() != program.uniformBufferSize) {
+        return failure(GpuOcioCommandError::UniformSnapshotMismatch);
+    }
     if (render::validateOcioGpuProgram(program, {}) != render::OcioGpuProgramError::None) {
         return failure(GpuOcioCommandError::InvalidProgram);
-    }
-    if (!program.uniformBufferData.empty() &&
-        program.uniformBufferData.size() != program.uniformBufferSize) {
-        return failure(GpuOcioCommandError::UniformSnapshotMismatch);
     }
 
     GpuOcioOutputEncoding encoding = GpuOcioOutputEncoding::FinalRgba32f;
@@ -164,15 +175,16 @@ GpuOcioCommandResult PreparedGpuOcioCommand::prepare(render::OcioGpuProgramDesc 
         .uniformSnapshot = std::span<const std::byte>(program.uniformBufferData.data(),
                                                       program.uniformBufferData.size()),
         .artifactDigest = artifact.spirvDigest,
+        .wrapperVersion = wrapperVersion,
     };
     const auto identity = computeGpuOcioCommandIdentity(parts);
     if (identity == core::Sha256Digest{}) {
         return failure(GpuOcioCommandError::InvalidArtifact);
     }
     const std::uint64_t retainedBytes = retainedResourceBytes(program, artifact.spirv.size());
-    auto command = std::shared_ptr<const PreparedGpuOcioCommand>(
-        new PreparedGpuOcioCommand(std::move(program), std::move(artifact), encoding, geometry,
-                                   std::move(spirvWords), identity, retainedBytes));
+    auto command = std::shared_ptr<const PreparedGpuOcioCommand>(new PreparedGpuOcioCommand(
+        std::move(program), std::move(artifact), encoding, geometry, std::move(spirvWords),
+        identity, std::string(wrapperVersion), retainedBytes));
     GpuOcioCommandResult result;
     result.command = std::move(command);
     return result;

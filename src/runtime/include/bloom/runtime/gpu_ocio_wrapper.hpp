@@ -13,7 +13,9 @@
 //  * set 1 binding 2: std430 uint flags status word (nonzero = the shader rejected the frame);
 //  * push_constant: { uint pixelCount; uint width; uint height; }.
 // OCIO's own resources occupy set 0 with the bindings the extraction declared; this generator never
-// moves them.
+// moves them. LUT sampling uses the shared versioned color::ocioGpuSamplingGlslFor adapter: its
+// preamble is emitted before the extracted body and its definitions after, with the body left
+// verbatim. The adapter version is recorded on the result and folded into the command identity.
 
 #include <bloom/core/sha256.hpp>
 #include <bloom/render/ocio_gpu_program.hpp>
@@ -34,6 +36,9 @@ enum class GpuOcioWrapperError : std::uint8_t {
     UnsupportedStage,
     InvalidFunctionName,
     UnsupportedDescriptorSet,
+    // The wrapper generation itself could not allocate. The public function is noexcept, so an
+    // allocation failure is reported as this typed error rather than terminating the process.
+    AllocationFailure,
 };
 
 [[nodiscard]] std::string_view gpuOcioWrapperErrorName(GpuOcioWrapperError error) noexcept;
@@ -41,6 +46,10 @@ enum class GpuOcioWrapperError : std::uint8_t {
 struct GpuOcioWrapperResult final {
     std::string source;
     std::string entryPoint;
+    // The exact versioned per-sampler precise-sampling adapter used to build this wrapper
+    // (color::kOcioGpuPreciseSamplingVersion). Folded into the prepared command identity so a
+    // sampling-semantics change can never reuse an older artifact.
+    std::string samplingVersion;
     core::Sha256Digest sourceDigest{};
     GpuOcioWrapperError error = GpuOcioWrapperError::None;
 

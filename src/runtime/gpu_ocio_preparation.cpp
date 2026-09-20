@@ -48,7 +48,7 @@ void appendF64(std::vector<std::byte>& bytes, const double value) {
         bytes.push_back(static_cast<std::byte>(static_cast<unsigned char>(character)));
     }
     bytes.push_back(std::byte{0});
-    appendU64(bytes, 1);
+    appendU64(bytes, 2);
     bytes.push_back(static_cast<std::byte>(transform.kind));
     appendText(bytes, transform.fromId);
     appendText(bytes, transform.toId);
@@ -56,6 +56,18 @@ void appendF64(std::vector<std::byte>& bytes, const double value) {
     appendText(bytes, transform.view);
     appendF64(bytes, transform.exposure);
     appendF64(bytes, transform.contrast);
+    // FileTransform content identity: the exact LUT content digest and format plus the requested
+    // interpolation/direction and the process/working space ids.
+    if (transform.lutFile != nullptr) {
+        for (const auto value : transform.lutFile->digest.bytes()) {
+            bytes.push_back(static_cast<std::byte>(value));
+        }
+        appendU64(bytes, transform.lutFile->format);
+        appendU64(bytes, static_cast<std::uint64_t>(transform.interpolation));
+        appendU64(bytes, static_cast<std::uint64_t>(transform.direction));
+    }
+    appendText(bytes, transform.processSpaceId);
+    appendText(bytes, transform.workingSpaceId);
     appendU64(bytes, geometry.width);
     appendU64(bytes, geometry.height);
     const auto revision = config.expectedRevision().bytes();
@@ -65,6 +77,11 @@ void appendF64(std::vector<std::byte>& bytes, const double value) {
     appendText(bytes, options.glslangValidatorPath);
     appendText(bytes, options.spirvValPath);
     appendText(bytes, options.targetEnvironment);
+    // The artifact-affecting compile limits are part of the key: a stricter per-call limit must not
+    // reuse a cached artifact that violates the current request's budget. Deadline and diagnostic
+    // limits do not change the artifact, so they are validated separately rather than keyed.
+    appendU64(bytes, options.maxSourceBytes);
+    appendU64(bytes, options.maxSpirvBytes);
     const auto digest = core::Sha256Hasher::hash(bytes);
     return digest.has_value() ? *digest : core::Sha256Digest{};
 }
@@ -86,6 +103,8 @@ mapProgramError(const render::OcioGpuProgramError error) noexcept {
         return GpuOcioPreparationError::InvalidRequest;
     case render::OcioGpuProgramError::IdentityTransform:
         return GpuOcioPreparationError::IdentityTransform;
+    case render::OcioGpuProgramError::Cancelled:
+        return GpuOcioPreparationError::CompileCancelled;
     default:
         return GpuOcioPreparationError::ExtractionFailed;
     }
@@ -98,6 +117,26 @@ struct Entry final {
 };
 
 } // namespace
+
+bool validGpuOcioCompileOptions(const GpuOcioCompileOptions& options) noexcept {
+    const color::GpuShaderCompileLimits hard{};
+    if (options.glslangValidatorPath.empty() || options.spirvValPath.empty()) {
+        return false;
+    }
+    if (options.maxSourceBytes == 0 || options.maxSourceBytes > hard.maxSourceBytes) {
+        return false;
+    }
+    if (options.maxSpirvBytes == 0 || options.maxSpirvBytes > hard.maxSpirvBytes) {
+        return false;
+    }
+    if (options.maxDiagnosticBytes == 0 || options.maxDiagnosticBytes > hard.maxDiagnosticBytes) {
+        return false;
+    }
+    if (options.deadline <= std::chrono::milliseconds::zero()) {
+        return false;
+    }
+    return true;
+}
 
 std::string_view gpuOcioPreparationErrorName(const GpuOcioPreparationError error) noexcept {
     switch (error) {
@@ -153,12 +192,16 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
     const color::ResolvedBloomNeutralConfig& config, const GpuOcioTransformSpec& transform,
     const GpuOcioCommandGeometry geometry, const GpuOcioCompileOptions& options,
     const GpuOcioCancellation& cancel) {
-    if (options.glslangValidatorPath.empty() || options.spirvValPath.empty()) {
+    if (!validGpuOcioCompileOptions(options)) {
         return failure(GpuOcioPreparationError::InvalidRequest,
-                       "explicit glslangValidator/spirv-val paths are required");
+                       "the compile options are invalid (missing tools, zero/oversized limit, or "
+                       "non-positive deadline)");
     }
     if (geometry.width == 0 || geometry.height == 0) {
         return failure(GpuOcioPreparationError::InvalidRequest, "the geometry is empty");
+    }
+    if (transform.kind == GpuOcioTransformKind::FileTransform && transform.lutFile == nullptr) {
+        return failure(GpuOcioPreparationError::InvalidRequest, "the LUT resource is missing");
     }
     if (cancel && cancel()) {
         return failure(GpuOcioPreparationError::CompileCancelled, "cancelled before extraction");
@@ -190,6 +233,10 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
         case GpuOcioTransformKind::ExposureContrast:
             return color::buildOcioGpuProgramForExposureContrast(
                 config, transform.fromId, transform.exposure, transform.contrast);
+        case GpuOcioTransformKind::FileTransform:
+            return color::buildOcioGpuProgramForFileTransform(
+                config, *transform.lutFile, transform.interpolation, transform.direction,
+                transform.processSpaceId, transform.workingSpaceId, {}, cancel);
         }
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
     }();
@@ -238,22 +285,39 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
         }
         return failure(GpuOcioPreparationError::CompileFailed, std::move(diagnostic));
     }
+    // A cancellation observed before publication must not retain a cancelled result.
+    if (cancel && cancel()) {
+        return failure(GpuOcioPreparationError::CompileCancelled,
+                       "cancelled before the prepared command was published");
+    }
     {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         ++impl_->counters.compiles;
     }
 
-    auto commandResult =
-        PreparedGpuOcioCommand::prepare(std::move(*program), *compiled.artifact, geometry);
+    auto commandResult = PreparedGpuOcioCommand::prepare(std::move(*program), *compiled.artifact,
+                                                         geometry, wrapper.samplingVersion);
     if (!commandResult.hasValue()) {
         return failure(GpuOcioPreparationError::CommandInvalid,
                        std::string(gpuOcioCommandErrorName(commandResult.error)));
     }
     auto command = std::move(commandResult.command);
 
+    // Transactional insert: the charge and the insertion happen under one lock, and an entry that
+    // appeared while this call was extracting/compiling (a duplicate same-key miss) is returned
+    // canonically without charging bytes again or evicting anything. `totalBytes` therefore always
+    // equals the sum of the retained entries.
     const std::uint64_t bytes = command->retainedBytes();
     {
         std::lock_guard<std::mutex> lock(impl_->mutex);
+        const auto existing = impl_->cache.find(key);
+        if (existing != impl_->cache.end()) {
+            existing->second.serial = ++impl_->serial;
+            ++impl_->counters.cacheHits;
+            GpuOcioPreparationResult result;
+            result.command = existing->second.command;
+            return result;
+        }
         if (impl_->budgets.maxEntries == 0 || impl_->budgets.maxBytes == 0 ||
             bytes > impl_->budgets.maxBytes) {
             return failure(GpuOcioPreparationError::OverBudget,
@@ -272,8 +336,17 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
             impl_->cache.erase(victim);
             ++impl_->counters.evictions;
         }
+        const auto inserted = impl_->cache.emplace(key, Entry{command, bytes, ++impl_->serial});
+        if (!inserted.second) {
+            // Defensive: another thread won between the re-check and the insert. Use the canonical
+            // existing command and do not charge.
+            inserted.first->second.serial = ++impl_->serial;
+            ++impl_->counters.cacheHits;
+            GpuOcioPreparationResult result;
+            result.command = inserted.first->second.command;
+            return result;
+        }
         impl_->totalBytes += bytes;
-        impl_->cache.emplace(key, Entry{command, bytes, ++impl_->serial});
     }
     GpuOcioPreparationResult result;
     result.command = std::move(command);
