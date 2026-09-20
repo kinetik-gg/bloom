@@ -71,6 +71,17 @@ struct SeededSession final {
                                    document.snapshot().project().compositions().front().id()) {}
 };
 
+// The session is constructed in place by SeededSession. Check it explicitly so a future change
+// cannot silently turn a missing fixture into a skipped test.
+[[nodiscard]] ui::CompositionSession* seededSession(SeededSession& fixture,
+                                                    Expectations& expectations) {
+    if (!fixture.session) {
+        expectations.expect(false, "the seeded composition session is constructed");
+        return nullptr;
+    }
+    return &*fixture.session;
+}
+
 [[nodiscard]] document::CompositionFormat squareFormat(const document::FrameRate rate) {
     return document::CompositionFormat::create(1920, 1080, core::PixelAspectRatio::square(), rate)
         .value_or(document::CompositionFormat{});
@@ -125,8 +136,12 @@ void testOneFrameSurvivesUnitRoundtrip(Expectations& expectations) {
         return;
     }
     SeededSession fixture(*oneFrame, squareFormat(*rate));
+    auto* session = seededSession(fixture, expectations);
+    if (session == nullptr) {
+        return;
+    }
     const auto id = runDialog(
-        *fixture.session,
+        *session,
         [](QDialog& dialog, Expectations& expect) {
             auto* unit = unitControl(dialog);
             auto* duration = durationControl(dialog);
@@ -154,8 +169,7 @@ void testOneFrameSurvivesUnitRoundtrip(Expectations& expectations) {
         return;
     }
     const auto* composition = fixture.document.snapshot().project().findComposition(*id);
-    expectations.expect(composition != nullptr &&
-                            composition->duration() == *core::RationalTime::create(1, 24),
+    expectations.expect(composition != nullptr && composition->duration() == *oneFrame,
                         "one frame: the stored duration is exactly 1/24, not a rounded microsecond "
                         "count");
 }
@@ -168,8 +182,12 @@ void testFractionalSecondsSurviveUnitRoundtrip(Expectations& expectations) {
         return;
     }
     SeededSession fixture(*halfSecond, squareFormat(*rate));
+    auto* session = seededSession(fixture, expectations);
+    if (session == nullptr) {
+        return;
+    }
     const auto id = runDialog(
-        *fixture.session,
+        *session,
         [](QDialog& dialog, Expectations& expect) {
             auto* unit = unitControl(dialog);
             auto* duration = durationControl(dialog);
@@ -194,8 +212,7 @@ void testFractionalSecondsSurviveUnitRoundtrip(Expectations& expectations) {
         return;
     }
     const auto* composition = fixture.document.snapshot().project().findComposition(*id);
-    expectations.expect(composition != nullptr &&
-                            composition->duration() == *core::RationalTime::create(1, 2),
+    expectations.expect(composition != nullptr && composition->duration() == *halfSecond,
                         "fractional seconds: the stored duration remains exactly 1/2 s");
 }
 
@@ -209,8 +226,12 @@ void testFpsChangeKeepsEnteredUnit(Expectations& expectations) {
     // Frames stay frames: one frame at 24 fps becomes one frame at 30 fps, i.e. 1/30 s.
     {
         SeededSession fixture(*oneFrame, squareFormat(*rate24));
+        auto* session = seededSession(fixture, expectations);
+        if (session == nullptr) {
+            return;
+        }
         const auto id = runDialog(
-            *fixture.session,
+            *session,
             [](QDialog& dialog, Expectations& expect) {
                 auto* rate = frameRateControl(dialog);
                 auto* ok = okControl(dialog);
@@ -235,8 +256,12 @@ void testFpsChangeKeepsEnteredUnit(Expectations& expectations) {
     // Seconds stay seconds: 1/24 s at 30 fps is still 1/24 s.
     {
         SeededSession fixture(*oneFrame, squareFormat(*rate24));
+        auto* session = seededSession(fixture, expectations);
+        if (session == nullptr) {
+            return;
+        }
         const auto id = runDialog(
-            *fixture.session,
+            *session,
             [](QDialog& dialog, Expectations& expect) {
                 auto* unit = unitControl(dialog);
                 auto* rate = frameRateControl(dialog);
@@ -253,8 +278,7 @@ void testFpsChangeKeepsEnteredUnit(Expectations& expectations) {
             expectations);
         const auto* composition =
             id.has_value() ? fixture.document.snapshot().project().findComposition(*id) : nullptr;
-        expectations.expect(composition != nullptr &&
-                                composition->duration() == *core::RationalTime::create(1, 24),
+        expectations.expect(composition != nullptr && composition->duration() == *oneFrame,
                             "fps seconds: the exact seconds are unchanged by the frame-rate edit");
     }
 }
@@ -269,8 +293,12 @@ void testInheritedFractionalRateIsPreserved(Expectations& expectations) {
     // Untouched: the exact 30000/1001 is reused, not truncated to 29.
     {
         SeededSession fixture(duration, squareFormat(*rate));
+        auto* session = seededSession(fixture, expectations);
+        if (session == nullptr) {
+            return;
+        }
         const auto id = runDialog(
-            *fixture.session,
+            *session,
             [](QDialog& dialog, Expectations& expect) {
                 auto* rateControl = frameRateControl(dialog);
                 auto* ok = okControl(dialog);
@@ -294,8 +322,12 @@ void testInheritedFractionalRateIsPreserved(Expectations& expectations) {
     // Edited: the artist's whole-number rate wins.
     {
         SeededSession fixture(duration, squareFormat(*rate));
+        auto* session = seededSession(fixture, expectations);
+        if (session == nullptr) {
+            return;
+        }
         const auto id = runDialog(
-            *fixture.session,
+            *session,
             [](QDialog& dialog, Expectations& expect) {
                 auto* rateControl = frameRateControl(dialog);
                 auto* ok = okControl(dialog);
@@ -327,8 +359,12 @@ void testExtremeInheritedDurationClampsSafely(Expectations& expectations) {
         return;
     }
     SeededSession fixture(*extreme, squareFormat(*rate));
+    auto* session = seededSession(fixture, expectations);
+    if (session == nullptr) {
+        return;
+    }
     const auto id = runDialog(
-        *fixture.session,
+        *session,
         [](QDialog& dialog, Expectations& expect) {
             auto* duration = durationControl(dialog);
             auto* ok = okControl(dialog);

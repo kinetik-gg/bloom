@@ -322,7 +322,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         }
         checks.expect(frameCache->contains(*key), "the cached frame is retained in the cache");
         const auto identity = identityForIndex(index, *key);
-        const auto frame = frameCache->take(identity);
+        auto frame = frameCache->take(identity);
         checks.expect(frame != nullptr && frame->provenance().provider ==
                                               runtime::PreviewDisplayProvider::GpuResident,
                       "the RAM frame is a genuine GPU-resident frame");

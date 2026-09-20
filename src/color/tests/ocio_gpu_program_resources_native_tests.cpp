@@ -188,7 +188,7 @@ void testExposureContrastUniforms(Expectations& expectations, GpuDevice& device,
 void testLut3d(Expectations& expectations, GpuDevice& device,
                const bloom::color::ResolvedBloomNeutralConfig& aces) {
     constexpr std::uint32_t edge = 3;
-    std::vector<float> samples(edge * edge * edge * 3U);
+    std::vector<float> samples(std::size_t{edge} * edge * edge * 3U);
     for (std::uint32_t r = 0; r < edge; ++r) {
         for (std::uint32_t g = 0; g < edge; ++g) {
             for (std::uint32_t b = 0; b < edge; ++b) {

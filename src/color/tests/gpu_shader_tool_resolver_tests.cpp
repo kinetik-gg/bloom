@@ -5,11 +5,13 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -51,15 +53,24 @@ std::string sha256Text(const bloom::core::Sha256Digest& digest) {
     return "sha256:" + std::string(text.data(), text.size());
 }
 
+// A hash failure is a broken fixture, never a zero digest: throw so main reports an unmistakable
+// failure instead of silently substituting a default that could mask a corrupt fixture.
 bloom::core::Sha256Digest hashFile(const fs::path& path) {
     std::ifstream input(path, std::ios::binary);
     std::vector<char> bytes{std::istreambuf_iterator<char>(input),
                             std::istreambuf_iterator<char>()};
-    return *bloom::core::Sha256Hasher::hash(std::as_bytes(std::span(bytes)));
+    const auto digest = bloom::core::Sha256Hasher::hash(std::as_bytes(std::span(bytes)));
+    if (!digest)
+        throw std::runtime_error("the fixture file could not be hashed");
+    return *digest;
 }
 
 bloom::core::Sha256Digest digestOf(std::string_view text) {
-    return *bloom::core::Sha256Hasher::hash(std::as_bytes(std::span(text.data(), text.size())));
+    const auto digest =
+        bloom::core::Sha256Hasher::hash(std::as_bytes(std::span(text.data(), text.size())));
+    if (!digest)
+        throw std::runtime_error("the fixture text could not be hashed");
+    return *digest;
 }
 
 std::string inventoryText(const bool relocated, const std::string& glslangStaged,
@@ -376,23 +387,30 @@ void testRelocatedInventory(Expectations& expectations, const std::string& glsla
 } // namespace
 
 int main() {
-    const char* glslang = std::getenv("BLOOM_GLSLANG_VALIDATOR");
-    const char* spirvVal = std::getenv("BLOOM_SPIRV_VAL");
-    if (glslang == nullptr || spirvVal == nullptr) {
+    const char* const glslangValue = std::getenv("BLOOM_GLSLANG_VALIDATOR");
+    const std::string glslang = glslangValue != nullptr ? glslangValue : std::string{};
+    const char* const spirvValue = std::getenv("BLOOM_SPIRV_VAL");
+    const std::string spirvVal = spirvValue != nullptr ? spirvValue : std::string{};
+    if (glslang.empty() || spirvVal.empty()) {
         std::cerr << "SKIP: qualified glslangValidator/spirv-val paths not provided\n";
         return 77;
     }
-    Expectations expectations;
-    testValidStagedToolsCompile(expectations, glslang, spirvVal);
-    testCancelledRetry(expectations, glslang, spirvVal);
-    testWarmLimits(expectations, glslang, spirvVal);
-    testInventorySymlinkEscape(expectations, glslang, spirvVal);
-    testRelocatedInventory(expectations, glslang, spirvVal);
-    testMissingTool(expectations, glslang, spirvVal);
-    testWrongDigest(expectations, glslang, spirvVal);
-    testSymlinkOutside(expectations, glslang, spirvVal);
-    testInvalidInventory(expectations, glslang, spirvVal);
-    testSourceStagedMismatch(expectations, glslang, spirvVal);
-    testDescriptorAndCancellation(expectations, glslang, spirvVal);
-    return expectations.failures() == 0 ? 0 : 1;
+    try {
+        Expectations expectations;
+        testValidStagedToolsCompile(expectations, glslang, spirvVal);
+        testCancelledRetry(expectations, glslang, spirvVal);
+        testWarmLimits(expectations, glslang, spirvVal);
+        testInventorySymlinkEscape(expectations, glslang, spirvVal);
+        testRelocatedInventory(expectations, glslang, spirvVal);
+        testMissingTool(expectations, glslang, spirvVal);
+        testWrongDigest(expectations, glslang, spirvVal);
+        testSymlinkOutside(expectations, glslang, spirvVal);
+        testInvalidInventory(expectations, glslang, spirvVal);
+        testSourceStagedMismatch(expectations, glslang, spirvVal);
+        testDescriptorAndCancellation(expectations, glslang, spirvVal);
+        return expectations.failures() == 0 ? 0 : 1;
+    } catch (const std::exception& error) {
+        std::cerr << "FAILED: unexpected exception: " << error.what() << '\n';
+        return 1;
+    }
 }

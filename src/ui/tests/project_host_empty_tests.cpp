@@ -102,6 +102,17 @@ struct BlankSession final {
           session(std::in_place, document, stack, document::CompositionId{}) {}
 };
 
+// The session is constructed in place by the blank/seeded fixtures. Check it explicitly so a
+// future change cannot silently turn a missing fixture into a skipped test.
+template <typename Fixture>
+[[nodiscard]] ui::CompositionSession* seededSession(Fixture& fixture, Expectations& expectations) {
+    if (!fixture.session) {
+        expectations.expect(false, "the seeded composition session is constructed");
+        return nullptr;
+    }
+    return &*fixture.session;
+}
+
 // Finds the live New Composition dialog. QApplication::activeModalWidget() is normally it; the
 // top-level fallback keeps the driver robust on the offscreen platform.
 [[nodiscard]] QDialog* activeNewCompositionDialog() {
@@ -346,8 +357,12 @@ void testBlankStatusBarNeutralThenRestores(Expectations& expectations) {
 
 void testDurationDefaultsToTenSecondsInFrames(Expectations& expectations) {
     BlankSession fixture;
+    auto* session = seededSession(fixture, expectations);
+    if (session == nullptr) {
+        return;
+    }
     const auto id = runNewCompositionDialog(
-        *fixture.session,
+        *session,
         [](QDialog& dialog, Expectations& expect) {
             auto* duration =
                 dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsDurationField"));
@@ -386,8 +401,12 @@ void testDurationDefaultsToTenSecondsInFrames(Expectations& expectations) {
 void testFramesAtTwentyFiveAndThirtyFps(Expectations& expectations) {
     for (const std::uint32_t fps : {25U, 30U}) {
         BlankSession fixture;
+        auto* session = seededSession(fixture, expectations);
+        if (session == nullptr) {
+            return;
+        }
         const auto id = runNewCompositionDialog(
-            *fixture.session,
+            *session,
             [fps](QDialog& dialog, Expectations& expect) {
                 auto* rate =
                     dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsFrameRateField"));
@@ -418,8 +437,12 @@ void testFramesAtTwentyFiveAndThirtyFps(Expectations& expectations) {
 
 void testFractionalSeconds(Expectations& expectations) {
     BlankSession fixture;
+    auto* session = seededSession(fixture, expectations);
+    if (session == nullptr) {
+        return;
+    }
     const auto id = runNewCompositionDialog(
-        *fixture.session,
+        *session,
         [](QDialog& dialog, Expectations& expect) {
             auto* unit =
                 dialog.findChild<ui::kit::KDropdown*>(QStringLiteral("assetsDurationUnitDropdown"));
@@ -452,8 +475,12 @@ void testFractionalSeconds(Expectations& expectations) {
 
 void testSwitchUnitsPreservesDuration(Expectations& expectations) {
     BlankSession fixture;
+    auto* session = seededSession(fixture, expectations);
+    if (session == nullptr) {
+        return;
+    }
     const auto id = runNewCompositionDialog(
-        *fixture.session,
+        *session,
         [](QDialog& dialog, Expectations& expect) {
             auto* unit =
                 dialog.findChild<ui::kit::KDropdown*>(QStringLiteral("assetsDurationUnitDropdown"));
@@ -492,8 +519,12 @@ void testFpsChangeKeepsEnteredUnit(Expectations& expectations) {
     // Frames stay frames: 240 frames at 30 fps is 8 s.
     {
         BlankSession fixture;
+        auto* session = seededSession(fixture, expectations);
+        if (session == nullptr) {
+            return;
+        }
         const auto id = runNewCompositionDialog(
-            *fixture.session,
+            *session,
             [](QDialog& dialog, Expectations& expect) {
                 auto* rate =
                     dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsFrameRateField"));
@@ -521,8 +552,12 @@ void testFpsChangeKeepsEnteredUnit(Expectations& expectations) {
     // Seconds stay seconds: 10 s at 30 fps is still 10 s.
     {
         BlankSession fixture;
+        auto* session = seededSession(fixture, expectations);
+        if (session == nullptr) {
+            return;
+        }
         const auto id = runNewCompositionDialog(
-            *fixture.session,
+            *session,
             [](QDialog& dialog, Expectations& expect) {
                 auto* unit = dialog.findChild<ui::kit::KDropdown*>(
                     QStringLiteral("assetsDurationUnitDropdown"));
@@ -555,8 +590,12 @@ void testFpsChangeKeepsEnteredUnit(Expectations& expectations) {
 
 void testInvalidValuesAreClamped(Expectations& expectations) {
     BlankSession fixture;
+    auto* session = seededSession(fixture, expectations);
+    if (session == nullptr) {
+        return;
+    }
     const auto id = runNewCompositionDialog(
-        *fixture.session,
+        *session,
         [](QDialog& dialog, Expectations& expect) {
             auto* duration =
                 dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsDurationField"));
@@ -586,16 +625,25 @@ void testInvalidValuesAreClamped(Expectations& expectations) {
 void testCancelAddsNothing(Expectations& expectations) {
     BlankSession fixture;
     const auto before = fixture.document.snapshot().project().compositions().size();
+    auto* session = seededSession(fixture, expectations);
+    if (session == nullptr) {
+        return;
+    }
     const auto id = runNewCompositionDialog(
-        *fixture.session, [](QDialog& dialog, Expectations&) { dialog.reject(); }, expectations);
+        *session, [](QDialog& dialog, Expectations&) { dialog.reject(); }, expectations);
     expectations.expect(!id.has_value(), "cancel: the dialog returns no composition");
     expectations.expect(fixture.document.snapshot().project().compositions().size() == before,
                         "cancel: no composition was added and no command ran");
 }
 
 void testInheritsCurrentCompositionDuration(Expectations& expectations) {
-    const auto format = document::CompositionFormat::create(
-        1920, 1080, core::PixelAspectRatio::square(), document::FrameRate::create(25, 1).value());
+    const auto rate = document::FrameRate::create(25, 1);
+    expectations.expect(rate.has_value(), "inherit duration: fixture frame rate is valid");
+    if (!rate.has_value()) {
+        return;
+    }
+    const auto format =
+        document::CompositionFormat::create(1920, 1080, core::PixelAspectRatio::square(), *rate);
     const auto duration = core::RationalTime::create(5, 1);
     expectations.expect(format.has_value() && duration.has_value(),
                         "inherit duration: fixture format/duration are valid");
@@ -603,10 +651,14 @@ void testInheritsCurrentCompositionDuration(Expectations& expectations) {
         return;
     }
     SeededSession fixture(*format, *duration);
-    expectations.expect(fixture.session->composition() != nullptr,
+    auto* session = seededSession(fixture, expectations);
+    if (session == nullptr) {
+        return;
+    }
+    expectations.expect(session->composition() != nullptr,
                         "inherit duration: the seeded session has a composition");
     const auto id = runNewCompositionDialog(
-        *fixture.session,
+        *session,
         [](QDialog& dialog, Expectations& expect) {
             auto* duration =
                 dialog.findChild<QDoubleSpinBox*>(QStringLiteral("assetsDurationField"));

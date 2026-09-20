@@ -37,9 +37,9 @@ constexpr std::size_t kExecutableByteCeiling = 1u << 30;
 
 // Hard ceilings. A request may lower a limit but never raise it above these; the check runs before
 // any allocation, child launch, or read so an oversized caller value cannot become a real budget.
-constexpr std::size_t kHardMaxSourceBytes = 64u * 1024u * 1024u;
-constexpr std::size_t kHardMaxSpirvBytes = 256u * 1024u * 1024u;
-constexpr std::size_t kHardMaxDiagnosticBytes = 1u * 1024u * 1024u;
+constexpr std::size_t kHardMaxSourceBytes = std::size_t{64} * 1024u * 1024u;
+constexpr std::size_t kHardMaxSpirvBytes = std::size_t{256} * 1024u * 1024u;
+constexpr std::size_t kHardMaxDiagnosticBytes = std::size_t{1} * 1024u * 1024u;
 constexpr std::uint64_t kHardMinAddressSpaceBytes = 64ull * 1024ull * 1024ull;
 constexpr std::uint64_t kHardMaxAddressSpaceBytes = 4ull * 1024ull * 1024ull * 1024ull;
 constexpr std::uint32_t kHardMinOpenFiles = 8;
@@ -224,7 +224,6 @@ std::optional<GpuShaderCompileError> mapProcessError(ProcessError error) {
     case ProcessError::Unavailable:
         return GpuShaderCompileError::Unavailable;
     case ProcessError::Spawn:
-        return GpuShaderCompileError::SpawnFailure;
     case ProcessError::ResourceLimit:
         return GpuShaderCompileError::SpawnFailure;
     case ProcessError::Io:
@@ -299,8 +298,8 @@ GpuShaderCompiler::resolveTool(const std::string& role, const std::string& path,
     // detected. Bounded and cancellable between chunks.
     const auto hashed =
         gpu_shader_detail::hashFileBounded(path, kExecutableByteCeiling, deadline, cancel);
-    if (hashed.error) {
-        result.error = *hashed.error;
+    if (hashed.error || !hashed.digest) {
+        result.error = hashed.error.value_or(GpuShaderCompileError::IoFailure);
         return result;
     }
     {
@@ -435,6 +434,9 @@ GpuShaderCompileResult GpuShaderCompiler::compile(const GpuShaderCompileRequest&
             return cancelled();
         return failed(*validator.error, "spirv-val path is not a qualified executable");
     }
+    if (!compiler.identity || !validator.identity)
+        return failed(GpuShaderCompileError::InvalidTool,
+                      "tool identity unavailable after successful resolution");
 
     const auto sourceDigest = core::Sha256Hasher::hash(std::as_bytes(
         std::span<const char>(request.computeShaderText.data(), request.computeShaderText.size())));

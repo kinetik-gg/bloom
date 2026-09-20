@@ -315,7 +315,7 @@ void testCachedBudgetAndHardCeilings(Expectations& expectations, const std::stri
                             GpuShaderCompileError::OutputTooLarge,
                         "a cache hit is re-checked against a tighter SPIR-V ceiling");
     auto raised = request;
-    raised.limits.maxSourceBytes = 128u * 1024u * 1024u;
+    raised.limits.maxSourceBytes = std::size_t{128} * 1024u * 1024u;
     expectations.expect(errorCode(compiler.compile(raised)) == GpuShaderCompileError::LimitsInvalid,
                         "a caller cannot raise a limit above the hard ceiling");
     auto zeroDeadline = request;
@@ -342,6 +342,7 @@ void testConcurrentSameKey(Expectations& expectations, const std::string& glslan
     const auto request = baseRequest(glslang, spirvVal);
     std::atomic<int> compiled{0};
     std::vector<std::thread> workers;
+    workers.reserve(4);
     for (int worker = 0; worker < 4; ++worker) {
         workers.emplace_back([&compiler, &request, &compiled]() {
             for (int attempt = 0; attempt < 2; ++attempt) {
@@ -450,8 +451,10 @@ void testCacheEviction(Expectations& expectations, const std::string& glslang,
     {
         GpuShaderCompiler capacityOne(1);
         const auto a = capacityOne.compile(requestA);
-        expectations.expect(a.status == GpuShaderCompileStatus::Compiled,
+        expectations.expect(a.status == GpuShaderCompileStatus::Compiled && a.artifact,
                             "capacity-1: first insert compiles");
+        if (!a.artifact)
+            return;
         auto stats = capacityOne.stats();
         expectations.expect(stats.cacheEntries == 1 && stats.cacheBytes == a.artifact->spirv.size(),
                             "capacity-1: exact entry/byte accounting after first insert");
@@ -459,14 +462,19 @@ void testCacheEviction(Expectations& expectations, const std::string& glslang,
         expectations.expect(capacityOne.stats().cacheHits == 1,
                             "capacity-1: revisit of the first shader is a hit");
         const auto b = capacityOne.compile(requestB);
-        expectations.expect(b.status == GpuShaderCompileStatus::Compiled,
+        expectations.expect(b.status == GpuShaderCompileStatus::Compiled && b.artifact,
                             "capacity-1: second insert compiles");
+        if (!b.artifact)
+            return;
         stats = capacityOne.stats();
         expectations.expect(stats.cacheEntries == 1 && stats.cacheBytes == b.artifact->spirv.size(),
                             "capacity-1: second insert evicts the first with exact bytes");
         const auto revisitA = capacityOne.compile(requestA);
-        expectations.expect(revisitA.status == GpuShaderCompileStatus::Compiled,
+        expectations.expect(revisitA.status == GpuShaderCompileStatus::Compiled &&
+                                revisitA.artifact,
                             "capacity-1: evicted first shader recompiles");
+        if (!revisitA.artifact)
+            return;
         expectations.expect(capacityOne.stats().cacheMisses == 3,
                             "capacity-1: evicted first shader is a miss");
         stats = capacityOne.stats();
@@ -481,20 +489,27 @@ void testCacheEviction(Expectations& expectations, const std::string& glslang,
     {
         GpuShaderCompiler byteBudget(8, static_cast<std::size_t>(maxBytes));
         const auto a = byteBudget.compile(requestA);
-        expectations.expect(a.status == GpuShaderCompileStatus::Compiled,
+        expectations.expect(a.status == GpuShaderCompileStatus::Compiled && a.artifact,
                             "byte-budget: first insert compiles");
+        if (!a.artifact)
+            return;
         auto stats = byteBudget.stats();
         expectations.expect(stats.cacheEntries == 1 && stats.cacheBytes == a.artifact->spirv.size(),
                             "byte-budget: exact accounting after first insert");
         const auto b = byteBudget.compile(requestB);
-        expectations.expect(b.status == GpuShaderCompileStatus::Compiled,
+        expectations.expect(b.status == GpuShaderCompileStatus::Compiled && b.artifact,
                             "byte-budget: second insert compiles");
+        if (!b.artifact)
+            return;
         stats = byteBudget.stats();
         expectations.expect(stats.cacheEntries == 1 && stats.cacheBytes == b.artifact->spirv.size(),
                             "byte-budget: second insert evicts the first with exact bytes");
         const auto revisitA = byteBudget.compile(requestA);
-        expectations.expect(revisitA.status == GpuShaderCompileStatus::Compiled,
+        expectations.expect(revisitA.status == GpuShaderCompileStatus::Compiled &&
+                                revisitA.artifact,
                             "byte-budget: evicted first shader recompiles");
+        if (!revisitA.artifact)
+            return;
         expectations.expect(byteBudget.stats().cacheMisses == 3,
                             "byte-budget: evicted first shader is a miss");
         stats = byteBudget.stats();

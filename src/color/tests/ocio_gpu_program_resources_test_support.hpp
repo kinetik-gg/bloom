@@ -222,12 +222,14 @@ compileGlsl(const std::string& glsl) {
     }
     const std::string compile = "\"" + glslang.string() + "\" --target-env vulkan1.2 -V \"" +
                                 sourcePath + "\" -o \"" + spvPath + "\"";
+    // NOLINTNEXTLINE(bugprone-command-processor) -- bounded test fixture: pinned build tool path.
     if (std::system(compile.c_str()) != 0) {
         std::cerr << "glslangValidator rejected the resource wrapper program\n";
         return std::nullopt;
     }
     const std::string validate =
         "\"" + spirvVal.string() + "\" --target-env vulkan1.2 \"" + spvPath + "\"";
+    // NOLINTNEXTLINE(bugprone-command-processor) -- bounded test fixture: pinned build tool path.
     if (std::system(validate.c_str()) != 0) {
         std::cerr << "spirv-val rejected the resource wrapper program\n";
         return std::nullopt;

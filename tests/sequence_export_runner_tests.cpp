@@ -150,7 +150,7 @@ decodeVideoFrames(const std::filesystem::path& path) {
     if (!found) {
         return frames;
     }
-    media::video::DecodedVideoCache cache(256U * 1024U * 1024U);
+    media::video::DecodedVideoCache cache(std::size_t{256} * 1024U * 1024U);
     for (std::uint64_t index = 0; index < frameCount; ++index) {
         auto decoded = session.frame(probe, stream, index, 0, &cache);
         if (std::get_if<media::provider::Unavailable>(&decoded) != nullptr) {
@@ -450,6 +450,9 @@ GpuProofOutcome testGpuVideoProvenance(Fixture& f, const std::filesystem::path& 
               "GPU video: decoded frame matches the CPU export within the ProRes tolerance");
         const auto time = host::FrameRangeRunnerV1::timeForFrame(range, index);
         check(time.has_value(), "GPU video: the frame has an exact composition time");
+        if (!time.has_value()) {
+            continue;
+        }
         FrameIdentityFields fields;
         fields.routeId = "route.export.video";
         fields.projectId = planResult.plan->projectId().value();

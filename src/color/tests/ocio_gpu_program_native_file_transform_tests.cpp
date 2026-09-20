@@ -132,7 +132,7 @@ void testFileTransform(Expectations& expectations, GpuDevice& device,
         auto uploader = GpuImageUpload::create(device);
         expectations.expect(program != nullptr && uploader.hasValue(),
                             std::string("the FileTransform program hosts: ") + fixture.name);
-        if (program == nullptr || !uploader) {
+        if (!program || *program == nullptr || !uploader) {
             continue;
         }
         constexpr std::uint32_t width = 5;

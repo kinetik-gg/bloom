@@ -44,7 +44,7 @@ void testEffectCst(Expectations& expectations, GpuDevice& device,
     auto program = makeProgram(device, *desc.program());
     auto uploader = GpuImageUpload::create(device);
     expectations.expect(program != nullptr && uploader.hasValue(), "the CST program hosts");
-    if (program == nullptr || !uploader) {
+    if (!program || *program == nullptr || !uploader) {
         return;
     }
     constexpr std::uint32_t width = 4;
@@ -144,7 +144,7 @@ void testDisplay(Expectations& expectations, GpuDevice& device,
     auto program = makeProgram(device, *desc.program());
     auto uploader = GpuImageUpload::create(device);
     expectations.expect(program != nullptr && uploader.hasValue(), "the display program hosts");
-    if (program == nullptr || !uploader) {
+    if (!program || *program == nullptr || !uploader) {
         return;
     }
     constexpr std::uint32_t width = 5;
@@ -231,7 +231,7 @@ void testGeometryAndBudgetLifecycle(Expectations& expectations, GpuDevice& devic
     auto uploader = GpuImageUpload::create(device);
     expectations.expect(program != nullptr && uploader.hasValue(),
                         "the geometry lifecycle program hosts");
-    if (program == nullptr || !uploader) {
+    if (!program || *program == nullptr || !uploader) {
         return;
     }
     const auto handle = bloom::color::buildBloomNeutralCpuDisplayProcessor(neutral);
@@ -351,7 +351,7 @@ void testGeometryAndBudgetLifecycle(Expectations& expectations, GpuDevice& devic
     }
     auto effectProgram = makeProgram(device, *cst.program());
     expectations.expect(effectProgram != nullptr, "the geometry lifecycle CST program hosts");
-    if (effectProgram == nullptr) {
+    if (!effectProgram || *effectProgram == nullptr) {
         return;
     }
     constexpr std::uint32_t effectWidth = 4;

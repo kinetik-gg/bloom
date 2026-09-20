@@ -446,8 +446,16 @@ OcioGpuSamplingGlsl ocioGpuSamplingGlslFor(const render::OcioGpuProgramDesc& pro
             for (const auto& texture : program.textures) {
                 const std::string function = "bloom_ocio_sample_" + texture.samplerName;
                 const std::string coordinate = coordinateType(texture.dimensions);
-                declarations += "vec4 " + function + "(" + coordinate + " coordinate);\n";
-                definitions += "vec4 " + function + "(" + coordinate + " coordinate)\n{\n";
+                declarations.append("vec4 ")
+                    .append(function)
+                    .append("(")
+                    .append(coordinate)
+                    .append(" coordinate);\n");
+                definitions.append("vec4 ")
+                    .append(function)
+                    .append("(")
+                    .append(coordinate)
+                    .append(" coordinate)\n{\n");
                 switch (texture.interpolation) {
                 case render::OcioGpuInterpolation::Linear:
                     definitions += linearSampling(texture.samplerName, texture.dimensions);

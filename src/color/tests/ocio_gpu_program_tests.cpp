@@ -327,7 +327,7 @@ void testFileTransformExtraction(Expectations& expectations,
     using bloom::color::LutDirection;
     using bloom::color::LutInterpolation;
     const auto process = std::string(resolved.processColorSpaceId());
-    const auto working = process;
+    const auto& working = process;
 
     struct FormatCase final {
         const char* name;
@@ -475,7 +475,9 @@ void testFileTransformExtraction(Expectations& expectations,
         const auto junkBytes = std::as_bytes(std::span(junk.data(), junk.size()));
         malformed.bytes.assign(junkBytes.begin(), junkBytes.end());
         const auto malformedDigest = bloom::core::Sha256Hasher::hash(malformed.bytes);
-        malformed.digest = *malformedDigest;
+        expectations.expect(malformedDigest.has_value(), "the malformed LUT digest is computable");
+        if (malformedDigest)
+            malformed.digest = *malformedDigest;
         expectations.expect(bloom::color::buildOcioGpuProgramForFileTransform(
                                 resolved, malformed, LutInterpolation::Best, LutDirection::Forward,
                                 process, working)
@@ -546,12 +548,14 @@ void testWrapperFixtureCompiles(Expectations& expectations) {
     const auto spv = std::filesystem::temp_directory_path() / "bloom_ocio_wrapper_fixture.spv";
     const std::string compile = "\"" + glslang.string() + "\" --target-env vulkan1.2 -V \"" +
                                 fixture.string() + "\" -o \"" + spv.string() + "\"";
+    // NOLINTNEXTLINE(bugprone-command-processor) -- bounded test fixture: pinned build tool path.
     if (std::system(compile.c_str()) != 0) {
         expectations.expect(false, "the pinned wrapper fixture compiles with glslangValidator");
         return;
     }
     const std::string validate =
         "\"" + spirvVal.string() + "\" --target-env vulkan1.2 \"" + spv.string() + "\"";
+    // NOLINTNEXTLINE(bugprone-command-processor) -- bounded test fixture: pinned build tool path.
     expectations.expect(std::system(validate.c_str()) == 0,
                         "the compiled wrapper fixture passes spirv-val");
     std::error_code ignored;

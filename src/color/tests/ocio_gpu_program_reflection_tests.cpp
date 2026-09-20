@@ -55,9 +55,9 @@ void emit(std::vector<std::uint32_t>& words, const std::uint32_t opcode,
     emit(module, kOpVariable, {27u, 28u, 2u});
     for (const auto decoration : {33u, 34u}) {
         emit(module, kOpDecorate, {20u, decoration, decoration == 34u ? 1u : 0u});
-        emit(module, kOpDecorate, {21u, decoration, decoration == 34u ? 1u : 1u});
+        emit(module, kOpDecorate, {21u, decoration, 1u});
         emit(module, kOpDecorate, {22u, decoration, decoration == 34u ? 1u : 2u});
-        emit(module, kOpDecorate, {28u, decoration, decoration == 34u ? 0u : 0u});
+        emit(module, kOpDecorate, {28u, decoration, 0u});
     }
     emit(module, kOpDecorate, {14u, 6u, 4u});
     emit(module, kOpDecorate, {17u, 6u, 4u});

@@ -58,6 +58,8 @@ constexpr std::uint32_t kHeight = 16;
 [[nodiscard]] std::vector<Rgba32f> mixedFixture(const float magnitude) {
     std::vector<Rgba32f> pixels;
     pixels.reserve(static_cast<std::size_t>(kWidth) * kHeight);
+    // The fixed seed is the fixture contract: GPU/CPU parity must reproduce byte-for-byte.
+    // NOLINTNEXTLINE(bugprone-random-generator-seed) -- deterministic parity fixture.
     std::mt19937 generator(0x1CEB00DAU);
     std::uniform_real_distribution<float> rgb(-magnitude, magnitude);
     std::uniform_real_distribution<float> alpha(0.0F, 1.0F);
@@ -141,6 +143,8 @@ void runDivisionProbe(Expectations& expectations, GpuDevice& device) {
     std::vector<std::pair<float, float>> pairs;
     pixels.reserve(static_cast<std::size_t>(kWidth) * kHeight);
     pairs.reserve(pixels.capacity());
+    // The fixed seed is the fixture contract: the division probe must reproduce byte-for-byte.
+    // NOLINTNEXTLINE(bugprone-random-generator-seed) -- deterministic parity fixture.
     std::mt19937 generator(0xD1D1DE99U);
     std::uniform_real_distribution<float> numerators(-2.0F, 2.0F);
     std::uniform_real_distribution<float> denominators(0.001F, 1.0F);

@@ -361,6 +361,8 @@ void testNonReferenceQualityIsGpuSubsetFallback(Expectations& expectations) {
     fixture.provider.publish(bloom::runtime::buildBloomNeutralQualifiedDisplayProcessor());
     const auto snapshot = session.snapshot();
     auto identity = identityFor(snapshot, compositionId);
+    // This negative test deliberately supplies an out-of-range enum to exercise the quality guard.
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange) -- intentional invalid input.
     identity.quality = static_cast<bloom::runtime::EvaluationQuality>(255);
     const auto outcome =
         runStage(fixture, identity, snapshot, {}, expectations, "Non-Reference quality");
