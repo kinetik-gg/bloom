@@ -16,8 +16,6 @@ namespace bloom::render {
 namespace {
 
 constexpr std::uint64_t kDrainTimeoutNanoseconds = 2ULL * 1000ULL * 1000ULL * 1000ULL;
-constexpr std::uint64_t kMaxImageBytes = 256ULL * 1024ULL * 1024ULL;
-constexpr std::uint64_t kMaxMetadataBytes = 16ULL * 1024ULL * 1024ULL;
 
 [[nodiscard]] GpuBlendDiagnostic makeDiagnostic(const GpuBlendDiagnosticCode code,
                                                 std::string message) {
@@ -269,8 +267,7 @@ GpuBlendCreateResult GpuBlend::create(GpuDevice& device, const GpuBlendBudgets& 
         return {nullptr, makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
                                         "the blend kernel policy is not a known value")};
     }
-    if (budgets.maxImageBytes == 0 || budgets.maxImageBytes > kMaxImageBytes ||
-        budgets.maxMetadataBytes == 0 || budgets.maxMetadataBytes > kMaxMetadataBytes) {
+    if (budgets.maxImageBytes == 0 || budgets.maxMetadataBytes == 0) {
         return {nullptr, makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
                                         "the blend budget is out of range")};
     }
