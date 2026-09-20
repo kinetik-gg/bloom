@@ -155,6 +155,7 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
             .sourceOperation = operationIndex,
             .pixel = render::Rgba32f::transparent(),
             .opacity = 1.0F,
+            .geometry = nullptr,
             .coverage = nullptr,
             .outputWindow = layerWindow,
             .displayWindow = fullDisplayWindow,
@@ -167,9 +168,9 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
                 vScale, opacity, allowance, coverageCache, charge, cancellation, leafCommand)) {
             return error;
         }
-        if (const auto error =
-                chargeCoverage(leafCommand.coverage, leafCommand.outputWindow.extent().width(),
-                               leafCommand.outputWindow.extent().height())) {
+        if (const auto error = chargeCoverage(leafCommand.coverageIdentity(),
+                                              leafCommand.outputWindow.extent().width(),
+                                              leafCommand.outputWindow.extent().height())) {
             return error;
         }
         const auto leafSourceWindow = leafCommand.outputWindow;
@@ -222,6 +223,7 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
         .sourceOperation = operationIndex,
         .pixel = render::Rgba32f::transparent(),
         .opacity = 1.0F,
+        .geometry = nullptr,
         .coverage = nullptr,
         .outputWindow = layerWindow,
         .displayWindow = fullDisplayWindow,
@@ -242,8 +244,8 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
         std::string strokeKey;
         if (shapeCoverage.hasFill()) {
             if (const auto error =
-                    chargeCoverage(shapeCoverage.fill->coverage, layerWindow.extent().width(),
-                                   layerWindow.extent().height())) {
+                    chargeCoverage(shapeCoverage.fill->coverageIdentity(),
+                                   layerWindow.extent().width(), layerWindow.extent().height())) {
                 return error;
             }
             composedKey = shapeCoverage.fill->semanticKey;
@@ -252,8 +254,8 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
         }
         if (shapeCoverage.hasStroke()) {
             if (const auto error =
-                    chargeCoverage(shapeCoverage.stroke->coverage, layerWindow.extent().width(),
-                                   layerWindow.extent().height())) {
+                    chargeCoverage(shapeCoverage.stroke->coverageIdentity(),
+                                   layerWindow.extent().width(), layerWindow.extent().height())) {
                 return error;
             }
             strokeKey = shapeCoverage.stroke->semanticKey;
@@ -339,8 +341,9 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
         }
         consumedText = true;
     }
-    if (const auto error = chargeCoverage(coverageCommand.coverage, layerWindow.extent().width(),
-                                          layerWindow.extent().height())) {
+    if (const auto error =
+            chargeCoverage(coverageCommand.coverageIdentity(), layerWindow.extent().width(),
+                           layerWindow.extent().height())) {
         return error;
     }
     semanticKey = coverageCommand.semanticKey;

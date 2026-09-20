@@ -102,11 +102,11 @@ std::optional<GpuSceneLeafFailure> buildCoverageSolidLeaf(
 
     const auto windowWidth = layerWindow.extent().width();
     const auto windowHeight = layerWindow.extent().height();
-    std::shared_ptr<const std::vector<std::uint8_t>> coverage;
+    std::shared_ptr<const render::PathRasterCoverageGeometry> geometry;
     if (coverageCache != nullptr) {
-        coverage = coverageCache->find(geometryKeyDigest);
+        geometry = coverageCache->find(geometryKeyDigest);
     }
-    if (coverage == nullptr) {
+    if (geometry == nullptr) {
         const std::array<render::Path, 1> paths{render::rectanglePath(width->value, height->value)};
         const auto cancel = [&cancellation]() { return cancellation.isCancellationRequested(); };
         const auto matrixPath =
@@ -117,21 +117,21 @@ std::optional<GpuSceneLeafFailure> buildCoverageSolidLeaf(
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                         "Coverage geometry is invalid");
         }
-        auto bytes = std::make_shared<std::vector<std::uint8_t>>(
-            static_cast<std::size_t>(windowWidth) * windowHeight, 0);
-        for (std::int64_t y = layerWindow.originY(); y < layerWindow.maxYExclusive(); ++y) {
-            const auto offset = static_cast<std::size_t>(y - layerWindow.originY()) * windowWidth;
-            if (!raster.value()->coverageRow(
-                    layerWindow.originX(), y,
-                    std::span<std::uint8_t>(bytes->data() + offset, windowWidth),
-                    render::PathFillRule::NonZero, false, cancel)) {
+        auto built = raster.value()->coverageGeometry(layerWindow.originX(), layerWindow.originY(),
+                                                      windowWidth, windowHeight,
+                                                      render::PathFillRule::NonZero, false, cancel);
+        if (!built) {
+            if (cancellation.isCancellationRequested()) {
                 return fail(PreparedGpuSceneDiagnosticCode::Cancelled,
                             "Coverage rasterization was cancelled");
             }
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Coverage geometry is invalid");
         }
-        coverage = std::move(bytes);
+        geometry =
+            std::make_shared<const render::PathRasterCoverageGeometry>(std::move(*built.value()));
         if (coverageCache != nullptr) {
-            coverageCache->store(geometryKeyDigest, coverage);
+            coverageCache->store(geometryKeyDigest, geometry);
         }
     }
 
@@ -140,7 +140,8 @@ std::optional<GpuSceneLeafFailure> buildCoverageSolidLeaf(
     }
     command.pixel = *pixel.value();
     command.opacity = static_cast<float>(opacity);
-    command.coverage = coverage;
+    command.geometry = geometry;
+    command.coverage = nullptr;
     command.outputWindow = layerWindow;
     command.displayWindow = fullDisplayWindow;
     command.pixelAspect = fullPixelAspect;
@@ -336,11 +337,11 @@ std::optional<GpuSceneLeafFailure> buildTextCoverageLeaf(
 
     const auto windowWidth = layerWindow.extent().width();
     const auto windowHeight = layerWindow.extent().height();
-    std::shared_ptr<const std::vector<std::uint8_t>> coverage;
+    std::shared_ptr<const render::PathRasterCoverageGeometry> geometry;
     if (coverageCache != nullptr) {
-        coverage = coverageCache->find(geometryKeyDigest);
+        geometry = coverageCache->find(geometryKeyDigest);
     }
-    if (coverage == nullptr) {
+    if (geometry == nullptr) {
         const auto matrixPath =
             render::PathMatrix{matrix.a, matrix.b, matrix.c, matrix.d, matrix.x, matrix.y};
         auto raster =
@@ -354,21 +355,21 @@ std::optional<GpuSceneLeafFailure> buildTextCoverageLeaf(
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                         "Text coverage geometry is invalid");
         }
-        auto bytes = std::make_shared<std::vector<std::uint8_t>>(
-            static_cast<std::size_t>(windowWidth) * windowHeight, 0);
-        for (std::int64_t y = layerWindow.originY(); y < layerWindow.maxYExclusive(); ++y) {
-            const auto offset = static_cast<std::size_t>(y - layerWindow.originY()) * windowWidth;
-            if (!raster.value()->coverageRow(
-                    layerWindow.originX(), y,
-                    std::span<std::uint8_t>(bytes->data() + offset, windowWidth),
-                    render::PathFillRule::NonZero, false, cancel)) {
+        auto built = raster.value()->coverageGeometry(layerWindow.originX(), layerWindow.originY(),
+                                                      windowWidth, windowHeight,
+                                                      render::PathFillRule::NonZero, false, cancel);
+        if (!built) {
+            if (cancellation.isCancellationRequested()) {
                 return fail(PreparedGpuSceneDiagnosticCode::Cancelled,
                             "Text coverage rasterization was cancelled");
             }
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Text coverage geometry is invalid");
         }
-        coverage = std::move(bytes);
+        geometry =
+            std::make_shared<const render::PathRasterCoverageGeometry>(std::move(*built.value()));
         if (coverageCache != nullptr) {
-            coverageCache->store(geometryKeyDigest, coverage);
+            coverageCache->store(geometryKeyDigest, geometry);
         }
     }
 
@@ -377,7 +378,8 @@ std::optional<GpuSceneLeafFailure> buildTextCoverageLeaf(
     }
     command.pixel = *pixel.value();
     command.opacity = static_cast<float>(opacity);
-    command.coverage = coverage;
+    command.geometry = geometry;
+    command.coverage = nullptr;
     command.outputWindow = layerWindow;
     command.displayWindow = fullDisplayWindow;
     command.pixelAspect = fullPixelAspect;
@@ -481,17 +483,12 @@ std::optional<GpuSceneLeafFailure> buildTextLeafCoverageLeaf(
     addPixelAspectToKey(geometryKey, fullPixelAspect);
     const auto geometryKeyDigest = geometryKey.digest();
 
-    std::shared_ptr<const std::vector<std::uint8_t>> coverage;
-    if (coverageCache != nullptr) {
-        coverage = coverageCache->find(geometryKeyDigest);
-    }
-    if (coverage == nullptr) {
-        coverage = std::make_shared<const std::vector<std::uint8_t>>(coverageBytes.begin(),
-                                                                     coverageBytes.end());
-        if (coverageCache != nullptr) {
-            coverageCache->store(geometryKeyDigest, coverage);
-        }
-    }
+    // The integer-grid text leaf is the CPU text source's own FreeType glyph rasterization:
+    // host font preparation, not a PathRaster vector-coverage mask. It stays a host 8-bit bitmap
+    // translated by an exact integer and does not consume the GPU vector-coverage producer.
+    static_cast<void>(coverageCache);
+    auto coverage = std::make_shared<const std::vector<std::uint8_t>>(coverageBytes.begin(),
+                                                                      coverageBytes.end());
     if (const auto error =
             chargeBytes(window.value()->extent().width(), window.value()->extent().height(),
                         sizeof(render::Rgba32f))) {
@@ -499,6 +496,7 @@ std::optional<GpuSceneLeafFailure> buildTextLeafCoverageLeaf(
     }
     command.pixel = *pixel.value();
     command.opacity = 1.0F;
+    command.geometry = nullptr;
     command.coverage = coverage;
     command.outputWindow = *window.value();
     command.displayWindow = fullDisplayWindow;

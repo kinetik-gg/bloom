@@ -68,10 +68,14 @@ void testCancellation(Expectations& expectations, GpuDevice& device) {
                                 !executor.executor->deviceLost(),
                             "cancel-live: a proven cancellation needs no owner drain");
     }
-    const auto plan = basicPlan();
+    // Recovery on the vector-coverage path specifically: the same fractional scene that was
+    // cancelled live above must still dispatch its native coverage producer and publish.
+    const auto plan = fractionalPlan();
     const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
     const auto recovered = runScene(*executor.executor, prepared.scene, kSceneBudget);
     expectations.expect(recovered.ready, "cancel: the executor is usable after cancellation");
+    expectations.expect(executor.executor->counters().coverageDispatches > 0,
+                        "cancel: the coverage producer recovers and dispatches after cancellation");
 }
 
 void testTinyBudget(Expectations& expectations, GpuDevice& device) {
@@ -85,7 +89,8 @@ void testTinyBudget(Expectations& expectations, GpuDevice& device) {
     if (!executor) {
         return;
     }
-    const auto plan = basicPlan();
+    // The vector-coverage path: a tiny budget must be refused before any GpuPathCoverage dispatch.
+    const auto plan = fractionalPlan();
     const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
     expectations.expect(prepared.hasValue(), "budget: the scene prepares");
     if (!prepared) {
@@ -94,6 +99,8 @@ void testTinyBudget(Expectations& expectations, GpuDevice& device) {
     const auto refused = executor.executor->begin(prepared.scene, 1);
     expectations.expect(refused.code == GpuSceneExecutorDiagnosticCode::OverBudget,
                         "budget: a tiny request budget is refused before Vulkan");
+    expectations.expect(executor.executor->counters().coverageDispatches == 0,
+                        "budget: a refused coverage scene dispatched no native producer");
     expectations.expect(executor.executor->state() == GpuSceneExecutorJobState::Idle,
                         "budget: a refusal leaves the executor idle");
     expectations.expect(executor.executor->counters().budgetRefusals >= 1,

@@ -228,10 +228,16 @@ inline void addWindowBytes(std::uint64_t& total, const render::ImageWindow windo
             [&total, &countedCoverage](const auto& item) {
                 using T = std::decay_t<decltype(item)>;
                 if constexpr (std::is_same_v<T, GpuSceneCoverageSolidCommand>) {
-                    if (item.coverage != nullptr &&
-                        countedCoverage.insert(item.coverage.get()).second) {
+                    const void* identity = item.coverageIdentity();
+                    if (identity != nullptr && countedCoverage.insert(identity).second) {
                         const auto maximum = std::numeric_limits<std::uint64_t>::max();
-                        const std::uint64_t bytes = item.coverage->size();
+                        const std::uint64_t bytes =
+                            item.geometry != nullptr
+                                ? static_cast<std::uint64_t>(item.geometry->rows.size()) *
+                                          sizeof(render::PathRasterCoverageRange) +
+                                      static_cast<std::uint64_t>(item.geometry->spans.size()) *
+                                          sizeof(render::PathRasterCoverageSpan)
+                                : static_cast<std::uint64_t>(item.coverage->size());
                         total = bytes > maximum - total ? maximum : total + bytes;
                     }
                 } else if constexpr (std::is_same_v<T, GpuSceneUploadCommand>) {

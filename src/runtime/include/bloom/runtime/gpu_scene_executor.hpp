@@ -124,6 +124,10 @@ struct GpuSceneExecutorCounters final {
     // Native op begin() calls, by operation family.
     std::uint64_t solidDispatches = 0;
     std::uint64_t coveredSolidDispatches = 0;
+    // Native GpuPathCoverage begin() calls: the positive proof that a vector source's coverage was
+    // rasterized on the device (not a host mask). A warm scene whose covered output is cached runs
+    // zero of these.
+    std::uint64_t coverageDispatches = 0;
     std::uint64_t translationDispatches = 0;
     std::uint64_t sourceOverDispatches = 0;
     // Distinct from the composite counters above: an affine placement (GpuAffine) and an explicit

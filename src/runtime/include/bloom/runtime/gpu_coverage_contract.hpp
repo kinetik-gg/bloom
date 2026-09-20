@@ -205,11 +205,13 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
     // The vector coverage axis is a PIXEL operation, not host preparation: a GPU vector path must
     // rasterize its own coverage on the device and prove it with native provenance/counters. A CPU
     // PathRaster coverage mask consumed by CoveredSolidV1 (a fill from a host mask) does NOT
-    // satisfy this axis, so it stays Required and unfixtured here until the native GPU coverage
-    // producer and its consumer fixture land.
+    // satisfy this axis. The production builder now emits immutable PathRasterCoverageGeometry and
+    // the executor runs the native GpuPathCoverage producer; the genuine fixture lives in the
+    // executor native coverage tests and must observe a positive cold coverage dispatch and zero
+    // warm. The fixture owner below names the native gate that carries that evidence.
     out.push_back(GpuFeatureCoverageEntry{
         "feature.geometry.vector_coverage", "native GPU vector coverage rasterization",
-        GpuCoverageDisposition::Required, "src/render gpu vector coverage native tests"});
+        GpuCoverageDisposition::Required, "src/runtime GpuSceneExecutor native coverage tests"});
     out.push_back(GpuFeatureCoverageEntry{
         "feature.layer.affine.scale", "layer scale axis", GpuCoverageDisposition::Required,
         "src/render LayerTransform + gpu scene preparation tests"});

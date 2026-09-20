@@ -260,10 +260,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     const auto chargeTransient = [](const std::uint64_t, const std::uint64_t, const std::uint64_t)
         -> std::optional<detail::GpuSceneLeafFailure> { return std::nullopt; };
     const auto chargeCoverage =
-        [&](const std::shared_ptr<const std::vector<std::uint8_t>>& coverage,
-            const std::uint64_t width,
+        [&](const void* coverageIdentity, const std::uint64_t width,
             const std::uint64_t height) -> std::optional<detail::GpuSceneLeafFailure> {
-        if (coverage == nullptr || !countedCoverage.insert(coverage.get()).second) {
+        if (coverageIdentity == nullptr || !countedCoverage.insert(coverageIdentity).second) {
             return std::nullopt;
         }
         return chargeRetained(width, height, sizeof(std::uint8_t));

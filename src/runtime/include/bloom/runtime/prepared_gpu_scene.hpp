@@ -5,13 +5,14 @@
 //
 // Preparation runs entirely on the CPU and produces an ordered list of GPU execution commands with
 // the EXACT resolved operands and geometry the CPU evaluator would use. It never allocates a full
-// RGBA CPU image; for a fractional-translation solid it DOES allocate the exact R8 coverage raster
-// the CPU PathRaster produces (bounded by the request allowance), and for nothing else. a solid
-// command carries its resolved premultiplied pixel; a translation command carries the resolved
-// local translation/opacity and source/output windows; a merge command carries the bottom-to-top
-// foreground chain; the output command carries the composition window. The test tree replays these
-// commands with the existing CPU primitives to prove pixel equality, but that replay is a test
-// oracle, not part of preparation.
+// RGBA CPU image and it never builds a per-pixel coverage mask: for a vector source it emits the
+// immutable bounded `PathRasterCoverageGeometry` (integer scanline sample spans) that the native
+// `GpuPathCoverage` producer rasterizes on the device. A solid command carries its resolved
+// premultiplied pixel; a translation command carries the resolved local translation/opacity and
+// source/output windows; a merge command carries the bottom-to-top foreground chain; the output
+// command carries the composition window. The test tree replays these commands with the existing
+// CPU primitives to prove pixel equality, but that replay is a test oracle, not part of
+// preparation.
 //
 // Command indexes are EXECUTION ORDER ONLY. They are never pixel identity. A semantic key is built
 // from the resolved parameters, the input commands' semantic keys, the geometry windows/pixel
@@ -30,6 +31,7 @@
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/gpu_affine.hpp>
 #include <bloom/render/image_types.hpp>
+#include <bloom/render/path_raster.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/evaluation.hpp>
@@ -165,14 +167,24 @@ struct GpuSceneCompositionOutputCommand final {
 };
 
 // A solid layer whose CPU evaluation takes the vector-coverage path (a fractional device grid): the
-// exact immutable R8 coverage the SAME CPU PathRaster produces, plus the resolved premultiplied
-// pixel and the layer opacity. A native op is expected to fill RGB from the pixel through the
-// coverage, apply opacity, and stay resident; the full RGBA CPU image is never materialised here.
+// immutable bounded `PathRasterCoverageGeometry` the SAME CPU PathRaster produces -- integer
+// scanline sample spans, never a CPU per-pixel mask -- plus the resolved premultiplied pixel and
+// the layer opacity. The native `GpuPathCoverage` producer rasterizes that geometry on the device
+// and `GpuSolid::beginCoveredResident` fills RGB through the resident mask and applies opacity; the
+// fill stays resident and the full RGBA CPU image is never materialised here.
+//
+// Exactly one coverage representation is set:
+//   * `geometry` is the Required native vector-coverage pixel work (a fractional Solid, a shape
+//     fill/stroke, or a shaped text vector layer) and must be consumed by the GPU producer.
+//   * `coverage` is the host FreeType 8-bit glyph bitmap of an integer-grid text leaf. That leaf is
+//     the CPU text source's own font rasterization (host font preparation) translated by an exact
+//     integer; it is not a PathRaster::coverageRow mask and is not the vector-coverage axis.
 struct GpuSceneCoverageSolidCommand final {
     GpuSceneCommandIndex index = kInvalidGpuSceneCommand;
     OperationIndex sourceOperation = OperationIndex::fromRaw(0);
     render::Rgba32f pixel = render::Rgba32f::transparent();
     float opacity = 1.0F;
+    std::shared_ptr<const render::PathRasterCoverageGeometry> geometry;
     std::shared_ptr<const std::vector<std::uint8_t>> coverage;
     render::ImageWindow outputWindow;
     render::ImageWindow displayWindow;
@@ -181,6 +193,12 @@ struct GpuSceneCoverageSolidCommand final {
     std::string geometryKey;
     // Pixel identity: geometryKey + the resolved pixel and opacity + coverage-solid semantics.
     std::string semanticKey;
+
+    // The one coverage representation this command carries, for charge/identity accounting.
+    [[nodiscard]] const void* coverageIdentity() const noexcept {
+        return geometry != nullptr ? static_cast<const void*>(geometry.get())
+                                   : static_cast<const void*>(coverage.get());
+    }
 };
 
 // An ImageSource or VideoSource leaf: the exact converted, immutable lin_rec709_scene source image

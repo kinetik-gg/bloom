@@ -246,6 +246,12 @@ runMediaBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionP
         add(id, GpuCoverageFixtureCriterion::Prepared, "src/render PathRaster + shape source tests",
             [kind] { return runBuilder(withSource(shape(kind, 103000), 103000)); });
     }
+    // The native vector-coverage axis: the production builder emits immutable PathRaster coverage
+    // geometry (never a host mask) and the native gate must observe a real GpuPathCoverage compute
+    // dispatch for it, cold and zero warm. A fill+stroke shape exercises both coverage passes.
+    add("feature.geometry.vector_coverage", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime GpuSceneExecutor native coverage tests",
+        [] { return runBuilder(withSource(shape(ShapeKind::Ellipse, 107500, true), 107500)); });
     // A layer over a raster merge result is a raster input, so the production builder must emit the
     // accepted GpuAffine command for each transform axis (scale, rotation, anchor).
     add("feature.layer.affine.scale", GpuCoverageFixtureCriterion::Prepared,
