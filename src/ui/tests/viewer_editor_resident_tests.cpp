@@ -537,23 +537,26 @@ void testViewerEditorBlankCoverIsOpaqueCurrentCpuPaint(Expectations& expectation
 void testNativeCoverPromotionIsFencedAndStable(Expectations& expectations) {
     QWidget root;
     root.setObjectName(QStringLiteral("coverFenceRoot"));
-    auto* editor = new QWidget(&root);
-    editor->setObjectName(QStringLiteral("coverFenceEditor"));
-    auto* siblingA = new QWidget(editor);
-    auto* siblingB = new QWidget(editor);
+    // Stack children declared after root so they are destroyed before it and detach themselves from
+    // the parent chain (safe reverse destruction order); no child is heap-allocated, so an early
+    // return from an expectation cannot leak it.
+    QWidget editor(&root);
+    editor.setObjectName(QStringLiteral("coverFenceEditor"));
+    QWidget siblingA(&editor);
+    QWidget siblingB(&editor);
     root.resize(240, 180);
     root.show();
     QApplication::processEvents();
 
-    expectations.expect(!editor->testAttribute(Qt::WA_NativeWindow) && editor->internalWinId() == 0,
+    expectations.expect(!editor.testAttribute(Qt::WA_NativeWindow) && editor.internalWinId() == 0,
                         "the editor starts alien before any cover exists");
-    expectations.expect(!siblingA->testAttribute(Qt::WA_NativeWindow) &&
-                            !siblingB->testAttribute(Qt::WA_NativeWindow),
+    expectations.expect(!siblingA.testAttribute(Qt::WA_NativeWindow) &&
+                            !siblingB.testAttribute(Qt::WA_NativeWindow),
                         "the editor siblings start alien before any cover exists");
 
     ui::ViewerGpuResidentController controller;
     ui::ViewerGpuResidentController::Dependencies dependencies;
-    dependencies.containerParent = editor;
+    dependencies.containerParent = &editor;
     controller.setDependencies(std::move(dependencies));
     controller.setCpuCoverSnapshot([] {
         QPixmap snapshot(8, 6);
@@ -571,16 +574,16 @@ void testNativeCoverPromotionIsFencedAndStable(Expectations& expectations) {
         return;
     }
     expectations.expect(cover->internalWinId() != 0, "the cover itself is native");
-    expectations.expect(!editor->testAttribute(Qt::WA_NativeWindow) && editor->internalWinId() == 0,
+    expectations.expect(!editor.testAttribute(Qt::WA_NativeWindow) && editor.internalWinId() == 0,
                         "constructing the cover does not promote the editor native");
-    expectations.expect(!siblingA->testAttribute(Qt::WA_NativeWindow) &&
-                            !siblingB->testAttribute(Qt::WA_NativeWindow),
+    expectations.expect(!siblingA.testAttribute(Qt::WA_NativeWindow) &&
+                            !siblingB.testAttribute(Qt::WA_NativeWindow),
                         "constructing the cover does not promote the editor siblings native");
 
     QWidget* coverHost = cover->parentWidget();
-    expectations.expect(coverHost != nullptr && coverHost != editor,
+    expectations.expect(coverHost != nullptr && coverHost != &editor,
                         "the cover is fenced behind a dedicated alien host");
-    if (coverHost == nullptr || coverHost == editor) {
+    if (coverHost == nullptr || coverHost == &editor) {
         return;
     }
     expectations.expect(!coverHost->testAttribute(Qt::WA_NativeWindow) &&
