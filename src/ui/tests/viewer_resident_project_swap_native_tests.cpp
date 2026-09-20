@@ -41,6 +41,7 @@
 #include <QCoreApplication>
 #include <QMouseEvent>
 #include <QPointF>
+#include <QPointer>
 #include <QSettings>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -98,7 +99,7 @@ struct HarnessOptions final {
 }
 
 [[nodiscard]] QWindow* nativeVulkanWindow(QWidget* container, QWidget* host) {
-    QWindow* handle = container->windowHandle();
+    QWindow* handle = container != nullptr ? container->windowHandle() : nullptr;
     for (QWindow* candidate : QGuiApplication::allWindows()) {
         if (!candidate->isVisible() || candidate->surfaceType() != QSurface::VulkanSurface) {
             continue;
@@ -116,6 +117,82 @@ struct HarnessOptions final {
         }
     }
     return handle;
+}
+
+// The native target identity is the presenter's embedded QWindow: a document replacement retires
+// the old target and destroys that window (the presenter owns the container and the window it
+// creates). A QPointer captured before the transition therefore proves whether the target-local
+// present counters (nativePresentCount/appliedSequence, which reset to zero on a fresh presenter)
+// still belong to the same target. Comparing a post-transition count against a pre-transition one
+// is only meaningful while the window survives; across a fresh target the genuine per-target
+// evidence is applied >= enqueued > 0 plus the current desired frame's owner present ack.
+[[nodiscard]] bool sameNativeTarget(const QPointer<QWindow>& before, QWindow* now) noexcept {
+    return !before.isNull() && before == now;
+}
+
+struct NativePhaseState final {
+    std::uint64_t enqueued = 0;
+    std::uint64_t applied = 0;
+    std::uint64_t presentCount = 0;
+    bool residentActive = false;
+    bool coverVisible = false;
+    bool sameTarget = false;
+    bool containerValid = false;
+    QRect containerGeometry;
+    bool windowValid = false;
+    bool windowVulkan = false;
+    QSize windowSize;
+    bool frameResident = false;
+    std::uint64_t frameComposition = 0;
+    std::string diagnostic;
+};
+
+// Captures the whole native phase so a failed progress assertion can be disambiguated: a genuine
+// presentation bug versus a counter compared across a retired/recreated target.
+[[nodiscard]] NativePhaseState captureNativePhase(ui::ViewerEditor& viewer,
+                                                  ui::CompositionPreviewController& controller,
+                                                  QWidget* container, QWindow* window,
+                                                  const QPointer<QWindow>& before) {
+    NativePhaseState state;
+    state.enqueued = viewer.gpuNativeLastEnqueuedSequenceForTest();
+    state.applied = viewer.gpuNativeAppliedSequenceForTest();
+    state.presentCount = viewer.gpuNativePresentCountForTest();
+    state.residentActive = viewer.residentPresentationActiveForTest();
+    state.coverVisible = viewer.gpuCpuCoverVisibleForTest();
+    state.sameTarget = sameNativeTarget(before, window);
+    state.containerValid = container != nullptr;
+    if (container != nullptr) {
+        state.containerGeometry = container->geometry();
+    }
+    state.windowValid = window != nullptr;
+    if (window != nullptr) {
+        state.windowVulkan = window->surfaceType() == QSurface::VulkanSurface;
+        state.windowSize = window->size();
+    }
+    const auto frame = controller.state().frame;
+    state.frameResident = isResidentFrame(frame);
+    if (frame != nullptr) {
+        state.frameComposition = frame->desiredIdentity().compositionId.value();
+    }
+    state.diagnostic = viewer.gpuPresentationDiagnosticForTest();
+    return state;
+}
+
+void reportNativePhase(const char* phaseName, const NativePhaseState& state) {
+    std::cerr << "PHASE " << phaseName << " sameTarget=" << (state.sameTarget ? 1 : 0)
+              << " enqueued=" << state.enqueued << " applied=" << state.applied
+              << " presentCount=" << state.presentCount
+              << " residentActive=" << (state.residentActive ? 1 : 0)
+              << " coverVisible=" << (state.coverVisible ? 1 : 0)
+              << " container=" << (state.containerValid ? 1 : 0)
+              << " containerGeometry=" << state.containerGeometry.x() << ','
+              << state.containerGeometry.y() << ',' << state.containerGeometry.width() << ','
+              << state.containerGeometry.height() << " window=" << (state.windowValid ? 1 : 0)
+              << " windowVulkan=" << (state.windowVulkan ? 1 : 0)
+              << " windowSize=" << state.windowSize.width() << ',' << state.windowSize.height()
+              << " frameResident=" << (state.frameResident ? 1 : 0)
+              << " frameComposition=" << state.frameComposition
+              << " diagnostic=" << state.diagnostic << '\n';
 }
 
 void sendNativeMouse(QWindow& window, QWidget& container, const QEvent::Type type,
@@ -321,6 +398,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         viewer->setGpuPresentationDependencies(nullptr, nullptr, std::string{}, 1.0);
         return 1;
     }
+    // The pre-swap target identity. The rebind drives the controller to a frame-less state, which
+    // retires this live target and destroys this window; the QPointer goes null once that happens.
+    const QPointer<QWindow> preSwapWindow(nativeWindow);
 
     const QPointF firstCentre(viewer->canvasRectForTest().center());
     viewer->setFocus(Qt::OtherFocusReason);
@@ -366,18 +446,40 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         return 1;
     }
 
-    // Genuine owner-observed native present for the new frame (never mailbox admission).
+    // Genuine owner-observed native present for the new frame (never mailbox admission). The
+    // present count is target-local and resets to zero on a fresh presenter, so it is compared
+    // against the pre-swap count ONLY while the same native target survives. Across a retired and
+    // recreated target the genuine evidence is applied >= enqueued > 0 on the CURRENT target plus
+    // the current desired resident frame's owner ack.
     const bool secondGenuinelyPresented = waitUntil(
         [&] {
+            QWidget* liveContainer = nativeContainer(*viewer);
+            QWindow* liveWindow = nativeVulkanWindow(liveContainer, host.get());
+            const bool sameTarget = sameNativeTarget(preSwapWindow, liveWindow);
             const std::uint64_t enqueued = viewer->gpuNativeLastEnqueuedSequenceForTest();
             const std::uint64_t applied = viewer->gpuNativeAppliedSequenceForTest();
-            return enqueued > 0U && applied >= enqueued &&
-                   viewer->gpuNativePresentCountForTest() > presentCountBefore;
+            const bool nativeProgress =
+                enqueued > 0U && applied >= enqueued &&
+                (sameTarget ? viewer->gpuNativePresentCountForTest() > presentCountBefore : true) &&
+                viewer->residentPresentationActiveForTest();
+            const auto frame = controller.state().frame;
+            const bool desiredResident =
+                isResidentFrame(frame) &&
+                frame->desiredIdentity().compositionId == second.compositionId;
+            return nativeProgress && desiredResident;
         },
         20s);
     checks.expect(secondGenuinelyPresented,
                   "the swapped resident frame was genuinely applied natively (applied >= enqueued "
-                  "and the owner present count advanced)");
+                  "and the owner present count advanced or the target was recreated with a current "
+                  "owner ack)");
+    if (!secondGenuinelyPresented) {
+        QWidget* liveContainer = nativeContainer(*viewer);
+        reportNativePhase("second-present-unproven",
+                          captureNativePhase(*viewer, controller, liveContainer,
+                                             nativeVulkanWindow(liveContainer, host.get()),
+                                             preSwapWindow));
+    }
     checks.expect(service.status().counters.fullFrameReadbacks ==
                       afterSwapCounters.fullFrameReadbacks,
                   "the project swap performed no full-frame readback");
@@ -390,8 +492,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                   "the native CPU cover is hidden after the swapped frame's present ack");
 
     // The container may briefly hide while the presenter re-attaches the new document; the
-    // user-visible invariant is that it settles visible and inside the viewer.
-    QWidget* swappedContainer = nullptr;
+    // user-visible invariant is that it settles visible and inside the viewer. A QPointer plus a
+    // reacquire keeps the test from dereferencing a container that a target recreation destroyed.
+    QPointer<QWidget> swappedContainer;
     const bool swappedContainerSettled = waitUntil(
         [&] {
             swappedContainer = nativeContainer(*viewer);
@@ -405,7 +508,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     QWindow* swappedWindow = nullptr;
     const bool swappedWindowReady = waitUntil(
         [&] {
-            swappedWindow = nativeVulkanWindow(swappedContainer, host.get());
+            swappedWindow = nativeVulkanWindow(nativeContainer(*viewer), host.get());
             return swappedWindow != nullptr &&
                    swappedWindow->surfaceType() == QSurface::VulkanSurface;
         },
@@ -414,23 +517,40 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                   "the presenter still owns its real Vulkan QWindow after the swap");
 
     // A host resize exercises the cover show/hide path: the presenter must re-present and the cover
-    // must be hidden again once the new present is acknowledged.
+    // must be hidden again once the new present is acknowledged. The pre-resize target identity
+    // separates a genuine re-present failure from a target-local counter compared across a
+    // recreation; the resize path is reported, never masked.
+    const QPointer<QWindow> preResizeWindow(swappedWindow);
     const std::uint64_t resizePresentBefore = viewer->gpuNativePresentCountForTest();
     host->resize(host->width() + 60, host->height() + 40);
     QApplication::processEvents();
     const bool resizedAndRepresented = waitUntil(
         [&] {
+            QWidget* liveContainer = nativeContainer(*viewer);
+            QWindow* liveWindow = nativeVulkanWindow(liveContainer, host.get());
+            const bool sameTarget = sameNativeTarget(preResizeWindow, liveWindow);
             const std::uint64_t enqueued = viewer->gpuNativeLastEnqueuedSequenceForTest();
             const std::uint64_t applied = viewer->gpuNativeAppliedSequenceForTest();
-            return applied >= enqueued &&
-                   viewer->gpuNativePresentCountForTest() > resizePresentBefore &&
-                   !viewer->gpuCpuCoverVisibleForTest();
+            const bool nativeProgress =
+                enqueued > 0U && applied >= enqueued &&
+                (sameTarget ? viewer->gpuNativePresentCountForTest() > resizePresentBefore
+                            : true) &&
+                viewer->residentPresentationActiveForTest();
+            return nativeProgress && !viewer->gpuCpuCoverVisibleForTest();
         },
         20s);
     checks.expect(resizedAndRepresented,
                   "a viewer resize re-presents the resident frame and hides the cover after ack");
-    checks.expect(swappedContainer == nullptr ||
-                      viewer->rect().contains(swappedContainer->geometry()),
+    if (!resizedAndRepresented) {
+        QWidget* liveContainer = nativeContainer(*viewer);
+        reportNativePhase("resize-represent-unproven",
+                          captureNativePhase(*viewer, controller, liveContainer,
+                                             nativeVulkanWindow(liveContainer, host.get()),
+                                             preResizeWindow));
+    }
+    QWidget* settledContainer = nativeContainer(*viewer);
+    checks.expect(settledContainer == nullptr ||
+                      viewer->rect().contains(settledContainer->geometry()),
                   "the native container stays inside the viewer after the resize");
 
     // Native input still activates the panel after the swap.
