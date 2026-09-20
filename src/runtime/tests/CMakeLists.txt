@@ -440,6 +440,14 @@ target_link_libraries(bloom_runtime_gpu_coverage_contract_test
 target_include_directories(bloom_runtime_gpu_coverage_contract_test
     PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS}
             "${PROJECT_SOURCE_DIR}/tests/support")
+# The shared runtime OCIO context for the effect/working-space fixtures is built from the REAL tools
+# staged beside this gate executable by bloom_package_gpu_shader_tools (the same packaging the
+# desktop/CLI/MCP targets use), never a manually injected or ambient path. The executable-relative
+# definition is what the resolver validates.
+target_compile_definitions(bloom_runtime_gpu_coverage_contract_test PRIVATE
+    "BLOOM_GPU_COVERAGE_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_coverage_contract_test>\"")
+include(BloomGpuShaderTools)
+bloom_package_gpu_shader_tools(bloom_runtime_gpu_coverage_contract_test)
 # apps/bloom-media-worker is added after src/runtime, so a TARGET guard here would be false at
 # configure time; mirror the video-scene-preparation tests and take the real worker + fixture
 # generator as build-order dependencies on the platform that defines them.
@@ -479,13 +487,30 @@ set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
 # The generated video fixtures are owned by the media worker's `media3` setup, exactly like the
 # existing video-scene-preparation tests. The route-proof setup fixture is separate and always
 # required by the native gate; it publishes no proof, only a fresh nonce.
+#
+# The gate consumes the genuine proofs the real route harnesses publish, so it must run after them.
+# The harnesses live in the UI test tree (they need the Qt shell) and each sets up its own fixture;
+# the names are listed here because a runtime test may not set a property on a test that lives in
+# another directory. A required fixture with no setup test is treated as satisfied, so a build with
+# no UI shell (or a platform without these harnesses) keeps the gate's previous behaviour and never
+# fabricates a proof. The viewer and RAM-preview writers are this workstream's; the remaining export
+# writers add their own fixture names to this same list.
+set(BLOOM_GPU_ROUTE_PROOF_WRITER_FIXTURES
+    gpu_route_proof_viewer
+    gpu_route_proof_ram)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_tests_properties(bloom.runtime.gpu_coverage_contract PROPERTIES FIXTURES_REQUIRED media3)
+    # The export route-proof writers are Linux-only (the host/scripting harnesses they extend are),
+    # so the native acceptance fixture chain includes their writers only on Linux. The chained
+    # fixtures guarantee order: gpu_route_proofs (fresh nonce) -> gpu_route_proof_writers ->
+    # native acceptance.
     set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
-        PROPERTIES FIXTURES_REQUIRED "media3;gpu_route_proofs")
+        PROPERTIES FIXTURES_REQUIRED
+            "media3;gpu_route_proofs;gpu_route_proof_writers;${BLOOM_GPU_ROUTE_PROOF_WRITER_FIXTURES}")
 else()
     set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
-        PROPERTIES FIXTURES_REQUIRED gpu_route_proofs)
+        PROPERTIES FIXTURES_REQUIRED
+            "gpu_route_proofs;${BLOOM_GPU_ROUTE_PROOF_WRITER_FIXTURES}")
 endif()
 
 # Route-proof handoff tests. Both targets include the Qt-free shared codec from tests/support through
@@ -1242,6 +1267,66 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
         TIMEOUT 300
     )
     set_tests_properties(bloom.runtime.gpu_ocio_scene_executor
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+# General GPU display arm: real OCIO display programs for the default and a non-default display/view
+# pair dispatched through runtime::GpuOcioDisplayArm and compared to the unchanged CPU OCIO display
+# oracle (<=1 RGB code, alpha exact), with cold/warm program reuse, no full-frame readback, a typed
+# non-neutral ViewAdjust refusal, and a genuine program/descriptor qualification. Requires the Vulkan
+# backend and the pinned tools; skips cleanly otherwise.
+if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_gpu_ocio_display_arm_test
+        gpu_ocio_display_arm_native_tests.cpp)
+    target_link_libraries(bloom_runtime_gpu_ocio_display_arm_test
+        PRIVATE bloom_runtime_evaluator bloom_render)
+    if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
+        target_compile_definitions(bloom_runtime_gpu_ocio_display_arm_test PRIVATE
+            "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+    endif()
+    bloom_enable_warnings(bloom_runtime_gpu_ocio_display_arm_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_ocio_display_arm_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_ocio_display_arm
+        COMMAND bloom_runtime_gpu_ocio_display_arm_test
+        LABELS runtime unit gpu color
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.runtime.gpu_ocio_display_arm
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+# General-display SERVICE acceptance: the production GpuPreviewDisplayService is driven with a real
+# PreviewGpuSceneStageFunction whose stage carries an off-UI-prepared general GpuDisplayProgram. It
+# proves the ordinary default Neutral request takes the prepared general arm ABOVE the retired 4K
+# ceiling, that non-default display + adjustments produce real resident GpuResident frames with a
+# valid lease and zero full-frame readback, and that a warm/display-only change retains the process
+# output in the scene content cache while changing only the exact DisplayRgba8 command identity. It
+# needs a presentable (Wayland) resident route, the Vulkan backend, and the pinned tools; without a
+# device it prints an explicit skip (exit 77) and --require-device fails closed.
+if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_gpu_preview_display_service_general_test
+        gpu_preview_display_service_general_tests.cpp)
+    target_include_directories(bloom_runtime_gpu_preview_display_service_general_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+    target_link_libraries(bloom_runtime_gpu_preview_display_service_general_test
+        PRIVATE bloom_runtime_evaluator bloom_render)
+    # The shared OCIO context resolver consumes the REAL tools staged beside this test executable by
+    # bloom_package_gpu_shader_tools (the same packaging the app uses); the test builds its request
+    # from the executable-relative BLOOM_GPU_TOOLS_* definitions, never a manually injected path.
+    target_compile_definitions(bloom_runtime_gpu_preview_display_service_general_test PRIVATE
+        "BLOOM_GPU_GENERAL_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_preview_display_service_general_test>\"")
+    include(BloomGpuShaderTools)
+    bloom_package_gpu_shader_tools(bloom_runtime_gpu_preview_display_service_general_test)
+    bloom_enable_warnings(bloom_runtime_gpu_preview_display_service_general_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_preview_display_service_general_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_preview_display_service_general
+        COMMAND bloom_runtime_gpu_preview_display_service_general_test
+        LABELS runtime integration gpu color resident
+        TIMEOUT 600
+    )
+    set_tests_properties(bloom.runtime.gpu_preview_display_service_general
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 

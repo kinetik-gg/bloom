@@ -107,7 +107,10 @@ bloom_add_test(
 # as well; a hardware-free build prints an explicit skip and --require-device fails closed.
 add_executable(bloom_render_gpu_path_coverage_test
     gpu_path_coverage_tests.cpp
-    gpu_path_coverage_fault_seam.cpp)
+    gpu_path_coverage_parity_tests.cpp
+    gpu_path_coverage_lifecycle_tests.cpp
+    gpu_path_coverage_fault_seam.cpp
+    gpu_path_coverage_test_support.hpp)
 target_link_libraries(bloom_render_gpu_path_coverage_test PRIVATE bloom_render)
 target_include_directories(bloom_render_gpu_path_coverage_test
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
@@ -132,6 +135,41 @@ bloom_add_test(
     COMMAND bloom_render_gpu_image_upload_test
     LABELS unit gpu render
 )
+
+# Bounded-resource-retirement tests for GpuSolid/CoveredSolidV1 and GpuImageUpload. They include the
+# Vulkan-free private fault seams, so the targets exist only where the Vulkan backend is built; a
+# hardware-free build prints an explicit skip and --require-device fails closed. The vectors prove
+# many pre-created instances beyond capacity, foreign-destruction boundedness, unproven-fence
+# retention, exact owner-thread/generation isolation across two device threads, and owner-drain
+# recovery.
+if(BLOOM_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_render_gpu_solid_retirement_test gpu_solid_retirement_tests.cpp)
+    target_link_libraries(bloom_render_gpu_solid_retirement_test PRIVATE bloom_render)
+    target_include_directories(bloom_render_gpu_solid_retirement_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+    bloom_enable_warnings(bloom_render_gpu_solid_retirement_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_solid_retirement_test)
+    bloom_add_test(
+        NAME bloom.render.gpu_solid_retirement
+        COMMAND bloom_render_gpu_solid_retirement_test
+        LABELS unit gpu render
+        TIMEOUT 120
+    )
+
+    add_executable(bloom_render_gpu_image_upload_retirement_test
+        gpu_image_upload_retirement_tests.cpp)
+    target_link_libraries(bloom_render_gpu_image_upload_retirement_test PRIVATE bloom_render)
+    target_include_directories(bloom_render_gpu_image_upload_retirement_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+    bloom_enable_warnings(bloom_render_gpu_image_upload_retirement_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_image_upload_retirement_test)
+    bloom_add_test(
+        NAME bloom.render.gpu_image_upload_retirement
+        COMMAND bloom_render_gpu_image_upload_retirement_test
+        LABELS unit gpu render
+        TIMEOUT 120
+    )
+endif()
 
 # takeImage()-before-Ready guard regression for the three resident producers (upload, solid/covered,
 # resident display), mirroring GpuComposite's readiness guard. It uses only the public render API, so
@@ -316,7 +354,7 @@ target_include_directories(bloom_render_gpu_affine_kernel_test
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
 target_compile_definitions(bloom_render_gpu_affine_kernel_test
     PRIVATE
-        "BLOOM_AFFINE_BILINEAR_SPV_SHA256=\"ee28424e6b4b7d3c4e437f6ce438f75c7dfbf57e78b2a06b1e4aed1cb71f9373\"")
+        "BLOOM_AFFINE_BILINEAR_SPV_SHA256=\"3db9745132a3ee0721675dddf5f8d041f4e89eb4a2e5fed0410f80d6468facef\"")
 bloom_enable_warnings(bloom_render_gpu_affine_kernel_test)
 bloom_enable_strict_floating_point(bloom_render_gpu_affine_kernel_test)
 bloom_add_test(
@@ -339,7 +377,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     endif()
     target_compile_definitions(bloom_render_gpu_affine_test
         PRIVATE
-            "BLOOM_AFFINE_BILINEAR_SPV_SHA256=\"ee28424e6b4b7d3c4e437f6ce438f75c7dfbf57e78b2a06b1e4aed1cb71f9373\""
+            "BLOOM_AFFINE_BILINEAR_SPV_SHA256=\"3db9745132a3ee0721675dddf5f8d041f4e89eb4a2e5fed0410f80d6468facef\""
             BLOOM_AFFINE_NATIVE_TEST=1
             BLOOM_RENDER_TEST_VULKAN_BACKEND=1)
     bloom_enable_warnings(bloom_render_gpu_affine_test)
@@ -488,6 +526,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid_covered.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid_retirement.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_path_coverage.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_path_coverage_lifecycle.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_path_coverage_resources.cpp"
@@ -495,6 +534,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite_resources.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_upload.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_upload_resources.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_upload_retirement.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_affine.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_affine_resources.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_blend.cpp"

@@ -12,6 +12,7 @@
 #include <bloom/render/gpu_neutral_display.hpp>
 #include <bloom/render/gpu_resident_display.hpp>
 #include <bloom/runtime/gpu_neutral_display_qualification.hpp>
+#include <bloom/runtime/gpu_ocio_display_arm.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
@@ -26,6 +27,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -121,6 +123,13 @@ struct PreviewDisplayServiceCore final {
     std::unique_ptr<GpuSceneCache> residentSceneCache;
     std::unique_ptr<GpuSceneExecutor> residentExecutor;
     std::unique_ptr<render::GpuResidentDisplay> residentDisplay;
+    // General display arm: the exact OCIO DisplayRgba8 executor for a request whose display/view is
+    // not the startup self-qualified Neutral pair. Created lazily on the owner thread the first time
+    // a stage carries a per-request display program, and reused for every such frame.
+    std::unique_ptr<GpuOcioDisplayArm> residentGeneralDisplay;
+    // The command identity of the general display program that produced the last published frame.
+    // Owner-thread only; used so a display/view change is visible as a distinct program.
+    core::Sha256Digest publishedGeneralDisplayIdentity{};
     // Genuine immutable resident qualification report, produced on the owner thread at startup
     // independently of the packed readback qualification. Never fabricated.
     std::shared_ptr<const GpuResidentPreviewQualificationReport> residentQualification;
@@ -391,6 +400,17 @@ struct PreviewDisplayBenchmarkSample final {
 [[nodiscard]] std::vector<PreviewDisplayBenchmarkSample>
 runGpuPreviewDisplayBenchmark(const std::filesystem::path& loader);
 
+// Test-only result of one owner-thread sparse copy out of a resident frame lease. `pixels` is one
+// entry per requested coordinate. The sparse byte and submission totals this represents are
+// test-only and are never folded into the production full-frame readback counters.
+struct ResidentSparseSampleResult final {
+    bool ran = false;
+    std::string diagnostic;
+    std::vector<render::Rgba8> pixels;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+
 // Narrow test access hook. Tests may hold a completion/child retirement open to prove accounting is
 // not released early. It fabricates nothing about qualification.
 struct GpuPreviewDisplayServiceTestAccess final {
@@ -421,6 +441,15 @@ struct GpuPreviewDisplayServiceTestAccess final {
     }
     static bool residentRouteAvailable(const PreviewDisplayServiceCore& core) {
         return core.residentExecutor != nullptr && core.residentDisplay != nullptr;
+    }
+    // General-display probes (read-only, owner-created state). `generalDisplayActive` is true once
+    // the service lazily created the OCIO display arm for a request; `generalDisplayIdentity` is the
+    // exact DisplayRgba8 command identity of the last published general frame.
+    static bool generalDisplayActive(const PreviewDisplayServiceCore& core) {
+        return core.residentGeneralDisplay != nullptr;
+    }
+    static core::Sha256Digest generalDisplayIdentity(const PreviewDisplayServiceCore& core) {
+        return core.publishedGeneralDisplayIdentity;
     }
     static std::shared_ptr<PreviewDisplayServiceCore>
     coreOf(const GpuPreviewDisplayService& service);
@@ -454,6 +483,15 @@ struct GpuPreviewDisplayServiceTestAccess final {
                                                            PresentationTestLeaseResult& out,
                                                            std::chrono::milliseconds timeout,
                                                            bool foreign = false);
+
+    // Test-only: run one owner-thread task that pins `lease` in the service registry and copies
+    // EXACTLY the requested pixels out of the resident RGBA8 display image. This is the sparse
+    // counterpart of the debug full-frame readback: it is never a full-frame transfer, it runs on
+    // the device owner thread, and it touches no production counter.
+    [[nodiscard]] static bool
+    sampleResidentFrameSparse(GpuPreviewDisplayService& service, const GpuResidentFrameLease& lease,
+                              std::span<const render::ImagePixelCoordinate> coordinates,
+                              ResidentSparseSampleResult& out, std::chrono::milliseconds timeout);
 };
 
 } // namespace detail

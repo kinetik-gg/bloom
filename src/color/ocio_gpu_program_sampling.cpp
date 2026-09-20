@@ -4,9 +4,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <vector>
 
 namespace bloom::color {
 namespace {
@@ -138,39 +140,194 @@ coordinateType(const render::OcioGpuTextureDimensions dimensions) noexcept {
     return fast;
 }
 
-// OCIO's GammaOp is the op this adapter specializes: its CPU renderer takes the fast-power path and
-// its generated GLSL uses a vec4 `gamma` exponent. The pinned OCIO emits the exact comment
-// `// Add Gamma '...' processing` once per gamma op and declares `vec4 gamma = vec4(...)`.
-// ExponentOp (v1 configs only) uses `// Add an Exponent processing` and is never covered.
+// The pinned OCIO marks every generated op region with a deterministic comment. The adapter keys
+// its per-op specialization on those comments, never on a broad `pow(` signature: a program that
+// contains both a GammaOp and an ExponentOp (both use `pow(vec4, vec4)`) has only the GammaOp block
+// rewritten, and a program with a fixed-function vec3 power keeps that hardware pow.
 [[nodiscard]] bool programContainsGammaOp(const std::string_view shaderText) noexcept {
     return shaderText.find("// Add Gamma '") != std::string_view::npos &&
            shaderText.find("vec4 gamma = vec4(") != std::string_view::npos;
 }
+[[nodiscard]] bool programContainsLogOp(const std::string_view shaderText) noexcept {
+    return shaderText.find("// Add Log '") != std::string_view::npos;
+}
+[[nodiscard]] bool programContainsMatrixOp(const std::string_view shaderText) noexcept {
+    return shaderText.find("// Add Matrix processing") != std::string_view::npos;
+}
 
-// The macro redirects the generated body's `pow` token; the overloads then specialize only the
-// GammaOp call, which is always `pow(vec4, vec4)` because OCIO's pixel is a vec4. Every other
-// `pow` signature (a LogOp's vec3 exponent, an ACEScc scalar exponent, a fixed-function scalar or
-// vec3 exponent) forwards to the generated hardware pow unchanged, so a program that mixes a
-// GammaOp with another power renderer has its GammaOp corrected and its other power calls left
-// exactly as OCIO generated them. The generated OCIO body stays byte-for-byte intact; only the
-// preprocessor token is redirected.
-constexpr std::string_view kFastPowPreamble = R"(
-float bloom_ocio_cpu_fast_pow(float x, float e);
-vec2 bloom_ocio_cpu_fast_pow(vec2 x, vec2 e);
-vec3 bloom_ocio_cpu_fast_pow(vec3 x, vec3 e);
-vec4 bloom_ocio_cpu_fast_pow(vec4 x, vec4 e);
-#define pow(x, y) bloom_ocio_cpu_fast_pow(x, y)
+[[nodiscard]] std::size_t countOccurrences(const std::string_view text,
+                                           const std::string_view needle) noexcept {
+    std::size_t count = 0;
+    for (std::size_t position = text.find(needle); position != std::string_view::npos;
+         position = text.find(needle, position + needle.size())) {
+        ++count;
+    }
+    return count;
+}
+
+// A GammaOp-only program keeps the accepted `pow` macro path (backward compatible with the runtime
+// wrapper as it stands). Every other program uses the per-op body specialization.
+[[nodiscard]] bool programPowerIsGammaOnly(const std::string_view shaderText) noexcept {
+    const std::size_t gammaOps = countOccurrences(shaderText, "// Add Gamma '");
+    return gammaOps != 0 && gammaOps == countOccurrences(shaderText, "pow(");
+}
+
+enum class OpKind : std::uint8_t { None, Gamma, Log, Matrix };
+
+struct OpBlock final {
+    std::size_t begin = 0;
+    std::size_t end = 0;
+    OpKind kind = OpKind::None;
+};
+
+// Locate each OCIO op region: the comment that precedes it, and the matching closing brace of the
+// `{ ... }` block that follows. OCIO's generated blocks are flat (no nested braces).
+[[nodiscard]] std::vector<OpBlock> findOpBlocks(const std::string_view body) {
+    std::vector<OpBlock> blocks;
+    std::size_t at = 0;
+    while (at < body.size()) {
+        OpKind kind = OpKind::None;
+        std::size_t comment = std::string_view::npos;
+        const auto consider = [&](const std::string_view needle, const OpKind candidate) {
+            const std::size_t found = body.find(needle, at);
+            if (found != std::string_view::npos && found < comment) {
+                comment = found;
+                kind = candidate;
+            }
+        };
+        consider("// Add Gamma '", OpKind::Gamma);
+        consider("// Add Log '", OpKind::Log);
+        consider("// Add Matrix processing", OpKind::Matrix);
+        if (comment == std::string_view::npos) {
+            break;
+        }
+        const std::size_t brace = body.find('{', comment);
+        if (brace == std::string_view::npos) {
+            break;
+        }
+        int depth = 0;
+        std::size_t index = brace;
+        for (; index < body.size(); ++index) {
+            if (body[index] == '{') {
+                ++depth;
+            } else if (body[index] == '}') {
+                --depth;
+                if (depth == 0) {
+                    ++index;
+                    break;
+                }
+            }
+        }
+        blocks.push_back(OpBlock{comment, index, kind});
+        at = index;
+    }
+    return blocks;
+}
+
+void replaceAll(std::string& text, const std::string_view from, const std::string_view to) {
+    std::size_t at = text.find(from);
+    while (at != std::string::npos) {
+        text.replace(at, from.size(), to);
+        at = text.find(from, at + to.size());
+    }
+}
+
+struct BodySpecialization final {
+    std::string body;
+    bool gamma = false;
+    bool log = false;
+    bool matrix = false;
+};
+
+// Copy the generated body, rewriting only the identified op regions. Everything outside those
+// regions, including the op comments themselves and any unrelated `pow` call, is copied verbatim.
+//
+// * GammaOp: `pow(x, gamma)` -> `bloom_ocio_cpu_gamma_pow(x, gamma)`.
+// * LogOp: the GPU bakes `1/logSlope` and `pow(base, (in-logOffset)*slopeInv)`, while OCIO's SSE
+//   CPU bakes `kinv = log2(base)/logSlope` and evaluates `sseExp2((in-logOffset)*kinv)`. The two
+//   lines are folded so the multiply by `slopeInv` no longer rounds before the power; remaining
+//   `pow(log_base, x)` forms fall back to `exp2(x*log2(base))`.
+// * MatrixOp: `mat4(...) * tmp` -> `bloom_ocio_cpu_matrix(mat4(...), tmp)`, reproducing OCIO's SSE
+//   `(col0*x + col1*y) + (col2*z + col3*w)` add order. Diagonal/offset forms are left untouched.
+[[nodiscard]] BodySpecialization specializeOcioShaderBody(const std::string_view source) {
+    BodySpecialization result;
+    result.body.reserve(source.size() + 128);
+    const std::vector<OpBlock> blocks = findOpBlocks(source);
+    std::size_t cursor = 0;
+    for (const auto& block : blocks) {
+        if (block.begin < cursor) {
+            continue;
+        }
+        result.body.append(source.substr(cursor, block.begin - cursor));
+        std::string region(source.substr(block.begin, block.end - block.begin));
+        switch (block.kind) {
+        case OpKind::Gamma:
+            replaceAll(region, "pow(", "bloom_ocio_cpu_gamma_pow(");
+            result.gamma = true;
+            break;
+        case OpKind::Log:
+            replaceAll(region,
+                       "vec3 linSeg = ( outColor.rgb - linear_segment_offset ) * "
+                       "linear_segment_slopeinv;",
+                       "vec3 linSeg = bloom_ocio_cpu_mul3(bloom_ocio_cpu_sub3(outColor.rgb, "
+                       "linear_segment_offset), linear_segment_slopeinv);");
+            replaceAll(region, "vec3 logSeg = (outColor.rgb - log_offset) * log_slopeinv;",
+                       "vec3 logSeg = bloom_ocio_cpu_sub3(outColor.rgb, log_offset);");
+            // OCIO's CPU camera-log renderer uses `kinv = log2(base)/logSlope`. For base 2 that is
+            // exactly the GPU's baked `1/logSlope`; the device `log2(2.0)` is not guaranteed to be
+            // exactly 1.0, so the base-2 form must not multiply by it.
+            if (region.find("log_base = vec3(2.") != std::string::npos) {
+                replaceAll(region, "logSeg = pow(log_base, logSeg);",
+                           "logSeg = bloom_ocio_cpu_log_exp2(logSeg, log_slopeinv);");
+            } else {
+                replaceAll(region, "logSeg = pow(log_base, logSeg);",
+                           "logSeg = bloom_ocio_cpu_log_exp(log_base, logSeg, log_slopeinv);");
+            }
+            replaceAll(region, "logSeg = lin_slopeinv * (logSeg - lin_offset);",
+                       "logSeg = bloom_ocio_cpu_mul3(lin_slopeinv, bloom_ocio_cpu_sub3(logSeg, "
+                       "lin_offset));");
+            replaceAll(region, "pow(log_base,", "bloom_ocio_cpu_log_pow(log_base,");
+            result.log = true;
+            break;
+        case OpKind::Matrix:
+            replaceAll(region, "mat4(", "bloom_ocio_cpu_matrix(mat4(");
+            replaceAll(region, ") * tmp", "), tmp)");
+            result.matrix = true;
+            break;
+        case OpKind::None:
+            break;
+        }
+        result.body.append(region);
+        cursor = block.end;
+    }
+    if (cursor < source.size()) {
+        result.body.append(source.substr(cursor));
+    }
+    return result;
+}
+
+// Forward declarations emitted before the generated body when it is specialized.
+constexpr std::string_view kCpuHelperDeclarations = R"(
+vec4 bloom_ocio_cpu_gamma_pow(vec4 x, vec4 e);
+vec3 bloom_ocio_cpu_log_pow(vec3 base, vec3 x);
+vec3 bloom_ocio_cpu_log_exp(vec3 base, vec3 x, vec3 slopeinv);
+vec3 bloom_ocio_cpu_log_exp2(vec3 x, vec3 slopeinv);
+vec3 bloom_ocio_cpu_sub3(vec3 a, vec3 b);
+vec3 bloom_ocio_cpu_mul3(vec3 a, vec3 b);
+vec3 bloom_ocio_cpu_mul3f(vec3 a, float b);
+vec4 bloom_ocio_cpu_sub4(vec4 a, vec4 b);
+vec4 bloom_ocio_cpu_mul4(vec4 a, vec4 b);
+vec4 bloom_ocio_cpu_mul4f(vec4 a, float b);
+vec4 bloom_ocio_cpu_add4(vec4 a, vec4 b);
+vec4 bloom_ocio_cpu_max4(vec4 a, vec4 b);
+precise vec4 bloom_ocio_cpu_matrix(mat4 m, vec4 v);
 )";
 
-// Exact transcription of OpenColorIO 2.5.2 `SSE.h` sseLog2/sseExp2/ssePower. The Chebyshev
-// coefficients, their evaluation order, the bit-level mantissa/exponent extraction and the
-// underflow/overflow handling are copied verbatim; changing any of them breaks oracle parity. The
-// non-vec4 overloads delegate to the hardware pow that OCIO's generated body already used.
-constexpr std::string_view kFastPowDefinitions = R"(
-#undef pow
-float bloom_ocio_cpu_fast_pow(float x, float e) { return pow(x, e); }
-vec2 bloom_ocio_cpu_fast_pow(vec2 x, vec2 e) { return pow(x, e); }
-vec3 bloom_ocio_cpu_fast_pow(vec3 x, vec3 e) { return pow(x, e); }
+// Exact transcription of OpenColorIO 2.5.2 `SSE.h` sseLog2/sseExp2/ssePower plus the LogOp
+// anti-log and MatrixOp add-order helpers. The Chebyshev coefficients, their evaluation order, the
+// bit-level mantissa/exponent extraction and the underflow/overflow handling are copied verbatim;
+// changing any of them breaks oracle parity.
+constexpr std::string_view kCpuHelperDefinitions = R"(
 precise float bloom_ocio_cpu_log2(float x)
 {
     int bits = floatBitsToInt(x);
@@ -199,6 +356,18 @@ precise float bloom_ocio_cpu_exp2(float x)
     if (x >= 128.0) { result = uintBitsToFloat(0x7F800000u); }
     return result;
 }
+precise vec3 bloom_ocio_cpu_exp2(vec3 x)
+{
+    return vec3(bloom_ocio_cpu_exp2(x.x), bloom_ocio_cpu_exp2(x.y), bloom_ocio_cpu_exp2(x.z));
+}
+precise vec3 bloom_ocio_cpu_sub3(vec3 a, vec3 b) { return a - b; }
+precise vec3 bloom_ocio_cpu_mul3(vec3 a, vec3 b) { return a * b; }
+precise vec3 bloom_ocio_cpu_mul3f(vec3 a, float b) { return a * b; }
+precise vec4 bloom_ocio_cpu_sub4(vec4 a, vec4 b) { return a - b; }
+precise vec4 bloom_ocio_cpu_mul4(vec4 a, vec4 b) { return a * b; }
+precise vec4 bloom_ocio_cpu_mul4f(vec4 a, float b) { return a * b; }
+precise vec4 bloom_ocio_cpu_add4(vec4 a, vec4 b) { return a + b; }
+precise vec4 bloom_ocio_cpu_max4(vec4 a, vec4 b) { return max(a, b); }
 precise float bloom_ocio_cpu_sse_pow(float x, float e)
 {
     float value = bloom_ocio_cpu_log2(x);
@@ -207,11 +376,45 @@ precise float bloom_ocio_cpu_sse_pow(float x, float e)
     if (!(x > 0.0)) { value = 0.0; }
     return value;
 }
-vec4 bloom_ocio_cpu_fast_pow(vec4 x, vec4 e)
+precise vec4 bloom_ocio_cpu_gamma_pow(vec4 x, vec4 e)
 {
     return vec4(bloom_ocio_cpu_sse_pow(x.x, e.x), bloom_ocio_cpu_sse_pow(x.y, e.y),
                 bloom_ocio_cpu_sse_pow(x.z, e.z), bloom_ocio_cpu_sse_pow(x.w, e.w));
 }
+precise vec3 bloom_ocio_cpu_log_pow(vec3 base, vec3 x)
+{
+    return bloom_ocio_cpu_exp2(x * log2(base));
+}
+precise vec3 bloom_ocio_cpu_log_exp(vec3 base, vec3 x, vec3 slopeinv)
+{
+    return bloom_ocio_cpu_exp2(x * (log2(base) * slopeinv));
+}
+precise vec3 bloom_ocio_cpu_log_exp2(vec3 x, vec3 slopeinv)
+{
+    return bloom_ocio_cpu_exp2(x * slopeinv);
+}
+precise vec4 bloom_ocio_cpu_matrix(mat4 m, vec4 v)
+{
+    return (m[0] * v.x + m[1] * v.y) + (m[2] * v.z + m[3] * v.w);
+}
+)";
+
+// Backward-compatible GammaOp-only `pow` macro. The non-vec4 overloads forward to the generated
+// hardware pow, so only the GammaOp call is redirected.
+constexpr std::string_view kFastPowPreamble = R"(
+float bloom_ocio_cpu_fast_pow(float x, float e);
+vec2 bloom_ocio_cpu_fast_pow(vec2 x, vec2 e);
+vec3 bloom_ocio_cpu_fast_pow(vec3 x, vec3 e);
+vec4 bloom_ocio_cpu_fast_pow(vec4 x, vec4 e);
+#define pow(x, y) bloom_ocio_cpu_fast_pow(x, y)
+)";
+
+constexpr std::string_view kFastPowOverloads = R"(
+#undef pow
+float bloom_ocio_cpu_fast_pow(float x, float e) { return pow(x, e); }
+vec2 bloom_ocio_cpu_fast_pow(vec2 x, vec2 e) { return pow(x, e); }
+vec3 bloom_ocio_cpu_fast_pow(vec3 x, vec3 e) { return pow(x, e); }
+vec4 bloom_ocio_cpu_fast_pow(vec4 x, vec4 e) { return bloom_ocio_cpu_gamma_pow(x, e); }
 )";
 
 } // namespace
@@ -268,12 +471,23 @@ OcioGpuSamplingGlsl ocioGpuSamplingGlslFor(const render::OcioGpuProgramDesc& pro
         declarations += "#define texture(s, c) bloom_ocio_sample_##s(c)\n";
     }
 
-    // CPU fast-power oracle parity adapter (GammaOp programs).
-    const bool fastPower =
-        linkedOcioCpuUsesFastPower() && programContainsGammaOp(program.shaderText);
-    if (fastPower) {
+    // CPU-math parity adapter. A GammaOp-only program keeps the accepted `pow` macro path; any
+    // program with a GammaOp, LogOp, or MatrixOp region gets a per-op body specialization instead.
+    const bool cpuParity = linkedOcioCpuUsesFastPower();
+    const bool gammaOnly = programPowerIsGammaOnly(program.shaderText);
+    const bool hasGamma = programContainsGammaOp(program.shaderText);
+    const bool hasLog = programContainsLogOp(program.shaderText);
+    const bool hasMatrix = programContainsMatrixOp(program.shaderText);
+
+    if (cpuParity && gammaOnly && !hasLog && !hasMatrix) {
         declarations += std::string(kFastPowPreamble);
-        definitions += std::string(kFastPowDefinitions);
+        definitions += std::string(kCpuHelperDefinitions);
+        definitions += std::string(kFastPowOverloads);
+    } else if (cpuParity && (hasGamma || hasLog || hasMatrix)) {
+        BodySpecialization specialized = specializeOcioShaderBody(program.shaderText);
+        declarations += std::string(kCpuHelperDeclarations);
+        definitions += std::string(kCpuHelperDefinitions);
+        result.shaderBody = std::move(specialized.body);
     }
 
     if (declarations.empty()) {
@@ -282,6 +496,53 @@ OcioGpuSamplingGlsl ocioGpuSamplingGlslFor(const render::OcioGpuProgramDesc& pro
     result.preamble = std::move(declarations);
     result.definitions = std::move(definitions);
     return result;
+}
+
+std::string_view ocioGpuPreciseDivisionGlsl() noexcept {
+    // Correctly-rounded binary32 division. `a / b` gives a quotient within one ULP on a
+    // non-conforming device; `fma(-b, q, a)` is then the exact residual, and folding `r / b` back
+    // yields the nearest-even result the unchanged CPU oracle produces with scalar division. The
+    // residual is exact because FMA computes a - b*q with a single rounding.
+    return R"(
+precise float bloom_ocio_cpu_next_up(float x)
+{
+    const uint u = floatBitsToUint(x);
+    if (x == 0.0) { return uintBitsToFloat(1u); }
+    return (x > 0.0) ? uintBitsToFloat(u + 1u) : uintBitsToFloat(u - 1u);
+}
+precise float bloom_ocio_cpu_next_down(float x)
+{
+    const uint u = floatBitsToUint(x);
+    if (x == 0.0) { return uintBitsToFloat(0x80000001u); }
+    return (x > 0.0) ? uintBitsToFloat(u - 1u) : uintBitsToFloat(u + 1u);
+}
+precise float bloom_ocio_cpu_div(float a, float b)
+{
+    precise float q = a / b;
+    precise float r = fma(-b, q, a);
+    q = q + r / b;
+    r = fma(-b, q, a);
+    q = q + r / b;
+    r = fma(-b, q, a);
+    if (r != 0.0) {
+        // The exact quotient is q + r/b. Move q by one ULP toward it when the residual passes the
+        // rounding midpoint; break an exact tie toward the even mantissa. The midpoint uses the
+        // gap toward the chosen neighbour, which differs from the opposite gap at powers of two.
+        precise float up = bloom_ocio_cpu_next_up(q);
+        precise float down = bloom_ocio_cpu_next_down(q);
+        precise bool away = (r > 0.0) == (b > 0.0);
+        precise float gap = away ? abs(up - q) : abs(q - down);
+        precise float midpoint = abs(b) * 0.5 * gap;
+        if (abs(r) > midpoint) {
+            q = away ? up : down;
+        } else if (abs(r) == midpoint && (floatBitsToUint(q) & 1u) != 0u) {
+            q = away ? up : down;
+        }
+    }
+    return q;
+}
+precise vec3 bloom_ocio_cpu_premul(vec3 rgb, float a) { return rgb * a; }
+)";
 }
 
 } // namespace bloom::color

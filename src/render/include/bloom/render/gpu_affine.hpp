@@ -14,11 +14,14 @@
 // GPU parity is held to the documented per-finite-component 2e-6 absolute-or-relative gate
 // (docs/architecture/gpu-backend.md), never claimed bit-exact.
 //
-// SAMPLE METADATA. A general affine inverse map is evaluated on the host in Float64 (exactly the
-// oracle arithmetic) once per output pixel, reduced to the same integer base and Float32 factor the
-// CPU row uses, and uploaded as a bounded O(width*height) coordinate buffer. The kernel performs
-// only the bilinear gather and the opacity multiply; the host never generates or resamples RGBA
-// pixels. This is the "GPU float64 is absent" path the CPU oracle requires.
+// SAMPLE METADATA. The general affine inverse map is uploaded as a compact O(1) set of binary64
+// coefficients (see GpuAffineMap) and the per-pixel source-local coordinate is derived on the GPU
+// with a portable error-free double-float reconstruction; the kernel performs the exact CPU
+// floor/factor reduction and the bilinear gather plus the opacity multiply. No O(width*height)
+// per-pixel host metadata loop runs on the successful path. The host never generates or resamples
+// RGBA pixels, and the kernel needs neither shaderFloat64 nor a 64-bit integer type. The original
+// per-pixel host preparation below (prepareAffineSamples/prepareAffineMatrixSamples) is retained as
+// the exact CPU reference used by tests; it is not on the GPU path.
 //
 // This header is intentionally narrow. It does not create a device or a service; it consumes the
 // existing GpuDevice and GpuImage. Native work runs on the device owner thread and fails closed
@@ -87,6 +90,46 @@ struct GpuAffineMatrix final {
                                                                       ImageWindow sourceWindow,
                                                                       ImageWindow outputWindow);
 
+// The compact O(1) GPU sample map: the inverse affine placement restricted to the output pixel
+// lattice, expressed on output-local integer indices so the kernel needs no output origin and no
+// per-pixel host loop:
+//   localX(column, row) = localXAtOrigin + stepXPerColumn * column + stepXPerRow * row
+//   localY(column, row) = localYAtOrigin + stepYPerColumn * column + stepYPerRow * row
+// `column`/`row` are 0-based data-window indices of `outputWindow`; the origin is folded into
+// `localXAtOrigin`/`localYAtOrigin`. The six coefficients are derived from the CPU oracle sampled
+// at the output origin and at one step along each axis, so the map tracks the same CPU oracle the
+// render path uses. This is a tolerance-qualified compact approximation, not a bit-exact
+// reconstruction: the probed-difference coefficients are not universally identical to the oracle's
+// own per-pixel inverseMap() evaluation for arbitrary origins or near-cancelling coefficients. The
+// kernel reconstructs each pixel in error-free two-Float32 (double-float, ~48 significand bits)
+// arithmetic without shaderFloat64, and parity is verified across the full output window by the
+// native gates to 2e-6 abs-or-rel on all four components with bit-exact alpha at the 0/1 endpoints.
+// A collapsed (non-finite or
+// zero-determinant) composed matrix yields the all-transparent sentinel map (both constants -2.0,
+// all steps 0).
+struct GpuAffineMap final {
+    double localXAtOrigin = 0.0;
+    double localYAtOrigin = 0.0;
+    double stepXPerColumn = 1.0;
+    double stepXPerRow = 0.0;
+    double stepYPerColumn = 0.0;
+    double stepYPerRow = 1.0;
+
+    friend bool operator==(const GpuAffineMap&, const GpuAffineMap&) noexcept = default;
+};
+
+// Compact O(1) inverse-map preparation for the LayerTransform oracle: probes
+// LayerTransform::inverseMap() at the output origin and one local pixel step along each axis. Pure
+// host arithmetic; O(1) in the output extent. Identical in the Vulkan and stub builds.
+[[nodiscard]] GpuAffineMap prepareAffineMap(const LayerTransform& transform,
+                                            ImageWindow outputWindow);
+
+// Compact O(1) inverse-map preparation for the composed-matrix form. Uses the same closed-form
+// inverse as prepareAffineMatrixSamples; a non-finite or singular matrix yields the transparent
+// sentinel map. O(1) in the output extent.
+[[nodiscard]] GpuAffineMap prepareAffineMatrixMap(const GpuAffineMatrix& matrix,
+                                                  ImageWindow outputWindow);
+
 // Validated inputs for the LayerTransform form. `source` is shared immutable ownership retained for
 // the job's lifetime. `outputWindow` is the output DATA window only; the output DISPLAY window and
 // pixel aspect are preserved from the source. The opacity is LayerTransform::opacity(), already
@@ -106,11 +149,15 @@ struct GpuAffineMatrixParameters final {
     float opacity = 1.0F;
 };
 
+// Per-call ceilings. Defaults are effectively unbounded so the real bounds are the live device
+// limits and the per-call byteBudget; no fixed 256 MiB or 4K ceiling is baked in. This matches
+// GpuPointResampleBudgets and the full-resolution admission direction. A non-zero injected value
+// proves the fail-closed budget path.
 struct GpuAffineBudgets final {
-    std::uint64_t maxImageBytes = 256ULL * 1024ULL * 1024ULL;
-    // The per-pixel sample buffer is 16 bytes per output pixel; the default covers 4K (about
-    // 133 MiB) and larger requests are refused against the per-call byte budget.
-    std::uint64_t maxMetadataBytes = 256ULL * 1024ULL * 1024ULL;
+    std::uint64_t maxImageBytes = std::numeric_limits<std::uint64_t>::max();
+    // The compact inverse-affine metadata is O(1) (six binary64 coefficients); the practical
+    // metadata bound is the per-call byteBudget, never a per-pixel O(width*height) array.
+    std::uint64_t maxMetadataBytes = std::numeric_limits<std::uint64_t>::max();
 };
 
 enum class GpuAffineJobState : std::uint8_t { Idle, Pending, Ready, Failure };

@@ -16,25 +16,10 @@ namespace bloom::render {
 namespace {
 
 constexpr std::uint64_t kAffineDrainTimeoutNanoseconds = 2ULL * 1000ULL * 1000ULL * 1000ULL;
-constexpr std::uint64_t kAffineMaxImageBytes = 256ULL * 1024ULL * 1024ULL;
-constexpr std::uint64_t kAffineMaxMetadataBytes = 256ULL * 1024ULL * 1024ULL;
 
 [[nodiscard]] GpuAffineDiagnostic makeDiagnostic(const GpuAffineDiagnosticCode code,
                                                  std::string message) {
     return affineDiagnostic(code, std::move(message));
-}
-
-// Overflow-checked per-pixel metadata size for one output window; refuses a window whose pixel
-// count or byte size cannot be represented. Used before any host allocation.
-[[nodiscard]] bool affineMetadataBytes(ImageWindow outputWindow, std::uint64_t& out) noexcept {
-    const std::uint64_t width = outputWindow.extent().width();
-    const std::uint64_t height = outputWindow.extent().height();
-    std::uint64_t pixels = 0;
-    if (width == 0 || height == 0 || compositeMultiplyOverflows(width, height, pixels) ||
-        compositeMultiplyOverflows(pixels, sizeof(GpuAffineSample), out)) {
-        return false;
-    }
-    return true;
 }
 
 } // namespace
@@ -50,7 +35,7 @@ void GpuAffine::Impl::clearJob() {
     discardRequested.store(false);
     residentImage.reset();
     retainedSource.reset();
-    samples.release();
+    map.release();
     status.release();
     statusMapped = nullptr;
 }
@@ -211,8 +196,7 @@ bool GpuAffine::Impl::createPipelines() {
 }
 
 GpuAffineCreateResult GpuAffine::create(GpuDevice& device, const GpuAffineBudgets& budgets) {
-    if (budgets.maxImageBytes == 0 || budgets.maxImageBytes > kAffineMaxImageBytes ||
-        budgets.maxMetadataBytes == 0 || budgets.maxMetadataBytes > kAffineMaxMetadataBytes) {
+    if (budgets.maxImageBytes == 0 || budgets.maxMetadataBytes == 0) {
         return {nullptr, makeDiagnostic(GpuAffineDiagnosticCode::InvalidArgument,
                                         "the affine budget is out of range")};
     }
@@ -287,7 +271,7 @@ GpuAffineDiagnostic GpuAffine::beginAffine(const GpuAffineParameters& parameters
                               "the affine pipeline is not initialized");
     }
     // Cheap gates first: reject a foreign thread, a busy pipeline, or a stale generation before any
-    // O(width*height) metadata preparation.
+    // coordinate work.
     const auto cheap = impl_->preflightCheap();
     if (cheap.code != GpuAffineDiagnosticCode::None) {
         return cheap;
@@ -309,14 +293,13 @@ GpuAffineDiagnostic GpuAffine::beginAffine(const GpuAffineParameters& parameters
         return makeDiagnostic(GpuAffineDiagnosticCode::InvalidArgument,
                               "the LayerTransform source window does not match the source image");
     }
-    std::uint64_t metadataBytes = 0;
-    if (!affineMetadataBytes(parameters.outputWindow, metadataBytes) ||
-        metadataBytes > impl_->budgets.maxMetadataBytes || metadataBytes > byteBudget) {
+    if (sizeof(GpuAffineMapGpu) > impl_->budgets.maxMetadataBytes ||
+        sizeof(GpuAffineMapGpu) > byteBudget) {
         return makeDiagnostic(GpuAffineDiagnosticCode::OverBudget,
-                              "the affine sample metadata exceeds the byte budget");
+                              "the affine map metadata exceeds the byte budget");
     }
-    const auto samples = prepareAffineSamples(*parameters.transform, parameters.outputWindow);
-    return impl_->beginPrepared(parameters.source, parameters.outputWindow, samples,
+    const auto map = prepareAffineMap(*parameters.transform, parameters.outputWindow);
+    return impl_->beginPrepared(parameters.source, parameters.outputWindow, map,
                                 parameters.transform->opacity(), byteBudget);
 }
 
@@ -344,23 +327,21 @@ GpuAffineDiagnostic GpuAffine::beginAffineMatrix(const GpuAffineMatrixParameters
         return makeDiagnostic(GpuAffineDiagnosticCode::InvalidArgument,
                               "the affine opacity is out of domain");
     }
-    std::uint64_t metadataBytes = 0;
-    if (!affineMetadataBytes(parameters.outputWindow, metadataBytes) ||
-        metadataBytes > impl_->budgets.maxMetadataBytes || metadataBytes > byteBudget) {
+    if (sizeof(GpuAffineMapGpu) > impl_->budgets.maxMetadataBytes ||
+        sizeof(GpuAffineMapGpu) > byteBudget) {
         return makeDiagnostic(GpuAffineDiagnosticCode::OverBudget,
-                              "the affine sample metadata exceeds the byte budget");
+                              "the affine map metadata exceeds the byte budget");
     }
-    const auto samples =
-        prepareAffineMatrixSamples(parameters.matrix, *sourceWindow, parameters.outputWindow);
-    return impl_->beginPrepared(parameters.source, parameters.outputWindow, samples,
-                                parameters.opacity, byteBudget);
+    const auto map = prepareAffineMatrixMap(parameters.matrix, parameters.outputWindow);
+    return impl_->beginPrepared(parameters.source, parameters.outputWindow, map, parameters.opacity,
+                                byteBudget);
 }
 
-GpuAffineDiagnostic
-GpuAffine::Impl::beginPrepared(const std::shared_ptr<const GpuImage>& source,
-                               const ImageWindow outputWindow,
-                               const std::span<const GpuAffineSample> preparedSamples,
-                               const float opacity, const std::uint64_t byteBudget) {
+GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(const std::shared_ptr<const GpuImage>& source,
+                                                   const ImageWindow outputWindow,
+                                                   const GpuAffineMap& affineMap,
+                                                   const float opacity,
+                                                   const std::uint64_t byteBudget) {
     if (!onOwnerThread()) {
         return makeDiagnostic(GpuAffineDiagnosticCode::WrongThread,
                               "beginAffine must run on the device owner thread");
@@ -392,20 +373,14 @@ GpuAffine::Impl::beginPrepared(const std::shared_ptr<const GpuImage>& source,
         return makeDiagnostic(GpuAffineDiagnosticCode::InvalidArgument,
                               "the affine opacity is out of domain");
     }
-    std::uint64_t expectedSamples = 0;
-    if (compositeMultiplyOverflows(outputWidth, outputHeight, expectedSamples) ||
-        expectedSamples != preparedSamples.size()) {
-        return makeDiagnostic(GpuAffineDiagnosticCode::InvalidArgument,
-                              "the prepared sample count does not match the output window");
-    }
-    // Requested byte math is overflow-checked: two uint32 extents can overflow uint64.
+    // Requested byte math is overflow-checked: two uint32 extents can overflow uint64. The
+    // metadata charge is the map buffer PLUS the 4-byte status buffer, matching the buffers
+    // actually retained for the job.
     std::uint64_t imageBytes = 0;
-    std::uint64_t sampleBytes = 0;
     std::uint64_t metadataBytes = 0;
     if (compositeMultiplyOverflows(outputWidth, outputHeight, imageBytes) ||
         compositeMultiplyOverflows(imageBytes, sizeof(Rgba32f), imageBytes) ||
-        compositeMultiplyOverflows(expectedSamples, sizeof(GpuAffineSample), sampleBytes) ||
-        compositeAddOverflows(sampleBytes, sizeof(std::uint32_t), metadataBytes)) {
+        compositeAddOverflows(sizeof(GpuAffineMapGpu), sizeof(std::uint32_t), metadataBytes)) {
         return makeDiagnostic(GpuAffineDiagnosticCode::OverBudget,
                               "the affine request overflows the byte arithmetic");
     }
@@ -433,11 +408,13 @@ GpuAffine::Impl::beginPrepared(const std::shared_ptr<const GpuImage>& source,
     }
 
     clearJob();
-    // Device buffers first so any allocation failure precedes any driver work.
-    if (!createCompositeBuffer(*control, sampleBytes, false, preparedSamples.data(),
-                               this->samples)) {
+    // Device buffers first so any allocation failure precedes any driver work. The compact O(1)
+    // map is host-visible and written directly: no transient staging buffer and no extra queue
+    // submit, unlike the former O(width*height) sample array.
+    const GpuAffineMapGpu packedMap = packAffineMap(affineMap);
+    if (!createCompositeBuffer(*control, sizeof(packedMap), true, &packedMap, this->map)) {
         return makeDiagnostic(GpuAffineDiagnosticCode::AllocationFailed,
-                              "the affine sample metadata buffer could not be allocated");
+                              "the affine map metadata buffer could not be allocated");
     }
     const std::uint32_t zeroFlag = 0;
     if (!createCompositeBuffer(*control, sizeof(zeroFlag), true, &zeroFlag, status)) {
@@ -462,22 +439,22 @@ GpuAffine::Impl::beginPrepared(const std::shared_ptr<const GpuImage>& source,
     }
     GpuImageImpl* const outputRaw = resident.get();
 
-    // Enforce the budget on the ACTUAL VMA allocation sizes (allocator rounding included) plus the
-    // transient staging peak for the sample upload.
+    // Enforce the budget on the ACTUAL VMA allocation sizes (allocator rounding included). The map
+    // buffer is host-visible and written directly, so there is no transient staging peak.
     std::uint64_t retainedActual = 0;
     std::uint64_t peakActual = 0;
     {
         const std::uint64_t outputActual = compositeImageAllocationBytes(*outputRaw);
-        const std::uint64_t samplesActual = compositeBufferAllocationBytes(this->samples);
+        const std::uint64_t mapActual = compositeBufferAllocationBytes(this->map);
         const std::uint64_t statusActual = compositeBufferAllocationBytes(status);
         std::uint64_t sum = 0;
-        if (compositeAddOverflows(outputActual, samplesActual, sum) ||
-            compositeAddOverflows(sum, statusActual, sum) ||
-            compositeAddOverflows(sum, samplesActual, peakActual)) {
+        if (compositeAddOverflows(outputActual, mapActual, sum) ||
+            compositeAddOverflows(sum, statusActual, sum)) {
             return makeDiagnostic(GpuAffineDiagnosticCode::OverBudget,
                                   "the affine allocation sizes overflow the byte arithmetic");
         }
         retainedActual = sum;
+        peakActual = retainedActual;
     }
     if (retainedActual > byteBudget || peakActual > byteBudget) {
         return makeDiagnostic(GpuAffineDiagnosticCode::OverBudget,
@@ -507,7 +484,7 @@ GpuAffine::Impl::beginPrepared(const std::shared_ptr<const GpuImage>& source,
     outputInfo.imageView = outputRaw->view;
     outputInfo.imageLayout = vk::ImageLayout::eGeneral;
     vk::DescriptorBufferInfo sampleInfo{};
-    sampleInfo.buffer = this->samples.buffer;
+    sampleInfo.buffer = this->map.buffer;
     sampleInfo.range = VK_WHOLE_SIZE;
     vk::DescriptorBufferInfo statusInfoWrite{};
     statusInfoWrite.buffer = status.buffer;

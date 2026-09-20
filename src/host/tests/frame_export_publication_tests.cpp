@@ -1,5 +1,7 @@
 #include <bloom/host/frame_export_publication.hpp>
 
+#include "gpu_route_proof_export_support.hpp"
+
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
@@ -36,6 +38,7 @@
 #include <memory>
 #include <optional>
 #include <source_location>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -54,6 +57,8 @@ namespace platform = bloom::platform;
 namespace runtime = bloom::runtime;
 
 using namespace std::chrono_literals;
+
+namespace routeproof = bloom::gpu_route_proof_export;
 
 class Expectations final {
   public:
@@ -1681,7 +1686,19 @@ void testGpuStaleDisplayBindingRefused(Expectations& expectations) {
 #endif
 }
 
-void testGpuCompositedExportParity(Expectations& expectations, const bool requireDevice) {
+//
+// When `proofDirectory` is non-empty this same real run also publishes the genuine
+// `route.export.still_frame` proof, but only after every assertion above passed: the proof carries
+// the attempt's canonical process identity, the actual cold dispatch/epoch/readback counters, and
+// an evidence digest bound to the actual GPU/CPU process comparison and the independently decoded
+// PNG bytes. An absent loader/device returns Skipped so the proof CTest reports 77, never a pass.
+enum class GpuProofOutcome : std::uint8_t { NotRequested, Skipped, Ran };
+
+GpuProofOutcome testGpuCompositedExportParity(Expectations& expectations, const bool requireDevice,
+                                              const std::filesystem::path& proofDirectory) {
+    const auto skip = [&proofDirectory] {
+        return proofDirectory.empty() ? GpuProofOutcome::NotRequested : GpuProofOutcome::Skipped;
+    };
     const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER");
     if (loader == nullptr || *loader == '\0') {
         if (requireDevice) {
@@ -1690,11 +1707,11 @@ void testGpuCompositedExportParity(Expectations& expectations, const bool requir
         } else {
             std::cout << "NOTE: BLOOM_TEST_VULKAN_LOADER unset; skipping GPU publication parity\n";
         }
-        return;
+        return skip();
     }
     ExportFixture fixture;
     if (!fixture.setUp(expectations, "gpu parity: fixture is available")) {
-        return;
+        return GpuProofOutcome::Ran;
     }
     runtime::GpuProcessFrameEvaluatorOptions options;
     options.enabled = true;
@@ -1708,7 +1725,7 @@ void testGpuCompositedExportParity(Expectations& expectations, const bool requir
     if (!provider->deviceAvailable()) {
         expectations.expect(!requireDevice, "gpu parity: a device is required");
         std::cout << "NOTE: no compatible Vulkan device; skipping GPU publication parity\n";
-        return;
+        return skip();
     }
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
     // Qualified packaged shader tools: enables the real GPU DisplayRgba8 PNG route (the CPU display
@@ -1785,7 +1802,7 @@ void testGpuCompositedExportParity(Expectations& expectations, const bool requir
         !buildAttempt(gpuPngTarget, output::OutputPresetV1::PngRgba8SrgbV1, provider, gpuPngAttempt,
                       gpuPngProvenance)) {
         expectations.expect(false, "gpu parity: the CPU/GPU attempts complete");
-        return;
+        return GpuProofOutcome::Ran;
     }
     expectations.expect(
         gpuExrAttempt->frame()->identity().provider == runtime::EvaluationProvider::GpuResident &&
@@ -1860,6 +1877,7 @@ void testGpuCompositedExportParity(Expectations& expectations, const bool requir
     expectations.expect(pngParity,
                         "gpu parity: GPU-composited PNG pixels match the CPU reference within one "
                         "code with exact alpha");
+
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
     // Real GPU display route: the PNG attempt retains the verified DisplayRgba8 payload directly
     // (no CPU per-pixel display conversion), transferred in the SAME single submission as the
@@ -1876,7 +1894,116 @@ void testGpuCompositedExportParity(Expectations& expectations, const bool requir
                         "gpu parity: the PNG route makes one submission carrying process+encoded "
                         "payloads with real dispatches");
 #endif
+
+    // Publish the genuine still-frame route proof from the exact run above. It is written only
+    // after every assertion passed, so a failed parity/publication can never become a passing
+    // proof; the evidence digest is bound to the actual process comparison and the independent PNG
+    // decode, and the counters are the real attempt provenance.
+    if (!proofDirectory.empty() && expectations.failures() == 0) {
+        const auto identityDigest =
+            routeproof::sha256Hex(gpuExrAttempt->processIdentity()->canonicalBytes());
+        const auto& proofCpuPixels = cpuAttempt->frame()->processImage().pixels();
+        const auto& proofGpuPixels = gpuExrAttempt->frame()->processImage().pixels();
+        constexpr double kProofTolerance = static_cast<double>(kTolerance);
+        routeproof::FrameEvidence evidence;
+        evidence.identityHex = identityDigest;
+        evidence.comparedPixels = proofCpuPixels.size();
+        evidence.alphaExact = proofCpuPixels.size() == proofGpuPixels.size();
+        double maxFloatDelta = 0.0;
+        std::uint64_t processMismatches = 0;
+        if (proofCpuPixels.size() == proofGpuPixels.size()) {
+            for (std::size_t index = 0; index < proofCpuPixels.size(); ++index) {
+                const auto& cpuPixel = proofCpuPixels[index];
+                const auto& gpuPixel = proofGpuPixels[index];
+                if (cpuPixel.alpha() != gpuPixel.alpha()) {
+                    evidence.alphaExact = false;
+                    ++processMismatches;
+                    continue;
+                }
+                bool pixelBad = false;
+                for (std::size_t component = 0; component < 3; ++component) {
+                    const double cpuValue = static_cast<double>(cpuPixel.components()[component]);
+                    const double gpuValue = static_cast<double>(gpuPixel.components()[component]);
+                    const double difference = std::abs(cpuValue - gpuValue);
+                    maxFloatDelta = std::max(maxFloatDelta, difference);
+                    if (difference > kProofTolerance &&
+                        difference >
+                            kProofTolerance * std::max(std::abs(cpuValue), std::abs(gpuValue))) {
+                        pixelBad = true;
+                    }
+                }
+                if (pixelBad) {
+                    ++processMismatches;
+                }
+            }
+        }
+        evidence.maxFloatDelta = maxFloatDelta;
+        evidence.mismatchedPixels = processMismatches;
+        evidence.cpuDecodedDigest =
+            routeproof::sha256Pixels(std::span<const std::uint8_t>(cpuDecoded.rgba));
+        evidence.gpuDecodedDigest =
+            routeproof::sha256Pixels(std::span<const std::uint8_t>(gpuDecoded.rgba));
+        std::uint64_t decodedMismatches = 0;
+        std::uint64_t maxIntegerDelta = 0;
+        bool decodedAlphaExact = true;
+        const auto decodedCount = std::min(cpuDecoded.rgba.size(), gpuDecoded.rgba.size());
+        for (std::size_t index = 0; index < decodedCount; ++index) {
+            const auto difference =
+                static_cast<std::uint64_t>(std::abs(static_cast<int>(cpuDecoded.rgba[index]) -
+                                                    static_cast<int>(gpuDecoded.rgba[index])));
+            maxIntegerDelta = std::max(maxIntegerDelta, difference);
+            const bool alpha = index % 4U == 3U;
+            if (alpha) {
+                if (difference != 0) {
+                    decodedAlphaExact = false;
+                    ++decodedMismatches;
+                }
+            } else if (difference > 1) {
+                ++decodedMismatches;
+            }
+        }
+        evidence.maxIntegerDelta = maxIntegerDelta;
+        evidence.mismatchedPixels += decodedMismatches;
+        evidence.alphaExact = evidence.alphaExact && decodedAlphaExact;
+
+        routeproof::ExportProofCounters counters;
+        counters.deviceOwnershipEpoch = gpuExrProvenance->deviceOwnershipEpoch;
+        counters.nativeDispatches = gpuExrProvenance->counters.nativeDispatches;
+        counters.verifiedFrames = 1;
+        counters.readbackSubmissions = gpuExrProvenance->readbackSubmissions;
+        // The ACTUAL combined-readback payload count and bytes from the attempt provenance: the
+        // identity/EXR arm transfers one process payload; a display/PNG arm transfers two (process +
+        // encoded) under the same one submission. Never derived from the readback count.
+        counters.payloads = gpuExrProvenance->transferredPayloads;
+        counters.transferredBytes = gpuExrProvenance->processPayloadBytes +
+                                    gpuExrProvenance->encodedPayloadBytes;
+
+        const std::array<std::string, 1> identityList{identityDigest};
+        const std::array<routeproof::FrameEvidence, 1> evidenceList{evidence};
+        const auto processDigest = routeproof::orderedIdentityDigest(identityList);
+        const auto capturedEvidenceDigest = routeproof::evidenceDigest(evidenceList);
+        std::string nonce;
+        if (!routeproof::readProofNonce(proofDirectory, nonce)) {
+            expectations.expect(false,
+                                "gpu parity: a fresh run nonce is required for the still proof");
+        } else {
+            const auto written = routeproof::publishExportProof(
+                proofDirectory, nonce, "route.export.still_frame",
+                bloom::runtime::GpuRouteHarnessKind::StillFrameExport, counters, processDigest,
+                capturedEvidenceDigest);
+            if (!written.written) {
+                expectations.expect(false, "gpu parity: the still route proof was rejected: " +
+                                               written.detail);
+            } else {
+                std::cout << "PASS(route-proof) route.export.still_frame frames="
+                          << counters.verifiedFrames << " dispatches=" << counters.nativeDispatches
+                          << " readbacks=" << counters.readbackSubmissions
+                          << " bytes=" << counters.transferredBytes << '\n';
+            }
+        }
+    }
     static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+    return GpuProofOutcome::Ran;
 }
 
 } // namespace
@@ -1884,11 +2011,16 @@ void testGpuCompositedExportParity(Expectations& expectations, const bool requir
 int main(const int argc, char** argv) {
     Expectations expectations;
     bool requireDevice = false;
+    std::filesystem::path proofDirectory;
     for (int index = 1; index < argc; ++index) {
-        if (std::string_view(argv[index]) == "--require-device") {
+        const std::string_view argument{argv[index]};
+        if (argument == "--require-device") {
             requireDevice = true;
+        } else if (argument == "--route-proof-dir" && index + 1 < argc) {
+            proofDirectory = argv[++index];
         }
     }
+    GpuProofOutcome stillOutcome = GpuProofOutcome::NotRequested;
     try {
         testDigestMismatchRejected(expectations);
         testIntentRegisteredExactlyOnce(expectations);
@@ -1909,10 +2041,15 @@ int main(const int argc, char** argv) {
         testGpuStaleDisplayBindingRefused(expectations);
         testGpuSameGeometryWrongTransformRefused(expectations);
         testGpuCrossRevisionCommandRefused(expectations);
-        testGpuCompositedExportParity(expectations, requireDevice);
+        stillOutcome = testGpuCompositedExportParity(expectations, requireDevice, proofDirectory);
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return EXIT_FAILURE;
     }
-    return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (expectations.failures() != 0) {
+        return EXIT_FAILURE;
+    }
+    // With --route-proof-dir and no loader/device the honest result is a CTest skip, never a pass
+    // labelled as a proof.
+    return stillOutcome == GpuProofOutcome::Skipped ? 77 : EXIT_SUCCESS;
 }

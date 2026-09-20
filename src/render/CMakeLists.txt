@@ -456,9 +456,9 @@ set(BLOOM_AFFINE_BILINEAR_MANIFEST
 set(BLOOM_AFFINE_BILINEAR_INC
     "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/affine_bilinear_spirv.inc")
 set(BLOOM_AFFINE_BILINEAR_COMP_SHA256
-    "1648feceb9869b69f274f7b6af90770a8c6c57ac78b31d270e5735218d52ebab")
+    "8b728e94e85e2d83bd7604e43062f371f0d8578d5a71f06691df30bf747fdd54")
 set(BLOOM_AFFINE_BILINEAR_SPV_SHA256
-    "ee28424e6b4b7d3c4e437f6ce438f75c7dfbf57e78b2a06b1e4aed1cb71f9373")
+    "3db9745132a3ee0721675dddf5f8d041f4e89eb4a2e5fed0410f80d6468facef")
 
 file(SHA256 "${BLOOM_AFFINE_BILINEAR_COMP}" bloom_affine_bilinear_comp_sha256)
 if(NOT bloom_affine_bilinear_comp_sha256 STREQUAL BLOOM_AFFINE_BILINEAR_COMP_SHA256)
@@ -1026,6 +1026,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_affine_resources.cpp
         vulkan/gpu_blend.cpp
         vulkan/gpu_blend_private.hpp
+        vulkan/gpu_bounded_retirement.hpp
         vulkan/gpu_composite.cpp
         vulkan/gpu_composite_private.hpp
         vulkan/gpu_composite_resources.cpp
@@ -1035,8 +1036,10 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_image.cpp
         vulkan/gpu_image_private.hpp
         vulkan/gpu_image_upload.cpp
+        vulkan/gpu_image_upload_fault.hpp
         vulkan/gpu_image_upload_private.hpp
         vulkan/gpu_image_upload_resources.cpp
+        vulkan/gpu_image_upload_retirement.cpp
         vulkan/gpu_neutral_display.cpp
         vulkan/gpu_neutral_display_private.hpp
         vulkan/gpu_neutral_display_resources.cpp
@@ -1058,10 +1061,14 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_process_readback.cpp
         vulkan/gpu_resident_display.cpp
         vulkan/gpu_resident_display_private.hpp
+        vulkan/gpu_resident_display_readback.cpp
+        vulkan/gpu_resident_display_readback_private.hpp
         vulkan/gpu_resident_display_resources.cpp
         vulkan/gpu_solid.cpp
         vulkan/gpu_solid_covered.cpp
+        vulkan/gpu_solid_fault.hpp
         vulkan/gpu_solid_private.hpp
+        vulkan/gpu_solid_retirement.cpp
         vulkan/gpu_path_coverage.cpp
         vulkan/gpu_path_coverage_lifecycle.cpp
         vulkan/gpu_path_coverage_resources.cpp

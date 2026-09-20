@@ -87,4 +87,62 @@ std::vector<GpuAffineSample> prepareAffineMatrixSamples(const GpuAffineMatrix& m
     return samples;
 }
 
+GpuAffineMap prepareAffineMap(const LayerTransform& transform, const ImageWindow outputWindow) {
+    // Probe the CPU oracle at the output origin and one local step along each lattice axis to build
+    // a compact approximation of the inverse map over the window. The map is mathematically affine,
+    // but the probed differences are Float64 subtractions of sampled values, so the reconstructed
+    // per-pixel coordinate is NOT bit-identical to the oracle's own inverseMap() evaluation for
+    // arbitrary origins and near-cancelling coefficients. Parity is therefore tolerance-qualified
+    // (2e-6 abs-or-rel RGB, exact alpha endpoints) and is verified across the full output window by
+    // the native gates, never asserted exact by construction.
+    const auto originX = static_cast<double>(outputWindow.originX());
+    const auto originY = static_cast<double>(outputWindow.originY());
+    const auto atOrigin = transform.inverseMap(originX, originY);
+    const auto atColumn = transform.inverseMap(originX + 1.0, originY);
+    const auto atRow = transform.inverseMap(originX, originY + 1.0);
+    GpuAffineMap map;
+    map.localXAtOrigin = atOrigin.x;
+    map.localYAtOrigin = atOrigin.y;
+    map.stepXPerColumn = atColumn.x - atOrigin.x;
+    map.stepXPerRow = atRow.x - atOrigin.x;
+    map.stepYPerColumn = atColumn.y - atOrigin.y;
+    map.stepYPerRow = atRow.y - atOrigin.y;
+    return map;
+}
+
+GpuAffineMap prepareAffineMatrixMap(const GpuAffineMatrix& matrix, const ImageWindow outputWindow) {
+    const double determinant = matrix.a * matrix.d - matrix.b * matrix.c;
+    if (!std::isfinite(determinant) || determinant == 0.0) {
+        // No inverse: the collapsed layer is the empty (all-transparent) result. A constant local
+        // coordinate of -2.0 is strictly outside the CPU's in-range (-1, extent) interval on both
+        // axes, so every pixel reduces to the transparent sentinel.
+        return GpuAffineMap{.localXAtOrigin = -2.0,
+                            .localYAtOrigin = -2.0,
+                            .stepXPerColumn = 0.0,
+                            .stepXPerRow = 0.0,
+                            .stepYPerColumn = 0.0,
+                            .stepYPerRow = 0.0};
+    }
+    const auto point = [&](const double absoluteX, const double absoluteY) {
+        const double relativeX = absoluteX - matrix.tx;
+        const double relativeY = absoluteY - matrix.ty;
+        return LayerTransform::SamplePoint{
+            (matrix.d * relativeX - matrix.b * relativeY) / determinant,
+            (-matrix.c * relativeX + matrix.a * relativeY) / determinant};
+    };
+    const auto originX = static_cast<double>(outputWindow.originX());
+    const auto originY = static_cast<double>(outputWindow.originY());
+    const auto atOrigin = point(originX, originY);
+    const auto atColumn = point(originX + 1.0, originY);
+    const auto atRow = point(originX, originY + 1.0);
+    GpuAffineMap map;
+    map.localXAtOrigin = atOrigin.x;
+    map.localYAtOrigin = atOrigin.y;
+    map.stepXPerColumn = atColumn.x - atOrigin.x;
+    map.stepXPerRow = atRow.x - atOrigin.x;
+    map.stepYPerColumn = atColumn.y - atOrigin.y;
+    map.stepYPerRow = atRow.y - atOrigin.y;
+    return map;
+}
+
 } // namespace bloom::render

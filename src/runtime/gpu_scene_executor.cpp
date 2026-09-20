@@ -300,6 +300,10 @@ GpuSceneExecutorPollResult GpuSceneExecutor::poll() {
                 impl.affine->cancel();
             } else if (impl.nativeKind == Impl::NativeKind::Blend) {
                 impl.blend->cancel();
+            } else if (impl.nativeKind == Impl::NativeKind::PathCoverage) {
+                if (impl.pathCoverage != nullptr) {
+                    impl.pathCoverage->cancel();
+                }
             } else if (impl.nativeKind == Impl::NativeKind::Ocio) {
                 if (impl.nativeOcioProgram != nullptr) {
                     impl.nativeOcioProgram->cancel();
@@ -375,6 +379,10 @@ void GpuSceneExecutor::cancel() noexcept {
             impl_->affine->cancel();
         } else if (impl_->nativeKind == Impl::NativeKind::Blend) {
             impl_->blend->cancel();
+        } else if (impl_->nativeKind == Impl::NativeKind::PathCoverage) {
+            if (impl_->pathCoverage != nullptr) {
+                impl_->pathCoverage->cancel();
+            }
         } else if (impl_->nativeKind == Impl::NativeKind::Ocio) {
             if (impl_->nativeOcioProgram != nullptr) {
                 impl_->nativeOcioProgram->cancel();
@@ -394,6 +402,7 @@ bool GpuSceneExecutor::teardownDrainIncomplete() noexcept {
            render::GpuImageUpload::teardownDrainIncomplete() ||
            render::GpuAffine::teardownDrainIncomplete() ||
            render::GpuBlend::teardownDrainIncomplete() ||
+           render::GpuPathCoverage::teardownDrainIncomplete() ||
            render::GpuOcioProgram::teardownDrainIncomplete();
 }
 

@@ -129,11 +129,15 @@ target_sources(
         gpu_scene_executor.cpp
         gpu_scene_executor_planner.cpp
         gpu_scene_executor_execution.cpp
+        gpu_scene_executor_coverage.cpp
         gpu_scene_executor_ocio.cpp
         gpu_scene_executor_private.hpp
         gpu_process_frame.cpp
+        gpu_process_frame_preparation_private.cpp
+        gpu_process_frame_preparation_private.hpp
         gpu_process_frame_readback.cpp
         gpu_process_frame_readback_private.hpp
+        gpu_process_frame_support_private.hpp
         gpu_ocio_wrapper.cpp
         gpu_ocio_command.cpp
         gpu_ocio_preparation.cpp
@@ -141,6 +145,8 @@ target_sources(
         gpu_ocio_program_executor.cpp
         gpu_ocio_program_retained_bytes.hpp
         gpu_output_color.cpp
+        gpu_ocio_display_arm.cpp
+        gpu_ocio_display_program_service.cpp
         view_adjust.cpp
         view_adjust_support.hpp
         value_graph_evaluation.cpp
@@ -177,6 +183,7 @@ target_sources(
             include/bloom/runtime/gpu_ocio_preparation.hpp
             include/bloom/runtime/gpu_ocio_context.hpp
             include/bloom/runtime/gpu_ocio_program_executor.hpp
+            include/bloom/runtime/gpu_ocio_display_arm.hpp
             include/bloom/runtime/gpu_output_color.hpp
             include/bloom/runtime/input_color_context.hpp
             include/bloom/runtime/prepared_gpu_scene.hpp

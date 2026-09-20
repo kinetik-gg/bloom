@@ -3,12 +3,15 @@
 // contract the MCP server relies on to share ONE server-lifetime provider across still and video
 // renders instead of re-bootstrapping (or prematurely retiring) a device per frame.
 
+#include "gpu_route_proof_export_support.hpp"
+
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
+#include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/scripting/render.hpp>
@@ -22,6 +25,7 @@
 #include <OpenEXR/ImfStringAttribute.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -30,6 +34,7 @@
 #include <memory>
 #include <optional>
 #include <source_location>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -43,6 +48,10 @@ namespace core = bloom::core;
 namespace host = bloom::host;
 namespace runtime = bloom::runtime;
 namespace scripting = bloom::scripting;
+namespace routeproof = bloom::gpu_route_proof_export;
+
+// A skip for the proof CTest is exit 77; --require-device turns it into a failure.
+enum class GpuProofOutcome : std::uint8_t { NotRequested, Skipped, Ran };
 
 class Expectations final {
   public:
@@ -314,12 +323,149 @@ struct ExrImage final {
     return true;
 }
 
+// The per-frame production identity material the scripting facade can genuinely observe: the real
+// compiled plan identity plus the exact frame request and preset. Render::run compiles the same
+// plan, so this is the production plan/request identity, not a placeholder.
+struct FrameIdentityFields final {
+    std::string_view routeId;
+    std::uint64_t projectId = 0;
+    std::uint64_t compositionId = 0;
+    std::uint64_t sourceRevision = 0;
+    std::uint64_t outputIndex = 0;
+    std::uint64_t operationCount = 0;
+    std::uint32_t planSemantics = 0;
+    std::uint32_t animationSamplingSemantics = 0;
+    std::uint64_t frameIndex = 0;
+    std::int64_t timeNumerator = 0;
+    std::int64_t timeDenominator = 1;
+    std::uint64_t preset = 0;
+    std::string_view provider;
+};
+
+[[nodiscard]] std::string frameIdentityHex(const FrameIdentityFields& fields) {
+    routeproof::CanonicalWriter writer;
+    writer.text("bloom.gpu.route.export-frame-identity.v1");
+    writer.text(fields.routeId);
+    writer.u64(fields.projectId);
+    writer.u64(fields.compositionId);
+    writer.u64(fields.sourceRevision);
+    writer.u64(fields.outputIndex);
+    writer.u64(fields.operationCount);
+    writer.u32(fields.planSemantics);
+    writer.u32(fields.animationSamplingSemantics);
+    writer.u64(fields.frameIndex);
+    writer.i64(fields.timeNumerator);
+    writer.i64(fields.timeDenominator);
+    writer.u64(fields.preset);
+    writer.text(fields.provider);
+    return routeproof::sha256Hex(writer.bytes());
+}
+
+// SHA-256 over the exact float bytes the independently decoded EXR payload carries. Every plane is
+// written in canonical big-endian bit order, so the digest is bound to the actual output values.
+[[nodiscard]] std::string exrDigest(const ExrImage& image) {
+    routeproof::CanonicalWriter writer;
+    writer.u64(static_cast<std::uint64_t>(image.width));
+    writer.u64(static_cast<std::uint64_t>(image.height));
+    writer.u64(image.red.size());
+    for (std::size_t index = 0; index < image.red.size(); ++index) {
+        writer.f64(static_cast<double>(image.red[index]));
+        writer.f64(static_cast<double>(image.green[index]));
+        writer.f64(static_cast<double>(image.blue[index]));
+        writer.f64(static_cast<double>(image.alpha[index]));
+    }
+    return routeproof::sha256Hex(writer.bytes());
+}
+
+// The actual paired GPU/CPU comparison of one independently decoded EXR frame.
+[[nodiscard]] routeproof::FrameEvidence compareExrEvidence(const ExrImage& gpu, const ExrImage& cpu,
+                                                           std::string identityHex,
+                                                           const float tolerance) {
+    routeproof::FrameEvidence evidence;
+    evidence.identityHex = std::move(identityHex);
+    evidence.comparedPixels = cpu.red.size();
+    evidence.alphaExact = true;
+    double maxDelta = 0.0;
+    std::uint64_t mismatches = 0;
+    if (gpu.valid && cpu.valid && gpu.red.size() == cpu.red.size()) {
+        for (std::size_t index = 0; index < cpu.red.size(); ++index) {
+            if (!bitsEqual(cpu.alpha[index], gpu.alpha[index])) {
+                evidence.alphaExact = false;
+                ++mismatches;
+                continue;
+            }
+            bool pixelBad = false;
+            const double red = std::abs(static_cast<double>(cpu.red[index] - gpu.red[index]));
+            const double green = std::abs(static_cast<double>(cpu.green[index] - gpu.green[index]));
+            const double blue = std::abs(static_cast<double>(cpu.blue[index] - gpu.blue[index]));
+            maxDelta = std::max({maxDelta, red, green, blue});
+            pixelBad = !finiteClose(cpu.red[index], gpu.red[index], tolerance) ||
+                       !finiteClose(cpu.green[index], gpu.green[index], tolerance) ||
+                       !finiteClose(cpu.blue[index], gpu.blue[index], tolerance);
+            if (pixelBad) {
+                ++mismatches;
+            }
+        }
+    }
+    evidence.maxFloatDelta = maxDelta;
+    evidence.mismatchedPixels = mismatches;
+    evidence.cpuDecodedDigest = exrDigest(cpu);
+    evidence.gpuDecodedDigest = exrDigest(gpu);
+    return evidence;
+}
+
+// Publishes one scripted export proof from the exact verified frames. The writer rejects a
+// zero-dispatch / no-frame / over-policy proof, and the caller only reaches here after every
+// assertion passed.
+void publishScriptedProof(Expectations& expectations, const std::filesystem::path& proofDirectory,
+                          const std::string_view routeId,
+                          const bloom::runtime::GpuRouteHarnessKind harness,
+                          const std::uint64_t nativeDispatches, const std::uint64_t epoch,
+                          const std::uint64_t readbacks, const std::uint64_t frameWidth,
+                          const std::uint64_t frameHeight,
+                          const std::vector<std::string>& identityHex,
+                          const std::vector<routeproof::FrameEvidence>& evidence) {
+    if (proofDirectory.empty()) {
+        return;
+    }
+    routeproof::ExportProofCounters counters;
+    counters.deviceOwnershipEpoch = epoch;
+    counters.nativeDispatches = nativeDispatches;
+    counters.verifiedFrames = identityHex.size();
+    counters.readbackSubmissions = readbacks;
+    // The accepted final readback transfers one process payload; no separate production payload
+    // counter exists yet, so the real submission count is the payload count, not a guess.
+    counters.payloads = readbacks;
+    counters.transferredBytes = routeproof::processPayloadBytes(readbacks, frameWidth, frameHeight);
+    std::string nonce;
+    if (!routeproof::readProofNonce(proofDirectory, nonce)) {
+        expectations.expect(false, "scripted proof: a fresh run nonce is required");
+        return;
+    }
+    const auto processDigest = routeproof::orderedIdentityDigest(identityHex);
+    const auto capturedEvidenceDigest = routeproof::evidenceDigest(evidence);
+    const auto written = routeproof::publishExportProof(
+        proofDirectory, nonce, routeId, harness, counters, processDigest, capturedEvidenceDigest);
+    if (!written.written) {
+        expectations.expect(false, std::string{"scripted proof rejected: "} + written.detail);
+        return;
+    }
+    std::cout << "PASS(route-proof) " << routeId << " frames=" << counters.verifiedFrames
+              << " dispatches=" << counters.nativeDispatches
+              << " readbacks=" << counters.readbackSubmissions
+              << " bytes=" << counters.transferredBytes << '\n';
+}
+
 // Real headless render integration over the production Render::run: at least two EXR frames through
 // an injected provider, positive genuine GPU counters and device epoch, strict CPU/process and
 // encoded-output parity against a disabled-provider CPU reference, and the repeated provider still
 // live. Requires BLOOM_TEST_VULKAN_LOADER (an absolute loader path); skips honestly otherwise.
-void testNativeHeadlessRenderProvenanceAndParity(Expectations& expectations,
-                                                 const bool requireDevice) {
+GpuProofOutcome testNativeHeadlessRenderProvenanceAndParity(Expectations& expectations,
+                                                            const bool requireDevice,
+                                                            const std::filesystem::path& proofDir) {
+    const auto skip = [&proofDir] {
+        return proofDir.empty() ? GpuProofOutcome::NotRequested : GpuProofOutcome::Skipped;
+    };
     const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER");
     if (loader == nullptr || *loader == '\0') {
         if (requireDevice) {
@@ -328,16 +474,16 @@ void testNativeHeadlessRenderProvenanceAndParity(Expectations& expectations,
         } else {
             std::cout << "NOTE: BLOOM_TEST_VULKAN_LOADER unset; skipping native headless render\n";
         }
-        return;
+        return skip();
     }
     auto session = buildSolidSession(expectations);
     if (session == nullptr) {
-        return;
+        return GpuProofOutcome::Ran;
     }
     TempDirectory directory;
     expectations.expect(directory.isValid(), "native render: temp directory is available");
     if (!directory.isValid()) {
-        return;
+        return GpuProofOutcome::Ran;
     }
     runtime::TaskScheduler scheduler;
     runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
@@ -350,12 +496,25 @@ void testNativeHeadlessRenderProvenanceAndParity(Expectations& expectations,
     if (!provider->deviceAvailable()) {
         expectations.expect(!requireDevice, "native render: a device is required");
         std::cout << "NOTE: no compatible Vulkan device; skipping native headless render\n";
-        return;
+        return skip();
     }
     auto cpuProvider = host::GpuExportProvider::create(disabledOptions());
     cpuProvider->prepare(scheduler);
-    const auto compositionId = session->snapshot().project().compositions().front().id();
+    const auto snapshot = session->snapshot();
+    const auto compositionId = snapshot.project().compositions().front().id();
+    const auto* composition = snapshot.project().findComposition(compositionId);
+    const auto planResult =
+        compiler.compile({.snapshot = snapshot, .compositionId = compositionId}, {});
+    expectations.expect(planResult.plan != nullptr,
+                        "native render: the plan compiles for identity");
     constexpr float kTolerance = 2e-6F;
+    std::vector<std::string> identityHex;
+    std::vector<routeproof::FrameEvidence> evidence;
+    std::uint64_t proofDispatches = 0;
+    std::uint64_t proofReadbacks = 0;
+    std::uint64_t proofEpoch = 0;
+    std::uint64_t frameWidth = 0;
+    std::uint64_t frameHeight = 0;
     for (const std::uint64_t frame : {std::uint64_t{0}, std::uint64_t{1}}) {
         const auto gpuPath = directory.path() / ("gpu-" + std::to_string(frame) + ".exr");
         const auto cpuPath = directory.path() / ("cpu-" + std::to_string(frame) + ".exr");
@@ -393,11 +552,196 @@ void testNativeHeadlessRenderProvenanceAndParity(Expectations& expectations,
         expectations.expect(pixelsMatch(gpuImage, cpuImage, kTolerance),
                             "native render: GPU/CPU process pixels match within 2e-6 with exact "
                             "alpha");
+        if (planResult.plan != nullptr && composition != nullptr) {
+            const auto time = host::FrameRangeRunnerV1::timeForFrame(
+                {.destination = gpuPath,
+                 .firstFrame = frame,
+                 .lastFrame = frame,
+                 .frameRate = composition->format().frameRate(),
+                 .duration = composition->duration()},
+                frame);
+            if (time.has_value()) {
+                FrameIdentityFields fields;
+                fields.routeId = "route.export.headless_scripted";
+                fields.projectId = planResult.plan->projectId().value();
+                fields.compositionId = planResult.plan->compositionId().value();
+                fields.sourceRevision = planResult.plan->sourceRevision().value();
+                fields.outputIndex = planResult.plan->output().value();
+                fields.operationCount = planResult.plan->operations().size();
+                fields.planSemantics = planResult.plan->planSemanticsVersion();
+                fields.animationSamplingSemantics =
+                    planResult.plan->animationSamplingSemanticsVersion();
+                fields.frameIndex = frame;
+                fields.timeNumerator = time->numerator();
+                fields.timeDenominator = time->denominator();
+                fields.preset = static_cast<std::uint64_t>(
+                    bloom::output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1);
+                fields.provider = "gpu-resident";
+                const auto identity = frameIdentityHex(fields);
+                identityHex.push_back(identity);
+                evidence.push_back(compareExrEvidence(gpuImage, cpuImage, identity, kTolerance));
+                frameWidth = static_cast<std::uint64_t>(gpuImage.width);
+                frameHeight = static_cast<std::uint64_t>(gpuImage.height);
+            }
+        }
+        proofDispatches += gpu.gpuNativeDispatches;
+        proofReadbacks += gpu.gpuReadbacks;
+        if (gpu.gpuDeviceOwnershipEpoch != 0) {
+            proofEpoch = gpu.gpuDeviceOwnershipEpoch;
+        }
     }
     expectations.expect(!provider->retirementComplete() && provider->evaluator() != nullptr,
                         "native render: the repeated injected provider stays live");
     expectations.expect(provider->shutdownAndWait(std::chrono::seconds(10)),
                         "native render: the provider retires with completion proof");
+    if (expectations.failures() == 0 && identityHex.size() == 2) {
+        publishScriptedProof(expectations, proofDir, "route.export.headless_scripted",
+                             bloom::runtime::GpuRouteHarnessKind::HeadlessScripted, proofDispatches,
+                             proofEpoch, proofReadbacks, frameWidth, frameHeight, identityHex,
+                             evidence);
+    }
+    return GpuProofOutcome::Ran;
+}
+
+// Real sequence/range integration over the production Render::run range mode: the real
+// FrameRangeRunner publishes numbered EXR frames through the same per-frame output attempt path,
+// and every frame is verified against an independent disabled-provider CPU export. A device is
+// required; without one this returns Skipped.
+GpuProofOutcome testNativeSequenceRangeProvenanceAndParity(Expectations& expectations,
+                                                           const bool requireDevice,
+                                                           const std::filesystem::path& proofDir) {
+    const auto skip = [&proofDir] {
+        return proofDir.empty() ? GpuProofOutcome::NotRequested : GpuProofOutcome::Skipped;
+    };
+    const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER");
+    if (loader == nullptr || *loader == '\0') {
+        if (requireDevice) {
+            expectations.expect(
+                false, "native sequence range: --require-device needs BLOOM_TEST_VULKAN_LOADER");
+        }
+        return skip();
+    }
+    auto session = buildSolidSession(expectations);
+    if (session == nullptr) {
+        return GpuProofOutcome::Ran;
+    }
+    TempDirectory directory;
+    expectations.expect(directory.isValid(), "native sequence range: temp directory is available");
+    if (!directory.isValid()) {
+        return GpuProofOutcome::Ran;
+    }
+    runtime::TaskScheduler scheduler;
+    runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    auto provider = host::GpuExportProvider::create(optionsFor(loader));
+    provider->prepare(scheduler);
+    const auto bootstrapDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (!provider->prepared() && std::chrono::steady_clock::now() < bootstrapDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (!provider->deviceAvailable()) {
+        expectations.expect(!requireDevice, "native sequence range: a device is required");
+        return skip();
+    }
+    auto cpuProvider = host::GpuExportProvider::create(disabledOptions());
+    cpuProvider->prepare(scheduler);
+    const auto snapshot = session->snapshot();
+    const auto compositionId = snapshot.project().compositions().front().id();
+    const auto* composition = snapshot.project().findComposition(compositionId);
+    expectations.expect(composition != nullptr, "native sequence range: the composition exists");
+    if (composition == nullptr) {
+        return GpuProofOutcome::Ran;
+    }
+    const auto planResult =
+        compiler.compile({.snapshot = snapshot, .compositionId = compositionId}, {});
+    expectations.expect(planResult.plan != nullptr,
+                        "native sequence range: the plan compiles for identity");
+    constexpr std::uint64_t kFirstFrame = 0;
+    constexpr std::uint64_t kLastFrame = 2;
+    constexpr float kTolerance = 2e-6F;
+    const auto gpuBase = directory.path() / "gpu-sequence.exr";
+    const auto cpuBase = directory.path() / "cpu-sequence.exr";
+    const auto gpuRange = scripting::Render::run(
+        *session, scheduler, compiler,
+        {.composition = compositionId,
+         .frame = std::nullopt,
+         .range = std::make_pair(kFirstFrame, kLastFrame),
+         .preset = bloom::output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
+         .destination = gpuBase},
+        {}, provider);
+    expectations.expect(gpuRange.succeeded && gpuRange.publishedFrames == 3,
+                        "native sequence range: the GPU range publishes three frames");
+    const auto cpuRange = scripting::Render::run(
+        *session, scheduler, compiler,
+        {.composition = compositionId,
+         .frame = std::nullopt,
+         .range = std::make_pair(kFirstFrame, kLastFrame),
+         .preset = bloom::output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
+         .destination = cpuBase},
+        {}, cpuProvider);
+    expectations.expect(cpuRange.succeeded && cpuRange.publishedFrames == 3 &&
+                            cpuRange.gpuEvaluatedFrames == 0,
+                        "native sequence range: the disabled provider is an honest CPU reference");
+    expectations.expect(gpuRange.gpuEvaluatedFrames == 3 && gpuRange.gpuNativeDispatches > 0 &&
+                            gpuRange.gpuReadbacks == 3 && gpuRange.gpuDeviceOwnershipEpoch > 0,
+                        "native sequence range: genuine per-frame GPU counters");
+    std::vector<std::string> identityHex;
+    std::vector<routeproof::FrameEvidence> evidence;
+    std::uint64_t frameWidth = 0;
+    std::uint64_t frameHeight = 0;
+    for (std::uint64_t frame = kFirstFrame; frame <= kLastFrame; ++frame) {
+        const auto time =
+            host::FrameRangeRunnerV1::timeForFrame({.destination = gpuBase,
+                                                    .firstFrame = kFirstFrame,
+                                                    .lastFrame = kLastFrame,
+                                                    .frameRate = composition->format().frameRate(),
+                                                    .duration = composition->duration()},
+                                                   frame);
+        const auto gpuPath =
+            host::FrameRangeRunnerV1::sequenceFramePath(gpuBase, frame, kLastFrame);
+        const auto cpuPath =
+            host::FrameRangeRunnerV1::sequenceFramePath(cpuBase, frame, kLastFrame);
+        const auto gpuImage = readExr(gpuPath);
+        const auto cpuImage = readExr(cpuPath);
+        expectations.expect(gpuImage.valid && cpuImage.valid &&
+                                descriptorsMatch(gpuImage, cpuImage),
+                            "native sequence range: both frame EXRs reopen with matching "
+                            "descriptors");
+        expectations.expect(pixelsMatch(gpuImage, cpuImage, kTolerance),
+                            "native sequence range: GPU frame matches the CPU reference within "
+                            "2e-6 with exact alpha");
+        if (planResult.plan != nullptr && composition != nullptr && time.has_value()) {
+            FrameIdentityFields fields;
+            fields.routeId = "route.export.sequence_range";
+            fields.projectId = planResult.plan->projectId().value();
+            fields.compositionId = planResult.plan->compositionId().value();
+            fields.sourceRevision = planResult.plan->sourceRevision().value();
+            fields.outputIndex = planResult.plan->output().value();
+            fields.operationCount = planResult.plan->operations().size();
+            fields.planSemantics = planResult.plan->planSemanticsVersion();
+            fields.animationSamplingSemantics =
+                planResult.plan->animationSamplingSemanticsVersion();
+            fields.frameIndex = frame;
+            fields.timeNumerator = time->numerator();
+            fields.timeDenominator = time->denominator();
+            fields.preset = static_cast<std::uint64_t>(
+                bloom::output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1);
+            fields.provider = "gpu-resident";
+            const auto identity = frameIdentityHex(fields);
+            identityHex.push_back(identity);
+            evidence.push_back(compareExrEvidence(gpuImage, cpuImage, identity, kTolerance));
+            frameWidth = static_cast<std::uint64_t>(gpuImage.width);
+            frameHeight = static_cast<std::uint64_t>(gpuImage.height);
+        }
+    }
+    expectations.expect(provider->shutdownAndWait(std::chrono::seconds(10)),
+                        "native sequence range: the provider retires with completion proof");
+    if (expectations.failures() == 0 && identityHex.size() == 3) {
+        publishScriptedProof(expectations, proofDir, "route.export.sequence_range",
+                             bloom::runtime::GpuRouteHarnessKind::SequenceRangeExport,
+                             gpuRange.gpuNativeDispatches, gpuRange.gpuDeviceOwnershipEpoch,
+                             gpuRange.gpuReadbacks, frameWidth, frameHeight, identityHex, evidence);
+    }
+    return GpuProofOutcome::Ran;
 }
 
 } // namespace
@@ -405,18 +749,44 @@ void testNativeHeadlessRenderProvenanceAndParity(Expectations& expectations,
 int main(int argc, char** argv) {
     Expectations expectations;
     bool requireDevice = false;
+    std::filesystem::path proofDir;
     for (int index = 1; index < argc; ++index) {
-        if (std::string_view(argv[index]) == "--require-device") {
+        const std::string_view argument{argv[index]};
+        if (argument == "--require-device") {
             requireDevice = true;
+        } else if (argument == "--route-proof-dir" && index + 1 < argc) {
+            proofDir = argv[++index];
+        }
+    }
+    GpuProofOutcome headlessOutcome = GpuProofOutcome::NotRequested;
+    GpuProofOutcome sequenceOutcome = GpuProofOutcome::NotRequested;
+    std::string proofRoute = "both";
+    for (int index = 1; index < argc; ++index) {
+        if (std::string_view(argv[index]) == "--route" && index + 1 < argc) {
+            proofRoute = argv[++index];
         }
     }
     try {
         testInjectedProviderIsReusedAndNotRetired(expectations);
         testLocalProviderIsRetired(expectations);
-        testNativeHeadlessRenderProvenanceAndParity(expectations, requireDevice);
+        if (proofRoute != "sequence") {
+            headlessOutcome =
+                testNativeHeadlessRenderProvenanceAndParity(expectations, requireDevice, proofDir);
+        }
+        if (proofRoute != "headless") {
+            sequenceOutcome =
+                testNativeSequenceRangeProvenanceAndParity(expectations, requireDevice, proofDir);
+        }
     } catch (const std::exception& error) {
         std::cerr << "unexpected exception: " << error.what() << '\n';
         return EXIT_FAILURE;
     }
-    return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (expectations.failures() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (headlessOutcome == GpuProofOutcome::Skipped ||
+        sequenceOutcome == GpuProofOutcome::Skipped) {
+        return 77;
+    }
+    return EXIT_SUCCESS;
 }

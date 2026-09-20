@@ -180,14 +180,18 @@ struct GpuProcessFrameEvaluatorOptions final {
     // transform closed, so the caller keeps the CPU reference path rather than mis-rendering.
     std::shared_ptr<const GpuSceneOcioContext> ocioContext;
     // Per-request media context. Preferred form is `mediaContextProvider`, which the evaluator calls
-    // on its owner thread so the asset base directory follows a session Open/SaveAs exactly like the
-    // preview path; `mediaContext` is the static fallback when no provider is set.
+    // on the CALLING CPU worker during scene preparation (never on the GPU owner thread) so the
+    // asset base directory follows a session Open/SaveAs exactly like the preview path;
+    // `mediaContext` is the static fallback when no provider is set.
     GpuSceneMediaContext mediaContext;
     std::function<GpuSceneMediaContext()> mediaContextProvider;
     // Inert shared resolver the owning GpuExportProvider runs once on its CPU-worker bootstrap to
     // qualify the packaged tools and publish the context above. Never resolved by the evaluator, and
     // never consulted from the UI thread or this evaluator's owner thread.
     std::shared_ptr<GpuOcioContextResolver> ocioResolver;
+    // Test-only deterministic fault seam: when non-zero, the Nth scene-preparation slot allocation
+    // fails with a typed BadAllocation. Zero (the default) disables it and production never sets it.
+    std::uint32_t failPreparationAllocationAt = 0;
 };
 
 // Dedicated owner worker. Construction starts the worker and initializes the device on it; a
@@ -211,10 +215,12 @@ class GpuProcessFrameEvaluator final {
     // Explains a non-ready state; None when gpuAvailable().
     [[nodiscard]] GpuProcessFrameDiagnostic availabilityDiagnostic() const;
 
-    // Builds the prepared scene with the real CpuGpuSceneBuilder, executes it on the owner worker,
-    // and performs exactly one final combined readback. Never blocks on a Vulkan call from the
-    // caller thread. A scene outside the prepared-GPU subset is `UnsupportedGpuSubset`; the caller
-    // falls back to the CPU reference evaluator.
+    // Prepares the immutable scene with the real CpuGpuSceneBuilder ON THE CALLING CPU WORKER
+    // (media decode, OCIO configuration, and shader compilation never run on the GPU owner thread),
+    // enqueues it under bounded admission, executes it on the owner worker, and performs exactly one
+    // final combined readback. Never blocks on a Vulkan call from the caller thread. A scene outside
+    // the prepared-GPU subset is `UnsupportedGpuSubset`; the caller falls back to the CPU reference
+    // evaluator.
     //
     // `outputCommand` is an already-compiled, immutable OCIO output command prepared on a CPU task
     // before dispatch. It may be null (identity arm): only the exact process payload is read back.

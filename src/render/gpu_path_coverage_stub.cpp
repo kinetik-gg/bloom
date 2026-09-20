@@ -3,6 +3,7 @@
 #include "vulkan/gpu_path_coverage_fault.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -79,6 +80,14 @@ std::atomic<std::uint32_t>& pathCoverageMaxWorkGroupCountYOverride() noexcept {
 }
 bool pathCoverageQuarantineOccupied() noexcept { return false; }
 bool retirePathCoverageQuarantineForOwner() noexcept { return false; }
+bool acquireResidentSlot(GpuPathCoverageImpl*) noexcept { return false; }
+void releaseResidentSlot(GpuPathCoverageImpl*) noexcept {}
+std::size_t pathCoverageResidentCapacity() noexcept { return 0; }
+std::size_t pathCoverageResidentInUse() noexcept { return 0; }
+std::size_t pathCoverageResidentOrphaned() noexcept { return 0; }
+std::uint64_t pathCoverageResidentRefusals() noexcept { return 0; }
+std::uint64_t pathCoverageResidentRetired() noexcept { return 0; }
+void drainPathCoverageResidentOrphansOnOwnerThread() noexcept {}
 
 } // namespace path_coverage_detail
 

@@ -440,6 +440,8 @@ void testBudgetRefusal(Expectations& expectations) {
                         "the failure is a diagnosed pixel-storage budget, not an allocation throw");
 }
 
+#include "gpu_scene_coverage_budget_tests.ipp"
+
 void testUnsupported(Expectations& expectations) {
     const CpuGpuSceneBuilder builder;
     const auto solidPlan = twoLayerPlan(format(8, 8), LayerValues{}, LayerValues{}, 8.0, 8.0, 5000);
@@ -620,6 +622,7 @@ int main() {
         testTimeActivation(expectations, evaluator);
         testInactiveAndMuteSolo(expectations, evaluator);
         testBudgetRefusal(expectations);
+        testCoverageHostGeometryBudget(expectations);
         testKeyStability(expectations);
         testTextCoverage(expectations, evaluator);
         testShapeCoverage(expectations, evaluator);

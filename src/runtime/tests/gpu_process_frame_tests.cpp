@@ -39,6 +39,7 @@ using bloom::runtime::CpuCompositionEvaluator;
 using bloom::runtime::EvaluationProvider;
 using bloom::runtime::EvaluationRequest;
 using bloom::runtime::EvaluationStatus;
+using bloom::runtime::GpuProcessFrameDiagnosticCode;
 using bloom::runtime::GpuProcessFrameEvaluator;
 using bloom::runtime::GpuProcessFrameEvaluatorOptions;
 using bloom::runtime::GpuProcessFrameStatus;
@@ -255,6 +256,158 @@ void runCancelledTokenTest(Expectations& expectations, const Options& options) {
     evaluator->beginShutdown();
 }
 
+void runPreparationOffOwnerTest(Expectations& expectations, const Options& options) {
+    std::atomic<std::thread::id> providerThread{};
+    std::atomic<std::thread::id> preflightThread{};
+    std::atomic<std::thread::id> operationThread{};
+    std::atomic<std::thread::id> evaluateThread{};
+    auto evaluatorOptions = gpuEvaluatorOptions(options.loader_path);
+    evaluatorOptions.mediaContextProvider = [&] {
+        providerThread.store(std::this_thread::get_id());
+        return bloom::runtime::GpuSceneMediaContext{};
+    };
+    auto evaluator = GpuProcessFrameEvaluator::create(evaluatorOptions);
+    expectations.expect(evaluator != nullptr, "prep-off-owner: evaluator constructed");
+    if (evaluator == nullptr || !evaluator->gpuAvailable()) {
+        return;
+    }
+    const auto plan = lifecyclePlan();
+    const auto request = requestFor(*plan);
+
+    // Caller A blocks inside its CPU-preparation progress callback until released, so the owner is
+    // demonstrably free to serve another request while A's preparation is still pending.
+    std::atomic<bool> releaseA{false};
+    std::atomic<bool> aEnteredPreflight{false};
+    std::thread a([&] {
+        evaluateThread.store(std::this_thread::get_id());
+        static_cast<void>(evaluator->evaluate(
+            plan, request, {}, [&](const bloom::runtime::EvaluationProgress& event) {
+                if (event.stage == bloom::runtime::EvaluationProgressStage::Preflight) {
+                    preflightThread.store(std::this_thread::get_id());
+                    aEnteredPreflight.store(true);
+                    while (!releaseA.load(std::memory_order_acquire)) {
+                        std::this_thread::sleep_for(1ms);
+                    }
+                } else if (event.stage == bloom::runtime::EvaluationProgressStage::Operation) {
+                    operationThread.store(std::this_thread::get_id());
+                }
+            }));
+    });
+    const auto aDeadline = std::chrono::steady_clock::now() + 10s;
+    while (!aEnteredPreflight.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < aDeadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    expectations.expect(aEnteredPreflight.load(std::memory_order_acquire),
+                        "prep-off-owner: A entered CPU preparation");
+
+    std::atomic<bool> bCompleted{false};
+    std::atomic<bool> bEvaluated{false};
+    std::thread b([&] {
+        const auto outcome = evaluator->evaluate(plan, request);
+        bEvaluated.store(outcome.status == GpuProcessFrameStatus::Evaluated &&
+                         outcome.frame != nullptr);
+        bCompleted.store(true);
+    });
+    const auto bDeadline = std::chrono::steady_clock::now() + 20s;
+    while (!bCompleted.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < bDeadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    expectations.expect(bCompleted.load(std::memory_order_acquire) &&
+                            bEvaluated.load(std::memory_order_acquire),
+                        "prep-off-owner: the owner serves B while A's CPU preparation is pending");
+    releaseA.store(true, std::memory_order_release);
+    a.join();
+    b.join();
+
+    expectations.expect(preflightThread.load() == evaluateThread.load(),
+                        "prep-off-owner: Preflight fires on the calling CPU worker");
+    expectations.expect(providerThread.load() == evaluateThread.load(),
+                        "prep-off-owner: the media context provider (decode/preparation) runs on "
+                        "the calling CPU worker, never the GPU owner");
+    expectations.expect(operationThread.load() != evaluateThread.load() &&
+                            operationThread.load() != std::thread::id{},
+                        "prep-off-owner: the native Operation event fires on the GPU owner, not the "
+                        "caller");
+    evaluator->beginShutdown();
+}
+
+// A deterministic fault seam proves the admission reservation is released through the public API
+// when slot allocation fails, and that a later request on the same evaluator still succeeds.
+void runPreparationAllocationFaultTest(Expectations& expectations, const Options& options) {
+    auto evaluatorOptions = gpuEvaluatorOptions(options.loader_path);
+    evaluatorOptions.failPreparationAllocationAt = 1;
+    auto evaluator = GpuProcessFrameEvaluator::create(evaluatorOptions);
+    expectations.expect(evaluator != nullptr, "prep-fault: evaluator constructed");
+    if (evaluator == nullptr || !evaluator->gpuAvailable()) {
+        return;
+    }
+    const auto plan = lifecyclePlan();
+    const auto request = requestFor(*plan);
+    const auto first = evaluator->evaluate(plan, request);
+    expectations.expect(first.status == GpuProcessFrameStatus::Failed &&
+                            first.diagnostic.code == GpuProcessFrameDiagnosticCode::BadAllocation &&
+                            first.frame == nullptr,
+                        "prep-fault: the injected allocation failure is a typed BadAllocation");
+    const auto second = evaluator->evaluate(plan, request);
+    expectations.expect(second.status == GpuProcessFrameStatus::Evaluated &&
+                            second.frame != nullptr,
+                        "prep-fault: a subsequent request succeeds (reservation was not leaked)");
+    evaluator->beginShutdown();
+}
+
+// beginShutdown() while a calling worker is still preparing must not report retirement complete,
+// must not publish a frame, and must complete retirement only once the caller finishes.
+void runShutdownDuringPreparationTest(Expectations& expectations, const Options& options) {
+    auto evaluator = GpuProcessFrameEvaluator::create(gpuEvaluatorOptions(options.loader_path));
+    expectations.expect(evaluator != nullptr, "shutdown-prep: evaluator constructed");
+    if (evaluator == nullptr || !evaluator->gpuAvailable()) {
+        return;
+    }
+    const auto plan = lifecyclePlan();
+    const auto request = requestFor(*plan);
+    std::atomic<bool> release{false};
+    std::atomic<bool> entered{false};
+    std::atomic<GpuProcessFrameStatus> status{GpuProcessFrameStatus::Failed};
+    std::thread caller([&] {
+        const auto outcome =
+            evaluator->evaluate(plan, request, {}, [&](const bloom::runtime::EvaluationProgress& event) {
+                if (event.stage == bloom::runtime::EvaluationProgressStage::Preflight) {
+                    entered.store(true, std::memory_order_release);
+                    while (!release.load(std::memory_order_acquire)) {
+                        std::this_thread::sleep_for(1ms);
+                    }
+                }
+            });
+        status.store(outcome.status);
+    });
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    while (!entered.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    expectations.expect(entered.load(std::memory_order_acquire),
+                        "shutdown-prep: the caller entered CPU preparation");
+    evaluator->beginShutdown();
+    // Give the owner time to leave its loop and retire; retirement must still be withheld while the
+    // calling worker is inside CPU preparation.
+    std::this_thread::sleep_for(500ms);
+    expectations.expect(!evaluator->retirementComplete(),
+                        "shutdown-prep: retirement is withheld while a caller is preparing");
+    release.store(true, std::memory_order_release);
+    caller.join();
+    const auto retireDeadline = std::chrono::steady_clock::now() + 10s;
+    while (!evaluator->retirementComplete() &&
+           std::chrono::steady_clock::now() < retireDeadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    expectations.expect(evaluator->retirementComplete(),
+                        "shutdown-prep: retirement completes once the caller finishes");
+    expectations.expect(status.load() != GpuProcessFrameStatus::Evaluated,
+                        "shutdown-prep: no frame is published after shutdown");
+}
+
 void runLifecycleTests(Expectations& expectations, const Options& options) {
     runTwoCallerTest(expectations, options);
     runQueuedRequestsTest(expectations, options);
@@ -262,6 +415,9 @@ void runLifecycleTests(Expectations& expectations, const Options& options) {
     runThrowingProgressTest(expectations, options);
     runReentrantEvaluateTest(expectations, options);
     runCancelledTokenTest(expectations, options);
+    runPreparationOffOwnerTest(expectations, options);
+    runPreparationAllocationFaultTest(expectations, options);
+    runShutdownDuringPreparationTest(expectations, options);
 }
 
 int run(int argc, char** argv) {

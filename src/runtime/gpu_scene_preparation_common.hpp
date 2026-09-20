@@ -56,6 +56,27 @@ fail(const PreparedGpuSceneDiagnosticCode code, std::string message) {
     return GpuSceneLeafFailure{code, std::move(message)};
 }
 
+// The ACTUAL host-retained byte size of one prepared covered command: the immutable
+// PathRasterCoverageGeometry row ranges + spans for the vector paths, or the integer-grid text
+// leaf's host FreeType bitmap. This is the only host coverage allocation scene preparation retains
+// (the GPU R8 mask and the RGBA32F output are executor-time allocations bounded by the executor's
+// live-pin ledger), so it is the exact byte count both the builder's retained-byte charger and the
+// nested child resident-byte total must use. Never width*height*1: a simple full-width vector has
+// O(rows) geometry while a complex one can exceed its R8 mask.
+[[nodiscard]] inline std::uint64_t
+gpuSceneCoverageHostBytes(const GpuSceneCoverageSolidCommand& command) noexcept {
+    if (command.geometry != nullptr) {
+        return static_cast<std::uint64_t>(command.geometry->rows.size()) *
+                   sizeof(render::PathRasterCoverageRange) +
+               static_cast<std::uint64_t>(command.geometry->spans.size()) *
+                   sizeof(render::PathRasterCoverageSpan);
+    }
+    if (command.coverage != nullptr) {
+        return static_cast<std::uint64_t>(command.coverage->size());
+    }
+    return 0;
+}
+
 } // namespace bloom::runtime::detail
 
 #endif // BLOOM_RUNTIME_GPU_SCENE_PREPARATION_COMMON_HPP

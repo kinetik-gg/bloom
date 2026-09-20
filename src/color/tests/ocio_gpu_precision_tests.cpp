@@ -78,24 +78,52 @@ int main() {
                !contains(plain.definitions, "bloom_ocio_cpu_log2"),
            "a program without a GammaOp does not receive the fast-power adapter");
 
-    // A program that mixes a GammaOp with another power renderer must specialize only the GammaOp
-    // call (the vec4 exponent) and forward every other `pow` signature to the hardware pow.
+    // A program that mixes a GammaOp with a LogOp must specialize only the identified op regions,
+    // leaving no global `pow` redirection behind.
     bloom::render::OcioGpuProgramDesc mixed;
     mixed.functionName = "bloom_ocio_transform";
     mixed.semanticsId = "bloom.test.mixed";
-    mixed.shaderText = "// Add Gamma 'monCurveRev' processing\n"
-                       "vec4 gamma = vec4(0.416666657);\n"
-                       "res = pow(max(vec4(0.), p), gamma);\n"
-                       "res2 = pow(log_base, logSeg);\n";
+    mixed.shaderText = "  // Add Log 'Camera Log to Lin' processing\n"
+                       "  {\n"
+                       "    vec3 log_base = vec3(2., 2., 2.);\n"
+                       "    vec3 logSeg = (outColor.rgb - log_offset) * log_slopeinv;\n"
+                       "    logSeg = pow(log_base, logSeg);\n"
+                       "  }\n"
+                       "  // Add Gamma 'monCurveRev' processing\n"
+                       "  {\n"
+                       "    vec4 gamma = vec4(0.416666657);\n"
+                       "    vec4 powSeg = pow( max( vec4(0., 0., 0., 0.), outColor ), gamma );\n"
+                       "  }\n";
     const auto mixedAdapter = bloom::color::ocioGpuSamplingGlslFor(mixed);
-    expect(mixedAdapter.dispatches() && contains(mixedAdapter.preamble, "#define pow"),
-           "a GammaOp mixed with another power renderer still redirects pow");
-    expect(contains(mixedAdapter.definitions,
-                    "vec3 bloom_ocio_cpu_fast_pow(vec3 x, vec3 e) { return pow(x, e); }"),
-           "a non-vec4 pow signature forwards to the generated hardware pow");
-    expect(contains(mixedAdapter.definitions, "bloom_ocio_cpu_sse_pow") &&
-               contains(mixedAdapter.definitions, "vec4 bloom_ocio_cpu_fast_pow(vec4 x, vec4 e)"),
-           "the vec4 GammaOp signature is the only one specialized to OCIO's fast power");
+    expect(mixedAdapter.dispatches() && !mixedAdapter.shaderBody.empty(),
+           "a mixed GammaOp/LogOp program emits a specialized body");
+    expect(!contains(mixedAdapter.preamble, "#define pow") &&
+               contains(mixedAdapter.shaderBody, "bloom_ocio_cpu_gamma_pow(") &&
+               contains(mixedAdapter.shaderBody, "bloom_ocio_cpu_log_exp2(logSeg, log_slopeinv)"),
+           "only the identified Gamma and Log op regions are specialized");
+    expect(contains(mixedAdapter.shaderBody,
+                    "logSeg = bloom_ocio_cpu_sub3(outColor.rgb, log_offset);") &&
+               !contains(mixedAdapter.shaderBody, "logSeg = (outColor.rgb - log_offset) *"),
+           "the LogOp slope multiply is folded into the CPU's kinv decomposition");
+
+    // A GammaOp next to an ExponentOp (both `pow(vec4, vec4)`) must not rewrite the ExponentOp.
+    bloom::render::OcioGpuProgramDesc gammaExponent;
+    gammaExponent.functionName = "bloom_ocio_transform";
+    gammaExponent.semanticsId = "bloom.test.gamma-exponent";
+    gammaExponent.shaderText =
+        "  // Add an Exponent processing\n"
+        "  {\n"
+        "    res = pow( max( res, vec4(0.) ), vec4(2.2, 2.2, 2.2, 1.) );\n"
+        "  }\n"
+        "  // Add Gamma 'monCurveRev' processing\n"
+        "  {\n"
+        "    vec4 gamma = vec4(0.416666657);\n"
+        "    vec4 powSeg = pow( max( vec4(0., 0., 0., 0.), outColor ), gamma );\n"
+        "  }\n";
+    const auto gammaExponentAdapter = bloom::color::ocioGpuSamplingGlslFor(gammaExponent);
+    expect(contains(gammaExponentAdapter.shaderBody, "bloom_ocio_cpu_gamma_pow(") &&
+               contains(gammaExponentAdapter.shaderBody, "res = pow( max( res, vec4(0.) )"),
+           "an unrelated ExponentOp pow call is left untouched next to a GammaOp");
 
     if (failures != 0) {
         std::cerr << failures << " OCIO precision adapter expectation(s) failed\n";

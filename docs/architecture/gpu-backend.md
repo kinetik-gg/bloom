@@ -85,7 +85,15 @@ co-owned until the consuming submission is proved retired, and the consume path 
 thread, exact device identity, and generation before readiness or dimensions. In-flight submissions
 are serialized by one process-wide bounded reservation claimed before any native allocation: a
 proven retirement returns it, an unproven one moves the exact submission into an owner-only
-quarantine, and admission is refused while occupied. The dispatch is a flattened 2D grid bounded by
+quarantine, and admission is refused while occupied. Every producer native resource set (pipeline
+plus resident mask) holds one of a fixed number of process-wide resident slots, acquired before its
+first native allocation and held until owner-thread retirement; creation is lazy, so idle producers
+allocate nothing. A producer destroyed on a foreign thread only marks its already-owned slot
+orphaned (ownership is preserved, never destroyed off-thread); the owner drain retires orphaned
+residents allocation-free and returns their slots, and it gates every fence query and teardown on
+the exact owner thread and generation, so one device thread can never touch another's orphan. It
+therefore refuses cleanly when the pool is full and recovers once the rightful owner drains. The
+dispatch is a flattened 2D grid bounded by
 the real device workgroup-count limits, so a capacity-valid large geometry is not refused by a 1D
 grid. The kernel requires no Float64/Int64 capability, and a configure-time disassembly rejects
 either. Every shipped shader is an offline

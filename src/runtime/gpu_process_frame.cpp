@@ -1,6 +1,8 @@
 #include <bloom/runtime/gpu_process_frame.hpp>
 
+#include "gpu_process_frame_preparation_private.hpp"
 #include "gpu_process_frame_readback_private.hpp"
+#include "gpu_process_frame_support_private.hpp"
 
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/gpu_device.hpp>
@@ -19,6 +21,7 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <thread>
 #include <utility>
@@ -43,104 +46,20 @@ std::size_t defaultGpuProcessFrameByteBudget() noexcept {
     return gpuProcessFrameByteBudgetForAvailable(machineMemorySample().availableBytes);
 }
 
-namespace {
 
-GpuProcessFrameDiagnosticCode mapSceneDiagnostic(PreparedGpuSceneDiagnosticCode code) {
-    switch (code) {
-    case PreparedGpuSceneDiagnosticCode::UnsupportedOperation:
-    case PreparedGpuSceneDiagnosticCode::UnsupportedTransform:
-    case PreparedGpuSceneDiagnosticCode::UnsupportedBlend:
-    case PreparedGpuSceneDiagnosticCode::UnsupportedRequest:
-    case PreparedGpuSceneDiagnosticCode::MediaUnavailable:
-        return GpuProcessFrameDiagnosticCode::SceneUnsupported;
-    case PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded:
-        return GpuProcessFrameDiagnosticCode::OverBudget;
-    case PreparedGpuSceneDiagnosticCode::AllocationFailure:
-        return GpuProcessFrameDiagnosticCode::BadAllocation;
-    case PreparedGpuSceneDiagnosticCode::Cancelled:
-        return GpuProcessFrameDiagnosticCode::Cancelled;
-    case PreparedGpuSceneDiagnosticCode::InvalidRequest:
-    case PreparedGpuSceneDiagnosticCode::InvalidPlan:
-        return GpuProcessFrameDiagnosticCode::InvalidRequest;
-    default:
-        return GpuProcessFrameDiagnosticCode::InternalInvariant;
-    }
-}
-
-GpuProcessFrameDiagnosticCode mapExecutorDiagnostic(GpuSceneExecutorDiagnosticCode code) {
-    switch (code) {
-    case GpuSceneExecutorDiagnosticCode::OverBudget:
-        return GpuProcessFrameDiagnosticCode::OverBudget;
-    case GpuSceneExecutorDiagnosticCode::Cancelled:
-        return GpuProcessFrameDiagnosticCode::Cancelled;
-    case GpuSceneExecutorDiagnosticCode::DeviceLost:
-        return GpuProcessFrameDiagnosticCode::DeviceLost;
-    case GpuSceneExecutorDiagnosticCode::DeviceUnavailable:
-        return GpuProcessFrameDiagnosticCode::DeviceUnavailable;
-    default:
-        return GpuProcessFrameDiagnosticCode::InternalInvariant;
-    }
-}
-
-// A progress callback is caller-supplied and may throw; it must never unwind out of the owner
-// worker (or a scheduler task) and take the process down.
-void safeProgress(const EvaluationProgressCallback& progress,
-                  const EvaluationProgress& event) noexcept {
-    if (!progress) {
-        return;
-    }
-    try {
-        progress(event);
-    } catch (...) {
-    }
-}
-
-GpuProcessFrameCounters snapshotCounters(const GpuSceneExecutor& executor) noexcept {
-    const auto counters = executor.counters();
-    GpuProcessFrameCounters result;
-    result.sceneBegins = counters.sceneBegins;
-    result.scenesCompleted = counters.scenesCompleted;
-    result.outputCacheHits = counters.outputCacheHits;
-    result.outputCacheMisses = counters.outputCacheMisses;
-    result.solidDispatches = counters.solidDispatches;
-    result.coveredSolidDispatches = counters.coveredSolidDispatches;
-    result.translationDispatches = counters.translationDispatches;
-    result.sourceOverDispatches = counters.sourceOverDispatches;
-    result.uploads = counters.uploads;
-    result.nativeDispatches = counters.dispatches;
-    return result;
-}
-
-std::string outputSemanticKey(const PreparedGpuScene& scene) {
-    const auto index = scene.outputCommand();
-    const auto& commands = scene.commands();
-    if (index == kInvalidGpuSceneCommand || static_cast<std::size_t>(index) >= commands.size()) {
-        return {};
-    }
-    return std::visit([](const auto& command) -> const std::string& { return command.semanticKey; },
-                      commands[index]);
-}
-
-GpuProcessFrameOutcome failure(GpuProcessFrameStatus status, GpuProcessFrameDiagnosticCode code,
-                               std::string message) {
-    GpuProcessFrameOutcome outcome;
-    outcome.status = status;
-    outcome.diagnostic = {code, std::move(message)};
-    return outcome;
-}
-
-} // namespace
-
-// One caller-visible request slot. The owner thread owns `outcome`/`hasResult`; the caller owns
-// `done`/`hasResult` observation under the shared mutex. Each request carries its own completion
-// condition variable, so two concurrent callers each wake exactly once and a queued request is
-// cancelled independently of the running one.
+// One caller-visible request slot. The calling CPU worker builds the immutable `scene` BEFORE the
+// slot is enqueued; the owner thread owns native execution and writes `outcome`. The caller owns
+// `done` observation under the shared mutex. Each request carries its own completion condition
+// variable, so two concurrent callers each wake exactly once and a queued request is cancelled
+// independently of the running one.
 struct GpuProcessFrameRequest final {
     std::shared_ptr<const CompiledCompositionPlan> plan;
     std::optional<EvaluationRequest> evaluation;
     CancellationToken cancellation;
     EvaluationProgressCallback progress;
     std::shared_ptr<const PreparedGpuOcioCommand> outputCommand;
+    // Built on the calling CPU worker (never the GPU owner) and immutable thereafter.
+    std::shared_ptr<const PreparedGpuScene> scene;
 
     bool done = false;
     GpuProcessFrameOutcome outcome;
@@ -176,17 +95,25 @@ struct GpuProcessFrameEvaluator::Impl final {
     // and waits on the slot's own condition variable until the owner marks it done or shutdown
     // rejects it. The owner never runs more than one request at a time.
     std::deque<std::shared_ptr<GpuProcessFrameRequest>> queue;
+    // CPU scene preparations in flight on calling workers. `inFlightPreparations + queue.size()` is
+    // the bounded admission total, so a flood of callers cannot build unboundedly.
+    std::size_t inFlightPreparations = 0;
+    // Test-only fault counter (see failPreparationAllocationAt).
+    std::atomic<std::uint32_t> preparationAllocations{0};
     bool stopping = false;
 
     void runOwner();
     GpuProcessFrameOutcome runRequest(std::shared_ptr<const CompiledCompositionPlan> plan,
                                       const EvaluationRequest& request,
+                                      std::shared_ptr<const PreparedGpuScene> scene,
                                       const CancellationToken& cancellation,
                                       const EvaluationProgressCallback& progress,
                                       std::shared_ptr<const PreparedGpuOcioCommand> outputCommand);
     GpuProcessFrameOutcome
     runRequestImpl(std::shared_ptr<const CompiledCompositionPlan> plan,
-                   const EvaluationRequest& request, const CancellationToken& cancellation,
+                   const EvaluationRequest& request,
+                   std::shared_ptr<const PreparedGpuScene> scene,
+                   const CancellationToken& cancellation,
                    const EvaluationProgressCallback& progress,
                    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand);
 };
@@ -203,10 +130,11 @@ void completeQueuedAsCancelled(const std::shared_ptr<GpuProcessFrameRequest>& re
 
 GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequest(
     std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
-    const CancellationToken& cancellation, const EvaluationProgressCallback& progress,
+    std::shared_ptr<const PreparedGpuScene> scene, const CancellationToken& cancellation,
+    const EvaluationProgressCallback& progress,
     std::shared_ptr<const PreparedGpuOcioCommand> outputCommand) {
     try {
-        return runRequestImpl(std::move(plan), request, cancellation, progress,
+        return runRequestImpl(std::move(plan), request, std::move(scene), cancellation, progress,
                               std::move(outputCommand));
     } catch (const std::bad_alloc&) {
         return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::BadAllocation,
@@ -224,16 +152,17 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequest(
 
 GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
     std::shared_ptr<const CompiledCompositionPlan> plan, const EvaluationRequest& request,
-    const CancellationToken& cancellation, const EvaluationProgressCallback& progress,
+    std::shared_ptr<const PreparedGpuScene> scene, const CancellationToken& cancellation,
+    const EvaluationProgressCallback& progress,
     std::shared_ptr<const PreparedGpuOcioCommand> outputCommand) {
     if (executor == nullptr || device == nullptr || cache == nullptr) {
         return failure(GpuProcessFrameStatus::DeviceUnavailable,
                        GpuProcessFrameDiagnosticCode::DeviceUnavailable,
                        "the GPU executor is not initialized");
     }
-    if (plan == nullptr) {
+    if (plan == nullptr || scene == nullptr) {
         return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::InvalidRequest,
-                       "no compiled plan");
+                       "no prepared scene");
     }
 
     // Respect a prior unproven native submission before reusing the executor: drain on the owner
@@ -261,32 +190,9 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
         }
     }
 
-    safeProgress(progress, {.stage = EvaluationProgressStage::Preflight,
-                            .operation = std::nullopt,
-                            .completed = 0,
-                            .total = std::nullopt});
-
-    // 1. The genuine CPU-side prepared scene (same builder the resident preview route uses). It
-    // resolves the exact operands/geometry without allocating a full RGBA CPU image. The root-owned
-    // media context (evaluator caches + current asset base) and the shared, off-UI OCIO context are
-    // injected here so media/effects/colour transforms run through the real production paths; a
-    // missing context fails closed rather than substituting identity.
-    const GpuSceneMediaContext mediaContext =
-        options.mediaContextProvider ? options.mediaContextProvider() : options.mediaContext;
-    CpuGpuSceneBuilder builder(nullptr, mediaContext,
-                               options.ocioContext != nullptr ? *options.ocioContext
-                                                              : GpuSceneOcioContext{});
-    auto built = builder.build(plan, request, cancellation);
-    if (!built.hasValue()) {
-        const auto code = mapSceneDiagnostic(built.diagnostic.code);
-        const auto status = code == GpuProcessFrameDiagnosticCode::SceneUnsupported
-                                ? GpuProcessFrameStatus::UnsupportedGpuSubset
-                            : code == GpuProcessFrameDiagnosticCode::Cancelled
-                                ? GpuProcessFrameStatus::Cancelled
-                                : GpuProcessFrameStatus::Failed;
-        return failure(status, code, built.diagnostic.message);
-    }
-    std::shared_ptr<const PreparedGpuScene> scene = std::move(built.scene);
+    // 1. The prepared scene was built by the CALLING CPU worker before this request was enqueued,
+    // so no media decode, OCIO configuration, or shader compilation runs on the GPU owner thread.
+    // The owner only performs native work on the immutable scene.
     if (cancellation.isCancellationRequested() || stopRequested.load()) {
         return failure(GpuProcessFrameStatus::Cancelled, GpuProcessFrameDiagnosticCode::Cancelled,
                        "cancelled before GPU dispatch");
@@ -521,8 +427,9 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
             continue;
         }
 
-        auto outcome = runRequest(active->plan, *active->evaluation, active->cancellation,
-                                  active->progress, std::move(active->outputCommand));
+        auto outcome = runRequest(active->plan, *active->evaluation, active->scene,
+                                  active->cancellation, active->progress,
+                                  std::move(active->outputCommand));
 
         std::lock_guard lock(mutex);
         active->outcome = std::move(outcome);
@@ -609,25 +516,25 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
         return failure(GpuProcessFrameStatus::Disabled, GpuProcessFrameDiagnosticCode::Disabled,
                        "GPU process-frame evaluation is disabled");
     }
-    // Reentrancy: caller-owned lifetime forbids destroying the evaluator or issuing another
-    // evaluate() from inside a progress callback on the owner thread. A non-owner queued caller is
-    // fine; only the owner thread itself is rejected, before any wait, so it cannot deadlock on its
-    // own completion.
-    if (impl_->ownerThreadId.load(std::memory_order_acquire) == std::this_thread::get_id()) {
+    // Reentrancy: a progress callback runs on the CALLING CPU worker (scene preparation) or, for
+    // the native-phase event, on the owner. Reject a nested evaluate() from either the same calling
+    // thread or the owner thread before any wait, so it cannot deadlock on its own completion.
+    static thread_local bool insideEvaluate = false;
+    if (insideEvaluate ||
+        impl_->ownerThreadId.load(std::memory_order_acquire) == std::this_thread::get_id()) {
         return failure(GpuProcessFrameStatus::Failed,
                        GpuProcessFrameDiagnosticCode::InternalInvariant,
-                       "reentrant GPU evaluate from the owner thread is not permitted");
+                       "reentrant GPU evaluate is not permitted");
     }
+    struct InsideEvaluateGuard final {
+        bool& flag;
+        ~InsideEvaluateGuard() { flag = false; }
+    } insideEvaluateGuard{insideEvaluate};
+    insideEvaluate = true;
 
-    // Admit one request slot under the shared mutex. Shutdown rejects new calls; a full queue
-    // applies bounded back-pressure. The request is queued after the currently running one and
-    // never shares its completion.
-    auto slot = std::make_shared<GpuProcessFrameRequest>();
-    slot->plan = std::move(plan);
-    slot->evaluation = request;
-    slot->cancellation = cancellation;
-    slot->progress = std::move(progress);
-    slot->outputCommand = std::move(outputCommand);
+    // Bounded admission BEFORE any CPU preparation: `inFlightPreparations + queue.size()` is the
+    // total admitted set, so a flood of callers cannot build scenes unboundedly. Shutdown rejects
+    // new calls; a full set applies back-pressure.
     {
         std::lock_guard lock(impl_->mutex);
         if (impl_->stopping) {
@@ -642,13 +549,101 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
                                : impl_->availability.code,
                            impl_->availability.message);
         }
-        if (impl_->queue.size() >= impl_->options.maxQueuedRequests) {
+        if (impl_->inFlightPreparations + impl_->queue.size() >=
+            impl_->options.maxQueuedRequests) {
             return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::OverBudget,
                            "the GPU evaluator request queue is full");
         }
-        impl_->queue.push_back(slot);
+        ++impl_->inFlightPreparations;
     }
-    impl_->cv.notify_all();
+    // Scope-bound reservation release: EVERY exit -- including a bad_alloc from scene preparation,
+    // slot allocation, or queue insertion -- releases exactly one reservation. A successful enqueue
+    // converts the reservation into a queue slot and marks it released under the same lock.
+    bool reservationHeld = true;
+    struct ReservationGuard final {
+        Impl* impl;
+        bool& held;
+        ~ReservationGuard() {
+            if (!held) {
+                return;
+            }
+            held = false;
+            std::lock_guard lock(impl->mutex);
+            if (impl->inFlightPreparations > 0) {
+                --impl->inFlightPreparations;
+            }
+        }
+    } reservationGuard{impl_.get(), reservationHeld};
+
+    std::shared_ptr<GpuProcessFrameRequest> slot;
+    try {
+        if (cancellation.isCancellationRequested()) {
+            return failure(GpuProcessFrameStatus::Cancelled,
+                           GpuProcessFrameDiagnosticCode::Cancelled,
+                           "cancelled before CPU scene preparation");
+        }
+
+        safeProgress(progress, {.stage = EvaluationProgressStage::Preflight,
+                                .operation = std::nullopt,
+                                .completed = 0,
+                                .total = std::nullopt});
+
+        // Prepare the immutable scene HERE, on the calling CPU worker, never on the GPU owner
+        // thread. Media decode, OCIO configuration, and shader compilation all run on this thread;
+        // the owner only performs native work on the finished scene.
+        auto preparation = detail::prepareExportScene(impl_->options, plan, request, cancellation);
+        if (preparation.scene == nullptr) {
+            return failure(preparation.status, preparation.diagnosticCode,
+                           std::move(preparation.diagnosticMessage));
+        }
+
+        // Test-only deterministic fault seam: simulate the slot allocation failing after admission
+        // and CPU preparation, so the reservation-release path is exercised through the public API.
+        if (impl_->options.failPreparationAllocationAt != 0 &&
+            impl_->preparationAllocations.fetch_add(1, std::memory_order_relaxed) + 1U ==
+                impl_->options.failPreparationAllocationAt) {
+            throw std::bad_alloc();
+        }
+
+        slot = std::make_shared<GpuProcessFrameRequest>();
+        slot->plan = std::move(plan);
+        slot->evaluation = request;
+        slot->cancellation = cancellation;
+        slot->progress = std::move(progress);
+        slot->outputCommand = std::move(outputCommand);
+        slot->scene = std::move(preparation.scene);
+        {
+            std::lock_guard lock(impl_->mutex);
+            if (impl_->stopping) {
+                return failure(GpuProcessFrameStatus::Failed,
+                               GpuProcessFrameDiagnosticCode::DeviceUnavailable,
+                               "the GPU evaluator is shutting down; refusing new requests");
+            }
+            if (cancellation.isCancellationRequested()) {
+                return failure(GpuProcessFrameStatus::Cancelled,
+                               GpuProcessFrameDiagnosticCode::Cancelled,
+                               "cancelled before GPU dispatch");
+            }
+            impl_->queue.push_back(slot); // may throw; the guard still releases the reservation
+            if (impl_->inFlightPreparations > 0) {
+                --impl_->inFlightPreparations;
+            }
+            reservationHeld = false;
+        }
+        impl_->cv.notify_all();
+    } catch (const std::bad_alloc&) {
+        return failure(GpuProcessFrameStatus::Failed,
+                       GpuProcessFrameDiagnosticCode::BadAllocation,
+                       "the GPU request failed to allocate its host buffers");
+    } catch (const std::exception&) {
+        return failure(GpuProcessFrameStatus::Failed,
+                       GpuProcessFrameDiagnosticCode::InternalInvariant,
+                       "the GPU request failed with an internal error");
+    } catch (...) {
+        return failure(GpuProcessFrameStatus::Failed,
+                       GpuProcessFrameDiagnosticCode::InternalInvariant,
+                       "the GPU request failed with an unknown internal error");
+    }
 
     // Wait on this request's own condition variable only. While waiting, if this caller's token is
     // cancelled and this slot is still queued (not running), remove it and return Cancelled
@@ -685,7 +680,18 @@ void GpuProcessFrameEvaluator::beginShutdown() noexcept {
 }
 
 bool GpuProcessFrameEvaluator::retirementComplete() const noexcept {
-    return impl_ == nullptr || impl_->retired.load(std::memory_order_acquire);
+    if (impl_ == nullptr) {
+        return true;
+    }
+    if (!impl_->retired.load(std::memory_order_acquire)) {
+        return false;
+    }
+    // The owner worker has retired, but an active calling worker may still be preparing a scene (or
+    // converting its reservation into a queue slot). Retirement is complete only when no such caller
+    // is in flight, so an owner that observes completion may safely release the evaluator without
+    // racing a live `evaluate()`.
+    std::lock_guard lock(impl_->mutex);
+    return impl_->inFlightPreparations == 0;
 }
 
 } // namespace bloom::runtime

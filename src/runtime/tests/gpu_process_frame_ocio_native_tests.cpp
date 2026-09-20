@@ -292,45 +292,6 @@ mixedPlan(const CompositionFormat compositionFormat, const document::AssetRecord
         std::move(operations), OperationIndex::fromRaw(9)});
 }
 
-// A 6000x4000-friendly plan: a real EXR image-source layer and a translucent solid layer merged
-// bottom-to-top, then composition output. No OCIO effect/text, so the CPU reference gate stays fast
-// while still exercising real media decode at the full composition size.
-[[nodiscard]] std::shared_ptr<const CompiledCompositionPlan>
-mediaSolidPlan(const CompositionFormat compositionFormat, const document::AssetRecord& asset,
-               const Color4d solidColor, const std::uint64_t idBase) {
-    const LayerIds idsA{ParameterId::fromRaw(idBase + 0), ParameterId::fromRaw(idBase + 1),
-                        ParameterId::fromRaw(idBase + 2), ParameterId::fromRaw(idBase + 3),
-                        ParameterId::fromRaw(idBase + 4), ParameterId::fromRaw(idBase + 5)};
-    const LayerIds idsB{ParameterId::fromRaw(idBase + 6),  ParameterId::fromRaw(idBase + 7),
-                        ParameterId::fromRaw(idBase + 8),  ParameterId::fromRaw(idBase + 9),
-                        ParameterId::fromRaw(idBase + 10), ParameterId::fromRaw(idBase + 11)};
-    std::vector<CompiledOperation> operations;
-    operations.emplace_back(
-        CompiledImageSource{NodeId::fromRaw(idBase + 10), asset, 0, 0, 0, std::string{}, false});
-    operations.emplace_back(layerOutput(NodeId::fromRaw(idBase + 11), LayerId::fromRaw(idBase + 20),
-                                        OperationIndex::fromRaw(0), idsA,
-                                        LayerValues{.position = {0.0, 0.0}, .opacity = 1.0}));
-    operations.emplace_back(CompiledSolid{NodeId::fromRaw(idBase + 12),
-                                          {ParameterId::fromRaw(idBase + 13), solidColor},
-                                          {ParameterId::fromRaw(idBase + 14), 32.0},
-                                          {ParameterId::fromRaw(idBase + 15), 32.0}});
-    operations.emplace_back(layerOutput(NodeId::fromRaw(idBase + 16), LayerId::fromRaw(idBase + 21),
-                                        OperationIndex::fromRaw(2), idsB,
-                                        LayerValues{.position = {1.0, 1.0}, .opacity = 0.5}));
-    operations.emplace_back(CompiledMerge{
-        NodeId::fromRaw(idBase + 30),
-        std::vector<CompiledMergeInput>{
-            CompiledMergeInput{LayerSlotId::fromRaw(idBase + 31), LayerId::fromRaw(idBase + 20),
-                               OperationIndex::fromRaw(1)},
-            CompiledMergeInput{LayerSlotId::fromRaw(idBase + 32), LayerId::fromRaw(idBase + 21),
-                               OperationIndex::fromRaw(3)}}});
-    operations.emplace_back(
-        CompiledCompositionOutput{NodeId::fromRaw(idBase + 40), OperationIndex::fromRaw(4)});
-    return publish(CompiledCompositionPlanDefinition{
-        document::Revision::fromRaw(7), kProjectId, kCompositionId, compositionFormat,
-        std::move(operations), OperationIndex::fromRaw(5)});
-}
-
 [[nodiscard]] EvaluationRequest acesRequest(const CompiledCompositionPlan& plan) {
     auto request = requestFor(plan);
     request.colorIntent = EvaluationColorIntent{
@@ -563,29 +524,58 @@ int main(int argc, char** argv) {
                             identity.outputColorCounters.encodedPayloadBytes == 0,
                         "the identity arm transfers exactly one exactly-accounted process payload");
 
-    // The large-composition gate with the DEFAULT export budget and a real media source: a
-    // 6000x4000 composition must evaluate (not be refused by a fixed 1 GiB gate) whenever the host
-    // genuinely has the memory. The render layer's per-operation image cap is fixed and smaller than
-    // one 6000x4000 RGBA32F image, so this exercises the honest CPU reference path with the same
-    // host-derived budget the production roots inject.
+    // The large-composition GPU gate with the DEFAULT export budget and a real media source: a
+    // 6000x4000 media+CST+text composition must evaluate through the real GpuProcessFrame evaluator
+    // (positive GPU dispatch, not a CPU fallback) with the exact combined readback payload counters,
+    // and its process payload must match the strict CPU oracle. The full-resolution producer limits
+    // are host-capacity-derived, so a 384 MB frame is admitted whenever the host genuinely has the
+    // memory; the budget is never a fixed 1 GiB gate.
     {
         constexpr std::uint32_t kLargeWidth = 6000;
         constexpr std::uint32_t kLargeHeight = 4000;
-        const auto largePlan = mediaSolidPlan(format(kLargeWidth, kLargeHeight), fixture.asset,
-                                              Color4d{0.3, 0.4, 0.5, 0.5}, 7000);
+        const auto largePlan = mixedPlan(format(kLargeWidth, kLargeHeight), fixture.asset,
+                                         Color4d{-0.2, 1.6, 0.35, 0.5}, 7000);
         auto largeRequest = acesRequest(*largePlan);
         largeRequest.pixelStorageByteLimit = bloom::runtime::defaultGpuProcessFrameByteBudget();
-        const auto largeFrame = cpuEvaluator.evaluate(largePlan, largeRequest, {});
-        expectations.expect(largeFrame.status() == bloom::runtime::EvaluationStatus::Evaluated &&
-                                largeFrame.frame() != nullptr,
-                            "a 6000x4000 real-source export evaluates under the default "
-                            "host-derived budget");
-        if (largeFrame.frame() != nullptr &&
-            largeFrame.frame()->processImage().descriptor() != nullptr) {
-            const auto extent =
-                largeFrame.frame()->processImage().descriptor()->dataWindow().extent();
-            expectations.expect(extent.width() == kLargeWidth && extent.height() == kLargeHeight,
-                                "the 6000x4000 process image keeps its exact geometry");
+        auto largeOracleRequest = largeRequest;
+        largeOracleRequest.bypassOperationCache = true;
+        const auto largeOracle = cpuEvaluator.evaluate(largePlan, largeOracleRequest, {});
+        expectations.expect(largeOracle.status() == bloom::runtime::EvaluationStatus::Evaluated &&
+                                largeOracle.frame() != nullptr,
+                            "the 6000x4000 CPU oracle evaluates the mixed scene");
+        const auto largeGeometry = GpuOcioCommandGeometry{kLargeWidth, kLargeHeight};
+        const auto largePrepared = ocioContext->preparer->prepare(*config, spec, largeGeometry,
+                                                                  ocioContext->compileOptions);
+        expectations.expect(largePrepared.hasValue(),
+                            "the 6000x4000 display command compiles from the shared preparer");
+        if (largePrepared.hasValue() && largeOracle.frame() != nullptr) {
+            const auto large =
+                evaluator->evaluate(largePlan, largeRequest, {}, {}, largePrepared.command);
+            expectations.expect(large.status == GpuProcessFrameStatus::Evaluated &&
+                                    large.frame != nullptr,
+                                "a 6000x4000 media+CST+text export evaluates on the GPU under the "
+                                "default host-derived budget");
+            const auto expectedProcessBytes =
+                static_cast<std::uint64_t>(kLargeWidth) * kLargeHeight * sizeof(float) * 4U;
+            const auto expectedEncodedBytes = static_cast<std::uint64_t>(kLargeWidth) *
+                                              kLargeHeight * sizeof(std::uint8_t) * 4U;
+            expectations.expect(
+                large.encodedArm == bloom::runtime::GpuOutputColorArm::DisplayRgba8 &&
+                    large.outputColorCounters.readbackSubmissions == 1 &&
+                    large.outputColorCounters.transferredPayloads == 2 &&
+                    large.outputColorCounters.processPayloadBytes == expectedProcessBytes &&
+                    large.outputColorCounters.encodedPayloadBytes == expectedEncodedBytes &&
+                    large.encodedDisplayRgba8.size() ==
+                        static_cast<std::size_t>(kLargeWidth) * kLargeHeight &&
+                    large.counters.nativeDispatches > 0,
+                "the 6000x4000 combined PNG counters are exact (one submission, two payloads) with "
+                "real GPU dispatches");
+            if (large.frame != nullptr) {
+                expectations.expect(
+                    pixelsClose(large.frame->processImage().pixels(),
+                                largeOracle.frame()->processImage().pixels()),
+                    "the 6000x4000 GPU process payload matches the strict CPU oracle");
+            }
         }
     }
 

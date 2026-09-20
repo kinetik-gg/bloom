@@ -279,7 +279,11 @@ void testControllerGpuPathAndParity(Expectations& expectations, const Options& o
         ui::makeCompositionPreviewPipeline(fixture.compiler, fixture.evaluator,
                                            fixture.referencePreparer, fixture.provider,
                                            fixture.planCache),
-        {.colorIntent = session.colorIntent(), .displayName = {}, .viewName = {}, .showLook = true},
+        {.colorIntent = session.colorIntent(),
+         .displayName = {},
+         .viewName = {},
+         .showLook = true,
+         .pixelStorageByteLimit = kBudget},
         frameCache, nullptr, serviceSubmitter(service, serviceCalls));
     expectations.expect(waitUntil([&] { return isReady(controller); }),
                         "the foreground frame is ready through the real service");
@@ -443,7 +447,11 @@ void testMissingLoaderCpuFallback(Expectations& expectations) {
         ui::makeCompositionPreviewPipeline(fixture.compiler, fixture.evaluator,
                                            fixture.referencePreparer, fixture.provider,
                                            fixture.planCache),
-        {.colorIntent = session.colorIntent(), .displayName = {}, .viewName = {}, .showLook = true},
+        {.colorIntent = session.colorIntent(),
+         .displayName = {},
+         .viewName = {},
+         .showLook = true,
+         .pixelStorageByteLimit = kBudget},
         std::make_shared<ui::PreviewFrameCache>(), nullptr,
         serviceSubmitter(service, serviceCalls));
     expectations.expect(waitUntil([&] { return isReady(controller); }),
@@ -593,6 +601,8 @@ void testPipelineTiming(Expectations& expectations, const Options& options) {
 
 } // namespace
 
+#include "gpu_preview_app_budget_recovery_tests.ipp"
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -603,6 +613,8 @@ int main(int argc, char** argv) {
     Expectations expectations;
     try {
         testControllerGpuPathAndParity(expectations, options);
+        testControllerLivenessAfterBudgetRefusal(expectations, options);
+        testGenuineBuilderBudgetRefusalRecovery(expectations, options);
         testMissingLoaderCpuFallback(expectations);
         testPipelineTiming(expectations, options);
     } catch (const std::exception& error) {

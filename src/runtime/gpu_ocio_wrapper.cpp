@@ -164,11 +164,16 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
                "height; "
                "} bloom_ocio_push;\n";
         out << sampling.preamble;
-        out << program.shaderText;
-        if (program.shaderText.back() != '\n') {
+        // A per-op specialized body (when present) replaces the generated body; the extracted
+        // descriptor and its digest/content identity are never modified.
+        const std::string& body =
+            sampling.shaderBody.empty() ? program.shaderText : sampling.shaderBody;
+        out << body;
+        if (body.back() != '\n') {
             out << '\n';
         }
         out << sampling.definitions;
+        out << color::ocioGpuPreciseDivisionGlsl();
         if (display) {
             out << kQuantizerGlsl;
         }
@@ -192,9 +197,11 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
             // Exact CPU image-effect semantics: an alpha-zero source pixel is copied through
             // unchanged, including any hidden RGB, and is never un-premultiplied or transformed.
             out << "  if (a == 0.0) { imageStore(bloom_ocio_output, c, p); return; }\n";
-            out << "  vec3 s = p.rgb / a;\n";
+            out << "  vec3 s = vec3(bloom_ocio_cpu_div(p.r, a), bloom_ocio_cpu_div(p.g, a), "
+                   "bloom_ocio_cpu_div(p.b, a));\n";
         } else {
-            out << "  vec3 s = (a != 0.0) ? p.rgb / a : vec3(0.0);\n";
+            out << "  vec3 s = (a != 0.0) ? vec3(bloom_ocio_cpu_div(p.r, a), "
+                   "bloom_ocio_cpu_div(p.g, a), bloom_ocio_cpu_div(p.b, a)) : vec3(0.0);\n";
         }
         out << "  if (any(isnan(s)) || any(isinf(s))) { bloom_ocio_status.flags[0] = 1u; return; "
                "}\n";
@@ -216,7 +223,8 @@ GpuOcioWrapperResult buildGpuOcioWrapperGlsl(const render::OcioGpuProgramDesc& p
             out << "  uint qa = bloom_ocio_quantize(a);\n";
             out << "  bloom_ocio_output.words[index] = r | (g << 8) | (b << 16) | (qa << 24);\n";
         } else {
-            out << "  imageStore(bloom_ocio_output, c, vec4(t.rgb * a, a));\n";
+            out << "  imageStore(bloom_ocio_output, c, vec4(bloom_ocio_cpu_premul(t.rgb, a), "
+                   "a));\n";
         }
         out << "}\n";
 

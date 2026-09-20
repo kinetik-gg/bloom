@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/document/document.hpp>
+#include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -45,7 +46,11 @@ struct CompositionPreviewSettings final {
     std::string displayName;
     std::string viewName;
     bool showLook = true;
-    std::size_t pixelStorageByteLimit = kDefaultPreviewPixelStorageByteLimit;
+    // Capacity-aware: sized from the RAM-preview allocation (gpuPreviewRequestByteAllowance()),
+    // so the request allowance follows the machine and the operator's memory overrides instead of a
+    // fixed constant. A constrained injected budget still refuses cleanly and takes the honest CPU
+    // fallback.
+    std::size_t pixelStorageByteLimit = runtime::gpuPreviewRequestByteAllowance();
     // The first Interactive request is immediate. Subsequent requests inside this 16 ms window
     // coalesce to the newest value; an active worker remains the admission gate.
     std::chrono::milliseconds interactiveTrailingCadence = std::chrono::milliseconds{16};

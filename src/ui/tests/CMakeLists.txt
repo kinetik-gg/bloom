@@ -207,6 +207,27 @@ target_link_libraries(bloom_composition_preview_cpu_stage_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_preview_gpu_scene_stage_test PRIVATE bloom_ui)
 target_include_directories(bloom_composition_preview_gpu_scene_stage_test
     PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+# Production general-display stage path. It drives the ACTUAL makeSessionRefreshingGpuSceneStage
+# with the shared runtime GpuOcioContextResolver over the REAL packaged tools staged beside this
+# executable by bloom_package_gpu_shader_tools (no injected tool paths or preparer); without the
+# tools the general assertions are compiled out and the test is a clean pass.
+add_executable(bloom_composition_preview_gpu_scene_general_test
+    composition_preview_gpu_scene_general_tests.cpp)
+target_include_directories(bloom_composition_preview_gpu_scene_general_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_composition_preview_gpu_scene_general_test PRIVATE bloom_ui)
+target_compile_definitions(bloom_composition_preview_gpu_scene_general_test PRIVATE
+    "BLOOM_GPU_GENERAL_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_composition_preview_gpu_scene_general_test>\"")
+include(BloomGpuShaderTools)
+bloom_package_gpu_shader_tools(bloom_composition_preview_gpu_scene_general_test)
+bloom_enable_warnings(bloom_composition_preview_gpu_scene_general_test)
+bloom_add_test(
+    NAME bloom.ui.composition_preview_gpu_scene_general
+    COMMAND bloom_composition_preview_gpu_scene_general_test
+    LABELS ui gpu color
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
 target_link_libraries(bloom_gpu_preview_submitter_test PRIVATE bloom_ui)
 target_link_libraries(bloom_gpu_preview_app_test PRIVATE bloom_ui bloom_runtime_evaluator)
 # bloom_ui_gpu_presentation_target_test adopts the borrowed VkInstance through Qt's public
@@ -1474,6 +1495,66 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         TIMEOUT 300
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
+
+    # Genuine GPU route-proof writers. These are the real production viewer and RAM-preview
+    # harnesses; each publishes its route proof into the build-owned run-scoped proof directory the
+    # runtime native acceptance gate reads. They are CTest fixture SETUP tests (their own fixtures
+    # are required by the gate) and they require the runtime `gpu_route_proofs` setup, so the order
+    # is: nonce setup -> writer(s) -> final contract gate. The gate lives in the runtime tree and
+    # never links the UI shell; only the writer fixtures are appended below. A Wayland platform is
+    # inherited (CI sets offscreen, so the writer skips and the gate reports the proof missing).
+    set(BLOOM_GPU_ROUTE_PROOF_DIR "${PROJECT_BINARY_DIR}/gpu-route-proofs")
+
+    add_executable(bloom_ui_gpu_viewer_route_proof_test
+        gpu_viewer_route_proof_tests.cpp
+        gpu_route_proof_harness_support.hpp
+        gpu_service_chain_fixture.hpp
+        gpu_vertical_proof_support.hpp)
+    target_include_directories(bloom_ui_gpu_viewer_route_proof_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/tests/support" "${PROJECT_SOURCE_DIR}/src/runtime"
+                ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    target_link_libraries(bloom_ui_gpu_viewer_route_proof_test
+        PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
+    bloom_enable_warnings(bloom_ui_gpu_viewer_route_proof_test)
+    bloom_enable_strict_floating_point(bloom_ui_gpu_viewer_route_proof_test)
+    bloom_add_test(
+        NAME bloom.ui.gpu_viewer_route_proof
+        COMMAND bloom_ui_gpu_viewer_route_proof_test
+                --proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}"
+                ${bloom_ui_gpu_viewer_service_chain_loader_args}
+        LABELS ui gpu viewer route-proof
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.ui.gpu_viewer_route_proof
+        PROPERTIES FIXTURES_REQUIRED gpu_route_proofs FIXTURES_SETUP gpu_route_proof_viewer)
+
+    add_executable(bloom_ui_gpu_ram_preview_route_proof_test
+        gpu_ram_preview_route_proof_tests.cpp
+        gpu_route_proof_harness_support.hpp
+        gpu_service_chain_fixture.hpp
+        gpu_vertical_proof_support.hpp)
+    target_include_directories(bloom_ui_gpu_ram_preview_route_proof_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/tests/support" "${PROJECT_SOURCE_DIR}/src/runtime"
+                ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    target_link_libraries(bloom_ui_gpu_ram_preview_route_proof_test
+        PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
+    bloom_enable_warnings(bloom_ui_gpu_ram_preview_route_proof_test)
+    bloom_enable_strict_floating_point(bloom_ui_gpu_ram_preview_route_proof_test)
+    bloom_add_test(
+        NAME bloom.ui.gpu_ram_preview_route_proof
+        COMMAND bloom_ui_gpu_ram_preview_route_proof_test
+                --proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}"
+                ${bloom_ui_gpu_viewer_service_chain_loader_args}
+        LABELS ui gpu ram route-proof
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.ui.gpu_ram_preview_route_proof
+        PROPERTIES FIXTURES_REQUIRED gpu_route_proofs FIXTURES_SETUP gpu_route_proof_ram)
+
+    # Final contract dependency order: the runtime native acceptance gate lists these two writer
+    # fixtures in its own FIXTURES_REQUIRED (src/runtime/tests/CMakeLists.txt), because a test may
+    # not set a property on a test that lives in another directory. CTest then runs, in order, the
+    # runtime nonce setup, these writers, and the gate that reads their proofs.
 endif()
 
 # Device-free ViewerEditor view-coordinate oracle: fit / zoom-about-cursor / pan pinned against an

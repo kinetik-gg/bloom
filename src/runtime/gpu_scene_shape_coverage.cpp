@@ -189,29 +189,29 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
     const auto windowHeight = layerWindow.extent().height();
     const auto rule = static_cast<render::PathFillRule>(shape.fillRule);
     const auto rasterize = [&](const bool strokePass, const std::string& geometryKeyDigest,
-                               std::shared_ptr<const std::vector<std::uint8_t>>& coverage)
+                               std::shared_ptr<const render::PathRasterCoverageGeometry>& geometry)
         -> std::optional<GpuSceneLeafFailure> {
         if (coverageCache != nullptr) {
-            coverage = coverageCache->find(geometryKeyDigest);
+            geometry = coverageCache->find(geometryKeyDigest);
         }
-        if (coverage != nullptr) {
+        if (geometry != nullptr) {
             return std::nullopt;
         }
-        auto bytes = std::make_shared<std::vector<std::uint8_t>>(
-            static_cast<std::size_t>(windowWidth) * windowHeight, 0);
-        for (std::int64_t y = layerWindow.originY(); y < layerWindow.maxYExclusive(); ++y) {
-            const auto offset = static_cast<std::size_t>(y - layerWindow.originY()) * windowWidth;
-            if (!raster.value()->coverageRow(
-                    layerWindow.originX(), y,
-                    std::span<std::uint8_t>(bytes->data() + offset, windowWidth), rule, strokePass,
-                    cancel)) {
+        auto built =
+            raster.value()->coverageGeometry(layerWindow.originX(), layerWindow.originY(),
+                                             windowWidth, windowHeight, rule, strokePass, cancel);
+        if (!built) {
+            if (cancellation.isCancellationRequested()) {
                 return fail(PreparedGpuSceneDiagnosticCode::Cancelled,
                             "Shape coverage rasterization was cancelled");
             }
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Shape coverage geometry is invalid");
         }
-        coverage = std::move(bytes);
+        geometry =
+            std::make_shared<const render::PathRasterCoverageGeometry>(std::move(*built.value()));
         if (coverageCache != nullptr) {
-            coverageCache->store(geometryKeyDigest, coverage);
+            coverageCache->store(geometryKeyDigest, geometry);
         }
         return std::nullopt;
     };
@@ -236,8 +236,8 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
         addWindowToKey(geometryKey, layerWindow);
         addPixelAspectToKey(geometryKey, fullPixelAspect);
         const auto geometryKeyDigest = geometryKey.digest();
-        std::shared_ptr<const std::vector<std::uint8_t>> coverage;
-        if (const auto error = rasterize(false, geometryKeyDigest, coverage)) {
+        std::shared_ptr<const render::PathRasterCoverageGeometry> geometry;
+        if (const auto error = rasterize(false, geometryKeyDigest, geometry)) {
             return error;
         }
         if (const auto error = chargeBytes(windowWidth, windowHeight, sizeof(render::Rgba32f))) {
@@ -258,7 +258,8 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
                                                 .sourceOperation = OperationIndex::fromRaw(0),
                                                 .pixel = *pixel.value(),
                                                 .opacity = fillOpacity,
-                                                .coverage = coverage,
+                                                .geometry = geometry,
+                                                .coverage = nullptr,
                                                 .outputWindow = layerWindow,
                                                 .displayWindow = fullDisplayWindow,
                                                 .pixelAspect = fullPixelAspect,
@@ -289,8 +290,8 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
         addWindowToKey(geometryKey, layerWindow);
         addPixelAspectToKey(geometryKey, fullPixelAspect);
         const auto geometryKeyDigest = geometryKey.digest();
-        std::shared_ptr<const std::vector<std::uint8_t>> coverage;
-        if (const auto error = rasterize(true, geometryKeyDigest, coverage)) {
+        std::shared_ptr<const render::PathRasterCoverageGeometry> geometry;
+        if (const auto error = rasterize(true, geometryKeyDigest, geometry)) {
             return error;
         }
         if (const auto error = chargeBytes(windowWidth, windowHeight, sizeof(render::Rgba32f))) {
@@ -309,7 +310,8 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
                                                   .sourceOperation = OperationIndex::fromRaw(0),
                                                   .pixel = *pixel.value(),
                                                   .opacity = strokeOpacity,
-                                                  .coverage = coverage,
+                                                  .geometry = geometry,
+                                                  .coverage = nullptr,
                                                   .outputWindow = layerWindow,
                                                   .displayWindow = fullDisplayWindow,
                                                   .pixelAspect = fullPixelAspect,

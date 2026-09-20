@@ -464,6 +464,24 @@ void testByteCeiling(Expectations& expectations) {
                         "a nested scene under a tiny allowance fails closed on the byte ceiling");
 }
 
+// A nested child whose only retained host allocation is its own vector coverage geometry: the
+// parent allowance must cover the ACTUAL row ranges + spans, not the width*height R8 mask. A
+// 6000x4000 simple child geometry is far below its 24 MB R8 mask, so a 1 MiB allowance admits it.
+void testNestedCoverageGeometryBytes(Expectations& expectations) {
+    const auto child =
+        childPlan(format(128, 128), LayerValues{.position = {64.3, 64.7}},
+                  LayerValues{.position = {64.0, 64.0}}, 6000.0, 4000.0, 12000, 1201, false);
+    const auto parent =
+        parentPlan(child, format(128, 128), timeMapping(12100, 0.0, 1.0, 0), 12200, 1200);
+    const CpuGpuSceneBuilder builder;
+    const auto prepared = builder.build(parent, requestAt(*parent, RationalTime{}, 1U << 20U));
+    expectations.expect(prepared.hasValue(),
+                        "a nested child's actual coverage geometry fits a sub-R8 allowance");
+    if (!prepared) {
+        std::cerr << "nested coverage diagnostic: " << prepared.diagnostic.message << "\n";
+    }
+}
+
 [[nodiscard]] bloom::runtime::CancellationToken makeCancelledToken() {
     using namespace bloom::runtime;
     TaskSchedulerConfig config = TaskSchedulerConfig::defaults();
@@ -604,6 +622,7 @@ int main() {
         testNestedVectorLeavesAndHdr(expectations, evaluator);
         testReferenceFailures(expectations);
         testByteCeiling(expectations);
+        testNestedCoverageGeometryBytes(expectations);
         testCancellation(expectations);
         testBranchKeyIsolation(expectations);
         if (!expectations.ok()) {
