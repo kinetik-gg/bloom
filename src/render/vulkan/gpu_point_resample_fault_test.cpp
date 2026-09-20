@@ -23,4 +23,14 @@ std::uint32_t pointResampleLiveResourceSetsForTest() noexcept {
     return pointResampleLiveResourceSets();
 }
 
+std::uint32_t pointResampleLiveResidentsForTest() noexcept { return pointResampleLiveResidents(); }
+
+std::uint32_t pointResampleRetainedResidentsForTest() noexcept {
+    return pointResampleRetainedResidents();
+}
+
+std::uint32_t retirePointResampleRetainedForOwnerForTest() noexcept {
+    return pointResampleRetireRetainedForOwner();
+}
+
 } // namespace bloom::render::point_resample_detail

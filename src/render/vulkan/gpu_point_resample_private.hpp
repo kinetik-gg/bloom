@@ -57,6 +57,21 @@ namespace point_resample_detail {
 
 using vulkan_detail::DeviceAllocatorState;
 
+// Bounded live-resident accounting and the owner-drainable retained-resident store, defined in
+// gpu_point_resample_resources.cpp.
+[[nodiscard]] bool acquireResidentSlot() noexcept;
+void releaseResidentSlot() noexcept;
+// Allocation-free: finds a free fixed-capacity slot first and only then moves `resident` into it,
+// so a full store leaves the caller's unique_ptr ownership untouched (never destroying the image on
+// this thread). Never throws.
+[[nodiscard]] bool retainResident(const std::shared_ptr<DeviceAllocatorState>& deviceState,
+                                  std::unique_ptr<GpuImage>& resident,
+                                  std::thread::id ownerThread) noexcept;
+// Allocation-free owner drain. Never throws.
+[[nodiscard]] std::uint32_t retireRetainedForOwner() noexcept;
+[[nodiscard]] std::uint32_t liveResidents() noexcept;
+[[nodiscard]] std::uint32_t retainedResidents() noexcept;
+
 enum class ReservationState : std::uint8_t {
     // Reusable by any owner thread.
     Free,
@@ -81,17 +96,29 @@ struct ResourceSet final {
     vk::raii::CommandPool commandPool{nullptr};
     vk::raii::CommandBuffer commandBuffer{nullptr};
     vk::raii::Fence fence{nullptr};
+    // True while this set owns one bounded live-resident slot for `resident`.
+    bool residentSlotHeld = false;
 
-    void reset() noexcept {
+    // Frees the per-job submission resources but keeps `resident` and its resident slot (used when
+    // a proven-retired result is published).
+    void releaseJobOnly() noexcept {
         fence = vk::raii::Fence{nullptr};
         commandBuffer = vk::raii::CommandBuffer{nullptr};
         commandPool = vk::raii::CommandPool{nullptr};
         descriptorSet = vk::raii::DescriptorSet{nullptr};
         descriptorPool = vk::raii::DescriptorPool{nullptr};
         pipeline = CompositePipeline{};
-        resident.reset();
         axis.release();
         source.reset();
+    }
+
+    void reset() noexcept {
+        if (residentSlotHeld) {
+            releaseResidentSlot();
+            residentSlotHeld = false;
+        }
+        releaseJobOnly();
+        resident.reset();
         deviceState.reset();
     }
 };
