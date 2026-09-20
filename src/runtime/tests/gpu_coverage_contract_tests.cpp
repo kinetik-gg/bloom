@@ -12,6 +12,13 @@
 // failure. The gate never passes a requirement it did not earn and never adds an opt-out to turn a
 // hole green. "Green" means every Required id was genuinely prepared or genuinely executed on the
 // hardware present in this run; it is not a claim that every platform or GPU has been qualified.
+//
+// A fixture may declare an explicit PackagedShaderTools prerequisite. When this build stages the
+// packaged tools the fixture runs normally and a broken resolver is a hard failure; when the build
+// deliberately packages no tools (CPU stub, unqualified mode, missing prefix) the fixture is an
+// explicit NotRun and the CPU gate returns CTest 77, but only after every structural and
+// independent check has passed. A missing required fixture is a structural failure that the
+// prerequisite NotRun can never absorb, and no independent fixture is ever masked by tools.
 
 #include "gpu_coverage_contract_plans.hpp"
 #include "gpu_coverage_display_support.hpp"
@@ -76,12 +83,16 @@ using bloom::runtime::ImageEffectKernel;
 using bloom::runtime::OperationIndex;
 using bloom::runtime::PreparedGpuSceneDiagnosticCode;
 
-using bloom::gpu_coverage_gate::findFixture;
+using bloom::gpu_coverage_gate::classifyFixtureExecution;
 using bloom::gpu_coverage_gate::Fixture;
+using bloom::gpu_coverage_gate::FixtureExecution;
+using bloom::gpu_coverage_gate::FixturePrerequisite;
 using bloom::gpu_coverage_gate::FixtureRun;
 using bloom::gpu_coverage_gate::FrameRun;
+using bloom::gpu_coverage_gate::prerequisiteDecisionRegression;
 using bloom::gpu_coverage_gate::requiredCoverageIds;
 using bloom::gpu_coverage_gate::routeOwner;
+using bloom::gpu_coverage_gate::structuralFixtureFailures;
 using bloom::gpu_coverage_plans::AffineAxis;
 using bloom::gpu_coverage_plans::basePlan;
 using bloom::gpu_coverage_plans::effectPlan;
@@ -258,9 +269,10 @@ displayProofRunner(const bool customView) {
     std::vector<Fixture> list;
     const auto add = [&list](std::string id, GpuCoverageFixtureCriterion criterion,
                              std::string owner, std::function<FixtureRun()> run,
-                             bloom::gpu_coverage_gate::NativeProofRunner nativeProof = {}) {
+                             bloom::gpu_coverage_gate::NativeProofRunner nativeProof = {},
+                             FixturePrerequisite prerequisite = FixturePrerequisite::None) {
         list.push_back(Fixture{std::move(id), criterion, std::move(owner), std::move(run),
-                               std::move(nativeProof)});
+                               std::move(nativeProof), prerequisite});
     };
     const auto addImageEffectPlan = [&add](std::string id, const ImageEffectKernel& kernel,
                                            const std::uint64_t idBase, std::string owner) {
@@ -317,10 +329,14 @@ displayProofRunner(const bool customView) {
 
     addImageEffectPlan("effect.IdentityImageKernel", bloom::runtime::IdentityImageKernel{}, 100000,
                        {});
-    add("effect.CstKernel", GpuCoverageFixtureCriterion::Prepared,
-        "src/color OCIO image effect tests", [] { return runCstEffectFixture(101000); });
-    add("effect.FileTransformKernel", GpuCoverageFixtureCriterion::Prepared,
-        "src/color OCIO image effect tests", [] { return runFileTransformFixture(102000); });
+    add(
+        "effect.CstKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/color OCIO image effect tests", [] { return runCstEffectFixture(101000); }, {},
+        FixturePrerequisite::PackagedShaderTools);
+    add(
+        "effect.FileTransformKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/color OCIO image effect tests", [] { return runFileTransformFixture(102000); }, {},
+        FixturePrerequisite::PackagedShaderTools);
 
     // Every one of the eight blend modes is emitted by the real production builder now: Normal
     // stays the retained SourceOver merge, every other mode an explicit BlendV1 fold.
@@ -389,9 +405,10 @@ displayProofRunner(const bool customView) {
     // ACEScg composition prepared by the production builder with the shared OCIO context, then
     // executed and compared to the unchanged CPU evaluator at 2e-6. The owner is this gate's
     // native working-space proof, never an external test name.
-    add("feature.color.working_space_transform", GpuCoverageFixtureCriterion::Prepared,
+    add(
+        "feature.color.working_space_transform", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime GpuSceneBuilder working-space effect native proof",
-        [] { return runWorkingSpaceFixture(); });
+        [] { return runWorkingSpaceFixture(); }, {}, FixturePrerequisite::PackagedShaderTools);
 
     // Display features are native-only. Each owns a genuine native proof in this gate: a real OCIO
     // display program compiled with the shared context and dispatched through the production
@@ -448,10 +465,14 @@ displayProofRunner(const bool customView) {
                 nestedChildPlan(122000, 203, bloom::core::Color4d{0.2, 0.6, 0.9, 1.0});
             return runBuilder(nestedParentPlan(child, 123000, 101));
         });
-    add("node.bloom.ocio-colour-space-transform", GpuCoverageFixtureCriterion::Prepared,
-        "src/color OCIO image effect tests", [] { return runCstEffectFixture(108000); });
-    add("node.bloom.ocio-file-transform", GpuCoverageFixtureCriterion::Prepared,
-        "src/color OCIO image effect tests", [] { return runFileTransformFixture(109000); });
+    add(
+        "node.bloom.ocio-colour-space-transform", GpuCoverageFixtureCriterion::Prepared,
+        "src/color OCIO image effect tests", [] { return runCstEffectFixture(108000); }, {},
+        FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.ocio-file-transform", GpuCoverageFixtureCriterion::Prepared,
+        "src/color OCIO image effect tests", [] { return runFileTransformFixture(109000); }, {},
+        FixturePrerequisite::PackagedShaderTools);
     return list;
 }
 
@@ -500,6 +521,21 @@ int run(int argc, char** argv) {
     }
 
     const auto requiredIds = requiredCoverageIds();
+    // The explicit fixture list must cover every Required id and list no unrequired fixture. This
+    // is a structural check independent of any optional prerequisite: a missing fixture stays a
+    // failure even when the packaged shader tools are absent.
+    for (const auto& failure : structuralFixtureFailures(list, requiredIds)) {
+        failures.push_back(failure);
+    }
+    // Focused regression proving the environmental NotRun path can never absorb a missing fixture.
+    std::string regressionEvidence;
+    if (prerequisiteDecisionRegression(regressionEvidence)) {
+        std::cout << "REGRESSION prerequisite: " << regressionEvidence << '\n';
+    } else {
+        failures.push_back("prerequisite regression: " + regressionEvidence);
+    }
+
+    const bool toolsAvailable = bloom::gpu_coverage_ocio::toolsAvailable();
     // Routes are proven only by the genuine external route harnesses (viewer/RAM/export/headless),
     // which the CPU-only gate cannot run. It reports them as externally owned and never relabels an
     // executor-prepared scene as a route proof; the distinct native acceptance CTest still requires
@@ -508,34 +544,26 @@ int run(int argc, char** argv) {
         if (id.rfind("route.", 0) == 0) {
             std::cout << "NOTRUN(route) " << id << " (externally-owned genuine proof; owner "
                       << routeOwner(id) << ")\n";
-            continue;
-        }
-        bool present = false;
-        for (const auto& fixture : list) {
-            present = present || fixture.id == id;
-        }
-        if (!present) {
-            failures.push_back("missing required fixture for '" + id + "'");
-        }
-    }
-    for (const auto& fixture : list) {
-        bool known = false;
-        for (const auto& id : requiredIds) {
-            known = known || id == fixture.id;
-        }
-        if (!known) {
-            failures.push_back("fixture '" + fixture.id + "' has no Required contract entry");
         }
     }
 
     std::size_t passed = 0;
     std::size_t red = 0;
     std::size_t notRun = 0;
+    std::size_t prerequisiteNotRun = 0;
     for (const auto& fixture : list) {
-        if (fixture.criterion == GpuCoverageFixtureCriterion::NativeRequired) {
+        const auto execution = classifyFixtureExecution(fixture, toolsAvailable);
+        if (execution == FixtureExecution::NativeNotRun) {
             std::cout << "NOTRUN " << fixture.id << " (native fixture owned by " << fixture.owner
                       << ")\n";
             ++notRun;
+            continue;
+        }
+        if (execution == FixtureExecution::PrerequisiteNotRun) {
+            std::cout << "NOTRUN(tools) " << fixture.id
+                      << " (packaged GPU shader tools unavailable: "
+                      << bloom::gpu_coverage_ocio::unavailableReason() << ")\n";
+            ++prerequisiteNotRun;
             continue;
         }
         const auto result = fixture.run();
@@ -550,13 +578,25 @@ int run(int argc, char** argv) {
     }
 
     std::cout << "\nGPU coverage contract: " << passed << " pass, " << red << " required holes, "
-              << notRun << " native-not-run\n";
+              << prerequisiteNotRun << " not-run (unavailable tools), " << notRun
+              << " native-not-run\n";
     if (!failures.empty()) {
         std::cerr << "\nGPU COVERAGE GATE RED (" << failures.size() << " failures):\n";
         for (const auto& failure : failures) {
             std::cerr << "  - " << failure << '\n';
         }
         return 1;
+    }
+    if (prerequisiteNotRun > 0) {
+        // Every structural and independent check passed; the required shader-tool preparation could
+        // not execute because this build stages no tools. This is an explicit environmental SKIP
+        // (CTest 77), never a red gate and never a fabricated pass. A qualified build that packages
+        // the tools executes these fixtures normally and fails if the resolver is broken.
+        std::cout << "SKIP: " << prerequisiteNotRun
+                  << " required fixtures need the packaged GPU shader tools, which this build does "
+                     "not stage ("
+                  << bloom::gpu_coverage_ocio::unavailableReason() << ")\n";
+        return 77;
     }
     return 0;
 }

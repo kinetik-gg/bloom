@@ -28,6 +28,20 @@ namespace bloom::gpu_coverage_ocio {
 #endif
 }
 
+// The typed build-time reason the packaged shader tools are absent (CPU stub, unqualified mode,
+// missing prefix, or missing tools). Only meaningful when toolsAvailable() is false; it names the
+// environmental cause so the gate reports an explicit NotRun rather than a generic hole. The
+// value comes from bloom_package_gpu_shader_tools, never from probing PATH.
+[[nodiscard]] inline std::string_view unavailableReason() noexcept {
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
+    return {};
+#elif defined(BLOOM_GPU_TOOLS_UNAVAILABLE_REASON)
+    return BLOOM_GPU_TOOLS_UNAVAILABLE_REASON;
+#else
+    return "shader-tools-not-packaged";
+#endif
+}
+
 // The one immutable context resolved from the real packaged tools. A function-local static keeps
 // the single resolve and the shared preparer alive for the whole gate run.
 [[nodiscard]] inline std::shared_ptr<const bloom::runtime::GpuSceneOcioContext> sharedContext() {

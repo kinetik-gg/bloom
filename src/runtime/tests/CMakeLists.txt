@@ -485,6 +485,11 @@ bloom_add_test(
     LABELS runtime unit gpu contract
     TIMEOUT 300
 )
+# A build that deliberately stages no packaged GPU shader tools reports the shader-dependent
+# colour-transform fixtures as explicit NotRun and exits 77 once every structural and independent
+# check has passed. CTest records that as Skipped, not Failed; a missing fixture or any other
+# structural failure still exits 1 and fails the gate.
+set_tests_properties(bloom.runtime.gpu_coverage_contract PROPERTIES SKIP_RETURN_CODE 77)
 
 # Native acceptance is a distinct CTest from the CPU gate. With a device it must actually execute
 # the native routes/fixtures; without one it must SKIP (exit 77), and `--require-device` must hard
