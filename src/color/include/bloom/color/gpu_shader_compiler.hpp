@@ -23,9 +23,9 @@ struct GpuShaderToolPaths {
 // Pre-allocation ceilings. A caller may lower these; the implementation rejects a request that
 // raises any of them above the hard ceiling rather than silently accepting an unbounded value.
 struct GpuShaderCompileLimits {
-    std::size_t maxSourceBytes = 4u * 1024u * 1024u;
-    std::size_t maxSpirvBytes = 64u * 1024u * 1024u;
-    std::size_t maxDiagnosticBytes = 16u * 1024u;
+    std::size_t maxSourceBytes = 4ull * 1024u * 1024u;
+    std::size_t maxSpirvBytes = 64ull * 1024u * 1024u;
+    std::size_t maxDiagnosticBytes = 16ull * 1024u;
     std::chrono::milliseconds deadline{10000};
     std::uint64_t addressSpaceBytes = 512ull * 1024ull * 1024ull;
     std::uint32_t openFiles = 64;
@@ -93,7 +93,7 @@ class GpuShaderCompiler final {
     // the entry count and the resident SPIR-V bytes actually retained (an artifact larger than the
     // byte budget is returned but not cached).
     explicit GpuShaderCompiler(std::size_t maxCacheEntries = 64,
-                               std::size_t maxCacheBytes = 64u * 1024u * 1024u);
+                               std::size_t maxCacheBytes = 64ull * 1024u * 1024u);
     ~GpuShaderCompiler();
     GpuShaderCompiler(const GpuShaderCompiler&) = delete;
     GpuShaderCompiler& operator=(const GpuShaderCompiler&) = delete;

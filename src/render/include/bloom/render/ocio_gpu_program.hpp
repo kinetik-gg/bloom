@@ -119,13 +119,13 @@ enum class OcioGpuProgramStage : std::uint8_t {
 // Checked ceilings applied before a program is accepted. The producer enforces these against the
 // real OCIO reflection; an out-of-limit extraction is a typed refusal, never a truncated program.
 struct OcioGpuProgramLimits final {
-    std::uint64_t maxShaderBytes = 4U * 1024U * 1024U;
+    std::uint64_t maxShaderBytes = 4ULL * 1024U * 1024U;
     std::uint32_t maxTextures = 32;
     std::uint32_t max3dEdge = 129;
-    std::uint64_t maxAggregateLutBytes = 256U * 1024U * 1024U;
+    std::uint64_t maxAggregateLutBytes = 256ULL * 1024U * 1024U;
     std::uint32_t maxUniforms = 256;
     std::uint32_t maxDynamicPropertyCount = 32;
-    std::uint64_t maxUniformBufferBytes = 64U * 1024U;
+    std::uint64_t maxUniformBufferBytes = 64ULL * 1024U;
 };
 
 // The immutable extracted program. `shaderText` is the exact OCIO GLSL_VK_4_6 program, including

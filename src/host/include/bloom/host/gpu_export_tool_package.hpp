@@ -87,7 +87,7 @@ parsePackagedToolDigest(const std::string_view text) {
     return std::filesystem::weakly_canonical(std::filesystem::path(buffer));
 #else
     std::error_code error;
-    const auto path = std::filesystem::read_symlink("/proc/self/exe", error);
+    auto path = std::filesystem::read_symlink("/proc/self/exe", error);
     if (error) {
         return {};
     }
