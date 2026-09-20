@@ -24,6 +24,7 @@
 // stage carries CpuReference, and neither is inferred from the other. A GPU-evaluated process is
 // never stamped CpuReference.
 
+#include <bloom/core/sha256.hpp>
 #include <bloom/render/gpu_resident_display.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/gpu_resident_frame_lease.hpp>
@@ -116,5 +117,37 @@ makeGpuResidentDisplayProductRequest(const PreviewCpuStage& stage,
 [[nodiscard]] GpuResidentDisplayProductRequest
 makeGpuResidentDisplayProductRequest(const PreparedGpuScene& scene, PreviewRequestIdentity identity,
                                      std::shared_ptr<const render::GpuDisplayImage> display);
+
+// --- General display product -------------------------------------------------------------------
+//
+// The general display route produces a resident RGBA8 image through the per-request OCIO
+// DisplayRgba8 program (runtime::GpuOcioDisplayArm), not the startup Neutral shader. This factory
+// validates the actual native image against the trusted prepared-scene output descriptor and the
+// pretend command geometry, then publishes the opaque lease. It does NOT fabricate a Neutral
+// qualification report: the general display identity and its genuine program qualification are
+// carried by the caller (the service stage), and the frame is built with an explicit general
+// provenance. Eligibility is governed by the real device/geometry/budget relationship only.
+struct GpuGeneralDisplayProductRequest final {
+    PreviewRequestIdentity identity;
+    ProcessFrameIdentity processIdentity{.plan = nullptr,
+                                         .time = core::RationalTime{},
+                                         .output = OperationIndex::fromRaw(0),
+                                         .resolution = CompositionFormatResolution{}};
+    std::vector<EvaluatedOperationBounds> bounds;
+    std::optional<render::Rgba32fImageDescriptor> expectedDescriptor;
+    std::shared_ptr<const render::GpuDisplayImage> display;
+    std::size_t pixelStorageByteLimit = 0;
+    // The exact command identity the display arm dispatched, so a consumer can correlate the frame
+    // with the prepared program.
+    core::Sha256Digest displayCommandIdentity{};
+};
+
+[[nodiscard]] bool gpuGeneralDisplayProductIsEligible(
+    render::GpuDevice& device, const GpuResidentFrameLeaseRegistry& registry,
+    const GpuGeneralDisplayProductRequest& request, std::string& reason) noexcept;
+
+[[nodiscard]] std::optional<PreparedPreviewFrame>
+makeGpuGeneralDisplayPreview(render::GpuDevice& device, GpuResidentFrameLeaseRegistry& registry,
+                             GpuGeneralDisplayProductRequest request) noexcept;
 
 } // namespace bloom::runtime

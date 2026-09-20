@@ -20,6 +20,7 @@
 
 #include <bloom/render/gpu_presentation_types.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_ocio_display_arm.hpp>
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
@@ -110,10 +111,20 @@ gpuSceneMediaContextFor(const runtime::CpuCompositionEvaluator& evaluator,
 // media-follows-session seam; the evaluator's canonical accessors are internally locked.
 [[nodiscard]] runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
     const runtime::SnapshotCompiler& compiler, const runtime::CpuCompositionEvaluator& evaluator,
-    const runtime::QualifiedDisplayProcessorProvider& qualifiedProcessorProvider,
+    const runtime::QualifiedDisplayProcessorProvider& qualifiedDisplayProcessorProvider,
     std::shared_ptr<runtime::GpuSceneCoverageCache> coverageCache,
     std::shared_ptr<runtime::GpuPreparedUploadCache> uploadCache,
-    CompiledPlanCacheHandle planCache = nullptr);
+    CompiledPlanCacheHandle planCache = nullptr,
+    std::shared_ptr<const runtime::GpuDisplayProgramService> displayProgramService = nullptr);
+
+// Builds the off-UI general-display program service from a lazy compile-options provider. The
+// provider is NOT invoked here: it runs on the first prepare() call on the GPU-scene CPU worker, so
+// no shader-tool resolution, hashing, config resolution, or compilation ever happens on the UI
+// thread. The provider returns empty paths when the packaged tools cannot be resolved; every
+// affected request then takes the CPU display fallback (never a silent approximation).
+[[nodiscard]] std::shared_ptr<const runtime::GpuDisplayProgramService>
+makeGpuDisplayProgramService(runtime::GpuDisplayProgramService::CompileOptionsProvider
+                                 optionsProvider);
 
 // Owns the cached presentation capability for the whole application. It is not a QObject, holds no
 // native handle, and never blocks. The application refreshes it from the EXISTING TaskUiBridge poll

@@ -12,6 +12,7 @@
 #include <bloom/render/gpu_neutral_display.hpp>
 #include <bloom/render/gpu_resident_display.hpp>
 #include <bloom/runtime/gpu_neutral_display_qualification.hpp>
+#include <bloom/runtime/gpu_ocio_display_arm.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
@@ -121,6 +122,13 @@ struct PreviewDisplayServiceCore final {
     std::unique_ptr<GpuSceneCache> residentSceneCache;
     std::unique_ptr<GpuSceneExecutor> residentExecutor;
     std::unique_ptr<render::GpuResidentDisplay> residentDisplay;
+    // General display arm: the exact OCIO DisplayRgba8 executor for a request whose display/view is
+    // not the startup self-qualified Neutral pair. Created lazily on the owner thread the first time
+    // a stage carries a per-request display program, and reused for every such frame.
+    std::unique_ptr<GpuOcioDisplayArm> residentGeneralDisplay;
+    // The command identity of the general display program that produced the last published frame.
+    // Owner-thread only; used so a display/view change is visible as a distinct program.
+    core::Sha256Digest publishedGeneralDisplayIdentity{};
     // Genuine immutable resident qualification report, produced on the owner thread at startup
     // independently of the packed readback qualification. Never fabricated.
     std::shared_ptr<const GpuResidentPreviewQualificationReport> residentQualification;
@@ -421,6 +429,15 @@ struct GpuPreviewDisplayServiceTestAccess final {
     }
     static bool residentRouteAvailable(const PreviewDisplayServiceCore& core) {
         return core.residentExecutor != nullptr && core.residentDisplay != nullptr;
+    }
+    // General-display probes (read-only, owner-created state). `generalDisplayActive` is true once
+    // the service lazily created the OCIO display arm for a request; `generalDisplayIdentity` is the
+    // exact DisplayRgba8 command identity of the last published general frame.
+    static bool generalDisplayActive(const PreviewDisplayServiceCore& core) {
+        return core.residentGeneralDisplay != nullptr;
+    }
+    static core::Sha256Digest generalDisplayIdentity(const PreviewDisplayServiceCore& core) {
+        return core.publishedGeneralDisplayIdentity;
     }
     static std::shared_ptr<PreviewDisplayServiceCore>
     coreOf(const GpuPreviewDisplayService& service);

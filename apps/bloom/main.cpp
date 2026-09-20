@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <bloom/color/gpu_shader_tool_resolver.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -48,6 +49,7 @@
 #include <QTimer>
 
 #include <memory>
+#include <filesystem>
 
 int main(int argc, char* argv[]) {
     QApplication application(argc, argv);
@@ -225,9 +227,43 @@ int main(int argc, char* argv[]) {
     // Open/SaveAs that changes the session base directory.
     auto gpuSceneCoverageCache = std::make_shared<bloom::runtime::GpuSceneCoverageCache>();
     auto gpuPreparedUploadCache = std::make_shared<bloom::runtime::GpuPreparedUploadCache>();
+    // The general-display program service. The packaged glslangValidator/spirv-val paths come from
+    // the application's OWN packaging macros (never PATH, never a manual setup), resolved through the
+    // color resolver's inventory validation. That resolution (and the per-project OCIO config
+    // resolution and shader compilation) is LAZY: the provider below runs on the GPU-scene CPU
+    // worker on first use, never on the UI thread. Without the tools every affected request takes
+    // the CPU display fallback.
+    std::shared_ptr<const bloom::runtime::GpuDisplayProgramService> gpuDisplayProgramService;
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
+    {
+        bloom::color::GpuShaderToolPackage toolPackage;
+        toolPackage.toolsDirectory = BLOOM_GPU_TOOLS_DIR;
+        toolPackage.inventoryName = BLOOM_GPU_TOOLS_INVENTORY_NAME;
+        toolPackage.glslangValidatorName = BLOOM_GPU_TOOLS_GLSLANG_NAME;
+        toolPackage.spirvValName = BLOOM_GPU_TOOLS_SPIRV_VAL_NAME;
+        toolPackage.relocated = static_cast<bool>(BLOOM_GPU_TOOLS_RELOCATED);
+#ifdef BLOOM_GPU_TOOLS_BUNDLE_RELATIVE
+        toolPackage.bundleRelative = true;
+#endif
+        const auto applicationPath =
+            std::filesystem::path(QCoreApplication::applicationFilePath().toStdString());
+        gpuDisplayProgramService = bloom::ui::makeGpuDisplayProgramService(
+            [toolPackage, applicationPath]() -> bloom::runtime::GpuOcioCompileOptions {
+                bloom::runtime::GpuOcioCompileOptions options;
+                bloom::color::GpuShaderToolResolver resolver;
+                const auto resolved = resolver.resolve(applicationPath, toolPackage);
+                if (!resolved.ok) {
+                    return options;
+                }
+                options.glslangValidatorPath = resolved.paths.glslangValidator;
+                options.spirvValPath = resolved.paths.spirvVal;
+                return options;
+            });
+    }
+#endif
     auto gpuPreviewGpuSceneStage = bloom::ui::makeSessionRefreshingGpuSceneStage(
         snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, gpuSceneCoverageCache,
-        gpuPreparedUploadCache, compiledPlanCache);
+        gpuPreparedUploadCache, compiledPlanCache, gpuDisplayProgramService);
     auto gpuPreviewCpuStage = bloom::ui::makeCompositionPreviewCpuStage(
         snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, compiledPlanCache);
     auto gpuPreviewCpuDisplayFallback =

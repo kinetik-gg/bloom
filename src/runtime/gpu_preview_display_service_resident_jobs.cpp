@@ -355,6 +355,13 @@ void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>&
     const bool eligible = residentStageIsEligible(core, *stage, reason);
     if (!eligible || core->residentNativeReady.size() >= core->options.readyStageQueueCapacity) {
         core->counterCpuFallbacks.fetch_add(1, std::memory_order_relaxed);
+        const std::string detail =
+            eligible ? std::string("the resident ready-stage queue is full")
+                     : (reason.empty() ? std::string("the resident stage was not eligible") : reason);
+        {
+            std::lock_guard lock(core->stateMutex);
+            core->publishedResidentDetail = "resident stage ineligible: " + detail;
+        }
         dispatchResidentCpuFallbackChild(core, stage);
         return;
     }
@@ -367,16 +374,17 @@ void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>&
 // -----------------------------------------------------------------------------------------------
 
 void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
+    // The general display route needs only the scene executor; the Neutral fast path additionally
+    // requires the resident display (checked per-stage in residentStageIsEligible/residentDisplayBegin).
     if (!core->residentNativeReady.empty() &&
-        (core->residentExecutor == nullptr || core->residentDisplay == nullptr ||
-         core->stopping.load(std::memory_order_acquire))) {
+        (core->residentExecutor == nullptr || core->stopping.load(std::memory_order_acquire))) {
         while (!core->residentNativeReady.empty()) {
             auto stage = core->residentNativeReady.front();
             core->residentNativeReady.pop_front();
             finishResidentImmediately(core, stage, false);
         }
     }
-    if (core->residentExecutor == nullptr || core->residentDisplay == nullptr) {
+    if (core->residentExecutor == nullptr) {
         return;
     }
 

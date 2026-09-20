@@ -207,6 +207,36 @@ target_link_libraries(bloom_composition_preview_cpu_stage_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_preview_gpu_scene_stage_test PRIVATE bloom_ui)
 target_include_directories(bloom_composition_preview_gpu_scene_stage_test
     PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/tests")
+# Production general-display stage path. It needs the pinned glslangValidator/spirv-val to compile a
+# real OCIO DisplayRgba8 program; without them the general case is compiled out and the test is a
+# clean pass with no general assertion (never a fabricated success).
+add_executable(bloom_composition_preview_gpu_scene_general_test
+    composition_preview_gpu_scene_general_tests.cpp)
+target_include_directories(bloom_composition_preview_gpu_scene_general_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_composition_preview_gpu_scene_general_test PRIVATE bloom_ui)
+find_program(bloom_ui_general_ocio_glslang_validator
+    NAMES glslangValidator
+    HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
+    NO_DEFAULT_PATH)
+find_program(bloom_ui_general_ocio_spirv_val
+    NAMES spirv-val
+    HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
+    NO_DEFAULT_PATH)
+if(bloom_ui_general_ocio_glslang_validator AND bloom_ui_general_ocio_spirv_val)
+    get_filename_component(bloom_ui_general_ocio_tools_dir
+        "${bloom_ui_general_ocio_glslang_validator}" DIRECTORY)
+    target_compile_definitions(bloom_composition_preview_gpu_scene_general_test PRIVATE
+        "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_ui_general_ocio_tools_dir}\"")
+endif()
+bloom_enable_warnings(bloom_composition_preview_gpu_scene_general_test)
+bloom_add_test(
+    NAME bloom.ui.composition_preview_gpu_scene_general
+    COMMAND bloom_composition_preview_gpu_scene_general_test
+    LABELS ui gpu color
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
 target_link_libraries(bloom_gpu_preview_submitter_test PRIVATE bloom_ui)
 target_link_libraries(bloom_gpu_preview_app_test PRIVATE bloom_ui bloom_runtime_evaluator)
 # bloom_ui_gpu_presentation_target_test adopts the borrowed VkInstance through Qt's public

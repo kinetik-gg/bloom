@@ -1,5 +1,7 @@
 #include <bloom/ui/gpu_viewer_bootstrap.hpp>
 
+#include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/ui/composition_preview_gpu_scene_stage.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 
@@ -101,10 +103,12 @@ runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
     const runtime::QualifiedDisplayProcessorProvider& qualifiedProcessorProvider,
     std::shared_ptr<runtime::GpuSceneCoverageCache> coverageCache,
     std::shared_ptr<runtime::GpuPreparedUploadCache> uploadCache,
-    CompiledPlanCacheHandle planCache) {
+    CompiledPlanCacheHandle planCache,
+    std::shared_ptr<const runtime::GpuDisplayProgramService> displayProgramService) {
     return [&compiler, &evaluator, &qualifiedProcessorProvider,
             coverageCache = std::move(coverageCache), uploadCache = std::move(uploadCache),
-            planCache = std::move(planCache)](
+            planCache = std::move(planCache),
+            displayProgramService = std::move(displayProgramService)](
                const document::Snapshot& snapshot,
                const runtime::PreviewRequestIdentity& desiredIdentity,
                const std::size_t pixelStorageByteLimit,
@@ -116,10 +120,19 @@ runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
         auto mediaContext = gpuSceneMediaContextFor(evaluator, uploadCache);
         const runtime::CpuGpuSceneBuilder builder(coverageCache, std::move(mediaContext));
         auto stage = makeCompositionPreviewGpuSceneStage(compiler, builder,
-                                                         qualifiedProcessorProvider, planCache);
+                                                         qualifiedProcessorProvider, planCache,
+                                                         displayProgramService);
         return stage(snapshot, desiredIdentity, pixelStorageByteLimit, interactionOverride,
                      context);
     };
+}
+
+std::shared_ptr<const runtime::GpuDisplayProgramService>
+makeGpuDisplayProgramService(runtime::GpuDisplayProgramService::CompileOptionsProvider
+                                 optionsProvider) {
+    // The provider is stored, never invoked: no resolution/hash/compile happens here. The service
+    // performs its first I/O on the GPU-scene CPU worker.
+    return std::make_shared<const runtime::GpuDisplayProgramService>(std::move(optionsProvider));
 }
 
 GpuViewerBootstrap::GpuViewerBootstrap(runtime::TaskScheduler& scheduler,

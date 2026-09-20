@@ -2,6 +2,7 @@
 
 #include "composition_preview_stage_shared.hpp"
 
+#include <bloom/runtime/gpu_neutral_display_qualification.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
 #include <memory>
@@ -104,11 +105,13 @@ using detail::validateStageRequest;
 runtime::PreviewGpuSceneStageFunction makeCompositionPreviewGpuSceneStage(
     const runtime::SnapshotCompiler& compiler, const runtime::CpuGpuSceneBuilder& builder,
     const runtime::QualifiedDisplayProcessorProvider& qualifiedProcessorProvider,
-    CompiledPlanCacheHandle planCache) {
+    CompiledPlanCacheHandle planCache,
+    std::shared_ptr<const runtime::GpuDisplayProgramService> displayProgramService) {
     if (planCache == nullptr) {
         planCache = std::make_shared<CompiledPlanCache>();
     }
-    return [&compiler, &builder, &qualifiedProcessorProvider, planCache = std::move(planCache)](
+    return [&compiler, &builder, &qualifiedProcessorProvider, planCache = std::move(planCache),
+            displayProgramService = std::move(displayProgramService)](
                const document::Snapshot& snapshot,
                const runtime::PreviewRequestIdentity& desiredIdentity,
                const std::size_t pixelStorageByteLimit,
@@ -202,9 +205,64 @@ runtime::PreviewGpuSceneStageFunction makeCompositionPreviewGpuSceneStage(
                 "The selected OCIO working space could not prepare a qualified display transform"));
         }
 
-        auto stage = std::make_shared<const runtime::PreviewGpuSceneStage>(
-            desiredIdentity, std::move(buildResult.scene), std::move(selection.handle),
-            pixelStorageByteLimit, std::move(diagnostics));
+        // General display preparation: derive the request's exact project color binding from its
+        // color identity and prepare the OCIO DisplayRgba8 command for THAT binding on this CPU
+        // worker (never the UI thread; the service resolves tools and config lazily). The returned
+        // program's own binding is validated before it is carried on the stage, so a program for
+        // another config, working space, or display/view can never be accepted for this request even
+        // when the display/view names and geometry agree. Any refusal takes the full CPU display
+        // path (the stage carries no general program); it is never a silent downgrade.
+        std::shared_ptr<const runtime::GpuDisplayProgram> displayProgram;
+        if (displayProgramService != nullptr) {
+            const auto& descriptor = buildResult.scene->outputDescriptor();
+            const auto width = descriptor.dataWindow().extent().width();
+            const auto height = descriptor.dataWindow().extent().height();
+            const auto expectedBinding = runtime::gpuDisplayColorBindingForIntent(
+                desiredIdentity.colorIntent, desiredIdentity.displayName,
+                desiredIdentity.viewName);
+            context.reportProgress({.phase = "Preparing GPU preview scene",
+                                    .subphase = "Preparing the OCIO display program",
+                                    .completed = 0,
+                                    .total = std::nullopt});
+            runtime::GpuOcioCancellation cancel = [&context] {
+                return context.isCancellationRequested();
+            };
+            auto prepared = displayProgramService->prepare(expectedBinding, width, height,
+                                                           desiredIdentity.viewAdjust, cancel);
+            if (prepared.error == runtime::GpuDisplayProgramError::Cancelled) {
+                return StageResult::cancelled(std::move(diagnostics));
+            }
+            if (prepared.hasValue()) {
+                if (runtime::gpuDisplayProgramMatchesRequest(prepared.program, expectedBinding)) {
+                    displayProgram = std::make_shared<const runtime::GpuDisplayProgram>(
+                        std::move(prepared.program));
+                } else {
+                    diagnostics.push_back(
+                        {.code = "bloom.preview.gpu-scene.display-binding-mismatch",
+                         .severity = runtime::DiagnosticSeverity::Warning,
+                         .summary = "The prepared display program does not match the request's "
+                                    "project color identity",
+                         .detail = prepared.diagnostic,
+                         .suggestedAction = "Take the full CPU composition preview path."});
+                }
+            } else if (!prepared.diagnostic.empty()) {
+                diagnostics.push_back(
+                    {.code = "bloom.preview.gpu-scene.display-unavailable",
+                     .severity = runtime::DiagnosticSeverity::Warning,
+                     .summary = prepared.diagnostic,
+                     .detail = {},
+                     .suggestedAction = "Take the full CPU composition preview path."});
+            }
+        }
+
+        std::shared_ptr<const runtime::PreviewGpuSceneStage> stage =
+            displayProgram != nullptr
+                ? std::make_shared<const runtime::PreviewGpuSceneStage>(
+                      desiredIdentity, std::move(buildResult.scene), std::move(selection.handle),
+                      std::move(displayProgram), pixelStorageByteLimit, std::move(diagnostics))
+                : std::make_shared<const runtime::PreviewGpuSceneStage>(
+                      desiredIdentity, std::move(buildResult.scene), std::move(selection.handle),
+                      pixelStorageByteLimit, std::move(diagnostics));
         return StageResult::succeeded(std::make_shared<const runtime::PreviewGpuSceneStageOutcome>(
             runtime::PreviewGpuSceneStageOutcome{.status =
                                                      runtime::PreviewGpuSceneStageStatus::Prepared,
