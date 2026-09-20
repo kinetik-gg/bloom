@@ -1,3 +1,20 @@
+void paintViewerCompositionFrame(QPainter& painter, const QRectF& displayRect) {
+    painter.setPen(QPen(kit::color(kit::Color::CompositionFrame), kit::kCompositionFrameWidth));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(displayRect.adjusted(0.0, 0.0, -kit::kCompositionFrameWidth,
+                                          -kit::kCompositionFrameWidth));
+}
+
+void paintViewerEmptyInvitation(QPainter& painter, const QRectF& canvasRect,
+                                const QString& invitation) {
+    if (invitation.isEmpty()) {
+        return;
+    }
+    painter.setFont(kit::font(kit::TypeRole::Ui));
+    painter.setPen(kit::color(kit::Color::Muted));
+    painter.drawText(canvasRect, Qt::AlignCenter, invitation);
+}
+
 void ViewerEditor::setGpuPresentationDependencies(
     std::shared_ptr<runtime::GpuPresentationClient> client, runtime::TaskScheduler* scheduler,
     std::string vulkanLoaderPath, const double devicePixelRatio) {
@@ -88,6 +105,9 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
         const auto descriptor = render::ReferenceDisplayBufferDescriptor::create(
             resident->displayWindow, resident->pixelAspect);
         if (descriptor) {
+            // The composition frame is part of the CPU paint (paintViewerContent); the native
+            // overlay must draw it too or a resident composition has no visible bounds at all.
+            paintViewerCompositionFrame(painter, displayRect);
             const ViewerMapping mapping{displayRect, composition->format(),
                                         frame->desiredIdentity().resolution, resident->pixelAspect,
                                         *descriptor.value()};
@@ -102,6 +122,10 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
         paintCreation(painter);
         paintPathTools(painter);
         paintTextEditing(painter);
+        // The empty-state invitation is drawn by paintEvent() on the CPU path, which resident
+        // presentation skips entirely; record it here so an active composition with no layers still
+        // invites a layer instead of reading as a bare checkerboard.
+        paintViewerEmptyInvitation(painter, canvasRect(), emptyStateInvitation());
         painter.end();
         if (!picture.isNull()) {
             request.overlay.picture = picture;
@@ -350,6 +374,16 @@ void ViewerEditor::forwardGpuInput(const ViewerGpuInputEvent& event) {
     const QPointF origin = gpuContainer_ != nullptr ? QPointF(gpuContainer_->pos()) : QPointF{};
     const QPointF local = event.local + origin;
     const QPointF global = event.global;
+    // Native present routes input through the presenter's QWindow, which is NOT a descendant the
+    // workspace's own widget event filter watches. Calling the handlers directly would therefore
+    // bypass both that filter (panel activation) and Qt's normal delivery. Re-dispatch through
+    // QCoreApplication::sendEvent() so application and receiver event filters see the event exactly
+    // as they would for a click on the widget itself; the viewer is the correct receiver because
+    // `local` was translated into its coordinates above.
+    const auto dispatch = [this](QEvent* forwarded) {
+        static_cast<void>(QCoreApplication::sendEvent(this, forwarded));
+        updateGpuResidentPresentation();
+    };
     switch (event.kind) {
     case ViewerGpuInputKind::MousePress:
     case ViewerGpuInputKind::MouseRelease:
@@ -360,28 +394,19 @@ void ViewerEditor::forwardGpuInput(const ViewerGpuInputEvent& event) {
                                                              : QEvent::MouseButtonDblClick;
         QMouseEvent forwarded(type, local, local, global, event.button, event.buttons,
                               event.modifiers);
-        if (type == QEvent::MouseButtonPress) {
-            mousePressEvent(&forwarded);
-        } else if (type == QEvent::MouseButtonRelease) {
-            mouseReleaseEvent(&forwarded);
-        } else {
-            mouseDoubleClickEvent(&forwarded);
-        }
-        updateGpuResidentPresentation();
+        dispatch(&forwarded);
         break;
     }
     case ViewerGpuInputKind::MouseMove: {
         QMouseEvent forwarded(QEvent::MouseMove, local, local, global, Qt::NoButton, event.buttons,
                               event.modifiers);
-        mouseMoveEvent(&forwarded);
-        updateGpuResidentPresentation();
+        dispatch(&forwarded);
         break;
     }
     case ViewerGpuInputKind::Wheel: {
         QWheelEvent forwarded(local, global, event.pixelDelta, event.angleDelta, event.buttons,
                               event.modifiers, event.scrollPhase, event.inverted);
-        wheelEvent(&forwarded);
-        updateGpuResidentPresentation();
+        dispatch(&forwarded);
         break;
     }
     case ViewerGpuInputKind::KeyPress:
@@ -389,19 +414,13 @@ void ViewerEditor::forwardGpuInput(const ViewerGpuInputEvent& event) {
         QKeyEvent forwarded(event.kind == ViewerGpuInputKind::KeyPress ? QEvent::KeyPress
                                                                        : QEvent::KeyRelease,
                             event.key, event.modifiers, event.text, event.autoRepeat);
-        if (event.kind == ViewerGpuInputKind::KeyPress) {
-            keyPressEvent(&forwarded);
-        } else {
-            QWidget::keyReleaseEvent(&forwarded);
-        }
-        updateGpuResidentPresentation();
+        dispatch(&forwarded);
         break;
     }
     case ViewerGpuInputKind::InputMethod: {
         QInputMethodEvent forwarded;
         forwarded.setCommitString(event.text);
-        inputMethodEvent(&forwarded);
-        updateGpuResidentPresentation();
+        dispatch(&forwarded);
         break;
     }
     case ViewerGpuInputKind::FocusIn:
@@ -416,7 +435,7 @@ void ViewerEditor::forwardGpuInput(const ViewerGpuInputEvent& event) {
         break;
     case ViewerGpuInputKind::Leave: {
         QEvent forwarded(QEvent::Leave);
-        leaveEvent(&forwarded);
+        dispatch(&forwarded);
         break;
     }
     case ViewerGpuInputKind::GrabMouse:

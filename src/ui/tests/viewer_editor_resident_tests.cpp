@@ -26,16 +26,23 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
+#include <bloom/render/display_buffer.hpp>
 #include <bloom/render/gpu_present_image.hpp>
+#include <bloom/render/image_types.hpp>
 #include <bloom/runtime/gpu_presentation_coordinator.hpp>
+#include <bloom/runtime/prepared_preview_frame.hpp>
+#include <bloom/ui/viewer_gpu_resident.hpp>
 
 #include "viewer_gpu_presenter_port.hpp"
 
 #include <QApplication>
+#include <QColor>
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QEvent>
 #include <QEventLoop>
 #include <QImage>
+#include <QPainter>
 #include <QPixmap>
 
 #include <chrono>
@@ -65,6 +72,21 @@ class Expectations final {
 
   private:
     int failures_ = 0;
+};
+
+// Counts MouseButtonPress events delivered to the widget it filters, proving native input is
+// re-dispatched through Qt (which runs receiver event filters) rather than only the handler.
+class PressFilter final : public QObject {
+  public:
+    int presses = 0;
+
+  protected:
+    bool eventFilter(QObject*, QEvent* event) override {
+        if (event->type() == QEvent::MouseButtonPress) {
+            ++presses;
+        }
+        return false;
+    }
 };
 
 // A port that reports no usable borrowed instance, so the presenter stays
@@ -251,9 +273,122 @@ void testViewerEditorResidentGateIsInertAndKeepsCpuPaint(Expectations& expectati
     expectations.expect(ui::cpuFallbackCompletionIsCurrent(newer, newer),
                         "the matching fallback completion is current");
 
+    // 7. Native-present input is re-dispatched through Qt, so a receiver event filter (the
+    // workspace's panel-activation filter) sees it. A direct mousePressEvent() call would bypass
+    // that filter entirely and leave the panel inactive even though the click landed.
+    PressFilter pressFilter;
+    viewer.installEventFilter(&pressFilter);
+    ui::ViewerGpuInputEvent press;
+    press.kind = ui::ViewerGpuInputKind::MousePress;
+    press.local = QPointF(12.0, 9.0);
+    press.global = QPointF(12.0, 9.0);
+    press.button = Qt::LeftButton;
+    press.buttons = Qt::LeftButton;
+    viewer.forwardGpuInputForTest(press);
+    expectations.expect(
+        pressFilter.presses == 1,
+        "forwarded native input runs receiver event filters, not just the handler");
+
     controller.beginShutdown();
     bridge.beginShutdown();
     (void)waitUntil([&] { return scheduler.isQuiescent(); });
+}
+
+void testResidentFrameGeometryResolvesTheSameMappingDescriptor(Expectations& expectations) {
+    // Direct manipulation resolves its display descriptor from EITHER the CPU packed buffer view OR
+    // the GPU-resident lease's immutable geometry. A resident frame has no CPU buffer
+    // (displayBufferView() is nullopt by construction), so currentMapping() previously refused
+    // every resident gesture; this pins that the resident arm resolves geometry-only, with no
+    // readback and no fabricated buffer. A synthetic ResidentFrameGeometry is used because the
+    // production resident lease requires a real GPU device, but the descriptor depends only on the
+    // geometry the lease exposes.
+    const auto extent = render::ImageExtent::create(1920, 1080);
+    const auto window = render::ImageWindow::create(-2, 5, 1920, 1080);
+    expectations.expect(extent.hasValue() && window.hasValue(), "fixture geometry is valid");
+    if (!extent.hasValue() || !window.hasValue()) {
+        return;
+    }
+    const auto pixelAspect = core::PixelAspectRatio::square();
+    const auto expected =
+        render::ReferenceDisplayBufferDescriptor::create(*window.value(), pixelAspect);
+    expectations.expect(expected.hasValue(), "the fixture descriptor is valid");
+    if (!expected.hasValue()) {
+        return;
+    }
+
+    const runtime::PreviewDisplayBufferView cpuView{
+        .displayWindow = *window.value(),
+        .pixelAspect = pixelAspect,
+        .layout = render::PackedImageLayout{0, 0, 0},
+        .pixels = {},
+        .isOcioQualified = false,
+    };
+
+    const ui::ResidentFrameGeometry residentGeometry{
+        .displayExtent = *extent.value(),
+        .displayWindow = *window.value(),
+        .pixelAspect = pixelAspect,
+        .lease = {},
+    };
+
+    const auto fromCpu = ui::viewerDisplayDescriptorForFrame(cpuView, std::nullopt);
+    const auto fromResident = ui::viewerDisplayDescriptorForFrame(std::nullopt, residentGeometry);
+    expectations.expect(fromCpu.has_value() && fromResident.has_value(),
+                        "both the CPU buffer and the resident lease resolve a descriptor");
+    if (fromCpu.has_value() && fromResident.has_value()) {
+        expectations.expect(*fromCpu == *fromResident,
+                            "resident geometry maps exactly like the equivalent CPU buffer view");
+        expectations.expect(*fromResident == *expected.value(),
+                            "the resident descriptor is the lease's own geometry, not a readback");
+    }
+    expectations.expect(!ui::viewerDisplayDescriptorForFrame(std::nullopt, std::nullopt).has_value(),
+                        "neither source yields no descriptor");
+}
+
+void testCompositionFrameChromePaintsWithoutADevice(Expectations& expectations) {
+    // The resident overlay is the only paint on the GPU route; it records the same composition
+    // frame border and empty-state invitation the CPU path draws. Both are painted here with no
+    // device, so the shared helpers can never silently stop emitting visible ink.
+    const QRectF displayRect(30.0, 20.0, 180.0, 100.0);
+    const QRectF canvasRect(0.0, 0.0, 240.0, 140.0);
+
+    QImage canvas(240, 140, QImage::Format_ARGB32_Premultiplied);
+    canvas.fill(Qt::transparent);
+    QPainter painter(&canvas);
+    ui::paintViewerCompositionFrame(painter, displayRect);
+    ui::paintViewerEmptyInvitation(painter, canvasRect, QStringLiteral("Create a layer to begin"));
+    painter.end();
+    expectations.expect(canvas.pixelColor(30, 20).alpha() > 0,
+                        "the composition frame border paints visible ink");
+
+    bool invitationInk = false;
+    for (int y = 40; y < 100 && !invitationInk; ++y) {
+        for (int x = 40; x < 200; ++x) {
+            if (canvas.pixelColor(x, y).alpha() > 0) {
+                invitationInk = true;
+                break;
+            }
+        }
+    }
+    expectations.expect(invitationInk, "the empty-state invitation paints visible ink");
+
+    QImage bare(240, 140, QImage::Format_ARGB32_Premultiplied);
+    bare.fill(Qt::transparent);
+    QPainter barePainter(&bare);
+    ui::paintViewerCompositionFrame(barePainter, displayRect);
+    ui::paintViewerEmptyInvitation(barePainter, canvasRect, QString());
+    barePainter.end();
+    bool interiorInk = false;
+    for (int y = 40; y < 100 && !interiorInk; ++y) {
+        for (int x = 40; x < 200; ++x) {
+            if (bare.pixelColor(x, y).alpha() > 0) {
+                interiorInk = true;
+                break;
+            }
+        }
+    }
+    expectations.expect(!interiorInk,
+                        "an empty invitation paints no interior ink over the composition");
 }
 
 } // namespace
@@ -262,6 +397,8 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     Expectations expectations;
     testViewerEditorResidentGateIsInertAndKeepsCpuPaint(expectations);
+    testResidentFrameGeometryResolvesTheSameMappingDescriptor(expectations);
+    testCompositionFrameChromePaintsWithoutADevice(expectations);
     if (expectations.failures() == 0) {
         std::cout << "PASS: actual ViewerEditor resident integration (CPU/inert gate)\n";
         return 0;

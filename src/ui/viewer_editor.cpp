@@ -2313,9 +2313,7 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
         // invitation names the composition; a project that has one but no layers names the layer.
         drawCanvasBackground(painter, surround, background_);
         if (!invitation.isEmpty()) {
-            painter.setFont(kit::font(kit::TypeRole::Ui));
-            painter.setPen(kit::color(kit::Color::Muted));
-            painter.drawText(frame, Qt::AlignCenter, invitation);
+            paintViewerEmptyInvitation(painter, frame, invitation);
         }
         return;
     }
@@ -2332,11 +2330,7 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
     paintViewerContent(painter);
     // An active composition with no layers still shows its layer invitation; a composition with
     // content (including one whose render is genuinely unsupported) shows no empty-state text.
-    if (!invitation.isEmpty()) {
-        painter.setFont(kit::font(kit::TypeRole::Ui));
-        painter.setPen(kit::color(kit::Color::Muted));
-        painter.drawText(frame, Qt::AlignCenter, invitation);
-    }
+    paintViewerEmptyInvitation(painter, frame, invitation);
 }
 
 void ViewerEditor::paintViewerContent(QPainter& painter) {
@@ -2390,11 +2384,7 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
                     painter.drawImage(displayRect, shownImage, QRectF(shownImage.rect()));
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-                    painter.setPen(QPen(kit::color(kit::Color::CompositionFrame),
-                                        kit::kCompositionFrameWidth));
-                    painter.setBrush(Qt::NoBrush);
-                    painter.drawRect(displayRect.adjusted(0.0, 0.0, -kit::kCompositionFrameWidth,
-                                                          -kit::kCompositionFrameWidth));
+                    paintViewerCompositionFrame(painter, displayRect);
                     if (geometry.has_value()) {
                         const auto bounds = previewController_.selectedLayerBounds();
                         const auto descriptor = render::ReferenceDisplayBufferDescriptor::create(
@@ -2451,6 +2441,31 @@ void ViewerEditor::updatePreviewAccessibility() {
         tr("%1. %2. %3").arg(preview.message, frameDescription, colorStateDescription));
 }
 
+std::optional<render::ReferenceDisplayBufferDescriptor>
+viewerDisplayDescriptorForFrame(std::optional<runtime::PreviewDisplayBufferView> cpuView,
+                                std::optional<ResidentFrameGeometry> residentFrame) noexcept {
+    if (cpuView.has_value()) {
+        const auto descriptorResult = render::ReferenceDisplayBufferDescriptor::create(
+            cpuView->displayWindow, cpuView->pixelAspect);
+        if (!descriptorResult) {
+            return std::nullopt;
+        }
+        return *descriptorResult.value();
+    }
+    if (residentFrame.has_value()) {
+        // The resident arm has no host pixels by construction; its descriptor is built from the
+        // lease's immutable geometry exactly as buildResidentPresentRequest() already does for the
+        // native present. This is metadata, never a readback.
+        const auto descriptorResult = render::ReferenceDisplayBufferDescriptor::create(
+            residentFrame->displayWindow, residentFrame->pixelAspect);
+        if (!descriptorResult) {
+            return std::nullopt;
+        }
+        return *descriptorResult.value();
+    }
+    return std::nullopt;
+}
+
 std::optional<ViewerMapping> ViewerEditor::currentMapping() const {
     const auto& preview = previewController_.state();
     const PreparedPreviewFrameHandle& frameHandle = preview.frame;
@@ -2483,23 +2498,24 @@ std::optional<ViewerMapping> ViewerEditor::currentMapping() const {
         return std::nullopt;
     }
     // The gesture-mapping geometry is alternative-agnostic (design decision 2): a qualified frame's
-    // window/pixel-aspect maps a drag gesture exactly the way a reference frame's does. The frozen
-    // ViewerMapping::displayDescriptor stays a
+    // window/pixel-aspect maps a drag gesture exactly the way a reference frame's does, and the
+    // GPU-resident arm (which has no host pixels at all) maps from its lease metadata the same way.
+    // The frozen ViewerMapping::displayDescriptor stays a
     // render::ReferenceDisplayBufferDescriptor purely as a geometry/change-detection value here
     // (extent, pixel aspect, packed layout) -- never as a claim that the underlying pixels are the
     // unqualified reference product; a qualified frame's isOcioQualified() bit lives on
     // PreviewDisplayBufferView above, not on this reused geometry type, and nothing reads this
     // descriptor's own (always-false) isOcioQualified() to decide provenance.
-    const auto bufferView = frameHandle->displayBufferView();
-    if (!bufferView.has_value()) {
-        return std::nullopt;
-    }
-    const auto descriptorResult = render::ReferenceDisplayBufferDescriptor::create(
-        bufferView->displayWindow, bufferView->pixelAspect);
+    //
+    // A resident frame's displayBufferView() is nullopt by construction; resolving the descriptor
+    // through the lease's immutable geometry (never a readback) is what lets direct manipulation
+    // work on the GPU presentation route instead of refusing every gesture forever.
+    const auto descriptorResult = viewerDisplayDescriptorForFrame(
+        frameHandle->displayBufferView(), residentFrameGeometry(*frameHandle));
     if (!descriptorResult) {
         return std::nullopt;
     }
-    const auto descriptor = *descriptorResult.value();
+    const auto descriptor = descriptorResult.value();
     // THE SEAM (task U3, decision 2): the frozen mapping rectangle used to be ALWAYS
     // fitDisplayRect() -- the fit-to-window rectangle, regardless of any zoom/pan. It is now
     // viewTransformedDisplayRect(), which composes the SAME fit rectangle when transform_ is in
