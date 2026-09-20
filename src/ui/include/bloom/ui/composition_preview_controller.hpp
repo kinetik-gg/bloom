@@ -32,7 +32,8 @@ class TaskUiBridge;
 inline constexpr std::size_t kDefaultPreviewPixelStorageByteLimit =
     std::size_t{512} * 1024U * 1024U;
 
-// Playback misses use Visible priority only when the delivery estimate fits the tick budget.
+// Playback misses use Visible priority; an idle tick always submits, while a busy tick (an active
+// or pending foreground request) is skipped rather than queued.
 enum class PreviewRequestKind : std::uint8_t {
     Interactive,
     Visible,

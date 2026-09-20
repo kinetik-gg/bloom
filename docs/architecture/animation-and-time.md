@@ -706,13 +706,15 @@ RAM Preview command: finish pre-rendering the range (or its budget-limited prefi
 Each due tick advances the exact session time and asks for its frame:
 
 - A cache hit publishes immediately without evaluation or coalescing.
-- A miss is admitted at `Visible` only when no foreground request is active/pending and the maximum
-  observed delivery duration for the current identity is at most half the time until the next tick.
-  Delivery timing includes queue, preparation, and UI polling; the extra half provides headroom.
-- Unknown, slow, or busy misses are skipped immediately. The previous picture remains visibly stale,
-  the frame is counted dropped, and speculative filling continues. A prediction is not a deadline
-  guarantee: an admitted frame arriving after its deadline or superseded by another tick cannot
-  replace the displayed picture. A valid late result may still enter the cache for a later loop.
+- A miss is admitted at `Visible` whenever no foreground request is active/pending. The measured
+  delivery estimate does not gate an idle admission: it is only refreshed by a successful
+  completion, so refusing to submit on an unknown or slow estimate would starve a cold, uncached
+  range forever. Delivery timing includes queue, preparation, and UI polling.
+- A busy miss (a foreground request is active or pending) is skipped immediately. The previous
+  picture remains visibly stale, the frame is counted dropped, and speculative filling continues. A
+  prediction is not a deadline guarantee: an admitted frame arriving after its deadline or
+  superseded by another tick cannot replace the displayed picture. A valid late result may still
+  enter the cache for a later loop.
 
 The transport retains its two exact clocks. If the next frame is cached, it advances exactly one
 frame per due tick, preserving frame-accurate RAM Preview even after a host stall. Otherwise it jumps

@@ -802,9 +802,13 @@ void CompositionPreviewController::requestPreview(const bool clearLastGoodFrame,
         }
     }
 
-    if (kind == PreviewRequestKind::Playback &&
-        (active_.has_value() || pending_.has_value() || !preparationEstimate_.has_value() ||
-         *preparationEstimate_ > playbackBudget_ / 2)) {
+    // Playback admission. A frame already in flight is never queued behind: drop this tick and keep
+    // the previous picture. When the controller is IDLE, a Playback tick must still submit even when
+    // the measured preparation estimate says it cannot fit the tick. `preparationEstimate_` is only
+    // refreshed by a successful completion, so refusing to submit while idle starves the transport
+    // permanently: the estimate can never change, no frame is ever cached, and playback never
+    // progresses or recovers. One-active/one-newest is preserved because a non-idle tick still drops.
+    if (kind == PreviewRequestKind::Playback && (active_.has_value() || pending_.has_value())) {
         noteDroppedFrame();
         publishTerminal(PreviewActivity::Cancelled,
                         tr("Playback skipped this frame; showing the previous frame"));
