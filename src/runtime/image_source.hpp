@@ -22,6 +22,12 @@ struct ImageSourceSelection {
     core::Sha256Digest configRevision;
     bool inputColorSpaceAutomatic = false;
     std::string cacheKey;
+    // Decode-only identity: validated asset/sequence-member content digest + the requested alpha
+    // association. It deliberately excludes the colour interpretation, input/working colour space,
+    // configuration revision and the proxy, because none of them change the RAW decoded bytes. The
+    // GPU media colour split keys its raw upload cache on this identity, so a changed working space
+    // or display reuses the decoded upload while a changed frame is a miss.
+    std::string decodeKey;
     // The disk cache's own content-addressed key (asset digest + member frame + interpretation +
     // input/working colour-space ids + config revision + decoder identity/version -- see
     // media-io.md "Disk cache").
@@ -65,4 +71,27 @@ evaluateImageSource(const ImageSourceSelection& selection,
                     double verticalScale, std::size_t budget, OperationCache* memoryCache,
                     ImageSourceMemoryCacheAccess memoryAccess, const CancellationToken& cancel,
                     media::cache::MediaDiskCache* diskCache = nullptr);
+
+// Decode-only factoring for the GPU media colour split. The connected evaluateImageSource() path
+// is unchanged; these two functions expose its halves so the GPU path can decode RAW (no OCIO
+// processor, no implicit conversion, no proxy resample hidden in host code), upload the full source
+// dimensions/metadata, and let the accepted GPU colour command run the input->working transform.
+
+// Decode the selected source with no input colour processor and no resample. The returned image
+// carries the native decoded pixels and the source's own descriptor. Selection, digest validation
+// and diagnostics are exactly media::decodeImage()'s; the interpretation is forced to a Raw,
+// processor-free decode so no OCIO pass runs.
+[[nodiscard]] media::ImageResult<std::shared_ptr<const render::Rgba32fImage>>
+decodeRawImageSource(const ImageSourceSelection& selection, std::size_t budget,
+                     const CancellationToken& cancel);
+
+// Rebase a decoded image into the evaluator's composition descriptor: a (0,0)-origin data window
+// sized ceil(sourceExtent * scale), the composition display window and pixel aspect. At unit scale
+// this is the evaluator's exact rebase copy; at a fractional proxy scale it is the evaluator's
+// exact nearest-neighbour copy. One implementation shared by evaluateImageSource() and the GPU
+// split.
+[[nodiscard]] media::ImageResult<render::Rgba32fImage>
+resampleDecodedImage(const render::Rgba32fImage& decoded,
+                     render::Rgba32fImageDescriptor composition, double horizontalScale,
+                     double verticalScale, std::size_t budget, const CancellationToken& cancel);
 } // namespace bloom::runtime::detail

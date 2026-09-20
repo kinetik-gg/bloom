@@ -454,14 +454,23 @@ void testUnsupported(Expectations& expectations) {
                                              PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
                             "ROI is refused before any work");
     }
-    // Non-linear color intent.
+    // A non-lin_rec709_scene working space is admitted for the colour-agnostic operations: a solid
+    // applies no working-space transform (the CPU reference only premultiplies the authored value),
+    // so it now prepares and carries the requested working space in its process identity. A
+    // transform that must resolve the working space still fails closed; that path is covered by the
+    // media/effect acceptance tests.
     {
         auto request = requestFor(*solidPlan);
         request.colorIntent.workingColorSpaceId = "acescg";
         const auto prepared = builder.build(solidPlan, request);
-        expectations.expect(!prepared && prepared.diagnostic.code ==
-                                             PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
-                            "a non-lin_rec709_scene intent is refused");
+        expectations.expect(prepared.hasValue(),
+                            "a colour-agnostic solid scene prepares under a non-neutral working "
+                            "space");
+        if (prepared) {
+            expectations.expect(prepared.scene->processIdentity().colorIntent.workingColorSpaceId ==
+                                    "acescg",
+                                "the prepared identity carries the requested working space");
+        }
     }
     // An operation kind still outside the prepared subset (nested Composition Source).
     {

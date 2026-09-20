@@ -377,6 +377,54 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     return std::nullopt;
 }
 
+// Emits and wires one reachable CompiledImageEffect into the builder's per-operation state.
+// Identity effects alias the input command/key/window/bounds and keep the deferred vector chain; a
+// non-identity effect publishes its OCIO command chain and marks any materialized leaf consumed.
+// Keeping this here leaves the builder orchestrator within its size budget.
+template <typename Emit, typename Charge, typename ChargeCoverage>
+[[nodiscard]] std::optional<GpuSceneLeafFailure> emitImageEffectOperation(
+    const CompiledImageEffect& effect, const OperationIndex operationIndex,
+    const GpuSceneEffectEmissionContext& ctx, const GpuSceneOcioContext& ocioContext,
+    const CancellationToken& cancellation, Emit&& emit, Charge&& charge,
+    ChargeCoverage&& chargeCoverage, std::vector<GpuSceneCommandIndex>& commandForOperation,
+    std::vector<std::string>& keyOf,
+    std::vector<std::optional<render::ImageWindow>>& outputWindowOf,
+    std::vector<EvaluatedOperationBounds>& bounds,
+    std::vector<std::optional<GpuSceneVectorChain>>& vectors, std::vector<bool>& textConsumed,
+    std::vector<bool>& shapeConsumed) {
+    GpuSceneEffectEmission emitted;
+    if (const auto error =
+            emitImageEffectCommand(effect, operationIndex, ctx, ocioContext, cancellation, emit,
+                                   charge, chargeCoverage, emitted)) {
+        return error;
+    }
+    const std::size_t index = operationIndex.value();
+    const std::size_t input = effect.input.value();
+    if (emitted.identity) {
+        commandForOperation[index] = commandForOperation[input];
+        keyOf[index] = keyOf[input];
+        outputWindowOf[index] = outputWindowOf[input];
+        bounds[index].local = bounds[input].output;
+        bounds[index].output = bounds[index].local;
+        vectors[index] = vectors[input];
+        return std::nullopt;
+    }
+    commandForOperation[index] = emitted.command;
+    keyOf[index] = emitted.key;
+    outputWindowOf[index] = emitted.window;
+    bounds[index].local = emitted.local;
+    bounds[index].output = emitted.output;
+    if (emitted.consumedLeaf != kNoVectorLeaf) {
+        if (emitted.consumedText) {
+            textConsumed[emitted.consumedLeaf] = true;
+        }
+        if (emitted.consumedShape) {
+            shapeConsumed[emitted.consumedLeaf] = true;
+        }
+    }
+    return std::nullopt;
+}
+
 } // namespace bloom::runtime::detail
 
 #endif // BLOOM_RUNTIME_GPU_SCENE_EFFECT_EMISSION_HPP

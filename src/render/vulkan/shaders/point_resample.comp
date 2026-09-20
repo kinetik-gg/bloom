@@ -1,0 +1,64 @@
+#version 460
+// Bloom PointResampleV1 compute shader. Offline-generated/embedded; do not edit at runtime.
+// Operation: PointResampleV1.
+//
+// Reproduces the media-image-proxy CPU oracle
+// (src/runtime/image_source.cpp evaluateImageSource) for the RGBA32F reference-parity profile:
+//   outputWidth  = max(1, ceil(sourceWidth  * horizontalScale))
+//   outputHeight = max(1, ceil(sourceHeight * verticalScale))
+//   sourceX(x)   = min(sourceWidth  - 1, (uint32)(double(x) / horizontalScale))
+//   sourceY(y)   = min(sourceHeight - 1, (uint32)(double(y) / verticalScale))
+//   out[y][x]    = in[sourceY(y)][sourceX(x)]
+// It is a BIT-EXACT copy: no interpolation, no colour transform, no alpha change.
+//
+// SAMPLE POINT PRECISION. The exact binary64 division is evaluated on the host, once per output
+// column and once per output row, and reduced to the clamped data-window-relative source index:
+//   sourceX[x] = min(sourceWidth  - 1, (uint32)(double(x) / horizontalScale))
+//   sourceY[y] = min(sourceHeight - 1, (uint32)(double(y) / verticalScale))
+// The host emits those indices as one bounded O(outputWidth + outputHeight) int32 storage buffer
+// (sourceX first, then sourceY) and the kernel only fetches the selected pixel. The kernel never
+// re-derives the mapping and needs no shaderFloat64. This is coordinate metadata only -- no
+// per-pixel RGBA is generated and no CPU resampling happens on the host.
+//
+// 2D FLATTENED DISPATCH. The output pixel space is flattened row-major into 256-wide workgroups.
+// The host dispatches (groupsX, groupsY) with groupsX clamped to maxComputeWorkGroupCount[0] and
+// the remainder carried in Y, so a frame whose X workgroup count exceeds the physical X limit is
+// still dispatched instead of being rejected. gl_NumWorkGroups.x times the local size is the
+// flattened row stride; invocations past the pixel count return immediately.
+//
+// The kernel is a pure imageLoad -> imageStore. imageLoad/imageStore on an rgba32f storage image
+// preserves every source bit, so non-finite, subnormal, negative, HDR, and alpha lanes are copied
+// exactly. There is consequently no error-flag buffer and no status rejection path: the CPU oracle
+// likewise copies the source lane unchanged.
+//
+// Binding 2 layout: int sourceIndex[outputWidth + outputHeight];
+//   [0, outputWidth)                 source x for each output column
+//   [outputWidth, +outputHeight)     source y for each output row
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D bloom_point_input;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D bloom_point_output;
+layout(set = 0, binding = 2, std430) readonly buffer BloomPointAxis {
+    int sourceIndex[];
+} bloom_point_axis;
+
+layout(push_constant) uniform BloomPointPushConstants {
+    uint outputWidth;  // output data-window width/height
+    uint outputHeight;
+} bloom_point_push;
+
+void main()
+{
+    uvec2 invocation = gl_GlobalInvocationID.xy;
+    uint linear = invocation.y * (gl_NumWorkGroups.x * 256u) + invocation.x;
+    uint total = bloom_point_push.outputWidth * bloom_point_push.outputHeight;
+    if (linear >= total) {
+        return;
+    }
+    uint column = linear % bloom_point_push.outputWidth;
+    uint row = linear / bloom_point_push.outputWidth;
+    int sourceX = bloom_point_axis.sourceIndex[column];
+    int sourceY = bloom_point_axis.sourceIndex[bloom_point_push.outputWidth + row];
+    imageStore(bloom_point_output, ivec2(column, row),
+               imageLoad(bloom_point_input, ivec2(sourceX, sourceY)));
+}

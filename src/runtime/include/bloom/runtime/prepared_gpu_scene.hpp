@@ -93,6 +93,10 @@ struct GpuSceneMediaStatistics final {
     std::uint64_t videoSources = 0;
     std::uint64_t imageConversions = 0;
     std::uint64_t videoConversions = 0;
+    // Native (GPU) colour-transform commands successfully prepared through the injected OCIO
+    // preparer. A warm build serves the same program from the preparer's own content cache; the
+    // upload cache hit is what suppresses the decode/convert entirely.
+    std::uint64_t ocioCommandPreparations = 0;
     std::uint64_t uploadCacheHits = 0;
     std::uint64_t uploadCacheMisses = 0;
     std::uint64_t uploadKeyConstructions = 0;
@@ -486,12 +490,13 @@ struct PreparedGpuSceneBuildResult final {
     explicit operator bool() const noexcept { return hasValue(); }
 };
 
-// Off-UI GPU OCIO preparation injection for image-effect scene commands. The builder resolves the
-// exact configured colour space transform through the accepted OCIO GPU builder, generates the
-// wrapper, and compiles it off the UI thread through the injected preparer; it never compiles
-// shader text itself and never consults PATH, an environment variable, or a workspace path. A null
-// preparer makes a reachable non-identity effect fail closed (Unsupported) so a caller that does
-// not prepare effects keeps the existing CPU path rather than silently substituting identity.
+// Off-UI GPU OCIO preparation injection for media-source colour conversion and image-effect
+// commands. The builder resolves the exact configured colour-space transform through the accepted
+// OCIO GPU builder, generates the wrapper, and compiles it off the UI thread through the injected
+// preparer; it never compiles shader text itself and never consults PATH, an environment variable,
+// or a workspace path. A null preparer makes a reachable non-identity transform fail closed
+// (Unsupported) so a caller that does not prepare transforms keeps the existing CPU path rather
+// than silently substituting identity.
 struct GpuSceneOcioContext final {
     std::shared_ptr<GpuOcioProgramPreparer> preparer;
     GpuOcioCompileOptions compileOptions;
@@ -512,8 +517,9 @@ class CpuGpuSceneBuilder final {
     // fails closed with MediaUnavailable instead of decoding with different semantics.
     //
     // The optional OCIO context supplies the off-UI preparer and the qualified compiler tool paths
-    // used for a non-identity image effect. Its default (no preparer, no tools) keeps every
-    // existing caller working and fails a non-identity effect closed rather than mis-rendering it.
+    // used for a media-source or image-effect colour transform. Its default (no preparer, no tools)
+    // keeps every existing caller working and fails a non-identity transform closed rather than
+    // mis-rendering it.
     explicit CpuGpuSceneBuilder(std::shared_ptr<GpuSceneCoverageCache> coverageCache = nullptr,
                                 GpuSceneMediaContext mediaContext = {},
                                 GpuSceneOcioContext ocioContext = {})

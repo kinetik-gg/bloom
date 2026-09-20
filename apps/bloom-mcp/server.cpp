@@ -77,12 +77,25 @@ bool Server::interceptCancellation(const std::string_view message) {
 
 Server::Server(std::unique_ptr<scripting::Session> session)
     : session_(std::move(session)), facade_(*session_) {
+    // One server-lifetime GPU final-render provider, bootstrapped once on the server scheduler's
+    // worker and reused by every render request; no per-request device bootstrap, no singleton.
+    gpuExportProvider_ = host::GpuExportProvider::create();
+    gpuExportProvider_->prepare(scheduler_);
     subscription_ = facade_.events.subscribe([this](const commands::CommandEvent& event) {
         if (events_.size() == 1024) {
             events_.pop_front();
         }
         events_.emplace_back(++sequence_, event);
     });
+}
+
+Server::~Server() {
+    // Headless server teardown runs on the stdio/main thread, never the UI event loop: signal the
+    // evaluator owner and prove retirement completion before the provider is released. The
+    // scheduler that ran the bootstrap is still alive here.
+    if (gpuExportProvider_ != nullptr) {
+        static_cast<void>(gpuExportProvider_->shutdownAndWait(std::chrono::seconds(10)));
+    }
 }
 
 std::string Server::error(yyjson_val* id, const int code, const std::string_view message) {

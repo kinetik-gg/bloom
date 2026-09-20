@@ -113,6 +113,11 @@ struct GpuProcessFrameOutcome final {
     std::shared_ptr<const ProcessFrame> frame;
     GpuProcessFrameDiagnostic diagnostic;
     GpuProcessFrameCounters counters;
+    // The native device ownership epoch that produced this outcome, read on the owner thread from
+    // GpuDevice::ownershipEpoch(). It is a genuine value from the actual device, never fabricated,
+    // and is zero when no device evaluated the request (disabled, unavailable, unsupported,
+    // cancelled, or failed before a device result). Diagnostics only; it never enters a digest.
+    std::uint64_t deviceOwnershipEpoch = 0;
 
     [[nodiscard]] bool hasValue() const noexcept { return frame != nullptr; }
     explicit operator bool() const noexcept { return hasValue(); }
@@ -168,6 +173,13 @@ class GpuProcessFrameEvaluator final {
 
     // Non-blocking. The destructor joins the owner worker.
     void beginShutdown() noexcept;
+
+    // Non-blocking. True once the owner worker has fully retired: it has left its request loop,
+    // destroyed the device/cache/executor generation on the owner thread, and the thread function
+    // has returned. A caller may release the evaluator once this is true without joining a live
+    // owner thread. False while bootstrap or request work is still in progress, and false before
+    // beginShutdown() has been observed by the owner loop.
+    [[nodiscard]] bool retirementComplete() const noexcept;
 
   private:
     struct Impl;

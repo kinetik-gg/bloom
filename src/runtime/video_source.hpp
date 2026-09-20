@@ -10,6 +10,11 @@ struct VideoSourceSelection {
     std::shared_ptr<const media::provider::FrameProduct> frame;
     std::shared_ptr<const color::CpuColorSpaceProcessor> inputProcessor;
     std::string cacheKey, warning;
+    // Decode-only identity: asset content digest + video stream id + selected frame index. It
+    // excludes the input/working colour space, config revision, display and proxy, because the raw
+    // codec-side preparation does not depend on them. The GPU media colour split keys its raw video
+    // upload on this identity, so a changed working space or display reuses the decoded frame.
+    std::string decodeKey;
     std::string inputColorSpaceId;
     std::string resolvedInputColorSpaceName, inputColorSpaceWarning, workingColorSpaceId;
     core::Sha256Digest configRevision;

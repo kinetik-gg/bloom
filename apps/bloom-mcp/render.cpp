@@ -1,5 +1,6 @@
 #include "server.hpp"
 #include <bloom/core/sha256.hpp>
+#include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
 
 #include <array>
@@ -77,7 +78,8 @@ yyjson_mut_val* Server::render(Json& out, yyjson_val* arguments, const bool comp
              .frame = range ? std::nullopt : std::optional(first),
              .range = range ? std::optional(std::pair(first, last)) : std::nullopt,
              .preset = *preset,
-             .destination = destination});
+             .destination = destination},
+            {}, gpuExportProvider_);
         if (!result.succeeded)
             throw std::runtime_error(result.diagnostic);
         frames = result.publishedFrames;
@@ -91,6 +93,10 @@ yyjson_mut_val* Server::render(Json& out, yyjson_val* arguments, const bool comp
         if (rate < 8000 || rate > 192000)
             throw InvalidInput("Audio sample rate is outside 8000..192000");
         output::ExportResourceLedgerV1 ledger;
+        // The server-lifetime GPU final-render provider is reused here; the sequence runner copies
+        // it into every per-frame attempt and defers the first evaluation until its bootstrap is
+        // terminal, so the first frame is genuinely GPU when a device exists. The unchanged CPU
+        // reference path is the fallback otherwise.
         host::SequenceExportRunnerV1 runner(
             scheduler_, compiler, *session_->publicationCoordinator(),
             *session_->artifactCoordinator(), ledger,
@@ -107,7 +113,8 @@ yyjson_mut_val* Server::render(Json& out, yyjson_val* arguments, const bool comp
              .pcmCodec = *preset == output::OutputPresetV1::PcmWavV1 ? profile : "pcm_s16le",
              .bwfDescription = {},
              .assetBaseDirectory = session_->displayPath().parent_path(),
-             .worker = {}});
+             .worker = {},
+             .gpuProvider = gpuExportProvider_});
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(10);
         while (!runner.result()) {
             runner.poll();

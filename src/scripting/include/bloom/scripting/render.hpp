@@ -14,6 +14,10 @@
 #include <string>
 #include <utility>
 
+namespace bloom::host {
+class GpuExportProvider;
+} // namespace bloom::host
+
 namespace bloom::scripting {
 
 struct RenderRequest final {
@@ -30,14 +34,22 @@ struct RenderResult final {
     std::uint64_t publishedFrames = 0;
     std::string preservationReport;
     std::string diagnostic;
+    // Aggregate native GPU provenance over the frames this render evaluated. Diagnostics only:
+    // it never enters preservation identity or the approval digest. All zero when no provider was
+    // injected/available or every frame took the CPU reference path.
+    std::uint64_t gpuEvaluatedFrames = 0;
+    std::uint64_t gpuNativeDispatches = 0;
+    std::uint64_t gpuReadbacks = 0;
+    std::uint64_t gpuDeviceOwnershipEpoch = 0;
 };
 
 class Render final {
   public:
-    [[nodiscard]] static RenderResult run(Session& session, runtime::TaskScheduler& scheduler,
-                                          const runtime::SnapshotCompiler& compiler,
-                                          RenderRequest request,
-                                          std::filesystem::path scratchDirectory = {});
+    [[nodiscard]] static RenderResult
+    run(Session& session, runtime::TaskScheduler& scheduler,
+        const runtime::SnapshotCompiler& compiler, RenderRequest request,
+        std::filesystem::path scratchDirectory = {},
+        std::shared_ptr<host::GpuExportProvider> gpuProvider = {});
 };
 
 } // namespace bloom::scripting

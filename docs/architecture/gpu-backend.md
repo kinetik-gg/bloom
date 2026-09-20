@@ -74,7 +74,22 @@ with no media decode on the GPU thread; `GpuComposite` runs `TranslationOpacityB
 `SourceOverV1`, each writing a new resident image; `GpuResidentDisplay` copies a resident RGBA32F
 image device-to-device through the embedded Bloom Neutral V1 shader into a resident packed RGBA8
 image, reading back only the 4-byte status word; `GpuNeutralDisplay` runs the fixed `OcioDisplayV1`
-compute operation. Every shipped shader is an offline artifact under `tools/gpu-shaders`, pinned by
+compute operation. `GpuPathCoverage` is the vector coverage producer: the CPU builds the immutable
+`PathRasterCoverageGeometry` (bounded integer scanline sample spans, O(edges x rows), with no
+per-pixel mask and the exact `coverageRow` boundary comparison preserved through a bounded binary
+search over the real quarter-sample positions), and one pure-integer compute dispatch turns those
+spans into the exact 8-bit coverage mask `PathRaster::coverageRow` produces, retained device-resident
+as a packed little-endian R8 storage buffer. `GpuSolid::beginCoveredResident` then binds that resident
+buffer directly for the covered fill, with no download or re-upload; the coverage buffer is
+co-owned until the consuming submission is proved retired, and the consume path validates owner
+thread, exact device identity, and generation before readiness or dimensions. In-flight submissions
+are serialized by one process-wide bounded reservation claimed before any native allocation: a
+proven retirement returns it, an unproven one moves the exact submission into an owner-only
+quarantine, and admission is refused while occupied. The dispatch is a flattened 2D grid bounded by
+the real device workgroup-count limits, so a capacity-valid large geometry is not refused by a 1D
+grid. The kernel requires no Float64/Int64 capability, and a configure-time disassembly rejects
+either. Every shipped shader is an offline
+artifact under `tools/gpu-shaders`, pinned by
 SHA-256 with a manifest binding and a configure-time `glslangValidator`/`spirv-val` regeneration check
 against the embedded SPIR-V digest, so the source -> SPIR-V -> embedded-array relationship is closed
 and no runtime code loads or compiles a shader. All primitives share one bounded policy: owner-thread
@@ -103,7 +118,9 @@ Scene preparation, caches, and executor. `CpuGpuSceneBuilder` (`prepared_gpu_sce
 (solid, covered solid, unparented translation-only layer, image/video upload, Normal merge,
 composition output) using the evaluator's real preflight resolution and, for a fractional
 translation-only solid, the same CPU coverage raster; it allocates no full RGBA CPU image and fails
-closed `Unsupported` for every out-of-subset reachable operation. Command semantic keys carry the
+closed `Unsupported` for every out-of-subset reachable operation. That host-built coverage mask is a
+known gap, not a GPU vector-coverage implementation: `feature.geometry.vector_coverage` stays
+Required and RED until a native GPU coverage producer replaces it. Command semantic keys carry the
 resolved operands plus the pinned render SPIR-V digests and never node/layer IDs, operation indexes,
 or the revision. `ImageSource`/`VideoSource` leaves resolve and colour-convert on the CPU task thread
 through the evaluator's own entry points and publish a frozen upload command whose source semantic key
@@ -129,7 +146,8 @@ that pin.
 Coverage contract and final render. `bloom/runtime/gpu_coverage_contract.hpp` is the exhaustive,
 compile-time-checked registry of every `CompiledOperation`/`ImageEffectKernel` alternative, every
 image-producing authoring lowering, every built-in pixel node type, and the required blend, shape,
-layer, colour, and display feature axes and render routes. GPU production preparation is required by
+geometry (native vector coverage), layer, colour, and display feature axes and render routes. GPU
+production preparation is required by
 default; adding an alternative, lowering, or pixel node type without classifying and fixturing it is
 a compile failure or a missing-fixture failure, and an unclassified or unfixtured required id keeps
 the coverage gate RED by name rather than warning. A fixture passes only with a genuine prepared GPU
@@ -139,10 +157,16 @@ admitted-but-not-prepared pass, and an invalid plan or missing media is never a 
 The only permitted exceptions are typed and narrow: an actual pixel operation, feature, or route
 exception requires a non-empty id, a rationale, and an owning document or accepted decision
 reference, and no such exception exists today. Host-preparation declarations -- media container and
-sample I/O and decompression, font shaping, parameter/geometry resolution, and one final readback --
-are a separate audited list and are not a route to exempt a pixel operation, feature, or route.
-Approval identifiers are never fabricated, and working-space colour conversion is a pixel
-transformation that is never an opt-out.
+sample I/O and decompression, font load/shaping, parameter/curve/geometry resolution, and one final
+readback -- are a separate audited list and are not a route to exempt a pixel operation, feature, or
+route. Approval identifiers are never fabricated, and working-space colour conversion is a pixel
+transformation that is never an opt-out. Per-pixel vector coverage rasterization (the CPU
+`PathRaster::coverageRow` mask) is likewise a pixel transformation, not host preparation: a
+`CoveredSolidV1` fill from a host-built mask does not satisfy the Required
+`feature.geometry.vector_coverage` axis, which needs a native GPU coverage producer with real
+device provenance and dispatch counters.
+The resident `GpuPathCoverage` producer performs this rasterization from bounded CPU scanline
+geometry; scene integration must retain its device provenance and dispatch counters.
 
 Preview and final rendering are both required. Interactive viewer preview, RAM preview fill and
 playback, still-frame export, sequence/range export, video export, and headless/scripted render are

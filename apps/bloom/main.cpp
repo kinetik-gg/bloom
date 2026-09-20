@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -260,7 +261,29 @@ int main(int argc, char* argv[]) {
     bloom::ui::RamPreviewController ramPreviewController(
         compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline,
         nullptr, gpuPreviewDisplaySubmitter);
+    // The application-lifetime GPU final-render provider is created HERE, once, before the
+    // shutdown coordinator that will own its retirement ordering, so it outlives every coordinator
+    // callback and every export attempt. It reuses the same app-relative bundled loader the
+    // preview service uses. The coordinator signals the evaluator owner (non-blocking) at
+    // beginShutdown and polls genuine retirement completion from the UI event loop, so the UI
+    // never waits on the native owner even after task admission closes.
+    bloom::runtime::GpuProcessFrameEvaluatorOptions gpuExportOptions;
+    gpuExportOptions.enabled = bundledNativeLoader;
+    if (bundledNativeLoader) {
+        gpuExportOptions.loaderPath = gpuPreviewDisplayOptions.loaderPath;
+    }
+    auto gpuExportProvider = bloom::host::GpuExportProvider::create(gpuExportOptions);
+    gpuExportProvider->prepare(taskScheduler);
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);
+    shutdownCoordinator.setGpuExportRetirement(
+        [&gpuExportProvider] { gpuExportProvider->beginShutdown(); },
+        [&gpuExportProvider] {
+            if (!gpuExportProvider->retirementComplete()) {
+                return false;
+            }
+            gpuExportProvider->collectRetired();
+            return true;
+        });
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &ramPreviewController, &bloom::ui::RamPreviewController::beginShutdown);
@@ -292,7 +315,7 @@ int main(int argc, char* argv[]) {
     bloom::ui::FrameExportController frameExportController(
         compositionSession, taskScheduler, taskUiBridge, snapshotCompiler,
         projectHost.publicationCoordinator(), projectHost.artifactCoordinator(), {},
-        &qualifiedDisplayProcessorProvider);
+        &qualifiedDisplayProcessorProvider, gpuExportProvider);
 
     // The typed viewer GPU dependency context. Its presentation-client getter reads the cached
     // service capability, so an editor created before the async startup qualification finishes is

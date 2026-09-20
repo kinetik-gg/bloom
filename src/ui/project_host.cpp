@@ -692,13 +692,12 @@ void ProjectHost::beginOpen(const std::filesystem::path& path) {
 }
 
 void ProjectHost::replaceWithNewProject() {
-    host::NewProjectSessionRequest request{
-        .projectName = "Untitled",
-        .compositionName = "Composition 1",
-        .duration = core::RationalTime::fromInteger(10),
-        .format = {},
-    };
-    auto created = host::ProjectSession::createNew(identitySource_, std::move(request));
+    // A new project starts blank: no composition is created, so the artist gets a clean empty
+    // document and the existing New Composition command is the one way to author the first one
+    // (docs/architecture/project-session.md's "Session Publication": a project with no composition
+    // exposes no active composition). Nothing here creates-and-deletes a placeholder composition,
+    // and no undo entry is staged for the startup document.
+    auto created = host::ProjectSession::createNewBlank(identitySource_, "Untitled");
     if (!created) {
         // RuntimeIdentityExhausted/ResourceUnavailable/InvalidNewProject: unreachable in practice
         // with a fresh identity source and fixed request fields. The previous session (if any) is

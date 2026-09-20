@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-08-25
+Updated: 2026-09-20
 
 Source: user-provided Bloom UI sketch dated 2026-08-25.
 
@@ -32,7 +32,7 @@ must not imply implemented scope.
 All editor panels receive a read-only context containing at least:
 
 - active project
-- active composition
+- active composition (absent on a blank new project, which owns no composition yet)
 - current rational time
 - current selection
 - active tool

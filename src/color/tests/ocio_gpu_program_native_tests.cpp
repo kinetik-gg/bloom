@@ -216,6 +216,175 @@ void testDisplay(Expectations& expectations, GpuDevice& device,
     expectations.expect(alphaMismatches == 0, "display alpha is byte-exact against the CPU oracle");
 }
 
+void testGeometryAndBudgetLifecycle(Expectations& expectations, GpuDevice& device,
+                                    const bloom::color::ResolvedBloomNeutralConfig& neutral,
+                                    const bloom::color::ResolvedBloomNeutralConfig& aces) {
+    // The packed display buffer is persistent per program; a geometry change must grow OR shrink it
+    // only after the previous submission retires, and every job must still match the CPU oracle.
+    auto desc = bloom::color::buildOcioGpuProgramForDisplay(neutral, neutral.displayName(),
+                                                            neutral.viewName());
+    expectations.expect(desc.succeeded(), "the geometry lifecycle display program extracts");
+    if (!desc.succeeded()) {
+        return;
+    }
+    auto program = makeProgram(device, *desc.program());
+    auto uploader = GpuImageUpload::create(device);
+    expectations.expect(program != nullptr && uploader.hasValue(),
+                        "the geometry lifecycle program hosts");
+    if (program == nullptr || !uploader) {
+        return;
+    }
+    const auto handle = bloom::color::buildBloomNeutralCpuDisplayProcessor(neutral);
+    const auto* const processor = handle.handle();
+    expectations.expect(processor != nullptr,
+                        "the geometry lifecycle CPU display processor prepares");
+    if (processor == nullptr) {
+        return;
+    }
+
+    std::uint64_t smallJobBytes = 0;
+    std::uint64_t largeJobBytes = 0;
+    const auto runDisplay = [&](const std::uint32_t width, const std::uint32_t height,
+                                const bool recordSmall, const bool recordLarge) {
+        const auto pixels = fixturePixels(width, height);
+        const auto input = uploadImage(*uploader.upload, width, height, pixels);
+        expectations.expect(input != nullptr, "a geometry lifecycle input uploads");
+        if (input == nullptr) {
+            return;
+        }
+        const auto accepted = (*program)->beginDisplay(input, {}, kBudget);
+        expectations.expect(accepted.code == GpuOcioProgramDiagnosticCode::None,
+                            "a geometry lifecycle begin is accepted");
+        if (accepted.code != GpuOcioProgramDiagnosticCode::None) {
+            return;
+        }
+        const auto poll = awaitOcioCompletion(**program, expectations);
+        expectations.expect(poll == GpuOcioProgramPollResult::Ready,
+                            "a geometry lifecycle dispatch completes");
+        if (poll != GpuOcioProgramPollResult::Ready) {
+            return;
+        }
+        const std::uint64_t jobBytes = (*program)->lastJobAllocationBytes();
+        // The accessor must be nonzero and cover at least the RGBA8 output image bytes for the
+        // current geometry (it also includes the packed buffer).
+        expectations.expect(
+            jobBytes > 0 && jobBytes >= static_cast<std::uint64_t>(width) * height * 4U,
+            "the display accessor reports the current packed and output bytes");
+        if (recordSmall) {
+            smallJobBytes = jobBytes;
+        }
+        if (recordLarge) {
+            largeJobBytes = jobBytes;
+        }
+        GpuDisplayImage output = (*program)->takeDisplayOutput();
+        expectations.expect(output.isValid(), "a geometry lifecycle display output is published");
+        if (!output.isValid()) {
+            return;
+        }
+        const auto readback = bloom::render::readbackResidentDisplayImage(output, kBudget);
+        expectations.expect(readback.hasValue(), "a geometry lifecycle display output reads back");
+        if (!readback) {
+            return;
+        }
+        std::size_t mismatches = 0;
+        for (std::size_t index = 0; index < pixels.size(); ++index) {
+            const auto& p = pixels[index];
+            std::array<float, 3> straight{0.0F, 0.0F, 0.0F};
+            if (p.alpha() != 0.0F) {
+                straight = {p.red() / p.alpha(), p.green() / p.alpha(), p.blue() / p.alpha()};
+            }
+            const auto display = processor->referenceToDisplayLinear(
+                bloom::core::Color4d{static_cast<double>(straight[0]),
+                                     static_cast<double>(straight[1]),
+                                     static_cast<double>(straight[2]), 1.0});
+            if (!display.has_value()) {
+                ++mismatches;
+                continue;
+            }
+            const auto& gpu = readback.pixels[index];
+            if (std::abs(static_cast<int>(gpu.red) - quantize(display->red)) > 1 ||
+                std::abs(static_cast<int>(gpu.green) - quantize(display->green)) > 1 ||
+                std::abs(static_cast<int>(gpu.blue) - quantize(display->blue)) > 1 ||
+                gpu.alpha != quantize(static_cast<double>(p.alpha()))) {
+                ++mismatches;
+            }
+        }
+        expectations.expect(mismatches == 0,
+                            "the geometry lifecycle display matches the CPU oracle");
+    };
+    runDisplay(3, 2, true, false);
+    runDisplay(128, 64, false, true);
+    runDisplay(3, 2, false, false);
+    expectations.expect(largeJobBytes > smallJobBytes,
+                        "the large geometry reports more packed/output bytes than the small one");
+    // Without the shrink the stale large packed allocation would keep the reported bytes near the
+    // large geometry; the repeated small geometry must return close to the first small job.
+    expectations.expect((*program)->lastJobAllocationBytes() <= smallJobBytes + 4096U,
+                        "the packed buffer shrinks back for the repeated small geometry");
+
+    // A budget smaller than the packed/output bytes is refused before publication; the same program
+    // then accepts and completes a valid request.
+    {
+        const auto pixels = fixturePixels(3, 2);
+        const auto input = uploadImage(*uploader.upload, 3, 2, pixels);
+        expectations.expect(input != nullptr, "the budget refusal input uploads");
+        if (input != nullptr) {
+            const auto refused = (*program)->beginDisplay(input, {}, 1);
+            expectations.expect(refused.code == GpuOcioProgramDiagnosticCode::OverBudget,
+                                "a display budget below the output is refused");
+            const auto recovered = (*program)->beginDisplay(input, {}, kBudget);
+            expectations.expect(recovered.code == GpuOcioProgramDiagnosticCode::None,
+                                "a valid display request recovers after the refusal");
+            if (recovered.code == GpuOcioProgramDiagnosticCode::None) {
+                const auto poll = awaitOcioCompletion(**program, expectations);
+                expectations.expect(poll == GpuOcioProgramPollResult::Ready &&
+                                        (*program)->takeDisplayOutput().isValid(),
+                                    "the recovered display request publishes");
+            }
+        }
+    }
+
+    // The effect arm owns a full-frame RGBA32F output; byteBudget must cover its actual bytes.
+    auto cst = bloom::color::buildOcioGpuProgramForCst(aces, "ACES2065-1", "ACEScg");
+    expectations.expect(cst.succeeded(), "the geometry lifecycle CST program extracts");
+    if (!cst.succeeded()) {
+        return;
+    }
+    auto effectProgram = makeProgram(device, *cst.program());
+    expectations.expect(effectProgram != nullptr, "the geometry lifecycle CST program hosts");
+    if (effectProgram == nullptr) {
+        return;
+    }
+    constexpr std::uint32_t effectWidth = 4;
+    constexpr std::uint32_t effectHeight = 3;
+    const auto effectPixels = fixturePixels(effectWidth, effectHeight);
+    const auto effectInput =
+        uploadImage(*uploader.upload, effectWidth, effectHeight, effectPixels);
+    expectations.expect(effectInput != nullptr, "the effect lifecycle input uploads");
+    if (effectInput != nullptr) {
+        const std::uint64_t outputBytes = static_cast<std::uint64_t>(effectWidth) * effectHeight *
+                                          sizeof(bloom::render::Rgba32f);
+        const auto refused = (*effectProgram)->beginEffect(effectInput, {}, outputBytes - 1U);
+        expectations.expect(refused.code == GpuOcioProgramDiagnosticCode::OverBudget,
+                            "an effect budget below the RGBA32F output is refused");
+        const auto recovered = (*effectProgram)->beginEffect(effectInput, {}, kBudget);
+        expectations.expect(recovered.code == GpuOcioProgramDiagnosticCode::None,
+                            "a valid effect request recovers after the refusal");
+        if (recovered.code == GpuOcioProgramDiagnosticCode::None) {
+            const auto poll = awaitOcioCompletion(**effectProgram, expectations);
+            expectations.expect(poll == GpuOcioProgramPollResult::Ready,
+                                "the effect lifecycle dispatch completes");
+            if (poll == GpuOcioProgramPollResult::Ready) {
+                const std::uint64_t jobBytes = (*effectProgram)->lastJobAllocationBytes();
+                expectations.expect(jobBytes > 0 && jobBytes >= outputBytes,
+                                    "the effect accessor reports the current output bytes");
+                expectations.expect((*effectProgram)->takeEffectOutput() != nullptr,
+                                    "the effect lifecycle output publishes");
+            }
+        }
+    }
+}
+
 } // namespace bloom::color::ocio_gpu_native_test
 
 using bloom::color::ocio_gpu_native_test::Expectations;
@@ -266,6 +435,7 @@ int main(int argc, char** argv) {
     expectations.expect(device.device->state() == GpuDeviceState::Ready, "the device is Ready");
     testEffectCst(expectations, *device.device, *aces);
     testDisplay(expectations, *device.device, *neutral);
+    testGeometryAndBudgetLifecycle(expectations, *device.device, *neutral, *aces);
     bloom::color::ocio_gpu_native_test::testFileTransform(expectations, *device.device, *neutral);
 
     if (expectations.failures() != 0) {

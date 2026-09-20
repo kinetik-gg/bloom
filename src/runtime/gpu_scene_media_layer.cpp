@@ -2,7 +2,7 @@
 
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
-#include "gpu_scene_nested.hpp"
+#include "gpu_scene_preparation_builders.hpp"
 
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/render/image.hpp>
@@ -11,19 +11,6 @@
 
 namespace bloom::runtime::detail {
 namespace {
-
-[[nodiscard]] bool isSubsetOperation(const CompiledOperation& operation) noexcept {
-    return std::holds_alternative<CompiledSolid>(operation) ||
-           std::holds_alternative<CompiledText>(operation) ||
-           std::holds_alternative<CompiledShape>(operation) ||
-           std::holds_alternative<CompiledImageSource>(operation) ||
-           std::holds_alternative<CompiledVideoSource>(operation) ||
-           std::holds_alternative<CompiledImageEffect>(operation) ||
-           std::holds_alternative<CompiledLayerOutput>(operation) ||
-           std::holds_alternative<CompiledMerge>(operation) ||
-           std::holds_alternative<CompiledCompositionOutput>(operation) ||
-           std::holds_alternative<CompiledCompositionSource>(operation);
-}
 
 // Common tail shared by both upload leaves: derive bounds + window from the frozen image, charge
 // the resident bytes, and fill the result. Returns a failure if the upload produced no descriptor
@@ -54,6 +41,9 @@ finishUploadLeaf(const MediaUploadOutcome& outcome, GpuSceneUploadLeafResult& re
     result.image = outcome.image;
     result.descriptor = descriptor;
     result.semanticKey = outcome.semanticKey;
+    result.uploadSemanticKey =
+        outcome.uploadSemanticKey.empty() ? outcome.semanticKey : outcome.uploadSemanticKey;
+    result.program = outcome.program;
     return std::nullopt;
 }
 
@@ -64,22 +54,32 @@ std::optional<GpuSceneLeafFailure> screenUnsupportedLayers(const CompiledComposi
                                                            const ResolvedEvaluation& resolved,
                                                            const CancellationToken& cancellation) {
     const std::size_t operationCount = plan.operations().size();
+    // One classifier per plan so a child plan several sources reference is classified once.
+    NestedCompositionChainClassifier nestedClassifier;
     for (std::size_t index = 0; index < operationCount; ++index) {
         if (cancellation.isCancellationRequested()) {
             return fail(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
         }
-        if (!isSubsetOperation(plan.operations()[index])) {
+        if (!isGpuSceneSubsetOperation(plan.operations()[index])) {
             return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                         "A reachable operation is outside the prepared subset");
         }
         // A composition source is classified into the subset only when its REAL nested chain is
-        // present, acyclic, and within the depth ceiling. The child's own operations are screened
-        // when that child is built, so an unsupported child still fails closed.
-        if (const auto* source = std::get_if<CompiledCompositionSource>(&plan.operations()[index]);
-            source != nullptr && !nestedCompositionChainIsSupported(*source, plan)) {
-            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
-                        "A composition source without a supported nested plan is outside the "
-                        "prepared subset");
+        // present, acyclic, within the depth ceiling, and inside the bounded cancellation-aware
+        // scan. The child's own operations are screened when that child is built, so an unsupported
+        // child still fails closed.
+        if (const auto* source =
+                std::get_if<CompiledCompositionSource>(&plan.operations()[index])) {
+            switch (nestedClassifier.classify(*source, plan, cancellation)) {
+            case NestedCompositionClassification::Supported:
+                break;
+            case NestedCompositionClassification::Cancelled:
+                return fail(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
+            case NestedCompositionClassification::Unsupported:
+                return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                            "A composition source without a supported nested plan is outside the "
+                            "prepared subset");
+            }
         }
         const auto* layer = std::get_if<CompiledLayerOutput>(&plan.operations()[index]);
         if (layer == nullptr) {
@@ -131,6 +131,34 @@ buildVideoUploadLeaf(const CompiledVideoSource& source, const EvaluationRequest&
     const auto outcome = prepareVideoUpload(source, request, plan, resolved, context, pixelBudget,
                                             request.bypassOperationCache,
                                             plan.bypassOperationCache(), cancellation, statistics);
+    return finishUploadLeaf(outcome, result, hScale, vScale, chargeBytes);
+}
+
+std::optional<GpuSceneLeafFailure>
+buildImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest& request,
+                    const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
+                    const GpuSceneMediaContext& context, const GpuSceneOcioContext& ocioContext,
+                    const std::uint64_t pixelBudget, const double hScale, const double vScale,
+                    const GpuSceneMediaChargeBytes& chargeBytes,
+                    const CancellationToken& cancellation, GpuSceneMediaStatistics& statistics,
+                    GpuSceneUploadLeafResult& result) {
+    const auto outcome = prepareImageColorLeaf(
+        source, request, plan, resolved, context, ocioContext, pixelBudget,
+        request.bypassOperationCache, plan.bypassOperationCache(), cancellation, statistics);
+    return finishUploadLeaf(outcome, result, hScale, vScale, chargeBytes);
+}
+
+std::optional<GpuSceneLeafFailure>
+buildVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest& request,
+                    const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
+                    const GpuSceneMediaContext& context, const GpuSceneOcioContext& ocioContext,
+                    const std::uint64_t pixelBudget, const double hScale, const double vScale,
+                    const GpuSceneMediaChargeBytes& chargeBytes,
+                    const CancellationToken& cancellation, GpuSceneMediaStatistics& statistics,
+                    GpuSceneUploadLeafResult& result) {
+    const auto outcome = prepareVideoColorLeaf(
+        source, request, plan, resolved, context, ocioContext, pixelBudget,
+        request.bypassOperationCache, plan.bypassOperationCache(), cancellation, statistics);
     return finishUploadLeaf(outcome, result, hScale, vScale, chargeBytes);
 }
 
