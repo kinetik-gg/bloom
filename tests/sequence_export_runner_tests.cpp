@@ -164,18 +164,17 @@ decodeVideoFrames(const std::filesystem::path& path) {
 void publishVideoProof(const std::filesystem::path& proofDirectory,
                        const host::SequenceExportResultV1& gpuResult,
                        const std::vector<std::string>& identityHex,
-                       const std::vector<routeproof::FrameEvidence>& evidence,
-                       const std::uint64_t frameWidth, const std::uint64_t frameHeight) {
+                       const std::vector<routeproof::FrameEvidence>& evidence) {
     routeproof::ExportProofCounters counters;
     counters.deviceOwnershipEpoch = gpuResult.gpuDeviceOwnershipEpoch;
     counters.nativeDispatches = gpuResult.gpuNativeDispatches;
     counters.verifiedFrames = identityHex.size();
-    counters.readbackSubmissions = gpuResult.gpuReadbacks;
-    // The accepted final readback transfers one process payload; no separate production payload
-    // counter exists yet, so the real submission count is the payload count, not a guess.
-    counters.payloads = gpuResult.gpuReadbacks;
-    counters.transferredBytes =
-        routeproof::processPayloadBytes(gpuResult.gpuReadbacks, frameWidth, frameHeight);
+    // The ACTUAL combined-readback counters the per-frame attempts reported: submissions, distinct
+    // payloads, and the exact combined process + encoded payload bytes. Never derived from the
+    // frame dimensions or from the submission count.
+    counters.readbackSubmissions = gpuResult.gpuReadbackSubmissions;
+    counters.payloads = gpuResult.gpuTransferredPayloads;
+    counters.transferredBytes = gpuResult.gpuProcessPayloadBytes + gpuResult.gpuEncodedPayloadBytes;
     std::string nonce;
     if (!routeproof::readProofNonce(proofDirectory, nonce)) {
         throw std::runtime_error("video route proof: a fresh run nonce is required");
@@ -401,6 +400,14 @@ GpuProofOutcome testGpuVideoProvenance(Fixture& f, const std::filesystem::path& 
     check(result.gpuNativeDispatches > 0, "GPU video: positive native dispatches");
     check(result.gpuReadbacks == result.gpuEvaluatedFrames,
           "GPU video: exactly one final readback per GPU-evaluated frame");
+    check(result.gpuReadbackSubmissions == result.gpuEvaluatedFrames,
+          "GPU video: exactly one final readback submission per GPU-evaluated frame");
+    // The per-frame attempts use the identity/TIFF arm: one process payload per submission, no
+    // encoded output-colour payload. These are the ACTUAL counters, not a guess from dimensions.
+    check(result.gpuTransferredPayloads == result.gpuReadbackSubmissions,
+          "GPU video: the identity arm transfers exactly one payload per submission");
+    check(result.gpuProcessPayloadBytes > 0 && result.gpuEncodedPayloadBytes == 0,
+          "GPU video: the identity arm reports real process bytes and no encoded bytes");
     check(result.gpuDeviceOwnershipEpoch > 0,
           "GPU video: a genuine device ownership epoch is reported");
     std::cout << "GPU video frames=" << result.gpuEvaluatedFrames
@@ -434,8 +441,6 @@ GpuProofOutcome testGpuVideoProvenance(Fixture& f, const std::filesystem::path& 
         .duration = core::RationalTime::fromInteger(2)};
     std::vector<std::string> identityHex;
     std::vector<routeproof::FrameEvidence> evidence;
-    std::uint64_t frameWidth = 0;
-    std::uint64_t frameHeight = 0;
     for (std::size_t index = 0; index < gpuFrames.size(); ++index) {
         const auto comparison =
             compareFrameProduct(gpuFrames[index], cpuFrames[index], kProResTolerance);
@@ -478,12 +483,8 @@ GpuProofOutcome testGpuVideoProvenance(Fixture& f, const std::filesystem::path& 
             cpuWriter.text(routeproof::sha256Hex(plane.bytes));
         frameEvidence.cpuDecodedDigest = routeproof::sha256Hex(cpuWriter.bytes());
         evidence.push_back(std::move(frameEvidence));
-        if (!gpuFrames[index].planes.empty()) {
-            frameWidth = gpuFrames[index].planes.front().width;
-            frameHeight = gpuFrames[index].planes.front().height;
-        }
     }
-    publishVideoProof(proofDirectory, result, identityHex, evidence, frameWidth, frameHeight);
+    publishVideoProof(proofDirectory, result, identityHex, evidence);
     return GpuProofOutcome::Ran;
 }
 GpuProofOutcome tests(const std::filesystem::path& directory, const bool requireDevice,

@@ -67,19 +67,30 @@ if(BUILD_TESTING)
         COMMAND bloom_scripting_facade_test
         LABELS unit scripting host commands document
     )
-    # Render::run's injected-provider contract plus the native headless render integration: an
-    # owner-provided GpuExportProvider is reused across renders and never retired by the call, while
-    # a locally created one is retired with proof. OpenEXR lets the test reopen the published EXR
-    # payloads for strict CPU/process and encoded-output parity.
-    bloom_find_dependency(OpenEXR)
+    # Render::run's injected-provider contract plus the native headless and sequence-range render
+    # integration: an owner-provided GpuExportProvider is reused across renders and never retired by
+    # the call, while a locally created one is retired with proof. ZLIB backs the test's own
+    # from-scratch PNG reader, so the scripted routes independently decode the published PNG payloads
+    # and prove the genuine GPU output-colour (two-payload) arm. The production packaged GPU shader
+    # tools are staged beside the executable exactly as the desktop/CLI/MCP roots stage them, so the
+    # PNG output-colour command is prepared through the real packaged resolver -- never PATH.
+    include(BloomGpuShaderTools)
+    bloom_find_dependency(ZLIB)
+    # The helper roots the qualified zlib search at the prefix (and caches ZLIB_LIBRARY), but its
+    # find_dependency() form does not guarantee the namespaced target exists in this directory
+    # scope; mirror the host targets' own explicit guard so ZLIB::ZLIB is always defined here.
+    if(NOT TARGET ZLIB::ZLIB)
+        find_package(ZLIB REQUIRED)
+    endif()
     add_executable(bloom_scripting_render_injected_provider_test
                    tests/render_injected_provider_test.cpp)
     target_link_libraries(bloom_scripting_render_injected_provider_test
-                          PRIVATE bloom_scripting OpenEXR::OpenEXR)
+                          PRIVATE bloom_scripting ZLIB::ZLIB)
     target_include_directories(bloom_scripting_render_injected_provider_test PRIVATE
         "${PROJECT_SOURCE_DIR}/tests/support"
         "${PROJECT_SOURCE_DIR}/src/runtime/include" "${PROJECT_SOURCE_DIR}/src/core/include"
         "${PROJECT_SOURCE_DIR}/src/document/include" "${PROJECT_SOURCE_DIR}/src/render/include")
+    bloom_package_gpu_shader_tools(bloom_scripting_render_injected_provider_test)
     bloom_enable_warnings(bloom_scripting_render_injected_provider_test)
     # CTest runs the actual GPU case when the qualified prefix provides a loader (the test skips
     # honestly when no real device is present, so the CPU stub stays tested on GPU-less hosts).

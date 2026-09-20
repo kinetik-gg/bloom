@@ -51,7 +51,16 @@ struct SequenceExportResultV1 {
     // provider was supplied or every frame fell back to the CPU reference path.
     std::uint64_t gpuEvaluatedFrames = 0;
     std::uint64_t gpuNativeDispatches = 0;
+    // `gpuReadbacks` is the pre-existing compatibility name for the summed final readback
+    // submissions (one per GPU-evaluated frame); `gpuReadbackSubmissions` is the explicit
+    // combined-readback name. `gpuTransferredPayloads` is the summed distinct payload count (one
+    // for the identity arm, two for the display arm) and the process/encoded byte totals are the
+    // exact combined-readback bytes. Never derived from frame dimensions.
     std::uint64_t gpuReadbacks = 0;
+    std::uint64_t gpuReadbackSubmissions = 0;
+    std::uint64_t gpuTransferredPayloads = 0;
+    std::uint64_t gpuProcessPayloadBytes = 0;
+    std::uint64_t gpuEncodedPayloadBytes = 0;
     // Genuine native device ownership epoch observed on the GPU-evaluated frames (last nonzero
     // value; zero when no frame used a device). Diagnostics only.
     std::uint64_t gpuDeviceOwnershipEpoch = 0;

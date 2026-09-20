@@ -106,6 +106,10 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
             result.gpuEvaluatedFrames = gpuProvenance->gpuEvaluated() ? 1U : 0U;
             result.gpuNativeDispatches = gpuProvenance->counters.nativeDispatches;
             result.gpuReadbacks = gpuProvenance->counters.readbacks;
+            result.gpuReadbackSubmissions = gpuProvenance->readbackSubmissions;
+            result.gpuTransferredPayloads = gpuProvenance->transferredPayloads;
+            result.gpuProcessPayloadBytes = gpuProvenance->processPayloadBytes;
+            result.gpuEncodedPayloadBytes = gpuProvenance->encodedPayloadBytes;
             result.gpuDeviceOwnershipEpoch = gpuProvenance->deviceOwnershipEpoch;
         }
         return result;
@@ -298,6 +302,10 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
                 aggregate.gpuEvaluatedFrames += current.gpuEvaluatedFrames;
                 aggregate.gpuNativeDispatches += current.gpuNativeDispatches;
                 aggregate.gpuReadbacks += current.gpuReadbacks;
+                aggregate.gpuReadbackSubmissions += current.gpuReadbackSubmissions;
+                aggregate.gpuTransferredPayloads += current.gpuTransferredPayloads;
+                aggregate.gpuProcessPayloadBytes += current.gpuProcessPayloadBytes;
+                aggregate.gpuEncodedPayloadBytes += current.gpuEncodedPayloadBytes;
                 if (current.gpuDeviceOwnershipEpoch != 0) {
                     aggregate.gpuDeviceOwnershipEpoch = current.gpuDeviceOwnershipEpoch;
                 }

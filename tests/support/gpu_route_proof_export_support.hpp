@@ -19,7 +19,6 @@
 #include "gpu_route_proof_io.hpp"
 
 #include <bloom/core/sha256.hpp>
-#include <bloom/render/image_types.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -140,11 +139,11 @@ orderedIdentityDigest(const std::span<const std::string> perFrameIdentityHex) {
 
 // The explicit final-render transfer figures a proof must report. `readbackSubmissions` is the
 // final device-to-host submission count (readbacks); `payloads` is the number of distinct payloads
-// those submissions carried; `transferredBytes` is the exact process-payload byte total. The
-// accepted readback transfers one process payload per submission today, so a caller with no
-// separate production payload counter reports submissions == payloads. When the output-colour
-// provenance integration lands and exposes a real two-payload counter, the harness supplies it
-// here; it is never guessed upward.
+// those submissions carried; `transferredBytes` is the exact combined process + encoded payload
+// byte total. All three come from the attempt's own combined-readback provenance counters
+// (`readbackSubmissions`, `transferredPayloads`, `processPayloadBytes + encodedPayloadBytes`),
+// never derived from the submission count or the frame dimensions: one submission may carry two
+// payloads (process-analysis + encoded output) and must be reported as two.
 struct ExportProofCounters final {
     std::uint64_t deviceOwnershipEpoch = 0;
     std::uint64_t nativeDispatches = 0;
@@ -194,14 +193,6 @@ publishExportProof(const std::filesystem::path& directory, const std::string_vie
 [[nodiscard]] inline bool readProofNonce(const std::filesystem::path& directory,
                                          std::string& nonce) {
     return bloom::gpu_route_proof_io::readRunNonce(directory, nonce) == RouteProofIoStatus::Ok;
-}
-
-// The exact process-payload byte count of `frames` final RGBA32F readbacks of an `width` x `height`
-// frame. This is the real size of the payload the accepted readback transfers.
-[[nodiscard]] inline std::uint64_t processPayloadBytes(const std::uint64_t frames,
-                                                       const std::uint64_t width,
-                                                       const std::uint64_t height) noexcept {
-    return frames * width * height * sizeof(render::Rgba32f);
 }
 
 } // namespace bloom::gpu_route_proof_export

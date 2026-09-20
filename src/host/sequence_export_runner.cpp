@@ -45,6 +45,10 @@ struct Work {
     std::uint64_t gpuEvaluatedFrames = 0;
     std::uint64_t gpuNativeDispatches = 0;
     std::uint64_t gpuReadbacks = 0;
+    std::uint64_t gpuReadbackSubmissions = 0;
+    std::uint64_t gpuTransferredPayloads = 0;
+    std::uint64_t gpuProcessPayloadBytes = 0;
+    std::uint64_t gpuEncodedPayloadBytes = 0;
     std::uint64_t gpuDeviceOwnershipEpoch = 0;
     std::unique_ptr<output::OutputAnalysisAttemptTargetV1> target;
     std::optional<SequenceExportResultV1> result;
@@ -269,6 +273,10 @@ struct Work {
         outcome.gpuEvaluatedFrames = gpuEvaluatedFrames;
         outcome.gpuNativeDispatches = gpuNativeDispatches;
         outcome.gpuReadbacks = gpuReadbacks;
+        outcome.gpuReadbackSubmissions = gpuReadbackSubmissions;
+        outcome.gpuTransferredPayloads = gpuTransferredPayloads;
+        outcome.gpuProcessPayloadBytes = gpuProcessPayloadBytes;
+        outcome.gpuEncodedPayloadBytes = gpuEncodedPayloadBytes;
         outcome.gpuDeviceOwnershipEpoch = gpuDeviceOwnershipEpoch;
         if (guardResult.status() == PublicationGuardStatus::Entered) {
             auto guard = std::move(guardResult).takeGuard();
@@ -387,8 +395,7 @@ struct SequenceExportRunnerV1::State {
                            .resolution = runtime::CompositionFormatResolution{},
                            .quality = runtime::EvaluationQuality::Reference,
                            .colorIntent = work->colorIntent(),
-                           .pixelStorageByteLimit =
-                               runtime::defaultGpuProcessFrameByteBudget(),
+                           .pixelStorageByteLimit = runtime::defaultGpuProcessFrameByteBudget(),
                            .bypassLookNodes = false},
             .targetPath = work->request.range.destination,
             .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
@@ -494,6 +501,10 @@ void SequenceExportRunnerV1::poll() {
             ++s.work->gpuEvaluatedFrames;
             s.work->gpuNativeDispatches += provenance->counters.nativeDispatches;
             s.work->gpuReadbacks += provenance->counters.readbacks;
+            s.work->gpuReadbackSubmissions += provenance->readbackSubmissions;
+            s.work->gpuTransferredPayloads += provenance->transferredPayloads;
+            s.work->gpuProcessPayloadBytes += provenance->processPayloadBytes;
+            s.work->gpuEncodedPayloadBytes += provenance->encodedPayloadBytes;
             if (provenance->deviceOwnershipEpoch != 0) {
                 s.work->gpuDeviceOwnershipEpoch = provenance->deviceOwnershipEpoch;
             }
