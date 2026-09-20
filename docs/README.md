@@ -77,8 +77,14 @@ provide research or rationale, but they are not binding until adopted here.
   digest; Project ownership waits for the qualified Bloom Neutral v1 asset and profile. ADR 0019
   accepts the dependency mechanism, while concrete prefixes and profiles remain pending
   qualification.
-- Vulkan/MoltenVK remains a working GPU direction until its per-operation parity and lifecycle spike
-  passes on Linux, macOS, and Windows.
+- A shared GPU scene prepares every current compiled pixel operation under a strict fail-closed
+  operation and render-route coverage contract, with no pixel exception. The resident preview and
+  final-render routes both evaluate through it, including the general GPU output-colour production
+  context, a 6000x4000 media+CST+text export with locally verified native execution, and
+  capacity-aware resident sizing. The CPU reference evaluator remains the correctness oracle and
+  explicit supported fallback; GPU execution is locally exercised on Linux only, and macOS and
+  Windows have an explicit supported CPU fallback. Vulkan/MoltenVK remains a working GPU direction
+  until its cross-platform parity and lifecycle spike passes.
 
 The detailed implementation status and next merge gates live in [`roadmap.md`](roadmap.md).
 

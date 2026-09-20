@@ -34,8 +34,12 @@ passes.
   hardware/bootstrap baseline; `Unavailable`, `PreviewOnly`, and `ReferenceParity` are
   per-operation-and-precision outcomes, not a device-wide marketing tier.
 - Qualify a closed, versioned operation vocabulary against the CPU fixtures before the scheduler may
-  select it. The first `GpuOperationId` values are `SolidV1`,
-  `TranslationOpacityBilinearV1`, `SourceOverV1`, `OcioDisplayV1`, and `PackedDisplayV1`.
+  select it. The render capability report's `GpuOperationId` vocabulary is `SolidV1`,
+  `TranslationOpacityBilinearV1`, `SourceOverV1`, `OcioDisplayV1`, and `PackedDisplayV1`; the report
+  advertises no operation until its frozen fixtures pass. The shared scene executor's additional
+  typed operations (covered solid and native coverage, affine, typed blend, point resample, OCIO
+  effect) are gated by the runtime operation/route coverage contract and their own native parity
+  fixtures rather than by a capability-report entry.
 
 The Vulkan specification describes explicit graphics and compute control, while MoltenVK implements
 a Vulkan subset over public Metal APIs and converts SPIR-V to Metal Shading Language. MoltenVK also
@@ -96,14 +100,25 @@ therefore refuses cleanly when the pool is full and recovers once the rightful o
 dispatch is a flattened 2D grid bounded by
 the real device workgroup-count limits, so a capacity-valid large geometry is not refused by a 1D
 grid. The kernel requires no Float64/Int64 capability, and a configure-time disassembly rejects
-either. Every shipped shader is an offline
-artifact under `tools/gpu-shaders`, pinned by
-SHA-256 with a manifest binding and a configure-time `glslangValidator`/`spirv-val` regeneration check
-against the embedded SPIR-V digest, so the source -> SPIR-V -> embedded-array relationship is closed
-and no runtime code loads or compiles a shader. All primitives share one bounded policy: owner-thread
-operations, explicit byte budgets checked against actual VMA allocation sizes and the transient
-staging peak with overflow-safe arithmetic, cancellation, device-binding checks, and a bounded
-teardown that quarantines an unproved submission rather than destroying it in flight.
+either. Every shipped Bloom-authored kernel is an offline artifact under `tools/gpu-shaders`, pinned
+by SHA-256 with a manifest binding and a configure-time `glslangValidator`/`spirv-val` regeneration
+check against the embedded SPIR-V digest, so the source -> SPIR-V -> embedded-array relationship is
+closed and no runtime code loads or compiles a Bloom kernel. OCIO-generated shader text is the
+separate runtime-compiled path, described under "Shaders And OpenColorIO". `GpuAffine` runs
+`AffineBilinearV1`, a complete composed affine (rotation, uniform/nonuniform/negative scale, anchor,
+translation, and any precomposed parent matrix) over one resident image; the host uploads one compact
+O(1) affine map and the kernel reconstructs each source-local coordinate on the device with portable
+split-precision arithmetic that does not require a device float64 or 64-bit integer capability, held
+to the documented per-finite-component 2e-6 RGB parity tolerance with bit-exact alpha at the 0 and 1
+endpoints rather than a universal exactness claim, so no O(width*height) host metadata loop and no
+host pixel resampling occurs. `GpuBlend` runs `BlendV1`
+for any `core::BlendMode` over two resident images, and `GpuPointResample` runs `PointResampleV1`,
+the bit-exact nearest-neighbour gather the media-image proxy path uses. `GpuProcessReadback` and
+`GpuOutputColorReadback` are the single bounded, cancellable device-to-host transfers reserved for
+the final export boundary, never the preview path. All primitives share one bounded policy:
+owner-thread operations, explicit byte budgets checked against actual VMA allocation sizes and the
+transient staging peak with overflow-safe arithmetic, cancellation, device-binding checks, and a
+bounded teardown that quarantines an unproved submission rather than destroying it in flight.
 
 Qualification. `bloom/runtime/gpu_neutral_display_qualification.hpp` runs the native device/pipeline
 on the owner thread, refuses any processor other than the exact default Bloom Neutral v1 handle
@@ -114,8 +129,9 @@ holds to the frozen contract (RGB within one straight-RGBA8 code, alpha exact) o
 values; a nonzero subnormal frame is measured as whole-frame shader rejection and remains a per-frame
 CPU fallback, never a parity failure or a claimed supported domain. Timing measures a warmup plus
 alternating pairs, and the eligible interval is the contiguous faster suffix ending at 4K, so an
-unmeasured or slower 4K leaves the operation CPU-only. The outcome is `PreviewOnly`; final output
-stays on CPU. `gpu_resident_preview_qualification.hpp` reuses the caller's already-created typed
+unmeasured or slower 4K leaves the operation CPU-only, and no measured speedup is claimed. The
+qualification outcome is `PreviewOnly`; it is not selected for final output.
+`gpu_resident_preview_qualification.hpp` reuses the caller's already-created typed
 pipelines, refuses any pipeline not bound to the exact actual device (`GpuDevice::ownershipEpoch()`
 is the unique ownership identity), and compares every pixel against the CPU primitives and the
 independent OCIO oracle; its report is constructed only by its private factory and is `PreviewOnly`
@@ -123,17 +139,23 @@ only.
 
 Scene preparation, caches, and executor. `CpuGpuSceneBuilder` (`prepared_gpu_scene.hpp`) turns a real
 `CompiledCompositionPlan` plus an `EvaluationRequest` into ordered immutable `GpuSceneCommand`s
-(solid, covered solid, unparented translation-only layer, image/video upload, Normal merge,
-composition output) using the evaluator's real preflight resolution and, for a fractional
-translation-only solid, the same CPU coverage raster; it allocates no full RGBA CPU image and fails
-closed `Unsupported` for every out-of-subset reachable operation. That host-built coverage mask is a
-known gap, not a GPU vector-coverage implementation: `feature.geometry.vector_coverage` stays
-Required and RED until a native GPU coverage producer replaces it. Command semantic keys carry the
-resolved operands plus the pinned render SPIR-V digests and never node/layer IDs, operation indexes,
-or the revision. `ImageSource`/`VideoSource` leaves resolve and colour-convert on the CPU task thread
-through the evaluator's own entry points and publish a frozen upload command whose source semantic key
-contains no node id, plan index, frame time, or layer transform; a reachable unsupported layer is
-screened before any decode. `GpuSceneCoverageCache` is a bounded transactional LRU keyed on raster
+(solid, covered solid and native vector coverage, translation, affine layer transform, source-over
+and typed blend, OCIO colour/effect transform, point-resample proxy gather, image/video upload,
+nested composition, merge, and composition output) using the evaluator's real preflight resolution
+and the exact resolved operands; it allocates no full RGBA CPU image and fails closed `Unsupported`
+for every reachable operation it cannot prepare. A vector source emits the
+immutable bounded `PathRasterCoverageGeometry` (integer scanline spans, never a host per-pixel mask)
+that the executor rasterizes through the native `GpuPathCoverage` producer; scene integration keeps
+that producer's device provenance and dispatch counters, so the Required
+`feature.geometry.vector_coverage` axis is carried by real GPU work rather than a host mask. Command
+semantic keys carry the resolved operands plus the pinned render SPIR-V digests and never node/layer
+IDs, operation indexes, or the revision. `ImageSource`/`VideoSource` leaves decode raw on the CPU
+task thread through the evaluator's own entry points and publish a frozen upload command; when the
+shared GPU colour context is available, a real input-to-working OCIO transform and a fractional
+proxy point-resample then run as GPU commands over that upload, so the decoded samples are not
+colour-converted on the host. Without that context the leaf keeps the connected CPU conversion path
+as the fallback. The upload/source semantic key contains no node id, plan index, frame time, or
+layer transform; a reachable unsupported layer is screened before any decode. `GpuSceneCoverageCache` is a bounded transactional LRU keyed on raster
 geometry alone; `GpuPreparedUploadCache` (128 MiB / 4096 entries default, zero disables) reuses a
 converted source across a transform-only change. `GpuSceneExecutor` (`gpu_scene_executor.hpp`) drives
 one immutable `PreparedGpuScene` as a bounded sequence of already-typed native operations on an
@@ -154,7 +176,8 @@ that pin.
 Coverage contract and final render. `bloom/runtime/gpu_coverage_contract.hpp` is the exhaustive,
 compile-time-checked registry of every `CompiledOperation`/`ImageEffectKernel` alternative, every
 image-producing authoring lowering, every built-in pixel node type, and the required blend, shape,
-geometry (native vector coverage), layer, colour, and display feature axes and render routes. GPU
+geometry (native vector coverage), region-of-interest, layer, colour, and display feature axes and
+render routes. GPU
 production preparation is required by
 default; adding an alternative, lowering, or pixel node type without classifying and fixturing it is
 a compile failure or a missing-fixture failure, and an unclassified or unfixtured required id keeps
@@ -168,19 +191,23 @@ reference, and no such exception exists today. Host-preparation declarations -- 
 sample I/O and decompression, font load/shaping, parameter/curve/geometry resolution, and one final
 readback -- are a separate audited list and are not a route to exempt a pixel operation, feature, or
 route. Approval identifiers are never fabricated, and working-space colour conversion is a pixel
-transformation that is never an opt-out. Per-pixel vector coverage rasterization (the CPU
-`PathRaster::coverageRow` mask) is likewise a pixel transformation, not host preparation: a
-`CoveredSolidV1` fill from a host-built mask does not satisfy the Required
-`feature.geometry.vector_coverage` axis, which needs a native GPU coverage producer with real
-device provenance and dispatch counters.
-The resident `GpuPathCoverage` producer performs this rasterization from bounded CPU scanline
-geometry; scene integration must retain its device provenance and dispatch counters.
+transformation that is never an opt-out. Per-pixel vector coverage rasterization is likewise a
+pixel transformation, not host preparation: a `CoveredSolidV1` fill from a host-built
+`PathRaster::coverageRow` mask does not satisfy the Required `feature.geometry.vector_coverage`
+axis. The resident `GpuPathCoverage` producer performs that rasterization from bounded CPU scanline
+geometry, and the shared scene builder/executor now emit and dispatch it while retaining its
+device provenance and dispatch counters; the native coverage fixture owns that evidence. A requested
+region of interest is likewise a Required route (`feature.roi`): the prepared scene clips its native
+output to the requested data window exactly as the CPU evaluator does, preserving native windows and
+pixel aspect, with a native ROI fixture and missed-GPU detection.
 
 Preview and final rendering are both required. Interactive viewer preview, RAM preview fill and
 playback, still-frame export, sequence/range export, video export, and headless/scripted render are
 required routes through the actual production evaluation paths, with no preview-only exemption. A
-final render may read the single composited image back once at the CPU codec/file boundary; per-node
-or per-operation full-frame roundtrips are not a GPU implementation. Native acceptance is a distinct
+final render may read the single composited image back once at the CPU codec/file boundary; the GPU
+route's one combined readback transfers the process payload plus, when present, the encoded output in
+a single submission, and per-node or per-operation full-frame roundtrips are not a GPU
+implementation. Native acceptance is a distinct
 gate: on a device it must execute the routes and assert native dispatch, resident provenance, a pixel
 oracle, cold/warm cache state, and no silent CPU whole-frame render for an ordinary operation; with
 no device it reports an explicit skip, never a pass, and `--require-device` fails. An unavailable
@@ -206,12 +233,16 @@ routes on that same owner thread and scheduler lease:
   `PreviewDisplayProvider::GpuNeutral` provenance; otherwise the same evaluated stage is mapped by
   the CPU display fallback and is never compiled or evaluated twice.
 - The opt-in resident route (additive constructor) runs a genuine startup `qualifyResidentPreview()`,
-  prepares the GPU scene on a CPU child, drives it through `GpuSceneExecutor` -> `GpuResidentDisplay`
-  -> the resident product factory, and publishes an opaque owner-bound `GpuResidentFrameLease` into
-  the service's presentation registry with zero full-frame readback. It supports the qualified
-  Solid/covered-solid, translation/opacity, `SourceOver`, and media-upload operations plus the default
-  Bloom Neutral display; anything else takes the full original CPU path on the same
-  snapshot/identity/overrides.
+  prepares the shared GPU scene on a CPU child, drives it through `GpuSceneExecutor` ->
+  `GpuResidentDisplay` -> the resident product factory, and publishes an opaque owner-bound
+  `GpuResidentFrameLease` into the service's presentation registry with zero full-frame readback. The
+  prepared scene now covers every current compiled pixel operation: solid and covered-solid (native
+  vector coverage), translation, affine layer transforms, `SourceOver` and typed `BlendV1`, OCIO
+  colour/effect transforms, point-resample proxy gathers, media upload, merge, nested composition,
+  composition output, and a requested region of interest, plus the default Bloom Neutral display. A
+  request the builder refuses (for example non-`Reference` quality, or a working space reaching an
+  operation without verified working-space semantics) takes the full original CPU path on the same
+  snapshot/identity/overrides rather than mis-rendering.
 
 A stage whose failure, deadline, cancellation, or lost generation leaves a native submission
 unretired enters an explicit `Retiring` phase that retains the stage, its completion token, and the
@@ -222,6 +253,18 @@ retention or allocation failure latches the process-wide fuse. The bounded count
 cache hits/misses, fallbacks, and refusals, so a test can prove no full-frame readback occurred.
 `beginShutdown()` is non-blocking; the destructor joins the service thread and drains child/native
 ownership before releasing the lease.
+
+Resident capacity and host/device separation. The resident route sizes its one pool from the
+resolved device allocation budget, never from host RAM alone. On the device owner thread
+`GpuDevice::availableAllocationBudget()` reports either a live `VK_EXT_memory_budget` figure or a
+conservative nominal `DEVICE_LOCAL` estimate, and the runtime partitions that one pool into the
+frame-cache, lease-registry, scene-cache, and per-request sub-budgets with bounded cache headroom,
+clamped so the total can never overcommit the device and never raised above the artist's configured
+ceiling. Host limits and device limits are separate: a host decode/pixel-storage ceiling larger than
+the device share is clamped only for the device stage while the host ceiling is preserved for
+decoding and the CPU fallback, and a zero device ceiling is the honest no-device-admission signal
+that takes the CPU path. A genuinely unresolved device uses a small safe fallback pool; a known-zero
+device is never turned into that fallback.
 
 Presentation lane. The qualified Linux loader is rebuilt with `BUILD_WSI_WAYLAND_SUPPORT=ON` alone
 (XCB/Xlib/Xrandr and DirectFB stay `OFF`; the Wayland branch adds no pkg-config or `DT_NEEDED` entry).
@@ -260,12 +303,15 @@ split/close/collapse/root-replace/restore, reports `Deferred` rather than a prem
 resumes only targets still attached to the live root; `ApplicationShutdownCoordinator` emits
 `shutdownQuiescent` only once BOTH task quiescence and native-surface retirement are observed, and the
 application begins service shutdown on `shutdownQuiescent`. `apps/bloom/main.cpp` now constructs the
-resident service overload (GPU scene stage + CPU stage + display fallback), derives bounded resident
-lease/scene-cache budgets from the artist's UI frame-cache budget, requests Wayland presentation only
-for a bundled loader on a genuine Wayland session, shares the coverage and prepared-upload caches, and
-builds a session-refreshing GPU scene stage so relative media follows the live session base directory.
-`bloom::ui::GpuViewerBootstrap` caches the service's presentation client/availability and hands every
-current and future `ViewerEditor` a typed `ViewerGpuDependencies`; `ViewerEditor` presents the
+resident service overload (GPU scene stage + CPU stage + display fallback), derives the configured
+resident lease/scene-cache/request budgets from the artist's UI frame-cache ceiling, requests Wayland
+presentation only for a bundled loader on a genuine Wayland session, shares the coverage and
+prepared-upload caches and the one shared OCIO resolver/context, and builds a session-refreshing GPU
+scene stage so relative media follows the live session base directory.
+`bloom::ui::GpuViewerBootstrap` caches the service's presentation client/availability and installs
+the owner-resolved, capacity-clamped resident plan on the shared frame cache through the existing
+status poll, then hands every current and future `ViewerEditor` a typed `ViewerGpuDependencies`;
+`ViewerEditor` presents the
 resident arm through `ViewerGpuResidentController`, which owns the same-request CPU fallback, the
 native CPU cover, and off-thread overlay rasterization, and forwards native window input back through
 the real event handlers. The RAM preview controller fills its range with a bounded two-deep pipeline
@@ -281,16 +327,22 @@ CPU reference with zero byte difference, and the four viewer background modes (S
 White, Checkerboard) each match the CPU surround, including transparent composition pixels, so the
 GPU and CPU display paths agree. Warm cache reuse adds no native dispatches, the unsupported path
 returns the CPU fallback, and shutdown drains cleanly. This document makes no full-application FPS
-claim and no universal qualification claim. The fixed operation remains `PreviewOnly`, final output
-stays on CPU, and nothing here is a Windows or macOS GPU claim; Linux Wayland is the only locally
-exercised resident-present platform.
+claim, no measured speedup claim, and no universal or cross-platform qualification claim, and the
+resident-preview outcome remains `PreviewOnly`. The final-render route now evaluates through the
+same application-owned GPU provider for still, range, video, and headless export: the general
+output-colour production context resolves the OCIO display/effect program on the blocking CPU stage,
+the shared scene composes and reads the single combined process-plus-encoded result back once at the
+codec/file boundary, and a 6000x4000 media+CST+text export has locally verified native execution.
+The CPU reference evaluator remains the correctness oracle and the explicit supported fallback. GPU
+execution is locally exercised on Linux only; macOS and Windows have an explicit supported CPU
+fallback, not a GPU parity claim.
 
-Genuinely unimplemented / future work. Per-layer GPU compositing selection by the scene evaluator;
-general (non-subset) graph execution; a whole-application benchmark; the full per-operation
+Genuinely unimplemented / future work. A whole-application benchmark; the full per-operation
 qualification fixtures for a future `ReferenceParity` profile (the qualified display transform and
-the resident scene route remain `PreviewOnly`; no operation reaches `ReferenceParity`); runtime
-compilation of generated OCIO shader programs; the cross-platform Linux/macOS/Windows parity spike;
-Windows/macOS GPU support; and a reviewed XCB/Xlib/Xrandr presentation intake. The qualified Linux
+the resident scene route remain `PreviewOnly`; no operation reaches `ReferenceParity`); the
+cross-platform Linux/macOS/Windows parity spike; Windows/macOS GPU support; and a reviewed
+XCB/Xlib/Xrandr presentation intake. The scene evaluator now prepares every current compiled pixel
+operation through one shared scene, including a requested region of interest. The qualified Linux
 prefix manifest remains pending, so this direction stays `working`.
 
 ## Boundaries
@@ -399,8 +451,11 @@ GPU display stage can reuse the evaluated frame instead of recomputing the graph
   non-default display/view selection, view adjustments, overrides, ROI, progress, and diagnostics
   are preserved.
 
-This seam is CPU-only. No GPU service, device, or pipeline is activated by it, and the renderworker's
-`GpuNeutralDisplayPipeline` is not yet consumed here.
+The seam itself creates no device, service, or thread; it separates CPU preparation from the display
+product. The application now consumes it alongside the GPU scene stage: `apps/bloom/main.cpp` builds
+the resident service overload, so an evaluated `ProcessFrame` can flow into the shared GPU executor
+and display product instead of only the CPU fallback. The CPU stage and `PreviewCpuDisplayFallback`
+remain the correctness oracle and the explicit unavailable path.
 
 - Requests carry snapshot identity, time, output, resolution, quality, color intent, and a
   cancellation generation.
@@ -510,9 +565,12 @@ The first reference-parity profile uses `RGBA32F`. Its numeric gates are:
 `RGBA16F` remains a distinct `PreviewOnly` profile until it has its own explicit precision and image
 quality contract. Passing an `RGBA16F` preview gate says nothing about `RGBA32F` reference parity.
 
-Until a later decision admits a qualified GPU operation profile for final output, deterministic
-final export uses the CPU reference path. Enabling GPU final rendering is a deliberate policy in
-addition to `ReferenceParity`, not an automatic consequence of having a GPU.
+The final-render route now evaluates through the application-owned GPU provider described in
+[`frame-output.md`](frame-output.md), with the single final CPU readback at the codec/file boundary
+and the CPU reference evaluator as the correctness oracle and explicit `Disabled`/unavailable
+fallback. That is a production preparation/execution route, not a `ReferenceParity` claim: any
+stricter final-output policy remains an explicit decision rather than an automatic consequence of
+having a GPU.
 
 GPU process cache identity includes the process request identity, primitive and backend semantics,
 backend/shader/SPIR-V/compiler revisions and options, texture/storage precision, operation
@@ -524,10 +582,12 @@ object from surviving device recreation even when its pixels would be equivalent
 
 ## Shaders And OpenColorIO
 
-Bloom-authored kernels use one reviewed Vulkan GLSL source path. Shipped shaders are compiled to
-SPIR-V at build time, validated, reflected into explicit bindings, and packaged with a source and
-compiler version. Runtime specialization should prefer constants and pipeline variants over
-unbounded source generation.
+Bloom-authored kernels use one reviewed Vulkan GLSL source path. Shipped Bloom shaders are compiled
+to SPIR-V at build time, validated, reflected into explicit bindings, and packaged with a source and
+compiler version; runtime code never compiles or loads a Bloom kernel. OCIO-generated shader text is
+the one runtime-compiled path: it is extracted from the project's resolved config, wrapped, and
+compiled to SPIR-V on a CPU worker using the packaged, pinned `glslangValidator`/`spirv-val` tools.
+Runtime specialization prefers constants and pipeline variants over unbounded source generation.
 
 OpenColorIO currently exposes `GPU_LANGUAGE_GLSL_VK_4_6` as a GPU shader target. Bloom uses an OCIO
 `GPUProcessor` and `GpuShaderDesc` to obtain shader text, uniforms, and LUT textures. Because those
@@ -547,12 +607,14 @@ reason to substitute the temporary reference mapper.
 Before compilation or upload, the adapter enforces checked limits on shader bytes, tokens, entry
 points, uniforms, texture count, LUT dimensions, aggregate LUT bytes, and compile time; validates LUT
 shape and finite samples; and rejects unsupported OCIO resource forms. Shader compilation runs off
-the UI and GPU service threads in a killable, resource-limited helper process. Bloom accepts its
-output only after SPIR-V structural validation and reflection exactly match the declared entry point,
-bindings, descriptor types, dimensions, and limits. Pipeline creation remains on the GPU service
-thread and is covered by device-loss containment. A timeout, helper crash, validation mismatch,
-driver failure, or budget breach produces an operation-scoped diagnostic, publishes no partial
-pipeline or LUT, and cannot poison an existing qualified cache entry.
+the UI and GPU service threads, and off the native GPU owner thread, as a bounded, cancellable child
+process of the packaged tools with no shell involved; the shared `GpuOcioContextResolver` qualifies
+the executable-relative package once on a CPU worker and publishes one `GpuOcioProgramPreparer`.
+Bloom accepts the output only after SPIR-V structural validation and reflection exactly match the
+declared entry point, bindings, descriptor types, dimensions, and limits. Pipeline creation remains
+on the GPU service thread and is covered by device-loss containment. A timeout, tool crash,
+validation mismatch, driver failure, or budget breach produces an operation-scoped diagnostic,
+publishes no partial pipeline or LUT, and cannot poison an existing qualified cache entry.
 
 Glslang is the provisional GLSL-to-SPIR-V compiler because it is Khronos's reference front end and
 can be used as a command-line tool or library. Its exact build and transitive licenses must be pinned
@@ -571,9 +633,11 @@ typed compile definitions for that relative layout (`BLOOM_GPU_TOOLS_AVAILABLE`,
 `BLOOM_GPU_TOOLS_DIR`, `BLOOM_GPU_TOOLS_GLSLANG_NAME`, `BLOOM_GPU_TOOLS_SPIRV_VAL_NAME`, and the
 inventory name); no absolute build path is embedded. An unqualified mode, a CPU-stub build, a missing
 prefix, or a prefix without the pinned tools clears the capability with a typed reason instead of
-falling back to a host tool, and the CPU reference path remains the supported outcome. This slice
-stages tools only; it introduces no process invocation, resource limit, or runtime compiler consumer.
-The lock records `shippingRoles: ["executable", "license"]` for both components and the two license
+falling back to a host tool, and the CPU reference path remains the supported outcome. The staged
+tools are the runtime consumer's only compiler: the OCIO program preparer invokes them through the
+platform process supervisor with explicit source/SPIR-V/diagnostic byte ceilings, an address-space
+and open-file limit, a deadline, and cancellation, never a shell or an ambient lookup. The lock
+records `shippingRoles: ["executable", "license"]` for both components and the two license
 reviews were extended from their earlier build-only form accordingly.
 
 Arbitrary project-provided shader source is outside the initial scope. If scripting or shader nodes
@@ -649,8 +713,9 @@ completion/fence observation, readback, and presentation. On the first loss sign
 5. attempts at most one controlled asynchronous device recreation during the process lifetime; and
 6. resumes with a new generation and freshly measured capability report, or remains `Unavailable`.
 
-Final output continues on CPU only when its immutable request and policy allow the CPU equivalent;
-otherwise it fails. It never resumes partway through an output with mixed hidden semantics.
+On a device-loss or unavailable fallback, final output continues on the CPU reference path only when
+its immutable request and policy allow the CPU equivalent; otherwise it fails. It never resumes
+partway through an output with mixed hidden semantics.
 
 - No compatible GPU: start normally with the CPU renderer and show one persistent, actionable
   performance diagnostic.
