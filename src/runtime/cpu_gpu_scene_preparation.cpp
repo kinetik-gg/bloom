@@ -46,6 +46,22 @@ struct GpuSceneVectorChain final {
     double opacity = 1.0;
 };
 
+// Operations whose pixels are colour-space agnostic: their values are resolved through the exact
+// configured input->working OCIO transform (or are blend/geometry logic over already-resolved
+// pixels), so they are correct under any resolvable working space. The lin_rec709_scene-specific
+// operations (solid pixel, vector coverage, view adjust) are deliberately absent. Used only to keep
+// a non-neutral working space honest: it is admitted for exactly these media scenes and refused for
+// every scene that also carries a lin_rec709-specific operation.
+[[nodiscard]] bool isMediaSafeOperation(const CompiledOperation& operation) noexcept {
+    return std::holds_alternative<CompiledImageSource>(operation) ||
+           std::holds_alternative<CompiledVideoSource>(operation) ||
+           std::holds_alternative<CompiledImageEffect>(operation) ||
+           std::holds_alternative<CompiledLayerOutput>(operation) ||
+           std::holds_alternative<CompiledMerge>(operation) ||
+           std::holds_alternative<CompiledCompositionSource>(operation) ||
+           std::holds_alternative<CompiledCompositionOutput>(operation);
+}
+
 } // namespace
 
 PreparedGpuSceneBuildResult
@@ -76,12 +92,18 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                       "Compiled plan semantics are unsupported");
     }
     if (request.quality != EvaluationQuality::Reference ||
-        request.colorIntent.workingColorSpaceId != kLinearRec709SceneColorSpaceId ||
         request.colorIntent.workingColorSpaceId.find('\0') != std::string_view::npos ||
         request.roi) {
         return failed(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
-                      "Only Reference quality, lin_rec709_scene, and no ROI are prepared");
+                      "Only Reference quality and no ROI are prepared");
     }
+    // The non-media prepared subset (solid pixels, vector coverage, image effects) assumes
+    // lin_rec709_scene pixel semantics, so a different working space is refused for it. A
+    // media-only scene carries no such operation: its pixels are resolved through the exact
+    // configured input->working OCIO transform, so an ACES scene-linear working space (or any other
+    // resolvable one) is prepared. The reachable-subset check runs below.
+    const bool neutralWorkingSpace =
+        request.colorIntent.workingColorSpaceId == kLinearRec709SceneColorSpaceId;
     if (plan->operations().empty() || request.output.value() >= plan->operations().size() ||
         request.output != plan->output() ||
         !std::holds_alternative<CompiledCompositionOutput>(
@@ -94,10 +116,23 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     }
 
     const std::size_t operationCount = plan->operations().size();
+    // The reachable-operation subset classifier is extracted to gpu_scene_preparation_builders.hpp.
     std::vector<bool> reachable;
     if (const auto error = detail::computeReachablePreparedOperations(*plan, request.output.value(),
                                                                       cancellation, reachable)) {
         return failed(error->code, error->message);
+    }
+    // A non-neutral working space is honest only for the media-safe subset. A scene that also
+    // reaches a lin_rec709_scene-specific operation (solid pixel, vector coverage, view adjust)
+    // still refuses a non-neutral working space rather than mis-colouring it.
+    if (!neutralWorkingSpace) {
+        for (std::size_t index = 0; index < operationCount; ++index) {
+            if (reachable[index] && !isMediaSafeOperation(plan->operations()[index])) {
+                return failed(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
+                              "A non-lin_rec709_scene working space is prepared only for "
+                              "media-only scenes");
+            }
+        }
     }
 
     auto checked = detail::preflight(plan, request, cancellation, {}, nullptr, nullptr);
@@ -108,8 +143,16 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         const auto code = checked.diagnostic.has_value()
                               ? checked.diagnostic->code
                               : EvaluationDiagnosticCode::InternalInvariant;
-        std::string message = checked.diagnostic.has_value() ? checked.diagnostic->summary
-                                                             : std::string{"Preflight failed"};
+        std::string message;
+        if (checked.diagnostic.has_value()) {
+            message = checked.diagnostic->summary;
+            if (message.empty()) {
+                message = checked.diagnostic->detail;
+            }
+        }
+        if (message.empty()) {
+            message = "Preflight failed";
+        }
         return failed(code == EvaluationDiagnosticCode::PixelStorageBudgetExceeded
                           ? PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded
                           : PreparedGpuSceneDiagnosticCode::PreflightFailure,
@@ -316,48 +359,36 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         if (const auto* image = std::get_if<CompiledImageSource>(&operation)) {
             const auto remainingBudget = allowance > chargedBytes ? allowance - chargedBytes : 0;
             detail::GpuSceneUploadLeafResult leaf;
-            const auto error = detail::buildImageUploadLeaf(
-                *image, request, *plan, resolved, mediaContext_, remainingBudget, hScale, vScale,
-                charge, cancellation, mediaStatistics, leaf);
+            const auto error = detail::buildImageColorLeaf(
+                *image, request, *plan, resolved, mediaContext_, ocioContext_, remainingBudget,
+                hScale, vScale, charge, cancellation, mediaStatistics, leaf);
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
             }
             bounds[index] = leaf.bounds;
             outputWindowOf[index] = leaf.outputWindow;
-            keyOf[index] = leaf.semanticKey;
-            if (!leaf.descriptor.has_value()) {
-                return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                              "the upload leaf produced no image descriptor");
+            if (const auto emitError = detail::emitMediaLeafCommands(
+                    operationIndex, leaf, charge, emit, commandForOperation[index], keyOf[index])) {
+                return failed(emitError->code, emitError->message, mediaStatistics);
             }
-            GpuSceneUploadCommand command{.sourceOperation = operationIndex,
-                                          .image = std::move(leaf.image),
-                                          .descriptor = *leaf.descriptor,
-                                          .semanticKey = leaf.semanticKey};
-            commandForOperation[index] = emit(std::move(command));
             continue;
         }
 
         if (const auto* video = std::get_if<CompiledVideoSource>(&operation)) {
             const auto remainingBudget = allowance > chargedBytes ? allowance - chargedBytes : 0;
             detail::GpuSceneUploadLeafResult leaf;
-            const auto error = detail::buildVideoUploadLeaf(
-                *video, request, *plan, resolved, mediaContext_, remainingBudget, hScale, vScale,
-                charge, cancellation, mediaStatistics, leaf);
+            const auto error = detail::buildVideoColorLeaf(
+                *video, request, *plan, resolved, mediaContext_, ocioContext_, remainingBudget,
+                hScale, vScale, charge, cancellation, mediaStatistics, leaf);
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
             }
             bounds[index] = leaf.bounds;
             outputWindowOf[index] = leaf.outputWindow;
-            keyOf[index] = leaf.semanticKey;
-            if (!leaf.descriptor.has_value()) {
-                return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                              "the upload leaf produced no image descriptor");
+            if (const auto emitError = detail::emitMediaLeafCommands(
+                    operationIndex, leaf, charge, emit, commandForOperation[index], keyOf[index])) {
+                return failed(emitError->code, emitError->message, mediaStatistics);
             }
-            GpuSceneUploadCommand command{.sourceOperation = operationIndex,
-                                          .image = std::move(leaf.image),
-                                          .descriptor = *leaf.descriptor,
-                                          .semanticKey = leaf.semanticKey};
-            commandForOperation[index] = emit(std::move(command));
             continue;
         }
 
