@@ -389,7 +389,7 @@ decodeExr(const std::filesystem::path& path, const ImageInterpretation& interpre
         const std::uint64_t channelCount =
             static_cast<std::uint64_t>(layout->luminance ? 1U : 3U) + (layout->hasAlpha ? 1U : 0U);
         const std::uint64_t finalBytes = descriptor.value()->layout().pixelStorageBytes;
-        constexpr std::uint64_t kBandTargetBytes = 1024U * 1024U;
+        constexpr std::uint64_t kBandTargetBytes = std::uint64_t{1024} * 1024U;
         std::uint64_t chunkRows = 1U;
         if (layout->tiled) {
             chunkRows = std::max<std::uint64_t>(1U, layout->tileHeight);

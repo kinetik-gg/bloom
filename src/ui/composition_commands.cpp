@@ -232,7 +232,8 @@ std::optional<document::CompositionId> showNewCompositionDialog(CompositionSessi
             return inheritedRate;
         }
         // The artist's typed rate at millifps precision, reduced to lowest terms.
-        const auto numerator = clampedRound(fields.frameRate->value() * 1000.0, 1, 1000 * 1000);
+        const auto numerator =
+            clampedRound(fields.frameRate->value() * 1000.0, 1, std::int64_t{1000} * 1000);
         return document::FrameRate::create(static_cast<std::uint32_t>(numerator), 1000)
             .value_or(inheritedRate);
     };

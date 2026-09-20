@@ -19,7 +19,7 @@ namespace {
 [[nodiscard]] bool cancelled(const CancelImageWork& cancel) { return cancel && cancel(); }
 
 constexpr std::size_t kImageHeaderBytes = 16;
-constexpr std::size_t kHashChunkBytes = 1024U * 1024U;
+constexpr std::size_t kHashChunkBytes = std::size_t{1024} * 1024U;
 // PNG/JPEG peak admission phases: the decoded RGBA32F image (16 bytes/px), the codec's RGBA16
 // staging buffer (4 channels * 2 bytes = 8 bytes/px), and the one-row float conversion scratch
 // (16 bytes/px). Every phase that is live at once must fit the caller's explicit budget before the
@@ -227,7 +227,7 @@ ImageResult<ImageProbe> probeImage(const std::filesystem::path& path, const Canc
             const auto response = provider->decode({.path = path,
                                                     .interpretation = {},
                                                     .pixelBudget = kMaxImageStorageBytes,
-                                                    .expectedDigest = *digest.value});
+                                                    .expectedDigest = digest.value});
             if (!response.value.has_value())
                 return {{},
                         response.diagnostic,

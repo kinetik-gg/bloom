@@ -100,6 +100,9 @@ def run_one(
             f"--checks={checks}",
             "--warnings-as-errors=*",
             f"--header-filter={header_filter}",
+            # Keep upstream vendor bytes outside Bloom diagnostics, as bloom-format-check does.
+            # The adapter translation unit itself is still checked.
+            "--exclude-header-filter=/third_party/",
             "-p",
             str(database.parent),
             str(unit),
