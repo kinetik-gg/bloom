@@ -207,6 +207,27 @@ target_link_libraries(bloom_composition_preview_cpu_stage_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_preview_gpu_scene_stage_test PRIVATE bloom_ui)
 target_include_directories(bloom_composition_preview_gpu_scene_stage_test
     PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+# Production general-display stage path. It drives the ACTUAL makeSessionRefreshingGpuSceneStage
+# with the shared runtime GpuOcioContextResolver over the REAL packaged tools staged beside this
+# executable by bloom_package_gpu_shader_tools (no injected tool paths or preparer); without the
+# tools the general assertions are compiled out and the test is a clean pass.
+add_executable(bloom_composition_preview_gpu_scene_general_test
+    composition_preview_gpu_scene_general_tests.cpp)
+target_include_directories(bloom_composition_preview_gpu_scene_general_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_composition_preview_gpu_scene_general_test PRIVATE bloom_ui)
+target_compile_definitions(bloom_composition_preview_gpu_scene_general_test PRIVATE
+    "BLOOM_GPU_GENERAL_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_composition_preview_gpu_scene_general_test>\"")
+include(BloomGpuShaderTools)
+bloom_package_gpu_shader_tools(bloom_composition_preview_gpu_scene_general_test)
+bloom_enable_warnings(bloom_composition_preview_gpu_scene_general_test)
+bloom_add_test(
+    NAME bloom.ui.composition_preview_gpu_scene_general
+    COMMAND bloom_composition_preview_gpu_scene_general_test
+    LABELS ui gpu color
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
 target_link_libraries(bloom_gpu_preview_submitter_test PRIVATE bloom_ui)
 target_link_libraries(bloom_gpu_preview_app_test PRIVATE bloom_ui bloom_runtime_evaluator)
 # bloom_ui_gpu_presentation_target_test adopts the borrowed VkInstance through Qt's public

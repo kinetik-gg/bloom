@@ -566,25 +566,32 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
     const bool residentMode = core->gpuStageFunction != nullptr;
     bool gpuMode = false;
     if (residentMode) {
-        // Resident selection is driven ONLY by the genuine resident report and a usable
-        // presentation generation. It is deliberately not gated on the packed readback
-        // qualification, packed bandwidth, a fake qualification, or the raw document revision.
+        // Resident selection requires a usable presentation generation and a live route. It is
+        // deliberately NOT gated on the Neutral-specific qualification (its measured pixel interval
+        // and packed parity are a performance/parity gate for the Neutral shader, not a global
+        // support gate): the per-request stage decides between a prepared general display program,
+        // the startup Neutral fast path, and the CPU fallback. The packed readback qualification,
+        // packed bandwidth, a fake qualification, and the raw document revision are all irrelevant.
         gpuMode = current.state == GpuPreviewDisplayServiceState::Ready && current.gpuAvailable &&
-                  current.residentQualification != nullptr &&
-                  current.residentQualification->eligible() && !core->residentRouteTerminal &&
-                  core->presentation != nullptr && core->presentation->available &&
-                  core->presentation->registry != nullptr;
+                  !core->residentRouteTerminal && core->presentation != nullptr &&
+                  core->presentation->available && core->presentation->registry != nullptr;
     } else {
         gpuMode = current.state == GpuPreviewDisplayServiceState::Ready && current.gpuAvailable &&
                   current.qualification != nullptr && current.qualification->eligible();
     }
     const std::size_t allowance =
         pixelStorageByteLimit != 0 ? pixelStorageByteLimit : core->options.previewByteAllowance;
+    // In resident mode the per-request stage decides between the general display program (which may
+    // be a non-default display/view and a non-neutral ViewAdjust), the startup Neutral fast path,
+    // and the CPU fallback. The submit gate therefore must NOT preempt a non-neutral request: doing
+    // so would re-introduce the old neutral-only gate and silently drop every prepared general
+    // display program. The packed (non-resident) arm keeps the neutral requirement.
+    const bool neutralRequired = !residentMode;
     if (!gpuMode || pixelStorageByteLimit == 0 || allowance > core->options.previewByteAllowance ||
-        !detail::gpuPreviewDisplayRequestIsNeutral(identity)) {
-        // Reference/unavailable/disabled, oversize admission, or non-neutral: ordinary CPU task
-        // before any stage work on the held reservation. For the resident arm an unavailable
-        // presentation generation takes this honest CPU fallback.
+        (neutralRequired && !detail::gpuPreviewDisplayRequestIsNeutral(identity))) {
+        // Reference/unavailable/disabled, oversize admission, or a packed non-neutral request:
+        // ordinary CPU task before any stage work on the held reservation. For the resident arm an
+        // unavailable presentation generation takes this honest CPU fallback.
         return submitCpuRootReserved(core, std::move(request), snapshot, identity,
                                      pixelStorageByteLimit, overrides);
     }

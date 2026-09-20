@@ -22,6 +22,7 @@
 #include <bloom/runtime/compiled_plan_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/render/image.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 #include <bloom/runtime/preview_gpu_scene_stage.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
@@ -264,7 +265,9 @@ void testPreparedSolidMatchesCpuOracle(Expectations& expectations) {
     }
 }
 
-void testTextIsGpuSubsetFallback(Expectations& expectations) {
+// Text is now a supported prepared operation: the stage must prepare it, not fake an unsupported
+// fallback.
+void testTextIsPrepared(Expectations& expectations) {
     Fixture fixture;
     auto project = makeProject();
     const auto compositionId = project.initialCompositionId;
@@ -273,17 +276,18 @@ void testTextIsGpuSubsetFallback(Expectations& expectations) {
     bloom::ui::CompositionSession session(document, commands, compositionId);
     expectations.expect(session.addTextLayer(QStringLiteral("Title"), QStringLiteral("Bloom")),
                         "the fixture creates a text layer");
+    fixture.provider.publish(bloom::runtime::buildBloomNeutralQualifiedDisplayProcessor());
     const auto snapshot = session.snapshot();
     const auto identity = identityFor(snapshot, compositionId);
     const auto outcome = runStage(fixture, identity, snapshot, {}, expectations, "Text");
     expectations.expect(outcome != nullptr &&
-                            outcome->status == PreviewGpuSceneStageStatus::UnsupportedGpuSubset,
-                        "a text graph takes the full original CPU fallback");
-    expectations.expect(outcome != nullptr && outcome->stage == nullptr,
-                        "an unsupported GPU subset never fabricates a stage or empty frame");
+                            outcome->status == PreviewGpuSceneStageStatus::Prepared &&
+                            outcome->stage != nullptr,
+                        "a text graph is prepared by the production GPU scene builder");
 }
 
-void testRotationIsGpuSubsetFallback(Expectations& expectations) {
+// Rotation is now a supported affine prepared operation.
+void testRotationIsPrepared(Expectations& expectations) {
     Fixture fixture;
     auto project = makeProject();
     const auto compositionId = project.initialCompositionId;
@@ -294,14 +298,42 @@ void testRotationIsGpuSubsetFallback(Expectations& expectations) {
         session.addSolidLayer(QStringLiteral("Rotated"), bloom::core::Color4d{0.7, 0.2, 0.1, 1.0}),
         "the fixture creates a solid layer");
     expectations.expect(session.setSelectedRotation(30.0), "the solid layer is rotated");
+    fixture.provider.publish(bloom::runtime::buildBloomNeutralQualifiedDisplayProcessor());
     const auto snapshot = session.snapshot();
     const auto identity = identityFor(snapshot, compositionId);
     const auto outcome = runStage(fixture, identity, snapshot, {}, expectations, "Rotation");
     expectations.expect(outcome != nullptr &&
+                            outcome->status == PreviewGpuSceneStageStatus::Prepared &&
+                            outcome->stage != nullptr,
+                        "a rotated layer is prepared by the production GPU scene builder");
+}
+
+// Genuine unsupported coverage is retained: the prepared GPU subset refuses a request carrying an
+// ROI, and the stage must take the full original CPU fallback without fabricating a scene.
+void testRoiIsGpuSubsetFallback(Expectations& expectations) {
+    Fixture fixture;
+    auto project = makeProject();
+    const auto compositionId = project.initialCompositionId;
+    bloom::document::Document document(std::move(project.project));
+    bloom::commands::CommandStack commands(document);
+    bloom::ui::CompositionSession session(document, commands, compositionId);
+    expectations.expect(
+        session.addSolidLayer(QStringLiteral("Solid"), bloom::core::Color4d{0.2, 0.4, 0.8, 1.0}),
+        "the fixture creates a solid layer");
+    fixture.provider.publish(bloom::runtime::buildBloomNeutralQualifiedDisplayProcessor());
+    const auto snapshot = session.snapshot();
+    auto identity = identityFor(snapshot, compositionId);
+    const auto roi = bloom::render::ImageWindow::create(0, 0, 32, 24);
+    expectations.expect(roi.hasValue(), "the ROI is created");
+    if (roi.hasValue()) {
+        identity.roi = *roi.value();
+    }
+    const auto outcome = runStage(fixture, identity, snapshot, {}, expectations, "ROI");
+    expectations.expect(outcome != nullptr &&
                             outcome->status == PreviewGpuSceneStageStatus::UnsupportedGpuSubset,
-                        "a rotated layer takes the full original CPU fallback");
+                        "an ROI request takes the full original CPU fallback");
     expectations.expect(outcome != nullptr && outcome->stage == nullptr,
-                        "a rotated layer never fabricates a stage");
+                        "an unsupported GPU subset never fabricates a stage or empty frame");
 }
 
 void testPendingReferencePreparesWithoutProcessor(Expectations& expectations) {
@@ -496,8 +528,9 @@ int runTests(int argc, char** argv) {
     QApplication application(argc, argv);
     Expectations expectations;
     testPreparedSolidMatchesCpuOracle(expectations);
-    testTextIsGpuSubsetFallback(expectations);
-    testRotationIsGpuSubsetFallback(expectations);
+    testTextIsPrepared(expectations);
+    testRotationIsPrepared(expectations);
+    testRoiIsGpuSubsetFallback(expectations);
     testPendingReferencePreparesWithoutProcessor(expectations);
     testFailedProviderFailsClosed(expectations);
     testOverrideChangesSceneWithoutPoisoningPlanCache(expectations);

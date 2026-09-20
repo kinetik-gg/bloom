@@ -333,4 +333,116 @@ makeGpuResidentDisplayPreview(render::GpuDevice& device, GpuResidentFrameLeaseRe
     }
 }
 
+// -----------------------------------------------------------------------------------------------
+// General display product
+// -----------------------------------------------------------------------------------------------
+
+bool gpuGeneralDisplayProductIsEligible(render::GpuDevice& device,
+                                        const GpuResidentFrameLeaseRegistry& registry,
+                                        const GpuGeneralDisplayProductRequest& request,
+                                        std::string& reason) noexcept {
+    try {
+        if (!registry.isBoundTo(device)) {
+            reason = "the lease registry is not the one bound to this device";
+            return false;
+        }
+        if (!device.isOwnerThread()) {
+            reason = "the general display product must run on the device owner thread";
+            return false;
+        }
+        if (request.identity.requestGeneration == 0) {
+            reason = "the request generation is zero";
+            return false;
+        }
+        if (request.identity.output != PreviewOutput::Composition) {
+            reason = "only the composition preview output is supported";
+            return false;
+        }
+        const auto& plan = request.processIdentity.plan;
+        if (plan == nullptr) {
+            reason = "the process identity has no compiled plan";
+            return false;
+        }
+        if (request.identity.projectId != plan->projectId() ||
+            request.identity.compositionId != plan->compositionId() ||
+            request.identity.sourceRevision != plan->sourceRevision() ||
+            request.processIdentity.output != plan->output()) {
+            reason = "the request identity does not match the process frame's plan";
+            return false;
+        }
+        const auto* display = request.display.get();
+        if (display == nullptr || !display->isValid()) {
+            reason = "the general display image is null or invalid";
+            return false;
+        }
+        if (!display->isBoundTo(device)) {
+            reason = "the general display image is not bound to this device";
+            return false;
+        }
+        // The native image must match the trusted prepared-scene output descriptor exactly: real
+        // geometry governed by the actual descriptor, never an artificial pixel interval.
+        if (!request.expectedDescriptor.has_value()) {
+            reason = "the request carries no trusted scene output descriptor";
+            return false;
+        }
+        const auto& expected = *request.expectedDescriptor;
+        const auto dataExtent = expected.dataWindow().extent();
+        if (display->width() != dataExtent.width() || display->height() != dataExtent.height()) {
+            reason = "the general display dimensions do not match the scene output descriptor";
+            return false;
+        }
+        if (!(display->dataWindow() == expected.dataWindow()) ||
+            !(display->displayWindow() == expected.displayWindow())) {
+            reason = "the general display window does not match the scene output descriptor";
+            return false;
+        }
+        if (!(display->pixelAspect() == expected.pixelAspect())) {
+            reason = "the general display pixel aspect does not match the scene output descriptor";
+            return false;
+        }
+        const auto allocationBytes = display->allocationBytes();
+        if (allocationBytes == 0) {
+            reason = "the general display reports no native allocation bytes";
+            return false;
+        }
+        const std::size_t boundsBytes = std::span(request.bounds).size_bytes();
+        if (request.pixelStorageByteLimit != 0 &&
+            (allocationBytes > request.pixelStorageByteLimit ||
+             boundsBytes > request.pixelStorageByteLimit - allocationBytes)) {
+            reason = "the general display allocation plus geometry exceed the request budget";
+            return false;
+        }
+        return true;
+    } catch (...) {
+        reason.clear();
+        return false;
+    }
+}
+
+std::optional<PreparedPreviewFrame>
+makeGpuGeneralDisplayPreview(render::GpuDevice& device, GpuResidentFrameLeaseRegistry& registry,
+                             GpuGeneralDisplayProductRequest request) noexcept {
+    try {
+        std::string reason;
+        if (!gpuGeneralDisplayProductIsEligible(device, registry, request, reason)) {
+            return std::nullopt;
+        }
+        if (request.display == nullptr) {
+            return std::nullopt;
+        }
+        auto published = registry.publish(request.display);
+        if (!published.hasValue()) {
+            return std::nullopt;
+        }
+        // The general route has no Neutral qualification report. The frame is built with a null
+        // Neutral report; its display provenance is GpuResident and the exact display command
+        // identity is retained by the caller (the service stage/status). No report is fabricated.
+        return detail::buildResidentPreviewFrame(
+            std::move(request.identity), std::move(request.processIdentity),
+            std::move(published.lease), nullptr, std::move(request.bounds));
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
 } // namespace bloom::runtime

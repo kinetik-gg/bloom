@@ -20,6 +20,7 @@
 
 #include <bloom/render/gpu_presentation_types.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_ocio_display_arm.hpp>
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
@@ -108,12 +109,21 @@ gpuSceneMediaContextFor(const runtime::CpuCompositionEvaluator& evaluator,
 // freshly copied media context (sharing the coverage + prepared-upload caches) and immediately
 // invokes the existing stage function while that builder is alive. This is the
 // media-follows-session seam; the evaluator's canonical accessors are internally locked.
+//
+// `ocioContextResolver` is the ONE shared, inert runtime::GpuOcioContextResolver. It is resolved on
+// this CPU worker per request (idempotent after the first success) and supplies BOTH the builder's
+// GpuSceneOcioContext (its single shared GpuOcioProgramPreparer and the validated executable-
+// relative tool paths, enabling effects/media/arbitrary ACES working space) and the SAME preparer
+// to the general display program service. A null resolver or a failed resolve keeps the builder's
+// default fail-closed context and every affected request takes the CPU fallback with a reason.
+// Nothing here resolves tools, hashes, or compiles on the UI thread.
 [[nodiscard]] runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
     const runtime::SnapshotCompiler& compiler, const runtime::CpuCompositionEvaluator& evaluator,
-    const runtime::QualifiedDisplayProcessorProvider& qualifiedProcessorProvider,
+    const runtime::QualifiedDisplayProcessorProvider& qualifiedDisplayProcessorProvider,
     std::shared_ptr<runtime::GpuSceneCoverageCache> coverageCache,
     std::shared_ptr<runtime::GpuPreparedUploadCache> uploadCache,
-    CompiledPlanCacheHandle planCache = nullptr);
+    CompiledPlanCacheHandle planCache = nullptr,
+    std::shared_ptr<runtime::GpuOcioContextResolver> ocioContextResolver = nullptr);
 
 // Owns the cached presentation capability for the whole application. It is not a QObject, holds no
 // native handle, and never blocks. The application refreshes it from the EXISTING TaskUiBridge poll

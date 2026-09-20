@@ -1245,6 +1245,66 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
+# General GPU display arm: real OCIO display programs for the default and a non-default display/view
+# pair dispatched through runtime::GpuOcioDisplayArm and compared to the unchanged CPU OCIO display
+# oracle (<=1 RGB code, alpha exact), with cold/warm program reuse, no full-frame readback, a typed
+# non-neutral ViewAdjust refusal, and a genuine program/descriptor qualification. Requires the Vulkan
+# backend and the pinned tools; skips cleanly otherwise.
+if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_gpu_ocio_display_arm_test
+        gpu_ocio_display_arm_native_tests.cpp)
+    target_link_libraries(bloom_runtime_gpu_ocio_display_arm_test
+        PRIVATE bloom_runtime_evaluator bloom_render)
+    if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
+        target_compile_definitions(bloom_runtime_gpu_ocio_display_arm_test PRIVATE
+            "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+    endif()
+    bloom_enable_warnings(bloom_runtime_gpu_ocio_display_arm_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_ocio_display_arm_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_ocio_display_arm
+        COMMAND bloom_runtime_gpu_ocio_display_arm_test
+        LABELS runtime unit gpu color
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.runtime.gpu_ocio_display_arm
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+# General-display SERVICE acceptance: the production GpuPreviewDisplayService is driven with a real
+# PreviewGpuSceneStageFunction whose stage carries an off-UI-prepared general GpuDisplayProgram. It
+# proves the ordinary default Neutral request takes the prepared general arm ABOVE the retired 4K
+# ceiling, that non-default display + adjustments produce real resident GpuResident frames with a
+# valid lease and zero full-frame readback, and that a warm/display-only change retains the process
+# output in the scene content cache while changing only the exact DisplayRgba8 command identity. It
+# needs a presentable (Wayland) resident route, the Vulkan backend, and the pinned tools; without a
+# device it prints an explicit skip (exit 77) and --require-device fails closed.
+if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_gpu_preview_display_service_general_test
+        gpu_preview_display_service_general_tests.cpp)
+    target_include_directories(bloom_runtime_gpu_preview_display_service_general_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+    target_link_libraries(bloom_runtime_gpu_preview_display_service_general_test
+        PRIVATE bloom_runtime_evaluator bloom_render)
+    # The shared OCIO context resolver consumes the REAL tools staged beside this test executable by
+    # bloom_package_gpu_shader_tools (the same packaging the app uses); the test builds its request
+    # from the executable-relative BLOOM_GPU_TOOLS_* definitions, never a manually injected path.
+    target_compile_definitions(bloom_runtime_gpu_preview_display_service_general_test PRIVATE
+        "BLOOM_GPU_GENERAL_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_preview_display_service_general_test>\"")
+    include(BloomGpuShaderTools)
+    bloom_package_gpu_shader_tools(bloom_runtime_gpu_preview_display_service_general_test)
+    bloom_enable_warnings(bloom_runtime_gpu_preview_display_service_general_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_preview_display_service_general_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_preview_display_service_general
+        COMMAND bloom_runtime_gpu_preview_display_service_general_test
+        LABELS runtime integration gpu color resident
+        TIMEOUT 600
+    )
+    set_tests_properties(bloom.runtime.gpu_preview_display_service_general
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 # Real native parity for the PRODUCTION builder's image-effect commands: a compiled plan with a
 # non-identity CST effect (and, on Linux, a real isolated FileTransform) is prepared by the real
 # CpuGpuSceneBuilder, executed by the production GpuSceneExecutor, and compared against the
