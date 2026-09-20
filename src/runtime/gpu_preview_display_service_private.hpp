@@ -205,6 +205,7 @@ struct PreviewDisplayServiceCore final {
     std::atomic<std::uint64_t> counterGpuCacheHits{0};
     std::atomic<std::uint64_t> counterGpuCacheMisses{0};
     std::atomic<std::uint64_t> counterCpuFallbacks{0};
+    std::atomic<std::uint64_t> counterGpuAdmissionRefusals{0};
     std::atomic<std::uint64_t> counterFullFrameReadbacks{0};
     std::atomic<std::uint64_t> counterDisplayStatusReads{0};
     std::atomic<std::uint64_t> counterResidentLeaseRefusals{0};

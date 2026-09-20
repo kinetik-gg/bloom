@@ -133,6 +133,12 @@ struct GpuPreviewDisplayServiceCounters final {
     // Requests that took the full original CPU path (unsupported subset, non-neutral, over budget,
     // unavailable presentation, lease pressure, or a resident-native failure).
     std::uint64_t cpuFallbacks = 0;
+    // GPU parent submissions refused by the scheduler's bounded per-request admission (the derived
+    // host default or an explicit configured capacity) BEFORE any stage work. Non-zero means a
+    // request the display stage could have handled was forced onto the CPU by ADMISSION, not by
+    // device capability; this makes an admission mismatch observable instead of a silent
+    // cpuFallbacks increase.
+    std::uint64_t gpuAdmissionRefusals = 0;
     // FULL-FRAME host readbacks performed by the resident route. Always zero: the only host read on
     // the normal resident path is the resident display's 4-byte status word, counted separately
     // below. This field is an explicit negative assertion hook for "no CPU buffer / no packed

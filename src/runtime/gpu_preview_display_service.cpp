@@ -546,6 +546,8 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
     result.counters.gpuCacheHits = core.counterGpuCacheHits.load(std::memory_order_relaxed);
     result.counters.gpuCacheMisses = core.counterGpuCacheMisses.load(std::memory_order_relaxed);
     result.counters.cpuFallbacks = core.counterCpuFallbacks.load(std::memory_order_relaxed);
+    result.counters.gpuAdmissionRefusals =
+        core.counterGpuAdmissionRefusals.load(std::memory_order_relaxed);
     result.counters.fullFrameReadbacks =
         core.counterFullFrameReadbacks.load(std::memory_order_relaxed);
     result.counters.displayStatusReads =
@@ -649,7 +651,10 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
             core->finishRootAdmission({}, false);
             return submission;
         }
-        // Admission unavailable before any stage work: ordinary CPU task on the held reservation.
+        // Admission unavailable before any stage work. Record the bounded-admission refusal so a
+        // silent CPU fallback can never hide a GPU request-capacity mismatch, then take the honest
+        // CPU path on the held reservation.
+        core->counterGpuAdmissionRefusals.fetch_add(1, std::memory_order_relaxed);
         return submitCpuRootReserved(core, std::move(cpuRequest), snapshot, identity,
                                      pixelStorageByteLimit, overrides);
     } catch (...) {

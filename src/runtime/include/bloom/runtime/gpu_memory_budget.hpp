@@ -24,6 +24,7 @@
 
 #include <bloom/runtime/memory_budget_ledger.hpp>
 
+#include <algorithm>
 #include <cstddef>
 
 namespace bloom::runtime {
@@ -81,6 +82,27 @@ gpuPreviewRequestByteAllowanceFor(const std::size_t previewFrameCacheByteBudget)
 [[nodiscard]] inline std::size_t gpuPreviewRequestByteAllowance() noexcept {
     return gpuPreviewRequestByteAllowanceFor(
         processMemoryBudgetLedger().allocate().previewFrameCacheByteBudget);
+}
+
+// Deterministic default for the task scheduler's AGGREGATE GPU request-owned reservation ceiling
+// (the sum of `GpuTaskAdmission::requestOwnedBytes` over pending/accepted GPU tasks). It is
+// host-derived and ALWAYS valid: the assigned operation-cache split when positive, else the usable
+// host budget, else a 1-byte validity floor, clamped to the usable host budget. It is a finite
+// safety ceiling, never a device-capability claim, and it deliberately replaces the old fixed 1 GiB
+// default that silently refused a full-resolution resident preview.
+[[nodiscard]] inline std::size_t
+defaultGpuRequestOwnedByteCapacityFor(const std::size_t usableBudget,
+                                      const std::size_t operationCacheBudget) noexcept {
+    const std::size_t ceiling = usableBudget > 0 ? usableBudget : std::size_t{1};
+    const std::size_t budget = operationCacheBudget > 0 ? operationCacheBudget : ceiling;
+    return std::clamp(budget, std::size_t{1}, ceiling);
+}
+
+// The live default for the current process.
+[[nodiscard]] inline std::size_t defaultGpuRequestOwnedByteCapacity() noexcept {
+    return defaultGpuRequestOwnedByteCapacityFor(
+        processMemoryBudgetLedger().usableByteBudget(),
+        processMemoryBudgetLedger().allocate().operationCacheByteBudget);
 }
 
 } // namespace bloom::runtime

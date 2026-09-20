@@ -1,5 +1,7 @@
 #include "task_scheduler_internal.hpp"
 
+#include <bloom/runtime/gpu_memory_budget.hpp>
+
 #include <algorithm>
 #include <cstdint>
 #include <limits>
@@ -20,7 +22,6 @@ constexpr std::size_t kMaxGpuPendingQueue = 65'536;
 constexpr std::size_t kMaxGpuAdmittedStates = 65'536;
 constexpr std::size_t kMaxGpuLiveContinuations = 16'384;
 constexpr std::size_t kMaxGpuQueuedCommandBytes = std::size_t{1} << 30U;
-constexpr std::size_t kMaxGpuRequestOwnedBytes = std::size_t{1} << 30U;
 
 struct ScaledFraction {
     std::uint64_t quotient = 0;
@@ -160,6 +161,15 @@ TaskSchedulerConfig TaskSchedulerConfig::defaults() noexcept {
     // itself: the row-band pool's width is a property of the machine, not of how many task lanes
     // this configuration wants.
     config.blockingIoWorkerCount = 2;
+    // The AGGREGATE GPU request-owned reservation ceiling (summed over pending/accepted GPU tasks)
+    // is host-derived, not the old fixed 1 GiB. The helper uses the ledger's default operation-cache
+    // split when positive, else the usable host budget, else a 1-byte validity floor, always clamped
+    // to the usable host budget. It reads no artist cache override (overrides are supplied
+    // explicitly by the cache owners), is always finite and positive, and is the same default the
+    // preview byte allowance is sized against. The service still clamps each request to the real
+    // DEVICE budget, so this bound is never a device-capability claim and never the reason a
+    // GPU-capable request falls back to the CPU.
+    config.gpuRequestOwnedByteCapacity = defaultGpuRequestOwnedByteCapacity();
     return config;
 }
 
@@ -182,15 +192,19 @@ bool TaskSchedulerConfig::isValid() const noexcept {
            gpuQueuedCommandByteCapacity > 0 &&
            gpuQueuedCommandByteCapacity <= kMaxGpuQueuedCommandBytes &&
            gpuRequestOwnedByteCapacity > 0 &&
-           gpuRequestOwnedByteCapacity <= kMaxGpuRequestOwnedBytes && terminalHistoryCapacity > 0 &&
+           gpuRequestOwnedByteCapacity <= processMemoryBudgetLedger().usableByteBudget() &&
+           terminalHistoryCapacity > 0 &&
            terminalHistoryCapacity <= kMaxTerminalHistory && diagnosticsPerTask > 0 &&
            diagnosticsPerTask <= kMaxDiagnosticsPerTask && groupRegistryCapacity > 0 &&
            groupRegistryCapacity <= kMaxGroupRegistry;
 }
 
 bool GpuTaskAdmission::isValid() const noexcept {
+    // The request-owned reservation is bounded by the host-derived usable budget rather than a fixed
+    // 1 GiB, so a multi-GiB full-resolution reservation is a valid input. The scheduler's own
+    // per-request capacity check remains the authoritative admission gate.
     return queuedCommandBytes <= kMaxGpuQueuedCommandBytes &&
-           requestOwnedBytes <= kMaxGpuRequestOwnedBytes;
+           requestOwnedBytes <= processMemoryBudgetLedger().usableByteBudget();
 }
 
 CancellationToken::CancellationToken(
