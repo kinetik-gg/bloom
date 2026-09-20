@@ -392,6 +392,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                             evaluator->evaluate(plan, evaluation, context.cancellation());
                         gpuProvenance.status = gpuOutcome.status;
                         gpuProvenance.counters = gpuOutcome.counters;
+                        gpuProvenance.deviceOwnershipEpoch = gpuOutcome.deviceOwnershipEpoch;
                         if (gpuOutcome.status == runtime::GpuProcessFrameStatus::Evaluated) {
                             evaluatedFrame = gpuOutcome.frame;
                         }

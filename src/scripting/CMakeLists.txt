@@ -67,16 +67,36 @@ if(BUILD_TESTING)
         COMMAND bloom_scripting_facade_test
         LABELS unit scripting host commands document
     )
-    # Render::run's injected-provider contract: an owner-provided GpuExportProvider is reused across
-    # renders and never retired by the call, while a locally created one is retired with proof.
+    # Render::run's injected-provider contract plus the native headless render integration: an
+    # owner-provided GpuExportProvider is reused across renders and never retired by the call, while
+    # a locally created one is retired with proof. OpenEXR lets the test reopen the published EXR
+    # payloads for strict CPU/process and encoded-output parity.
+    bloom_find_dependency(OpenEXR)
     add_executable(bloom_scripting_render_injected_provider_test
                    tests/render_injected_provider_test.cpp)
-    target_link_libraries(bloom_scripting_render_injected_provider_test PRIVATE bloom_scripting)
+    target_link_libraries(bloom_scripting_render_injected_provider_test
+                          PRIVATE bloom_scripting OpenEXR::OpenEXR)
     bloom_enable_warnings(bloom_scripting_render_injected_provider_test)
+    # CTest runs the actual GPU case when the qualified prefix provides a loader (the test skips
+    # honestly when no real device is present, so the CPU stub stays tested on GPU-less hosts).
+    set(_bloom_render_injected_test_environment)
+    if(UNIX
+       AND NOT APPLE
+       AND BLOOM_RENDER_ENABLE_VULKAN
+       AND DEFINED BLOOM_DEPENDENCY_MODE
+       AND BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
+        find_package(VulkanLoader QUIET CONFIG PATHS "${BLOOM_DEPENDENCY_PREFIX}" NO_DEFAULT_PATH)
+        if(TARGET Vulkan::Loader)
+            list(APPEND _bloom_render_injected_test_environment
+                 "BLOOM_TEST_VULKAN_LOADER=$<TARGET_FILE:Vulkan::Loader>")
+        endif()
+    endif()
     bloom_add_test(
         NAME bloom.scripting.render-injected-provider
         COMMAND bloom_scripting_render_injected_provider_test
         LABELS unit scripting host rendering
+        ENVIRONMENT ${_bloom_render_injected_test_environment}
+        TIMEOUT 180
     )
 endif()
 

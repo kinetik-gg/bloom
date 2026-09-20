@@ -316,6 +316,9 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
 
     GpuProcessFrameOutcome outcome;
     outcome.counters = snapshotCounters(*executor);
+    // Genuine device identity for diagnostics: read directly from the actual native device on this
+    // owner thread. Never fabricated; stays zero for outcomes that never reached a device.
+    outcome.deviceOwnershipEpoch = device->ownershipEpoch();
     if (cancellation.isCancellationRequested() || stopRequested.load()) {
         outcome.status = GpuProcessFrameStatus::Cancelled;
         outcome.diagnostic = {GpuProcessFrameDiagnosticCode::Cancelled,

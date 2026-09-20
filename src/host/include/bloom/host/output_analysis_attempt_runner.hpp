@@ -68,6 +68,9 @@ namespace bloom::host {
 struct OutputAnalysisAttemptGpuProvenanceV1 final {
     runtime::GpuProcessFrameStatus status = runtime::GpuProcessFrameStatus::Disabled;
     runtime::GpuProcessFrameCounters counters;
+    // The genuine native device ownership epoch that produced the frame, propagated from
+    // GpuProcessFrameOutcome. Zero when no device evaluated the request (disabled/CPU fallback).
+    std::uint64_t deviceOwnershipEpoch = 0;
 
     [[nodiscard]] bool gpuEvaluated() const noexcept {
         return status == runtime::GpuProcessFrameStatus::Evaluated;
