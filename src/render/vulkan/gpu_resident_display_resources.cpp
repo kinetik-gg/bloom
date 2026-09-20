@@ -1,4 +1,5 @@
 #include "gpu_resident_display_private.hpp"
+#include "gpu_resident_display_readback_private.hpp"
 
 #include <array>
 #include <atomic>
@@ -33,51 +34,12 @@ displayReadbackFailure(const GpuDisplayImageReadbackCode code,
     return result;
 }
 
-struct StagingBuffer final {
-    StagingBuffer() = default;
-    StagingBuffer(const StagingBuffer&) = delete;
-    StagingBuffer& operator=(const StagingBuffer&) = delete;
-    StagingBuffer(StagingBuffer&& other) noexcept { *this = std::move(other); }
-    StagingBuffer& operator=(StagingBuffer&& other) noexcept {
-        if (this != &other) {
-            release();
-            state = other.state;
-            buffer = other.buffer;
-            allocation = other.allocation;
-            armed = other.armed;
-            other.state = nullptr;
-            other.buffer = VK_NULL_HANDLE;
-            other.allocation = VK_NULL_HANDLE;
-            other.armed = false;
-        }
-        return *this;
-    }
-    ~StagingBuffer() { release(); }
-    void release() noexcept {
-        if (armed && state != nullptr) {
-            vmaDestroyBuffer(state->allocator, buffer, allocation);
-        }
-        state = nullptr;
-        buffer = VK_NULL_HANDLE;
-        allocation = VK_NULL_HANDLE;
-        armed = false;
-    }
-    DeviceAllocatorState* state = nullptr;
-    VkBuffer buffer = VK_NULL_HANDLE;
-    VmaAllocation allocation = VK_NULL_HANDLE;
-    bool armed = false;
-};
+} // namespace
 
-// Bounded quarantine for a display readback whose completion is unproved. Retains the whole set and
-// the device generation; allocated once and never destroyed. No allocation on the failure path.
-struct DisplayReadbackQuarantine final {
-    std::shared_ptr<DeviceAllocatorState> state;
-    StagingBuffer staging;
-    vk::raii::CommandPool pool{nullptr};
-    vk::raii::CommandBuffer buffer{nullptr};
-    vk::raii::Fence fence{nullptr};
-    bool occupied = false;
-};
+namespace readback_detail {
+
+// The one process-wide quarantine/fuse shared with the sparse readback TU. Defined here beside the
+// full-frame readback that owns the primary staging lifetime.
 DisplayReadbackQuarantine& displayQuarantine() {
     static auto* const slot = new DisplayReadbackQuarantine();
     return *slot;
@@ -109,7 +71,7 @@ bool tryRetireDisplayQuarantine(DisplayReadbackQuarantine& slot) noexcept {
     return true;
 }
 
-} // namespace
+} // namespace readback_detail
 
 bool createResidentBuffer(DeviceAllocatorState& state, const std::uint64_t bytes,
                           const VkBufferUsageFlags usage, const VmaAllocationCreateFlags flags,
@@ -334,7 +296,7 @@ const GpuDisplayImageImpl* gpuDisplayImageImpl(const GpuDisplayImage& image) noe
 
 GpuDisplayImageReadback readbackResidentDisplayImage(const GpuDisplayImage& image,
                                                      const std::uint64_t byteBudget) noexcept {
-    if (displayFuse().load()) {
+    if (readback_detail::displayFuse().load()) {
         return displayReadbackFailure(GpuDisplayImageReadbackCode::DeviceUnavailable,
                                       "a prior display readback could not be retired");
     }
@@ -362,8 +324,8 @@ GpuDisplayImageReadback readbackResidentDisplayImage(const GpuDisplayImage& imag
             return displayReadbackFailure(GpuDisplayImageReadbackCode::OverBudget,
                                           "the readback exceeds the requested byte budget");
         }
-        DisplayReadbackQuarantine& slot = displayQuarantine();
-        if (!tryRetireDisplayQuarantine(slot)) {
+        readback_detail::DisplayReadbackQuarantine& slot = readback_detail::displayQuarantine();
+        if (!readback_detail::tryRetireDisplayQuarantine(slot)) {
             return displayReadbackFailure(GpuDisplayImageReadbackCode::DeviceUnavailable,
                                           "a prior display readback is still unretired");
         }
@@ -371,7 +333,7 @@ GpuDisplayImageReadback readbackResidentDisplayImage(const GpuDisplayImage& imag
         const VkDevice device = static_cast<VkDevice>(*state.device);
         const auto* dispatcher = state.device.getDispatcher();
 
-        StagingBuffer staging;
+        readback_detail::StagingBuffer staging;
         staging.state = &state;
         VkBufferCreateInfo bufferInfo{};
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -487,7 +449,7 @@ GpuDisplayImageReadback readbackResidentDisplayImage(const GpuDisplayImage& imag
             slot.fence = std::move(fence);
             slot.occupied = true;
             impl.submissionUnretired = true;
-            displayFuse().store(true);
+            readback_detail::displayFuse().store(true);
             return displayReadbackFailure(GpuDisplayImageReadbackCode::ReadbackFailed,
                                           "the display readback completion is unknown; retained");
         }

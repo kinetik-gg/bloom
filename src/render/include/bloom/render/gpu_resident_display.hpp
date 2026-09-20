@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,8 @@ class GpuDisplayImage;
 struct GpuDisplayImageImpl;
 enum class GpuDisplayImageReadbackCode : std::uint8_t;
 struct GpuDisplayImageReadback;
+struct ImagePixelCoordinate;
+struct GpuDisplayImageSparseReadback;
 
 // Opaque, move-only ownership of one GPU-resident RGBA8 display image. Owner-thread destruction;
 // co-owns the device allocator generation.
@@ -59,6 +62,10 @@ class GpuDisplayImage final {
     friend GpuDisplayImage makeGpuDisplayImage(std::unique_ptr<GpuDisplayImageImpl> impl) noexcept;
     friend GpuDisplayImageReadback readbackResidentDisplayImage(const GpuDisplayImage& image,
                                                                 std::uint64_t byteBudget) noexcept;
+    friend GpuDisplayImageSparseReadback
+    readbackResidentDisplayImageSparse(const GpuDisplayImage& image,
+                                       std::span<const ImagePixelCoordinate> coordinates,
+                                       std::uint64_t byteBudget) noexcept;
     // Read-only seam for the in-module presentation sampler: exposes the resident VkImage and its
     // generation to another src/render translation unit without any native handle reaching a public
     // consumer. Declared and defined inside src/render only.
@@ -96,6 +103,35 @@ struct GpuDisplayImageReadback final {
 
 [[nodiscard]] GpuDisplayImageReadback
 readbackResidentDisplayImage(const GpuDisplayImage& image, std::uint64_t byteBudget) noexcept;
+
+// One image-space pixel coordinate (origin 0,0; x < width, y < height) to copy back. The sparse
+// seam copies only the named pixels, never the whole frame.
+struct ImagePixelCoordinate final {
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+};
+
+// The test-only sparse counterpart of the full readback: it copies exactly the requested pixels
+// from the resident RGBA8 display image on the owner thread, so a route proof can compare a handful
+// of actual GPU values (content, alpha edges, transparent pixels) against the CPU oracle without a
+// full-frame transfer. It never increments a production readback counter; a caller reports its own
+// sparse byte/submission totals separately. Owner-thread only; debug/parity use.
+struct GpuDisplayImageSparseReadback final {
+    GpuDisplayImageReadbackCode code = GpuDisplayImageReadbackCode::None;
+    std::string message;
+    // One entry per requested coordinate, in request order.
+    std::vector<Rgba8> pixels;
+
+    [[nodiscard]] bool hasValue() const noexcept {
+        return code == GpuDisplayImageReadbackCode::None;
+    }
+    explicit operator bool() const noexcept { return hasValue(); }
+};
+
+[[nodiscard]] GpuDisplayImageSparseReadback
+readbackResidentDisplayImageSparse(const GpuDisplayImage& image,
+                                   std::span<const ImagePixelCoordinate> coordinates,
+                                   std::uint64_t byteBudget) noexcept;
 
 struct GpuResidentDisplayBudgets final {
     // Hard ceiling on bytes this job owns: temporary RGBA32F input buffer + packed output buffer +

@@ -27,6 +27,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -399,6 +400,17 @@ struct PreviewDisplayBenchmarkSample final {
 [[nodiscard]] std::vector<PreviewDisplayBenchmarkSample>
 runGpuPreviewDisplayBenchmark(const std::filesystem::path& loader);
 
+// Test-only result of one owner-thread sparse copy out of a resident frame lease. `pixels` is one
+// entry per requested coordinate. The sparse byte and submission totals this represents are
+// test-only and are never folded into the production full-frame readback counters.
+struct ResidentSparseSampleResult final {
+    bool ran = false;
+    std::string diagnostic;
+    std::vector<render::Rgba8> pixels;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+
 // Narrow test access hook. Tests may hold a completion/child retirement open to prove accounting is
 // not released early. It fabricates nothing about qualification.
 struct GpuPreviewDisplayServiceTestAccess final {
@@ -471,6 +483,15 @@ struct GpuPreviewDisplayServiceTestAccess final {
                                                            PresentationTestLeaseResult& out,
                                                            std::chrono::milliseconds timeout,
                                                            bool foreign = false);
+
+    // Test-only: run one owner-thread task that pins `lease` in the service registry and copies
+    // EXACTLY the requested pixels out of the resident RGBA8 display image. This is the sparse
+    // counterpart of the debug full-frame readback: it is never a full-frame transfer, it runs on
+    // the device owner thread, and it touches no production counter.
+    [[nodiscard]] static bool
+    sampleResidentFrameSparse(GpuPreviewDisplayService& service, const GpuResidentFrameLease& lease,
+                              std::span<const render::ImagePixelCoordinate> coordinates,
+                              ResidentSparseSampleResult& out, std::chrono::milliseconds timeout);
 };
 
 } // namespace detail
