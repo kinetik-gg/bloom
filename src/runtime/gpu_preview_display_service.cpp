@@ -131,6 +131,7 @@ void drainService(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core
             detail::processPreviewStages(core);
             detail::processNativeDisplay(core);
             detail::processResidentNativeDisplay(core);
+            detail::processServiceCachePurge(core);
             detail::pumpServicePresentation(core);
             waitForWake(core, observed, /*wakeOnStopping=*/false);
         } catch (...) {
@@ -172,6 +173,7 @@ void runServiceLoop(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
                 detail::processPreviewStages(core);
                 detail::processNativeDisplay(core);
                 detail::processResidentNativeDisplay(core);
+                detail::processServiceCachePurge(core);
                 // Presentation must be pumped on every iteration, even when no preview task is
                 // outstanding, so native acquire/present/retire progresses and the shutdown
                 // snapshot stays current.
@@ -662,7 +664,12 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
         throw;
     }
 }
-
+bool GpuPreviewDisplayService::purgeRetainedCaches(
+    const std::chrono::milliseconds timeout) noexcept {
+    return impl_ == nullptr || impl_->core == nullptr
+               ? false
+               : detail::purgeServiceCaches(impl_->core, timeout);
+}
 void GpuPreviewDisplayService::beginShutdown() noexcept {
     if (impl_ == nullptr || impl_->core == nullptr) {
         return;
@@ -678,6 +685,9 @@ void GpuPreviewDisplayService::beginShutdown() noexcept {
         ++core->wakeGeneration;
     }
     core->wakeCondition.notify_all();
+    // Release any worker blocked in purgeRetainedCaches() so it observes stopping rather than
+    // waiting out its timeout.
+    core->cachePurgeCondition.notify_all();
     {
         std::lock_guard lock(core->stateMutex);
         if (core->state != GpuPreviewDisplayServiceState::Stopped) {

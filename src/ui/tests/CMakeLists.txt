@@ -1050,6 +1050,10 @@ bloom_add_test(
 # window_status_bar's own coverage there for the widget-level wiring).
 add_executable(bloom_media_disk_cache_settings_test media_disk_cache_settings_tests.cpp)
 target_link_libraries(bloom_media_disk_cache_settings_test PRIVATE bloom_ui)
+# The deterministic service-purge timeout test reaches the service's private owner-thread purge
+# state machine (no device needed), exactly as the resident GPU tests reach the same private root.
+target_include_directories(bloom_media_disk_cache_settings_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
 bloom_enable_warnings(bloom_media_disk_cache_settings_test)
 bloom_add_test(
     NAME bloom.ui.media-disk-cache-settings

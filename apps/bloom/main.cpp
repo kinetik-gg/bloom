@@ -18,6 +18,7 @@
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/audio_playback_session.hpp>
 #include <bloom/ui/background_preview_controller.hpp>
+#include <bloom/ui/cache_purge_controller.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_cpu_stage.hpp>
 #include <bloom/ui/composition_preview_gpu_scene_stage.hpp>
@@ -50,6 +51,7 @@
 #include <QSettings>
 #include <QTimer>
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
 
@@ -435,12 +437,24 @@ int main(int argc, char* argv[]) {
     // page follows Initializing -> Ready -> a later capability loss without any UI-thread device
     // probe. Declared before the window so it outlives the borrowed pointer the window holds.
     bloom::ui::CachedAccelerationStatusProvider accelerationStatus;
+    // Edit | Purge…: the async, off-UI purge of derived caches. It shares the one scheduler and
+    // TaskUiBridge the rest of the application already polls, clears the GPU-scene and prepared-
+    // upload stores the preview and media paths share, and reaches the evaluator's decoded-video
+    // cache through its narrow owning API. Declared before the window so it outlives it.
+    bloom::ui::CachePurgeController cachePurgeController(
+        taskScheduler, taskUiBridge, mediaDiskCache.get(), cpuEvaluator.operationCache().get(),
+        gpuPreparedUploadCache.get(), gpuSceneCoverageCache.get(),
+        [&cpuEvaluator] { cpuEvaluator.clearDecodedVideoCache(); },
+        [&previewController](const bool gated) { previewController.setCachePurgeGate(gated); },
+        [&gpuPreviewDisplayService](const std::chrono::milliseconds timeout) {
+            return gpuPreviewDisplayService.purgeRetainedCaches(timeout);
+        });
     // Native (server-side) window chrome only (task C1): MainWindow no longer takes a chrome mode
     // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,
                                  frameExportController, &ramPreviewController, &previewController,
                                  nullptr, &playback, cpuEvaluator.operationCache().get(),
-                                 mediaDiskCache.get(), &accelerationStatus);
+                                 mediaDiskCache.get(), &accelerationStatus, &cachePurgeController);
     // Settings the composition root owns take effect immediately: the window has already saved the
     // value, and these read the same keys back. Cache budgets and the disk cache are startup-read
     // and deliberately not re-applied here.

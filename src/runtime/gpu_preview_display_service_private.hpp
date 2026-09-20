@@ -39,6 +39,18 @@ class CpuCompositionEvaluator;
 
 namespace detail {
 
+struct PreviewDisplayServiceCore;
+// Defined in gpu_preview_display_service_cache_purge.cpp. Runs on the service owner thread: claims
+// a pending resident-cache purge under `cachePurgeMutex`, clears the scene cache, and publishes
+// completion. A withdrawn (timed-out) request is never cleared.
+void processServiceCachePurge(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
+// Defined in gpu_preview_display_service_cache_purge.cpp. Worker-thread side: queues a purge and
+// waits, bounded by `timeout`, for the owner to claim and clear it. A timeout withdraws the still-
+// pending request and returns false; it can never leave a clear to run after it returns. Returns
+// true when the clear completed (or the service has no resident route).
+[[nodiscard]] bool purgeServiceCaches(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                                      std::chrono::milliseconds timeout) noexcept;
+
 inline constexpr std::size_t kMaxAcceptedServiceRoots = 512;
 
 // One accepted GPU display request. All fields are touched only on the service thread except
@@ -219,6 +231,22 @@ struct PreviewDisplayServiceCore final {
     std::uint64_t wakeGeneration = 0;
     std::atomic_bool stopping{false};
     std::atomic_bool shutdownRequested{false};
+
+    // "Purge preview cache": any worker thread may request an owner-thread clear of the resident
+    // scene cache's retained operation/output images. The owner clears (dropping only the cache's
+    // own references, so any outstanding pin/lease survives) and signals completion. No native
+    // object is destroyed off the owner thread, and no live lease is invalidated.
+    //
+    // A SINGLE mutex serializes request/claim/clear/cancel. The owner holds `cachePurgeMutex`
+    // across the claim and the clear, so a caller that times out can only withdraw a still-pending
+    // request or else block until the clear has completed -- it can never observe "timed out" and
+    // then let the owner clear afterwards. `cachePurgePending` is cleared when the owner claims the
+    // request or when a timed-out caller withdraws it, so a completed request can never poison the
+    // next one. The public API is serial: a request is rejected while one is pending.
+    std::mutex cachePurgeMutex;
+    std::condition_variable cachePurgeCondition;
+    bool cachePurgePending = false;
+    std::uint64_t cachePurgeCompleted = 0;
 
     // Service-thread-owned stage bookkeeping.
     std::vector<std::shared_ptr<PreviewDisplayStageRecord>> stages;

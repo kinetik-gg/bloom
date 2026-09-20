@@ -81,6 +81,13 @@ void GpuSceneCoverageCache::store(std::string geometryKey,
     retainedBytes_ += bytes;
 }
 
+void GpuSceneCoverageCache::clear() {
+    std::lock_guard lock(mutex_);
+    entries_.clear();
+    order_.clear();
+    retainedBytes_ = 0;
+}
+
 std::uint64_t GpuSceneCoverageCache::retainedBytes() const {
     std::lock_guard lock(mutex_);
     return retainedBytes_;

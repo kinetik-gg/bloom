@@ -5,17 +5,20 @@
 #include <memory>
 
 class QSettings;
-class QWidget;
 
 namespace bloom::media::cache {
 class MediaDiskCache;
 } // namespace bloom::media::cache
 
+namespace bloom::runtime {
+class OperationCache;
+} // namespace bloom::runtime
+
 // Settings and lifecycle for the media disk cache (docs/architecture/media-io.md "Disk cache").
 // These keys are edited by the Preferences window (Edit | Preferences... -> Memory & Caches, docs/
 // user-guide/preferences.md), which reads and writes them through
 // bloom::ui::ApplicationPreferences; this header remains the reader that owns their parsing and the
-// clear command. They are read once at startup, so a change takes effect after restart, exactly
+// purge command. They are read once at startup, so a change takes effect after restart, exactly
 // like the RAM preview and operation-cache byte budgets.
 namespace bloom::ui {
 
@@ -39,9 +42,12 @@ namespace bloom::ui {
 [[nodiscard]] std::unique_ptr<media::cache::MediaDiskCache>
 makeMediaDiskCacheFromSettings(const QSettings& settings);
 
-// The "Clear media cache" command body (Composition menu): asks for confirmation, then clears.
-// `cache` may be null (no disk cache configured for this session); the dialog then says so and
-// clears nothing. Returns true when the cache was actually cleared, for a status-bar notice.
-bool confirmAndClearMediaDiskCache(QWidget* parent, media::cache::MediaDiskCache* cache);
+// The "Purge media cache" effect: clears every entry of the on-disk decoded store AND the
+// evaluator's in-memory decoded-media entries. This is the owning API the purge worker calls; it
+// must never run on the UI thread because MediaDiskCache::clear() flushes the pending writer and
+// removes entries from disk. Source files are never opened, read, or changed -- only derived
+// decoded data is dropped, so zeroed caches simply decode again on next use. Either pointer may be
+// null. Returns true when at least one store was present and cleared.
+bool purgeMediaCaches(media::cache::MediaDiskCache* cache, runtime::OperationCache* operationCache);
 
 } // namespace bloom::ui

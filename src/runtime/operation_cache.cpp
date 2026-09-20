@@ -1,6 +1,7 @@
 #include <bloom/runtime/operation_cache.hpp>
 
 #include <algorithm>
+#include <iterator>
 #include <new>
 
 namespace bloom::runtime {
@@ -96,6 +97,19 @@ void OperationCache::removeLocked(const std::list<Entry>::iterator candidate) {
     index_.erase(candidate->content);
     entries_.erase(candidate);
 }
+void OperationCache::removeKindLocked(const OperationCacheEntryKind kind) {
+    for (auto entry = entries_.begin(); entry != entries_.end();) {
+        if (entry->kind != kind) {
+            ++entry;
+            continue;
+        }
+        // A std::list erase invalidates only the erased iterator, so `next` stays valid while the
+        // index/address maps for this entry are unwound.
+        const auto next = std::next(entry);
+        removeLocked(entry);
+        entry = next;
+    }
+}
 
 void OperationCache::evictToLocked(const std::size_t limit, std::uint64_t& counter) {
     while (bytes_ > limit && !entries_.empty()) {
@@ -112,6 +126,14 @@ void OperationCache::evict() {
 void OperationCache::trimToBytes(const std::size_t bytes) {
     const std::lock_guard lock(mutex_);
     evictToLocked(std::min(bytes, budget_), statistics_.pressureDrops);
+}
+void OperationCache::clearOperations() {
+    const std::lock_guard lock(mutex_);
+    removeKindLocked(OperationCacheEntryKind::Operation);
+}
+void OperationCache::clearDecodedMedia() {
+    const std::lock_guard lock(mutex_);
+    removeKindLocked(OperationCacheEntryKind::DecodedMedia);
 }
 void OperationCache::touch(const std::list<Entry>::iterator entry) {
     ++accessEpoch_;

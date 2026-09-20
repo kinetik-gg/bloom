@@ -42,6 +42,9 @@ class GpuSceneCoverageCache final {
     [[nodiscard]] std::shared_ptr<const GpuSceneCoverageGeometry>
     find(const std::string& geometryKey) noexcept;
     void store(std::string geometryKey, std::shared_ptr<const GpuSceneCoverageGeometry> geometry);
+    // Drops every retained coverage geometry. A caller already holding one keeps it valid; only
+    // re-derivation is forced. Lifetime hit/miss counters are left intact. Thread-safe.
+    void clear();
 
     [[nodiscard]] std::uint64_t retainedBytes() const;
     [[nodiscard]] std::size_t entryCount() const;

@@ -117,6 +117,7 @@ target_sources(
         gpu_presentation_coordinator_private.hpp
         gpu_presentation_client.cpp
         gpu_preview_display_service.cpp
+        gpu_preview_display_service_cache_purge.cpp
         gpu_preview_display_service_jobs.cpp
         gpu_preview_display_service_private.hpp
         gpu_preview_resident_capacity.cpp

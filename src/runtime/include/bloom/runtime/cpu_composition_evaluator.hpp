@@ -59,6 +59,10 @@ class CpuCompositionEvaluator final {
   public:
     [[nodiscard]] std::shared_ptr<detail::ImageEffectContext> imageEffectContext() const;
     void setVideoCacheByteBudget(std::size_t budget) const;
+    // "Purge media cache": drops the evaluator's decoded-video memory cache. Only the cache's own
+    // references are released, so a frame already handed to a task stays valid. Safe to call from
+    // any thread.
+    void clearDecodedVideoCache() const;
     [[nodiscard]] std::shared_ptr<detail::VideoSourceContext> videoContext() const;
     void setAssetBaseDirectory(std::filesystem::path directory) const {
         std::lock_guard lock(assetContext_->mutex);

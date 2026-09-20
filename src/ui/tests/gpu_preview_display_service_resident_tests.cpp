@@ -539,6 +539,36 @@ int runTests(int argc, char** argv) {
     expectations.expect(afterWarm.gpuCacheHits > beforeWarm.gpuCacheHits,
                         "a warm identical request was served from the content cache");
 
+    // --- Purge preview cache: owner-thread scene-cache clear, live lease preserved ---------------
+    // The clear is requested from a worker thread (never the UI thread) and must not invalidate the
+    // lease already presented above. A subsequent identical request then has to recompute, proving
+    // the retained scene cache was actually cleared rather than merely reported.
+    const auto beforePurge = service.status().counters;
+    bool purged = false;
+    std::thread purgeThread([&] { purged = service.purgeRetainedCaches(2s); });
+    purgeThread.join();
+    expectations.expect(purged, "the owner-thread resident cache purge completed");
+    expectations.expect(presentedLease->isValid(),
+                        "a lease already published stays valid across the cache purge");
+    auto afterPurge = service.submit(TaskRequest("resident after purge", taskOwner), snapshot,
+                                     identity, kBudget, {});
+    expectations.expect(afterPurge.status == bloom::runtime::TaskSubmissionStatus::Accepted,
+                        "the post-purge resident request was admitted");
+    const auto afterPurgeResult = awaitResult(afterPurge.handle);
+    const bool afterPurgePrepared = afterPurgeResult.has_value() &&
+                                    afterPurgeResult->state() == TaskState::Succeeded &&
+                                    afterPurgeResult->value().has_value() &&
+                                    afterPurgeResult->value().value()->status() ==
+                                        bloom::runtime::PreviewPreparationStatus::Prepared;
+    expectations.expect(afterPurgePrepared, "the post-purge resident request produced a frame");
+    const auto purgedCounters = service.status().counters;
+    expectations.expect(purgedCounters.gpuCacheMisses > beforePurge.gpuCacheMisses,
+                        "the purged scene cache reports a miss instead of reusing the entry");
+    expectations.expect(purgedCounters.nativeDispatches > beforePurge.nativeDispatches,
+                        "the post-purge request recomputed its native operations");
+    expectations.expect(presentedLease->isValid(),
+                        "the previously presented lease remains valid after the recompute");
+
     // --- Unsupported GPU subset: full original CPU path ------------------------------------------
     const auto beforeUnsupported = service.status().counters;
     const auto unsupportedIdentity = makeIdentity(*plan, kGenerationUnsupportedSubset);

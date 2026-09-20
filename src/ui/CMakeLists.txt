@@ -330,6 +330,7 @@ target_sources(
     bloom_ui
     PRIVATE
         background_preview_controller.cpp
+        cache_purge_controller.cpp
         application_shutdown_coordinator.cpp
         composition_authoring.cpp
         composition_editor_support.cpp
@@ -445,6 +446,7 @@ target_sources(
             include/bloom/ui/acceleration_status.hpp
             include/bloom/ui/application_preferences.hpp
             include/bloom/ui/background_preview_controller.hpp
+            include/bloom/ui/cache_purge_controller.hpp
             include/bloom/ui/application_shutdown_coordinator.hpp
             include/bloom/ui/composition_authoring.hpp
             include/bloom/ui/composition_editors.hpp

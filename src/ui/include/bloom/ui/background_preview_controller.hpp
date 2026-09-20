@@ -27,6 +27,10 @@ class BackgroundPreviewController final : public QObject {
 
   public slots:
     void restart();
+    // "Purge preview cache": drops the in-flight speculative frame without retaining it and parks
+    // the pass until the next genuine restart trigger (an edit, a time change, a resolution
+    // change), so an explicit purge is not immediately undone by the idle timer.
+    void suspendForCachePurge();
     void beginShutdown();
     // Also callable by tests without waiting for the idle timer.
     void fillNextFrame();

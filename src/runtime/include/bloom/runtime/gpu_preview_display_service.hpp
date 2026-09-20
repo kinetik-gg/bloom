@@ -275,6 +275,15 @@ class GpuPreviewDisplayService final {
 
     [[nodiscard]] GpuPreviewDisplayServiceStatus status() const;
 
+    // Owner-thread clear of the resident GPU scene cache's retained operation/output images. Must
+    // be called from a worker thread, never the UI thread: it posts the clear to the service owner
+    // thread and waits there (bounded by `timeout`). Clearing drops only the cache's own
+    // references, so a displayed or exported lease that still pins an image stays valid -- no live
+    // lease is invalidated and no native object is destroyed. Returns true when the clear ran (or
+    // this service has no resident route), false when the service is shutting down or the wait
+    // expired.
+    [[nodiscard]] bool purgeRetainedCaches(std::chrono::milliseconds timeout) noexcept;
+
     // Non-blocking. Closes admission for this service's own tasks, requests cancellation on the
     // tasks it submitted (including ordinary CPU fallback roots), and wakes the service thread.
     // It never drains and never touches unrelated scheduler tasks.

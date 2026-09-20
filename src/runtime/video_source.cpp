@@ -177,4 +177,5 @@ std::shared_ptr<detail::VideoSourceContext> CpuCompositionEvaluator::videoContex
 void CpuCompositionEvaluator::setVideoCacheByteBudget(std::size_t budget) const {
     videoContext()->cache.setByteBudget(budget);
 }
+void CpuCompositionEvaluator::clearDecodedVideoCache() const { videoContext()->cache.clear(); }
 } // namespace bloom::runtime

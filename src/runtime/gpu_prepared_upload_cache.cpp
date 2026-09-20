@@ -98,6 +98,15 @@ void GpuPreparedUploadCache::store(std::string key,
     retainedBytes_ += bytes;
 }
 
+void GpuPreparedUploadCache::clear() {
+    std::lock_guard lock(mutex_);
+    // Map keys are string_views into the order nodes, so the map is cleared (which destroys its
+    // elements without hashing) before the list that owns those strings.
+    entries_.clear();
+    order_.clear();
+    retainedBytes_ = 0;
+}
+
 std::uint64_t GpuPreparedUploadCache::retainedBytes() const {
     std::lock_guard lock(mutex_);
     return retainedBytes_;

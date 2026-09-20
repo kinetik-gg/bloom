@@ -195,6 +195,21 @@ class CompositionPreviewController final : public QObject {
 
   public slots:
     void requestRefresh();
+    // "Purge preview cache" (Edit | Purge…): retires any in-flight or pending foreground
+    // derivation without publishing it, clears the shared RAM preview frame cache including its
+    // GPU-resident references, and advances the request generation so a late old-generation result
+    // can neither become current nor be retained. The displayed frame is deliberately left in
+    // place: it is still a valid picture, and the next requested frame is a cache miss that
+    // re-evaluates. Emits previewCachePurged() BEFORE clearing so RAM preview and background fill
+    // detach their in-flight work first. No project state, revision, or undo history is touched.
+    void purgePreviewCache();
+    // Derived-cache purge gate. While set, no preview request is submitted and no background fill
+    // is admitted, so a value computed for the generation being purged cannot land in a cache after
+    // the purge cleared it. Set by the purge controller before it waits for retirement and released
+    // when the purge finishes; releasing re-requests the current time so a suppressed ask is not
+    // left unanswered. Purely derived state; never touches project truth.
+    void setCachePurgeGate(bool gated);
+    [[nodiscard]] bool cachePurgeGateActive() const noexcept { return cachePurgeGate_; }
     void beginShutdown();
 
     // Wired from the timeline's mouse-press (or any other Interactive-time-change gesture, e.g. a
@@ -220,6 +235,10 @@ class CompositionPreviewController final : public QObject {
     void droppedFrameCountChanged();
     // Emitted whenever ramPreviewProgress() changes, so the footer reading it never polls.
     void ramPreviewProgressChanged();
+    // Emitted by purgePreviewCache() before it clears the shared frame cache, so every controller
+    // that fills that cache (RAM preview, background fill) can cancel and discard its in-flight
+    // work rather than letting an old-generation result repopulate what the artist just purged.
+    void previewCachePurged();
 
   private:
     struct ActiveRequest final {
@@ -305,6 +324,7 @@ class CompositionPreviewController final : public QObject {
     std::uint64_t droppedFrameCount_ = 0;
     std::uint64_t generation_ = 0;
     bool shuttingDown_ = false;
+    bool cachePurgeGate_ = false;
     double displayedCompositionScale_ = 1.0;
     std::optional<QRectF> regionOfInterest_;
     std::unique_ptr<PlaybackController> playbackController_;

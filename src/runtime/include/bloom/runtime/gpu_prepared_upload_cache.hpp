@@ -51,6 +51,10 @@ class GpuPreparedUploadCache final {
 
     [[nodiscard]] std::shared_ptr<const render::Rgba32fImage> find(const std::string& key) noexcept;
     void store(std::string key, std::shared_ptr<const render::Rgba32fImage> image);
+    // Drops every retained upload, releasing the cache's own references. A caller already holding a
+    // converted image keeps it valid; only re-derivation is forced. Lifetime hit/miss counters are
+    // left intact. Thread-safe.
+    void clear();
 
     [[nodiscard]] std::uint64_t retainedBytes() const;
     [[nodiscard]] std::size_t entryCount() const;

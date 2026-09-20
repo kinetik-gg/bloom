@@ -66,6 +66,14 @@ class OperationCache final {
     // Explicit one-shot trim without changing admission. The ledger pressure callback separately
     // lowers admission and evicts atomically; configured ceilings remain in the ledger.
     void trimToBytes(std::size_t bytes);
+    // "Purge preview cache": removes every derived OPERATION entry, leaving decoded-media entries
+    // alone. A consumer that already holds a value keeps it alive -- a value is a shared_ptr -- so
+    // clearing here never invalidates work already in progress; it only forces the next request to
+    // re-evaluate. Lifetime access counters are left intact.
+    void clearOperations();
+    // "Purge media cache": removes every DECODED-MEDIA entry, leaving derived operation results
+    // alone. The same shared_ptr rule applies: no live product is invalidated, only re-derived.
+    void clearDecodedMedia();
     [[nodiscard]] OperationCacheAccessStatistics statistics() const;
 
   private:
@@ -94,6 +102,7 @@ class OperationCache final {
     void evict();
     void evictToLocked(std::size_t limit, std::uint64_t& counter);
     void removeLocked(std::list<Entry>::iterator candidate);
+    void removeKindLocked(OperationCacheEntryKind kind);
     [[nodiscard]] std::list<Entry>::iterator evictionCandidate();
 
     MemoryBudgetLedger& ledger_;

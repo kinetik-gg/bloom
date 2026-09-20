@@ -87,3 +87,37 @@ no longer counts as pressure, so it does not keep the caches trimmed.
 Decoded media stored on disk has a separate disk-space budget. Its pending writes consume RAM
 and follow the memory limits above; clearing stored disk entries does not change your memory
 settings.
+
+## Purging caches
+
+**Edit → Purge…** holds two explicit maintenance commands that free derived runtime data. Neither
+one edits the project: no command, revision, dirty state, or undo step is produced, and no live
+frame held by the viewer or an export is invalidated — the purge only drops the caches' own
+references, so anything still in use stays valid until its owner releases it. Neither command asks
+for confirmation; both clear only rebuildable derived data.
+
+- **Purge preview cache** drops every retained RAM preview frame, including the cache's references
+  to GPU-resident frames, the evaluator's cached derived operation results, and the shared GPU-scene
+  coverage, prepared-upload, and resident GPU scene stores. Any preview or RAM preview frame still
+  being prepared is retired first. The frame on screen stays valid; the next frame you ask for is
+  computed again, so the preview cache's held-bytes reading drops to empty and refills only as you
+  work.
+- **Purge media cache** clears the on-disk decoded-frame store, the evaluator's in-memory decoded
+  still-image and decoded-video media, the prepared-upload store, and the resident GPU scene store
+  (which retains decoded/uploaded media sources). Your source files are never read, written, or
+  changed: the caches hold decoded or converted copies only, and the next use decodes again. Derived
+  operation results are left alone — those belong to **Purge preview cache**.
+
+The work runs off the interface thread on Bloom's existing task system, and the commands show
+**Purging caches…** and disable themselves while a purge is running. Bloom stops the preview, RAM
+preview, and background producers for the whole purge, then waits for work already in flight to
+finish before it clears, so a result that was already being computed cannot land in a cache after
+the purge. The GPU resident scene cache is cleared on its own owner thread; outstanding GPU leases
+(the frame on screen, an export, an in-flight task) stay valid because only the cache's own
+references are dropped. If a long-running task (for example an export) has not retired within a
+short bounded wait, the purge stops safely without clearing and says so, rather than leaving the
+commands disabled indefinitely; retry once the work finishes. Both commands stay present even when
+the relevant cache is unavailable (the disk cache is disabled, or no preview pipeline exists); the
+command then reports that clearly instead of silently doing nothing. The two remain independent:
+purging the preview cache does not clear decoded media, and purging the media cache does not clear
+preview frames.

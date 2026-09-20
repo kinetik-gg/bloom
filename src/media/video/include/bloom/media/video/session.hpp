@@ -27,6 +27,10 @@ class DecodedVideoCache final {
     [[nodiscard]] std::shared_ptr<const provider::FrameProduct> find(const FrameKey& key);
     void store(const FrameKey& key, std::shared_ptr<const provider::FrameProduct> frame);
     void setByteBudget(std::size_t budget);
+    // "Purge media cache": drops every decoded video frame this cache retains. It only releases the
+    // cache's own references; a frame already handed to a caller stays valid until that caller
+    // releases it. Safe to call from any thread.
+    void clear();
     [[nodiscard]] std::size_t residentBytes() const;
     [[nodiscard]] std::size_t byteBudget() const;
 

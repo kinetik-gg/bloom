@@ -10,8 +10,10 @@
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/host/project_session.hpp>
+#include <bloom/runtime/operation_cache.hpp>
 #include <bloom/ui/acceleration_status.hpp>
 #include <bloom/ui/application_preferences.hpp>
+#include <bloom/ui/cache_purge_controller.hpp>
 #include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
@@ -84,12 +86,13 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                        PlaybackController* const playbackController,
                        runtime::OperationCache* const operationCache,
                        media::cache::MediaDiskCache* const mediaDiskCache,
-                       const AccelerationStatusProvider* const accelerationStatus)
+                       const AccelerationStatusProvider* const accelerationStatus,
+                       CachePurgeController* const cachePurgeController)
     : QMainWindow(parent), compositionSession_(compositionSession), projectHost_(projectHost),
       frameExportController_(frameExportController), ramPreview_(ramPreview),
       previewController_(previewController), playbackController_(playbackController),
       operationCache_(operationCache), mediaDiskCache_(mediaDiskCache),
-      accelerationStatus_(accelerationStatus) {
+      cachePurgeController_(cachePurgeController), accelerationStatus_(accelerationStatus) {
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
     resize(1600, 1000);
@@ -102,6 +105,19 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
     createMenus(*menuBar_);
     createWorkspaceActions();
     updateEditActions();
+    if (cachePurgeController_ != nullptr) {
+        connect(cachePurgeController_, &CachePurgeController::purgeStarted, this, [this] {
+            updatePurgeActions();
+            statusStrip_->setPersistentMessage(tr("Purging caches…"));
+        });
+        connect(cachePurgeController_, &CachePurgeController::purgeFinished, this,
+                [this](const bool /*success*/, const QString& message) {
+                    updatePurgeActions();
+                    statusStrip_->setPersistentMessage({});
+                    statusStrip_->showTransientMessage(message);
+                });
+    }
+    updatePurgeActions();
 
     connect(&projectHost_, &ProjectHost::dirtyStateChanged, this, &MainWindow::updateWindowTitle);
     connect(&projectHost_, &ProjectHost::sessionReplaced, this, &MainWindow::updateWindowTitle);
@@ -326,6 +342,21 @@ void MainWindow::createMenus(QMenuBar& menuBar) {
     preferencesAction_->setShortcutContext(Qt::WindowShortcut);
     connect(preferencesAction_, &QAction::triggered, this, &MainWindow::showPreferences);
 
+    // Edit | Purge… — explicit derived-cache commands (docs/user-guide/memory.md "Purging caches").
+    // Both actions are present and enabled except while a purge is running: derived caches are
+    // optional, and an unavailable one is reported clearly when the command runs rather than
+    // silently omitted from the menu. Neither is a project edit, so no command, revision, dirty
+    // flag, or undo entry is produced.
+    editMenu->addSeparator();
+    purgeMenu_ = editMenu->addMenu(tr("Purge…"));
+    purgeMenu_->setObjectName(QStringLiteral("editPurgeMenu"));
+    purgePreviewCacheAction_ = purgeMenu_->addAction(tr("Purge preview cache"));
+    purgePreviewCacheAction_->setObjectName(QStringLiteral("purgePreviewCacheAction"));
+    connect(purgePreviewCacheAction_, &QAction::triggered, this, &MainWindow::purgePreviewCache);
+    purgeMediaCacheAction_ = purgeMenu_->addAction(tr("Purge media cache"));
+    purgeMediaCacheAction_->setObjectName(QStringLiteral("purgeMediaCacheAction"));
+    connect(purgeMediaCacheAction_, &QAction::triggered, this, &MainWindow::purgeMediaCache);
+
     compositionMenu_ = menuBar.addMenu("&Composition");
     createCompositionMenu(*compositionMenu_);
     viewMenu_ = menuBar.addMenu("&View");
@@ -400,18 +431,6 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
                                                                 : "&RAM Preview");
         });
     }
-
-    // Clear Media Cache (task CACHE-2): the on-disk decoded-frame store, docs/architecture/
-    // media-io.md "Disk cache". Present even when `mediaDiskCache_` is null -- see
-    // confirmAndClearMediaDiskCache()'s own null handling -- so the command is discoverable rather
-    // than silently missing on a session that happens to have the disk cache disabled.
-    compositionMenu.addSeparator();
-    clearMediaDiskCacheAction_ = compositionMenu.addAction(tr("Clear Media Cache…"));
-    clearMediaDiskCacheAction_->setObjectName("compositionClearMediaDiskCacheAction");
-    connect(clearMediaDiskCacheAction_, &QAction::triggered, this, [this] {
-        if (confirmAndClearMediaDiskCache(this, mediaDiskCache_))
-            statusStrip_->showTransientMessage(tr("Media cache cleared"));
-    });
 }
 
 void MainWindow::updateCompositionActions() {
@@ -423,6 +442,70 @@ void MainWindow::updateCompositionActions() {
     renameCompositionAction_->setEnabled(hasComposition);
     // Deleting the final composition is allowed and returns to the blank, usable empty project.
     deleteCompositionAction_->setEnabled(hasComposition);
+}
+
+void MainWindow::purgePreviewCache() {
+    // Edit | Purge… | Purge preview cache. The RAM preview frame cache and the in-flight preview
+    // work are retired on the UI thread (cheap, and the displayed frame stays valid). The
+    // operation-cache and GPU-scene clears run through the purge controller once the scheduler has
+    // retired every task, so a value computed by work that was in flight cannot repopulate a cache
+    // after the clear. Project truth, revision, dirty state, and undo history are untouched.
+    if (cachePurgeController_ != nullptr) {
+        // Gate first (retires in-flight work and blocks new asks), then clear the frame cache.
+        if (!cachePurgeController_->requestPreviewPurge()) {
+            statusStrip_->showTransientMessage(tr("A cache purge is already running"));
+            return;
+        }
+        if (previewController_ != nullptr) {
+            previewController_->purgePreviewCache();
+        } else if (ramPreview_ != nullptr) {
+            ramPreview_->cancel();
+        }
+        return;
+    }
+    if (previewController_ != nullptr) {
+        previewController_->purgePreviewCache();
+    } else if (ramPreview_ != nullptr) {
+        ramPreview_->cancel();
+    }
+    // A window built without the purge task system (tests, a headless host): the operation cache's
+    // clear is pure in-memory bookkeeping, so it stays safe to do here.
+    if (operationCache_ != nullptr) {
+        operationCache_->clearOperations();
+        statusStrip_->showTransientMessage(tr("Preview cache purged"));
+    } else {
+        statusStrip_->showTransientMessage(tr("No preview cache is available"));
+    }
+}
+
+void MainWindow::purgeMediaCache() {
+    // Edit | Purge… | Purge media cache. The on-disk clear flushes the pending writer and removes
+    // entries from disk, so it must run on the task system's BlockingIo lane; the controller waits
+    // for scheduler retirement first. Source files are never touched. No confirmation: the caches
+    // are rebuildable derived state.
+    if (cachePurgeController_ != nullptr) {
+        if (!cachePurgeController_->requestMediaPurge()) {
+            statusStrip_->showTransientMessage(tr("A cache purge is already running"));
+        }
+        return;
+    }
+    if (operationCache_ != nullptr) {
+        // Memory-only fallback for a host with no task system. The disk store is deliberately not
+        // cleared here, because that I/O must never run on the UI thread.
+        operationCache_->clearDecodedMedia();
+        statusStrip_->showTransientMessage(tr("Media cache purged"));
+    } else {
+        statusStrip_->showTransientMessage(tr("No media cache is available"));
+    }
+}
+
+void MainWindow::updatePurgeActions() {
+    if (purgePreviewCacheAction_ == nullptr || purgeMediaCacheAction_ == nullptr) {
+        return;
+    }
+    const bool busy = cachePurgeController_ != nullptr && cachePurgeController_->isPurging();
+    purgePreviewCacheAction_->setEnabled(!busy);
+    purgeMediaCacheAction_->setEnabled(!busy);
 }
 
 void MainWindow::createViewMenu(QMenu& viewMenu) {
