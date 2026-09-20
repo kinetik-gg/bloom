@@ -45,6 +45,20 @@ struct GpuSceneVectorChain final {
     double opacity = 1.0;
 };
 
+// Operations whose pixels are colour-space agnostic: their values are resolved through the exact
+// configured input->working OCIO transform (or are blend/geometry logic over already-resolved
+// pixels), so they are correct under any resolvable working space. The lin_rec709_scene-specific
+// operations (solid pixel, vector coverage, view adjust) are deliberately absent.
+[[nodiscard]] bool isMediaSafeOperation(const CompiledOperation& operation) noexcept {
+    return std::holds_alternative<CompiledImageSource>(operation) ||
+           std::holds_alternative<CompiledVideoSource>(operation) ||
+           std::holds_alternative<CompiledImageEffect>(operation) ||
+           std::holds_alternative<CompiledLayerOutput>(operation) ||
+           std::holds_alternative<CompiledMerge>(operation) ||
+           std::holds_alternative<CompiledCompositionSource>(operation) ||
+           std::holds_alternative<CompiledCompositionOutput>(operation);
+}
+
 [[nodiscard]] bool isSubsetOperation(const CompiledOperation& operation) noexcept {
     return std::holds_alternative<CompiledSolid>(operation) ||
            std::holds_alternative<CompiledText>(operation) ||
@@ -87,12 +101,18 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                       "Compiled plan semantics are unsupported");
     }
     if (request.quality != EvaluationQuality::Reference ||
-        request.colorIntent.workingColorSpaceId != kLinearRec709SceneColorSpaceId ||
         request.colorIntent.workingColorSpaceId.find('\0') != std::string_view::npos ||
         request.roi) {
         return failed(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
-                      "Only Reference quality, lin_rec709_scene, and no ROI are prepared");
+                      "Only Reference quality and no ROI are prepared");
     }
+    // The non-media prepared subset (solid pixels, vector coverage, image effects) assumes
+    // lin_rec709_scene pixel semantics, so a different working space is refused for it. A
+    // media-only scene carries no such operation: its pixels are resolved through the exact
+    // configured input->working OCIO transform, so an ACES scene-linear working space (or any other
+    // resolvable one) is prepared. The check runs after reachability below.
+    const bool neutralWorkingSpace =
+        request.colorIntent.workingColorSpaceId == kLinearRec709SceneColorSpaceId;
     if (plan->operations().empty() || request.output.value() >= plan->operations().size() ||
         request.output != plan->output() ||
         !std::holds_alternative<CompiledCompositionOutput>(
@@ -147,6 +167,11 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                           "A composition source without a supported nested plan is outside the "
                           "prepared subset");
         }
+        if (!neutralWorkingSpace && !isMediaSafeOperation(operation)) {
+            return failed(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
+                          "A non-lin_rec709_scene working space is prepared only for media-only "
+                          "scenes");
+        }
     }
 
     auto checked = detail::preflight(plan, request, cancellation, {}, nullptr, nullptr);
@@ -157,8 +182,16 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         const auto code = checked.diagnostic.has_value()
                               ? checked.diagnostic->code
                               : EvaluationDiagnosticCode::InternalInvariant;
-        std::string message = checked.diagnostic.has_value() ? checked.diagnostic->summary
-                                                             : std::string{"Preflight failed"};
+        std::string message;
+        if (checked.diagnostic.has_value()) {
+            message = checked.diagnostic->summary;
+            if (message.empty()) {
+                message = checked.diagnostic->detail;
+            }
+        }
+        if (message.empty()) {
+            message = "Preflight failed";
+        }
         return failed(code == EvaluationDiagnosticCode::PixelStorageBudgetExceeded
                           ? PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded
                           : PreparedGpuSceneDiagnosticCode::PreflightFailure,
@@ -365,48 +398,36 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         if (const auto* image = std::get_if<CompiledImageSource>(&operation)) {
             const auto remainingBudget = allowance > chargedBytes ? allowance - chargedBytes : 0;
             detail::GpuSceneUploadLeafResult leaf;
-            const auto error = detail::buildImageUploadLeaf(
-                *image, request, *plan, resolved, mediaContext_, remainingBudget, hScale, vScale,
-                charge, cancellation, mediaStatistics, leaf);
+            const auto error = detail::buildImageColorLeaf(
+                *image, request, *plan, resolved, mediaContext_, ocioContext_, remainingBudget,
+                hScale, vScale, charge, cancellation, mediaStatistics, leaf);
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
             }
             bounds[index] = leaf.bounds;
             outputWindowOf[index] = leaf.outputWindow;
-            keyOf[index] = leaf.semanticKey;
-            if (!leaf.descriptor.has_value()) {
-                return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                              "the upload leaf produced no image descriptor");
+            if (const auto emitError = detail::emitMediaLeafCommands(
+                    operationIndex, leaf, charge, emit, commandForOperation[index], keyOf[index])) {
+                return failed(emitError->code, emitError->message, mediaStatistics);
             }
-            GpuSceneUploadCommand command{.sourceOperation = operationIndex,
-                                          .image = std::move(leaf.image),
-                                          .descriptor = *leaf.descriptor,
-                                          .semanticKey = leaf.semanticKey};
-            commandForOperation[index] = emit(std::move(command));
             continue;
         }
 
         if (const auto* video = std::get_if<CompiledVideoSource>(&operation)) {
             const auto remainingBudget = allowance > chargedBytes ? allowance - chargedBytes : 0;
             detail::GpuSceneUploadLeafResult leaf;
-            const auto error = detail::buildVideoUploadLeaf(
-                *video, request, *plan, resolved, mediaContext_, remainingBudget, hScale, vScale,
-                charge, cancellation, mediaStatistics, leaf);
+            const auto error = detail::buildVideoColorLeaf(
+                *video, request, *plan, resolved, mediaContext_, ocioContext_, remainingBudget,
+                hScale, vScale, charge, cancellation, mediaStatistics, leaf);
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
             }
             bounds[index] = leaf.bounds;
             outputWindowOf[index] = leaf.outputWindow;
-            keyOf[index] = leaf.semanticKey;
-            if (!leaf.descriptor.has_value()) {
-                return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                              "the upload leaf produced no image descriptor");
+            if (const auto emitError = detail::emitMediaLeafCommands(
+                    operationIndex, leaf, charge, emit, commandForOperation[index], keyOf[index])) {
+                return failed(emitError->code, emitError->message, mediaStatistics);
             }
-            GpuSceneUploadCommand command{.sourceOperation = operationIndex,
-                                          .image = std::move(leaf.image),
-                                          .descriptor = *leaf.descriptor,
-                                          .semanticKey = leaf.semanticKey};
-            commandForOperation[index] = emit(std::move(command));
             continue;
         }
 

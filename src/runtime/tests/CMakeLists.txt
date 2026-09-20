@@ -562,7 +562,8 @@ add_executable(bloom_runtime_gpu_media_scene_preparation_test
 target_link_libraries(bloom_runtime_gpu_media_scene_preparation_test
     PRIVATE bloom_runtime_evaluator bloom_render OpenEXR::OpenEXR)
 target_include_directories(bloom_runtime_gpu_media_scene_preparation_test
-    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS}
+            "${PROJECT_SOURCE_DIR}/src/runtime")
 bloom_enable_warnings(bloom_runtime_gpu_media_scene_preparation_test)
 bloom_enable_strict_floating_point(bloom_runtime_gpu_media_scene_preparation_test)
 bloom_add_test(
@@ -679,7 +680,8 @@ add_executable(bloom_runtime_gpu_media_executor_test
     gpu_media_executor_tests.cpp
     gpu_media_executor_test_support.hpp)
 target_include_directories(bloom_runtime_gpu_media_executor_test
-    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS}
+            "${PROJECT_SOURCE_DIR}/src/runtime")
 target_link_libraries(bloom_runtime_gpu_media_executor_test
     PRIVATE bloom_runtime_evaluator bloom_render bloom_media_image bloom_media_video
             bloom_media_cache bloom_color bloom_color_ocio OpenEXR::OpenEXR)
@@ -694,6 +696,60 @@ bloom_add_test(
     LABELS runtime unit gpu render media
     TIMEOUT 600
 )
+
+# The bounded media-source GPU colour split: a real AP0 EXR -> CpuGpuSceneBuilder (with the shared
+# GpuSceneOcioContext) -> RAW full-source upload + real input->working OCIO ProcessEffect ->
+# GpuSceneExecutor on a real device, checked against the unchanged CpuCompositionEvaluator frame at
+# 2e-6. The OCIO program is compiled with the pinned tools; without them the test skips. Without a
+# device it notes the skipped native route unless --require-device is passed.
+add_executable(bloom_runtime_gpu_media_color_test gpu_media_color_tests.cpp)
+target_include_directories(bloom_runtime_gpu_media_color_test
+    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS}
+            "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_gpu_media_color_test
+    PRIVATE bloom_runtime_evaluator bloom_render bloom_media_image bloom_media_video
+            bloom_media_cache bloom_color bloom_color_ocio OpenEXR::OpenEXR)
+# The OCIO tool discovery below this target has not run yet at this point in the file, so resolve the
+# pinned tools locally (find_program caches, so this is the same result).
+find_program(bloom_media_color_glslang_validator
+    NAMES glslangValidator
+    HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
+    NO_DEFAULT_PATH)
+find_program(bloom_media_color_spirv_val
+    NAMES spirv-val
+    HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
+    NO_DEFAULT_PATH)
+if(bloom_media_color_glslang_validator AND bloom_media_color_spirv_val)
+    get_filename_component(bloom_media_color_tools_dir
+        "${bloom_media_color_glslang_validator}" DIRECTORY)
+    target_compile_definitions(bloom_runtime_gpu_media_color_test PRIVATE
+        "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_media_color_tools_dir}\"")
+endif()
+bloom_enable_warnings(bloom_runtime_gpu_media_color_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_media_color_test)
+target_compile_options(bloom_runtime_gpu_media_color_test PRIVATE -Wno-unused-function)
+# The real decoded video vectors need the media worker and its generated fixtures. They are
+# registered only where those exist (the same Linux-only condition apps/bloom-media-worker uses);
+# elsewhere the test prints an explicit NOTE for the video vectors rather than passing them.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_dependencies(bloom_runtime_gpu_media_color_test
+        bloom-media-worker bloom_media_generate_fixtures)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_media_color
+        COMMAND bloom_runtime_gpu_media_color_test
+                --fixtures "${PROJECT_BINARY_DIR}/apps/bloom-media-worker/fixtures"
+        LABELS runtime unit gpu render media color
+        TIMEOUT 600
+    )
+    set_tests_properties(bloom.runtime.gpu_media_color PROPERTIES FIXTURES_REQUIRED media3)
+else()
+    bloom_add_test(
+        NAME bloom.runtime.gpu_media_color
+        COMMAND bloom_runtime_gpu_media_color_test
+        LABELS runtime unit gpu render media color
+        TIMEOUT 600
+    )
+endif()
 
 # Test-only fault variant: cancellation / deadline / unproven upload retention against a real
 # submitted copy. It uses the same proof-only macro and header as the solid fault variant and links

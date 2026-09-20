@@ -53,6 +53,9 @@ finishUploadLeaf(const MediaUploadOutcome& outcome, GpuSceneUploadLeafResult& re
     result.image = outcome.image;
     result.descriptor = descriptor;
     result.semanticKey = outcome.semanticKey;
+    result.uploadSemanticKey =
+        outcome.uploadSemanticKey.empty() ? outcome.semanticKey : outcome.uploadSemanticKey;
+    result.program = outcome.program;
     return std::nullopt;
 }
 
@@ -130,6 +133,34 @@ buildVideoUploadLeaf(const CompiledVideoSource& source, const EvaluationRequest&
     const auto outcome = prepareVideoUpload(source, request, plan, resolved, context, pixelBudget,
                                             request.bypassOperationCache,
                                             plan.bypassOperationCache(), cancellation, statistics);
+    return finishUploadLeaf(outcome, result, hScale, vScale, chargeBytes);
+}
+
+std::optional<GpuSceneLeafFailure>
+buildImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest& request,
+                    const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
+                    const GpuSceneMediaContext& context, const GpuSceneOcioContext& ocioContext,
+                    const std::uint64_t pixelBudget, const double hScale, const double vScale,
+                    const GpuSceneMediaChargeBytes& chargeBytes,
+                    const CancellationToken& cancellation, GpuSceneMediaStatistics& statistics,
+                    GpuSceneUploadLeafResult& result) {
+    const auto outcome = prepareImageColorLeaf(
+        source, request, plan, resolved, context, ocioContext, pixelBudget,
+        request.bypassOperationCache, plan.bypassOperationCache(), cancellation, statistics);
+    return finishUploadLeaf(outcome, result, hScale, vScale, chargeBytes);
+}
+
+std::optional<GpuSceneLeafFailure>
+buildVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest& request,
+                    const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,
+                    const GpuSceneMediaContext& context, const GpuSceneOcioContext& ocioContext,
+                    const std::uint64_t pixelBudget, const double hScale, const double vScale,
+                    const GpuSceneMediaChargeBytes& chargeBytes,
+                    const CancellationToken& cancellation, GpuSceneMediaStatistics& statistics,
+                    GpuSceneUploadLeafResult& result) {
+    const auto outcome = prepareVideoColorLeaf(
+        source, request, plan, resolved, context, ocioContext, pixelBudget,
+        request.bypassOperationCache, plan.bypassOperationCache(), cancellation, statistics);
     return finishUploadLeaf(outcome, result, hScale, vScale, chargeBytes);
 }
 

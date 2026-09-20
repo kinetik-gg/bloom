@@ -126,6 +126,15 @@ ImageSourceSelection selectImageSource(const CompiledImageSource& source, core::
     key.add(locator->path);
     key.add(locator->relinkHint);
     selected.cacheKey = key.bytes();
+    // Decode-only identity: the selected member's content digest plus the requested alpha
+    // association. Colour interpretation, input/working colour space, config revision, proxy and
+    // path/relink fields are deliberately absent, so a changed working space or display keeps the
+    // same decoded upload while a changed frame or alpha association is a miss.
+    OperationKey decodeKey;
+    decodeKey.add(std::string{"gpu-raw-decode-v1"});
+    decodeKey.add(std::string(digest.begin(), digest.end()));
+    decodeKey.add(selected.interpretation.alphaAssociation);
+    selected.decodeKey = decodeKey.digest();
     // Content-addressed and restart-stable (docs/architecture/media-io.md "Disk cache"): asset
     // digest + member frame + interpretation + Bloom Neutral config digest + decoder identity, so
     // it deliberately omits `path`/`relinkHint`/`available` -- a relink of the same content should
@@ -174,7 +183,32 @@ evaluateImageSource(const ImageSourceSelection& selected,
                                {.image = image, .values = {}, .bounds = {}},
                                OperationCacheEntryKind::DecodedMedia);
     }
-    const auto sourceWindow = image->descriptor()->dataWindow();
+    return resampleDecodedImage(*image, composition, horizontalScale, verticalScale, budget,
+                                cancel);
+}
+
+media::ImageResult<std::shared_ptr<const render::Rgba32fImage>>
+decodeRawImageSource(const ImageSourceSelection& selected, const std::size_t budget,
+                     const CancellationToken& cancel) {
+    if (!selected.available)
+        return {{}, selected.warning};
+    media::ImageInterpretation rawInterpretation;
+    rawInterpretation.colorSpace = media::ImageColorSpace::Raw;
+    rawInterpretation.inputColorSpaceId = {};
+    rawInterpretation.alphaAssociation = selected.interpretation.alphaAssociation;
+    return media::decodeImage(
+        selected.path, rawInterpretation, {},
+        [&cancel] { return cancel.isCancellationRequested(); }, {}, budget, selected.digest);
+}
+
+media::ImageResult<render::Rgba32fImage>
+resampleDecodedImage(const render::Rgba32fImage& decoded,
+                     const render::Rgba32fImageDescriptor composition, const double horizontalScale,
+                     const double verticalScale, const std::size_t budget,
+                     const CancellationToken& cancel) {
+    if (decoded.descriptor() == nullptr)
+        return {{}, "Decoded image has no descriptor"};
+    const auto sourceWindow = decoded.descriptor()->dataWindow();
     const auto width = static_cast<std::uint64_t>(
         std::max(1.0, std::ceil(sourceWindow.extent().width() * horizontalScale)));
     const auto height = static_cast<std::uint64_t>(
@@ -201,8 +235,8 @@ evaluateImageSource(const ImageSourceSelection& selected,
                 std::min(sourceWindow.extent().width() - 1,
                          static_cast<std::uint32_t>(static_cast<double>(x) / horizontalScale));
             (*row.value())[x] =
-                image->pixels()[static_cast<std::size_t>(sourceY) * sourceWindow.extent().width() +
-                                sourceX];
+                decoded.pixels()[static_cast<std::size_t>(sourceY) * sourceWindow.extent().width() +
+                                 sourceX];
         }
     }
     auto frozen = std::move(*builder.value()).freeze();
