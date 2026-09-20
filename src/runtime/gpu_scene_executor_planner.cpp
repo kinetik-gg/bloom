@@ -420,18 +420,21 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
     }
 
     if (const auto* merge = std::get_if<GpuSceneMergeCommand>(&command)) {
-        for (const GpuSceneCommandIndex foreground : merge->foregrounds) {
-            if (const auto plan = planCommand(foreground, color);
-                plan.code != GpuSceneExecutorDiagnosticCode::None) {
-                return plan;
-            }
-        }
         std::uint64_t bytes = 0;
         if (!checkedImageBytes(merge->outputWindow, bytes)) {
             color[index] = 2;
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
                                   "a merge command has an empty window");
         }
+        // Interleave each foreground subtree with its own source-over instead of emitting every
+        // foreground first. The old order pinned ALL foregrounds at once: a wide merge of full-size
+        // layers held every layer plus the accumulator until the source-over steps ran, crossing
+        // the request budget even though each layer is consumed immediately after its composite.
+        // Here foreground i is planned, composited, and released before foreground i+1 is planned,
+        // so the live set stays accumulator + one foreground (+ that subtree's transient). The
+        // accumulator is still emitted before the first source-over (and first when there are no
+        // foregrounds), so the first dispatched step and the per-foreground composite order are
+        // unchanged; only the pin lifetime of the intermediate foregrounds changes.
         GpuSceneExecutorStep base;
         base.kind = GpuSceneExecutorStepKind::Solid;
         base.command = index;
@@ -443,8 +446,19 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         if (base.cacheOnComplete) {
             base.cacheKey = merge->semanticKey;
         }
-        steps.push_back(std::move(base));
+        if (merge->foregrounds.empty()) {
+            steps.push_back(std::move(base));
+            color[index] = 2;
+            return {};
+        }
         for (std::size_t i = 0; i < merge->foregrounds.size(); ++i) {
+            if (const auto plan = planCommand(merge->foregrounds[i], color);
+                plan.code != GpuSceneExecutorDiagnosticCode::None) {
+                return plan;
+            }
+            if (i == 0) {
+                steps.push_back(std::move(base));
+            }
             GpuSceneExecutorStep step;
             step.kind = GpuSceneExecutorStepKind::SourceOver;
             step.command = index;
