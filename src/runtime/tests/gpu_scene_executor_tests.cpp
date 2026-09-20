@@ -299,6 +299,19 @@ void expectParity(Expectations& expectations, GpuSceneExecutor& executor,
                         20000);
 }
 
+#ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
+// The native retirement fault contracts need the first dispatched step to be a pipeline the
+// test-only fault seam instruments (GpuSolid/GpuComposite/GpuAffine/GpuBlend/GpuImageUpload). A
+// direct solid on the integer device grid emits the exact translation path over a reachable
+// SolidV1 source; a fractional solid now lowers to the native vector-coverage producer, which the
+// seam deliberately does not instrument. Keep this fixture on the integer device grid so the fault
+// tests fault a genuine native submission instead of racing an uninstrumented coverage dispatch.
+[[nodiscard]] PlanPtr nativeFaultPlan() {
+    return twoLayerPlan(format(16, 12), LayerValues{.position = {4.0, 3.5}},
+                        LayerValues{.position = {9.0, 7.5}, .opacity = 0.5}, 6.0, 5.0, 43000);
+}
+#endif
+
 // ---- individual tests --------------------------------------------------------------------------
 
 void testFixtures(Expectations& expectations, GpuSceneExecutor& executor,

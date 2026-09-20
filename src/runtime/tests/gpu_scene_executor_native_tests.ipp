@@ -97,7 +97,9 @@ void testNativeRetirementContracts(Expectations& expectations, GpuDevice& device
     using Fault = fault::PollFault;
     fault::clear();
 
-    const auto plan = basicPlan();
+    // An integer-grid fixture: its first step is a fault-instrumented native pipeline (SolidV1 /
+    // the composite translation), so each injected fault hits a genuinely submitted native job.
+    const auto plan = nativeFaultPlan();
     const auto prepared = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
     expectations.expect(prepared.hasValue(), "drain: the scene prepares");
     if (!prepared) {
