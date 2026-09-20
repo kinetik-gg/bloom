@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <bloom/host/gpu_export_provider.hpp>
+#include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -272,6 +273,18 @@ int main(int argc, char* argv[]) {
     if (bundledNativeLoader) {
         gpuExportOptions.loaderPath = gpuPreviewDisplayOptions.loaderPath;
     }
+    // Compose the packaged GPU shader tools from THIS target's own definitions and hand the inert
+    // resolver to the provider, whose CPU-worker bootstrap qualifies them once and publishes the
+    // one shared OCIO context for both output display and media/effect transforms. The media
+    // context is refreshed per request on the owner thread so a session Open/SaveAs that moves the
+    // asset base directory is observed exactly as the preview path observes it.
+    gpuExportOptions.ocioResolver =
+        bloom::host::makePackagedGpuOcioResolver(bloom::host::currentExecutablePath());
+    gpuExportOptions.mediaContextProvider = [&cpuEvaluator, gpuPreparedUploadCache] {
+        auto context = bloom::runtime::GpuSceneMediaContext::fromEvaluator(cpuEvaluator);
+        context.preparedUploadCache = gpuPreparedUploadCache;
+        return context;
+    };
     auto gpuExportProvider = bloom::host::GpuExportProvider::create(gpuExportOptions);
     gpuExportProvider->prepare(taskScheduler);
     bloom::ui::ApplicationShutdownCoordinator shutdownCoordinator(previewController, taskUiBridge);

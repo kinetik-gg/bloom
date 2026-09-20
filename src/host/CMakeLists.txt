@@ -12,6 +12,7 @@ target_sources(
         gpu_export_provider.cpp
         sequence_export_runner.cpp
         output_analysis_attempt_runner.cpp
+        output_analysis_attempt_color_private.cpp
         project_session.cpp
         project_session_creation.cpp
         publication_coordinator.cpp
@@ -30,6 +31,7 @@ target_sources(
             include/bloom/host/frame_export_publication.hpp
             include/bloom/host/frame_range_runner.hpp
             include/bloom/host/gpu_export_provider.hpp
+            include/bloom/host/gpu_export_tool_package.hpp
             include/bloom/host/sequence_export_runner.hpp
             include/bloom/host/font_catalogue.hpp
             include/bloom/host/output_analysis_attempt_runner.hpp
@@ -233,6 +235,13 @@ if(BUILD_TESTING)
         add_executable(bloom_host_output_analysis_attempt_runner_test
                        tests/output_analysis_attempt_runner_tests.cpp)
         target_link_libraries(bloom_host_output_analysis_attempt_runner_test PRIVATE bloom_host)
+        # The provider factory test qualifies the REAL packaged GPU shader tools through the same
+        # GpuOcioContextResolver seam the desktop/CLI/MCP roots use; there is no manual compiler-path
+        # injection. A build without qualified tools runs only the typed CPU-fallback vectors.
+        target_compile_definitions(bloom_host_output_analysis_attempt_runner_test PRIVATE
+            "BLOOM_GPU_OCIO_CONTEXT_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_host_output_analysis_attempt_runner_test>\"")
+        include(BloomGpuShaderTools)
+        bloom_package_gpu_shader_tools(bloom_host_output_analysis_attempt_runner_test)
         bloom_enable_warnings(bloom_host_output_analysis_attempt_runner_test)
         bloom_add_test(
             NAME bloom.host.output-analysis-attempt-runner

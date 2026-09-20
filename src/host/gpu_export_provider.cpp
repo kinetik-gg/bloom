@@ -1,5 +1,7 @@
 #include <bloom/host/gpu_export_provider.hpp>
 
+#include <bloom/runtime/gpu_ocio_context.hpp>
+
 #include <mutex>
 #include <utility>
 
@@ -25,6 +27,10 @@ struct GpuExportProvider::State final {
     // and then calls prepare() OUTSIDE it, so a concurrent setGpuDisplayCompileOptions() reset can
     // never destroy the preparer mid-prepare (UAF). The last reference retires it.
     std::shared_ptr<runtime::GpuOcioProgramPreparer> displayPreparer;
+    // The production shared context: one off-UI preparer + qualified compile options resolved from
+    // the packaged tools by the owning provider's CPU-worker bootstrap. When present it is the ONE
+    // preparer used for output display and for the evaluator's media/effect transforms.
+    std::shared_ptr<const runtime::GpuSceneOcioContext> ocioContext;
     bool bootstrapScheduled = false;
     bool bootstrapComplete = false;
     bool stopping = false;
@@ -77,13 +83,27 @@ void GpuExportProvider::prepare(runtime::TaskScheduler& scheduler) {
         runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu);
     auto submission = scheduler.submit<void>(
         std::move(request),
-        [state = std::move(state)](runtime::TaskContext&) -> runtime::TaskResult<void> {
+        [state = std::move(state)](runtime::TaskContext& context) -> runtime::TaskResult<void> {
             bool stopping = false;
             {
                 std::lock_guard lock(state->mutex);
                 stopping = state->stopping;
             }
             if (!stopping) {
+                // Qualify the packaged GPU shader tools exactly once on this CPU worker (never the
+                // UI thread or the evaluator's GPU owner thread) and publish the one shared context
+                // to both the evaluator it creates and its own output-display preparation. A typed
+                // refusal (missing/invalid tools, cancellation) leaves the context null and the
+                // caller on the unchanged CPU reference path; nothing is poisoned for a retry.
+                if (state->options.ocioContext == nullptr && state->options.ocioResolver != nullptr) {
+                    const auto resolved = state->options.ocioResolver->resolve(
+                        [&context] { return context.isCancellationRequested(); });
+                    if (resolved.hasValue()) {
+                        state->options.ocioContext = resolved.context;
+                        std::lock_guard lock(state->displayMutex);
+                        state->ocioContext = resolved.context;
+                    }
+                }
                 std::shared_ptr<runtime::GpuProcessFrameEvaluator> created;
                 try {
                     // Blocks only this scheduled worker until the device/cache/executor bootstrap
@@ -234,6 +254,9 @@ bool GpuExportProvider::gpuDisplayPreparationAvailable() const noexcept {
         return false;
     }
     std::lock_guard lock(state_->displayMutex);
+    if (state_->ocioContext != nullptr && state_->ocioContext->preparer != nullptr) {
+        return true;
+    }
     return state_->displayCompile.has_value() &&
            runtime::validGpuOcioCompileOptions(*state_->displayCompile);
 }
@@ -246,26 +269,32 @@ runtime::GpuOcioPreparationResult GpuExportProvider::prepareGpuDisplayCommand(
         return {nullptr, runtime::GpuOcioPreparationError::InvalidRequest,
                 "no GPU export provider"};
     }
-    // Take an immutable (preparer, options) pair TOGETHER under the display lock: the shared
-    // preparer reference keeps the object alive for the whole prepare() call even if a concurrent
-    // setGpuDisplayCompileOptions() swaps the options and resets the member. prepare() runs outside
-    // the lock (the compiler/cache are internally synchronized), so a long compile never blocks the
-    // setter or evaluator coordination.
+    // Take an immutable (preparer, options) pair TOGETHER under the display lock. In production the
+    // pair is the one shared GpuSceneOcioContext resolved by the bootstrap on a CPU worker, so the
+    // SAME preparer serves output display and the evaluator's media/effect transforms; the shared
+    // reference keeps it alive for the whole prepare() call. prepare() runs outside the lock (the
+    // compiler/cache are internally synchronized). The explicit compile-options path is retained
+    // only as a focused test seam and is itself lifetime-safe.
     runtime::GpuOcioCompileOptions compile;
     std::shared_ptr<runtime::GpuOcioProgramPreparer> preparer;
     {
         std::lock_guard lock(state_->displayMutex);
-        if (!state_->displayCompile.has_value() ||
-            !runtime::validGpuOcioCompileOptions(*state_->displayCompile)) {
-            return {nullptr, runtime::GpuOcioPreparationError::InvalidRequest,
-                    "no qualified GPU display compile options were supplied"};
+        if (state_->ocioContext != nullptr && state_->ocioContext->preparer != nullptr) {
+            compile = state_->ocioContext->compileOptions;
+            preparer = state_->ocioContext->preparer;
+        } else {
+            if (!state_->displayCompile.has_value() ||
+                !runtime::validGpuOcioCompileOptions(*state_->displayCompile)) {
+                return {nullptr, runtime::GpuOcioPreparationError::InvalidRequest,
+                        "no qualified GPU display compile options were supplied"};
+            }
+            if (state_->displayPreparer == nullptr) {
+                state_->displayPreparer = std::make_shared<runtime::GpuOcioProgramPreparer>(
+                    runtime::GpuOcioPreparerBudgets{});
+            }
+            compile = *state_->displayCompile;
+            preparer = state_->displayPreparer;
         }
-        if (state_->displayPreparer == nullptr) {
-            state_->displayPreparer =
-                std::make_shared<runtime::GpuOcioProgramPreparer>(runtime::GpuOcioPreparerBudgets{});
-        }
-        compile = *state_->displayCompile;
-        preparer = state_->displayPreparer;
     }
     runtime::GpuOcioTransformSpec spec;
     spec.kind = runtime::GpuOcioTransformKind::Display;

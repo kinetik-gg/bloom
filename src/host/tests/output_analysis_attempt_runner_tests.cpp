@@ -8,8 +8,10 @@
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
+#include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/platform/staged_artifact.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
 
 #include <algorithm>
@@ -802,6 +804,65 @@ void testGpuDisplayConcurrentSetterPrepare(Expectations& expectations) {
                         "concurrent-prepare: the route stays available after the race");
 }
 
+// The production factory path: the provider qualifies the packaged GPU shader tools through the
+// shared GpuOcioContextResolver on its CPU-worker bootstrap and uses that ONE shared preparer for
+// output display. No setGpuDisplayCompileOptions() call appears anywhere; a build without packaged
+// tools reports the route unavailable and this test asserts only the typed fallback.
+void testGpuExportProviderFactoryDisplayPreparation(Expectations& expectations) {
+#ifdef BLOOM_GPU_TOOLS_AVAILABLE
+    runtime::TaskScheduler scheduler;
+    auto resolver = host::makePackagedGpuOcioResolver(host::currentExecutablePath());
+    expectations.expect(resolver != nullptr, "factory: the packaged resolver is composed");
+    if (resolver == nullptr) {
+        return;
+    }
+    runtime::GpuProcessFrameEvaluatorOptions options;
+    options.enabled = false; // display preparation is CPU-only: no device needed here
+    options.ocioResolver = resolver;
+    auto provider = host::GpuExportProvider::create(std::move(options));
+    provider->prepare(scheduler);
+    const auto deadline = std::chrono::steady_clock::now() + 20s;
+    while (!provider->prepared() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    expectations.expect(provider->prepared(), "factory: the bootstrap reaches a terminal state");
+    expectations.expect(provider->gpuDisplayPreparationAvailable(),
+                        "factory: the resolved context makes the display route available with no "
+                        "manual compiler paths");
+
+    auto resolution = bloom::color::resolveOcioBuiltIn(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kBloomNeutralV1ConfigUri,
+        bloom::color::kBloomNeutralV1ConfigDigest, runtime::kLinearRec709SceneColorSpaceId);
+    expectations.expect(resolution.ready(), "factory: the built-in config resolves");
+    if (resolution.ready()) {
+        if (auto config = std::move(resolution).takeResolved(); config.has_value()) {
+            const runtime::GpuOcioCommandGeometry geometry{2, 2};
+            const auto viaProvider = provider->prepareGpuDisplayCommand(
+                *config, config->displayName(), config->viewName(), geometry);
+            expectations.expect(viaProvider.hasValue(),
+                                "factory: the provider prepares a display command");
+            const auto context = resolver->resolve();
+            expectations.expect(context.hasValue(), "factory: the resolver exposes its context");
+            if (context.hasValue() && viaProvider.hasValue()) {
+                runtime::GpuOcioTransformSpec spec;
+                spec.kind = runtime::GpuOcioTransformKind::Display;
+                spec.display = std::string(config->displayName());
+                spec.view = std::string(config->viewName());
+                const auto viaSharedPreparer = context.context->preparer->prepare(
+                    *config, spec, geometry, context.context->compileOptions);
+                expectations.expect(
+                    viaSharedPreparer.hasValue() &&
+                        viaProvider.command->identity() == viaSharedPreparer.command->identity(),
+                    "factory: output display uses the SAME shared preparer as the resolved context");
+            }
+        }
+    }
+    static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+#else
+    static_cast<void>(expectations);
+#endif
+}
+
 } // namespace
 
 int main(const int argc, char** argv) {
@@ -822,6 +883,7 @@ int main(const int argc, char** argv) {
     testGpuExportProviderBootstrapInFlightIsNotComplete(expectations);
     testGpuExportProviderQueuedBootstrapCancellationCompletes(expectations);
     testGpuDisplayConcurrentSetterPrepare(expectations);
+    testGpuExportProviderFactoryDisplayPreparation(expectations);
     testGpuEvaluatorHostPath(expectations, requireDevice);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

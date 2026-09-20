@@ -21,6 +21,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -67,14 +68,23 @@ evaluateCpu(const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>
     return result.frame();
 }
 
+// The device-only options every lifecycle vector uses. Constructed with field assignment (not a
+// designated initializer) so the OCIO/media context fields keep their inert defaults.
+[[nodiscard]] GpuProcessFrameEvaluatorOptions
+gpuEvaluatorOptions(const std::filesystem::path& loaderPath) {
+    GpuProcessFrameEvaluatorOptions options;
+    options.enabled = true;
+    options.loaderPath = loaderPath;
+    options.requestByteBudget = kRequestBudget;
+    options.readbackByteBudget = kReadbackBudget;
+    return options;
+}
+
 // Two concurrent callers each receive exactly one outcome; neither hangs even though the owner
 // runs one request at a time. Bounded by a wall-clock deadline so a missed wake-up is a hard fail.
 void runTwoCallerTest(Expectations& expectations, const Options& options) {
     auto evaluator = GpuProcessFrameEvaluator::create(
-        GpuProcessFrameEvaluatorOptions{.enabled = true,
-                                        .loaderPath = options.loader_path,
-                                        .requestByteBudget = kRequestBudget,
-                                        .readbackByteBudget = kReadbackBudget});
+        gpuEvaluatorOptions(options.loader_path));
     expectations.expect(evaluator != nullptr, "two-caller: evaluator constructed");
     if (evaluator == nullptr || !evaluator->gpuAvailable()) {
         return;
@@ -107,10 +117,7 @@ void runTwoCallerTest(Expectations& expectations, const Options& options) {
 // Two independent queued requests both resolve in order without hanging.
 void runQueuedRequestsTest(Expectations& expectations, const Options& options) {
     auto evaluator = GpuProcessFrameEvaluator::create(
-        GpuProcessFrameEvaluatorOptions{.enabled = true,
-                                        .loaderPath = options.loader_path,
-                                        .requestByteBudget = kRequestBudget,
-                                        .readbackByteBudget = kReadbackBudget});
+        gpuEvaluatorOptions(options.loader_path));
     expectations.expect(evaluator != nullptr, "queued: evaluator constructed");
     if (evaluator == nullptr || !evaluator->gpuAvailable()) {
         return;
@@ -133,10 +140,7 @@ void runQueuedRequestsTest(Expectations& expectations, const Options& options) {
 // After beginShutdown(), new evaluate() calls are rejected with a typed failure.
 void runShutdownRejectsNewCallsTest(Expectations& expectations, const Options& options) {
     auto evaluator = GpuProcessFrameEvaluator::create(
-        GpuProcessFrameEvaluatorOptions{.enabled = true,
-                                        .loaderPath = options.loader_path,
-                                        .requestByteBudget = kRequestBudget,
-                                        .readbackByteBudget = kReadbackBudget});
+        gpuEvaluatorOptions(options.loader_path));
     expectations.expect(evaluator != nullptr, "shutdown-reject: evaluator constructed");
     if (evaluator == nullptr || !evaluator->gpuAvailable()) {
         return;
@@ -154,10 +158,7 @@ void runShutdownRejectsNewCallsTest(Expectations& expectations, const Options& o
 // completes with a typed outcome.
 void runThrowingProgressTest(Expectations& expectations, const Options& options) {
     auto evaluator = GpuProcessFrameEvaluator::create(
-        GpuProcessFrameEvaluatorOptions{.enabled = true,
-                                        .loaderPath = options.loader_path,
-                                        .requestByteBudget = kRequestBudget,
-                                        .readbackByteBudget = kReadbackBudget});
+        gpuEvaluatorOptions(options.loader_path));
     expectations.expect(evaluator != nullptr, "throwing-progress: evaluator constructed");
     if (evaluator == nullptr || !evaluator->gpuAvailable()) {
         return;
@@ -178,10 +179,7 @@ void runThrowingProgressTest(Expectations& expectations, const Options& options)
 // rejected with a typed failure before any wait, so it cannot deadlock on its own completion.
 void runReentrantEvaluateTest(Expectations& expectations, const Options& options) {
     auto evaluator = GpuProcessFrameEvaluator::create(
-        GpuProcessFrameEvaluatorOptions{.enabled = true,
-                                        .loaderPath = options.loader_path,
-                                        .requestByteBudget = kRequestBudget,
-                                        .readbackByteBudget = kReadbackBudget});
+        gpuEvaluatorOptions(options.loader_path));
     expectations.expect(evaluator != nullptr, "reentrant: evaluator constructed");
     if (evaluator == nullptr || !evaluator->gpuAvailable()) {
         return;
@@ -212,10 +210,7 @@ void runReentrantEvaluateTest(Expectations& expectations, const Options& options
 // scheduler task handle, never a test-only setter.
 void runCancelledTokenTest(Expectations& expectations, const Options& options) {
     auto evaluator = GpuProcessFrameEvaluator::create(
-        GpuProcessFrameEvaluatorOptions{.enabled = true,
-                                        .loaderPath = options.loader_path,
-                                        .requestByteBudget = kRequestBudget,
-                                        .readbackByteBudget = kReadbackBudget});
+        gpuEvaluatorOptions(options.loader_path));
     expectations.expect(evaluator != nullptr, "cancelled-token: evaluator constructed");
     if (evaluator == nullptr || !evaluator->gpuAvailable()) {
         return;
@@ -282,10 +277,7 @@ int run(int argc, char** argv) {
     const auto request = requestFor(*plan);
 
     auto evaluator = GpuProcessFrameEvaluator::create(
-        GpuProcessFrameEvaluatorOptions{.enabled = true,
-                                        .loaderPath = options.loader_path,
-                                        .requestByteBudget = kRequestBudget,
-                                        .readbackByteBudget = kReadbackBudget});
+        gpuEvaluatorOptions(options.loader_path));
     expectations.expect(evaluator != nullptr, "the evaluator is constructed");
     if (evaluator == nullptr) {
         return 1;

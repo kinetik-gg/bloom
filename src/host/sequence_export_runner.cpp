@@ -387,7 +387,8 @@ struct SequenceExportRunnerV1::State {
                            .resolution = runtime::CompositionFormatResolution{},
                            .quality = runtime::EvaluationQuality::Reference,
                            .colorIntent = work->colorIntent(),
-                           .pixelStorageByteLimit = 1024ULL * 1024U * 1024U,
+                           .pixelStorageByteLimit =
+                               runtime::defaultGpuProcessFrameByteBudget(),
                            .bypassLookNodes = false},
             .targetPath = work->request.range.destination,
             .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,

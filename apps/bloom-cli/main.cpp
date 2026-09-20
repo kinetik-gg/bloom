@@ -3,13 +3,17 @@
 #endif
 
 #include <bloom/document/node_definition_registry.hpp>
+#include <bloom/host/gpu_export_provider.hpp>
+#include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/output/output_analysis.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/scripting/json_script.hpp>
 #include <bloom/scripting/render.hpp>
 #include <bloom/scripting/session.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -220,12 +224,31 @@ frameRange(std::string_view value) {
     config.rowBandWorkerCount = runtime::kSerialRowBandWorkers;
     runtime::TaskScheduler scheduler(config);
     runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    // Headless GPU export provider: the CLI composes the packaged GPU shader tools from its OWN
+    // executable-relative packaging (never PATH) and hands the inert resolver to the provider,
+    // whose CPU-worker bootstrap qualifies them once. The media context follows the opened
+    // project's asset base directory so real media/effect scenes run through the production GPU
+    // paths; a device/tool refusal keeps the unchanged CPU reference path.
+    runtime::CpuCompositionEvaluator gpuMediaEvaluator;
+    if (project.has_value()) {
+        gpuMediaEvaluator.setAssetBaseDirectory(project->parent_path());
+    }
+    runtime::GpuProcessFrameEvaluatorOptions gpuOptions;
+    gpuOptions.ocioResolver =
+        bloom::host::makePackagedGpuOcioResolver(bloom::host::currentExecutablePath());
+    gpuOptions.mediaContextProvider = [&gpuMediaEvaluator] {
+        return runtime::GpuSceneMediaContext::fromEvaluator(gpuMediaEvaluator);
+    };
+    auto gpuProvider = bloom::host::GpuExportProvider::create(std::move(gpuOptions));
+    gpuProvider->prepare(scheduler);
     const auto result = scripting::Render::run(*session, scheduler, compiler,
                                                {.composition = composition,
                                                 .frame = frame,
                                                 .range = range,
                                                 .preset = *selectedPreset,
-                                                .destination = destination});
+                                                .destination = destination},
+                                               {}, gpuProvider);
+    static_cast<void>(gpuProvider->shutdownAndWait(std::chrono::seconds(10)));
     std::cout << result.preservationReport << '\n';
     if (!result.succeeded) {
         std::cerr << "error[bloom-cli.render]: " << result.diagnostic << '\n';

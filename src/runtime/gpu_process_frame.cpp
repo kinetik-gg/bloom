@@ -7,6 +7,7 @@
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
 #include <algorithm>
@@ -25,6 +26,23 @@
 #include <vector>
 
 namespace bloom::runtime {
+
+std::size_t
+gpuProcessFrameByteBudgetForAvailable(const std::optional<std::size_t> availableBytes) noexcept {
+    // Pure policy, no floor and no ceiling: a conservative quarter of what the host reports
+    // available. Unknown availability is a small typed fallback, never an invented large budget.
+    constexpr std::size_t kUnknownAvailabilityFallbackBytes = std::size_t{512} * 1024U * 1024U;
+    constexpr std::size_t kAvailableShareDenominator = 4U;
+    if (!availableBytes.has_value()) {
+        return kUnknownAvailabilityFallbackBytes;
+    }
+    return *availableBytes / kAvailableShareDenominator;
+}
+
+std::size_t defaultGpuProcessFrameByteBudget() noexcept {
+    return gpuProcessFrameByteBudgetForAvailable(machineMemorySample().availableBytes);
+}
+
 namespace {
 
 GpuProcessFrameDiagnosticCode mapSceneDiagnostic(PreparedGpuSceneDiagnosticCode code) {
@@ -249,8 +267,15 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
                             .total = std::nullopt});
 
     // 1. The genuine CPU-side prepared scene (same builder the resident preview route uses). It
-    // resolves the exact operands/geometry without allocating a full RGBA CPU image.
-    CpuGpuSceneBuilder builder;
+    // resolves the exact operands/geometry without allocating a full RGBA CPU image. The root-owned
+    // media context (evaluator caches + current asset base) and the shared, off-UI OCIO context are
+    // injected here so media/effects/colour transforms run through the real production paths; a
+    // missing context fails closed rather than substituting identity.
+    const GpuSceneMediaContext mediaContext =
+        options.mediaContextProvider ? options.mediaContextProvider() : options.mediaContext;
+    CpuGpuSceneBuilder builder(nullptr, mediaContext,
+                               options.ocioContext != nullptr ? *options.ocioContext
+                                                              : GpuSceneOcioContext{});
     auto built = builder.build(plan, request, cancellation);
     if (!built.hasValue()) {
         const auto code = mapSceneDiagnostic(built.diagnostic.code);

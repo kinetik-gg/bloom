@@ -688,11 +688,11 @@ void FrameExportController::handleCompileResult(CompileHandle& compiling) {
 bool FrameExportController::beginAttempt(
     const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
     const core::RationalTime time) {
-    // The evaluation memory budget reuses CompositionPreviewController's own default (composition_
-    // preview_controller.hpp's kDefaultPreviewPixelStorageByteLimit): the same working-set bound
-    // the viewer's own full-resolution preview already runs under for this composition, not a new
-    // invented number. This is distinct from (and independent of) the export job's own resource
-    // ledger admission below, which governs retained/staged export bytes, not evaluator scratch.
+    // The evaluation memory budget is the host-availability-derived GPU/CPU export budget: a
+    // conservative share of currently-available RAM, floored and capped (never unbounded), so the
+    // gate is open for a large composition while one export cannot plan to own the machine. This is
+    // distinct from (and independent of) the export job's own resource ledger admission below,
+    // which governs retained/staged export bytes, not evaluator scratch.
     //
     // `time` is the ONLY thing a sequence varies per frame: every frame is evaluated at its own
     // exact rational time, never at an accumulated one, which is exactly what makes an exported
@@ -704,7 +704,7 @@ bool FrameExportController::beginAttempt(
                        .resolution = runtime::CompositionFormatResolution{},
                        .quality = runtime::EvaluationQuality::Reference,
                        .colorIntent = session_.colorIntent(),
-                       .pixelStorageByteLimit = kDefaultPreviewPixelStorageByteLimit,
+                       .pixelStorageByteLimit = runtime::defaultGpuProcessFrameByteBudget(),
                        .bypassLookNodes = sequence_ && sequence_->bypassLookNodes},
         .targetPath = pendingDestination_,
         .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
