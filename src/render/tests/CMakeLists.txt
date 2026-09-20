@@ -160,6 +160,69 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     )
 endif()
 
+# CPU-only kernel-prep and host-metadata test for AffineBilinearV1: hashes the embedded SPIR-V array
+# against its pinned digest and derives every fixture expectation from the REAL CPU oracle. It never
+# dispatches a GPU and registers unconditionally, so it also runs in a CPU-stub build.
+add_executable(bloom_render_gpu_affine_kernel_test gpu_affine_kernel_tests.cpp)
+target_link_libraries(bloom_render_gpu_affine_kernel_test PRIVATE bloom_render)
+target_include_directories(bloom_render_gpu_affine_kernel_test
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+target_compile_definitions(bloom_render_gpu_affine_kernel_test
+    PRIVATE
+        "BLOOM_AFFINE_BILINEAR_SPV_SHA256=\"ee28424e6b4b7d3c4e437f6ce438f75c7dfbf57e78b2a06b1e4aed1cb71f9373\"")
+bloom_enable_warnings(bloom_render_gpu_affine_kernel_test)
+bloom_enable_strict_floating_point(bloom_render_gpu_affine_kernel_test)
+bloom_add_test(
+    NAME bloom.render.gpu_affine_kernel
+    COMMAND bloom_render_gpu_affine_kernel_test
+    LABELS unit gpu render
+)
+
+# Real-device native chain test (upload -> AffineBilinearV1) with the CPU primitives as oracle. It
+# compiles the private Vulkan header via the affine private header, so the target exists only where
+# the Vulkan backend is built; it skips cleanly without a device and --require-device fails closed.
+if(BLOOM_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_render_gpu_affine_test gpu_affine_native_tests.cpp)
+    target_link_libraries(bloom_render_gpu_affine_test PRIVATE bloom_render)
+    target_include_directories(bloom_render_gpu_affine_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan" "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/include/vulkan")
+        target_include_directories(bloom_render_gpu_affine_test
+            SYSTEM PRIVATE "${BLOOM_DEPENDENCY_PREFIX}/include")
+    endif()
+    target_compile_definitions(bloom_render_gpu_affine_test
+        PRIVATE
+            "BLOOM_AFFINE_BILINEAR_SPV_SHA256=\"ee28424e6b4b7d3c4e437f6ce438f75c7dfbf57e78b2a06b1e4aed1cb71f9373\""
+            BLOOM_AFFINE_NATIVE_TEST=1
+            BLOOM_RENDER_TEST_VULKAN_BACKEND=1)
+    bloom_enable_warnings(bloom_render_gpu_affine_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_affine_test)
+    bloom_add_test(
+        NAME bloom.render.gpu_affine
+        COMMAND bloom_render_gpu_affine_test
+        LABELS unit gpu render
+    )
+
+    # Honest cost measurement (host inverse-map metadata + dispatch + fence vs the CPU oracle at
+    # 720p/1080p). Meaningful in a Release build; it prints the build mode it ran under.
+    add_executable(bloom_render_gpu_affine_cost_test gpu_affine_cost_tests.cpp)
+    target_link_libraries(bloom_render_gpu_affine_cost_test PRIVATE bloom_render)
+    target_include_directories(bloom_render_gpu_affine_cost_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan" "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND IS_DIRECTORY "${BLOOM_DEPENDENCY_PREFIX}/include/vulkan")
+        target_include_directories(bloom_render_gpu_affine_cost_test
+            SYSTEM PRIVATE "${BLOOM_DEPENDENCY_PREFIX}/include")
+    endif()
+    bloom_enable_warnings(bloom_render_gpu_affine_cost_test)
+    bloom_enable_strict_floating_point(bloom_render_gpu_affine_cost_test)
+    bloom_add_test(
+        NAME bloom.render.gpu_affine_cost
+        COMMAND bloom_render_gpu_affine_cost_test
+        LABELS benchmark gpu render
+        TIMEOUT 300
+    )
+endif()
+
 # Pure CPU present-image test: the corrected fragment composition (display-space checkerboard,
 # destination/source mapping, channel remap per texel BEFORE the filter, premultiplied bilinear
 # filtering of the straight RGBA8 source, premultiplied overlay) reproduced on the CPU, plus the

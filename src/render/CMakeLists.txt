@@ -362,6 +362,66 @@ else()
         "source_over.comp digest is still enforced.")
 endif()
 
+# --- Fixed AffineBilinearV1 shader: source pin and regeneration check ----------------------------
+#
+# Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe. The checked-in
+# .comp is pinned here, the manifest must bind that source digest, and, when the locked
+# glslangValidator/spirv-val are present, configure recompiles it and confirms the SPIR-V digest
+# embedded in affine_bilinear_spirv.inc. Runtime code never compiles or loads a shader.
+set(BLOOM_AFFINE_BILINEAR_COMP
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/affine_bilinear.comp")
+set(BLOOM_AFFINE_BILINEAR_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/affine_bilinear.manifest")
+set(BLOOM_AFFINE_BILINEAR_INC
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/affine_bilinear_spirv.inc")
+set(BLOOM_AFFINE_BILINEAR_COMP_SHA256
+    "1648feceb9869b69f274f7b6af90770a8c6c57ac78b31d270e5735218d52ebab")
+set(BLOOM_AFFINE_BILINEAR_SPV_SHA256
+    "ee28424e6b4b7d3c4e437f6ce438f75c7dfbf57e78b2a06b1e4aed1cb71f9373")
+
+file(SHA256 "${BLOOM_AFFINE_BILINEAR_COMP}" bloom_affine_bilinear_comp_sha256)
+if(NOT bloom_affine_bilinear_comp_sha256 STREQUAL BLOOM_AFFINE_BILINEAR_COMP_SHA256)
+    message(FATAL_ERROR
+        "affine_bilinear.comp SHA-256 mismatch: measured ${bloom_affine_bilinear_comp_sha256}, "
+        "pinned ${BLOOM_AFFINE_BILINEAR_COMP_SHA256}. Regenerate only through the tools/gpu-shaders "
+        "recipe and update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_AFFINE_BILINEAR_MANIFEST}" bloom_affine_bilinear_manifest_text)
+if(NOT bloom_affine_bilinear_manifest_text MATCHES "${BLOOM_AFFINE_BILINEAR_COMP_SHA256}")
+    message(FATAL_ERROR
+        "affine_bilinear.manifest does not bind the pinned affine_bilinear.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_affine_bilinear_generated_spv
+        "${CMAKE_CURRENT_BINARY_DIR}/affine_bilinear.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_AFFINE_BILINEAR_COMP}" -o "${bloom_affine_bilinear_generated_spv}"
+        RESULT_VARIABLE bloom_affine_bilinear_glslang_result)
+    if(NOT bloom_affine_bilinear_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile affine_bilinear.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2
+                "${bloom_affine_bilinear_generated_spv}"
+        RESULT_VARIABLE bloom_affine_bilinear_spirv_val_result)
+    if(NOT bloom_affine_bilinear_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated AffineBilinearV1 SPIR-V.")
+    endif()
+    file(SHA256 "${bloom_affine_bilinear_generated_spv}" bloom_affine_bilinear_spv_sha256)
+    if(NOT bloom_affine_bilinear_spv_sha256 STREQUAL BLOOM_AFFINE_BILINEAR_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated AffineBilinearV1 SPIR-V SHA-256 ${bloom_affine_bilinear_spv_sha256} does "
+            "not match the embedded ${BLOOM_AFFINE_BILINEAR_SPV_SHA256}; the checked-in .comp and "
+            "affine_bilinear_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: affine_bilinear.comp regenerated and SPIR-V-validated "
+        "(${bloom_affine_bilinear_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "affine_bilinear.comp digest is still enforced.")
+endif()
+
 # --- Fixed CoveredSolidV1 resident-image shader: source pin and regeneration check ---------------
 #
 # Offline artifact from the same tools/gpu-shaders compile/validate/embed recipe (no new generator).
@@ -562,6 +622,7 @@ target_sources(
     PRIVATE
         cpu_image_primitives.cpp
         display_buffer.cpp
+        gpu_affine_host.cpp
         image.cpp
         image_types.cpp
         text_glyph_source.hpp
@@ -574,6 +635,7 @@ target_sources(
             include/bloom/render/cpu_image_primitives.hpp
             include/bloom/render/display_buffer.hpp
             include/bloom/render/embedded_fonts.hpp
+            include/bloom/render/gpu_affine.hpp
             include/bloom/render/gpu_composite.hpp
             include/bloom/render/gpu_device.hpp
             include/bloom/render/gpu_image.hpp
@@ -595,6 +657,9 @@ target_sources(
 # the desktop application.
 if(BLOOM_RENDER_VULKAN_AVAILABLE)
     target_sources(bloom_render PRIVATE
+        vulkan/gpu_affine.cpp
+        vulkan/gpu_affine_private.hpp
+        vulkan/gpu_affine_resources.cpp
         vulkan/gpu_composite.cpp
         vulkan/gpu_composite_private.hpp
         vulkan/gpu_composite_resources.cpp
@@ -627,6 +692,9 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/shaders/solid.comp
         vulkan/shaders/solid.manifest
         vulkan/shaders/solid_spirv.inc
+        vulkan/shaders/affine_bilinear.comp
+        vulkan/shaders/affine_bilinear.manifest
+        vulkan/shaders/affine_bilinear_spirv.inc
         vulkan/shaders/solid_covered.comp
         vulkan/shaders/solid_covered.manifest
         vulkan/shaders/solid_covered_spirv.inc
@@ -643,9 +711,10 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     )
 else()
     target_sources(bloom_render PRIVATE gpu_composite_stub.cpp gpu_device_stub.cpp
-                                     gpu_image_upload_stub.cpp gpu_neutral_display_stub.cpp
-                                     gpu_present_image_stub.cpp gpu_presentation_target_stub.cpp
-                                     gpu_resident_display_stub.cpp gpu_solid_stub.cpp)
+                                     gpu_affine_stub.cpp gpu_image_upload_stub.cpp
+                                     gpu_neutral_display_stub.cpp gpu_present_image_stub.cpp
+                                     gpu_presentation_target_stub.cpp gpu_resident_display_stub.cpp
+                                     gpu_solid_stub.cpp)
 endif()
 
 target_compile_features(bloom_render PUBLIC cxx_std_20)

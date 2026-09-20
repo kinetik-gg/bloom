@@ -1,0 +1,98 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "generator": "tools/gpu-shaders compile/validate/embed recipe (reused, not reimplemented)",
+  "generatorRevision": 1,
+  "operation": "AffineBilinearV1",
+  "entrypoint": "main",
+  "shader": {
+    "language": "GLSL_460",
+    "stage": "compute",
+    "sha256": "1648feceb9869b69f274f7b6af90770a8c6c57ac78b31d270e5735218d52ebab",
+    "spirvSha256": "ee28424e6b4b7d3c4e437f6ce438f75c7dfbf57e78b2a06b1e4aed1cb71f9373",
+    "localSizeX": 256,
+    "localSizeY": 1,
+    "localSizeZ": 1
+  },
+  "bindings": [
+    {
+      "set": 0,
+      "binding": 0,
+      "kind": "storage-image",
+      "access": "readonly",
+      "format": "rgba32f",
+      "role": "premultiplied-lin_rec709_scene-source"
+    },
+    {
+      "set": 0,
+      "binding": 1,
+      "kind": "storage-image",
+      "access": "writeonly",
+      "format": "rgba32f",
+      "role": "premultiplied-lin_rec709_scene-output"
+    },
+    {
+      "set": 0,
+      "binding": 2,
+      "kind": "storage-buffer",
+      "access": "readonly",
+      "element": "BloomAffineSample",
+      "role": "host-prepared-per-pixel-basex-basey-factorx-factory",
+      "layout": "outputWidth * outputHeight elements, row major"
+    },
+    {
+      "set": 0,
+      "binding": 3,
+      "kind": "storage-buffer",
+      "access": "readwrite",
+      "element": "uint",
+      "role": "error-flag",
+      "bits": {
+        "inputNonFinite": 1,
+        "resultNonFinite": 2,
+        "inputSubnormal": 4
+      }
+    }
+  ],
+  "pushConstant": {
+    "byteCount": 20,
+    "fields": [
+      {
+        "name": "outputWidth",
+        "type": "uint32"
+      },
+      {
+        "name": "outputHeight",
+        "type": "uint32"
+      },
+      {
+        "name": "sourceWidth",
+        "type": "uint32"
+      },
+      {
+        "name": "sourceHeight",
+        "type": "uint32"
+      },
+      {
+        "name": "opacity",
+        "type": "float32"
+      }
+    ]
+  },
+  "hostDerivation": {
+    "samples": "prepareAffineSamples(LayerTransform, outputWindow) or prepareAffineMatrixSamples(GpuAffineMatrix, sourceWindow, outputWindow): for every output pixel centre (absolute composition coordinates) compute the inverse-mapped source-local sample in Float64, then base=(int64)floor and factor=(float)(sample-base) exactly as layerTransformBilinearRow() does; the sentinel baseX==INT_MIN marks the CPU transparent branch sample<=-1.0 || >=extent on either axis",
+    "source": "GpuImageUpload/Rgba32fImage decode is done on the CPU task thread; no media decode on the GPU owner thread",
+    "opacity": "LayerTransform::opacity() for the LayerTransform form; the explicitly supplied float32 for the composed-matrix form",
+    "checked": "dispatch ceil(outputWidth*outputHeight/256); host preflights the image + per-pixel metadata budget and device limits"
+  },
+  "contracts": {
+    "numeric": "per-finite-component abs-or-rel 2e-6 against render::layerTransformBilinearRow and the parented row; never bit-exact by claim",
+    "arithmetic": "CPU uses std::fma(factor,end,(1-factor)*start); shader uses fma() for the same lerp; SPIR-V relaxed contraction is covered by the 2e-6 gate",
+    "sampleConvention": "kernel gathers the host-prepared per-pixel baseX/baseY/factorX/factorY; it never re-derives the affine inverse map and needs no shaderFloat64. This removes Float32 inverse-map precision loss at large output coordinates and for near-collapsed scales.",
+    "opacity": "opacity==0 writes transparent; opacity==1 skips the multiply; otherwise sampled *= opacity",
+    "transparentBorder": "base +/- 1 taps outside the source data window are exact transparent black, so premultiplied interpolation produces the correct edge falloff with no unpremultiply round trip",
+    "zeroScale": "a collapsed layer (scale 0 on either axis) has no inverse and is an empty layer before resampling; LayerTransform::create refuses it and this operation must not be submitted for one",
+    "nonFinitePolicy": "any non-finite tap sets bit0, any nonzero subnormal tap sets bit2, a non-finite result sets bit1; on any error the output pixel is transparent and the consumer must not publish while flags[0] != 0",
+    "cpuFallback": "non-finite/subnormal domains and any precision the shader cannot match stay on the CPU reference path; no silent substitution",
+    "metadataBudget": "the per-pixel sample array is O(outputWidth*outputHeight) BloomAffineSample (16 bytes each), charged against maxMetadataBytes and the per-call byteBudget; it is coordinate metadata only, never CPU-generated RGBA"
+  }
+}

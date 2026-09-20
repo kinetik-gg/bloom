@@ -235,6 +235,65 @@ struct Options final {
     return pixels;
 }
 
+// Dense HDR fixture for the affine boundary gate: alternating large positive/negative RGB (whose
+// bilinear combinations cancel) plus an alpha column cycle covering the exact 0 and 1 endpoints, a
+// tiny positive normal alpha, and fractional alphas. It is deliberately dense so near-integer and
+// 90-degree sample boundaries are exercised at many phases.
+[[nodiscard]] inline std::vector<Rgba32f> denseHdrPixels(const std::uint32_t width,
+                                                         const std::uint32_t height) {
+    std::vector<Rgba32f> pixels(static_cast<std::size_t>(width) * height, Rgba32f::transparent());
+    for (std::uint32_t y = 0; y < height; ++y) {
+        for (std::uint32_t x = 0; x < width; ++x) {
+            const bool positive = ((x + y) % 2U) == 0U;
+            const auto magnitude = 6.0F + static_cast<float>(x % 3U);
+            const auto red = positive ? magnitude : -magnitude;
+            const auto green = positive ? -4.0F : 4.0F;
+            const auto blue = static_cast<float>(x) * 0.5F - 2.0F;
+            float alpha = 0.0F;
+            switch (x % 5U) {
+            case 0U:
+                alpha = 0.0F;
+                break;
+            case 1U:
+                alpha = 1.0F;
+                break;
+            case 2U:
+                alpha = 1e-20F; // tiny positive NORMAL alpha, never subnormal
+                break;
+            default:
+                alpha = static_cast<float>((x % 7U) + 1U) / 8.0F;
+                break;
+            }
+            pixels[static_cast<std::size_t>(y) * width + x] = pixel(red, green, blue, alpha);
+        }
+    }
+    return pixels;
+}
+
+// Asserts the GPU alpha channel is bit-exact to the CPU oracle wherever the CPU alpha is an exact
+// 0 or 1 endpoint. This is the endpoint alpha-exactness gate; intermediate fractional alphas are
+// covered by the ordinary 2e-6 comparison.
+[[nodiscard]] inline bool endpointsAlphaExact(const std::vector<Rgba32f>& gpu,
+                                              const std::span<const Rgba32f> cpu,
+                                              Expectations& expectations,
+                                              const std::string& label) {
+    if (gpu.size() != cpu.size()) {
+        expectations.expect(false, label + ": endpoint alpha check pixel counts agree");
+        return false;
+    }
+    bool exact = true;
+    for (std::size_t index = 0; index < gpu.size(); ++index) {
+        const auto expectedAlpha = cpu[index].alpha();
+        if (expectedAlpha == 0.0F || expectedAlpha == 1.0F) {
+            if (gpu[index].alpha() != expectedAlpha) {
+                exact = false;
+            }
+        }
+    }
+    expectations.expect(exact, label + ": GPU alpha is bit-exact at 0/1 endpoints");
+    return exact;
+}
+
 struct TranslationCase final {
     std::string name;
     std::uint32_t width;

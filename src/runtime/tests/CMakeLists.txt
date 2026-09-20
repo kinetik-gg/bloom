@@ -660,3 +660,28 @@ bloom_add_test(
     LABELS runtime unit gpu presentation
     TIMEOUT 60
 )
+
+# Runtime-native parity proof for GpuAffine's composed-matrix form against the ACTUAL runtime parented
+# CPU oracle (ParentedLayerTransform::row). It lives here because runtime may depend on render while
+# production render may not depend on runtime. It uses only the public render API, so it compiles and
+# registers in both the Vulkan and stub builds; without a device it skips cleanly (and
+# --require-device fails closed).
+add_executable(bloom_runtime_gpu_affine_parented_test gpu_affine_parented_native_tests.cpp)
+target_include_directories(
+    bloom_runtime_gpu_affine_parented_test
+    PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/render/tests"
+        "${PROJECT_SOURCE_DIR}/src/runtime"
+)
+target_link_libraries(
+    bloom_runtime_gpu_affine_parented_test
+    PRIVATE bloom_runtime_evaluator bloom_render
+)
+bloom_enable_warnings(bloom_runtime_gpu_affine_parented_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_affine_parented_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_affine_parented
+    COMMAND bloom_runtime_gpu_affine_parented_test
+    LABELS runtime unit gpu render
+    TIMEOUT 180
+)
