@@ -1031,3 +1031,31 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
     set_tests_properties(bloom.runtime.gpu_ocio_scene_executor
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+# CompiledCompositionSource splice over a real OCIO ProcessEffect command. The production builder
+# does not yet emit CompiledImageEffect, so the fixture builds an immutable child PreparedGpuScene
+# with a genuine GpuOcioEffectCommand from the real preparer, splices it through the production
+# nested helper (remapped input dependency, unchanged program identity, charged resident bytes), and
+# then runs the spliced parent/child scene natively against the unchanged CPU OCIO oracle. Readback
+# happens only for the test oracle. Requires the Vulkan backend and the pinned tools.
+if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_gpu_nested_ocio_test gpu_nested_ocio_tests.cpp)
+    target_include_directories(bloom_runtime_gpu_nested_ocio_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime")
+    target_link_libraries(bloom_runtime_gpu_nested_ocio_test
+        PRIVATE bloom_runtime_evaluator bloom_render)
+    if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
+        target_compile_definitions(bloom_runtime_gpu_nested_ocio_test PRIVATE
+            "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+    endif()
+    bloom_enable_warnings(bloom_runtime_gpu_nested_ocio_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_nested_ocio_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_nested_ocio
+        COMMAND bloom_runtime_gpu_nested_ocio_test
+        LABELS runtime unit gpu color
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.runtime.gpu_nested_ocio
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()
