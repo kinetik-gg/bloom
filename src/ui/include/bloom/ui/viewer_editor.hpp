@@ -294,10 +294,13 @@ class ViewerEditor final : public QWidget,
     // Test-only: inject the adapter's private port seam so a CPU-only fixture can drive the
     // controller without a device. The product never calls this.
     void setGpuPresentationPortForTest(std::shared_ptr<ViewerGpuPort> port);
-    // Test-only: simulate an internal blank retirement already in flight (no presenter needed) and
-    // then settle it, so the fold-in/queued-delivery contract is testable without a device.
+    // Test-only: simulate an internal or external retirement already in flight (no presenter
+    // needed), settle the internal one, and read the external completion generation, so the
+    // fold-in/refusal contract is testable without a device.
     void simulateNativeRetireInFlightForTest();
+    void simulateExternalRetireInFlightForTest();
     void finishSimulatedNativeRetireForTest(bool safeToMutate, const std::string& diagnostic = {});
+    [[nodiscard]] std::uint64_t hostMutationGenerationForTest() const noexcept;
     // Test-only: the resident present request the viewer would submit for the current transform,
     // channel, and background. Device-free, so a test can prove the GPU surround matches the CPU
     // drawCanvasBackground() paint for every background mode.
@@ -656,8 +659,7 @@ class ViewerEditor final : public QWidget,
     // True only while the blank/no-frame transition is retiring a live target before it may unmap
     // the container; the update path must not hide it or start a second retire while pending.
     bool gpuNativeRetirePending_ = false;
-    // Monotonic token; every resolution, external resume, or teardown bumps it so a queued
-    // completion from a superseded retire is discarded.
+    // Bumped on every resolution, resume, or teardown so a stale queued retire is discarded.
     std::uint64_t gpuNativeRetireGeneration_ = 0;
     // True while an external EditorNativeSurface mutation owns the presenter's single retire slot.
     bool gpuHostMutationPending_ = false;
@@ -670,9 +672,7 @@ class ViewerEditor final : public QWidget,
     // Monotonic token for an external mutation's queued completion; bumping it discards a
     // superseded delivery (the presenter invokes its callback inline, so it is queued).
     std::uint64_t gpuHostMutationGeneration_ = 0;
-    // Defensive re-entrancy guard for updateGpuResidentPresentation(). The depth of the repaint/OOM
-    // report was not established; this only prevents a controller callback fired from a present
-    // from recursively re-entering the same transition.
+    // Defensive re-entrancy guard; the repaint/OOM report depth was never established.
     bool gpuPresentationUpdating_ = false;
     QTimer* gpuResidentTimer_ = nullptr;
     bool residentActive_ = false;

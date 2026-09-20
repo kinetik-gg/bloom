@@ -30,11 +30,24 @@ ViewerEditor::prepareNativeSurfaceMutation(const std::uint64_t generation,
         gpuHostMutationWaiter_ = GpuHostMutationWaiter{generation, std::move(completion)};
         return EditorNativeSurface::PrepareOutcome::RetirePending;
     }
+    if (gpuHostMutationPending_) {
+        // An external retirement already owns the presenter's single retire slot. Refuse the
+        // duplicate BEFORE touching gpuHostMutationGeneration_: superseding the first request would
+        // discard its queued completion and hang the host gate.
+        return EditorNativeSurface::PrepareOutcome::Refused;
+    }
+    if (!gpuResident_->hasLiveTarget()) {
+        // No live target: answer synchronously, exactly like the controller's NoLiveTarget path, so
+        // the host may mutate now and a later request can never supersede this answer.
+        if (completion) {
+            completion(generation, PrepareResult{true, "no live presentation target"});
+        }
+        return EditorNativeSurface::PrepareOutcome::NoLiveTarget;
+    }
     // The presenter invokes its mutation callback inline from applySnapshot() and then reclaims the
     // terminal owner record on that same stack, so running the host callback there could commit a
-    // tree mutation that destroys the presenter mid-applySnapshot. Deliver every external
-    // completion through a queued, generation-guarded, `this`-context call instead, exactly like
-    // the internal path.
+    // tree mutation that destroys the presenter mid-applySnapshot. Deliver every live external
+    // completion through a queued, generation-guarded, `this`-context call instead.
     const std::uint64_t hostGeneration = ++gpuHostMutationGeneration_;
     PrepareCallback queued = [this, generation, hostGeneration,
                               completion](const std::uint64_t, const PrepareResult& result) {
@@ -43,7 +56,7 @@ ViewerEditor::prepareNativeSurfaceMutation(const std::uint64_t generation,
             [this, generation, hostGeneration, safe = result.safeToMutate,
              diagnostic = result.diagnostic, completion] {
                 if (hostGeneration != gpuHostMutationGeneration_) {
-                    return; // superseded by a resume or a newer request
+                    return; // superseded by a resume
                 }
                 if (completion) {
                     completion(generation, PrepareResult{safe, diagnostic});
@@ -110,6 +123,12 @@ void ViewerEditor::requestResidentNativeRetire() {
     const QRect containerRect = contentRect().toRect();
     if (!containerRect.isEmpty()) {
         gpuResident_->revealCpuCover(containerRect);
+    }
+    if (gpuResident_->presenterState() == ViewerGpuPresenter::State::Retained) {
+        // A Retained target is terminal: no later retire can ever be proven safe. Never start a
+        // retry loop against it (and never recapture the cover every tick); keep the target mapped
+        // and the current cover raised until the host tears the tree down.
+        return;
     }
     if (gpuHostMutationPending_) {
         // An external EditorNativeSurface mutation already owns the presenter's single retire slot.
@@ -223,4 +242,15 @@ void ViewerEditor::simulateNativeRetireInFlightForTest() {
 void ViewerEditor::finishSimulatedNativeRetireForTest(const bool safeToMutate,
                                                       const std::string& diagnostic) {
     onResidentNativeRetireResult(gpuNativeRetireGeneration_, safeToMutate, diagnostic);
+}
+
+void ViewerEditor::simulateExternalRetireInFlightForTest() {
+    gpuNativeRetirePending_ = false;
+    gpuHostMutationPending_ = true;
+    gpuHostMutationWaiter_.reset();
+    ++gpuHostMutationGeneration_;
+}
+
+std::uint64_t ViewerEditor::hostMutationGenerationForTest() const noexcept {
+    return gpuHostMutationGeneration_;
 }

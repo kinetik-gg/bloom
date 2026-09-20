@@ -78,6 +78,10 @@ struct ViewerGpuResidentController::Impl final {
     ViewerGpuCpuCover* cover = nullptr;
     // True only while a native transition (attach/resize/resume/refusal) needs the CPU cover.
     bool coverRequired = true;
+    // True once the cover pixmap holds the current CPU paint. It is captured on the hidden->visible
+    // transition only, so a retained/refused transition that keeps re-raising the cover never
+    // re-rasterizes (and never churns platform buffers) every poll tick.
+    bool coverCaptured = false;
     std::function<void()> stateChanged;
     ViewerGpuPresenter::State lastReportedState = ViewerGpuPresenter::State::Uninitialized;
 
@@ -133,34 +137,44 @@ struct ViewerGpuResidentController::Impl final {
         if (cover == nullptr) {
             cover = new ViewerGpuCpuCover(dependencies.containerParent);
             cover->setObjectName(QStringLiteral("bloomViewerGpuCpuCover"));
+            coverCaptured = false;
         }
         if (cover->geometry() != rect) {
             cover->setGeometry(rect);
         }
-        // Snapshot only on the transition into visibility; a visible cover is not
-        // re-captured on every ordinary present.
-        if (!cover->isVisible()) {
+        // Snapshot once per conceal->reveal transition; a cover that is merely re-raised while it
+        // already holds the current paint is not re-rasterized (and a hidden ancestor cannot be
+        // mistaken for a transition, unlike a bare isVisible() test).
+        if (!coverCaptured) {
             cover->setSnapshot(coverSnapshot());
-            cover->show();
+            coverCaptured = true;
         }
-        cover->raise();
+        if (!cover->isVisible()) {
+            cover->show();
+            cover->raise();
+        }
     }
 
     void showCover() {
         if (cover == nullptr) {
             return;
         }
-        if (!cover->isVisible()) {
+        if (!coverCaptured) {
             cover->setSnapshot(coverSnapshot());
-            cover->show();
+            coverCaptured = true;
         }
-        cover->raise();
+        if (!cover->isVisible()) {
+            cover->show();
+            cover->raise();
+        }
     }
 
     void hideCover() {
         if (cover != nullptr) {
             cover->hide();
         }
+        // The next reveal must capture fresh paint, whatever changed while it was concealed.
+        coverCaptured = false;
     }
 
     [[nodiscard]] bool ensurePresenter(const std::uint32_t width, const std::uint32_t height) {
@@ -407,9 +421,10 @@ void ViewerGpuResidentController::concealCpuCover() {
 
 void ViewerGpuResidentController::revealCpuCover(const QRect& containerRect) {
     // Keep the cover required while the transition is in flight, then raise it. ensureCover()
-    // snapshots only on the hidden->visible transition, so a steady reveal never re-rasterizes the
-    // CPU image, while the first raise after a present-ack conceal always captures the CURRENT
-    // paint (a blank/no-frame state stays blank rather than flashing the previous native frame).
+    // captures the CPU paint once per conceal->reveal transition, so a retained/refused transition
+    // that re-raises the cover on every poll tick never re-rasterizes it (and never churns platform
+    // buffers); a fresh capture happens only after a conceal, so a blank/no-frame state stays blank
+    // rather than flashing the previous native frame.
     impl_->coverRequired = true;
     impl_->ensureCover(containerRect);
 }

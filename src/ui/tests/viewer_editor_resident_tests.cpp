@@ -11,6 +11,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/document.hpp>
@@ -288,22 +289,47 @@ void testViewerEditorResidentGateIsInertAndKeepsCpuPaint(Expectations& expectati
     expectations.expect(pressFilter.presses == 1,
                         "forwarded native input runs receiver event filters, not just the handler");
 
-    // 8. The blank-retire coordination contract, device-free (the live path is the native
-    // fixture). An external prepareNativeSurfaceMutation completion must never be delivered inline
-    // from the presenter/controller callback stack; it is queued and generation-guarded.
-    bool externalCalledInline = false;
+    // 8. With no live target the host may mutate synchronously; the completion is answered in the
+    // call (never queued, so a later request cannot supersede it).
+    bool externalCalled = false;
     const auto externalOutcome = viewer.prepareNativeSurfaceMutation(
         30, [&](const std::uint64_t generation, const ui::EditorNativeSurface::PrepareResult&) {
-            expectations.expect(generation == 30, "the external generation is echoed");
-            externalCalledInline = true;
+            expectations.expect(generation == 30, "the no-live-target generation is echoed");
+            externalCalled = true;
         });
     expectations.expect(externalOutcome == ui::EditorNativeSurface::PrepareOutcome::NoLiveTarget,
                         "with no live target the host may mutate synchronously");
-    expectations.expect(!externalCalledInline,
-                        "the external completion is queued, never invoked inline");
-    QApplication::processEvents();
-    expectations.expect(externalCalledInline,
-                        "the queued external completion is delivered after the call returns");
+    expectations.expect(externalCalled,
+                        "the no-live-target completion is answered synchronously, not queued");
+
+    // 8b. While an EXTERNAL retirement is already pending, a duplicate request must be refused
+    // WITHOUT bumping the completion generation: superseding the first queued completion would hang
+    // the host gate.
+    viewer.simulateExternalRetireInFlightForTest();
+    const std::uint64_t externalGeneration = viewer.hostMutationGenerationForTest();
+    bool firstDuplicateCalled = false;
+    expectations.expect(
+        viewer.prepareNativeSurfaceMutation(
+            50,
+            [&](const std::uint64_t, const ui::EditorNativeSurface::PrepareResult&) {
+                firstDuplicateCalled = true;
+            }) == ui::EditorNativeSurface::PrepareOutcome::Refused,
+        "a duplicate external request is refused while one is already pending");
+    bool secondDuplicateCalled = false;
+    expectations.expect(
+        viewer.prepareNativeSurfaceMutation(
+            51,
+            [&](const std::uint64_t, const ui::EditorNativeSurface::PrepareResult&) {
+                secondDuplicateCalled = true;
+            }) == ui::EditorNativeSurface::PrepareOutcome::Refused,
+        "a further duplicate external request is also refused");
+    expectations.expect(viewer.hostMutationGenerationForTest() == externalGeneration,
+                        "a refused duplicate never advances the external completion generation");
+    expectations.expect(!firstDuplicateCalled && !secondDuplicateCalled,
+                        "refused duplicates are never answered as safe");
+    viewer.resumeNativeSurfaceAfterMutation();
+    expectations.expect(viewer.hostMutationGenerationForTest() != externalGeneration,
+                        "an external resume invalidates stale queued completions");
 
     // 9. While an internal blank retirement owns the presenter's retire slot, a host request folds
     // into it (RetirePending) and is answered later with the truthful result; a second concurrent
@@ -439,11 +465,19 @@ void testCompositionFrameChromePaintsWithoutADevice(Expectations& expectations) 
 
 void testViewerEditorBlankCoverIsOpaqueCurrentCpuPaint(Expectations& expectations) {
     // The native CPU cover raised during a blank/no-frame retirement must be the CURRENT CPU paint
-    // (the opaque canvas background), never a transparent or stale image. This is the device-free
-    // half of the blank-retire behavior; the live retire itself is covered by the native fixtures.
+    // (the opaque canvas background), never a transparent or stale frame retained from the previous
+    // composition. A prior colored composition is displayed and painted first, so a regression that
+    // reuses the last CPU frame is caught; a from-empty test would only catch a null allocation.
     document::Document blankDocument(document::Project(document::ProjectId::fromRaw(7), "Blank"));
     commands::CommandStack blankCommands(blankDocument);
-    ui::CompositionSession session(blankDocument, blankCommands, document::CompositionId{});
+    auto newProject = makeTestProject("Blank cover");
+    const auto compositionId = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, compositionId);
+    expectations.expect(
+        session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.9, 0.05, 0.85, 1.0}),
+        "the fixture authors a colored Solid so the prior frame is distinctive");
     runtime::TaskScheduler scheduler(testSchedulerConfig());
     ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
 
@@ -461,16 +495,31 @@ void testViewerEditorBlankCoverIsOpaqueCurrentCpuPaint(Expectations& expectation
     ui::ViewerEditor viewer(session, controller);
     viewer.resize(320, 240);
     viewer.show();
-    QApplication::processEvents();
+    controller.requestRefresh();
+    expectations.expect(waitUntil([&] {
+                            const auto frame = controller.state().frame;
+                            return frame != nullptr &&
+                                   frame->provenance().provider !=
+                                       runtime::PreviewDisplayProvider::GpuResident;
+                        }),
+                        "a CPU frame is displayed before the blank rebind");
+    static_cast<void>(viewer.grab()); // paints the CPU frame, populating the last-CPU-frame cache
+    const QPixmap beforeCover = viewer.renderCpuCoverSnapshotForTest();
+    expectations.expect(!beforeCover.isNull(), "the composition cover snapshot renders");
 
-    expectations.expect(viewer.displayedFrameForTest() == nullptr,
-                        "a composition-less document has no displayed frame");
-    const QPixmap cover = viewer.renderCpuCoverSnapshotForTest();
-    expectations.expect(!cover.isNull(), "the blank-state cover snapshot renders");
-    if (!cover.isNull()) {
-        const QImage image = cover.toImage();
-        expectations.expect(image.pixelColor(image.width() / 2, image.height() / 2).alpha() > 0,
-                            "the blank-state cover is opaque current paint, not transparent");
+    session.rebind(blankDocument, blankCommands, document::CompositionId{});
+    expectations.expect(waitUntil([&] { return viewer.displayedFrameForTest() == nullptr; }),
+                        "the composition-less rebind clears the displayed frame");
+    QApplication::processEvents();
+    const QPixmap afterCover = viewer.renderCpuCoverSnapshotForTest();
+    expectations.expect(!afterCover.isNull(), "the blank-state cover snapshot renders");
+    if (!beforeCover.isNull() && !afterCover.isNull()) {
+        const QImage after = afterCover.toImage();
+        expectations.expect(after.pixelColor(after.width() / 2, after.height() / 2).alpha() == 255,
+                            "the blank-state cover is fully opaque");
+        expectations.expect(
+            after != beforeCover.toImage(),
+            "the blank-state cover does not retain the previous composition pixels");
     }
 
     controller.beginShutdown();
