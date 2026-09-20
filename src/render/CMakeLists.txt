@@ -701,6 +701,10 @@ if(BLOOM_RENDER_ENABLE_VULKAN AND DEFINED BLOOM_DEPENDENCY_MODE)
             "building the CPU-unavailable GPU device stub.")
     endif()
 endif()
+# Exported so sibling directories (e.g. src/color) can register GPU-native test targets only when
+# the real Vulkan backend is compiled; a CPU-stub build must not link Vulkan-only test helpers.
+set(BLOOM_RENDER_VULKAN_AVAILABLE "${BLOOM_RENDER_VULKAN_AVAILABLE}" CACHE INTERNAL
+    "bloom_render compiled the real Vulkan backend")
 
 # VMA's implementation is isolated in its own object target, exactly like the vendored stb_truetype
 # target above: third-party code gets its own warning profile and never inherits Bloom's
@@ -866,11 +870,14 @@ bloom_enable_strict_floating_point(bloom_render)
 
 if(BUILD_TESTING)
     # Test-only fault setters, deliberately NOT part of bloom_render: production targets never link
-    # this library, so shipping builds cannot expose fault behavior.
-    add_library(bloom_render_ocio_test_faults STATIC vulkan/gpu_ocio_program_fault_test.cpp)
-    target_compile_features(bloom_render_ocio_test_faults PUBLIC cxx_std_20)
-    target_include_directories(bloom_render_ocio_test_faults PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/vulkan")
-    bloom_enable_warnings(bloom_render_ocio_test_faults)
+    # this library, so shipping builds cannot expose fault behavior. The setters call into the
+    # Vulkan resource translation unit, so they exist only when the real backend is compiled.
+    if(BLOOM_RENDER_VULKAN_AVAILABLE)
+        add_library(bloom_render_ocio_test_faults STATIC vulkan/gpu_ocio_program_fault_test.cpp)
+        target_compile_features(bloom_render_ocio_test_faults PUBLIC cxx_std_20)
+        target_include_directories(bloom_render_ocio_test_faults PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/vulkan")
+        bloom_enable_warnings(bloom_render_ocio_test_faults)
+    endif()
     add_subdirectory(tests)
 endif()
