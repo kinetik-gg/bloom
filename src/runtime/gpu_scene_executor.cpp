@@ -122,7 +122,9 @@ GpuSceneExecutorCounters GpuSceneExecutor::counters() const noexcept {
     }
     auto snapshot = impl_->counters;
     snapshot.currentLiveImageBytes = impl_->liveBytes;
-    snapshot.peakLiveImageBytes = impl_->peakLiveBytes;
+    // clearJob() resets the per-job member peak on failure, so preserve the accumulated peak: a
+    // reported zero here means no peak was ever observed, never that a failure erased the evidence.
+    snapshot.peakLiveImageBytes = std::max(snapshot.peakLiveImageBytes, impl_->peakLiveBytes);
     return snapshot;
 }
 
@@ -340,7 +342,13 @@ GpuSceneExecutorPollResult GpuSceneExecutor::poll() {
     }
     const auto started = impl.startStep(impl.steps[impl.cursor]);
     if (started.code != GpuSceneExecutorDiagnosticCode::None) {
-        impl.fail(started.code, started.message, false);
+        // Bounded accounting context: the step's own refusal is distinguished from the executor's
+        // per-request allowance and its remaining headroom without a second probe.
+        impl.fail(started.code,
+                  started.message + " [requestBudget=" + std::to_string(impl.requestBudget) +
+                      ", liveBytes=" + std::to_string(impl.liveBytes) +
+                      ", remaining=" + std::to_string(impl.remainingBudget()) + ']',
+                  false);
         return GpuSceneExecutorPollResult::Failure;
     }
     return GpuSceneExecutorPollResult::Pending;

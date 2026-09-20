@@ -472,8 +472,15 @@ GpuCompositeDiagnostic GpuComposite::beginSourceOver(const GpuSourceOverParamete
     const std::uint64_t allowedImage =
         byteBudget < impl.budgets.maxImageBytes ? byteBudget : impl.budgets.maxImageBytes;
     if (imageBytes > allowedImage || sizeof(std::uint32_t) > impl.budgets.maxMetadataBytes) {
-        return compositeDiagnostic(GpuCompositeDiagnosticCode::OverBudget,
-                                   "the source-over image or metadata exceeds the byte budget");
+        return compositeDiagnostic(
+            GpuCompositeDiagnosticCode::OverBudget,
+            "the source-over image or metadata exceeds the byte budget [requiredImageBytes=" +
+                std::to_string(imageBytes) + ", byteBudget=" + std::to_string(byteBudget) +
+                ", producerMaxImageBytes=" + std::to_string(impl.budgets.maxImageBytes) +
+                ", allowedImageBytes=" + std::to_string(allowedImage) +
+                ", destination=" + std::to_string(destWidth) + "x" + std::to_string(destHeight) +
+                ", requiredMetadataBytes=" + std::to_string(sizeof(std::uint32_t)) +
+                ", maxMetadataBytes=" + std::to_string(impl.budgets.maxMetadataBytes) + ']');
     }
     if (impl.control->generation != impl.expectedGeneration) {
         impl.deviceLost = true;
@@ -543,8 +550,13 @@ GpuCompositeDiagnostic GpuComposite::beginSourceOver(const GpuSourceOverParamete
         }
     }
     if (retainedActual > byteBudget) {
-        return compositeDiagnostic(GpuCompositeDiagnosticCode::OverBudget,
-                                   "the actual source-over allocations exceed the byte budget");
+        return compositeDiagnostic(
+            GpuCompositeDiagnosticCode::OverBudget,
+            "the actual source-over allocations exceed the byte budget [actualRetainedBytes=" +
+                std::to_string(retainedActual) + ", byteBudget=" + std::to_string(byteBudget) +
+                ", producerMaxImageBytes=" + std::to_string(impl.budgets.maxImageBytes) +
+                ", destination=" + std::to_string(destWidth) + "x" + std::to_string(destHeight) +
+                ']');
     }
     impl.lastJobBytes = retainedActual;
 
