@@ -66,7 +66,6 @@ using bloom::runtime::GpuOcioProgramPreparer;
 using bloom::runtime::GpuOcioTransformKind;
 using bloom::runtime::GpuOcioTransformSpec;
 
-constexpr std::uint64_t kBudget = std::uint64_t{1} << 32;
 constexpr int kSkipExit = 77;
 
 class Expectations final {
@@ -92,6 +91,13 @@ class Expectations final {
     }
     return false;
 }
+
+// The helpers below prepare real OCIO programs from BLOOM_GPUSHADER_TOOLS_DIR; they are compiled
+// only when the shader tools are packaged. main()'s device-free wrapper probe still runs, and the
+// native arm reports an honest SKIP (exit 77) without the tools.
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+
+constexpr std::uint64_t kBudget = std::uint64_t{1} << 32;
 
 [[nodiscard]] std::shared_ptr<const GpuImage> uploadImage(GpuImageUpload& uploader,
                                                           const std::uint32_t width,
@@ -185,6 +191,10 @@ struct Fixtures final {
 
 void testCst(Expectations& expectations, GpuDevice& device, GpuOcioProgramPreparer& preparer,
              const Fixtures& fixtures) {
+    if (!fixtures.aces.has_value()) {
+        expectations.expect(false, "the ACES config resolves for the CST arm");
+        return;
+    }
     GpuOcioTransformSpec spec;
     spec.kind = GpuOcioTransformKind::Cst;
     spec.fromId = "ACES2065-1";
@@ -332,6 +342,10 @@ void testCst(Expectations& expectations, GpuDevice& device, GpuOcioProgramPrepar
 
 void testDisplay(Expectations& expectations, GpuDevice& device, GpuOcioProgramPreparer& preparer,
                  const Fixtures& fixtures) {
+    if (!fixtures.neutral.has_value()) {
+        expectations.expect(false, "the Bloom Neutral config resolves for the display arm");
+        return;
+    }
     GpuOcioTransformSpec spec;
     spec.kind = GpuOcioTransformKind::Display;
     spec.display = std::string(fixtures.neutral->displayName());
@@ -434,6 +448,10 @@ void testDisplay(Expectations& expectations, GpuDevice& device, GpuOcioProgramPr
 
 void testViewAdjustInvalidation(Expectations& expectations, GpuOcioProgramPreparer& preparer,
                                 const Fixtures& fixtures) {
+    if (!fixtures.aces.has_value() || !fixtures.neutral.has_value()) {
+        expectations.expect(false, "the fixture configs resolve for the view-adjust arm");
+        return;
+    }
     GpuOcioTransformSpec spec;
     spec.kind = GpuOcioTransformKind::ExposureContrast;
     spec.fromId = "ACEScg";
@@ -467,6 +485,10 @@ void testViewAdjustInvalidation(Expectations& expectations, GpuOcioProgramPrepar
 
 void testUploadFaultRetirement(Expectations& expectations, GpuDevice& device,
                                GpuOcioProgramPreparer& preparer, const Fixtures& fixtures) {
+    if (!fixtures.aces.has_value() || !fixtures.neutral.has_value()) {
+        expectations.expect(false, "the fixture configs resolve for the fault arm");
+        return;
+    }
     GpuOcioTransformSpec spec;
     spec.kind = GpuOcioTransformKind::Display;
     spec.display = "Rec.2100-PQ - Display";
@@ -516,10 +538,11 @@ void testUploadFaultRetirement(Expectations& expectations, GpuDevice& device,
     }
 }
 
+#endif // BLOOM_GPUSHADER_TOOLS_DIR
+
 } // namespace
 
 int main(int argc, char** argv) {
-    const bool requireDevice = parseRequireDevice(argc, argv);
     Expectations expectations;
     // Production-wrapper contract: the capacity-safe 2D flattening and the semantic version that
     // invalidates an older artifact. This needs no device or compiler and always runs.
@@ -537,10 +560,20 @@ int main(int argc, char** argv) {
                                 std::string::npos,
                             "the production OCIO wrapper flattens a capacity-safe 2D dispatch");
     }
+    // The always-run wrapper probe above must never be masked by the no-tools skip.
+    if (expectations.failures() != 0) {
+        std::cerr << expectations.failures() << " production OCIO wrapper expectation(s) failed\n";
+        return 1;
+    }
 #ifndef BLOOM_GPUSHADER_TOOLS_DIR
+    if (parseRequireDevice(argc, argv)) {
+        std::cerr << "FAIL: --require-device requested but BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
+        return 1;
+    }
     std::cout << "SKIP: BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
     return kSkipExit;
 #else
+    const bool requireDevice = parseRequireDevice(argc, argv);
     Fixtures fixtures;
     fixtures.options = compileOptions();
     auto neutralResolution = bloom::color::resolveBloomNeutralV1BuiltIn(

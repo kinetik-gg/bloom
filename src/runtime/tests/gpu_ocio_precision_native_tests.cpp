@@ -61,10 +61,25 @@ using bloom::runtime::GpuOcioProgramPreparer;
 using bloom::runtime::GpuOcioTransformKind;
 using bloom::runtime::GpuOcioTransformSpec;
 
-constexpr std::uint64_t kBudget = std::uint64_t{1} << 32;
 constexpr int kSkipExit = 77;
+
+[[nodiscard]] bool parseRequireDevice(const int argc, char** argv) {
+    for (int index = 1; index < argc; ++index) {
+        if (std::string_view(argv[index]) == "--require-device") {
+            return true;
+        }
+    }
+    return false;
+}
+
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+constexpr std::uint64_t kBudget = std::uint64_t{1} << 32;
 constexpr std::uint32_t kWidth = 64;
 constexpr std::uint32_t kHeight = 16;
+
+// Every helper and test below drives real OCIO shader preparation from
+// BLOOM_GPUSHADER_TOOLS_DIR, so this whole section is compiled only when the shader tools are
+// packaged. Without them main() reports an honest SKIP (exit 77); there is no silent pass.
 
 class Expectations final {
   public:
@@ -80,15 +95,6 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
-
-[[nodiscard]] bool parseRequireDevice(const int argc, char** argv) {
-    for (int index = 1; index < argc; ++index) {
-        if (std::string_view(argv[index]) == "--require-device") {
-            return true;
-        }
-    }
-    return false;
-}
 
 // RGB within the strict 2e-6 abs-or-rel gate; alpha byte-exact.
 [[nodiscard]] std::size_t compare(Expectations& expectations, const std::vector<Rgba32f>& actual,
@@ -205,6 +211,9 @@ class Expectations final {
 
     std::vector<Rgba32f> pixels;
     pixels.reserve(static_cast<std::size_t>(kWidth) * kHeight);
+    // Fixed seed is deliberate: this is a deterministic parity fixture, not a security context, and
+    // the CPU oracle must be reproducible.
+    // NOLINTNEXTLINE(bugprone-random-generator-seed)
     std::mt19937 generator(0xB1005EEDU);
     std::uniform_real_distribution<float> rgb(-2.0F, 12.0F);
     std::uniform_real_distribution<float> alpha(0.0F, 1.0F);
@@ -344,15 +353,21 @@ void runPrecision(Expectations& expectations, GpuDevice& device,
                         std::string(label) + ": a warm run reuses the retained native program");
 }
 
+#endif // BLOOM_GPUSHADER_TOOLS_DIR
+
 } // namespace
 
 int main(int argc, char** argv) {
-    const bool requireDevice = parseRequireDevice(argc, argv);
-    Expectations expectations;
 #ifndef BLOOM_GPUSHADER_TOOLS_DIR
+    if (parseRequireDevice(argc, argv)) {
+        std::cerr << "FAIL: --require-device requested but BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
+        return 1;
+    }
     std::cout << "SKIP: BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
     return kSkipExit;
 #else
+    const bool requireDevice = parseRequireDevice(argc, argv);
+    Expectations expectations;
     auto resolution = bloom::color::resolveBloomNeutralV1BuiltIn(
         bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kBloomNeutralV1ConfigUri,
         bloom::color::kBloomNeutralV1ConfigDigest);

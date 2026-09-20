@@ -103,8 +103,23 @@ using bloom::runtime::PreparedGpuOcioCommand;
 using bloom::runtime::PreparedGpuScene;
 using bloom::runtime::ProcessFrameIdentity;
 
-constexpr std::uint64_t kBudget = std::uint64_t{1} << 32;
 constexpr int kSkipExit = 77;
+
+[[nodiscard]] bool parseRequireDevice(const int argc, char** argv) {
+    for (int index = 1; index < argc; ++index) {
+        if (std::string_view(argv[index]) == "--require-device") {
+            return true;
+        }
+    }
+    return false;
+}
+
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+constexpr std::uint64_t kBudget = std::uint64_t{1} << 32;
+
+// Every helper and test below drives real OCIO shader preparation from
+// BLOOM_GPUSHADER_TOOLS_DIR, so this whole section is compiled only when the shader tools are
+// packaged. Without them main() reports an honest SKIP (exit 77); there is no silent pass.
 
 class Expectations final {
   public:
@@ -120,15 +135,6 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
-
-[[nodiscard]] bool parseRequireDevice(const int argc, char** argv) {
-    for (int index = 1; index < argc; ++index) {
-        if (std::string_view(argv[index]) == "--require-device") {
-            return true;
-        }
-    }
-    return false;
-}
 
 [[nodiscard]] ImageWindow window(const std::int64_t x, const std::int64_t y,
                                  const std::uint64_t width, const std::uint64_t height) {
@@ -454,15 +460,21 @@ void testScene(Expectations& expectations, GpuDevice& device,
     }
 }
 
+#endif // BLOOM_GPUSHADER_TOOLS_DIR
+
 } // namespace
 
 int main(int argc, char** argv) {
-    const bool requireDevice = parseRequireDevice(argc, argv);
-    Expectations expectations;
 #ifndef BLOOM_GPUSHADER_TOOLS_DIR
+    if (parseRequireDevice(argc, argv)) {
+        std::cerr << "FAIL: --require-device requested but BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
+        return 1;
+    }
     std::cout << "SKIP: BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
     return kSkipExit;
 #else
+    const bool requireDevice = parseRequireDevice(argc, argv);
+    Expectations expectations;
     const auto revision = bloom::color::ocioBuiltInContentRevision(
         bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
     if (!revision.has_value()) {

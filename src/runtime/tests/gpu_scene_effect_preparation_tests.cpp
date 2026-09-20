@@ -79,6 +79,7 @@ effectPlan(const std::vector<CompiledOperation>& leading, const ImageEffectKerne
         {ParameterId::fromRaw(idBase + 3), 6.0}};
 }
 
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
 [[nodiscard]] CompiledOperation textLeaf(const std::uint64_t idBase) {
     return CompiledText{
         NodeId::fromRaw(idBase),
@@ -91,6 +92,7 @@ effectPlan(const std::vector<CompiledOperation>& leading, const ImageEffectKerne
                                            {ParameterId::fromRaw(idBase + 5), 1.0},
                                            {ParameterId::fromRaw(idBase + 6), 0.0}}};
 }
+#endif
 
 [[nodiscard]] const GpuSceneOcioEffectCommand*
 findOcioCommand(const bloom::runtime::PreparedGpuScene& scene) {
@@ -170,6 +172,7 @@ void testFailClosed(Expectations& expectations, const std::string& from, const s
     }
 }
 
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
 [[nodiscard]] std::size_t countOcioCommands(const bloom::runtime::PreparedGpuScene& scene) {
     std::size_t count = 0;
     for (const auto& command : scene.commands()) {
@@ -177,6 +180,7 @@ void testFailClosed(Expectations& expectations, const std::string& from, const s
     }
     return count;
 }
+#endif
 
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
 [[nodiscard]] GpuSceneOcioContext ocioContext() {
@@ -303,31 +307,36 @@ void testRealFileTransform(Expectations& expectations, const std::string& workin
 } // namespace
 
 int main() {
-    Expectations expectations;
-    testIdentityAndRefusals(expectations);
+    try {
+        Expectations expectations;
+        testIdentityAndRefusals(expectations);
 
-    const auto config = bloom::runtime::detail::resolveInputColorConfig(
-        bloom::runtime::EvaluationColorIntent::LinearRec709Scene);
-    if (!config.has_value()) {
-        std::cerr << "SKIP: the Bloom Neutral OCIO config is unavailable\n";
-        return 77;
-    }
-    const std::string from{config->processColorSpaceId()};
-    const std::string to{config->sRgbTextureColorSpaceId()};
-    testFailClosed(expectations, from, to);
+        const auto config = bloom::runtime::detail::resolveInputColorConfig(
+            bloom::runtime::EvaluationColorIntent::LinearRec709Scene);
+        if (!config.has_value()) {
+            std::cerr << "SKIP: the Bloom Neutral OCIO config is unavailable\n";
+            return 77;
+        }
+        const std::string from{config->processColorSpaceId()};
+        const std::string to{config->sRgbTextureColorSpaceId()};
+        testFailClosed(expectations, from, to);
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
-    testRealCst(expectations, from, to);
+        testRealCst(expectations, from, to);
 #if defined(__linux__)
-    testRealFileTransform(expectations, from, to);
+        testRealFileTransform(expectations, from, to);
 #endif
 #else
-    std::cout << "SKIP: BLOOM_GPUSHADER_TOOLS_DIR is not set (real arms skipped)\n";
+        std::cout << "SKIP: BLOOM_GPUSHADER_TOOLS_DIR is not set (real arms skipped)\n";
 #endif
 
-    if (!expectations.ok()) {
-        std::cerr << "image-effect scene preparation expectations failed\n";
+        if (!expectations.ok()) {
+            std::cerr << "image-effect scene preparation expectations failed\n";
+            return 1;
+        }
+        std::cout << "PASS: image-effect GPU scene preparation\n";
+        return 0;
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
         return 1;
     }
-    std::cout << "PASS: image-effect GPU scene preparation\n";
-    return 0;
 }

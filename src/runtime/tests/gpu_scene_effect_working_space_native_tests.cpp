@@ -15,7 +15,13 @@
 // Requires the Vulkan backend and the pinned tools; skips cleanly otherwise.
 
 #include "gpu_media_executor_test_support.hpp"
+
+// The shared scene-preparation fixtures are only needed by the tools-present native arm; leaving
+// the header out of the tools-absent build keeps its conditionally-used helpers from being compiled
+// into an otherwise device-free translation unit.
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
 #include "gpu_scene_preparation_test_support.hpp"
+#endif
 
 #include <ImathBox.h>
 #include <ImfChannelList.h>
@@ -52,6 +58,10 @@
 namespace {
 
 namespace document = bloom::document;
+
+using bloom::runtime::media_executor_test::parseOptions;
+
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
 
 using bloom::core::BlendMode;
 using bloom::core::Color4d;
@@ -94,7 +104,6 @@ using bloom::runtime::media_executor_test::descriptorMatchesScene;
 using bloom::runtime::media_executor_test::kCacheBudget;
 using bloom::runtime::media_executor_test::kReadbackBudget;
 using bloom::runtime::media_executor_test::kSceneBudget;
-using bloom::runtime::media_executor_test::parseOptions;
 using bloom::runtime::media_executor_test::pixelsClose;
 using bloom::runtime::media_executor_test::runScene;
 
@@ -446,55 +455,68 @@ void testMixedAces(Expectations& expectations, GpuDevice& device,
     }
 }
 
+#endif // BLOOM_GPUSHADER_TOOLS_DIR
+
 } // namespace
 
 int main(int argc, char** argv) {
-    const auto options = parseOptions(argc, argv);
-    if (!options.valid) {
-        std::cerr << "invalid arguments\n";
-        return 2;
-    }
-    Expectations expectations;
-    const auto fixture = makeAcesFixture();
-    const auto revision = bloom::color::ocioBuiltInContentRevision(
-        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
-    if (!revision.has_value()) {
-        std::cout << "SKIP: the ACES built-in is unavailable\n";
-        return 77;
-    }
-    CpuCompositionEvaluator evaluator;
-    evaluator.setAssetBaseDirectory(fixture.directory);
+    try {
+        const auto options = parseOptions(argc, argv);
+        if (!options.valid) {
+            std::cerr << "invalid arguments\n";
+            return 2;
+        }
+        const auto revision = bloom::color::ocioBuiltInContentRevision(
+            bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
+        if (!revision.has_value()) {
+            std::cout << "SKIP: the ACES built-in is unavailable\n";
+            return 77;
+        }
 
 #ifndef BLOOM_GPUSHADER_TOOLS_DIR
-    std::cout << "SKIP: BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
-    return 77;
-#else
-    GpuOcioCompileOptions compileOptions;
-    compileOptions.glslangValidatorPath =
-        std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
-    compileOptions.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
-    GpuSceneOcioContext ocioContext;
-    ocioContext.preparer = std::make_shared<GpuOcioProgramPreparer>();
-    ocioContext.compileOptions = compileOptions;
-
-    GpuDeviceCreationOptions createOptions;
-    createOptions.loader_path = options.loader_path;
-    auto device = GpuDevice::create(createOptions);
-    if (!device) {
         if (options.require_device) {
-            std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message << '\n';
+            std::cerr << "FAIL: --require-device requested but BLOOM_GPUSHADER_TOOLS_DIR is not "
+                         "set\n";
             return 1;
         }
-        std::cout << "SKIP: no compatible Vulkan device available: " << device.diagnostic.message
-                  << '\n';
+        std::cout << "SKIP: BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
         return 77;
-    }
-    testMixedAces(expectations, *device.device, evaluator, fixture, ocioContext);
-    if (!expectations.ok()) {
-        std::cerr << "working-space expectation(s) failed\n";
+#else
+        Expectations expectations;
+        const auto fixture = makeAcesFixture();
+        CpuCompositionEvaluator evaluator;
+        evaluator.setAssetBaseDirectory(fixture.directory);
+        GpuOcioCompileOptions compileOptions;
+        compileOptions.glslangValidatorPath =
+            std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
+        compileOptions.spirvValPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/spirv-val";
+        GpuSceneOcioContext ocioContext;
+        ocioContext.preparer = std::make_shared<GpuOcioProgramPreparer>();
+        ocioContext.compileOptions = compileOptions;
+
+        GpuDeviceCreationOptions createOptions;
+        createOptions.loader_path = options.loader_path;
+        auto device = GpuDevice::create(createOptions);
+        if (!device) {
+            if (options.require_device) {
+                std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message
+                          << '\n';
+                return 1;
+            }
+            std::cout << "SKIP: no compatible Vulkan device available: "
+                      << device.diagnostic.message << '\n';
+            return 77;
+        }
+        testMixedAces(expectations, *device.device, evaluator, fixture, ocioContext);
+        if (!expectations.ok()) {
+            std::cerr << "working-space expectation(s) failed\n";
+            return 1;
+        }
+        std::cout << "PASS: mixed ACES working-space scene vs CPU oracle\n";
+        return 0;
+#endif
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
         return 1;
     }
-    std::cout << "PASS: mixed ACES working-space scene vs CPU oracle\n";
-    return 0;
-#endif
 }

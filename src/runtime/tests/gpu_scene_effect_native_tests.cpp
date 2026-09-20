@@ -86,6 +86,11 @@ using bloom::runtime::GpuSceneMediaContext;
 using bloom::runtime::GpuSceneOcioContext;
 using bloom::runtime::OperationIndex;
 
+// The whole fixture/runner section prepares real OCIO programs from BLOOM_GPUSHADER_TOOLS_DIR, so
+// it is compiled only when the shader tools are packaged. Without them main() reports an honest
+// SKIP (exit 77); there is no silent pass.
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+
 constexpr std::uint64_t kRevision = 7;
 constexpr auto kProject = bloom::document::ProjectId::fromRaw(1);
 constexpr std::uint64_t kSceneBudget = 64ULL * 1024ULL * 1024ULL;
@@ -227,12 +232,6 @@ runScene(GpuSceneExecutor& executor,
     return true;
 }
 
-#ifndef BLOOM_GPUSHADER_TOOLS_DIR
-int runNoTools() {
-    std::cout << "SKIP: BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
-    return 77;
-}
-#else
 [[nodiscard]] GpuSceneOcioContext ocioContext() {
     GpuOcioCompileOptions options;
     options.glslangValidatorPath = std::string(BLOOM_GPUSHADER_TOOLS_DIR) + "/glslangValidator";
@@ -400,36 +399,39 @@ void runFileTransform(Expectations& expectations, GpuDevice& device, GpuSceneCac
     static_cast<void>(process);
 }
 #endif
-#endif
 
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
-#ifndef BLOOM_GPUSHADER_TOOLS_DIR
-    static_cast<void>(expectations);
-    static_cast<void>(device);
-    static_cast<void>(cache);
-    static_cast<void>(from);
-    static_cast<void>(to);
-#else
     runCst(expectations, device, cache, from, to);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif
-#endif
 }
+#endif // BLOOM_GPUSHADER_TOOLS_DIR
 
 } // namespace
 
 int main(int argc, char** argv) {
     try {
+#ifndef BLOOM_GPUSHADER_TOOLS_DIR
         const Options options = parseOptions(argc, argv);
         if (!options.valid) {
             std::cerr << "invalid arguments\n";
             return 2;
         }
-#ifndef BLOOM_GPUSHADER_TOOLS_DIR
-        return runNoTools();
+        if (options.require_device) {
+            std::cerr << "FAIL: --require-device requested but BLOOM_GPUSHADER_TOOLS_DIR is not "
+                         "set\n";
+            return 1;
+        }
+        std::cout << "SKIP: BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
+        return 77;
 #else
+        const Options options = parseOptions(argc, argv);
+        if (!options.valid) {
+            std::cerr << "invalid arguments\n";
+            return 2;
+        }
         const auto config = bloom::runtime::detail::resolveInputColorConfig(
             bloom::runtime::EvaluationColorIntent::LinearRec709Scene);
         if (!config.has_value()) {

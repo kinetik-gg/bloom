@@ -37,6 +37,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -124,12 +125,27 @@ using bloom::runtime::OperationIndex;
 using bloom::runtime::PreparedGpuOcioCommand;
 using bloom::runtime::PreparedGpuScene;
 
-constexpr std::uint64_t kBudget = std::uint64_t{1} << 32;
 constexpr int kSkipExit = 77;
+
+[[nodiscard]] bool parseRequireDevice(const int argc, char** argv) {
+    for (int index = 1; index < argc; ++index) {
+        if (std::string_view(argv[index]) == "--require-device") {
+            return true;
+        }
+    }
+    return false;
+}
+
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+constexpr std::uint64_t kBudget = std::uint64_t{1} << 32;
 constexpr std::uint64_t kRevision = 7;
 constexpr auto kProject = bloom::document::ProjectId::fromRaw(1);
 constexpr std::uint32_t kWidth = 4;
 constexpr std::uint32_t kHeight = 3;
+
+// Every helper and test below drives real OCIO shader preparation from
+// BLOOM_GPUSHADER_TOOLS_DIR, so this whole section is compiled only when the shader tools are
+// packaged. Without them main() reports an honest SKIP (exit 77); there is no silent pass.
 
 class Expectations final {
   public:
@@ -145,15 +161,6 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
-
-[[nodiscard]] bool parseRequireDevice(const int argc, char** argv) {
-    for (int index = 1; index < argc; ++index) {
-        if (std::string_view(argv[index]) == "--require-device") {
-            return true;
-        }
-    }
-    return false;
-}
 
 [[nodiscard]] ImageWindow window(const std::int64_t x, const std::int64_t y,
                                  const std::uint64_t width, const std::uint64_t height) {
@@ -227,6 +234,9 @@ class Expectations final {
 [[nodiscard]] bloom::document::CompositionFormat format(const std::uint32_t width,
                                                         const std::uint32_t height) {
     const auto value = bloom::document::CompositionFormat::create(width, height);
+    if (!value.has_value()) {
+        throw std::logic_error("invalid nested-OCIO fixture composition format");
+    }
     return *value;
 }
 
@@ -590,48 +600,61 @@ void testSpliceAndNative(Expectations& expectations, GpuDevice* device,
     }
 }
 
+#endif // BLOOM_GPUSHADER_TOOLS_DIR
+
 } // namespace
 
 int main(int argc, char** argv) {
-    const bool requireDevice = parseRequireDevice(argc, argv);
-    Expectations expectations;
+    try {
 #ifndef BLOOM_GPUSHADER_TOOLS_DIR
-    std::cout << "SKIP: BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
-    return kSkipExit;
-#else
-    const auto revision = bloom::color::ocioBuiltInContentRevision(
-        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
-    if (!revision.has_value()) {
-        std::cout << "SKIP: the ACES built-in is unavailable\n";
-        return kSkipExit;
-    }
-    auto acesResolution =
-        bloom::color::resolveOcioBuiltIn(bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
-                                         bloom::color::kAcesCgV1ConfigUri, *revision, "ACEScg");
-    auto aces = std::move(acesResolution).takeResolved();
-    if (!aces.has_value()) {
-        std::cerr << "FAILED: the ACES built-in does not resolve\n";
-        return 1;
-    }
-    GpuDeviceCreationOptions options;
-    auto device = GpuDevice::create(options);
-    // The splice proof is device-free; run it first and fail honestly on its own assertions.
-    testSpliceAndNative(expectations, device ? device.device.get() : nullptr, *aces,
-                        compileOptions());
-    if (expectations.failures() != 0) {
-        std::cerr << expectations.failures() << " nested OCIO expectation(s) failed\n";
-        return 1;
-    }
-    if (!device) {
-        if (requireDevice) {
-            std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message << '\n';
+        if (parseRequireDevice(argc, argv)) {
+            std::cerr << "FAIL: --require-device requested but BLOOM_GPUSHADER_TOOLS_DIR is not "
+                         "set\n";
             return 1;
         }
-        std::cout << "SKIP: no compatible Vulkan device available: " << device.diagnostic.message
-                  << '\n';
+        std::cout << "SKIP: BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
         return kSkipExit;
-    }
-    std::cout << "PASS: nested OCIO splice + native parent/child execution\n";
-    return 0;
+#else
+        const bool requireDevice = parseRequireDevice(argc, argv);
+        Expectations expectations;
+        const auto revision = bloom::color::ocioBuiltInContentRevision(
+            bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
+        if (!revision.has_value()) {
+            std::cout << "SKIP: the ACES built-in is unavailable\n";
+            return kSkipExit;
+        }
+        auto acesResolution =
+            bloom::color::resolveOcioBuiltIn(bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
+                                             bloom::color::kAcesCgV1ConfigUri, *revision, "ACEScg");
+        auto aces = std::move(acesResolution).takeResolved();
+        if (!aces.has_value()) {
+            std::cerr << "FAILED: the ACES built-in does not resolve\n";
+            return 1;
+        }
+        GpuDeviceCreationOptions options;
+        auto device = GpuDevice::create(options);
+        // The splice proof is device-free; run it first and fail honestly on its own assertions.
+        testSpliceAndNative(expectations, device ? device.device.get() : nullptr, *aces,
+                            compileOptions());
+        if (expectations.failures() != 0) {
+            std::cerr << expectations.failures() << " nested OCIO expectation(s) failed\n";
+            return 1;
+        }
+        if (!device) {
+            if (requireDevice) {
+                std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message
+                          << '\n';
+                return 1;
+            }
+            std::cout << "SKIP: no compatible Vulkan device available: "
+                      << device.diagnostic.message << '\n';
+            return kSkipExit;
+        }
+        std::cout << "PASS: nested OCIO splice + native parent/child execution\n";
+        return 0;
 #endif
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
+        return 1;
+    }
 }

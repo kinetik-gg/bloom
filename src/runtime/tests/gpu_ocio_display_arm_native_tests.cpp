@@ -69,8 +69,23 @@ using bloom::runtime::PreparedGpuOcioCommand;
 using bloom::runtime::qualifyGpuOcioDisplay;
 using bloom::runtime::ViewAdjust;
 
-constexpr std::uint64_t kBudget = std::uint64_t{1} << 32;
 constexpr int kSkipExit = 77;
+
+[[nodiscard]] bool parseRequireDevice(const int argc, char** argv) {
+    for (int index = 1; index < argc; ++index) {
+        if (std::string_view(argv[index]) == "--require-device") {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Every helper and test below drives real OCIO shader preparation from
+// BLOOM_GPUSHADER_TOOLS_DIR, so this whole section is compiled only when the shader tools are
+// packaged. Without them main() reports an honest SKIP (exit 77); there is no silent pass.
+#ifdef BLOOM_GPUSHADER_TOOLS_DIR
+
+constexpr std::uint64_t kBudget = std::uint64_t{1} << 32;
 
 class Expectations final {
   public:
@@ -86,15 +101,6 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
-
-[[nodiscard]] bool parseRequireDevice(const int argc, char** argv) {
-    for (int index = 1; index < argc; ++index) {
-        if (std::string_view(argv[index]) == "--require-device") {
-            return true;
-        }
-    }
-    return false;
-}
 
 [[nodiscard]] GpuOcioCompileOptions compileOptions() {
     GpuOcioCompileOptions options;
@@ -528,81 +534,95 @@ void testLargeGeometry(Expectations& expectations, GpuDevice& device,
                         "the >4K route reads back no full frame");
 }
 
+#endif // BLOOM_GPUSHADER_TOOLS_DIR
+
 } // namespace
 
 int main(int argc, char** argv) {
-    const bool requireDevice = parseRequireDevice(argc, argv);
-    Expectations expectations;
+    try {
 #ifndef BLOOM_GPUSHADER_TOOLS_DIR
-    std::cout << "SKIP: BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
-    return kSkipExit;
-#else
-    const auto revision = bloom::color::ocioBuiltInContentRevision(
-        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kBloomNeutralV1ConfigUri);
-    if (!revision.has_value()) {
-        std::cout << "SKIP: the Bloom Neutral built-in is unavailable\n";
-        return kSkipExit;
-    }
-    auto resolution = bloom::color::resolveOcioBuiltIn(
-        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kBloomNeutralV1ConfigUri,
-        *revision, std::string{});
-    auto neutral = std::move(resolution).takeResolved();
-    if (!neutral.has_value()) {
-        std::cerr << "FAILED: the Bloom Neutral built-in does not resolve\n";
-        return 1;
-    }
-    auto device = GpuDevice::create(bloom::render::GpuDeviceCreationOptions{});
-    if (!device) {
-        if (requireDevice) {
-            std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message << '\n';
+        if (parseRequireDevice(argc, argv)) {
+            std::cerr << "FAIL: --require-device requested but BLOOM_GPUSHADER_TOOLS_DIR is not "
+                         "set\n";
             return 1;
         }
-        std::cout << "SKIP: no compatible Vulkan device available: " << device.diagnostic.message
-                  << '\n';
+        std::cout << "SKIP: BLOOM_GPUSHADER_TOOLS_DIR is not set\n";
         return kSkipExit;
-    }
-    expectations.expect(device.device->state() == GpuDeviceState::Ready, "the device is Ready");
-    GpuOcioProgramPreparer preparer;
-    // Default display/view of the Bloom Neutral config: the ordinary production default now takes
-    // the SAME general display arm (with no pixel-interval/4K gate). The >4K case below proves the
-    // retired ceiling specifically.
-    testDisplayPair(expectations, *device.device, preparer, *neutral,
-                    std::string(neutral->displayName()), std::string(neutral->viewName()),
-                    "default", false);
-    // The baseline root: two real ACES 1.3 CG display/view pairs, each across the full
-    // six-adjustment matrix, against the unchanged CPU oracle.
-    const auto acesRevision = bloom::color::ocioBuiltInContentRevision(
-        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
-    std::size_t ranAcesViews = 0;
-    if (acesRevision.has_value()) {
-        auto acesResolution = bloom::color::resolveOcioBuiltIn(
-            bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri,
-            *acesRevision, std::string{});
-        auto aces = std::move(acesResolution).takeResolved();
-        if (aces.has_value()) {
-            for (const auto& candidate : aces->displays()) {
-                auto cpuHandle = bloom::color::buildCpuDisplayProcessorForView(
-                    *aces, candidate.display, candidate.view);
-                if (cpuHandle.handle() == nullptr) {
-                    continue;
-                }
-                testDisplayPair(expectations, *device.device, preparer, *aces, candidate.display,
-                                candidate.view, "aces-view", true);
-                ++ranAcesViews;
-                if (ranAcesViews >= 2) {
-                    break;
+#else
+        const bool requireDevice = parseRequireDevice(argc, argv);
+        Expectations expectations;
+        const auto revision = bloom::color::ocioBuiltInContentRevision(
+            bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
+            bloom::color::kBloomNeutralV1ConfigUri);
+        if (!revision.has_value()) {
+            std::cout << "SKIP: the Bloom Neutral built-in is unavailable\n";
+            return kSkipExit;
+        }
+        auto resolution = bloom::color::resolveOcioBuiltIn(
+            bloom::color::OcioConfigLocatorKind::BloomBuiltIn,
+            bloom::color::kBloomNeutralV1ConfigUri, *revision, std::string{});
+        auto neutral = std::move(resolution).takeResolved();
+        if (!neutral.has_value()) {
+            std::cerr << "FAILED: the Bloom Neutral built-in does not resolve\n";
+            return 1;
+        }
+        auto device = GpuDevice::create(bloom::render::GpuDeviceCreationOptions{});
+        if (!device) {
+            if (requireDevice) {
+                std::cerr << "FAIL: required device unavailable: " << device.diagnostic.message
+                          << '\n';
+                return 1;
+            }
+            std::cout << "SKIP: no compatible Vulkan device available: "
+                      << device.diagnostic.message << '\n';
+            return kSkipExit;
+        }
+        expectations.expect(device.device->state() == GpuDeviceState::Ready, "the device is Ready");
+        GpuOcioProgramPreparer preparer;
+        // Default display/view of the Bloom Neutral config: the ordinary production default now
+        // takes the SAME general display arm (with no pixel-interval/4K gate). The >4K case below
+        // proves the retired ceiling specifically.
+        testDisplayPair(expectations, *device.device, preparer, *neutral,
+                        std::string(neutral->displayName()), std::string(neutral->viewName()),
+                        "default", false);
+        // The baseline root: two real ACES 1.3 CG display/view pairs, each across the full
+        // six-adjustment matrix, against the unchanged CPU oracle.
+        const auto acesRevision = bloom::color::ocioBuiltInContentRevision(
+            bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
+        std::size_t ranAcesViews = 0;
+        if (acesRevision.has_value()) {
+            auto acesResolution = bloom::color::resolveOcioBuiltIn(
+                bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri,
+                *acesRevision, std::string{});
+            auto aces = std::move(acesResolution).takeResolved();
+            if (aces.has_value()) {
+                for (const auto& candidate : aces->displays()) {
+                    auto cpuHandle = bloom::color::buildCpuDisplayProcessorForView(
+                        *aces, candidate.display, candidate.view);
+                    if (cpuHandle.handle() == nullptr) {
+                        continue;
+                    }
+                    testDisplayPair(expectations, *device.device, preparer, *aces,
+                                    candidate.display, candidate.view, "aces-view", true);
+                    ++ranAcesViews;
+                    if (ranAcesViews >= 2) {
+                        break;
+                    }
                 }
             }
         }
-    }
-    expectations.expect(ranAcesViews >= 2,
-                        "two ACES display/view pairs exercised the six-adjustment matrix");
-    testLargeGeometry(expectations, *device.device, preparer, *neutral);
-    if (expectations.failures() != 0) {
-        std::cerr << expectations.failures() << " GPU display arm expectation(s) failed\n";
+        expectations.expect(ranAcesViews >= 2,
+                            "two ACES display/view pairs exercised the six-adjustment matrix");
+        testLargeGeometry(expectations, *device.device, preparer, *neutral);
+        if (expectations.failures() != 0) {
+            std::cerr << expectations.failures() << " GPU display arm expectation(s) failed\n";
+            return 1;
+        }
+        std::cout << "PASS: general GPU display arm native acceptance\n";
+        return 0;
+#endif
+    } catch (const std::exception& exception) {
+        std::cerr << "Unexpected test exception: " << exception.what() << '\n';
         return 1;
     }
-    std::cout << "PASS: general GPU display arm native acceptance\n";
-    return 0;
-#endif
 }
