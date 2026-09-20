@@ -69,7 +69,10 @@ GpuOcioProgramJobState GpuOcioProgram::state() const noexcept {
 const GpuOcioProgramDiagnostic& GpuOcioProgram::diagnostic() const noexcept {
     static const GpuOcioProgramDiagnostic unavailable =
         makeDiagnostic(GpuOcioProgramDiagnosticCode::DeviceUnavailable, "no pipeline was created");
-    return impl_ != nullptr ? impl_->jobDiagnostic : unavailable;
+    if (impl_ == nullptr) {
+        return unavailable;
+    }
+    return impl_->jobDiagnostic;
 }
 bool GpuOcioProgram::isBoundTo(GpuDevice& device) const noexcept {
     if (impl_ == nullptr || !impl_->onOwnerThread()) {
@@ -108,7 +111,7 @@ GpuOcioProgramDiagnostic GpuOcioProgram::beginEffect(std::shared_ptr<const GpuIm
     if (impl.jobState != GpuOcioProgramJobState::Idle) {
         impl.clearJob();
     }
-    impl.beginImpl(false, input, uniformBytes, byteBudget);
+    impl.beginImpl(false, std::move(input), uniformBytes, byteBudget);
     return beginDiagnostic(impl.jobDiagnostic);
 }
 
@@ -141,7 +144,7 @@ GpuOcioProgramDiagnostic GpuOcioProgram::beginDisplay(std::shared_ptr<const GpuI
     if (impl.jobState != GpuOcioProgramJobState::Idle) {
         impl.clearJob();
     }
-    impl.beginImpl(true, input, uniformBytes, byteBudget);
+    impl.beginImpl(true, std::move(input), uniformBytes, byteBudget);
     return beginDiagnostic(impl.jobDiagnostic);
 }
 

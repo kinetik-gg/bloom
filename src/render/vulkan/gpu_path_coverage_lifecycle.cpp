@@ -321,7 +321,7 @@ void GpuPathCoverage::releaseImpl() noexcept {
         // Vulkan objects and can be destroyed here.
         if (impl_->residentSlot != kPathCoverageNoResidentSlot) {
             orphanResidentSlot(impl_.get());
-            (void)impl_.release();
+            [[maybe_unused]] const auto* const retained = impl_.release();
         } else {
             impl_.reset();
         }

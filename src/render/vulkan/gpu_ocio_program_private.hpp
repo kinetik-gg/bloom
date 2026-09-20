@@ -132,7 +132,7 @@ struct GpuOcioProgram::Impl final {
         return control != nullptr && control->owner == std::this_thread::get_id();
     }
     void fail(GpuOcioProgramDiagnosticCode code, std::string message);
-    void beginImpl(bool display, const std::shared_ptr<const GpuImage>& input,
+    void beginImpl(bool display, std::shared_ptr<const GpuImage> input,
                    std::span<const std::byte> uniformBytes, std::uint64_t byteBudget);
     void releaseTransient();
     void clearJob();

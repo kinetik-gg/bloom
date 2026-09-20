@@ -167,7 +167,7 @@ struct Pixel final {
     for (std::size_t channel = 0; channel < channels.size(); ++channel) {
         const auto cb = straightBackdrop[channel];
         const auto cs = straightSource[channel];
-        double blended = cs;
+        double blended;
         switch (mode) {
         case 1:
             blended = cb + cs;

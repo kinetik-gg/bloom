@@ -66,7 +66,7 @@ void GpuImageUpload::releaseImpl() noexcept {
         // destroyed here.
         if (impl_->residentSlot != kUploadNoResidentSlot) {
             impl_->orphanResidentSlot();
-            (void)impl_.release();
+            [[maybe_unused]] const auto* const retained = impl_.release();
         } else {
             impl_.reset();
         }

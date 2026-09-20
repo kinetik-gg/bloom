@@ -72,9 +72,12 @@ makeRequest(const std::shared_ptr<const GpuImage>& source, const std::uint32_t o
     if (!dataWindow) {
         return std::nullopt;
     }
+    const auto aspect = PixelAspectRatio::create(2, 1);
+    if (!aspect) {
+        return std::nullopt;
+    }
     const auto descriptor = Rgba32fImageDescriptor::create(
-        *dataWindow.value(), window(3, -5, outputWidth + 6, outputHeight + 10),
-        PixelAspectRatio::create(2, 1).value());
+        *dataWindow.value(), window(3, -5, outputWidth + 6, outputHeight + 10), *aspect);
     if (!descriptor) {
         return std::nullopt;
     }

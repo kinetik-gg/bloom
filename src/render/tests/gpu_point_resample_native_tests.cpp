@@ -174,7 +174,12 @@ void testGeometryParity(Expectations& expectations, GpuDevice& device) {
         return;
     }
     const ImageWindow displayWindow = window(4, -8, 320, 240);
-    const auto aspect = PixelAspectRatio::create(4, 3).value();
+    const auto aspectValue = PixelAspectRatio::create(4, 3);
+    expectations.expect(aspectValue.has_value(), "geometry: the pixel aspect is valid");
+    if (!aspectValue) {
+        return;
+    }
+    const PixelAspectRatio aspect = *aspectValue;
     for (const auto& testCase : geometryCases()) {
         const ImageWindow sourceWindow = window(testCase.sourceOriginX, testCase.sourceOriginY,
                                                 testCase.sourceWidth, testCase.sourceHeight);
@@ -452,7 +457,12 @@ void testBudgetRecoveryAndLimits(Expectations& expectations, GpuDevice& device) 
         return;
     }
     auto source = std::make_shared<const GpuImage>(std::move(*sourceResident));
-    const auto aspect = PixelAspectRatio::create(2, 1).value();
+    const auto aspectValue = PixelAspectRatio::create(2, 1);
+    expectations.expect(aspectValue.has_value(), "budget: the pixel aspect is valid");
+    if (!aspectValue) {
+        return;
+    }
+    const PixelAspectRatio aspect = *aspectValue;
     const ImageWindow displayWindow = window(-4, 2, 800, 400);
 
     // A budget-charged pipeline refuses a request whose image exceeds its injected maxImageBytes.

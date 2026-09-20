@@ -273,7 +273,7 @@ void testUnprovenRetention(Expectations& expectations, GpuDevice& device) {
 // one device thread from querying a fence or tearing down another device's Vulkan resources.
 struct OwnerThreadContext final {
     explicit OwnerThreadContext(GpuSolidParameters parametersIn) noexcept
-        : parameters(std::move(parametersIn)) {}
+        : parameters(parametersIn) {}
 
     std::filesystem::path loaderPath;
     GpuSolidParameters parameters;

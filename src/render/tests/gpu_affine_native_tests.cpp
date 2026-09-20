@@ -111,7 +111,7 @@ void runAffine(Expectations& expectations, GpuAffine& affine, GpuImageUpload& up
         return;
     }
 
-    const auto begin = affine.beginAffine({source, *outputWindow, *transform}, kBudget);
+    const auto begin = affine.beginAffine({source, *outputWindow, transform}, kBudget);
     expectations.expect(begin.code == GpuAffineDiagnosticCode::None,
                         testCase.name + ": begin accepted: " + begin.message);
     if (begin.code != GpuAffineDiagnosticCode::None) {

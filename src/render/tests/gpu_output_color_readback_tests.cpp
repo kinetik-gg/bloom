@@ -15,6 +15,7 @@
 #include <bloom/render/gpu_process_readback.hpp>
 #include <bloom/render/gpu_resident_display.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -80,9 +81,9 @@ void testCombinedProcessAndEffect(Expectations& expectations, GpuDevice& device)
                         "combined: exactly one device-to-host submission");
     expectations.expect(payloads.counters.payloads == 2,
                         "combined: the one submission carries two payloads");
-    expectations.expect(payloads.counters.processBytes == 8U * 4U * sizeof(Rgba32f),
+    expectations.expect(payloads.counters.processBytes == std::size_t{8} * 4U * sizeof(Rgba32f),
                         "combined: the process payload byte count is exact");
-    expectations.expect(payloads.counters.encodedBytes == 8U * 4U * sizeof(Rgba32f),
+    expectations.expect(payloads.counters.encodedBytes == std::size_t{8} * 4U * sizeof(Rgba32f),
                         "combined: the encoded payload byte count is exact");
     expectations.expect(payloads.counters.bytes ==
                             payloads.counters.processBytes + payloads.counters.encodedBytes,
@@ -166,11 +167,11 @@ void testEncodedDisplay(Expectations& expectations, GpuDevice& device) {
     auto payloads = readback.take();
     expectations.expect(payloads.counters.submissions == 1 && payloads.counters.payloads == 2,
                         "display: one submission carries process + RGBA8");
-    expectations.expect(payloads.counters.encodedBytes == 6U * 2U * sizeof(Rgba8),
+    expectations.expect(payloads.counters.encodedBytes == std::size_t{6} * 2U * sizeof(Rgba8),
                         "display: the RGBA8 payload byte count is exact");
-    expectations.expect(payloads.process.size() == 6U * 2U,
+    expectations.expect(payloads.process.size() == std::size_t{6} * 2U,
                         "display: the process payload is present");
-    expectations.expect(payloads.encodedRgba8.size() == 6U * 2U,
+    expectations.expect(payloads.encodedRgba8.size() == std::size_t{6} * 2U,
                         "display: the RGBA8 payload is present");
     expectations.expect(payloads.encodedRgba32f.empty(),
                         "display: no RGBA32F encoded arm was staged");

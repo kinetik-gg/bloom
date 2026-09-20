@@ -130,8 +130,9 @@ std::uint32_t retireRetainedForOwner() noexcept {
                 ++count;
             }
         }
-    } catch (...) {
-        // Nothing has been destroyed; the slots remain as they were.
+    } catch (...) { // NOLINT(bugprone-empty-catch)
+        // The mutex acquisition failed; nothing has been destroyed and the slots remain as they
+        // were, so this fail-closed path must not terminate the noexcept owner drain.
     }
     for (std::size_t index = 0; index < count; ++index) {
         releaseResidentSlot();

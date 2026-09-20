@@ -172,7 +172,8 @@ void testRejections(Expectations& expectations, GpuDevice& device) {
     expectations.expect(blend.blend->state() == GpuBlendJobState::Idle,
                         "a rejection starts no job");
     // A BlendMode value outside the durable mapping must be rejected, never fall through to a
-    // Normal-equivalent shader branch.
+    // Normal-equivalent shader branch; the out-of-vocabulary cast is the point of this test.
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange): intentional invalid enumerator.
     const auto invalidMode = static_cast<BlendMode>(200);
     expectations.expect(blend.blend->beginBlend({nullptr, nullptr, invalidMode}, kBudget).code ==
                             GpuBlendDiagnosticCode::InvalidArgument,

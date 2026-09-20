@@ -62,7 +62,7 @@ void GpuAffine::releaseImpl() noexcept {
         // Vulkan objects (the pipeline is created lazily under a slot) and can be destroyed here.
         if (impl_->residentSlot != kAffineNoResidentSlot) {
             impl_->orphanResidentSlot();
-            (void)impl_.release();
+            [[maybe_unused]] const auto* const retained = impl_.release();
         } else {
             impl_.reset();
         }
@@ -218,7 +218,7 @@ GpuAffineDiagnostic GpuAffine::beginAffine(const GpuAffineParameters& parameters
     }
     // Cheap gates first: reject a foreign thread, a busy pipeline, or a stale generation before any
     // coordinate work.
-    const auto cheap = impl_->preflightCheap();
+    auto cheap = impl_->preflightCheap();
     if (cheap.code != GpuAffineDiagnosticCode::None) {
         return cheap;
     }
@@ -255,7 +255,7 @@ GpuAffineDiagnostic GpuAffine::beginAffineMatrix(const GpuAffineMatrixParameters
         return makeDiagnostic(GpuAffineDiagnosticCode::DeviceUnavailable,
                               "the affine pipeline is not initialized");
     }
-    const auto cheap = impl_->preflightCheap();
+    auto cheap = impl_->preflightCheap();
     if (cheap.code != GpuAffineDiagnosticCode::None) {
         return cheap;
     }

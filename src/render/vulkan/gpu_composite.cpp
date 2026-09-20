@@ -91,7 +91,7 @@ void GpuComposite::releaseImpl() noexcept {
         // Vulkan objects (the pipelines are created lazily under a slot) and can be destroyed here.
         if (impl_->residentSlot != kCompositeNoResidentSlot) {
             impl_->orphanResidentSlot();
-            (void)impl_.release();
+            [[maybe_unused]] const auto* const retained = impl_.release();
         } else {
             impl_.reset();
         }

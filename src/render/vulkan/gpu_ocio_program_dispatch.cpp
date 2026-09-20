@@ -58,8 +58,7 @@ void GpuOcioProgram::Impl::clearJob() {
     releaseTransient();
 }
 
-void GpuOcioProgram::Impl::beginImpl(const bool display,
-                                     const std::shared_ptr<const GpuImage>& input,
+void GpuOcioProgram::Impl::beginImpl(const bool display, std::shared_ptr<const GpuImage> input,
                                      const std::span<const std::byte> uniformBytes,
                                      const std::uint64_t byteBudget) {
     const GpuImageImpl* const inputImpl = gpuImageImpl(*input);
@@ -324,7 +323,7 @@ void GpuOcioProgram::Impl::beginImpl(const bool display,
     jobPixelCount = static_cast<std::uint32_t>(pixelCount);
     jobWidth = inputImpl->width;
     jobHeight = inputImpl->height;
-    inputRetained = input;
+    inputRetained = std::move(input);
 }
 
 bool GpuOcioProgram::Impl::checkStatus() {

@@ -161,7 +161,10 @@ GpuPathCoverageJobState GpuPathCoverage::state() const noexcept {
 }
 const GpuPathCoverageDiagnostic& GpuPathCoverage::diagnostic() const noexcept {
     static const GpuPathCoverageDiagnostic none{};
-    return impl_ != nullptr ? impl_->jobDiagnostic : none;
+    if (impl_ == nullptr) {
+        return none;
+    }
+    return impl_->jobDiagnostic;
 }
 bool GpuPathCoverage::isBoundTo(GpuDevice& device) const noexcept {
     if (impl_ == nullptr || !impl_->onOwnerThread()) {

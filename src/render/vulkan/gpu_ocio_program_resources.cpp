@@ -74,7 +74,9 @@ void setReasonNoThrow(std::string& reason, const char* text) noexcept {
     try {
         reason = text;
     } catch (...) {
-        // A diagnostic must never unwind through an ownership transition.
+        // A diagnostic must never unwind through an ownership transition; drop any partial text
+        // rather than leave the reason in an indeterminate state.
+        reason.clear();
     }
 }
 
@@ -467,7 +469,9 @@ void releaseReservationIfReserved() noexcept {
             g_slotState = SlotState::Free;
             g_slotOwner = std::thread::id{};
         }
-    } catch (...) {
+    } catch (...) { // NOLINT(bugprone-empty-catch)
+        // The mutex acquisition failed; leave the reservation fail-closed rather than terminating a
+        // noexcept ownership transition. There is no reporting channel here.
     }
 }
 
@@ -505,18 +509,23 @@ createSampledResource(const std::shared_ptr<vulkan_detail::DeviceAllocatorState>
             }
         }
         const VkExtent3D extent = textureExtent(texture);
-        VkImageCreateInfo imageInfo{};
-        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        imageInfo.imageType = imageType(texture.dimensions);
-        imageInfo.format = format;
-        imageInfo.extent = extent;
-        imageInfo.mipLevels = 1;
-        imageInfo.arrayLayers = 1;
-        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkImageCreateInfo imageInfo{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .imageType = imageType(texture.dimensions),
+            .format = format,
+            .extent = extent,
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = nullptr,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
         VmaAllocationCreateInfo allocationInfo{};
         allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         ImageOwner image;
@@ -635,7 +644,9 @@ void retireUploadQuarantine() noexcept {
             return;
         }
         static_cast<void>(tryRetireQuarantinedLocked());
-    } catch (...) {
+    } catch (...) { // NOLINT(bugprone-empty-catch)
+        // The mutex acquisition failed; the quarantine stays latched rather than terminating this
+        // noexcept owner-thread retirement. There is no reporting channel here.
     }
 }
 

@@ -58,7 +58,7 @@ void GpuSolid::releaseImpl() noexcept {
         // Vulkan objects (the pipeline is created lazily under a slot) and can be destroyed here.
         if (impl_->residentSlot != kSolidNoResidentSlot) {
             impl_->orphanResidentSlot();
-            (void)impl_.release();
+            [[maybe_unused]] const auto* const retained = impl_.release();
         } else {
             impl_.reset();
         }
