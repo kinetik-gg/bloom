@@ -250,7 +250,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
 
     ui::ViewerGpuDependencies gpuDependencies;
     gpuDependencies.presentationClient = [client]() -> std::shared_ptr<GpuPresentationClient> {
-        return client;
+        return std::shared_ptr<GpuPresentationClient>(client);
     };
     gpuDependencies.scheduler = &scheduler;
     gpuDependencies.vulkanLoaderPath = options.loader.string();

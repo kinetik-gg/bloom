@@ -362,7 +362,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     // the blue active-panel activation, so its absence here is a real observable regression.
     ui::ViewerGpuDependencies gpuDependencies;
     gpuDependencies.presentationClient = [client]() -> std::shared_ptr<GpuPresentationClient> {
-        return client;
+        return std::shared_ptr<GpuPresentationClient>(client);
     };
     gpuDependencies.scheduler = &scheduler;
     gpuDependencies.vulkanLoaderPath = options.loader.string();
@@ -422,8 +422,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                   "the cold resident viewer frame performed real native dispatches");
     checks.expect(afterCold.fullFrameReadbacks == 0U,
                   "the resident viewer frame performed no full-frame readback");
-    checks.expect(ui::residentFrameGeometry(*displayed).has_value() &&
-                      ui::residentFrameGeometry(*displayed)->lease.isValid(),
+    const auto geometry = ui::residentFrameGeometry(*displayed);
+    checks.expect(geometry.has_value() && geometry->lease.isValid(),
                   "the displayed frame carries a valid genuine native lease");
 
     const QRectF displayRect = viewerDisplayRect(*viewer, compositionFormat);
