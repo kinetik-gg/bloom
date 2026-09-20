@@ -638,6 +638,25 @@ void TimelineLayerStack::setCurrentRow(const int row) {
     update();
 }
 
+void TimelineLayerStack::clearPooledRows() {
+    for (auto* row : rowPool_)
+        delete row;
+    rowPool_.clear();
+    for (auto* property : propertyPool_)
+        delete property;
+    propertyPool_.clear();
+    entries_.clear();
+    if (renameEditor_ != nullptr)
+        renameEditor_->hide();
+    renamingLayer_ = {};
+    anchorRow_ = -1;
+    dragRow_ = -1;
+    insertionRow_ = -1;
+    currentRow_ = -1;
+    updateRenameGeometry();
+    update();
+}
+
 void TimelineLayerStack::relayoutRows() {
     const int viewportRows = (height() + kTimelineRowHeight - 1) / kTimelineRowHeight + 1;
     const int first =
@@ -1880,6 +1899,13 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     });
     connect(stack_, &TimelineLayerStack::viewportResized, this, &TimelineEditor::updateScrollRange);
 
+    // Session publication order (CompositionSession::rebind): documentRebound() fires first, then
+    // liveValueChanged()/snapshotChanged(). Dropping the pooled rows here, before those later
+    // signals, means no stale row can dereference the composition the rebind just replaced -- most
+    // importantly a blank (composition-less) New/Open. rebuild() then repopulates from the new
+    // document.
+    connect(&session_, &CompositionSession::documentRebound, stack_,
+            &TimelineLayerStack::clearPooledRows);
     connect(&session_, &CompositionSession::snapshotChanged, this, &TimelineEditor::rebuild);
     connect(&session_, &CompositionSession::compositionChanged, this, &TimelineEditor::rebuild);
     connect(&session_, &CompositionSession::selectionChanged, this,
