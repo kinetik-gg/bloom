@@ -10,7 +10,7 @@
     "provenancePolicy": "not-published",
     "provenanceReview": {
       "path": "dependencies/licenses/glslang/provenance.md",
-      "sha256": "sha256:f03bfe0e245ad4105d86e3b6f66786e724218b229cd5e4180048207eddf6aa01"
+      "sha256": "sha256:8ae646e8c1e212d52d73f12add42d516eed0f1561f68d30a31c299b1410f9c26"
     },
     "provenance": []
   },
@@ -60,7 +60,7 @@
     "modified": false,
     "reviewRecord": {
       "path": "dependencies/licenses/glslang/review.md",
-      "sha256": "sha256:3b25192557374490bade36419c87ac02fdf65c4e086215d7132bd053ef8126ca"
+      "sha256": "sha256:4a9241c4ee743a323570056db62bec6f73252860381276bb18ffde95270a22f7"
     },
     "reviewedAt": "2026-09-19"
   },
@@ -104,7 +104,10 @@
       "capabilities": [
         "bloom.capability.glslang"
       ],
-      "shippingRoles": [],
+      "shippingRoles": [
+        "executable",
+        "license"
+      ],
       "conformanceFixtureSets": []
     }
   ],

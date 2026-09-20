@@ -130,7 +130,11 @@ CMake package config) and `executable` (for a non-shipping build- or qualify-tim
 `shippingRoles` may be an empty array only for `executable` linkage; every other linkage still
 declares at least one role. Empty roles mean the tool's installed binary is build/qualification
 support and is not part of the end-user application package; they do not exempt any installed file
-from the prefix inventory and they make no qualified-prefix claim. The frozen 1.0, 1.1, and 1.2
+from the prefix inventory and they make no qualified-prefix claim. A reviewed executable tool that
+is a genuine runtime product instead declares its real roles: the pinned `glslangValidator` and
+`spirv-val` GPU colour-compilation tools record `["executable", "license"]`, ship beside the
+desktop, CLI, and MCP executables through `cmake/BloomGpuShaderTools.cmake`, and travel with their
+reviewed license texts and a generated digest inventory rather than claiming build-only status. The frozen 1.0, 1.1, and 1.2
 schema bytes are unchanged, and a 1.2 lock remains closed to the new enums. The generator selects
 1.3 the moment a reviewed record carries a header-only or executable linkage and never downgrades
 an existing 1.3.

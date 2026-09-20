@@ -498,6 +498,24 @@ Glslang is the provisional GLSL-to-SPIR-V compiler because it is Khronos's refer
 can be used as a command-line tool or library. Its exact build and transitive licenses must be pinned
 and audited before distribution. [Glslang project](https://github.com/KhronosGroup/glslang)
 
+The pinned `glslangValidator` 16.4.0 and `spirv-val` (SPIRV-Tools `b707790a`) now ship as runtime
+tooling so GPU colour compilation works out of the box for the desktop, CLI, and MCP lanes.
+`cmake/BloomGpuShaderTools.cmake` resolves each executable only from the qualified dependency prefix
+(never the ambient PATH), verifies it stays under that prefix, and stages it and its reviewed license
+and generated inventory evidence into an executable-relative private `bloom-gpu-tools/` directory for
+both the build tree and install (inside `Contents/MacOS` for a macOS `.app` bundle; `bin/bloom-gpu-tools`
+on Linux and Windows, with the `.exe` suffix). Installed tools carry only an `$ORIGIN` rpath when the
+configure-time ELF inspection actually finds a private prefix runtime library; the operating system's
+C/C++ runtime is left to the supported platform floor and is never bundled. Each app target receives
+typed compile definitions for that relative layout (`BLOOM_GPU_TOOLS_AVAILABLE`,
+`BLOOM_GPU_TOOLS_DIR`, `BLOOM_GPU_TOOLS_GLSLANG_NAME`, `BLOOM_GPU_TOOLS_SPIRV_VAL_NAME`, and the
+inventory name); no absolute build path is embedded. An unqualified mode, a CPU-stub build, a missing
+prefix, or a prefix without the pinned tools clears the capability with a typed reason instead of
+falling back to a host tool, and the CPU reference path remains the supported outcome. This slice
+stages tools only; it introduces no process invocation, resource limit, or runtime compiler consumer.
+The lock records `shippingRoles: ["executable", "license"]` for both components and the two license
+reviews were extended from their earlier build-only form accordingly.
+
 Arbitrary project-provided shader source is outside the initial scope. If scripting or shader nodes
 are added later, validation, resource limits, and process isolation require a separate security
 decision.

@@ -19,6 +19,12 @@ install(
     RUNTIME DESTINATION bin
 )
 
+# Stage the qualified GPU shader tools into the executable-relative private directory (inside the
+# .app bundle on macOS) so desktop colour compilation works out of the box; an unqualified or
+# CPU-stub build gets a typed unavailable definition and the CPU reference path.
+include(BloomGpuShaderTools)
+bloom_package_gpu_shader_tools(bloom)
+
 # --- Bundled compute-only Vulkan loader (Linux native-backend builds only) -----------------------
 #
 # The device path loads the loader dynamically instead of linking it, so no DT_NEEDED entry makes
