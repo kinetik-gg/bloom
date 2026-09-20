@@ -285,9 +285,8 @@ void testViewerEditorResidentGateIsInertAndKeepsCpuPaint(Expectations& expectati
     press.button = Qt::LeftButton;
     press.buttons = Qt::LeftButton;
     viewer.forwardGpuInputForTest(press);
-    expectations.expect(
-        pressFilter.presses == 1,
-        "forwarded native input runs receiver event filters, not just the handler");
+    expectations.expect(pressFilter.presses == 1,
+                        "forwarded native input runs receiver event filters, not just the handler");
 
     controller.beginShutdown();
     bridge.beginShutdown();
@@ -341,8 +340,9 @@ void testResidentFrameGeometryResolvesTheSameMappingDescriptor(Expectations& exp
         expectations.expect(*fromResident == *expected.value(),
                             "the resident descriptor is the lease's own geometry, not a readback");
     }
-    expectations.expect(!ui::viewerDisplayDescriptorForFrame(std::nullopt, std::nullopt).has_value(),
-                        "neither source yields no descriptor");
+    expectations.expect(
+        !ui::viewerDisplayDescriptorForFrame(std::nullopt, std::nullopt).has_value(),
+        "neither source yields no descriptor");
 }
 
 void testCompositionFrameChromePaintsWithoutADevice(Expectations& expectations) {

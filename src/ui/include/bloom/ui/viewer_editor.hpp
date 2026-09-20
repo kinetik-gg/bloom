@@ -162,19 +162,12 @@ struct ViewTransform final {
 [[nodiscard]] bool cpuFallbackCompletionIsCurrent(const runtime::PreviewRequestIdentity& completed,
                                                   const runtime::PreviewRequestIdentity& current);
 
-// The immutable display descriptor a viewer mapping/gesture needs, resolved from EITHER the CPU
-// display buffer arm (reference/qualified/display-only, which carries packed host pixels) OR the
-// GPU-resident arm's lease metadata (`residentFrame`, which deliberately carries no host pixels).
-// Never reads, copies, or reconstructs pixels: the descriptor is geometry (display window, pixel
-// aspect, packed layout) only. Returns nullopt when neither source yields a valid descriptor. This
-// is the one place the resident arm's geometry is accepted into direct manipulation, so a resident
-// frame maps exactly like a CPU frame -- currentMapping() previously required a CPU buffer view and
-// therefore refused every resident frame forever. `cpuView` is the frame's own displayBufferView()
-// and `residentFrame` its own lease geometry (residentFrameGeometry()); at most one is expected.
+// The display descriptor a viewer gesture maps against, from the CPU packed view or, for the
+// GPU-resident arm, its lease geometry. Geometry only: no pixels are read, copied, or
+// reconstructed. Nullopt when neither source yields a descriptor; at most one is expected.
 [[nodiscard]] std::optional<render::ReferenceDisplayBufferDescriptor>
-viewerDisplayDescriptorForFrame(
-    std::optional<runtime::PreviewDisplayBufferView> cpuView,
-    std::optional<ResidentFrameGeometry> residentFrame) noexcept;
+viewerDisplayDescriptorForFrame(std::optional<runtime::PreviewDisplayBufferView> cpuView,
+                                std::optional<ResidentFrameGeometry> residentFrame) noexcept;
 
 // The composition-frame border and the active composition's empty-state invitation, painted exactly
 // as the CPU paint path draws them. The GPU-resident overlay recording is the only paint on the
@@ -294,9 +287,9 @@ class ViewerEditor final : public QWidget,
     // channel, and background. Device-free, so a test can prove the GPU surround matches the CPU
     // drawCanvasBackground() paint for every background mode.
     [[nodiscard]] ResidentPresentRequest buildResidentPresentRequestForTest();
-    // Test-only: drive one already-translated native input event through the real dispatch path so a
-    // test can prove it reaches receiver event filters (workspace panel activation) instead of only
-    // the handler.
+    // Test-only: drive one already-translated native input event through the real dispatch path so
+    // a test can prove it reaches receiver event filters (workspace panel activation) instead of
+    // only the handler.
     void forwardGpuInputForTest(const ViewerGpuInputEvent& event) { forwardGpuInput(event); }
 
   signals:

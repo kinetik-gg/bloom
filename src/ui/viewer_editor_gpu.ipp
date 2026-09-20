@@ -1,8 +1,8 @@
 void paintViewerCompositionFrame(QPainter& painter, const QRectF& displayRect) {
     painter.setPen(QPen(kit::color(kit::Color::CompositionFrame), kit::kCompositionFrameWidth));
     painter.setBrush(Qt::NoBrush);
-    painter.drawRect(displayRect.adjusted(0.0, 0.0, -kit::kCompositionFrameWidth,
-                                          -kit::kCompositionFrameWidth));
+    painter.drawRect(
+        displayRect.adjusted(0.0, 0.0, -kit::kCompositionFrameWidth, -kit::kCompositionFrameWidth));
 }
 
 void paintViewerEmptyInvitation(QPainter& painter, const QRectF& canvasRect,
