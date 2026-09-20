@@ -44,6 +44,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <functional>
 #include <iostream>
 #include <limits>
@@ -1193,7 +1194,7 @@ void testTimeReadoutFormatsFrameExactTimeAndResetsOnCompositionSwitch(Expectatio
 
 } // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) try {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     Expectations expectations;
@@ -1218,4 +1219,7 @@ int main(int argc, char** argv) {
     testArrowKeysOnLayerStackStillNavigateAndStepIsSuppressed(expectations);
     testTimeReadoutFormatsFrameExactTimeAndResetsOnCompositionSwitch(expectations);
     return expectations.failures() == 0 ? 0 : 1;
+} catch (const std::exception& error) {
+    std::cerr << "FAIL: playback regression threw: " << error.what() << '\n';
+    return 1;
 }

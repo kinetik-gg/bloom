@@ -176,7 +176,7 @@ void testPurgeMediaCachesClearsDiskAndDecodedMemory(Expectations& check) {
 
     cache::MediaDiskCacheConfig config;
     config.rootDirectory = std::filesystem::path(directory.filePath("media-cache").toStdString());
-    config.byteBudget = 4U * 1024U * 1024U;
+    config.byteBudget = 4ULL * 1024ULL * 1024ULL;
     cache::MediaDiskCache diskCache(config);
 
     const auto image = makeTestImage();
@@ -240,7 +240,7 @@ void testCachePurgeControllerClearsApplicableStores(Expectations& check) {
 
     cache::MediaDiskCacheConfig config;
     config.rootDirectory = std::filesystem::path(directory.filePath("media").toStdString());
-    config.byteBudget = 4U * 1024U * 1024U;
+    config.byteBudget = 4ULL * 1024ULL * 1024ULL;
     cache::MediaDiskCache disk(config);
     runtime::OperationCache operationCache(std::size_t{1} << 20U);
     runtime::GpuPreparedUploadCache uploads(std::size_t{1} << 20U);
