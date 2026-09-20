@@ -542,6 +542,44 @@ add_test(
 set_tests_properties(bloom.runtime.gpu_coverage_contract_mutation_proof
     PROPERTIES LABELS runtime quality contract TIMEOUT 240)
 
+# Ownership regression for the coverage contract registries. Generated names must be owned by the
+# returned entry, never a view into a temporary. The test retains each registry, churns the
+# allocator with poison blocks, then re-reads every name; it needs no library because the registries
+# are header-only. The ASAN variant of the same TU turns a stale read into a hard
+# heap-use-after-free and links no already-built library, so it rebuilds no dependency.
+add_executable(bloom_runtime_gpu_coverage_registry_ownership_test
+    gpu_coverage_registry_ownership_tests.cpp)
+target_include_directories(bloom_runtime_gpu_coverage_registry_ownership_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/include" "${PROJECT_SOURCE_DIR}/src/core/include"
+            "${PROJECT_SOURCE_DIR}/src/document/include" "${PROJECT_SOURCE_DIR}/src/render/include")
+target_compile_features(bloom_runtime_gpu_coverage_registry_ownership_test PRIVATE cxx_std_20)
+bloom_enable_warnings(bloom_runtime_gpu_coverage_registry_ownership_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_coverage_registry_ownership
+    COMMAND bloom_runtime_gpu_coverage_registry_ownership_test
+    LABELS runtime unit contract
+    TIMEOUT 60
+)
+if(CMAKE_CXX_COMPILER_ID MATCHES "^(AppleClang|Clang|GNU)$")
+    add_executable(bloom_runtime_gpu_coverage_registry_ownership_asan_test
+        gpu_coverage_registry_ownership_tests.cpp)
+    target_include_directories(bloom_runtime_gpu_coverage_registry_ownership_asan_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime/include" "${PROJECT_SOURCE_DIR}/src/core/include"
+                "${PROJECT_SOURCE_DIR}/src/document/include" "${PROJECT_SOURCE_DIR}/src/render/include")
+    target_compile_features(bloom_runtime_gpu_coverage_registry_ownership_asan_test PRIVATE cxx_std_20)
+    target_compile_options(bloom_runtime_gpu_coverage_registry_ownership_asan_test
+        PRIVATE -fsanitize=address -fno-omit-frame-pointer)
+    target_link_options(bloom_runtime_gpu_coverage_registry_ownership_asan_test
+        PRIVATE -fsanitize=address)
+    bloom_enable_warnings(bloom_runtime_gpu_coverage_registry_ownership_asan_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_coverage_registry_ownership_asan
+        COMMAND bloom_runtime_gpu_coverage_registry_ownership_asan_test
+        LABELS runtime unit contract sanitizer
+        TIMEOUT 60
+    )
+endif()
+
 # Bounded prepared-upload cache: node lifetime under replacement/eviction, byte and entry ceilings,
 # zero-budget disable, and per-entry accounting. CPU-only; no loader and no device.
 add_executable(bloom_runtime_gpu_prepared_upload_cache_test gpu_prepared_upload_cache_tests.cpp)

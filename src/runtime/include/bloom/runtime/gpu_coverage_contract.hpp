@@ -9,10 +9,13 @@
 // compile until it is classified here.
 //
 // The only permitted exceptions are narrow, typed, explicitly approved host-preparation steps --
-// media decode/conversion, font shaping, parameter/geometry resolution -- which are not
-// whole-frame pixel-rendering opt-outs. An exception must name a nonempty stable id, a nonempty
-// rationale, and an owning document/decision reference. There are no wildcard or blanket opt-outs,
-// and no approval identifier may be invented.
+// media container/sample I/O and decompression, font load/shaping, parameter/curve/geometry
+// RESOLUTION, and one final readback -- which are not whole-frame pixel-rendering opt-outs. An
+// exception must name a nonempty stable id, a nonempty rationale, and an owning document/decision
+// reference. There are no wildcard or blanket opt-outs, and no approval identifier may be invented.
+// Per-pixel coverage rasterization (CPU PathRaster coverageRow) is a pixel transformation, never
+// host preparation; the generated coverage mask is Required GPU work
+// (feature.geometry.vector_coverage).
 
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/document/node_definition_registry.hpp>
@@ -50,6 +53,8 @@ struct GpuCoverageEntry final {
     // Owns its storage so generated ids (for example node.<typeId>) stay valid after the registry
     // returns.
     std::string id;
+    // label, approvalReference, and rationale are always string literals, so a view is safe. Any
+    // future generated text here must become an owned std::string like id.
     std::string_view label;
     GpuCoverageDisposition disposition = GpuCoverageDisposition::Required;
     // Nonempty exactly for an approved exception or host-preparation entry. A repository document
@@ -143,10 +148,13 @@ template <typename Variant, std::size_t... Index>
         std::make_index_sequence<std::variant_size_v<ImageEffectKernel>>{});
 }
 
-// A feature axis a single basic fixture must not be able to claim on its own.
+// A feature axis a single basic fixture must not be able to claim on its own. Both id and label are
+// OWNED: a shape label is generated text, so a view into a temporary std::string would dangle once
+// the temporary dies and the caller retains the registry. `fixtureOwner` is always a string
+// literal.
 struct GpuFeatureCoverageEntry final {
     std::string id;
-    std::string_view label;
+    std::string label;
     GpuCoverageDisposition disposition = GpuCoverageDisposition::Required;
     // The production module or suite that owns the genuine fixture.
     std::string_view fixtureOwner;
@@ -194,6 +202,14 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
             std::string{"shape kind axis: "} + std::string{gpuShapeKindFeatureLabel(kind)},
             GpuCoverageDisposition::Required, "src/render PathRaster + shape source tests"});
     }
+    // The vector coverage axis is a PIXEL operation, not host preparation: a GPU vector path must
+    // rasterize its own coverage on the device and prove it with native provenance/counters. A CPU
+    // PathRaster coverage mask consumed by CoveredSolidV1 (a fill from a host mask) does NOT
+    // satisfy this axis, so it stays Required and unfixtured here until the native GPU coverage
+    // producer and its consumer fixture land.
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.geometry.vector_coverage", "native GPU vector coverage rasterization",
+        GpuCoverageDisposition::Required, "src/render gpu vector coverage native tests"});
     out.push_back(GpuFeatureCoverageEntry{
         "feature.layer.affine.scale", "layer scale axis", GpuCoverageDisposition::Required,
         "src/render LayerTransform + gpu scene preparation tests"});
@@ -228,6 +244,7 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
 // render does not count. The final-render routes may read back the single composited image at the
 // CPU codec/file boundary; per-node or per-operation full-frame roundtrips are not an
 // implementation.
+// All three fields are fixed string literals, so views into static storage are safe here.
 struct GpuRouteCoverageEntry final {
     std::string_view id;
     std::string_view label;
@@ -419,7 +436,10 @@ class GpuRouteProofSink final {
 //
 // Media decode is intentionally scoped to container/sample I/O and decompression only. Converting
 // the decoded samples into the working colour space is a pixel transformation and remains Required
-// (see feature.color.working_space_transform and the OCIO image-effect kernels).
+// (see feature.color.working_space_transform and the OCIO image-effect kernels). Likewise, font
+// load/shaping and parameter/curve/geometry resolution are host preparation, but the per-pixel
+// coverage mask a vector source rasterizes is a pixel transformation and is Required GPU work
+// (feature.geometry.vector_coverage); there is no host-preparation exemption for it.
 [[nodiscard]] inline std::vector<GpuCoverageEntry> gpuApprovedCpuPreparation() {
     return {
         GpuCoverageEntry{"prep.media.io_decompress",
@@ -439,12 +459,6 @@ class GpuRouteProofSink final {
             GpuCoverageDisposition::ApprovedCpuHostPreparation, "docs/architecture/gpu-backend.md",
             "Animated and driven operands are resolved by the real CPU preflight before "
             "the GPU command is built."},
-        GpuCoverageEntry{
-            "prep.geometry.coverage_raster",
-            "vector coverage rasterization for fractional transforms",
-            GpuCoverageDisposition::ApprovedCpuHostPreparation, "docs/architecture/gpu-backend.md",
-            "The exact CPU PathRaster coverage is host-built; the GPU command consumes "
-            "it rather than re-evaluating whole-frame pixels."},
         GpuCoverageEntry{
             "prep.export.final_readback",
             "single final composited image readback at the codec/file boundary",
