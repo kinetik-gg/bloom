@@ -17,23 +17,36 @@ namespace {
 
 [[nodiscard]] std::chrono::milliseconds
 serviceWaitInterval(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core) {
-    // The presentation coordinator must be pumped regularly to make native retirement progress even
-    // when no UI request arrives, so a live (unretired) presentation generation keeps the short
-    // interval just like an in-flight native preview job.
-    const bool presentationLive = core->presentation != nullptr && core->presentation->available &&
-                                  !core->presentationRetired;
-    const bool active = !core->stages.empty() || core->nativeInFlight ||
-                        core->residentNativeInFlight || !core->residentNativeReady.empty() ||
-                        presentationLive;
-    return active ? std::chrono::milliseconds(2) : std::chrono::milliseconds(50);
+    // Any preview stage, queued native job, or in-flight native submission needs the short poll.
+    const bool previewActive = !core->stages.empty() || core->nativeInFlight ||
+                               core->residentNativeInFlight || !core->nativeReady.empty() ||
+                               !core->residentNativeReady.empty();
+    if (previewActive) {
+        return std::chrono::milliseconds(2);
+    }
+    // A live presentation generation keeps the short interval only while a target still needs the
+    // owner to drive it (attach/resize/retire progress or an extracted/un-ingested request). A
+    // stable idle Active target is woken by the coordinator's own wake hook the moment a new frame,
+    // resize, or retirement arrives, so it waits on the notification instead of polling at 500 Hz.
+    if (core->presentation != nullptr && core->presentation->available &&
+        !core->presentationRetired && core->presentation->coordinator != nullptr &&
+        core->presentation->coordinator->hasPendingWork()) {
+        return std::chrono::milliseconds(2);
+    }
+    // Bounded idle wait: notifications still interrupt it immediately, so this only caps how long
+    // an otherwise idle owner sleeps before re-checking.
+    return std::chrono::milliseconds(50);
 }
 
 // Samples no state; the caller captures the wake generation BEFORE doing work, so a notification
-// that arrives during that work cannot be missed by the subsequent wait.
+// that arrives during that work cannot be missed by the subsequent wait. The interval is computed
+// before the wake mutex is taken so the presentation coordinator's mailbox lock is never nested
+// inside the service wake lock.
 void waitForWake(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core,
                  const std::uint64_t observedGeneration, const bool wakeOnStopping) {
+    const auto interval = serviceWaitInterval(core);
     std::unique_lock lock(core->wakeMutex);
-    core->wakeCondition.wait_for(lock, serviceWaitInterval(core), [&] {
+    core->wakeCondition.wait_for(lock, interval, [&] {
         return (wakeOnStopping && core->stopping.load(std::memory_order_acquire)) ||
                core->wakeGeneration != observedGeneration;
     });

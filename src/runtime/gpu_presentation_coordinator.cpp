@@ -114,6 +114,7 @@ void GpuPresentationCoordinator::beginShutdown() noexcept {
     }
     impl_->shuttingDown = true;
     impl_->shutdownPumps = 0;
+    impl_->shutdownStatusDirty = true;
     std::lock_guard lock(impl_->mailbox->mutex);
     impl_->mailbox->accepting = false;
     // Drop pending updates/resizes so shutdown does not perform fresh present work.
@@ -138,7 +139,7 @@ GpuPresentationShutdownStatus GpuPresentationCoordinator::shutdownStatus() const
     }
     if (impl_->ownerThreadHere()) {
         impl_->publishShutdownSnapshot();
-        return impl_->computeShutdownStatus();
+        return impl_->lastShutdownStatus;
     }
     // Off the owner thread: return the last owner-published snapshot. A UI caller never traverses
     // owner entries, which are only safe to read on the owner thread.
@@ -153,6 +154,12 @@ GpuPresentationShutdownStatus GpuPresentationCoordinator::shutdownStatus() const
 
 bool GpuPresentationCoordinator::isShuttingDown() const noexcept {
     return impl_ != nullptr && impl_->shuttingDown;
+}
+
+bool GpuPresentationCoordinator::hasPendingWork() const {
+    // Owner-thread diagnostic. Off the owner thread, or before construction completed, it reports
+    // false; a request always enqueues a wake through the client, so the driver cannot miss it.
+    return impl_ != nullptr && impl_->valid && impl_->ownerThreadHere() && impl_->hasPendingWork();
 }
 
 std::size_t GpuPresentationCoordinator::quarantinedGenerationCount() noexcept {

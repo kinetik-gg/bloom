@@ -540,10 +540,59 @@ GpuPresentationShutdownStatus CoordinatorState::computeShutdownStatus() const {
 }
 
 void CoordinatorState::publishShutdownSnapshot() {
-    const GpuPresentationShutdownStatus status = computeShutdownStatus();
+    if (!shutdownStatusDirty) {
+        // No owner state change since the last publication can alter the summary. Rewriting it
+        // would take the mailbox lock and reassign the same message on every idle pump; skip it.
+        return;
+    }
+    lastShutdownStatus = computeShutdownStatus();
+    {
+        std::lock_guard lock(mailbox->mutex);
+        mailbox->shutdownSnapshot = lastShutdownStatus;
+        mailbox->shutdownSnapshotValid = true;
+    }
+    shutdownStatusDirty = false;
+}
+
+bool CoordinatorState::hasPendingWork() const {
+    // Owner thread only. A target still needs the owner to drive it while it is attaching,
+    // resizing, or retiring, or while it has an extracted pending update/resize/retire or an
+    // acquired image awaiting present. A stable Active target with nothing extracted is idle: the
+    // client's wake hook re-arms the loop the instant a new request arrives, so the loop can wait
+    // instead of republishing the same snapshot thousands of times a second.
+    for (const auto& [id, entry] : entries) {
+        static_cast<void>(id);
+        switch (entry.state) {
+        case GpuPresentationTargetState::Attaching:
+        case GpuPresentationTargetState::Resizing:
+        case GpuPresentationTargetState::Retiring:
+            return true;
+        case GpuPresentationTargetState::Active:
+            if (entry.pendingUpdate.has_value() || entry.pendingResize.has_value() ||
+                entry.retirePending || entry.nativeAcquired) {
+                return true;
+            }
+            break;
+        case GpuPresentationTargetState::Retired:
+        case GpuPresentationTargetState::Rejected:
+        case GpuPresentationTargetState::Quarantined:
+        case GpuPresentationTargetState::Unproven:
+        case GpuPresentationTargetState::Gone:
+            break;
+        }
+    }
+    // Un-ingested client requests. The client wake hook normally restarts the loop immediately;
+    // this covers a request that landed between the pump's drain and the wait-decision without a
+    // lost wakeup.
     std::lock_guard lock(mailbox->mutex);
-    mailbox->shutdownSnapshot = status;
-    mailbox->shutdownSnapshotValid = true;
+    for (const auto& [id, slot] : mailbox->slots) {
+        static_cast<void>(id);
+        if (slot.attachPending || slot.update.has_value() || slot.resize.has_value() ||
+            slot.retirePending) {
+            return true;
+        }
+    }
+    return !mailbox->forgetRequested.empty();
 }
 
 void CoordinatorState::pumpOnce() {

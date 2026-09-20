@@ -59,6 +59,15 @@ constexpr std::uint64_t kTestLeaseByteBudget = std::uint64_t{1} << 32;
             .suggestedAction = "Review the GPU preview display service presentation diagnostics."};
 }
 
+[[nodiscard]] bool sameShutdownStatus(const GpuPresentationShutdownStatus& lhs,
+                                      const GpuPresentationShutdownStatus& rhs) noexcept {
+    return lhs.accepting == rhs.accepting && lhs.activeTargets == rhs.activeTargets &&
+           lhs.retiredTargets == rhs.retiredTargets &&
+           lhs.quarantinedTargets == rhs.quarantinedTargets &&
+           lhs.unprovenTargets == rhs.unprovenTargets && lhs.drained == rhs.drained &&
+           lhs.message == rhs.message;
+}
+
 // Test-only: one real resident RGBA8 display image produced on the service owner thread through the
 // same GpuSolid -> GpuResidentDisplay pipeline the coordinator tests use. No fabricated bytes.
 [[nodiscard]] std::shared_ptr<const GpuDisplayImage>
@@ -191,11 +200,30 @@ void publishServicePresentation(const std::shared_ptr<PreviewDisplayServiceCore>
             shutdown = core->presentation->coordinator->shutdownStatus();
         }
     }
-    std::lock_guard lock(core->stateMutex);
-    core->publishedPresentationAvailability = availability;
-    core->publishedPresentationDetail = std::move(detail);
-    core->publishedPresentationClient = std::move(client);
-    core->publishedPresentationShutdown = std::move(shutdown);
+    if (core->presentation != nullptr && core->presentation->publishedOnce &&
+        availability == core->presentation->publishedAvailability &&
+        detail == core->presentation->publishedDetail &&
+        client == core->presentation->publishedClient &&
+        sameShutdownStatus(shutdown, core->presentation->publishedShutdown)) {
+        // Nothing observable changed; skip the state lock and the identical republication. This is
+        // the common idle case and removes the per-pump lock churn the profile attributed to
+        // publishServicePresentation.
+        return;
+    }
+    {
+        std::lock_guard lock(core->stateMutex);
+        core->publishedPresentationAvailability = availability;
+        core->publishedPresentationDetail = detail;
+        core->publishedPresentationClient = client;
+        core->publishedPresentationShutdown = shutdown;
+    }
+    if (core->presentation != nullptr) {
+        core->presentation->publishedAvailability = availability;
+        core->presentation->publishedDetail = std::move(detail);
+        core->presentation->publishedClient = std::move(client);
+        core->presentation->publishedShutdown = std::move(shutdown);
+        core->presentation->publishedOnce = true;
+    }
 }
 
 void beginServicePresentationShutdown(
