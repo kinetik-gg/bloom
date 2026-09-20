@@ -32,6 +32,68 @@ target_compile_features(bloom_color PUBLIC cxx_std_20)
 target_link_libraries(bloom_color PUBLIC bloom_core)
 bloom_enable_warnings(bloom_color)
 
+# bloom_color_gpu_shader: the runtime GLSL -> validated SPIR-V compile adapter. It is Qt-, Vulkan-,
+# and OCIO-free, owns the isolated child-process compile through the narrow process-supervision
+# target, and returns the render-owned portable artifact header without linking the Vulkan backend.
+add_library(bloom_color_gpu_shader STATIC)
+
+target_sources(
+    bloom_color_gpu_shader
+    PRIVATE
+        gpu_shader_compiler.cpp
+        gpu_shader_compiler_process.cpp
+        gpu_shader_compiler_process.hpp
+    PUBLIC
+        FILE_SET HEADERS
+        BASE_DIRS include
+        FILES
+            include/bloom/color/gpu_shader_compiler.hpp
+)
+
+target_compile_features(bloom_color_gpu_shader PUBLIC cxx_std_20)
+target_include_directories(bloom_color_gpu_shader PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../render/include")
+target_link_libraries(bloom_color_gpu_shader PUBLIC bloom_core bloom_platform_process)
+bloom_enable_warnings(bloom_color_gpu_shader)
+
+if(BUILD_TESTING)
+    include(BloomTesting)
+    add_executable(
+        bloom_color_gpu_shader_test_helper
+        tests/gpu_shader_compiler_test_helper.cpp
+    )
+    target_compile_features(bloom_color_gpu_shader_test_helper PRIVATE cxx_std_20)
+    bloom_enable_warnings(bloom_color_gpu_shader_test_helper)
+
+    add_executable(
+        bloom_color_gpu_shader_test
+        tests/gpu_shader_compiler_tests.cpp
+    )
+    target_compile_definitions(
+        bloom_color_gpu_shader_test
+        PRIVATE
+            "BLOOM_GPU_SHADER_TEST_HELPER=\"$<TARGET_FILE:bloom_color_gpu_shader_test_helper>\""
+    )
+    target_link_libraries(bloom_color_gpu_shader_test PRIVATE bloom_color_gpu_shader)
+    add_dependencies(bloom_color_gpu_shader_test bloom_color_gpu_shader_test_helper)
+    bloom_enable_warnings(bloom_color_gpu_shader_test)
+
+    if(BLOOM_DEPENDENCY_PREFIX)
+        set(bloom_gpu_shader_test_environment
+            "BLOOM_GLSLANG_VALIDATOR=${BLOOM_DEPENDENCY_PREFIX}/bin/glslangValidator"
+            "BLOOM_SPIRV_VAL=${BLOOM_DEPENDENCY_PREFIX}/bin/spirv-val"
+        )
+    else()
+        set(bloom_gpu_shader_test_environment "")
+    endif()
+    bloom_add_test(
+        NAME bloom.color.gpu-shader-compiler
+        COMMAND bloom_color_gpu_shader_test
+        LABELS unit color gpu
+        ENVIRONMENT ${bloom_gpu_shader_test_environment}
+    )
+    set_tests_properties(bloom.color.gpu-shader-compiler PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 # bloom_color_ocio (issue #95): the in-process Bloom Neutral CPU display processor adapter.
 # Deliberately a separate target from bloom_color above -- bloom_color stays dependency-light
 # (bloom_core only); only this target links the heavier OpenColorIO dependency. Public headers

@@ -751,6 +751,7 @@ target_sources(
             include/bloom/render/gpu_presentation_target.hpp
             include/bloom/render/gpu_presentation_types.hpp
             include/bloom/render/gpu_resident_display.hpp
+            include/bloom/render/gpu_shader_artifact.hpp
             include/bloom/render/gpu_solid.hpp
             include/bloom/render/image.hpp
             include/bloom/render/image_types.hpp
