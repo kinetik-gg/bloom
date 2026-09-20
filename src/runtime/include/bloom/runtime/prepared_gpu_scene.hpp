@@ -34,6 +34,7 @@
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/gpu_ocio_command.hpp>
+#include <bloom/runtime/gpu_ocio_preparation.hpp>
 
 #include <charconv>
 #include <cmath>
@@ -485,6 +486,17 @@ struct PreparedGpuSceneBuildResult final {
     explicit operator bool() const noexcept { return hasValue(); }
 };
 
+// Off-UI GPU OCIO preparation injection for image-effect scene commands. The builder resolves the
+// exact configured colour space transform through the accepted OCIO GPU builder, generates the
+// wrapper, and compiles it off the UI thread through the injected preparer; it never compiles
+// shader text itself and never consults PATH, an environment variable, or a workspace path. A null
+// preparer makes a reachable non-identity effect fail closed (Unsupported) so a caller that does
+// not prepare effects keeps the existing CPU path rather than silently substituting identity.
+struct GpuSceneOcioContext final {
+    std::shared_ptr<GpuOcioProgramPreparer> preparer;
+    GpuOcioCompileOptions compileOptions;
+};
+
 // Stateless CPU scene preparation. The caller owns the plan and request; nothing is retained beyond
 // the returned scene.
 class GpuSceneCoverageCache;
@@ -498,9 +510,15 @@ class CpuGpuSceneBuilder final {
     // asset base directory and the prepared-upload cache used by ImageSource/VideoSource leaves.
     // The default empty context keeps the non-media constructor callers working: a media scene then
     // fails closed with MediaUnavailable instead of decoding with different semantics.
+    //
+    // The optional OCIO context supplies the off-UI preparer and the qualified compiler tool paths
+    // used for a non-identity image effect. Its default (no preparer, no tools) keeps every
+    // existing caller working and fails a non-identity effect closed rather than mis-rendering it.
     explicit CpuGpuSceneBuilder(std::shared_ptr<GpuSceneCoverageCache> coverageCache = nullptr,
-                                GpuSceneMediaContext mediaContext = {})
-        : coverageCache_(std::move(coverageCache)), mediaContext_(std::move(mediaContext)) {}
+                                GpuSceneMediaContext mediaContext = {},
+                                GpuSceneOcioContext ocioContext = {})
+        : coverageCache_(std::move(coverageCache)), mediaContext_(std::move(mediaContext)),
+          ocioContext_(std::move(ocioContext)) {}
 
     [[nodiscard]] PreparedGpuSceneBuildResult
     build(const std::shared_ptr<const CompiledCompositionPlan>& plan,
@@ -513,6 +531,7 @@ class CpuGpuSceneBuilder final {
 
     std::shared_ptr<GpuSceneCoverageCache> coverageCache_;
     GpuSceneMediaContext mediaContext_;
+    GpuSceneOcioContext ocioContext_;
 };
 
 } // namespace bloom::runtime

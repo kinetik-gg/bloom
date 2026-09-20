@@ -2,6 +2,7 @@
 
 #include "gpu_media_preparation.hpp"
 #include "gpu_scene_coverage.hpp"
+#include "gpu_scene_effect_emission.hpp"
 #include "gpu_scene_layer_emission.hpp"
 #include "gpu_scene_media_layer.hpp"
 #include "gpu_scene_nested.hpp"
@@ -39,11 +40,8 @@ namespace {
 // enclosing layer multiplied into it, and the accumulated layer opacity. It is propagated through a
 // Layer Output exactly as the evaluator does, so a layer fed by another vector layer rasterizes the
 // ORIGINAL leaf geometry through the full chain rather than resampling an intermediate raster.
-struct GpuSceneVectorChain final {
-    std::size_t source = 0;
-    detail::LayerMatrix matrix;
-    double opacity = 1.0;
-};
+// Defined in gpu_scene_effect_emission.hpp so an identity image effect can propagate it unchanged.
+using detail::GpuSceneVectorChain;
 
 [[nodiscard]] bool isSubsetOperation(const CompiledOperation& operation) noexcept {
     return std::holds_alternative<CompiledSolid>(operation) ||
@@ -51,6 +49,7 @@ struct GpuSceneVectorChain final {
            std::holds_alternative<CompiledShape>(operation) ||
            std::holds_alternative<CompiledImageSource>(operation) ||
            std::holds_alternative<CompiledVideoSource>(operation) ||
+           std::holds_alternative<CompiledImageEffect>(operation) ||
            std::holds_alternative<CompiledLayerOutput>(operation) ||
            std::holds_alternative<CompiledMerge>(operation) ||
            std::holds_alternative<CompiledCompositionOutput>(operation) ||
@@ -410,6 +409,58 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             continue;
         }
 
+        if (const auto* effect = std::get_if<CompiledImageEffect>(&operation)) {
+            const detail::GpuSceneEffectEmissionContext effectContext{
+                .plan = plan.get(),
+                .request = &request,
+                .resolved = &resolved,
+                .vectors = &vectors,
+                .commandForOperation = &commandForOperation,
+                .keyOf = &keyOf,
+                .outputWindowOf = &outputWindowOf,
+                .bounds = &bounds,
+                .commands = &commands,
+                .fullDisplayWindow = fullDisplayWindow,
+                .fullPixelAspect = fullPixelAspect,
+                .hScale = hScale,
+                .vScale = vScale,
+                .allowance = allowance,
+                .assetBaseDirectory = mediaContext_.assetBaseDirectory,
+                .coverageCache = coverageCache_,
+            };
+            detail::GpuSceneEffectEmission emitted;
+            if (const auto error = detail::emitImageEffectCommand(
+                    *effect, operationIndex, effectContext, ocioContext_, cancellation, emit,
+                    charge, chargeCoverage, emitted)) {
+                return failed(error->code, error->message, mediaStatistics);
+            }
+            const std::size_t effectInput = effect->input.value();
+            if (emitted.identity) {
+                // Exact CPU identity: alias the input command/key/window/bounds and keep the
+                // deferred vector chain so a consuming Layer Output still rasterizes the original
+                // leaf.
+                commandForOperation[index] = commandForOperation[effectInput];
+                keyOf[index] = keyOf[effectInput];
+                outputWindowOf[index] = outputWindowOf[effectInput];
+                bounds[index].local = bounds[effectInput].output;
+                bounds[index].output = bounds[index].local;
+                vectors[index] = vectors[effectInput];
+                continue;
+            }
+            commandForOperation[index] = emitted.command;
+            keyOf[index] = emitted.key;
+            outputWindowOf[index] = emitted.window;
+            bounds[index].local = emitted.local;
+            bounds[index].output = emitted.output;
+            if (emitted.consumedLeaf != detail::kNoVectorLeaf) {
+                if (emitted.consumedText)
+                    textConsumed[emitted.consumedLeaf] = true;
+                if (emitted.consumedShape)
+                    shapeConsumed[emitted.consumedLeaf] = true;
+            }
+            continue;
+        }
+
         if (const auto* source = std::get_if<CompiledCompositionSource>(&operation)) {
             // A nested composition is prepared by recursively building the CHILD plan with this
             // same production builder and splicing its genuine GPU commands into this list. The
@@ -635,7 +686,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                         leafOperation, *plan, resolved, chainMatrix, *layerWindow,
                         fullDisplayWindow, fullPixelAspect, hScale, vScale,
                         inputVec->opacity * opacity->value, leafPath && nativeGrid, allowance,
-                        operationIndex, transformValue, coverageCache_, cancellation, emit, charge,
+                        operationIndex, &transformValue, coverageCache_, cancellation, emit, charge,
                         chargeCoverage, composedIndex, semanticKey, consumedTextLeaf,
                         consumedShapeLeaf)) {
                     return failed(error->code, error->message);
