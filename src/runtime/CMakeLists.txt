@@ -147,6 +147,7 @@ target_sources(
             include/bloom/runtime/cpu_composition_evaluator.hpp
             include/bloom/runtime/evaluation.hpp
             include/bloom/runtime/gpu_neutral_display_qualification.hpp
+            include/bloom/runtime/gpu_coverage_contract.hpp
             include/bloom/runtime/gpu_resident_preview_qualification.hpp
             include/bloom/runtime/gpu_preview_display_product.hpp
             include/bloom/runtime/gpu_resident_preview_product.hpp

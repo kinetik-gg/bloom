@@ -375,6 +375,88 @@ bloom_add_test(
     TIMEOUT 300
 )
 
+# Bounded GPU coverage contract gate. It enumerates every CompiledOperation/ImageEffectKernel
+# alternative, feature axis, render route, and built-in pixel node type from the same contract,
+# drives the REAL production CpuGpuSceneBuilder over one genuine fixture per required id, and
+# reports the current holes by name. It is expected RED until the required production fixtures
+# exist; it must then turn green without weakening the contract or adding opt-outs. CPU-only.
+#
+# -Werror=switch makes the contract's no-default enumerator switches (ShapeKind, NodeLoweringKind)
+# a compile failure when a new enumerator is added without a classification.
+# Generated video fixtures are supplied by the caller so the real media worker pipeline is used
+# without inventing a fake handle. Empty means the video fixtures report an explicit
+# test-environment-missing failure.
+set(BLOOM_GPU_COVERAGE_MEDIA_FIXTURES "" CACHE PATH
+    "Directory containing the generated media-worker video fixtures for the GPU coverage gate")
+
+add_executable(bloom_runtime_gpu_coverage_contract_test gpu_coverage_contract_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_coverage_contract_test
+    PRIVATE bloom_runtime_evaluator bloom_render bloom_media_video OpenEXR::OpenEXR)
+target_include_directories(bloom_runtime_gpu_coverage_contract_test
+    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+if(TARGET bloom-media-worker)
+    add_dependencies(bloom_runtime_gpu_coverage_contract_test bloom-media-worker)
+endif()
+bloom_enable_warnings(bloom_runtime_gpu_coverage_contract_test)
+if(MSVC)
+    target_compile_options(bloom_runtime_gpu_coverage_contract_test PRIVATE /we4062)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+    target_compile_options(bloom_runtime_gpu_coverage_contract_test PRIVATE -Werror=switch)
+endif()
+bloom_enable_strict_floating_point(bloom_runtime_gpu_coverage_contract_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_coverage_contract
+    COMMAND bloom_runtime_gpu_coverage_contract_test
+            --media-fixtures "${BLOOM_GPU_COVERAGE_MEDIA_FIXTURES}"
+    LABELS runtime unit gpu contract
+    TIMEOUT 300
+)
+
+# Native acceptance is a distinct CTest from the CPU gate. With a device it must actually execute
+# the native routes/fixtures; without one it must SKIP (exit 77), and `--require-device` must hard
+# fail. It never reports a native pass it did not earn.
+bloom_add_test(
+    NAME bloom.runtime.gpu_coverage_native_acceptance
+    COMMAND bloom_runtime_gpu_coverage_contract_test --native-acceptance
+            --media-fixtures "${BLOOM_GPU_COVERAGE_MEDIA_FIXTURES}"
+    LABELS runtime native gpu contract
+    TIMEOUT 600
+)
+set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
+    PROPERTIES SKIP_RETURN_CODE 77)
+
+# Mutation proof: adding an unclassified pixel alternative must fail to compile, and it must fail on
+# the missing GpuOperationCoverageTraits specialization specifically. Both probe targets are excluded
+# from the default build; the check script builds the positive control first, then the negative
+# probe, and asserts the reason.
+add_library(bloom_runtime_gpu_coverage_contract_positive_probe OBJECT EXCLUDE_FROM_ALL
+    gpu_coverage_contract_positive_probe.cpp)
+target_link_libraries(bloom_runtime_gpu_coverage_contract_positive_probe
+    PRIVATE bloom_runtime_compiler)
+bloom_enable_warnings(bloom_runtime_gpu_coverage_contract_positive_probe)
+if(MSVC)
+    target_compile_options(bloom_runtime_gpu_coverage_contract_positive_probe PRIVATE /we4062)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+    target_compile_options(bloom_runtime_gpu_coverage_contract_positive_probe PRIVATE
+        -Werror=switch)
+endif()
+
+add_library(bloom_runtime_gpu_coverage_contract_negative_probe OBJECT EXCLUDE_FROM_ALL
+    gpu_coverage_contract_negative_probe.cpp)
+target_link_libraries(bloom_runtime_gpu_coverage_contract_negative_probe
+    PRIVATE bloom_runtime_compiler)
+bloom_enable_warnings(bloom_runtime_gpu_coverage_contract_negative_probe)
+
+add_test(
+    NAME bloom.runtime.gpu_coverage_contract_mutation_proof
+    COMMAND ${CMAKE_COMMAND}
+            "-DBLOOM_BUILD_DIR=${CMAKE_BINARY_DIR}"
+            "-DBLOOM_PROBE_POSITIVE=bloom_runtime_gpu_coverage_contract_positive_probe"
+            "-DBLOOM_PROBE_NEGATIVE=bloom_runtime_gpu_coverage_contract_negative_probe"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/gpu_coverage_negative_probe_check.cmake")
+set_tests_properties(bloom.runtime.gpu_coverage_contract_mutation_proof
+    PROPERTIES LABELS runtime quality contract TIMEOUT 180)
+
 # Bounded prepared-upload cache: node lifetime under replacement/eviction, byte and entry ceilings,
 # zero-budget disable, and per-entry accounting. CPU-only; no loader and no device.
 add_executable(bloom_runtime_gpu_prepared_upload_cache_test gpu_prepared_upload_cache_tests.cpp)

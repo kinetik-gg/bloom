@@ -126,6 +126,34 @@ device-bound `GpuDisplayImage`, charges the actual VMA allocation bytes, and ret
 owner-thread `GpuResidentFramePin`; there is deliberately no accessor returning a strong image outside
 that pin.
 
+Coverage contract and final render. `bloom/runtime/gpu_coverage_contract.hpp` is the exhaustive,
+compile-time-checked registry of every `CompiledOperation`/`ImageEffectKernel` alternative, every
+image-producing authoring lowering, every built-in pixel node type, and the required blend, shape,
+layer, colour, and display feature axes and render routes. GPU production preparation is required by
+default; adding an alternative, lowering, or pixel node type without classifying and fixturing it is
+a compile failure or a missing-fixture failure, and an unclassified or unfixtured required id keeps
+the coverage gate RED by name rather than warning. A fixture passes only with a genuine prepared GPU
+scene (or, native-only, real native execution with parity and cache evidence); there is no
+admitted-but-not-prepared pass, and an invalid plan or missing media is never a coverage pass.
+
+The only permitted exceptions are typed and narrow: an actual pixel operation, feature, or route
+exception requires a non-empty id, a rationale, and an owning document or accepted decision
+reference, and no such exception exists today. Host-preparation declarations -- media container and
+sample I/O and decompression, font shaping, parameter/geometry resolution, and one final readback --
+are a separate audited list and are not a route to exempt a pixel operation, feature, or route.
+Approval identifiers are never fabricated, and working-space colour conversion is a pixel
+transformation that is never an opt-out.
+
+Preview and final rendering are both required. Interactive viewer preview, RAM preview fill and
+playback, still-frame export, sequence/range export, video export, and headless/scripted render are
+required routes through the actual production evaluation paths, with no preview-only exemption. A
+final render may read the single composited image back once at the CPU codec/file boundary; per-node
+or per-operation full-frame roundtrips are not a GPU implementation. Native acceptance is a distinct
+gate: on a device it must execute the routes and assert native dispatch, resident provenance, a pixel
+oracle, cold/warm cache state, and no silent CPU whole-frame render for an ordinary operation; with
+no device it reports an explicit skip, never a pass, and `--require-device` fails. An unavailable
+device must publish explicit Unsupported/CPU-fallback provenance, never a CPU frame labelled GPU.
+
 Resident preview product and service. The closed `PreparedPreviewFrame` display variant has a fourth,
 GPU-resident arm, `PreviewResidentDisplayFrame`, built only by the validating owner-thread factory in
 `gpu_resident_preview_product.hpp`. Its only pixel storage is the opaque, owner-bound
