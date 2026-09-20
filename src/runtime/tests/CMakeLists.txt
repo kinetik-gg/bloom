@@ -950,3 +950,84 @@ bloom_add_test(
     LABELS runtime unit gpu render
     TIMEOUT 300
 )
+# Runtime OCIO command/preparation service: reusable wrapper generation, canonical command
+# identity, prepared-command validation, and the bounded preparation cache. CPU-only; the
+# compile-dependent cases need the pinned glslangValidator/spirv-val and an OCIO config and print
+# an explicit note otherwise. The identity/wrapper cases always run.
+find_program(bloom_runtime_ocio_glslang_validator
+    NAMES glslangValidator
+    HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
+    NO_DEFAULT_PATH)
+find_program(bloom_runtime_ocio_spirv_val
+    NAMES spirv-val
+    HINTS "${BLOOM_DEPENDENCY_PREFIX}/bin"
+    NO_DEFAULT_PATH)
+add_executable(bloom_runtime_gpu_ocio_command_test gpu_ocio_command_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_ocio_command_test PRIVATE bloom_runtime_evaluator)
+if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
+    get_filename_component(bloom_runtime_ocio_tools_dir
+        "${bloom_runtime_ocio_glslang_validator}" DIRECTORY)
+    target_compile_definitions(bloom_runtime_gpu_ocio_command_test PRIVATE
+        "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+endif()
+bloom_enable_warnings(bloom_runtime_gpu_ocio_command_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_ocio_command_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_ocio_command
+    COMMAND bloom_runtime_gpu_ocio_command_test
+    LABELS runtime unit gpu color
+    TIMEOUT 300
+)
+
+# Native acceptance for the runtime OCIO executor: real extracted/compiled OCIO CST + display +
+# view-adjust programs dispatched through the owner-thread executor and compared against the actual
+# unchanged CPU OCIO oracle, with warm zero-compile/zero-upload, invalidation, cancellation, and an
+# injected upload fault. Requires the Vulkan backend (the fault seam lives in the native closure) and
+# the pinned tools; skips cleanly otherwise.
+if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_gpu_ocio_program_executor_test
+        gpu_ocio_program_executor_native_tests.cpp)
+    target_include_directories(bloom_runtime_gpu_ocio_program_executor_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/render")
+    target_link_libraries(bloom_runtime_gpu_ocio_program_executor_test
+        PRIVATE bloom_runtime_evaluator bloom_render bloom_render_ocio_test_faults)
+    if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
+        target_compile_definitions(bloom_runtime_gpu_ocio_program_executor_test PRIVATE
+            "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+    endif()
+    bloom_enable_warnings(bloom_runtime_gpu_ocio_program_executor_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_ocio_program_executor_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_ocio_program_executor
+        COMMAND bloom_runtime_gpu_ocio_program_executor_test
+        LABELS runtime unit gpu color
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.runtime.gpu_ocio_program_executor
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+# Production GpuSceneExecutor driving an OCIO ProcessEffect scene command end to end: solid +
+# upload -> OCIO CST effect -> merge -> composition output, compared against the unchanged CPU OCIO
+# oracle plus the CPU source-over primitive, with warm zero-dispatch, dirty-effect-only invalidation,
+# and an actual-retained-byte budget refusal. Requires the Vulkan backend and the pinned tools.
+if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_gpu_ocio_scene_executor_test
+        gpu_ocio_scene_executor_native_tests.cpp)
+    target_link_libraries(bloom_runtime_gpu_ocio_scene_executor_test
+        PRIVATE bloom_runtime_evaluator bloom_render)
+    if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
+        target_compile_definitions(bloom_runtime_gpu_ocio_scene_executor_test PRIVATE
+            "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+    endif()
+    bloom_enable_warnings(bloom_runtime_gpu_ocio_scene_executor_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_ocio_scene_executor_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_ocio_scene_executor
+        COMMAND bloom_runtime_gpu_ocio_scene_executor_test
+        LABELS runtime unit gpu color
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.runtime.gpu_ocio_scene_executor
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()

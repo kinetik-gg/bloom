@@ -97,6 +97,12 @@ void GpuOcioProgram::Impl::beginImpl(const bool display,
         auto imageImpl = std::make_unique<GpuDisplayImageImpl>();
         imageImpl->state = control;
         imageImpl->generation = expectedGeneration;
+        // The output has exactly the input's geometry: propagate the data/display window and pixel
+        // aspect so a downstream native operation (composite/merge) can consume the resident
+        // result.
+        imageImpl->dataWindow = inputImpl->dataWindow;
+        imageImpl->displayWindow = inputImpl->displayWindow;
+        imageImpl->pixelAspect = inputImpl->pixelAspect;
         if (!createDisplayImage(state, inputImpl->width, inputImpl->height, *imageImpl)) {
             fail(GpuOcioProgramDiagnosticCode::AllocationFailed,
                  "the display output image could not be created");
@@ -118,6 +124,12 @@ void GpuOcioProgram::Impl::beginImpl(const bool display,
         auto imageImpl = std::make_unique<GpuImageImpl>();
         imageImpl->state = control;
         imageImpl->generation = expectedGeneration;
+        // The output has exactly the input's geometry: propagate the data/display window and pixel
+        // aspect so a downstream native operation (composite/merge) can consume the resident
+        // result.
+        imageImpl->dataWindow = inputImpl->dataWindow;
+        imageImpl->displayWindow = inputImpl->displayWindow;
+        imageImpl->pixelAspect = inputImpl->pixelAspect;
         if (!createResidentImage(state, inputImpl->width, inputImpl->height, *imageImpl)) {
             fail(GpuOcioProgramDiagnosticCode::AllocationFailed,
                  "the effect output image could not be created");

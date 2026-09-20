@@ -300,6 +300,10 @@ GpuSceneExecutorPollResult GpuSceneExecutor::poll() {
                 impl.affine->cancel();
             } else if (impl.nativeKind == Impl::NativeKind::Blend) {
                 impl.blend->cancel();
+            } else if (impl.nativeKind == Impl::NativeKind::Ocio) {
+                if (impl.nativeOcioProgram != nullptr) {
+                    impl.nativeOcioProgram->cancel();
+                }
             } else {
                 impl.composite->cancel();
             }
@@ -371,6 +375,10 @@ void GpuSceneExecutor::cancel() noexcept {
             impl_->affine->cancel();
         } else if (impl_->nativeKind == Impl::NativeKind::Blend) {
             impl_->blend->cancel();
+        } else if (impl_->nativeKind == Impl::NativeKind::Ocio) {
+            if (impl_->nativeOcioProgram != nullptr) {
+                impl_->nativeOcioProgram->cancel();
+            }
         }
         impl_->cancelIssued = true;
     }
@@ -385,7 +393,8 @@ bool GpuSceneExecutor::teardownDrainIncomplete() noexcept {
            render::GpuComposite::teardownDrainIncomplete() ||
            render::GpuImageUpload::teardownDrainIncomplete() ||
            render::GpuAffine::teardownDrainIncomplete() ||
-           render::GpuBlend::teardownDrainIncomplete();
+           render::GpuBlend::teardownDrainIncomplete() ||
+           render::GpuOcioProgram::teardownDrainIncomplete();
 }
 
 // Folded additive accessor (declared in the public header). It introduces no field or layout
