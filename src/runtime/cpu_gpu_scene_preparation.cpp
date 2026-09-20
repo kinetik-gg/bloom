@@ -5,6 +5,7 @@
 #include "gpu_scene_layer_emission.hpp"
 #include "gpu_scene_media_layer.hpp"
 #include "gpu_scene_nested.hpp"
+#include "gpu_scene_preparation_builders.hpp"
 #include "gpu_scene_preparation_private.hpp"
 #include "gpu_scene_vector_emission.hpp"
 
@@ -44,18 +45,6 @@ struct GpuSceneVectorChain final {
     detail::LayerMatrix matrix;
     double opacity = 1.0;
 };
-
-[[nodiscard]] bool isSubsetOperation(const CompiledOperation& operation) noexcept {
-    return std::holds_alternative<CompiledSolid>(operation) ||
-           std::holds_alternative<CompiledText>(operation) ||
-           std::holds_alternative<CompiledShape>(operation) ||
-           std::holds_alternative<CompiledImageSource>(operation) ||
-           std::holds_alternative<CompiledVideoSource>(operation) ||
-           std::holds_alternative<CompiledLayerOutput>(operation) ||
-           std::holds_alternative<CompiledMerge>(operation) ||
-           std::holds_alternative<CompiledCompositionOutput>(operation) ||
-           std::holds_alternative<CompiledCompositionSource>(operation);
-}
 
 } // namespace
 
@@ -105,48 +94,10 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     }
 
     const std::size_t operationCount = plan->operations().size();
-    std::vector<bool> reachable(operationCount, false);
-    std::vector<std::size_t> pending{request.output.value()};
-    while (!pending.empty()) {
-        const auto index = pending.back();
-        pending.pop_back();
-        if (index >= operationCount) {
-            return failed(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                          "Plan references an invalid operation");
-        }
-        if (reachable[index]) {
-            continue;
-        }
-        reachable[index] = true;
-        detail::forEachInput(plan->operations()[index], [&pending](const OperationIndex input) {
-            pending.push_back(input.value());
-        });
-        // A parent is not a pixel input, but the child's composed matrix needs the parent's matrix,
-        // so the parent subtree is part of what this build must resolve. The preflight still
-        // rejects a parent that is not an earlier Layer Output.
-        if (const auto* layer = std::get_if<CompiledLayerOutput>(&plan->operations()[index]);
-            layer && layer->parent && layer->parent->value() < operationCount) {
-            pending.push_back(layer->parent->value());
-        }
-    }
-    for (std::size_t index = 0; index < operationCount; ++index) {
-        if (!reachable[index]) {
-            continue;
-        }
-        const auto& operation = plan->operations()[index];
-        if (!isSubsetOperation(operation)) {
-            return failed(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
-                          "A reachable operation is outside the prepared subset");
-        }
-        // A composition source is inside the prepared subset only when it names a present,
-        // compatible child plan. A source that does not is refused exactly as it was before nested
-        // compositions were prepared at all, before any resolution or child build.
-        if (const auto* source = std::get_if<CompiledCompositionSource>(&operation);
-            source != nullptr && !detail::nestedCompositionChainIsSupported(*source, *plan)) {
-            return failed(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
-                          "A composition source without a supported nested plan is outside the "
-                          "prepared subset");
-        }
+    std::vector<bool> reachable;
+    if (const auto error = detail::computeReachablePreparedOperations(*plan, request.output.value(),
+                                                                      cancellation, reachable)) {
+        return failed(error->code, error->message);
     }
 
     auto checked = detail::preflight(plan, request, cancellation, {}, nullptr, nullptr);
@@ -419,7 +370,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             detail::GpuSceneNestedResult nested;
             const auto error = detail::prepareNestedComposition(
                 *source, *plan, request, resolved, hScale, vScale, detail::nestedCompositionDepth(),
-                allowance > chargedBytes ? allowance - chargedBytes : 0, cancellation,
+                allowance, chargedBytes, cancellation,
                 [this](const std::shared_ptr<const CompiledCompositionPlan>& childPlan,
                        const EvaluationRequest& childRequest, const CancellationToken& cancel) {
                     return build(childPlan, childRequest, cancel);
@@ -427,18 +378,6 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 commands, nested);
             if (error) {
                 return failed(error->code, error->message, mediaStatistics);
-            }
-            if (!nested.outputWindow.has_value()) {
-                return failed(PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                              "the nested composition published no output window", mediaStatistics);
-            }
-            if (nested.residentBytes != 0) {
-                if (chargedBytes > allowance || nested.residentBytes > allowance - chargedBytes) {
-                    return failed(PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded,
-                                  "Prepared scene exceeds the request pixel allowance",
-                                  mediaStatistics);
-                }
-                chargedBytes += nested.residentBytes;
             }
             bounds[index] = nested.bounds;
             outputWindowOf[index] = *nested.outputWindow;
