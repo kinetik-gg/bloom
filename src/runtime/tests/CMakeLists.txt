@@ -1150,6 +1150,32 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
+# Producer/executor isolation of the nonlinear CST precision gate: the neutral config's
+# process -> sRGB-texture GammaOp CST run through the real GpuOcioProgramPreparer +
+# GpuOcioProgramExecutor and compared against the unchanged CpuColorSpaceProcessor at 2e-6 with
+# byte-exact alpha, over negative/HDR/translucent/alpha-zero/threshold endpoints and a deterministic
+# random grid. Requires the Vulkan backend and the pinned tools.
+if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
+    add_executable(bloom_runtime_gpu_ocio_precision_test
+        gpu_ocio_precision_native_tests.cpp)
+    target_link_libraries(bloom_runtime_gpu_ocio_precision_test
+        PRIVATE bloom_runtime_evaluator bloom_render)
+    if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
+        target_compile_definitions(bloom_runtime_gpu_ocio_precision_test PRIVATE
+            "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+    endif()
+    bloom_enable_warnings(bloom_runtime_gpu_ocio_precision_test)
+    bloom_enable_strict_floating_point(bloom_runtime_gpu_ocio_precision_test)
+    bloom_add_test(
+        NAME bloom.runtime.gpu_ocio_precision
+        COMMAND bloom_runtime_gpu_ocio_precision_test
+        LABELS runtime unit gpu color
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.runtime.gpu_ocio_precision
+        PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 # Production GpuSceneExecutor driving an OCIO ProcessEffect scene command end to end: solid +
 # upload -> OCIO CST effect -> merge -> composition output, compared against the unchanged CPU OCIO
 # oracle plus the CPU source-over primitive, with warm zero-dispatch, dirty-effect-only invalidation,

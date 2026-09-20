@@ -70,6 +70,19 @@ void addPixelAspect(OperationKey& key, const core::PixelAspectRatio ratio) {
     return key.digest();
 }
 
+// The RAW decode upload identity: the kind tag plus the decode-only identity. It deliberately does
+// NOT fold the proxy scales or display descriptor, so a proxy or display change never re-decodes;
+// the raw upload carries the source's own metadata and the proxy is applied by the point-resample
+// command downstream. The kind tag keeps an image raw upload distinct from a video raw upload.
+[[nodiscard]] std::string rawDecodeUploadKey(const std::string_view kind,
+                                             const std::string& decodeKey) {
+    OperationKey key;
+    key.add(std::string{"gpu-raw-upload-v1"});
+    key.add(std::string{kind});
+    key.add(decodeKey);
+    return key.digest();
+}
+
 [[nodiscard]] std::size_t byteBudget(const std::uint64_t pixels) {
     return static_cast<std::size_t>(
         std::min<std::uint64_t>(pixels, std::numeric_limits<std::size_t>::max()));
@@ -353,27 +366,36 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
     const std::string fromId = selection.interpretation.inputColorSpaceId;
     const std::string_view toId = selection.workingColorSpaceId;
     const bool noConversion = selection.inputProcessor == nullptr;
-    if (colourTransformIsIdentity(fromId, toId, noConversion)) {
+    const bool identityTransform = colourTransformIsIdentity(fromId, toId, noConversion);
+    // Without a GPU OCIO preparer there is no way to run a non-identity transform on the device, so
+    // this leaf falls back to the connected CPU path (the exact evaluator conversion, including its
+    // CPU proxy resample). A GPU colour context is the caller's opt-in to the raw-upload +
+    // native-PointResample (+ optional OCIO) split.
+    if (ocioContext.preparer == nullptr) {
         ++statistics.imageSources;
         return evaluateConvertedImageUpload(selection, resolved, context, pixelBudget,
                                             explicitBypass, planBypass, cancellation, statistics);
     }
+    std::optional<color::ResolvedBloomNeutralConfig> config;
+    if (!identityTransform) {
+        config = resolveInputColorConfig(request.colorIntent);
+        if (!config) {
+            MediaUploadOutcome outcome;
+            outcome.failure = "The selected OCIO input configuration is unavailable";
+            return outcome;
+        }
+    }
 
     ++statistics.imageSources;
-    auto config = resolveInputColorConfig(request.colorIntent);
-    if (!config) {
-        MediaUploadOutcome outcome;
-        outcome.failure = "The selected OCIO input configuration is unavailable";
-        return outcome;
-    }
-    // A real input->working transform. The raw upload stays at the FULL source dimensions and
-    // carries the source's native metadata. Under a fractional proxy the accepted PointResampleV1
-    // command gathers the full-resolution upload to the proxy output window on the GPU, and the
-    // OCIO transform runs over that proxy geometry. The CPU oracle applies exact nearest resampling
-    // before the per-pixel colour transform; an exact nearest sample commutes with a per-pixel
-    // transform, so nearest-then-OCIO is pixel-identical. No host per-pixel resampling happens.
+    // A real OR identity input->working transform. The raw upload always stays at the FULL source
+    // dimensions with the source's native metadata. Under a fractional proxy the accepted
+    // PointResampleV1 command gathers the full-resolution upload to the proxy output window on the
+    // GPU; a non-identity transform then runs the OCIO CST over that proxy geometry. The CPU oracle
+    // applies exact nearest resampling before the per-pixel colour transform, and an exact nearest
+    // sample commutes with a per-pixel transform, so nearest-then-(optional OCIO) is
+    // pixel-identical with no host per-pixel resampling.
     MediaUploadOutcome outcome;
-    outcome.uploadSemanticKey = uploadSemanticKey("image-raw", selection.decodeKey, resolved);
+    outcome.uploadSemanticKey = rawDecodeUploadKey("image-raw", selection.decodeKey);
     outcome.semanticKey = outcome.uploadSemanticKey;
     ++statistics.uploadKeyConstructions;
     if (!explicitBypass && context.preparedUploadCache != nullptr) {
@@ -443,6 +465,10 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
         outcome.resample =
             MediaResamplePlan{*proxyDescriptor, resolved.horizontalScale, resolved.verticalScale};
     }
+    if (identityTransform) {
+        // No OCIO pass: the raw (or native-point-resampled) upload is already in working space.
+        return outcome;
+    }
     const auto ocioWindow = outcome.resample.has_value() ? outcome.resample->output.dataWindow()
                                                          : descriptor.dataWindow();
     const auto ocioAspect = outcome.resample.has_value() ? outcome.resample->output.pixelAspect()
@@ -485,22 +511,28 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
     const std::string& fromId = selection.inputColorSpaceId;
     const std::string_view toId = selection.workingColorSpaceId;
     const bool noConversion = selection.inputProcessor == nullptr;
-    if (colourTransformIsIdentity(fromId, toId, noConversion)) {
-        // The YUV->RGB transfer/primaries conversion plus an identity processor is exactly the
-        // connected path; no OCIO colour pass is hidden in host code.
+    const bool identityTransform = colourTransformIsIdentity(fromId, toId, noConversion);
+    // Without a GPU OCIO preparer a non-identity transform cannot run on the device, so fall back
+    // to the connected CPU path (the exact evaluator conversion). A GPU colour context is the
+    // caller's opt-in to the raw-upload + native-PointResample (+ optional OCIO) split.
+    if (ocioContext.preparer == nullptr) {
         return evaluateConvertedVideoUpload(selection, resolved, context, pixelBudget,
                                             explicitBypass, planBypass, cancellation, statistics);
     }
-    // A real input->working transform. The host does only the codec-side YUV matrix/range and the
-    // config-managed transfer-8 path (no curve) into the source's pre-OCIO state; the OCIO pass is
-    // the GPU command prepared below. The raw frame stays at source resolution; under a fractional
-    // proxy the PointResampleV1 command gathers it on the GPU before the OCIO transform.
-    auto config = resolveInputColorConfig(request.colorIntent);
-    if (!config) {
-        outcome.failure = "The selected OCIO input configuration is unavailable";
-        return outcome;
+    std::optional<color::ResolvedBloomNeutralConfig> config;
+    if (!identityTransform) {
+        config = resolveInputColorConfig(request.colorIntent);
+        if (!config) {
+            outcome.failure = "The selected OCIO input configuration is unavailable";
+            return outcome;
+        }
     }
-    outcome.uploadSemanticKey = uploadSemanticKey("video-raw", selection.decodeKey, resolved);
+    // The host does only the codec-side YUV matrix/range and the config-managed transfer-8 path (no
+    // curve) into the source's pre-OCIO state; a non-identity transform then runs the OCIO CST on
+    // the GPU. The raw frame stays at source resolution; under a fractional proxy the
+    // PointResampleV1 command gathers it on the GPU before the (optional) OCIO transform. An
+    // identity transform is the same raw frame with no OCIO pass, never treated as raw codec data.
+    outcome.uploadSemanticKey = rawDecodeUploadKey("video-raw", selection.decodeKey);
     outcome.semanticKey = outcome.uploadSemanticKey;
     ++statistics.uploadKeyConstructions;
     if (!explicitBypass && context.preparedUploadCache != nullptr) {
@@ -550,6 +582,11 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
         }
         outcome.resample =
             MediaResamplePlan{*proxyDescriptor, resolved.horizontalScale, resolved.verticalScale};
+    }
+    if (identityTransform) {
+        // No OCIO pass: the codec-prepared (or native-point-resampled) frame is already in working
+        // space.
+        return outcome;
     }
     const auto ocioWindow = outcome.resample.has_value() ? outcome.resample->output.dataWindow()
                                                          : descriptor.dataWindow();

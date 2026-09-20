@@ -63,8 +63,10 @@ bool GpuSceneExecutor::Impl::hasUnretiredNative() const noexcept {
     const bool blendUnretired = blend != nullptr && blend->hasUnretiredSubmission();
     const bool pointResampleUnretired =
         pointResample != nullptr && pointResample->hasUnretiredSubmission();
+    const bool coverageUnretired =
+        pathCoverage != nullptr && pathCoverage->hasUnretiredSubmission();
     return solidUnretired || compositeUnretired || uploadUnretired || affineUnretired ||
-           blendUnretired || pointResampleUnretired || ocioProgramsUnretired();
+           blendUnretired || pointResampleUnretired || coverageUnretired || ocioProgramsUnretired();
 }
 
 std::uint64_t GpuSceneExecutor::Impl::remainingBudget() const noexcept {
@@ -186,6 +188,8 @@ void GpuSceneExecutor::Impl::advanceDrain() noexcept {
         static_cast<void>(blend->poll());
     } else if (nativeKind == NativeKind::PointResample && pointResample != nullptr) {
         static_cast<void>(pointResample->poll());
+    } else if (nativeKind == NativeKind::PathCoverage && pathCoverage != nullptr) {
+        static_cast<void>(pathCoverage->poll());
     } else if (nativeKind == NativeKind::Ocio) {
         drainOcioPrograms();
     }
@@ -223,17 +227,14 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
         break;
     }
     case GpuSceneExecutorStepKind::CoveredSolid: {
-        const auto parameters = solidParameters();
-        if (!parameters.has_value()) {
+        if (!step.solidDataWindow.has_value() || !step.solidDisplayWindow.has_value()) {
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
                                   "a covered step has no window");
         }
-        const auto native =
-            solid->beginCovered(*parameters, step.coverage, step.coveredOpacity, remaining);
-        if (native.code != render::GpuSolidDiagnosticCode::None) {
-            return diagnosticFromSolid(native);
+        if (const auto error = startCoveredStep(step);
+            error.code != GpuSceneExecutorDiagnosticCode::None) {
+            return error;
         }
-        ++counters.coveredSolidDispatches;
         break;
     }
     case GpuSceneExecutorStepKind::Upload: {
@@ -340,11 +341,18 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
         }
         break;
     }
+    case GpuSceneExecutorStepKind::PathCoverage: {
+        // The native coverage producer is started from startCoveredStep, never as its own planned
+        // step; a plan carrying it is malformed.
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                              "a coverage producer step must not be planned directly");
+    }
     }
     ++counters.dispatches;
-    if (step.kind == GpuSceneExecutorStepKind::Solid ||
-        step.kind == GpuSceneExecutorStepKind::CoveredSolid) {
+    if (step.kind == GpuSceneExecutorStepKind::Solid) {
         nativeKind = NativeKind::Solid;
+    } else if (step.kind == GpuSceneExecutorStepKind::CoveredSolid) {
+        // startCoveredStep already selected PathCoverage (native producer) or Solid (host bitmap).
     } else if (step.kind == GpuSceneExecutorStepKind::Upload) {
         nativeKind = NativeKind::Upload;
     } else if (step.kind == GpuSceneExecutorStepKind::Affine) {
@@ -380,6 +388,9 @@ GpuSceneExecutor::Impl::~Impl() {
     pointResample.reset();
     solid.reset();
     composite.reset();
+    // The producer is destroyed last: a consuming fill's release above has already drained or
+    // quarantined its submission, so the co-owned resident mask is safe to release here.
+    pathCoverage.reset();
 }
 
 } // namespace bloom::runtime

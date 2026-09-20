@@ -20,6 +20,7 @@
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
+#include "gpu_scene_coverage_geometry_test_support.hpp"
 #include "layer_parent_transform.hpp"
 
 #include <algorithm>
@@ -432,6 +433,11 @@ replayScene(const PreparedGpuScene& scene, std::vector<std::shared_ptr<const Rgb
                 return false;
             }
             const auto width = coverage->outputWindow.extent().width();
+            const std::vector<std::uint8_t> mask =
+                bloom::gpu_scene_coverage_test::coverageMaskBytes(*coverage);
+            if (mask.empty()) {
+                return false;
+            }
             for (std::int64_t y = coverage->outputWindow.originY();
                  y < coverage->outputWindow.maxYExclusive(); ++y) {
                 auto row = builder.value()->row(y);
@@ -440,8 +446,7 @@ replayScene(const PreparedGpuScene& scene, std::vector<std::shared_ptr<const Rgb
                 }
                 const auto offset =
                     static_cast<std::size_t>(y - coverage->outputWindow.originY()) * width;
-                const auto coverageRow =
-                    std::span<const std::uint8_t>(coverage->coverage->data() + offset, width);
+                const auto coverageRow = std::span<const std::uint8_t>(mask.data() + offset, width);
                 if (const auto status = bloom::render::coverageSolidRow(
                         coverageRow, coverage->pixel, *row.value())) {
                     (void)status;
@@ -577,8 +582,7 @@ replayScene(const PreparedGpuScene& scene, std::vector<std::shared_ptr<const Rgb
                 return false;
             }
             const auto descriptor = Rgba32fImageDescriptor::create(
-                resample->outputWindow, input->descriptor()->displayWindow(),
-                input->descriptor()->pixelAspect());
+                resample->outputWindow, resample->displayWindow, resample->pixelAspect);
             if (!descriptor) {
                 return false;
             }

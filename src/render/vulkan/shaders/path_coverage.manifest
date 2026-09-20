@@ -1,0 +1,32 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "generator": "tools/gpu-shaders compile/validate/embed recipe (reused, not reimplemented)",
+  "generatorRevision": 1,
+  "operation": "GpuPathCoverage",
+  "entrypoint": "main",
+  "shader": {
+    "language": "GLSL_460",
+    "stage": "compute",
+    "sha256": "5dd4e2486ddea9750b6755997c77816cce7c3b4ef83a6ce1a5d59fb21c932219",
+    "spirvSha256": "f5aff832e47c64e42c95d0ae10429a5434e28566ccc1eb8d8c8d33e456bf2a4a",
+    "localSizeX": 256,
+    "textures": 0,
+    "uniforms": 0
+  },
+  "bindings": [
+    {"set": 0, "binding": 0, "kind": "storage-buffer", "access": "readonly", "format": "uvec2-row-ranges", "role": "per-subscanline-span-ranges"},
+    {"set": 0, "binding": 1, "kind": "storage-buffer", "access": "readonly", "format": "uvec2-inclusive-spans", "role": "integer-sample-coverage-spans"},
+    {"set": 0, "binding": 2, "kind": "storage-buffer", "access": "writeonly", "format": "r8-packed-le-uint32", "role": "resident-r8-coverage-mask"}
+  ],
+  "pushConstant": {"byteCount": 12, "fields": [
+    {"name": "width", "type": "uint32"},
+    {"name": "height", "type": "uint32"},
+    {"name": "groupsX", "type": "uint32"}
+  ]},
+  "contracts": {
+    "numeric": "integer-sample-overlap-equals-cpu-uint8",
+    "alphaPreserved": true,
+    "noFloat64": true,
+    "note": "count of covered 4x4 centre samples per pixel, quantized exactly as coverageRow (count*255+8)/16"
+  }
+}

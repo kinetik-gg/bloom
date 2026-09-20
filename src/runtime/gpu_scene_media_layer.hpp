@@ -105,10 +105,12 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
                                  .semanticKey = uploadKey};
     GpuSceneCommandIndex current = emit(std::move(upload));
     std::string currentKey = uploadKey;
-    // A proxied non-identity leaf keeps the full-resolution upload and gathers the proxy on the GPU
-    // before the OCIO transform. The resample output is charged (it is resident alongside the input
-    // for the duration of the gather until the input pin is consumed by the OCIO step).
-    if (leaf.program != nullptr && leaf.resample.has_value()) {
+    // A proxied leaf (identity or non-identity) keeps the full-resolution upload and gathers the
+    // proxy on the GPU; a non-identity transform then runs the OCIO CST over that proxy geometry.
+    // The resample is emitted independently of whether an OCIO program is present. The resample
+    // output is charged (it is resident alongside the input for the duration of the gather until
+    // the input pin is consumed by the next step).
+    if (leaf.resample.has_value()) {
         const auto extent = leaf.resample->output.dataWindow().extent();
         if (const auto error = charge(extent.width(), extent.height(), sizeof(render::Rgba32f))) {
             return error;
@@ -119,12 +121,14 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
                                               .inputKey = currentKey,
                                               .sourceWindow = leaf.descriptor->dataWindow(),
                                               .outputWindow = leaf.resample->output.dataWindow(),
+                                              .displayWindow =
+                                                  leaf.resample->output.displayWindow(),
                                               .horizontalScale = leaf.resample->horizontalScale,
                                               .verticalScale = leaf.resample->verticalScale,
                                               .pixelAspect = leaf.resample->output.pixelAspect(),
                                               .semanticKey = {}};
         resample.semanticKey = makeGpuScenePointResampleSemanticKey(
-            resample.inputKey, resample.sourceWindow, resample.outputWindow,
+            resample.inputKey, resample.sourceWindow, resample.outputWindow, resample.displayWindow,
             resample.horizontalScale, resample.verticalScale, resample.pixelAspect,
             "point-resample-v1");
         currentKey = resample.semanticKey;
@@ -137,6 +141,8 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
     }
     const auto ocioWindow = leaf.resample.has_value() ? leaf.resample->output.dataWindow()
                                                       : leaf.descriptor->dataWindow();
+    // The OCIO display window is the resample output display when a resample precedes it (the
+    // resample publishes a new display window), otherwise the upload's own display window.
     const auto ocioDisplay = leaf.resample.has_value() ? leaf.resample->output.displayWindow()
                                                        : leaf.descriptor->displayWindow();
     const auto ocioAspect = leaf.resample.has_value() ? leaf.resample->output.pixelAspect()
@@ -197,8 +203,9 @@ buildAndEmitMediaLeaf(const CompiledOperation& operation, const OperationIndex o
 }
 
 // The bounded GPU colour split leaves. They call prepareImageColorLeaf()/prepareVideoColorLeaf(),
-// so a non-identity transform yields a RAW full-source upload plus a real input->working OCIO
-// command; an exact-identity transform yields the unchanged connected upload with a null program.
+// so a fractional proxy yields a full-source RAW upload plus a native PointResampleV1 command
+// (identity or not), and a non-identity transform additionally yields a real input->working OCIO
+// command. An identity transform emits no OCIO program but still uses the native proxy gather.
 [[nodiscard]] std::optional<GpuSceneLeafFailure>
 buildImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest& request,
                     const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,

@@ -182,6 +182,11 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::completeNative() {
 }
 
 GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
+    if (nativeKind == NativeKind::PathCoverage) {
+        // The native coverage producer owns its own poll ladder: on Ready it starts the resident
+        // covered fill, so it short-circuits the generic status handling below.
+        return pollPathCoverage();
+    }
     NativePoll status = NativePoll::Failure;
     if (nativeKind == NativeKind::Solid) {
         status = mapSolid(solid->poll());

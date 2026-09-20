@@ -8,7 +8,7 @@ namespace bloom::runtime {
 GpuSceneCoverageCache::GpuSceneCoverageCache(const std::uint64_t maxBytes)
     : maxBytes_(maxBytes == 0 ? 1 : maxBytes) {}
 
-std::shared_ptr<const std::vector<std::uint8_t>>
+std::shared_ptr<const GpuSceneCoverageGeometry>
 GpuSceneCoverageCache::find(const std::string& geometryKey) noexcept {
     std::lock_guard lock(mutex_);
     const auto found = entries_.find(geometryKey);
@@ -18,15 +18,15 @@ GpuSceneCoverageCache::find(const std::string& geometryKey) noexcept {
     }
     order_.splice(order_.begin(), order_, found->second.position);
     ++hits_;
-    return found->second.coverage;
+    return found->second.geometry;
 }
 
 void GpuSceneCoverageCache::store(std::string geometryKey,
-                                  std::shared_ptr<const std::vector<std::uint8_t>> coverage) {
-    if (coverage == nullptr) {
+                                  std::shared_ptr<const GpuSceneCoverageGeometry> geometry) {
+    if (geometry == nullptr) {
         return;
     }
-    const std::uint64_t bytes = static_cast<std::uint64_t>(coverage->size());
+    const std::uint64_t bytes = gpuSceneCoverageGeometryBytes(*geometry);
     if (bytes == 0 || bytes > maxBytes_) {
         return;
     }
@@ -36,7 +36,7 @@ void GpuSceneCoverageCache::store(std::string geometryKey,
     if (const auto existing = entries_.find(std::string_view{geometryKey});
         existing != entries_.end()) {
         retainedBytes_ -= existing->second.bytes;
-        existing->second.coverage = std::move(coverage);
+        existing->second.geometry = std::move(geometry);
         existing->second.bytes = bytes;
         retainedBytes_ += bytes;
         order_.splice(order_.begin(), order_, existing->second.position);
@@ -67,7 +67,7 @@ void GpuSceneCoverageCache::store(std::string geometryKey,
         pushed = true;
         inserted = order_.begin();
         const auto placed =
-            entries_.emplace(std::string_view{*inserted}, Entry{coverage, bytes, inserted});
+            entries_.emplace(std::string_view{*inserted}, Entry{geometry, bytes, inserted});
         if (!placed.second) {
             order_.erase(inserted);
             return;

@@ -32,6 +32,19 @@ bloom_enable_warnings(bloom_render_path_raster_test)
 bloom_enable_strict_floating_point(bloom_render_path_raster_test)
 bloom_add_test(NAME bloom.render.path_raster COMMAND bloom_render_path_raster_test LABELS unit primitives)
 
+# CPU-only exactness test for PathRasterCoverageGeometry: reconstructs the uint8 mask from the
+# integer sample spans with exactly the GPU shader's arithmetic and asserts byte-identity to
+# coverageRow over every shape, rule, stroke, clip, transform, proxy and adversarial case. No device.
+add_executable(bloom_render_gpu_path_coverage_geometry_test gpu_path_coverage_geometry_tests.cpp)
+target_link_libraries(bloom_render_gpu_path_coverage_geometry_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_gpu_path_coverage_geometry_test)
+bloom_enable_strict_floating_point(bloom_render_gpu_path_coverage_geometry_test)
+bloom_add_test(
+    NAME bloom.render.gpu_path_coverage_geometry
+    COMMAND bloom_render_gpu_path_coverage_geometry_test
+    LABELS unit gpu render
+)
+
 # The GPU device test compiles and passes identically against the Vulkan bootstrap or the CPU stub:
 # the real probe runs only when a compatible device is present, and a hardware-free image prints an
 # explicit skip while the forced-missing-loader checks still exercise the portable API.
@@ -85,6 +98,28 @@ bloom_add_test(
     NAME bloom.render.gpu_solid_covered
     COMMAND bloom_render_gpu_solid_covered_test
     LABELS unit gpu render
+)
+
+# GpuPathCoverage native producer test. Builds the immutable scanline geometry from the real CPU
+# PathRaster and asserts the resident mask readback is byte-identical to the unchanged
+# coverageRow for the shape/transform/stroke/fill-rule/clip/adversarial matrix. It also proves one
+# resident coverage -> GpuSolid covered fill -> native output chain. Compiles against the CPU stub
+# as well; a hardware-free build prints an explicit skip and --require-device fails closed.
+add_executable(bloom_render_gpu_path_coverage_test
+    gpu_path_coverage_tests.cpp
+    gpu_path_coverage_fault_seam.cpp)
+target_link_libraries(bloom_render_gpu_path_coverage_test PRIVATE bloom_render)
+target_include_directories(bloom_render_gpu_path_coverage_test
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+target_compile_definitions(bloom_render_gpu_path_coverage_test
+    PRIVATE "BLOOM_PATH_COVERAGE_SPV_SHA256=\"f5aff832e47c64e42c95d0ae10429a5434e28566ccc1eb8d8c8d33e456bf2a4a\"")
+bloom_enable_warnings(bloom_render_gpu_path_coverage_test)
+bloom_enable_strict_floating_point(bloom_render_gpu_path_coverage_test)
+bloom_add_test(
+    NAME bloom.render.gpu_path_coverage
+    COMMAND bloom_render_gpu_path_coverage_test
+    LABELS unit gpu render
+    TIMEOUT 300
 )
 
 # Host RGBA32F -> resident GpuImage upload test (staged host copy; no shader).
@@ -453,6 +488,9 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid_covered.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_path_coverage.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_path_coverage_lifecycle.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_path_coverage_resources.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_composite_resources.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_upload.cpp"

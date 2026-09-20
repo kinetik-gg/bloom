@@ -13,7 +13,9 @@
 #include <bloom/render/gpu_blend.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
 #include <bloom/render/gpu_ocio_program.hpp>
+#include <bloom/render/gpu_path_coverage.hpp>
 #include <bloom/render/gpu_point_resample.hpp>
+#include <bloom/render/path_raster.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
@@ -37,7 +39,10 @@ namespace bloom::runtime {
 enum class GpuSceneExecutorStepKind : std::uint8_t {
     Solid,        // GpuSolid::begin: a solid command, a merge transparent base, or a transparent
                   // composition output.
-    CoveredSolid, // GpuSolid::beginCovered: the exact R8 coverage path.
+    CoveredSolid, // GpuSolid::beginCoveredResident/beginCovered: the R8 coverage path.
+    // The native GpuPathCoverage compute dispatch for one vector source's coverage geometry. It
+    // does not publish an image; on Ready the covered fill is started from the resident mask.
+    PathCoverage,
     // GpuImageUpload::begin: one ImageSource/VideoSource leaf. The exact converted host image is
     // uploaded once per builder semantic source key; the strong source reference is retained until
     // the submission's fence is proven retired (or the whole job is quarantined).
@@ -76,8 +81,11 @@ struct GpuSceneExecutorStep final {
     std::optional<render::ImageWindow> solidDataWindow;
     std::optional<render::ImageWindow> solidDisplayWindow;
     core::PixelAspectRatio solidPixelAspect = core::PixelAspectRatio::square();
-    // Covered solid (borrowed from the retained scene; the scene outlives the job).
-    std::span<const std::uint8_t> coverage;
+    // Covered solid (borrowed from the retained scene; the scene outlives the job). A PathRaster
+    // vector source carries immutable coverage geometry consumed by GpuPathCoverage; the integer
+    // FreeType text leaf carries its host bitmap. At most one is non-null.
+    std::shared_ptr<const render::PathRasterCoverageGeometry> coverageGeometry;
+    std::shared_ptr<const std::vector<std::uint8_t>> hostCoverage;
     float coveredOpacity = 1.0F;
     // Upload source: the strong immutable CPU source the converted pixels came from. It is retained
     // for the job lifetime so the staging copy and any unretired submission keep their source
@@ -217,8 +225,8 @@ pointResampleFieldsValid(const GpuScenePointResampleCommand& resample) noexcept 
         }
         return makeGpuScenePointResampleSemanticKey(
             resample->inputKey, resample->sourceWindow, resample->outputWindow,
-            resample->horizontalScale, resample->verticalScale, resample->pixelAspect,
-            kPointResampleArtifactToken);
+            resample->displayWindow, resample->horizontalScale, resample->verticalScale,
+            resample->pixelAspect, kPointResampleArtifactToken);
     }
     if (std::get_if<GpuSceneBlendCommand>(&command) != nullptr) {
         return {};
@@ -311,16 +319,12 @@ descriptorMatches(const GpuSceneCommand& command, const render::GpuImage& image,
                image.pixelAspect() == ocio->pixelAspect;
     }
     if (const auto* resample = std::get_if<GpuScenePointResampleCommand>(&command)) {
-        // The resample output is the proxy window; its display window and pixel aspect are
-        // inherited from the input.
-        if (!windowsEqual(image.dataWindow(), resample->outputWindow)) {
-            return false;
-        }
-        if (translationInput != nullptr) {
-            return image.displayWindow() == translationInput->displayWindow() &&
-                   image.pixelAspect() == translationInput->pixelAspect();
-        }
-        return true;
+        // The resample publishes a NEW image: the proxy data window, its own display window, and
+        // the input's pixel aspect. It does not inherit the source display window (a
+        // full-resolution source may be larger than the composition proxy).
+        return windowsEqual(image.dataWindow(), resample->outputWindow) &&
+               windowsEqual(image.displayWindow(), resample->displayWindow) &&
+               image.pixelAspect() == resample->pixelAspect;
     }
     return false;
 }
@@ -375,7 +379,7 @@ expectedDescriptorOf(const PreparedGpuScene& scene, const GpuSceneCommandIndex i
                 if (!source.has_value()) {
                     return std::nullopt;
                 }
-                return SceneDescriptorInfo{item.outputWindow, source->display, source->pixelAspect};
+                return SceneDescriptorInfo{item.outputWindow, item.displayWindow, item.pixelAspect};
             } else if constexpr (std::is_same_v<T, GpuSceneCompositionOutputCommand> ||
                                  std::is_same_v<T, GpuSceneSolidCommand>) {
                 return SceneDescriptorInfo{item.dataWindow, item.displayWindow, item.pixelAspect};
@@ -658,6 +662,11 @@ struct GpuSceneExecutor::Impl final {
     std::unique_ptr<render::GpuAffine> affine;
     std::unique_ptr<render::GpuBlend> blend;
     std::unique_ptr<render::GpuPointResample> pointResample;
+    // Retained native vector-coverage producer. Created lazily on the owner thread the first time a
+    // command carries coverage geometry, and kept for the executor's lifetime (pipeline reuse). It
+    // outlives every consuming fill submission: beginCoveredResident co-owns the resident mask, and
+    // the executor holds the producer until that fill is proved retired.
+    std::unique_ptr<render::GpuPathCoverage> pathCoverage;
 
     GpuSceneExecutorJobState state = GpuSceneExecutorJobState::Idle;
     GpuSceneExecutorDiagnostic diagnostic;
@@ -687,6 +696,7 @@ struct GpuSceneExecutor::Impl final {
         Blend,
         Ocio,
         PointResample,
+        PathCoverage,
     };
     NativeKind nativeKind = NativeKind::None;
     // In-flight OCIO program (borrowed from `ocioPrograms`; the map outlives the job).
@@ -719,6 +729,14 @@ struct GpuSceneExecutor::Impl final {
     [[nodiscard]] GpuSceneExecutorDiagnostic planCommand(GpuSceneCommandIndex index,
                                                          std::vector<std::uint8_t>& color);
     [[nodiscard]] GpuSceneExecutorDiagnostic startStep(const GpuSceneExecutorStep& step);
+    // Vector coverage, kept in gpu_scene_executor_coverage.cpp so this translation unit stays
+    // cohesive. `startCoveredStep` dispatches either the native GpuPathCoverage producer (geometry)
+    // or the host-bitmap covered fill (integer-grid text); `pollPathCoverage` advances the producer
+    // and, on Ready, starts the resident covered fill. `ensurePathCoverage` creates the retained
+    // producer on first use.
+    [[nodiscard]] GpuSceneExecutorDiagnostic ensurePathCoverage();
+    [[nodiscard]] GpuSceneExecutorDiagnostic startCoveredStep(const GpuSceneExecutorStep& step);
+    [[nodiscard]] GpuSceneExecutorPollResult pollPathCoverage();
     [[nodiscard]] GpuSceneExecutorDiagnostic finishNative(render::GpuImage produced);
     [[nodiscard]] GpuSceneExecutorDiagnostic completeNative();
     [[nodiscard]] GpuSceneExecutorPollResult pollNative();

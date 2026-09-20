@@ -7,6 +7,7 @@
 
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
+#include <bloom/render/gpu_path_coverage.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
@@ -51,6 +52,11 @@ struct NativeFixtureOutcome final {
     std::uint64_t warmDispatches = 0;
     std::uint64_t warmCacheHits = 0;
     std::uint64_t readbacks = 0;
+    // Set when the scene carries a PathRaster vector coverage command. The required evidence is a
+    // real GpuPathCoverage compute dispatch, not a consumed host mask.
+    bool coverageRequired = false;
+    std::uint64_t coverageColdDispatches = 0;
+    std::uint64_t coverageWarmDispatches = 0;
     std::string evidence;
 };
 
@@ -64,6 +70,12 @@ struct NativeFixtureOutcome final {
     }
     if (outcome.coldDispatches == 0 || outcome.familyDispatches == 0) {
         return "MISSED_GPU: zero actual native dispatch for the required family";
+    }
+    if (outcome.coverageRequired && outcome.coverageColdDispatches == 0) {
+        return "MISSED_GPU: zero native GpuPathCoverage dispatch for a vector coverage scene";
+    }
+    if (outcome.coverageRequired && outcome.coverageWarmDispatches != 0) {
+        return "MISSED_GPU: warm rerun dispatched native coverage work";
     }
     if (outcome.warmDispatches != 0) {
         return "MISSED_GPU: warm rerun dispatched native work";
@@ -96,11 +108,23 @@ struct NativeFixtureOutcome final {
     genuine.coldDispatches = 3;
     genuine.familyDispatches = 3;
     genuine.warmCacheHits = 1;
-    if (!rejects(zeroDispatch) || !rejects(cpuFallback) || rejects(genuine)) {
-        evidence = "missed-GPU detection failed for zero-dispatch or CPU-fallback fixtures";
+    // A vector coverage scene that reports a covered-solid fill but no GpuPathCoverage dispatch is
+    // a host-mask pass in disguise and must be rejected.
+    NativeFixtureOutcome coverageMissing;
+    coverageMissing.ran = true;
+    coverageMissing.coldDispatches = 3;
+    coverageMissing.familyDispatches = 3;
+    coverageMissing.warmCacheHits = 1;
+    coverageMissing.coverageRequired = true;
+    if (!rejects(zeroDispatch) || !rejects(cpuFallback) || !rejects(coverageMissing) ||
+        rejects(genuine)) {
+        evidence = "missed-GPU detection failed for zero-dispatch, CPU-fallback, or missing "
+                   "coverage-dispatch fixtures";
         return false;
     }
-    evidence = "zero-dispatch and CPU-fallback fixtures are MISSED_GPU; a real dispatch is not";
+    evidence =
+        "zero-dispatch, CPU-fallback, and missing coverage-dispatch fixtures are MISSED_GPU; "
+        "a real dispatch is not";
     return true;
 }
 
@@ -210,6 +234,13 @@ runNativeFixture(bloom::render::GpuDevice& device,
     NativeFixtureOutcome outcome;
     outcome.ran = true;
     outcome.family = requiredFamily(*scene);
+    for (const auto& command : scene->commands()) {
+        const auto* covered = std::get_if<bloom::runtime::GpuSceneCoverageSolidCommand>(&command);
+        if (covered != nullptr && covered->geometry != nullptr) {
+            outcome.coverageRequired = true;
+            break;
+        }
+    }
 
     auto oracleRequest = request;
     oracleRequest.bypassOperationCache = true;
@@ -262,6 +293,7 @@ runNativeFixture(bloom::render::GpuDevice& device,
 
     const auto runOnce = [&](const bool warm) -> bool {
         const auto before = executor.counters();
+        const auto coverageBefore = bloom::render::GpuPathCoverage::nativeDispatchCount();
         if (const auto diagnostic = executor.begin(scene, kSceneBudget);
             diagnostic.code != bloom::runtime::GpuSceneExecutorDiagnosticCode::None) {
             outcome.cpuFallback =
@@ -307,13 +339,17 @@ runNativeFixture(bloom::render::GpuDevice& device,
         }
         const auto after = executor.counters();
         const auto dispatches = after.dispatches - before.dispatches;
+        const auto coverageDispatches =
+            bloom::render::GpuPathCoverage::nativeDispatchCount() - coverageBefore;
         if (warm) {
             outcome.warmDispatches = dispatches;
             outcome.warmCacheHits = after.outputCacheHits - before.outputCacheHits;
+            outcome.coverageWarmDispatches = coverageDispatches;
         } else {
             outcome.coldDispatches = dispatches;
             outcome.familyDispatches =
                 familyCount(after, outcome.family) - familyCount(before, outcome.family);
+            outcome.coverageColdDispatches = coverageDispatches;
         }
         (void)executor.takeImage();
         return true;
@@ -333,7 +369,9 @@ runNativeFixture(bloom::render::GpuDevice& device,
                        std::to_string(outcome.familyDispatches) + ", cold " +
                        std::to_string(outcome.coldDispatches) + ", warm " +
                        std::to_string(outcome.warmDispatches) + ", warm cache hits " +
-                       std::to_string(outcome.warmCacheHits);
+                       std::to_string(outcome.warmCacheHits) + ", coverage cold " +
+                       std::to_string(outcome.coverageColdDispatches) + ", coverage warm " +
+                       std::to_string(outcome.coverageWarmDispatches);
     return outcome;
 }
 

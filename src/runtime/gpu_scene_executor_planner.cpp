@@ -126,15 +126,26 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
 
     if (const auto* covered = std::get_if<GpuSceneCoverageSolidCommand>(&command)) {
         std::uint64_t bytes = 0;
-        if (!checkedImageBytes(covered->outputWindow, bytes) || covered->coverage == nullptr) {
+        if (!checkedImageBytes(covered->outputWindow, bytes) ||
+            (covered->geometry == nullptr && covered->coverage == nullptr)) {
             color[index] = 2;
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
                                   "a covered solid command is incomplete");
         }
-        const std::uint64_t expected =
-            static_cast<std::uint64_t>(covered->outputWindow.extent().width()) *
+        const std::uint64_t width =
+            static_cast<std::uint64_t>(covered->outputWindow.extent().width());
+        const std::uint64_t height =
             static_cast<std::uint64_t>(covered->outputWindow.extent().height());
-        if (covered->coverage->size() != expected) {
+        const std::uint64_t expected = width * height;
+        if (covered->geometry != nullptr) {
+            const auto& geometry = *covered->geometry;
+            if (geometry.width != width || geometry.height != height ||
+                geometry.rows.size() != height * 4ULL) {
+                color[index] = 2;
+                return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                      "a covered solid geometry does not match its window");
+            }
+        } else if (covered->coverage->size() != expected) {
             color[index] = 2;
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
                                   "a covered solid coverage size does not match its window");
@@ -155,8 +166,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.solidDataWindow = covered->outputWindow;
         step.solidDisplayWindow = covered->displayWindow;
         step.solidPixelAspect = covered->pixelAspect;
-        step.coverage =
-            std::span<const std::uint8_t>(covered->coverage->data(), covered->coverage->size());
+        step.coverageGeometry = covered->geometry;
+        step.hostCoverage = covered->coverage;
         step.coveredOpacity = covered->opacity;
         steps.push_back(std::move(step));
         color[index] = 2;
@@ -359,9 +370,10 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
                                   "the point-resample input descriptor is not derivable");
         }
-        // The output window must be exactly the derived proxy window and the display window/PAR
-        // must be inherited from the input, so a malformed command can never resample to another
-        // grid.
+        // The output window must be exactly the derived proxy window; the source window and pixel
+        // aspect must match the input; the display window is carried explicitly (the resample
+        // publishes a new display window, so it need not equal the source's). This keeps a
+        // malformed command from resampling to another grid or mismatching the composition.
         const auto expectedOutput = render::ImageWindow::create(
             0, 0,
             static_cast<std::uint64_t>(std::max(
@@ -395,7 +407,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.pointResampleHorizontalScale = resample->horizontalScale;
         step.pointResampleVerticalScale = resample->verticalScale;
         const auto outputDescriptor = render::Rgba32fImageDescriptor::create(
-            resample->outputWindow, inputDescriptor->display, resample->pixelAspect);
+            resample->outputWindow, resample->displayWindow, resample->pixelAspect);
         if (!outputDescriptor) {
             color[index] = 2;
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
