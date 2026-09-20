@@ -137,8 +137,8 @@ imageSourcePlan(const bloom::document::AssetRecord& asset, const LayerValues lay
                        ParameterId::fromRaw(idBase + 2), ParameterId::fromRaw(idBase + 3),
                        ParameterId::fromRaw(idBase + 4), ParameterId::fromRaw(idBase + 5)};
     std::vector<CompiledOperation> operations;
-    operations.emplace_back(bloom::runtime::CompiledImageSource{
-        NodeId::fromRaw(idBase + 10), asset, 0, 0, 0, std::string{}, false});
+    operations.emplace_back(bloom::runtime::CompiledImageSource{NodeId::fromRaw(idBase + 10), asset,
+                                                                0, 0, 0, std::string{}, false});
     operations.emplace_back(layerOutput(NodeId::fromRaw(idBase + 11),
                                         bloom::document::LayerId::fromRaw(idBase + 12),
                                         OperationIndex::fromRaw(0), ids, layer));

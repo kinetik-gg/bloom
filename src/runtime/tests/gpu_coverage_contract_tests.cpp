@@ -12,9 +12,12 @@
 // later integration turns green without weakening the contract or adding opt-outs.
 
 #include "gpu_coverage_fixture_support.hpp"
+#include "gpu_coverage_gate_support.hpp"
 #include "gpu_coverage_media_support.hpp"
-#include "gpu_coverage_video_support.hpp"
+#include "gpu_coverage_mutation_support.hpp"
 #include "gpu_coverage_native_support.hpp"
+#include "gpu_coverage_route_proof_support.hpp"
+#include "gpu_coverage_video_support.hpp"
 
 #include <bloom/document/graph.hpp>
 #include <bloom/render/gpu_device.hpp>
@@ -61,34 +64,17 @@ using bloom::runtime::EvaluationRequest;
 using bloom::runtime::GpuCoverageFixtureCriterion;
 using bloom::runtime::ImageEffectKernel;
 using bloom::runtime::OperationIndex;
-using bloom::runtime::PreparedGpuScene;
 using bloom::runtime::PreparedGpuSceneDiagnosticCode;
 
-// A fixture run retains the REAL prepared scenes (not just a bool) so the native acceptance pass
-// can execute the same fixture through the production executor against the CPU oracle. A
-// time-mapped fixture (video) carries more than one distinct frame.
-struct FrameRun final {
-    std::shared_ptr<const bloom::runtime::CompiledCompositionPlan> plan;
-    EvaluationRequest request;
-    std::filesystem::path baseDirectory;
-    std::shared_ptr<const PreparedGpuScene> scene;
-};
+using bloom::gpu_coverage_gate::findFixture;
+using bloom::gpu_coverage_gate::Fixture;
+using bloom::gpu_coverage_gate::FixtureRun;
+using bloom::gpu_coverage_gate::FrameRun;
+using bloom::gpu_coverage_gate::requiredCoverageIds;
+using bloom::gpu_coverage_gate::routeOwner;
 
-struct FixtureRun final {
-    bool prepared = false;
-    std::string evidence;
-    std::vector<FrameRun> frames;
-};
-
-struct Fixture final {
-    std::string id;
-    GpuCoverageFixtureCriterion criterion = GpuCoverageFixtureCriterion::Prepared;
-    std::string owner;
-    std::function<FixtureRun()> run;
-};
-
-[[nodiscard]] FixtureRun runBuilder(
-    const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan) {
+[[nodiscard]] FixtureRun
+runBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan) {
     const CpuGpuSceneBuilder builder;
     const auto request = requestFor(*plan);
     FixtureRun result;
@@ -104,10 +90,10 @@ struct Fixture final {
     return result;
 }
 
-[[nodiscard]] FixtureRun runMediaBuilder(
-    const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan,
-    const bloom::runtime::CpuCompositionEvaluator& evaluator,
-    const std::filesystem::path& baseDirectory) {
+[[nodiscard]] FixtureRun
+runMediaBuilder(const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan,
+                const bloom::runtime::CpuCompositionEvaluator& evaluator,
+                const std::filesystem::path& baseDirectory) {
     auto context = bloom::runtime::GpuSceneMediaContext::fromEvaluator(evaluator);
     context.assetBaseDirectory = baseDirectory;
     const CpuGpuSceneBuilder builder(nullptr, context);
@@ -117,8 +103,8 @@ struct Fixture final {
     if (prepared) {
         result.prepared = true;
         result.frames.push_back(FrameRun{plan, request, baseDirectory, prepared.scene});
-        result.evidence = "prepared media " +
-                          std::to_string(prepared.scene->commands().size()) + " commands";
+        result.evidence =
+            "prepared media " + std::to_string(prepared.scene->commands().size()) + " commands";
         return result;
     }
     result.evidence = codeName(prepared.diagnostic.code) + ": " + prepared.diagnostic.message;
@@ -147,9 +133,8 @@ struct Fixture final {
                               prepared.diagnostic.message;
             return result;
         }
-        result.frames.push_back(FrameRun{plan, request,
-                                         bloom::gpu_coverage_video::mediaFixturesDirectory(),
-                                         prepared.scene});
+        result.frames.push_back(FrameRun{
+            plan, request, bloom::gpu_coverage_video::mediaFixturesDirectory(), prepared.scene});
     }
     result.prepared = true;
     result.evidence = "prepared video 2 frames";
@@ -163,9 +148,14 @@ struct Fixture final {
 
 [[nodiscard]] std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>
 withSource(const CompiledOperation& source, const std::uint64_t idBase,
-           const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>* nested = nullptr) {
+           const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>* nested = nullptr,
+           const double layerOpacity = 1.0) {
     auto definition = basePlan()->copyDefinition();
     definition.operations[0] = source;
+    if (layerOpacity != 1.0) {
+        auto& layer = std::get<bloom::runtime::CompiledLayerOutput>(definition.operations[1]);
+        layer.opacity = CompiledScalarParameter{layer.opacity.id, layerOpacity};
+    }
     if (nested != nullptr) {
         definition.nestedPlans.push_back(*nested);
     }
@@ -173,7 +163,11 @@ withSource(const CompiledOperation& source, const std::uint64_t idBase,
     return publish(std::move(definition));
 }
 
-[[nodiscard]] CompiledShape shape(const ShapeKind kind, const std::uint64_t idBase) {
+// A strict, kind-valid shape: a Line has no fill so it must carry a nonzero stroke, and a Path must
+// carry real anchors. Non-Line kinds may additionally request a stroke so the native CPU oracle
+// parity exercises the vector stroke/opacity arm rather than fill alone.
+[[nodiscard]] CompiledShape shape(const ShapeKind kind, const std::uint64_t idBase,
+                                  const bool withStroke = false) {
     CompiledShape value{};
     value.sourceNodeId = NodeId::fromRaw(idBase);
     value.kind = kind;
@@ -181,19 +175,38 @@ withSource(const CompiledOperation& source, const std::uint64_t idBase,
     value.fillEnabled = true;
     value.fillColor = CompiledColorParameter{ParameterId::fromRaw(idBase + 2),
                                              bloom::core::Color4d{0.8, 0.4, 0.2, 1.0}};
+    value.strokeEnabled = withStroke;
+    value.strokeColor = CompiledColorParameter{ParameterId::fromRaw(idBase + 3),
+                                               bloom::core::Color4d{0.1, 0.6, 0.9, 1.0}};
+    value.strokeWidth =
+        CompiledScalarParameter{ParameterId::fromRaw(idBase + 4), withStroke ? 1.5 : 0.0};
+    if (kind == ShapeKind::Line) {
+        value.fillEnabled = false;
+        value.strokeEnabled = true;
+        value.strokeWidth = CompiledScalarParameter{ParameterId::fromRaw(idBase + 4), 1.5};
+        value.lineStart = Vec2d{0.0, 0.0};
+        value.lineEnd = Vec2d{6.0, 5.0};
+    } else if (kind == ShapeKind::Path) {
+        value.path.closed = true;
+        value.path.anchors = {
+            bloom::document::PathAnchor{Vec2d{0.0, 0.0}, std::nullopt, std::nullopt},
+            bloom::document::PathAnchor{Vec2d{6.0, 0.0}, std::nullopt, std::nullopt},
+            bloom::document::PathAnchor{Vec2d{3.0, 5.0}, std::nullopt, std::nullopt}};
+    }
     return value;
 }
 
 [[nodiscard]] CompiledText text(const std::uint64_t idBase) {
-    return CompiledText{NodeId::fromRaw(idBase),
-                        ParameterId::fromRaw(idBase + 1),
-                        "gpu",
-                        {ParameterId::fromRaw(idBase + 2), 12.0},
-                        {ParameterId::fromRaw(idBase + 3),
-                         bloom::core::Color4d{1.0, 1.0, 1.0, 1.0}},
-                        CompiledTextLayout{ParameterId::fromRaw(idBase + 4), 0,
-                                           {ParameterId::fromRaw(idBase + 5), 1.0},
-                                           {ParameterId::fromRaw(idBase + 6), 0.0}}};
+    return CompiledText{
+        NodeId::fromRaw(idBase),
+        ParameterId::fromRaw(idBase + 1),
+        "gpu",
+        {ParameterId::fromRaw(idBase + 2), 12.0},
+        {ParameterId::fromRaw(idBase + 3), bloom::core::Color4d{1.0, 1.0, 1.0, 1.0}},
+        CompiledTextLayout{ParameterId::fromRaw(idBase + 4),
+                           0,
+                           {ParameterId::fromRaw(idBase + 5), 1.0},
+                           {ParameterId::fromRaw(idBase + 6), 0.0}}};
 }
 
 [[nodiscard]] CompiledImageEffect effect(const ImageEffectKernel& kernel,
@@ -209,9 +222,8 @@ effectPlan(const ImageEffectKernel& kernel, const std::uint64_t idBase) {
     auto layer = std::get<bloom::runtime::CompiledLayerOutput>(definition.operations[1]);
     layer.input = OperationIndex::fromRaw(1);
     auto merge = std::get<bloom::runtime::CompiledMerge>(definition.operations[4]);
-    merge.entries = {bloom::runtime::CompiledMergeInput{bloom::document::LayerSlotId::fromRaw(idBase),
-                                                        layer.layerId,
-                                                        OperationIndex::fromRaw(2)}};
+    merge.entries = {bloom::runtime::CompiledMergeInput{
+        bloom::document::LayerSlotId::fromRaw(idBase), layer.layerId, OperationIndex::fromRaw(2)}};
     definition.operations.clear();
     definition.operations.push_back(std::move(solid));
     definition.operations.push_back(effect(kernel, idBase + 10));
@@ -275,18 +287,20 @@ layerOnLayerPlan(const std::uint64_t idBase) {
             [kernel, idBase] { return runBuilder(effectPlan(kernel, idBase)); });
     };
 
-    for (const std::string_view id : {"operation.CompiledSolid", "operation.CompiledLayerOutput",
-                                      "operation.CompiledMerge",
-                                      "operation.CompiledCompositionOutput"}) {
+    for (const std::string_view id :
+         {"operation.CompiledSolid", "operation.CompiledLayerOutput", "operation.CompiledMerge",
+          "operation.CompiledCompositionOutput"}) {
         add(std::string{id}, GpuCoverageFixtureCriterion::Prepared,
             "src/runtime gpu scene preparation tests", [] { return runBuilder(basePlan()); });
     }
     add("operation.CompiledText", GpuCoverageFixtureCriterion::Prepared,
         "src/render text_raster + text source tests",
-        [] { return runBuilder(withSource(text(95000), 95000)); });
+        [] { return runBuilder(withSource(text(95000), 95000, nullptr, 0.6)); });
     add("operation.CompiledShape", GpuCoverageFixtureCriterion::Prepared,
-        "src/render PathRaster + shape source tests",
-        [] { return runBuilder(withSource(shape(ShapeKind::Rectangle, 96000), 96000)); });
+        "src/render PathRaster + shape source tests", [] {
+            return runBuilder(
+                withSource(shape(ShapeKind::Rectangle, 96000, true), 96000, nullptr, 0.7));
+        });
     add("operation.CompiledCompositionSource", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime SnapshotCompiler nested composition tests", [] {
             const auto nested = basePlan();
@@ -321,52 +335,56 @@ layerOnLayerPlan(const std::uint64_t idBase) {
     addImageEffectPlan("effect.CstKernel",
                        bloom::runtime::CstKernel{"lin_rec709_scene", "lin_rec709_scene"}, 101000,
                        {});
-    addImageEffectPlan(
-        "effect.FileTransformKernel",
-        bloom::runtime::FileTransformKernel{bloom::document::AssetId::fromRaw(0), 0, 0,
-                                            "lin_rec709_scene", std::nullopt},
-        102000, {});
+    addImageEffectPlan("effect.FileTransformKernel",
+                       bloom::runtime::FileTransformKernel{bloom::document::AssetId::fromRaw(0), 0,
+                                                           0, "lin_rec709_scene", std::nullopt},
+                       102000, {});
 
     for (const auto mode : bloom::core::kBlendModes) {
-        const auto id = std::string{"feature.blend."} +
-                        std::to_string(bloom::core::blendModeStoredValue(mode));
-        add(id, GpuCoverageFixtureCriterion::Prepared,
-            "src/render GpuComposite + composite parity tests", [mode] {
-                return runBuilder(modifiedLayer([mode](
-                                                   bloom::runtime::CompiledLayerOutput& layer) {
-                    layer.blendMode = mode;
-                }));
-            });
+        const auto id =
+            std::string{"feature.blend."} + std::to_string(bloom::core::blendModeStoredValue(mode));
+        if (mode == bloom::core::kDefaultBlendMode) {
+            add(id, GpuCoverageFixtureCriterion::Prepared,
+                "src/render GpuComposite + composite parity tests", [mode] {
+                    return runBuilder(
+                        modifiedLayer([mode](bloom::runtime::CompiledLayerOutput& layer) {
+                            layer.blendMode = mode;
+                        }));
+                });
+            continue;
+        }
+        // The production scene builder emits Normal blending only. The executor's GpuBlend command
+        // is proven standalone for every one of the eight modes by the native affine/blend executor
+        // test; that is standalone semantic evidence, NOT builder coverage, so this axis stays
+        // NotRun here rather than being relabelled as covered.
+        add(id, GpuCoverageFixtureCriterion::NativeRequired,
+            "src/runtime gpu_affine_blend_executor_native_tests (standalone GpuBlend parity; "
+            "builder "
+            "output not claimed)",
+            [] { return FixtureRun{}; });
     }
     constexpr std::array<ShapeKind, 7> kShapeKinds{
-        ShapeKind::Rectangle, ShapeKind::Ellipse, ShapeKind::Triangle,
-        ShapeKind::Polygon,   ShapeKind::Star,    ShapeKind::Line,
-        ShapeKind::Path};
+        ShapeKind::Rectangle, ShapeKind::Ellipse, ShapeKind::Triangle, ShapeKind::Polygon,
+        ShapeKind::Star,      ShapeKind::Line,    ShapeKind::Path};
     for (const auto kind : kShapeKinds) {
         const auto id =
             std::string{"feature.shape."} + std::to_string(static_cast<std::int64_t>(kind));
-        add(id, GpuCoverageFixtureCriterion::Prepared,
-            "src/render PathRaster + shape source tests",
+        add(id, GpuCoverageFixtureCriterion::Prepared, "src/render PathRaster + shape source tests",
             [kind] { return runBuilder(withSource(shape(kind, 103000), 103000)); });
     }
-    add("feature.layer.affine.scale", GpuCoverageFixtureCriterion::Prepared,
-        "src/render LayerTransform + gpu scene preparation tests", [] {
-            return runBuilder(modifiedLayer([](bloom::runtime::CompiledLayerOutput& layer) {
-                layer.scale = CompiledVec2Parameter{layer.scale.id, Vec2d{2.0, 2.0}};
-            }));
-        });
-    add("feature.layer.affine.rotation", GpuCoverageFixtureCriterion::Prepared,
-        "src/render LayerTransform + gpu scene preparation tests", [] {
-            return runBuilder(modifiedLayer([](bloom::runtime::CompiledLayerOutput& layer) {
-                layer.rotation = CompiledScalarParameter{layer.rotation.id, 30.0};
-            }));
-        });
-    add("feature.layer.affine.anchor", GpuCoverageFixtureCriterion::Prepared,
-        "src/render LayerTransform + gpu scene preparation tests", [] {
-            return runBuilder(modifiedLayer([](bloom::runtime::CompiledLayerOutput& layer) {
-                layer.anchor = CompiledVec2Parameter{layer.anchor.id, Vec2d{1.0, -0.5}};
-            }));
-        });
+    // The builder prepares translation-only layers; a non-identity scale, rotation, or anchor is
+    // refused. The executor's GpuAffine composed-matrix arm is proven standalone (scale, rotation,
+    // and anchor together) by the native affine/blend executor test, so these axes are NotRun with
+    // that evidence rather than presented as builder coverage.
+    constexpr std::string_view kAffineOwner =
+        "src/runtime gpu_affine_blend_executor_native_tests (standalone GpuAffine parity; builder "
+        "output not claimed)";
+    add("feature.layer.affine.scale", GpuCoverageFixtureCriterion::NativeRequired,
+        std::string{kAffineOwner}, [] { return FixtureRun{}; });
+    add("feature.layer.affine.rotation", GpuCoverageFixtureCriterion::NativeRequired,
+        std::string{kAffineOwner}, [] { return FixtureRun{}; });
+    add("feature.layer.affine.anchor", GpuCoverageFixtureCriterion::NativeRequired,
+        std::string{kAffineOwner}, [] { return FixtureRun{}; });
     add("feature.layer.parent", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime layer_parent_transform tests", [] {
             return runBuilder(modifiedLayer([](bloom::runtime::CompiledLayerOutput& layer) {
@@ -378,11 +396,9 @@ layerOnLayerPlan(const std::uint64_t idBase) {
         [] { return runBuilder(layerOnLayerPlan(104000)); });
 
     add("feature.display.view_adjust", GpuCoverageFixtureCriterion::NativeRequired,
-        "src/runtime gpu_neutral_display qualification tests",
-        [] { return FixtureRun{}; });
+        "src/runtime gpu_neutral_display qualification tests", [] { return FixtureRun{}; });
     add("feature.display.custom_view_transform", GpuCoverageFixtureCriterion::NativeRequired,
-        "src/runtime gpu_neutral_display qualification tests",
-        [] { return FixtureRun{}; });
+        "src/runtime gpu_neutral_display qualification tests", [] { return FixtureRun{}; });
 
     // One fixture identity per built-in authoring node type that produces pixels. A new node type
     // registered against an existing lowering gets a new `node.<typeId>` requirement and this
@@ -415,10 +431,10 @@ layerOnLayerPlan(const std::uint64_t idBase) {
         });
     add("node.bloom.text-source", GpuCoverageFixtureCriterion::Prepared,
         "src/render text_raster + text source tests",
-        [] { return runBuilder(withSource(text(105000), 105000)); });
+        [] { return runBuilder(withSource(text(105000), 105000, nullptr, 0.6)); });
     add("node.bloom.shape-source", GpuCoverageFixtureCriterion::Prepared,
         "src/render PathRaster + shape source tests",
-        [] { return runBuilder(withSource(shape(ShapeKind::Rectangle, 106000), 106000)); });
+        [] { return runBuilder(withSource(shape(ShapeKind::Rectangle, 106000, true), 106000)); });
     add("node.bloom.composition-source", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime SnapshotCompiler nested composition tests", [] {
             const auto nested = basePlan();
@@ -427,99 +443,15 @@ layerOnLayerPlan(const std::uint64_t idBase) {
     addImageEffectPlan("node.bloom.ocio-colour-space-transform",
                        bloom::runtime::CstKernel{"lin_rec709_scene", "lin_rec709_scene"}, 108000,
                        {});
-    addImageEffectPlan(
-        "node.bloom.ocio-file-transform",
-        bloom::runtime::FileTransformKernel{bloom::document::AssetId::fromRaw(0), 0, 0,
-                                            "lin_rec709_scene", std::nullopt},
-        109000, {});
+    addImageEffectPlan("node.bloom.ocio-file-transform",
+                       bloom::runtime::FileTransformKernel{bloom::document::AssetId::fromRaw(0), 0,
+                                                           0, "lin_rec709_scene", std::nullopt},
+                       109000, {});
     return list;
 }
 
 // Mutation proof for the node registry: a new node type sharing an existing lowering must gain its
 // own required id, with no fixture, so it cannot silently reuse another node's fixture.
-void nodeTypeMutationProof(std::vector<std::string>& failures) {
-    using bloom::document::NodeDefinition;
-    using bloom::document::NodeDefinitionRegistry;
-    using bloom::document::NodeRegistrationStatus;
-    const auto* solid = bloom::document::builtInNodeDefinitions().find(
-        bloom::document::kSolidSourceNodeType, bloom::document::kSolidSourceNodeSchemaVersion);
-    if (solid == nullptr) {
-        failures.emplace_back("node-type mutation proof: built-in solid definition missing");
-        return;
-    }
-    NodeDefinition synthetic = *solid;
-    synthetic.key.typeId = "test.synthetic-image-node";
-    NodeDefinitionRegistry registry;
-    if (registry.registerDefinition(std::move(synthetic)) != NodeRegistrationStatus::Registered) {
-        failures.emplace_back("node-type mutation proof: synthetic definition was rejected");
-        return;
-    }
-    registry.freeze();
-    bool found = false;
-    for (const auto& entry : bloom::runtime::gpuNodeTypeCoverage(registry)) {
-        found = found || entry.id == "node.test.synthetic-image-node";
-    }
-    if (!found) {
-        failures.emplace_back("node-type mutation proof: a new node type escaped node-type coverage");
-        return;
-    }
-    for (const auto& fixture : fixtures()) {
-        if (fixture.id == "node.test.synthetic-image-node") {
-            failures.emplace_back("node-type mutation proof: synthetic node unexpectedly fixtured");
-            return;
-        }
-    }
-    std::cout << "MUTATION node-type: a new node type sharing the Solid lowering gains a required "
-                 "id with no fixture (reported RED)\n";
-}
-
-[[nodiscard]] std::vector<std::string> requiredCoverageIds() {
-    std::vector<std::string> ids;
-    for (const auto& entry : bloom::runtime::gpuOperationCoverage()) {
-        if (entry.disposition == bloom::runtime::GpuCoverageDisposition::Required) {
-            ids.push_back(entry.id);
-        }
-    }
-    for (const auto& entry : bloom::runtime::gpuImageEffectCoverage()) {
-        if (entry.disposition == bloom::runtime::GpuCoverageDisposition::Required) {
-            ids.push_back(entry.id);
-        }
-    }
-    for (const auto& entry : bloom::runtime::gpuFeatureCoverage()) {
-        if (entry.disposition == bloom::runtime::GpuCoverageDisposition::Required) {
-            ids.push_back(entry.id);
-        }
-    }
-    for (const auto& route : bloom::runtime::gpuRenderRouteCoverage()) {
-        ids.emplace_back(route.id);
-    }
-    for (const auto& entry :
-         bloom::runtime::gpuNodeTypeCoverage(bloom::document::builtInNodeDefinitions())) {
-        if (entry.disposition == bloom::runtime::GpuCoverageDisposition::Required) {
-            ids.push_back(entry.id);
-        }
-    }
-    return ids;
-}
-
-[[nodiscard]] const Fixture* findFixture(const std::vector<Fixture>& list, const std::string& id) {
-    for (const auto& fixture : list) {
-        if (fixture.id == id) {
-            return &fixture;
-        }
-    }
-    return nullptr;
-}
-
-[[nodiscard]] std::string_view routeOwner(const std::string& id) {
-    for (const auto& route : bloom::runtime::gpuRenderRouteCoverage()) {
-        if (route.id == id) {
-            return route.owner;
-        }
-    }
-    return {};
-}
-
 [[nodiscard]] int runNativeAcceptance(const std::filesystem::path& loader,
                                       const bool requireDevice) {
     bloom::render::GpuDeviceCreationOptions options;
@@ -615,15 +547,39 @@ int main(int argc, char** argv) {
         return runNativeAcceptance(loader, requireDevice);
     }
 
+    const auto list = fixtures();
+    std::vector<std::string> fixtureIds;
+    fixtureIds.reserve(list.size());
+    for (const auto& fixture : list) {
+        fixtureIds.push_back(fixture.id);
+    }
+
     std::vector<std::string> failures;
     for (const auto& issue : bloom::runtime::validateGpuCoverageContract()) {
         failures.push_back("contract: " + issue.detail);
     }
-    nodeTypeMutationProof(failures);
+    bloom::gpu_coverage_mutation::nodeTypeMutationProof(fixtureIds, failures);
+    bloom::gpu_coverage_route_proof::routeProofSinkRejectsFakes(failures);
+    std::string nativeNegativeEvidence;
+    if (bloom::gpu_coverage_native::nativeNegativeFixturesDetectMissedGpu(nativeNegativeEvidence)) {
+        std::cout << "NEGATIVE native: " << nativeNegativeEvidence << '\n';
+    } else {
+        failures.push_back("native acceptance negative proof: " + nativeNegativeEvidence);
+    }
+    bloom::gpu_coverage_route_proof::printStandaloneExecutorEvidence();
 
     const auto requiredIds = requiredCoverageIds();
-    const auto list = fixtures();
+    // No genuine route harness publishes into this sink in this tree yet, so every route is MISSING
+    // by name. An executor-prepared scene is never relabelled as a viewer/RAM/export route proof.
+    const bloom::runtime::GpuRouteProofSink routeProofs;
     for (const auto& id : requiredIds) {
+        if (id.rfind("route.", 0) == 0) {
+            if (routeProofs.find(id) == nullptr) {
+                failures.push_back("missing required route proof for '" + id + "' (owner " +
+                                   std::string{routeOwner(id)} + ")");
+            }
+            continue;
+        }
         bool present = false;
         for (const auto& fixture : list) {
             present = present || fixture.id == id;

@@ -37,6 +37,9 @@ enum class NativeOperationFamily : std::uint8_t {
 struct NativeFixtureOutcome final {
     bool ran = false;
     bool passed = false;
+    // Set when the executor refused the scene or could not reach the device: the route fell back to
+    // a CPU whole-frame render and must never be counted as a GPU pass.
+    bool cpuFallback = false;
     NativeOperationFamily family = NativeOperationFamily::None;
     std::uint64_t coldDispatches = 0;
     std::uint64_t familyDispatches = 0;
@@ -45,6 +48,56 @@ struct NativeFixtureOutcome final {
     std::uint64_t readbacks = 0;
     std::string evidence;
 };
+
+// The single place that decides whether a native run actually proved a GPU dispatch. A scene that
+// prepared but then ran with zero native dispatches for the required family, or that fell back to
+// the CPU, is a MISSED GPU regardless of pixel parity. Cold must dispatch, the immediate warm
+// rerun must dispatch nothing and hit the output cache, and the route must not read back a frame.
+[[nodiscard]] inline std::string_view nativeMissedGpuReason(const NativeFixtureOutcome& outcome) {
+    if (outcome.cpuFallback) {
+        return "MISSED_GPU: CPU fallback with no native dispatch";
+    }
+    if (outcome.coldDispatches == 0 || outcome.familyDispatches == 0) {
+        return "MISSED_GPU: zero actual native dispatch for the required family";
+    }
+    if (outcome.warmDispatches != 0) {
+        return "MISSED_GPU: warm rerun dispatched native work";
+    }
+    if (outcome.warmCacheHits == 0) {
+        return "MISSED_GPU: warm rerun missed the output cache";
+    }
+    if (outcome.readbacks != 0) {
+        return "MISSED_GPU: the route performed a full-frame readback";
+    }
+    return {};
+}
+
+// CPU-only negative fixtures for the acceptance predicate itself. They construct the outcomes the
+// native gate must reject -- a prepared scene that ran with zero actual dispatch, and an executor
+// CPU fallback -- and prove the predicate classifies each as MISSED_GPU while a genuine dispatch is
+// accepted. No GPU is fabricated; only the rejection logic is exercised.
+[[nodiscard]] inline bool nativeNegativeFixturesDetectMissedGpu(std::string& evidence) {
+    const auto rejects = [](const NativeFixtureOutcome& outcome) {
+        return !nativeMissedGpuReason(outcome).empty();
+    };
+    NativeFixtureOutcome zeroDispatch;
+    zeroDispatch.ran = true;
+    zeroDispatch.warmCacheHits = 1;
+    NativeFixtureOutcome cpuFallback;
+    cpuFallback.ran = true;
+    cpuFallback.cpuFallback = true;
+    NativeFixtureOutcome genuine;
+    genuine.ran = true;
+    genuine.coldDispatches = 3;
+    genuine.familyDispatches = 3;
+    genuine.warmCacheHits = 1;
+    if (!rejects(zeroDispatch) || !rejects(cpuFallback) || rejects(genuine)) {
+        evidence = "missed-GPU detection failed for zero-dispatch or CPU-fallback fixtures";
+        return false;
+    }
+    evidence = "zero-dispatch and CPU-fallback fixtures are MISSED_GPU; a real dispatch is not";
+    return true;
+}
 
 [[nodiscard]] inline bool pixelsClose(const std::span<const bloom::render::Rgba32f> actual,
                                       const std::span<const bloom::render::Rgba32f> expected) {
@@ -75,10 +128,10 @@ requiredFamily(const bloom::runtime::PreparedGpuScene& scene) {
     bool hasTranslation = false;
     bool hasMerge = false;
     for (const auto& command : scene.commands()) {
-        hasSolid = hasSolid || std::holds_alternative<bloom::runtime::GpuSceneSolidCommand>(command);
-        hasCoverage =
-            hasCoverage ||
-            std::holds_alternative<bloom::runtime::GpuSceneCoverageSolidCommand>(command);
+        hasSolid =
+            hasSolid || std::holds_alternative<bloom::runtime::GpuSceneSolidCommand>(command);
+        hasCoverage = hasCoverage ||
+                      std::holds_alternative<bloom::runtime::GpuSceneCoverageSolidCommand>(command);
         hasTranslation =
             hasTranslation ||
             std::holds_alternative<bloom::runtime::GpuSceneTranslationCommand>(command);
@@ -100,9 +153,9 @@ requiredFamily(const bloom::runtime::PreparedGpuScene& scene) {
     return NativeOperationFamily::None;
 }
 
-[[nodiscard]] inline std::uint64_t familyCount(
-    const bloom::runtime::GpuSceneExecutorCounters& counters,
-    const NativeOperationFamily family) {
+[[nodiscard]] inline std::uint64_t
+familyCount(const bloom::runtime::GpuSceneExecutorCounters& counters,
+            const NativeOperationFamily family) {
     switch (family) {
     case NativeOperationFamily::Solid:
         return counters.solidDispatches;
@@ -188,6 +241,10 @@ runNativeFixture(bloom::render::GpuDevice& device,
         const auto before = executor.counters();
         if (const auto diagnostic = executor.begin(scene, kSceneBudget);
             diagnostic.code != bloom::runtime::GpuSceneExecutorDiagnosticCode::None) {
+            outcome.cpuFallback =
+                diagnostic.code == bloom::runtime::GpuSceneExecutorDiagnosticCode::Unsupported ||
+                diagnostic.code ==
+                    bloom::runtime::GpuSceneExecutorDiagnosticCode::DeviceUnavailable;
             outcome.evidence = "executor begin refused: " + diagnostic.message;
             return false;
         }
@@ -244,16 +301,14 @@ runNativeFixture(bloom::render::GpuDevice& device,
     }
     outcome.readbacks = executor.counters().readbacks;
 
-    const bool providerTruth = outcome.coldDispatches > 0 && outcome.familyDispatches > 0 &&
-                               outcome.warmDispatches == 0 && outcome.warmCacheHits > 0 &&
-                               outcome.readbacks == 0;
-    if (!providerTruth) {
-        outcome.evidence = "cold/family dispatch, warm-zero cache, or provenance not met";
+    if (const auto reason = nativeMissedGpuReason(outcome); !reason.empty()) {
+        outcome.evidence = std::string{reason};
         return outcome;
     }
     outcome.passed = true;
-    outcome.evidence = "native parity; family dispatches " + std::to_string(outcome.familyDispatches) +
-                       ", cold " + std::to_string(outcome.coldDispatches) + ", warm " +
+    outcome.evidence = "native parity; family dispatches " +
+                       std::to_string(outcome.familyDispatches) + ", cold " +
+                       std::to_string(outcome.coldDispatches) + ", warm " +
                        std::to_string(outcome.warmDispatches) + ", warm cache hits " +
                        std::to_string(outcome.warmCacheHits);
     return outcome;

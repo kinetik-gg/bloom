@@ -13,8 +13,8 @@
 
 #include <cstdint>
 #include <memory>
-#include <string>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -37,9 +37,8 @@ using bloom::runtime::CompiledVec2Parameter;
 using bloom::runtime::EvaluationRequest;
 using bloom::runtime::OperationIndex;
 
-
-[[nodiscard]] inline std::string codeName(
-    const bloom::runtime::PreparedGpuSceneDiagnosticCode code) {
+[[nodiscard]] inline std::string
+codeName(const bloom::runtime::PreparedGpuSceneDiagnosticCode code) {
     using bloom::runtime::PreparedGpuSceneDiagnosticCode;
     switch (code) {
     case PreparedGpuSceneDiagnosticCode::None:
@@ -72,9 +71,10 @@ using bloom::runtime::OperationIndex;
     return "Unknown";
 }
 
-[[nodiscard]] inline CompositionFormat format(const std::uint32_t width, const std::uint32_t height) {
-    const auto value = CompositionFormat::create(width, height,
-                                                 bloom::core::PixelAspectRatio::square());
+[[nodiscard]] inline CompositionFormat format(const std::uint32_t width,
+                                              const std::uint32_t height) {
+    const auto value =
+        CompositionFormat::create(width, height, bloom::core::PixelAspectRatio::square());
     if (!value.has_value()) {
         throw std::logic_error("coverage fixture format must be valid");
     }
@@ -101,8 +101,7 @@ struct LayerValues final {
 
 [[nodiscard]] inline CompiledLayerOutput layerOutput(const bloom::document::NodeId nodeId,
                                                      const bloom::document::LayerId layerId,
-                                                     const OperationIndex input,
-                                                     const LayerIds ids,
+                                                     const OperationIndex input, const LayerIds ids,
                                                      const LayerValues values) {
     return CompiledLayerOutput{nodeId,
                                layerId,
@@ -143,39 +142,36 @@ twoLayerPlan(const CompositionFormat compositionFormat, const LayerValues a, con
     const LayerIds idsA{ParameterId::fromRaw(idBase + 0), ParameterId::fromRaw(idBase + 1),
                         ParameterId::fromRaw(idBase + 2), ParameterId::fromRaw(idBase + 3),
                         ParameterId::fromRaw(idBase + 4), ParameterId::fromRaw(idBase + 5)};
-    const LayerIds idsB{ParameterId::fromRaw(idBase + 6), ParameterId::fromRaw(idBase + 7),
-                        ParameterId::fromRaw(idBase + 8), ParameterId::fromRaw(idBase + 9),
+    const LayerIds idsB{ParameterId::fromRaw(idBase + 6),  ParameterId::fromRaw(idBase + 7),
+                        ParameterId::fromRaw(idBase + 8),  ParameterId::fromRaw(idBase + 9),
                         ParameterId::fromRaw(idBase + 10), ParameterId::fromRaw(idBase + 11)};
     std::vector<CompiledOperation> operations;
-    operations.emplace_back(CompiledSolid{
-        NodeId::fromRaw(idBase + 20),
-        {ParameterId::fromRaw(idBase + 21), Color4d{0.5, 0.25, 0.125, 1.0}},
-        {ParameterId::fromRaw(idBase + 22), solidWidth},
-        {ParameterId::fromRaw(idBase + 23), solidHeight}});
     operations.emplace_back(
-        layerOutput(NodeId::fromRaw(idBase + 24), LayerId::fromRaw(idBase + 30),
-                    OperationIndex::fromRaw(0), idsA, a));
-    operations.emplace_back(CompiledSolid{
-        NodeId::fromRaw(idBase + 40),
-        {ParameterId::fromRaw(idBase + 41), Color4d{0.125, 0.375, 0.75, 0.5}},
-        {ParameterId::fromRaw(idBase + 42), solidWidth},
-        {ParameterId::fromRaw(idBase + 43), solidHeight}});
+        CompiledSolid{NodeId::fromRaw(idBase + 20),
+                      {ParameterId::fromRaw(idBase + 21), Color4d{0.5, 0.25, 0.125, 1.0}},
+                      {ParameterId::fromRaw(idBase + 22), solidWidth},
+                      {ParameterId::fromRaw(idBase + 23), solidHeight}});
+    operations.emplace_back(layerOutput(NodeId::fromRaw(idBase + 24), LayerId::fromRaw(idBase + 30),
+                                        OperationIndex::fromRaw(0), idsA, a));
     operations.emplace_back(
-        layerOutput(NodeId::fromRaw(idBase + 44), LayerId::fromRaw(idBase + 45),
-                    OperationIndex::fromRaw(2), idsB, b));
+        CompiledSolid{NodeId::fromRaw(idBase + 40),
+                      {ParameterId::fromRaw(idBase + 41), Color4d{0.125, 0.375, 0.75, 0.5}},
+                      {ParameterId::fromRaw(idBase + 42), solidWidth},
+                      {ParameterId::fromRaw(idBase + 43), solidHeight}});
+    operations.emplace_back(layerOutput(NodeId::fromRaw(idBase + 44), LayerId::fromRaw(idBase + 45),
+                                        OperationIndex::fromRaw(2), idsB, b));
     const CompiledMergeInput first{LayerSlotId::fromRaw(idBase + 50), LayerId::fromRaw(idBase + 30),
                                    OperationIndex::fromRaw(1)};
-    const CompiledMergeInput second{LayerSlotId::fromRaw(idBase + 51), LayerId::fromRaw(idBase + 45),
-                                    OperationIndex::fromRaw(3)};
-    operations.emplace_back(
-        CompiledMerge{NodeId::fromRaw(idBase + 52), std::vector<CompiledMergeInput>{first, second}});
+    const CompiledMergeInput second{LayerSlotId::fromRaw(idBase + 51),
+                                    LayerId::fromRaw(idBase + 45), OperationIndex::fromRaw(3)};
+    operations.emplace_back(CompiledMerge{NodeId::fromRaw(idBase + 52),
+                                          std::vector<CompiledMergeInput>{first, second}});
     operations.emplace_back(
         CompiledCompositionOutput{NodeId::fromRaw(idBase + 53), OperationIndex::fromRaw(4)});
-    return publish(CompiledCompositionPlanDefinition{bloom::document::Revision::fromRaw(7),
-                                                      bloom::document::ProjectId::fromRaw(1),
-                                                      bloom::document::CompositionId::fromRaw(2),
-                                                      compositionFormat, std::move(operations),
-                                                      OperationIndex::fromRaw(5)});
+    return publish(CompiledCompositionPlanDefinition{
+        bloom::document::Revision::fromRaw(7), bloom::document::ProjectId::fromRaw(1),
+        bloom::document::CompositionId::fromRaw(2), compositionFormat, std::move(operations),
+        OperationIndex::fromRaw(5)});
 }
 
 } // namespace bloom::gpu_coverage_fixtures

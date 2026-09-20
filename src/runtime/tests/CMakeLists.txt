@@ -383,19 +383,26 @@ bloom_add_test(
 #
 # -Werror=switch makes the contract's no-default enumerator switches (ShapeKind, NodeLoweringKind)
 # a compile failure when a new enumerator is added without a classification.
-# Generated video fixtures are supplied by the caller so the real media worker pipeline is used
-# without inventing a fake handle. Empty means the video fixtures report an explicit
-# test-environment-missing failure.
-set(BLOOM_GPU_COVERAGE_MEDIA_FIXTURES "" CACHE PATH
-    "Directory containing the generated media-worker video fixtures for the GPU coverage gate")
+# The generated media-worker fixtures are wired automatically: the coverage target depends on the
+# existing bloom_media_generate_fixtures generator and consumes the CTest `media3` fixture setup, so
+# no caller has to supply a directory. On a platform without that generator the path stays empty and
+# the video fixture reports an explicit test-environment-missing result rather than a fake pass.
+set(BLOOM_GPU_COVERAGE_MEDIA_FIXTURES "")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(BLOOM_GPU_COVERAGE_MEDIA_FIXTURES "${PROJECT_BINARY_DIR}/apps/bloom-media-worker/fixtures")
+endif()
 
 add_executable(bloom_runtime_gpu_coverage_contract_test gpu_coverage_contract_tests.cpp)
 target_link_libraries(bloom_runtime_gpu_coverage_contract_test
     PRIVATE bloom_runtime_evaluator bloom_render bloom_media_video OpenEXR::OpenEXR)
 target_include_directories(bloom_runtime_gpu_coverage_contract_test
     PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
-if(TARGET bloom-media-worker)
-    add_dependencies(bloom_runtime_gpu_coverage_contract_test bloom-media-worker)
+# apps/bloom-media-worker is added after src/runtime, so a TARGET guard here would be false at
+# configure time; mirror the video-scene-preparation tests and take the real worker + fixture
+# generator as build-order dependencies on the platform that defines them.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_dependencies(bloom_runtime_gpu_coverage_contract_test
+        bloom-media-worker bloom_media_generate_fixtures)
 endif()
 bloom_enable_warnings(bloom_runtime_gpu_coverage_contract_test)
 if(MSVC)
@@ -425,10 +432,22 @@ bloom_add_test(
 set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
     PROPERTIES SKIP_RETURN_CODE 77)
 
-# Mutation proof: adding an unclassified pixel alternative must fail to compile, and it must fail on
-# the missing GpuOperationCoverageTraits specialization specifically. Both probe targets are excluded
-# from the default build; the check script builds the positive control first, then the negative
-# probe, and asserts the reason.
+# The generated video fixtures are owned by the media worker's `media3` setup, exactly like the
+# existing video-scene-preparation tests. Registering the dependency here means the coverage gate
+# runs the real generated media without a caller-supplied directory.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set_tests_properties(
+        bloom.runtime.gpu_coverage_contract
+        bloom.runtime.gpu_coverage_native_acceptance
+        PROPERTIES FIXTURES_REQUIRED media3)
+endif()
+
+# Mutation proof: each way a new pixel operation/effect/feature can be introduced without
+# classification must fail to compile, and each must fail on its expected reason. All probe targets
+# are excluded from the default build; the check script builds the positive control first, then each
+# negative probe, and asserts the diagnostic. The built-in-node mutation (a runtime registry proof)
+# lives in the coverage gate itself; a new node type sharing an existing lowering gains a required
+# id with no fixture and is reported RED by name.
 add_library(bloom_runtime_gpu_coverage_contract_positive_probe OBJECT EXCLUDE_FROM_ALL
     gpu_coverage_contract_positive_probe.cpp)
 target_link_libraries(bloom_runtime_gpu_coverage_contract_positive_probe
@@ -447,15 +466,44 @@ target_link_libraries(bloom_runtime_gpu_coverage_contract_negative_probe
     PRIVATE bloom_runtime_compiler)
 bloom_enable_warnings(bloom_runtime_gpu_coverage_contract_negative_probe)
 
+add_library(bloom_runtime_gpu_coverage_contract_effect_negative_probe OBJECT EXCLUDE_FROM_ALL
+    gpu_coverage_contract_effect_negative_probe.cpp)
+target_link_libraries(bloom_runtime_gpu_coverage_contract_effect_negative_probe
+    PRIVATE bloom_runtime_compiler)
+bloom_enable_warnings(bloom_runtime_gpu_coverage_contract_effect_negative_probe)
+
+# A new feature enumerator is guarded by the contract's no-default switches under -Werror=switch;
+# this probe proves that guard is actually enabled in the build by failing on a missing case.
+add_library(bloom_runtime_gpu_coverage_contract_feature_negative_probe OBJECT EXCLUDE_FROM_ALL
+    gpu_coverage_contract_feature_negative_probe.cpp)
+target_link_libraries(bloom_runtime_gpu_coverage_contract_feature_negative_probe
+    PRIVATE bloom_runtime_compiler)
+bloom_enable_warnings(bloom_runtime_gpu_coverage_contract_feature_negative_probe)
+if(MSVC)
+    target_compile_options(bloom_runtime_gpu_coverage_contract_feature_negative_probe PRIVATE
+        /we4062)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+    target_compile_options(bloom_runtime_gpu_coverage_contract_feature_negative_probe PRIVATE
+        -Werror=switch)
+endif()
+
 add_test(
     NAME bloom.runtime.gpu_coverage_contract_mutation_proof
     COMMAND ${CMAKE_COMMAND}
             "-DBLOOM_BUILD_DIR=${CMAKE_BINARY_DIR}"
             "-DBLOOM_PROBE_POSITIVE=bloom_runtime_gpu_coverage_contract_positive_probe"
-            "-DBLOOM_PROBE_NEGATIVE=bloom_runtime_gpu_coverage_contract_negative_probe"
+            "-DBLOOM_PROBE_NEGATIVE_OPERATION=bloom_runtime_gpu_coverage_contract_negative_probe"
+            "-DBLOOM_REASON_OPERATION_A=GpuOperationCoverageTraits"
+            "-DBLOOM_REASON_OPERATION_B=SyntheticUnclassifiedOperation"
+            "-DBLOOM_PROBE_NEGATIVE_EFFECT=bloom_runtime_gpu_coverage_contract_effect_negative_probe"
+            "-DBLOOM_REASON_EFFECT_A=GpuImageEffectCoverageTraits"
+            "-DBLOOM_REASON_EFFECT_B=SyntheticUnclassifiedKernel"
+            "-DBLOOM_PROBE_NEGATIVE_FEATURE=bloom_runtime_gpu_coverage_contract_feature_negative_probe"
+            "-DBLOOM_REASON_FEATURE_A=SyntheticFeatureEnum"
+            "-DBLOOM_REASON_FEATURE_B=Wswitch"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/gpu_coverage_negative_probe_check.cmake")
 set_tests_properties(bloom.runtime.gpu_coverage_contract_mutation_proof
-    PROPERTIES LABELS runtime quality contract TIMEOUT 180)
+    PROPERTIES LABELS runtime quality contract TIMEOUT 240)
 
 # Bounded prepared-upload cache: node lifetime under replacement/eviction, byte and entry ceilings,
 # zero-budget disable, and per-entry accounting. CPU-only; no loader and no device.

@@ -60,12 +60,12 @@ struct VideoFixture final {
     asset.kind = document::AssetKind::Video;
     asset.contentDigest = probe.sourceDigest;
     for (const auto& stream : probe.streams) {
-        const auto timebase =
-            bloom::core::RationalTime::create(stream.timebase.numerator, stream.timebase.denominator);
+        const auto timebase = bloom::core::RationalTime::create(stream.timebase.numerator,
+                                                                stream.timebase.denominator);
         const auto period =
             bloom::core::RationalTime::create(stream.rate.denominator, stream.rate.numerator);
-        const auto duration =
-            bloom::core::RationalTime::create(stream.duration.numerator, stream.duration.denominator);
+        const auto duration = bloom::core::RationalTime::create(stream.duration.numerator,
+                                                                stream.duration.denominator);
         if (!timebase || !period || !duration) {
             throw std::logic_error("video fixture timing is invalid");
         }
@@ -127,8 +127,8 @@ struct VideoFixture final {
 // VideoSource -> translation-only Layer Output -> Normal Merge -> Composition Output at a given
 // composition time. Video always takes the raster translation path.
 [[nodiscard]] inline std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>
-videoPlan(const document::AssetRecord& asset, const LayerValues layer, const std::int64_t startFrame,
-          const std::uint64_t idBase) {
+videoPlan(const document::AssetRecord& asset, const LayerValues layer,
+          const std::int64_t startFrame, const std::uint64_t idBase) {
     using bloom::document::LayerId;
     using bloom::document::LayerSlotId;
     using bloom::document::NodeId;
@@ -137,15 +137,15 @@ videoPlan(const document::AssetRecord& asset, const LayerValues layer, const std
                        ParameterId::fromRaw(idBase + 2), ParameterId::fromRaw(idBase + 3),
                        ParameterId::fromRaw(idBase + 4), ParameterId::fromRaw(idBase + 5)};
     std::vector<CompiledOperation> operations;
-    operations.emplace_back(bloom::runtime::CompiledVideoSource{
-        NodeId::fromRaw(idBase + 10), asset, startFrame, 0, 0, std::string{}});
+    operations.emplace_back(bloom::runtime::CompiledVideoSource{NodeId::fromRaw(idBase + 10), asset,
+                                                                startFrame, 0, 0, std::string{}});
     operations.emplace_back(layerOutput(NodeId::fromRaw(idBase + 11), LayerId::fromRaw(idBase + 12),
                                         OperationIndex::fromRaw(0), ids, layer));
     operations.emplace_back(CompiledMerge{
         NodeId::fromRaw(idBase + 13),
-        std::vector<CompiledMergeInput>{CompiledMergeInput{
-            LayerSlotId::fromRaw(idBase + 14), LayerId::fromRaw(idBase + 12),
-            OperationIndex::fromRaw(1)}}});
+        std::vector<CompiledMergeInput>{CompiledMergeInput{LayerSlotId::fromRaw(idBase + 14),
+                                                           LayerId::fromRaw(idBase + 12),
+                                                           OperationIndex::fromRaw(1)}}});
     operations.emplace_back(
         CompiledCompositionOutput{NodeId::fromRaw(idBase + 15), OperationIndex::fromRaw(2)});
     return publish(CompiledCompositionPlanDefinition{

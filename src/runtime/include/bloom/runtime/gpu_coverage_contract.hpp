@@ -52,8 +52,8 @@ struct GpuCoverageEntry final {
     std::string id;
     std::string_view label;
     GpuCoverageDisposition disposition = GpuCoverageDisposition::Required;
-    // Nonempty exactly for an approved exception or host-preparation entry. A repository document or
-    // accepted decision that owns the approval, never a fabricated ticket id.
+    // Nonempty exactly for an approved exception or host-preparation entry. A repository document
+    // or accepted decision that owns the approval, never a fabricated ticket id.
     std::string_view approvalReference;
     // Nonempty exactly for an approved exception or host-preparation entry.
     std::string_view rationale;
@@ -61,18 +61,18 @@ struct GpuCoverageEntry final {
     friend bool operator==(const GpuCoverageEntry&, const GpuCoverageEntry&) = default;
 };
 
-// Exhaustive per-alternative traits. The primary templates are only declared, so a CompiledOperation
-// or ImageEffectKernel alternative without a specialization fails to compile when the collectors
-// below instantiate it. That is the compile-time gate on new alternatives.
+// Exhaustive per-alternative traits. The primary templates are only declared, so a
+// CompiledOperation or ImageEffectKernel alternative without a specialization fails to compile when
+// the collectors below instantiate it. That is the compile-time gate on new alternatives.
 template <typename Alternative> struct GpuOperationCoverageTraits;
 template <typename Alternative> struct GpuImageEffectCoverageTraits;
 
-#define BLOOM_GPU_REQUIRED_OPERATION(Alternative, Label)                                      \
-    template <> struct GpuOperationCoverageTraits<Alternative> final {                        \
-        [[nodiscard]] static constexpr GpuCoverageEntry entry() noexcept {                    \
-            return GpuCoverageEntry{"operation." #Alternative, Label,                         \
-                                    GpuCoverageDisposition::Required, {}, {}};                \
-        }                                                                                     \
+#define BLOOM_GPU_REQUIRED_OPERATION(Alternative, Label)                                           \
+    template <> struct GpuOperationCoverageTraits<Alternative> final {                             \
+        [[nodiscard]] static constexpr GpuCoverageEntry entry() noexcept {                         \
+            return GpuCoverageEntry{                                                               \
+                "operation." #Alternative, Label, GpuCoverageDisposition::Required, {}, {}};       \
+        }                                                                                          \
     }
 
 BLOOM_GPU_REQUIRED_OPERATION(CompiledSolid, "solid source");
@@ -86,12 +86,12 @@ BLOOM_GPU_REQUIRED_OPERATION(CompiledShape, "shape source");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledCompositionSource, "nested composition source");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledImageEffect, "image effect");
 
-#define BLOOM_GPU_REQUIRED_EFFECT(Alternative, Label)                                         \
-    template <> struct GpuImageEffectCoverageTraits<Alternative> final {                      \
-        [[nodiscard]] static constexpr GpuCoverageEntry entry() noexcept {                    \
-            return GpuCoverageEntry{"effect." #Alternative, Label,                            \
-                                    GpuCoverageDisposition::Required, {}, {}};                \
-        }                                                                                     \
+#define BLOOM_GPU_REQUIRED_EFFECT(Alternative, Label)                                              \
+    template <> struct GpuImageEffectCoverageTraits<Alternative> final {                           \
+        [[nodiscard]] static constexpr GpuCoverageEntry entry() noexcept {                         \
+            return GpuCoverageEntry{                                                               \
+                "effect." #Alternative, Label, GpuCoverageDisposition::Required, {}, {}};          \
+        }                                                                                          \
     }
 
 BLOOM_GPU_REQUIRED_EFFECT(IdentityImageKernel, "identity image effect kernel");
@@ -108,8 +108,7 @@ void collectGpuOperationCoverage(std::vector<GpuCoverageEntry>& out) {
     out.push_back(GpuOperationCoverageTraits<Alternative>::entry());
 }
 
-template <typename Alternative>
-void collectGpuEffectCoverage(std::vector<GpuCoverageEntry>& out) {
+template <typename Alternative> void collectGpuEffectCoverage(std::vector<GpuCoverageEntry>& out) {
     out.push_back(GpuImageEffectCoverageTraits<Alternative>::entry());
 }
 
@@ -154,8 +153,8 @@ struct GpuFeatureCoverageEntry final {
 };
 
 // Exhaustive shape-kind label. No default case: building the gate with
-// -Wswitch (from -Wall, promoted by -Werror) turns a newly added document::ShapeKind into a compile failure,
-// so the feature list cannot silently omit it.
+// -Wswitch (from -Wall, promoted by -Werror) turns a newly added document::ShapeKind into a compile
+// failure, so the feature list cannot silently omit it.
 [[nodiscard]] constexpr std::string_view
 gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
     switch (kind) {
@@ -180,62 +179,55 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
 [[nodiscard]] inline std::vector<GpuFeatureCoverageEntry> gpuFeatureCoverage() {
     std::vector<GpuFeatureCoverageEntry> out;
     for (const auto mode : core::kBlendModes) {
-        out.push_back(GpuFeatureCoverageEntry{
-            std::string{"feature.blend."} +
-                std::to_string(core::blendModeStoredValue(mode)),
-            "blend mode axis", GpuCoverageDisposition::Required,
-            "src/render GpuComposite + composite parity tests"});
+        out.push_back(GpuFeatureCoverageEntry{std::string{"feature.blend."} +
+                                                  std::to_string(core::blendModeStoredValue(mode)),
+                                              "blend mode axis", GpuCoverageDisposition::Required,
+                                              "src/render GpuComposite + composite parity tests"});
     }
     constexpr std::array<document::ShapeKind, 7> kShapeKinds{
-        document::ShapeKind::Rectangle, document::ShapeKind::Ellipse,
-        document::ShapeKind::Triangle,  document::ShapeKind::Polygon,
-        document::ShapeKind::Star,      document::ShapeKind::Line,
+        document::ShapeKind::Rectangle, document::ShapeKind::Ellipse, document::ShapeKind::Triangle,
+        document::ShapeKind::Polygon,   document::ShapeKind::Star,    document::ShapeKind::Line,
         document::ShapeKind::Path};
     for (const auto kind : kShapeKinds) {
         out.push_back(GpuFeatureCoverageEntry{
-            std::string{"feature.shape."} +
-                std::to_string(static_cast<std::int64_t>(kind)),
+            std::string{"feature.shape."} + std::to_string(static_cast<std::int64_t>(kind)),
             std::string{"shape kind axis: "} + std::string{gpuShapeKindFeatureLabel(kind)},
-            GpuCoverageDisposition::Required,
-            "src/render PathRaster + shape source tests"});
+            GpuCoverageDisposition::Required, "src/render PathRaster + shape source tests"});
     }
-    out.push_back(GpuFeatureCoverageEntry{"feature.layer.affine.scale", "layer scale axis",
-                                          GpuCoverageDisposition::Required,
-                                          "src/render LayerTransform + gpu scene preparation tests"});
-    out.push_back(GpuFeatureCoverageEntry{"feature.layer.affine.rotation", "layer rotation axis",
-                                          GpuCoverageDisposition::Required,
-                                          "src/render LayerTransform + gpu scene preparation tests"});
-    out.push_back(GpuFeatureCoverageEntry{"feature.layer.affine.anchor", "layer anchor axis",
-                                          GpuCoverageDisposition::Required,
-                                          "src/render LayerTransform + gpu scene preparation tests"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.layer.affine.scale", "layer scale axis", GpuCoverageDisposition::Required,
+        "src/render LayerTransform + gpu scene preparation tests"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.layer.affine.rotation", "layer rotation axis", GpuCoverageDisposition::Required,
+        "src/render LayerTransform + gpu scene preparation tests"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.layer.affine.anchor", "layer anchor axis", GpuCoverageDisposition::Required,
+        "src/render LayerTransform + gpu scene preparation tests"});
     out.push_back(GpuFeatureCoverageEntry{"feature.layer.parent", "parented layer transform axis",
                                           GpuCoverageDisposition::Required,
                                           "src/runtime layer_parent_transform tests"});
-    out.push_back(GpuFeatureCoverageEntry{"feature.layer.generic_input",
-                                          "layer fed by a non-source input (graph compositing)",
-                                          GpuCoverageDisposition::Required,
-                                          "src/runtime GpuSceneExecutor graph tests"});
-    // Colour conversion into the working space is a pixel transformation, never host I/O. Decode and
-    // decompression are preparation; the conversion itself must have a GPU implementation.
-    out.push_back(GpuFeatureCoverageEntry{"feature.color.working_space_transform",
-                                          "decode-to-working-space colour transform",
-                                          GpuCoverageDisposition::Required,
-                                          "src/color OCIO processor tests"});
-    out.push_back(GpuFeatureCoverageEntry{"feature.display.view_adjust",
-                                          "custom viewer exposure/gamma adjust",
-                                          GpuCoverageDisposition::Required,
-                                          "src/runtime gpu_neutral_display qualification tests"});
-    out.push_back(GpuFeatureCoverageEntry{"feature.display.custom_view_transform",
-                                          "custom display/view transform",
-                                          GpuCoverageDisposition::Required,
-                                          "src/runtime gpu_neutral_display qualification tests"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.layer.generic_input", "layer fed by a non-source input (graph compositing)",
+        GpuCoverageDisposition::Required, "src/runtime GpuSceneExecutor graph tests"});
+    // Colour conversion into the working space is a pixel transformation, never host I/O. Decode
+    // and decompression are preparation; the conversion itself must have a GPU implementation.
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.color.working_space_transform", "decode-to-working-space colour transform",
+        GpuCoverageDisposition::Required, "src/color OCIO processor tests"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.display.view_adjust", "custom viewer exposure/gamma adjust",
+        GpuCoverageDisposition::Required, "src/runtime gpu_neutral_display qualification tests"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.display.custom_view_transform", "custom display/view transform",
+        GpuCoverageDisposition::Required, "src/runtime gpu_neutral_display qualification tests"});
     return out;
 }
 
 // The render routes every pixel operation must reach. Preview and final render are both required:
 // there is no preview-only exemption, and a GPU implementation that is silently a CPU whole-frame
 // render does not count. The final-render routes may read back the single composited image at the
-// CPU codec/file boundary; per-node or per-operation full-frame roundtrips are not an implementation.
+// CPU codec/file boundary; per-node or per-operation full-frame roundtrips are not an
+// implementation.
 struct GpuRouteCoverageEntry final {
     std::string_view id;
     std::string_view label;
@@ -260,6 +252,167 @@ struct GpuRouteCoverageEntry final {
     };
 }
 
+enum class GpuCoverageContractIssue : std::uint8_t {
+    None,
+    DuplicateId,
+    MissingApprovalReference,
+    MissingRationale,
+    WildcardOptOut,
+    ApprovalReferenceOnRequired,
+    EffectNotCovered,
+    LoweringEscapesCoverage,
+    // A route proof carried no route id or harness, or an empty/generic value a boolean would.
+    RouteProofEmptyOrGeneric,
+    // A route proof named a route that is not one of the required render routes.
+    RouteProofUnknownRoute,
+    // The proof's harness kind does not match the route it claims to prove.
+    RouteProofHarnessMismatch,
+    // The proof omitted the production process identity, device ownership epoch, or evidence
+    // digest.
+    RouteProofMissingProvenance,
+    // The proof recorded zero actual native dispatches: a CPU whole-frame fallback, not a GPU pass.
+    RouteProofNoNativeDispatch,
+    // The proof recorded more full-frame readbacks than its route policy allows.
+    RouteProofExcessReadback,
+};
+
+struct GpuCoverageContractDiagnostic final {
+    GpuCoverageContractIssue issue = GpuCoverageContractIssue::None;
+    std::string detail;
+};
+
+// The closed set of production harnesses that can prove one render route. A route can only be
+// proven by the harness that owns it; a generic "verified" flag or a bare bool cannot stand in.
+enum class GpuRouteHarnessKind : std::uint8_t {
+    None = 0,
+    ViewerPreview,
+    RamPreview,
+    StillFrameExport,
+    SequenceRangeExport,
+    VideoExport,
+    HeadlessScripted,
+};
+
+[[nodiscard]] constexpr std::string_view
+gpuRouteHarnessRouteId(const GpuRouteHarnessKind harness) noexcept {
+    switch (harness) {
+    case GpuRouteHarnessKind::ViewerPreview:
+        return "route.preview.viewer";
+    case GpuRouteHarnessKind::RamPreview:
+        return "route.preview.ram_preview";
+    case GpuRouteHarnessKind::StillFrameExport:
+        return "route.export.still_frame";
+    case GpuRouteHarnessKind::SequenceRangeExport:
+        return "route.export.sequence_range";
+    case GpuRouteHarnessKind::VideoExport:
+        return "route.export.video";
+    case GpuRouteHarnessKind::HeadlessScripted:
+        return "route.export.headless_scripted";
+    case GpuRouteHarnessKind::None:
+        return {};
+    }
+    return {};
+}
+
+// Preview routes are readback-free by construction; only a final-render route may read the single
+// composited image back at the codec/file boundary.
+[[nodiscard]] constexpr bool gpuRouteAllowsFinalReadback(const std::string_view routeId) noexcept {
+    return routeId == "route.export.still_frame" || routeId == "route.export.sequence_range" ||
+           routeId == "route.export.video" || routeId == "route.export.headless_scripted";
+}
+
+// The typed proof an externally executed production route must publish. Every field is real
+// provenance captured from the genuine run -- the production process identity digest, the actual
+// device ownership epoch, the real native dispatch count, the bounded full-frame readback count,
+// and a captured evidence digest. It is deliberately structured so a bool or a generic fake cannot
+// satisfy it, and no proof is registered in this repository today: every route stays MISSING until
+// its real harness publishes one.
+struct GpuRouteExecutionProof final {
+    std::string routeId;
+    GpuRouteHarnessKind harness = GpuRouteHarnessKind::None;
+    std::string processIdentityDigest;
+    std::string deviceOwnershipEpoch;
+    std::uint64_t nativeDispatches = 0;
+    std::uint64_t fullFrameReadbacks = 0;
+    std::string evidenceDigest;
+};
+
+[[nodiscard]] inline std::vector<GpuCoverageContractDiagnostic>
+validateGpuRouteExecutionProof(const GpuRouteExecutionProof& proof) {
+    std::vector<GpuCoverageContractDiagnostic> issues;
+    if (proof.routeId.empty() || proof.harness == GpuRouteHarnessKind::None) {
+        issues.push_back({GpuCoverageContractIssue::RouteProofEmptyOrGeneric,
+                          "a route proof has no route id or harness kind"});
+        return issues;
+    }
+    bool known = false;
+    for (const auto& route : gpuRenderRouteCoverage()) {
+        known = known || route.id == proof.routeId;
+    }
+    if (!known) {
+        issues.push_back({GpuCoverageContractIssue::RouteProofUnknownRoute,
+                          "route proof names an unknown route '" + proof.routeId + "'"});
+        return issues;
+    }
+    if (gpuRouteHarnessRouteId(proof.harness) != proof.routeId) {
+        issues.push_back(
+            {GpuCoverageContractIssue::RouteProofHarnessMismatch,
+             "route proof for '" + proof.routeId + "' was produced by a different harness"});
+    }
+    if (proof.processIdentityDigest.empty() || proof.deviceOwnershipEpoch.empty() ||
+        proof.evidenceDigest.empty()) {
+        issues.push_back({GpuCoverageContractIssue::RouteProofMissingProvenance,
+                          "route proof for '" + proof.routeId +
+                              "' omits the production identity, device epoch, or evidence digest"});
+    }
+    if (proof.nativeDispatches == 0) {
+        issues.push_back(
+            {GpuCoverageContractIssue::RouteProofNoNativeDispatch,
+             "route proof for '" + proof.routeId +
+                 "' recorded zero native dispatches (a CPU fallback is not a GPU pass)"});
+    }
+    const bool readbackAllowed = gpuRouteAllowsFinalReadback(proof.routeId);
+    if ((!readbackAllowed && proof.fullFrameReadbacks != 0) ||
+        (readbackAllowed && proof.fullFrameReadbacks > 1)) {
+        issues.push_back(
+            {GpuCoverageContractIssue::RouteProofExcessReadback,
+             "route proof for '" + proof.routeId + "' exceeds its full-frame readback policy"});
+    }
+    return issues;
+}
+
+// The sink a real, externally executed route harness publishes into. A proof is retained only when
+// it validates; an empty/generic or fake proof is rejected by name. The gate reads this sink and
+// keeps every route MISSING while it is empty.
+class GpuRouteProofSink final {
+  public:
+    [[nodiscard]] GpuCoverageContractIssue publish(const GpuRouteExecutionProof& proof) {
+        const auto issues = validateGpuRouteExecutionProof(proof);
+        if (!issues.empty()) {
+            return issues.front().issue;
+        }
+        proofs_.push_back(proof);
+        return GpuCoverageContractIssue::None;
+    }
+
+    [[nodiscard]] const std::vector<GpuRouteExecutionProof>& proofs() const noexcept {
+        return proofs_;
+    }
+
+    [[nodiscard]] const GpuRouteExecutionProof*
+    find(const std::string_view routeId) const noexcept {
+        for (const auto& proof : proofs_) {
+            if (proof.routeId == routeId) {
+                return &proof;
+            }
+        }
+        return nullptr;
+    }
+
+  private:
+    std::vector<GpuRouteExecutionProof> proofs_;
+};
+
 // The narrow, already-approved host-preparation steps. These are not whole-frame pixel-rendering
 // opt-outs; the rendering operation itself remains Required above. Each entry names the accepted
 // owning document, never a fabricated approval id.
@@ -275,49 +428,32 @@ struct GpuRouteCoverageEntry final {
                          "docs/architecture/media-io.md",
                          "Decoding pipes a decompressed sample buffer to the working-space colour "
                          "transform; it does not itself produce working-space pixels."},
-        GpuCoverageEntry{"prep.font.shaping",
-                         "font load, shaping, and glyph geometry for text",
+        GpuCoverageEntry{"prep.font.shaping", "font load, shaping, and glyph geometry for text",
                          GpuCoverageDisposition::ApprovedCpuHostPreparation,
                          "docs/architecture/gpu-backend.md",
                          "Text shaping is host preparation; the whole-frame text render operation "
                          "remains Required and is not exempted."},
-        GpuCoverageEntry{"prep.parameter.resolution",
-                         "curve sampling, value-graph driver, and parameter preflight",
-                         GpuCoverageDisposition::ApprovedCpuHostPreparation,
-                         "docs/architecture/gpu-backend.md",
-                         "Animated and driven operands are resolved by the real CPU preflight before "
-                         "the GPU command is built."},
-        GpuCoverageEntry{"prep.geometry.coverage_raster",
-                         "vector coverage rasterization for fractional transforms",
-                         GpuCoverageDisposition::ApprovedCpuHostPreparation,
-                         "docs/architecture/gpu-backend.md",
-                         "The exact CPU PathRaster coverage is host-built; the GPU command consumes "
-                         "it rather than re-evaluating whole-frame pixels."},
-        GpuCoverageEntry{"prep.export.final_readback",
-                         "single final composited image readback at the codec/file boundary",
-                         GpuCoverageDisposition::ApprovedCpuHostPreparation,
-                         "docs/architecture/frame-output.md",
-                         "Final render may read the single composited image back once for CPU codec "
-                         "and file writing; per-node or per-operation full-frame roundtrips are not "
-                         "a GPU implementation."},
+        GpuCoverageEntry{
+            "prep.parameter.resolution",
+            "curve sampling, value-graph driver, and parameter preflight",
+            GpuCoverageDisposition::ApprovedCpuHostPreparation, "docs/architecture/gpu-backend.md",
+            "Animated and driven operands are resolved by the real CPU preflight before "
+            "the GPU command is built."},
+        GpuCoverageEntry{
+            "prep.geometry.coverage_raster",
+            "vector coverage rasterization for fractional transforms",
+            GpuCoverageDisposition::ApprovedCpuHostPreparation, "docs/architecture/gpu-backend.md",
+            "The exact CPU PathRaster coverage is host-built; the GPU command consumes "
+            "it rather than re-evaluating whole-frame pixels."},
+        GpuCoverageEntry{
+            "prep.export.final_readback",
+            "single final composited image readback at the codec/file boundary",
+            GpuCoverageDisposition::ApprovedCpuHostPreparation, "docs/architecture/frame-output.md",
+            "Final render may read the single composited image back once for CPU codec "
+            "and file writing; per-node or per-operation full-frame roundtrips are not "
+            "a GPU implementation."},
     };
 }
-
-enum class GpuCoverageContractIssue : std::uint8_t {
-    None,
-    DuplicateId,
-    MissingApprovalReference,
-    MissingRationale,
-    WildcardOptOut,
-    ApprovalReferenceOnRequired,
-    EffectNotCovered,
-    LoweringEscapesCoverage,
-};
-
-struct GpuCoverageContractDiagnostic final {
-    GpuCoverageContractIssue issue = GpuCoverageContractIssue::None;
-    std::string detail;
-};
 
 // Whether an authoring lowering produces pixels and therefore needs a Required pixel-operation
 // mapping. The switch covers every enumerator with no default, so building this contract with
@@ -425,8 +561,10 @@ gpuNodeTypeCoverage(const document::NodeDefinitionRegistry& registry) {
             continue;
         }
         out.push_back(GpuCoverageEntry{"node." + std::string{definition.key.typeId},
-                                       "authoring node type", GpuCoverageDisposition::Required,
-                                       {}, {}});
+                                       "authoring node type",
+                                       GpuCoverageDisposition::Required,
+                                       {},
+                                       {}});
     }
     return out;
 }
@@ -442,8 +580,8 @@ gpuNodeTypeCoverage(const document::NodeDefinitionRegistry& registry) {
     const auto preparation = gpuApprovedCpuPreparation();
     entries.insert(entries.end(), preparation.begin(), preparation.end());
     for (const auto& route : gpuRenderRouteCoverage()) {
-        entries.push_back(GpuCoverageEntry{std::string{route.id}, route.label,
-                                           GpuCoverageDisposition::Required, {}, {}});
+        entries.push_back(GpuCoverageEntry{
+            std::string{route.id}, route.label, GpuCoverageDisposition::Required, {}, {}});
     }
 
     const auto isWildcard = [](const std::string_view id) {
@@ -453,8 +591,8 @@ gpuNodeTypeCoverage(const document::NodeDefinitionRegistry& registry) {
     for (std::size_t i = 0; i < entries.size(); ++i) {
         const auto& entry = entries[i];
         if (entry.id.empty()) {
-            issues.push_back({GpuCoverageContractIssue::DuplicateId,
-                              "a coverage entry has an empty id"});
+            issues.push_back(
+                {GpuCoverageContractIssue::DuplicateId, "a coverage entry has an empty id"});
             continue;
         }
         for (std::size_t j = i + 1; j < entries.size(); ++j) {
@@ -470,9 +608,9 @@ gpuNodeTypeCoverage(const document::NodeDefinitionRegistry& registry) {
                                   "broad or wildcard opt-out '" + std::string{entry.id} + "'"});
             }
             if (entry.approvalReference.empty()) {
-                issues.push_back({GpuCoverageContractIssue::MissingApprovalReference,
-                                  "opt-out '" + std::string{entry.id} +
-                                      "' has no owning approval reference"});
+                issues.push_back(
+                    {GpuCoverageContractIssue::MissingApprovalReference,
+                     "opt-out '" + std::string{entry.id} + "' has no owning approval reference"});
             }
             if (entry.rationale.empty()) {
                 issues.push_back({GpuCoverageContractIssue::MissingRationale,
@@ -504,10 +642,9 @@ gpuNodeTypeCoverage(const document::NodeDefinitionRegistry& registry) {
         }
         const auto id = gpuLoweringOperationId(lowering);
         if (id.empty() || !hasRequiredOperation(id)) {
-            issues.push_back(
-                {GpuCoverageContractIssue::LoweringEscapesCoverage,
-                 "authoring lowering " + std::to_string(raw) +
-                     " has no Required pixel-operation coverage"});
+            issues.push_back({GpuCoverageContractIssue::LoweringEscapesCoverage,
+                              "authoring lowering " + std::to_string(raw) +
+                                  " has no Required pixel-operation coverage"});
         }
     }
     return issues;
