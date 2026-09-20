@@ -2,7 +2,6 @@
 
 #include "gpu_blend_private.hpp"
 
-
 #include <array>
 #include <atomic>
 #include <cmath>

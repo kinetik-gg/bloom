@@ -131,7 +131,6 @@ struct GpuAffine::Impl final {
         return GpuAffinePollResult::Failure;
     }
 #endif
-
 };
 
 } // namespace bloom::render

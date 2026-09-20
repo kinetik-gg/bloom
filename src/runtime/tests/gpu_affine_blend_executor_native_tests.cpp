@@ -11,7 +11,7 @@
 #include "gpu_blend_native_support.hpp"
 #include "gpu_composite_native_support.hpp"
 
-#include "../layer_parent_transform.hpp"
+#include "layer_parent_transform.hpp"
 
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/gpu_affine.hpp>
@@ -37,20 +37,22 @@
 #include <utility>
 #include <vector>
 
-
 namespace {
 
 using namespace bloom::render::composite_proof;
 
 using bloom::core::BlendMode;
+using bloom::render::blendLinearRec709SceneRow;
 using bloom::render::GpuImage;
 using bloom::render::ImageWindow;
+using bloom::render::readbackResidentImage;
 using bloom::render::Rgba32f;
 using bloom::render::Rgba32fImage;
 using bloom::render::Rgba32fImageDescriptor;
-using bloom::render::blendLinearRec709SceneRow;
 using bloom::render::blend_proof::blendPixels;
-using bloom::render::readbackResidentImage;
+using bloom::runtime::EvaluationColorIntent;
+using bloom::runtime::EvaluationProvider;
+using bloom::runtime::EvaluationQuality;
 using bloom::runtime::GpuSceneAffineCommand;
 using bloom::runtime::GpuSceneBlendCommand;
 using bloom::runtime::GpuSceneCache;
@@ -58,23 +60,19 @@ using bloom::runtime::GpuSceneCacheBudgets;
 using bloom::runtime::GpuSceneCommand;
 using bloom::runtime::GpuSceneCommandIndex;
 using bloom::runtime::GpuSceneCompositionOutputCommand;
-using bloom::runtime::OperationIndex;
-using bloom::runtime::EvaluationColorIntent;
-using bloom::runtime::EvaluationProvider;
-using bloom::runtime::EvaluationQuality;
-using bloom::runtime::ProcessFrameIdentity;
 using bloom::runtime::GpuSceneExecutor;
 using bloom::runtime::GpuSceneExecutorDiagnostic;
 using bloom::runtime::GpuSceneExecutorDiagnosticCode;
 using bloom::runtime::GpuSceneExecutorPollResult;
 using bloom::runtime::GpuSceneFixtureBuilder;
 using bloom::runtime::GpuSceneUploadCommand;
+using bloom::runtime::OperationIndex;
+using bloom::runtime::ProcessFrameIdentity;
 using bloom::runtime::detail::LayerMatrix;
 using bloom::runtime::detail::ParentedLayerTransform;
 
-[[nodiscard]] Rgba32fImageDescriptor descriptorFor(const ImageWindow data,
-                                                   const ImageWindow display,
-                                                   const PixelAspectRatio aspect) {
+[[nodiscard]] Rgba32fImageDescriptor
+descriptorFor(const ImageWindow data, const ImageWindow display, const PixelAspectRatio aspect) {
     const auto descriptor = Rgba32fImageDescriptor::create(data, display, aspect);
     return *descriptor.value();
 }
@@ -89,19 +87,17 @@ using bloom::runtime::detail::ParentedLayerTransform;
                                  .semanticKey = std::move(key)};
 }
 
-[[nodiscard]] GpuSceneCompositionOutputCommand outputCommand(const GpuSceneCommandIndex index,
-                                                             const GpuSceneCommandIndex input,
-                                                             const ImageWindow data,
-                                                             const ImageWindow display,
-                                                             const PixelAspectRatio aspect,
-                                                             std::string key) {
+[[nodiscard]] GpuSceneCompositionOutputCommand
+outputCommand(const GpuSceneCommandIndex index, const GpuSceneCommandIndex input,
+              const ImageWindow data, const ImageWindow display, const PixelAspectRatio aspect,
+              std::string key) {
     return GpuSceneCompositionOutputCommand{.index = index,
-                                             .sourceOperation = OperationIndex::fromRaw(0),
-                                             .input = input,
-                                             .dataWindow = data,
-                                             .displayWindow = display,
-                                             .pixelAspect = aspect,
-                                             .semanticKey = std::move(key)};
+                                            .sourceOperation = OperationIndex::fromRaw(0),
+                                            .input = input,
+                                            .dataWindow = data,
+                                            .displayWindow = display,
+                                            .pixelAspect = aspect,
+                                            .semanticKey = std::move(key)};
 }
 
 [[nodiscard]] bloom::render::GpuAffineMatrix toGpuAffineMatrix(const LayerMatrix& matrix,
@@ -217,10 +213,9 @@ void runAffine(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     std::vector<GpuSceneCommand> commands;
     commands.emplace_back(uploadCommand(0, source, "affine-src"));
     commands.emplace_back(affine);
-    commands.emplace_back(
-        outputCommand(2, 1, outputWindow, display, aspect, "affine-out"));
-    const auto scene =
-        GpuSceneFixtureBuilder::make(std::move(commands), 2, descriptorFor(outputWindow, display, aspect));
+    commands.emplace_back(outputCommand(2, 1, outputWindow, display, aspect, "affine-out"));
+    const auto scene = GpuSceneFixtureBuilder::make(std::move(commands), 2,
+                                                    descriptorFor(outputWindow, display, aspect));
 
     auto executor = GpuSceneExecutor::create(device, cache);
     expectations.expect(executor.hasValue(), "affine: executor creates");
@@ -244,12 +239,11 @@ void runAffine(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
             std::vector<Rgba32f> expected(static_cast<std::size_t>(outWidth) * outHeight,
                                           Rgba32f::transparent());
             for (std::uint32_t y = 0; y < outHeight; ++y) {
-                auto row = std::span<Rgba32f>(expected)
-                               .subspan(static_cast<std::size_t>(y) * outWidth, outWidth);
-                static_cast<void>(parented.row(*view.value(), outputWindow,
-                                               outputWindow.originY() +
-                                                   static_cast<std::int64_t>(y),
-                                               row));
+                auto row = std::span<Rgba32f>(expected).subspan(
+                    static_cast<std::size_t>(y) * outWidth, outWidth);
+                static_cast<void>(
+                    parented.row(*view.value(), outputWindow,
+                                 outputWindow.originY() + static_cast<std::int64_t>(y), row));
             }
             expectations.expect(parity(first.pixels, expected),
                                 "affine: GPU matches ParentedLayerTransform oracle (2e-6)");
@@ -260,8 +254,7 @@ void runAffine(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     const auto warm = runScene(*executor.executor, scene, budget, false);
     expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready, "affine warm: ready");
     const auto warmCounters = executor.executor->counters();
-    expectations.expect(warmCounters.affineDispatches == 1,
-                        "affine warm: no new affine dispatch");
+    expectations.expect(warmCounters.affineDispatches == 1, "affine warm: no new affine dispatch");
     expectations.expect(warmCounters.translationDispatches == 1,
                         "affine warm: no new translation dispatch");
     expectations.expect(warmCounters.uploads == 1, "affine warm: no new upload");
@@ -319,19 +312,18 @@ void runBlendMode(Expectations& expectations, GpuDevice& device, GpuSceneCache& 
     if (!executor) {
         return;
     }
-    const auto result =
-        runScene(*executor.executor, scene, 64ULL * 1024ULL * 1024ULL, false);
+    const auto result = runScene(*executor.executor, scene, 64ULL * 1024ULL * 1024ULL, false);
     // On a device without shaderFloat64 the six general modes are refused honestly.
     if (result.beginDiagnostic.code != GpuSceneExecutorDiagnosticCode::None) {
-        expectations.expect(result.beginDiagnostic.code == GpuSceneExecutorDiagnosticCode::Unsupported,
+        expectations.expect(result.beginDiagnostic.code ==
+                                GpuSceneExecutorDiagnosticCode::Unsupported,
                             name + ": only Unsupported may reject at begin");
         return;
     }
     if (result.pollResult != GpuSceneExecutorPollResult::Ready) {
         const auto code = executor.executor->diagnostic().code;
-        const bool acceptable =
-            (code == GpuSceneExecutorDiagnosticCode::Unsupported ||
-             code == GpuSceneExecutorDiagnosticCode::DispatchRefused);
+        const bool acceptable = (code == GpuSceneExecutorDiagnosticCode::Unsupported ||
+                                 code == GpuSceneExecutorDiagnosticCode::DispatchRefused);
         expectations.expect(acceptable, name + ": general mode must run or refuse honestly (f64)");
         return;
     }
@@ -352,21 +344,22 @@ void runBlendMode(Expectations& expectations, GpuDevice& device, GpuSceneCache& 
     bool oracleOk = true;
     for (std::uint32_t y = 0; y < height; ++y) {
         const auto offset = static_cast<std::size_t>(y) * width;
-        const auto status = blendLinearRec709SceneRow(
-            mode, sourceView.value()->pixels().subspan(offset, width),
-            std::span<Rgba32f>(expected).subspan(offset, width));
+        const auto status =
+            blendLinearRec709SceneRow(mode, sourceView.value()->pixels().subspan(offset, width),
+                                      std::span<Rgba32f>(expected).subspan(offset, width));
         if (status.has_value()) {
             oracleOk = false;
         }
     }
     expectations.expect(oracleOk, name + ": oracle rows succeed");
-    expectations.expect(parity(result.pixels, expected), name + ": GPU matches blend oracle (2e-6)");
+    expectations.expect(parity(result.pixels, expected),
+                        name + ": GPU matches blend oracle (2e-6)");
 }
 
 void runBlendMatrix(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
     const auto modes = std::array<BlendMode, 8>{
-        BlendMode::Normal,   BlendMode::Add,    BlendMode::Multiply, BlendMode::Screen,
-        BlendMode::Overlay,  BlendMode::Darken, BlendMode::Lighten,  BlendMode::Difference};
+        BlendMode::Normal,  BlendMode::Add,    BlendMode::Multiply, BlendMode::Screen,
+        BlendMode::Overlay, BlendMode::Darken, BlendMode::Lighten,  BlendMode::Difference};
     for (std::size_t i = 0; i < modes.size(); ++i) {
         runBlendMode(expectations, device, cache, modes[i],
                      "blend-mode-" + std::to_string(static_cast<unsigned>(i)));
@@ -497,8 +490,7 @@ void runBlendInvalidationAndCancel(Expectations& expectations, GpuDevice& device
         commands.emplace_back(uploadCommand(0, source, "bi-src"));
         commands.emplace_back(uploadCommand(1, destination, "bi-dst"));
         commands.emplace_back(blend);
-        commands.emplace_back(
-            outputCommand(3, 2, geometry, geometry, aspect, "bi-out-" + suffix));
+        commands.emplace_back(outputCommand(3, 2, geometry, geometry, aspect, "bi-out-" + suffix));
         return GpuSceneFixtureBuilder::make(std::move(commands), 3,
                                             descriptorFor(geometry, geometry, aspect));
     };
@@ -560,7 +552,6 @@ void runBlendInvalidationAndCancel(Expectations& expectations, GpuDevice& device
     }
 }
 
-
 #ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
 using bloom::render::gpu_scene_executor_fault::PollFault;
 #endif
@@ -602,9 +593,9 @@ int main(int argc, char** argv) {
                 auto refused = GpuSceneExecutor::create(*device.device, *foreignCache.cache);
                 expectations.expect(!refused.hasValue(),
                                     "foreign: executor refuses a foreign-device cache");
-                expectations.expect(
-                    refused.diagnostic.code == GpuSceneExecutorDiagnosticCode::InvalidArgument,
-                    "foreign: refusal is InvalidArgument");
+                expectations.expect(refused.diagnostic.code ==
+                                        GpuSceneExecutorDiagnosticCode::InvalidArgument,
+                                    "foreign: refusal is InvalidArgument");
             }
         }
         runAffine(expectations, *device.device, *cache.cache);
@@ -612,11 +603,12 @@ int main(int argc, char** argv) {
         runAffineInvalidationAndCancel(expectations, *device.device, *cache.cache);
         runBlendInvalidationAndCancel(expectations, *device.device, *cache.cache);
         bloom::runtime::tests::affine_blend_fault::runAffineFaults(expectations, *device.device,
-                                                                       *cache.cache);
+                                                                   *cache.cache);
         bloom::runtime::tests::affine_blend_fault::runBlendFaults(expectations, *device.device,
-                                                                      *cache.cache);
+                                                                  *cache.cache);
         if (expectations.failures() != 0) {
-            std::cerr << expectations.failures() << " executor affine/blend expectation(s) failed\n";
+            std::cerr << expectations.failures()
+                      << " executor affine/blend expectation(s) failed\n";
             return 1;
         }
         std::cout << "PASS: GPU scene executor affine + blend vs CPU oracle\n";

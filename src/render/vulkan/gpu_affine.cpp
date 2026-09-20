@@ -2,7 +2,6 @@
 
 #include "gpu_affine_private.hpp"
 
-
 #include <array>
 #include <cassert>
 #include <cmath>

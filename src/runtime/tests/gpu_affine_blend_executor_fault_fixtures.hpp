@@ -57,13 +57,14 @@ struct GpuSceneFixtureBuilder final {
 
 } // namespace bloom::runtime
 
-
 namespace bloom::runtime::tests::affine_blend_fault {
 
 #ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
 namespace {
 
 using bloom::core::BlendMode;
+using bloom::render::ImageWindow;
+using bloom::render::Rgba32fImageDescriptor;
 using bloom::render::blend_proof::blendPixels;
 using bloom::render::composite_proof::denseHdrPixels;
 using bloom::render::composite_proof::Expectations;
@@ -74,8 +75,6 @@ using bloom::render::composite_proof::PixelAspectRatio;
 using bloom::render::composite_proof::Rgba32f;
 using bloom::render::composite_proof::Rgba32fImage;
 using bloom::render::composite_proof::window;
-using bloom::render::ImageWindow;
-using bloom::render::Rgba32fImageDescriptor;
 using bloom::runtime::GpuSceneAffineCommand;
 using bloom::runtime::GpuSceneBlendCommand;
 using bloom::runtime::GpuSceneCache;
@@ -94,9 +93,8 @@ using bloom::render::gpu_scene_executor_fault::PollFault;
 #endif
 using bloom::runtime::detail::ParentedLayerTransform;
 
-[[nodiscard]] Rgba32fImageDescriptor descriptorFor(const ImageWindow data,
-                                                   const ImageWindow display,
-                                                   const PixelAspectRatio aspect) {
+[[nodiscard]] Rgba32fImageDescriptor
+descriptorFor(const ImageWindow data, const ImageWindow display, const PixelAspectRatio aspect) {
     const auto created = Rgba32fImageDescriptor::create(data, display, aspect);
     return *created.value();
 }
@@ -111,19 +109,17 @@ using bloom::runtime::detail::ParentedLayerTransform;
                                  .semanticKey = std::move(key)};
 }
 
-[[nodiscard]] GpuSceneCompositionOutputCommand outputCommand(const GpuSceneCommandIndex index,
-                                                             const GpuSceneCommandIndex input,
-                                                             const ImageWindow data,
-                                                             const ImageWindow display,
-                                                             const PixelAspectRatio aspect,
-                                                             std::string key) {
+[[nodiscard]] GpuSceneCompositionOutputCommand
+outputCommand(const GpuSceneCommandIndex index, const GpuSceneCommandIndex input,
+              const ImageWindow data, const ImageWindow display, const PixelAspectRatio aspect,
+              std::string key) {
     return GpuSceneCompositionOutputCommand{.index = index,
-                                             .sourceOperation = OperationIndex::fromRaw(0),
-                                             .input = input,
-                                             .dataWindow = data,
-                                             .displayWindow = display,
-                                             .pixelAspect = aspect,
-                                             .semanticKey = std::move(key)};
+                                            .sourceOperation = OperationIndex::fromRaw(0),
+                                            .input = input,
+                                            .dataWindow = data,
+                                            .displayWindow = display,
+                                            .pixelAspect = aspect,
+                                            .semanticKey = std::move(key)};
 }
 
 [[nodiscard]] bloom::render::GpuAffineMatrix toGpuAffineMatrix(const LayerMatrix& matrix,
@@ -142,9 +138,9 @@ struct RunOutcome final {
     GpuSceneExecutorPollResult pollResult = GpuSceneExecutorPollResult::Failure;
 };
 
-[[nodiscard]] RunOutcome
-runScene(GpuSceneExecutor& executor, const std::shared_ptr<const PreparedGpuScene>& scene,
-         const std::uint64_t budget) {
+[[nodiscard]] RunOutcome runScene(GpuSceneExecutor& executor,
+                                  const std::shared_ptr<const PreparedGpuScene>& scene,
+                                  const std::uint64_t budget) {
     RunOutcome outcome;
     if (executor.begin(scene, budget).code != GpuSceneExecutorDiagnosticCode::None) {
         return outcome;
@@ -170,10 +166,10 @@ runScene(GpuSceneExecutor& executor, const std::shared_ptr<const PreparedGpuScen
 } // namespace
 #endif // BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
 
-inline void runAffineFaults(
-    [[maybe_unused]] bloom::render::composite_proof::Expectations& expectations,
-    [[maybe_unused]] bloom::render::composite_proof::GpuDevice& device,
-    [[maybe_unused]] bloom::runtime::GpuSceneCache& cache) {
+inline void
+runAffineFaults([[maybe_unused]] bloom::render::composite_proof::Expectations& expectations,
+                [[maybe_unused]] bloom::render::composite_proof::GpuDevice& device,
+                [[maybe_unused]] bloom::runtime::GpuSceneCache& cache) {
 #ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
     const auto sourceWindow = window(2, 3, 18, 12);
     const auto aspect = PixelAspectRatio::square();
@@ -220,7 +216,8 @@ inline void runAffineFaults(
                             GpuSceneExecutorPollResult::Ready,
                         "affine-fault: warm ready");
 
-    // StallPending: real submitted affine job stalls -> mid-native cancel, no publication, no cache.
+    // StallPending: real submitted affine job stalls -> mid-native cancel, no publication, no
+    // cache.
     bloom::render::gpu_scene_executor_fault::set(PollFault::StallPending);
     expectations.expect(executor.executor->begin(sceneStall, budget).code ==
                             GpuSceneExecutorDiagnosticCode::None,
@@ -259,7 +256,8 @@ inline void runAffineFaults(
     expectations.expect(executor.executor->diagnostic().code ==
                             GpuSceneExecutorDiagnosticCode::NativeUnproven,
                         "affine-fault: unknown NativeUnproven");
-    expectations.expect(executor.executor->ownerDrainRequired(), "affine-fault: unknown drain gate");
+    expectations.expect(executor.executor->ownerDrainRequired(),
+                        "affine-fault: unknown drain gate");
     expectations.expect(executor.executor->begin(sceneUnknown, budget).code ==
                             GpuSceneExecutorDiagnosticCode::OwnerDrainRequired,
                         "affine-fault: unknown begin refused while draining");
@@ -296,10 +294,10 @@ inline void runAffineFaults(
 #endif
 }
 
-inline void runBlendFaults(
-    [[maybe_unused]] bloom::render::composite_proof::Expectations& expectations,
-    [[maybe_unused]] bloom::render::composite_proof::GpuDevice& device,
-    [[maybe_unused]] bloom::runtime::GpuSceneCache& cache) {
+inline void
+runBlendFaults([[maybe_unused]] bloom::render::composite_proof::Expectations& expectations,
+               [[maybe_unused]] bloom::render::composite_proof::GpuDevice& device,
+               [[maybe_unused]] bloom::runtime::GpuSceneCache& cache) {
 #ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
     const auto geometry = window(0, 0, 16, 12);
     const auto aspect = PixelAspectRatio::square();

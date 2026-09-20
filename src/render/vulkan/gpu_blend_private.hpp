@@ -22,9 +22,9 @@
 #endif
 
 #include <atomic>
-#include <optional>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -128,7 +128,6 @@ struct GpuBlend::Impl final {
         return GpuBlendPollResult::Failure;
     }
 #endif
-
 };
 
 } // namespace bloom::render
