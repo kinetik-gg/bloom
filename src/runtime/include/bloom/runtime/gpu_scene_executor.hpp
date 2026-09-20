@@ -40,6 +40,7 @@
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/gpu_solid.hpp>
+#include <bloom/runtime/gpu_memory_budget.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
@@ -181,8 +182,11 @@ struct GpuSceneExecutorProgress final {
 };
 
 struct GpuSceneExecutorBudgets final {
-    // Per-operation native image ceiling (also passed as the hard cap to the owned pipelines).
-    std::uint64_t maxImageBytes = 256ULL * 1024ULL * 1024ULL;
+    // Per-operation native image ceiling handed to the owned pipelines. This is a configured UPPER
+    // BOUND, not an allocation: it is capacity-sized so a large valid source is admitted, and each
+    // primitive validates the ACTUAL requested image against the device's real maxResourceSize in
+    // begin(). A permissive maximum never refuses pipeline creation.
+    std::uint64_t maxImageBytes = gpuProducerMaxImageBytes();
     // Metadata ceiling handed to the composite translation op.
     std::uint64_t maxMetadataBytes = 16ULL * 1024ULL * 1024ULL;
     // Metadata ceiling for the affine sample buffer (16 bytes per output pixel). Affine's metadata

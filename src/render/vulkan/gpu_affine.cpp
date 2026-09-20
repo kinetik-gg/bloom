@@ -16,8 +16,6 @@ namespace bloom::render {
 namespace {
 
 constexpr std::uint64_t kAffineDrainTimeoutNanoseconds = 2ULL * 1000ULL * 1000ULL * 1000ULL;
-constexpr std::uint64_t kAffineMaxImageBytes = 256ULL * 1024ULL * 1024ULL;
-constexpr std::uint64_t kAffineMaxMetadataBytes = 256ULL * 1024ULL * 1024ULL;
 
 [[nodiscard]] GpuAffineDiagnostic makeDiagnostic(const GpuAffineDiagnosticCode code,
                                                  std::string message) {
@@ -211,8 +209,7 @@ bool GpuAffine::Impl::createPipelines() {
 }
 
 GpuAffineCreateResult GpuAffine::create(GpuDevice& device, const GpuAffineBudgets& budgets) {
-    if (budgets.maxImageBytes == 0 || budgets.maxImageBytes > kAffineMaxImageBytes ||
-        budgets.maxMetadataBytes == 0 || budgets.maxMetadataBytes > kAffineMaxMetadataBytes) {
+    if (budgets.maxImageBytes == 0 || budgets.maxMetadataBytes == 0) {
         return {nullptr, makeDiagnostic(GpuAffineDiagnosticCode::InvalidArgument,
                                         "the affine budget is out of range")};
     }

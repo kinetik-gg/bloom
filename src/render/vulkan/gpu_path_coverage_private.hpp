@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -173,6 +174,10 @@ inline bool retireQuarantinedLocked(Reservation& slot) noexcept {
 
 } // namespace path_coverage_detail
 
+// Sentinel for an Impl that owns no resident-pool slot. The pool itself lives in the lifecycle
+// translation unit; the Impl only records its slot index so owner retirement can return it.
+inline constexpr std::size_t kPathCoverageNoResidentSlot = static_cast<std::size_t>(-1);
+
 struct GpuPathCoverageImpl final {
     GpuPathCoverageImpl() = default;
     GpuPathCoverageImpl(const GpuPathCoverageImpl&) = delete;
@@ -216,6 +221,10 @@ struct GpuPathCoverageImpl final {
     // Private device fact read once at create(): the compute workgroup count Y limit, so a large
     // capacity-valid dispatch can be flattened into 2D instead of being refused by a 1D grid.
     std::uint32_t maxWorkGroupCountY = 0;
+    // Resident-pool slot owned by this Impl from before its first native allocation until owner
+    // retirement. kPathCoverageNoResidentSlot means this Impl owns no native resources.
+    std::size_t residentSlot = kPathCoverageNoResidentSlot;
+    bool pipelineReady = false;
 
     vk::raii::ShaderModule shaderModule{nullptr};
     vk::raii::DescriptorSetLayout descriptorSetLayout{nullptr};

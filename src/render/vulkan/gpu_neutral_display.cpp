@@ -62,9 +62,7 @@ void GpuNeutralDisplay::releaseImpl() noexcept {
 GpuNeutralDisplayCreateResult GpuNeutralDisplay::create(GpuDevice& device,
                                                         const GpuNeutralDisplayBudgets& budgets) {
     if (budgets.maxInputBytes < kInputBytesPerPixel ||
-        budgets.maxInputBytes > neutral_display_detail::kMaxBudgetBytes ||
-        budgets.maxOwnedBytes < kInputBytesPerPixel + kOutputBytesPerPixel + kStatusBytes ||
-        budgets.maxOwnedBytes > neutral_display_detail::kMaxBudgetBytes) {
+        budgets.maxOwnedBytes < kInputBytesPerPixel + kOutputBytesPerPixel + kStatusBytes) {
         return {nullptr, makeDiagnostic(GpuNeutralDisplayDiagnosticCode::InvalidArgument,
                                         "the neutral display budgets are out of range")};
     }
@@ -96,7 +94,15 @@ GpuNeutralDisplayCreateResult GpuNeutralDisplay::create(GpuDevice& device,
     auto impl = std::make_unique<Impl>();
     impl->owner = std::this_thread::get_id();
     impl->state = std::move(state);
+    // A permissive configured maximum is an upper bound, not an allocation: clamp the effective
+    // ceiling instead of refusing the pipeline. begin() validates the actual requested bytes.
     impl->budgets = budgets;
+    impl->budgets.maxInputBytes = budgets.maxInputBytes < neutral_display_detail::kMaxBudgetBytes
+                                      ? budgets.maxInputBytes
+                                      : neutral_display_detail::kMaxBudgetBytes;
+    impl->budgets.maxOwnedBytes = budgets.maxOwnedBytes < neutral_display_detail::kMaxBudgetBytes
+                                      ? budgets.maxOwnedBytes
+                                      : neutral_display_detail::kMaxBudgetBytes;
     impl->expectedGeneration = impl->state->generation;
     if (!impl->createPipeline()) {
         return {nullptr, impl->createDiagnostic};

@@ -53,14 +53,16 @@ std::string gpuSceneDiagnosticCodeId(const bloom::runtime::PreparedGpuSceneDiagn
 
 // The hard-error codes are exactly the ones that mean "the scene could not be produced for a
 // reason that is not a subset refusal". Every other code -- an unsupported operation/transform/
-// blend/request, and any future media-unavailable code -- is a GPU-subset refusal whose correct
-// handling is the full original CPU fallback, never a fabricated empty scene.
+// blend/request, a pixel-storage budget refusal, and any future media-unavailable code -- is a
+// GPU-subset refusal whose correct handling is the full original CPU fallback, never a fabricated
+// empty scene. A budget refusal in particular is pressure, not corruption: the GPU scene's retained
+// host set can exceed its request allowance while the CPU reference peak still fits, so the viewer
+// must recover through the CPU path instead of failing closed.
 bool gpuScenePreparationIsFailure(
     const bloom::runtime::PreparedGpuSceneDiagnosticCode code) noexcept {
     using bloom::runtime::PreparedGpuSceneDiagnosticCode;
     switch (code) {
     case PreparedGpuSceneDiagnosticCode::InvalidPlan:
-    case PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded:
     case PreparedGpuSceneDiagnosticCode::AllocationFailure:
     case PreparedGpuSceneDiagnosticCode::PreflightFailure:
     case PreparedGpuSceneDiagnosticCode::InternalInvariant:
