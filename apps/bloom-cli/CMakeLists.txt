@@ -73,4 +73,12 @@ if(BUILD_TESTING)
             "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/gpu-tools-relocation"
             -P "${PROJECT_SOURCE_DIR}/cmake/tests/relocation_gpu_shader_tools.cmake"
         LABELS gpu unit)
+    bloom_add_test(
+        NAME bloom.gpu.shader-tools-concurrent-staging
+        COMMAND "${CMAKE_COMMAND}"
+            "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/gpu-tools-concurrent-staging"
+            "-DMODULE_DIR=${PROJECT_SOURCE_DIR}/cmake"
+            "-DGENERATOR=${CMAKE_GENERATOR}"
+            -P "${PROJECT_SOURCE_DIR}/cmake/tests/concurrent_gpu_shader_tools.cmake"
+        LABELS gpu unit)
 endif()

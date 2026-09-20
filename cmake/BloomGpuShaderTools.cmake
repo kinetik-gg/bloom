@@ -8,6 +8,9 @@
 # Validated every configure (no cached find_program) with realpath containment. ELF NEEDED names
 # resolve through an explicit OS-floor allowlist, a recursive prefix-private copy, or a hard error.
 # When relocation rewrites bytes, inventory records sourceSha256 and stagedSha256 separately.
+# Staging runs through BloomGpuShaderToolsStage.cmake, which holds a destination-scoped file lock,
+# so targets sharing one output directory (all the runtime GPU tests, for example) serialize instead
+# of racing concurrent directory copies into the same executable-relative package.
 
 include_guard(GLOBAL)
 
@@ -315,24 +318,26 @@ function(bloom_package_gpu_shader_tools target)
         "\"licenses\":[${_licenses_json}]}\n")
     file(WRITE "${_generated}/inventory.json" "${_inventory}")
 
-    set(_commands
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${_stage}/licenses"
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${bloom_gpu_tools_glslang}" "${_stage}/${_glslang_name}"
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${bloom_gpu_tools_spirv_val}" "${_stage}/${_spirv_name}"
-        COMMAND "${CMAKE_COMMAND}" -E copy_directory
-            "${_generated}/licenses" "${_stage}/licenses"
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${_generated}/inventory.json" "${_stage}/inventory.json")
+    # All staging runs through one helper that holds a destination-scoped file lock, so targets
+    # which share an output directory (all the runtime GPU tests, for example) serialize instead of
+    # racing concurrent directory copies into the same executable-relative package.
+    set(_stage_args
+        "${CMAKE_COMMAND}"
+        "-DGPU_TOOLS_STAGE=${_stage}"
+        "-DGPU_TOOLS_GENERATED=${_generated}"
+        "-DGPU_TOOLS_GLSLANG_SOURCE=${bloom_gpu_tools_glslang}"
+        "-DGPU_TOOLS_GLSLANG_NAME=${_glslang_name}"
+        "-DGPU_TOOLS_SPIRV_SOURCE=${bloom_gpu_tools_spirv_val}"
+        "-DGPU_TOOLS_SPIRV_NAME=${_spirv_name}")
     list(LENGTH _all_private_paths _private_count)
     if(_private_count GREATER 0)
         math(EXPR _private_last "${_private_count} - 1")
         foreach(_private_index RANGE 0 ${_private_last})
             list(GET _all_private_paths ${_private_index} _private_path)
             list(GET _all_private_names ${_private_index} _private_name)
-            list(APPEND _commands COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                "${_private_path}" "${_stage}/${_private_name}")
+            list(APPEND _stage_args
+                "-DGPU_TOOLS_PRIVATE_SOURCE_${_private_index}=${_private_path}"
+                "-DGPU_TOOLS_PRIVATE_NAME_${_private_index}=${_private_name}")
         endforeach()
         find_program(BLOOM_GPU_TOOLS_PATCHELF NAMES patchelf)
         if(NOT BLOOM_GPU_TOOLS_PATCHELF)
@@ -340,24 +345,19 @@ function(bloom_package_gpu_shader_tools target)
                 "Bloom GPU shader tools: the pinned tools need private runtime libraries "
                 "(${_all_private_names}) but patchelf was not found to set an $ORIGIN rpath.")
         endif()
-        # Relocation rewrites the staged executables and every copied private library so each
-        # object's own direct NEEDED entries resolve from the private directory.
-        list(APPEND _commands COMMAND "${BLOOM_GPU_TOOLS_PATCHELF}" --set-rpath "$ORIGIN"
-            "${_stage}/${_glslang_name}" "${_stage}/${_spirv_name}")
-        foreach(_private_name IN LISTS _all_private_names)
-            list(APPEND _commands COMMAND "${BLOOM_GPU_TOOLS_PATCHELF}" --set-rpath "$ORIGIN"
-                "${_stage}/${_private_name}")
-        endforeach()
         _bloom_gpu_tools_write_relocation_script("${_generated}/record-staged-hash.cmake"
             "${_glslang_name}" "${_spirv_name}")
-        list(APPEND _commands COMMAND "${CMAKE_COMMAND}"
-            "-DGPU_TOOLS_STAGE=${_stage}"
-            "-DGPU_TOOLS_INVENTORY=${_stage}/inventory.json"
-            "-DGPU_TOOLS_FILES=${_glslang_name},${_spirv_name}"
-            -P "${_generated}/record-staged-hash.cmake")
+        list(APPEND _stage_args
+            "-DGPU_TOOLS_PRIVATE_COUNT=${_private_count}"
+            "-DGPU_TOOLS_PATCHELF=${BLOOM_GPU_TOOLS_PATCHELF}"
+            "-DGPU_TOOLS_RECORD_SCRIPT=${_generated}/record-staged-hash.cmake")
+    else()
+        list(APPEND _stage_args "-DGPU_TOOLS_PRIVATE_COUNT=0")
     endif()
 
-    add_custom_target(${target}-gpu-shader-tools ALL ${_commands}
+    add_custom_target(${target}-gpu-shader-tools ALL
+        COMMAND ${_stage_args}
+            -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/BloomGpuShaderToolsStage.cmake"
         COMMENT "Staging the qualified GPU shader tools beside ${target}"
         VERBATIM)
     add_dependencies(${target} ${target}-gpu-shader-tools)
