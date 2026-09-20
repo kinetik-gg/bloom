@@ -34,6 +34,13 @@ struct RenderResult final {
     std::uint64_t publishedFrames = 0;
     std::string preservationReport;
     std::string diagnostic;
+    // Aggregate native GPU provenance over the frames this render evaluated. Diagnostics only:
+    // it never enters preservation identity or the approval digest. All zero when no provider was
+    // injected/available or every frame took the CPU reference path.
+    std::uint64_t gpuEvaluatedFrames = 0;
+    std::uint64_t gpuNativeDispatches = 0;
+    std::uint64_t gpuReadbacks = 0;
+    std::uint64_t gpuDeviceOwnershipEpoch = 0;
 };
 
 class Render final {

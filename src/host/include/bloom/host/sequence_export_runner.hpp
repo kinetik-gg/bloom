@@ -52,6 +52,9 @@ struct SequenceExportResultV1 {
     std::uint64_t gpuEvaluatedFrames = 0;
     std::uint64_t gpuNativeDispatches = 0;
     std::uint64_t gpuReadbacks = 0;
+    // Genuine native device ownership epoch observed on the GPU-evaluated frames (last nonzero
+    // value; zero when no frame used a device). Diagnostics only.
+    std::uint64_t gpuDeviceOwnershipEpoch = 0;
     [[nodiscard]] bool published() const noexcept { return publication.targetWasPublished(); }
 };
 // Authoring-thread driver. poll() never blocks: it composes the existing attempt/approval stages.

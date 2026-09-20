@@ -231,9 +231,12 @@ void testGpuVideoProvenance(Fixture& f, const std::filesystem::path& directory,
     check(result.gpuNativeDispatches > 0, "GPU video: positive native dispatches");
     check(result.gpuReadbacks == result.gpuEvaluatedFrames,
           "GPU video: exactly one final readback per GPU-evaluated frame");
+    check(result.gpuDeviceOwnershipEpoch > 0,
+          "GPU video: a genuine device ownership epoch is reported");
     std::cout << "GPU video frames=" << result.gpuEvaluatedFrames
               << " dispatches=" << result.gpuNativeDispatches
-              << " readbacks=" << result.gpuReadbacks << '\n';
+              << " readbacks=" << result.gpuReadbacks << " epoch=" << result.gpuDeviceOwnershipEpoch
+              << '\n';
 }
 void tests(const std::filesystem::path& directory, const bool requireDevice) {
     std::filesystem::remove_all(directory);

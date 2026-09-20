@@ -45,6 +45,7 @@ struct Work {
     std::uint64_t gpuEvaluatedFrames = 0;
     std::uint64_t gpuNativeDispatches = 0;
     std::uint64_t gpuReadbacks = 0;
+    std::uint64_t gpuDeviceOwnershipEpoch = 0;
     std::unique_ptr<output::OutputAnalysisAttemptTargetV1> target;
     std::optional<SequenceExportResultV1> result;
     explicit Work(SequenceExportRequestV1 r) : request(std::move(r)) {}
@@ -268,6 +269,7 @@ struct Work {
         outcome.gpuEvaluatedFrames = gpuEvaluatedFrames;
         outcome.gpuNativeDispatches = gpuNativeDispatches;
         outcome.gpuReadbacks = gpuReadbacks;
+        outcome.gpuDeviceOwnershipEpoch = gpuDeviceOwnershipEpoch;
         if (guardResult.status() == PublicationGuardStatus::Entered) {
             auto guard = std::move(guardResult).takeGuard();
             outcome.publication = lease.publish(platform::PublicationDisposition::Proceed);
@@ -491,6 +493,9 @@ void SequenceExportRunnerV1::poll() {
             ++s.work->gpuEvaluatedFrames;
             s.work->gpuNativeDispatches += provenance->counters.nativeDispatches;
             s.work->gpuReadbacks += provenance->counters.readbacks;
+            if (provenance->deviceOwnershipEpoch != 0) {
+                s.work->gpuDeviceOwnershipEpoch = provenance->deviceOwnershipEpoch;
+            }
         }
         if (s.work->isCancelled()) {
             s.fail({Error::Cancelled, "Composition export cancelled"});

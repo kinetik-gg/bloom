@@ -113,6 +113,11 @@ struct GpuProcessFrameOutcome final {
     std::shared_ptr<const ProcessFrame> frame;
     GpuProcessFrameDiagnostic diagnostic;
     GpuProcessFrameCounters counters;
+    // The native device ownership epoch that produced this outcome, read on the owner thread from
+    // GpuDevice::ownershipEpoch(). It is a genuine value from the actual device, never fabricated,
+    // and is zero when no device evaluated the request (disabled, unavailable, unsupported,
+    // cancelled, or failed before a device result). Diagnostics only; it never enters a digest.
+    std::uint64_t deviceOwnershipEpoch = 0;
 
     [[nodiscard]] bool hasValue() const noexcept { return frame != nullptr; }
     explicit operator bool() const noexcept { return hasValue(); }

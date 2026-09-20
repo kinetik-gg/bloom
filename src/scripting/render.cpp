@@ -95,23 +95,38 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
             std::this_thread::yield();
         }
     }
+    // Carry the geniune native provenance this attempt observed (empty for a CPU fallback) on every
+    // result that consumes the completed attempt, including its failure and non-approvable paths.
+    std::optional<host::OutputAnalysisAttemptGpuProvenanceV1> gpuProvenance;
+    if (*outcome) {
+        gpuProvenance = outcome->gpuProvenance();
+    }
+    const auto finish = [&gpuProvenance](RenderResult result) {
+        if (gpuProvenance.has_value()) {
+            result.gpuEvaluatedFrames = gpuProvenance->gpuEvaluated() ? 1U : 0U;
+            result.gpuNativeDispatches = gpuProvenance->counters.nativeDispatches;
+            result.gpuReadbacks = gpuProvenance->counters.readbacks;
+            result.gpuDeviceOwnershipEpoch = gpuProvenance->deviceOwnershipEpoch;
+        }
+        return result;
+    };
     if (!*outcome) {
-        return failed("The output analysis failed");
+        return finish(failed("The output analysis failed"));
     }
     const auto attempt = outcome->attempt();
     const auto digest =
         attempt == nullptr ? std::optional<core::Sha256Digest>{} : attempt->digest();
     if (attempt == nullptr || !attempt->approvable() || !digest.has_value()) {
-        return {.succeeded = false,
-                .preservationReport =
-                    attempt == nullptr ? "preservation report unavailable" : reportText(*attempt),
-                .diagnostic = "The preservation report is not approvable"};
+        return finish({.succeeded = false,
+                       .preservationReport = attempt == nullptr ? "preservation report unavailable"
+                                                                : reportText(*attempt),
+                       .diagnostic = "The preservation report is not approvable"});
     }
     auto approval = host::approveFrameExportV1(*publication, attempt, *digest);
     if (!approval) {
-        return {.succeeded = false,
-                .preservationReport = reportText(*attempt),
-                .diagnostic = "The export could not be approved"};
+        return finish({.succeeded = false,
+                       .preservationReport = reportText(*attempt),
+                       .diagnostic = "The export could not be approved"});
     }
     auto request = std::move(approval).takeRequest();
     auto requestShared = std::shared_ptr<host::FrameExportRequestV1>(std::move(request));
@@ -123,10 +138,9 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
     std::error_code scratchError;
     std::filesystem::create_directories(scratchDirectory, scratchError);
     if (scratchError) {
-        return RenderResult{.succeeded = false,
-                            .publishedFrames = 0,
-                            .preservationReport = reportText(*attempt),
-                            .diagnostic = "The export scratch directory could not be created"};
+        return finish({.succeeded = false,
+                       .preservationReport = reportText(*attempt),
+                       .diagnostic = "The export scratch directory could not be created"});
     }
     const auto scratch = std::move(scratchDirectory);
     runtime::TaskRequest taskRequest(
@@ -150,10 +164,9 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
                 .suggestedAction = "Inspect the preservation and publication diagnostics."});
         });
     if (!submission.accepted()) {
-        return RenderResult{.succeeded = false,
-                            .publishedFrames = 0,
-                            .preservationReport = reportText(*attempt),
-                            .diagnostic = "The export publication task could not start"};
+        return finish({.succeeded = false,
+                       .preservationReport = reportText(*attempt),
+                       .diagnostic = "The export publication task could not start"});
     }
     auto taskResult = await(submission.handle, cancelled);
     const bool publicationSucceeded =
@@ -161,10 +174,10 @@ exportWithPlan(Session& session, runtime::TaskScheduler& scheduler, const Plan& 
     const bool succeeded = taskResult.has_value() &&
                            taskResult->state() == runtime::TaskState::Succeeded &&
                            publicationSucceeded;
-    return {.succeeded = succeeded,
-            .publishedFrames = succeeded ? 1U : 0U,
-            .preservationReport = reportText(*attempt),
-            .diagnostic = succeeded ? std::string{} : "The export publication failed"};
+    return finish({.succeeded = succeeded,
+                   .publishedFrames = succeeded ? 1U : 0U,
+                   .preservationReport = reportText(*attempt),
+                   .diagnostic = succeeded ? std::string{} : "The export publication failed"});
 }
 
 [[nodiscard]] RenderResult compilePlan(const document::Snapshot& snapshot,
@@ -282,8 +295,16 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
                 const auto current =
                     exportWithPlan(session, scheduler, plan, frame.time, request.preset, frame.path,
                                    scratchDirectory, ledger, gpuProvider, request.cancelled);
+                aggregate.gpuEvaluatedFrames += current.gpuEvaluatedFrames;
+                aggregate.gpuNativeDispatches += current.gpuNativeDispatches;
+                aggregate.gpuReadbacks += current.gpuReadbacks;
+                if (current.gpuDeviceOwnershipEpoch != 0) {
+                    aggregate.gpuDeviceOwnershipEpoch = current.gpuDeviceOwnershipEpoch;
+                }
                 if (!current.succeeded) {
-                    aggregate = current;
+                    aggregate.succeeded = false;
+                    aggregate.preservationReport = current.preservationReport;
+                    aggregate.diagnostic = current.diagnostic;
                     return false;
                 }
                 aggregate.publishedFrames += 1;

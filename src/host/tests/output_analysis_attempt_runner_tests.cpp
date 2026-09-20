@@ -395,6 +395,8 @@ void testGpuEvaluatorHostPath(Expectations& expectations, const bool requireDevi
                                 "gpu host path: the attempt records real native dispatches");
             expectations.expect(provenance->counters.readbacks == 1,
                                 "gpu host path: the attempt records exactly one final readback");
+            expectations.expect(provenance->deviceOwnershipEpoch > 0,
+                                "gpu host path: the attempt reports the genuine device epoch");
         }
     }
     static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
