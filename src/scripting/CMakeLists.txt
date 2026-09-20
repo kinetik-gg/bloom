@@ -76,6 +76,10 @@ if(BUILD_TESTING)
                    tests/render_injected_provider_test.cpp)
     target_link_libraries(bloom_scripting_render_injected_provider_test
                           PRIVATE bloom_scripting OpenEXR::OpenEXR)
+    target_include_directories(bloom_scripting_render_injected_provider_test PRIVATE
+        "${PROJECT_SOURCE_DIR}/tests/support"
+        "${PROJECT_SOURCE_DIR}/src/runtime/include" "${PROJECT_SOURCE_DIR}/src/core/include"
+        "${PROJECT_SOURCE_DIR}/src/document/include" "${PROJECT_SOURCE_DIR}/src/render/include")
     bloom_enable_warnings(bloom_scripting_render_injected_provider_test)
     # CTest runs the actual GPU case when the qualified prefix provides a loader (the test skips
     # honestly when no real device is present, so the CPU stub stays tested on GPU-less hosts).
@@ -98,6 +102,37 @@ if(BUILD_TESTING)
         ENVIRONMENT ${_bloom_render_injected_test_environment}
         TIMEOUT 180
     )
+
+    # Scripted export route-proof writers: the same production Render::run facade, opt-in
+    # --route-proof-dir, publishing only after every parity assertion passed. The sequence/range
+    # route exercises the real FrameRangeRunner image-sequence mode; the headless route the
+    # single-frame mode. Both share the run nonce written by the gpu_route_proofs fixture.
+    set(BLOOM_GPU_ROUTE_PROOF_DIR "${PROJECT_BINARY_DIR}/gpu-route-proofs")
+    bloom_add_test(
+        NAME bloom.scripting.export-route-proof.headless
+        COMMAND bloom_scripting_render_injected_provider_test
+                --route-proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}" --route headless
+        LABELS unit scripting host gpu contract
+        ENVIRONMENT ${_bloom_render_injected_test_environment}
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.scripting.export-route-proof.headless PROPERTIES
+        SKIP_RETURN_CODE 77
+        FIXTURES_REQUIRED gpu_route_proofs
+        FIXTURES_SETUP gpu_route_proof_writers)
+
+    bloom_add_test(
+        NAME bloom.scripting.export-route-proof.sequence-range
+        COMMAND bloom_scripting_render_injected_provider_test
+                --route-proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}" --route sequence
+        LABELS unit scripting host gpu contract
+        ENVIRONMENT ${_bloom_render_injected_test_environment}
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.scripting.export-route-proof.sequence-range PROPERTIES
+        SKIP_RETURN_CODE 77
+        FIXTURES_REQUIRED gpu_route_proofs
+        FIXTURES_SETUP gpu_route_proof_writers)
 endif()
 
 if(BLOOM_BUILD_PYTHON)

@@ -270,6 +270,10 @@ if(BUILD_TESTING)
         # ZLIB::ZLIB link above.
         add_executable(bloom_host_sequence_export_runner_test ${PROJECT_SOURCE_DIR}/tests/sequence_export_runner_tests.cpp)
         target_link_libraries(bloom_host_sequence_export_runner_test PRIVATE bloom_host bloom_commands bloom_media_video)
+        target_include_directories(bloom_host_sequence_export_runner_test PRIVATE
+            "${PROJECT_SOURCE_DIR}/tests/support"
+            "${PROJECT_SOURCE_DIR}/src/runtime/include" "${PROJECT_SOURCE_DIR}/src/core/include"
+            "${PROJECT_SOURCE_DIR}/src/document/include" "${PROJECT_SOURCE_DIR}/src/render/include")
         add_dependencies(bloom_host_sequence_export_runner_test bloom-media-worker)
         bloom_enable_warnings(bloom_host_sequence_export_runner_test)
         bloom_add_test(NAME bloom.host.sequence-export COMMAND bloom_host_sequence_export_runner_test
@@ -279,11 +283,58 @@ if(BUILD_TESTING)
                        tests/frame_export_publication_tests.cpp)
         target_link_libraries(bloom_host_frame_export_publication_test PRIVATE bloom_host
                                                                                ZLIB::ZLIB)
+        target_include_directories(bloom_host_frame_export_publication_test PRIVATE
+            "${PROJECT_SOURCE_DIR}/tests/support"
+            "${PROJECT_SOURCE_DIR}/src/runtime/include" "${PROJECT_SOURCE_DIR}/src/core/include"
+            "${PROJECT_SOURCE_DIR}/src/document/include" "${PROJECT_SOURCE_DIR}/src/render/include")
         bloom_enable_warnings(bloom_host_frame_export_publication_test)
         bloom_add_test(
             NAME bloom.host.frame-export-publication
             COMMAND bloom_host_frame_export_publication_test
             LABELS unit host output persistence security
         )
+
+        # Export route-proof writers. These reuse the exact still/video harnesses above through an
+        # opt-in --route-proof-dir: the ordinary registrations stay byte-for-byte unchanged, and a
+        # writer invocation only publishes a proof after every parity/publication assertion passed.
+        # The build-owned proof directory and the gpu_route_proofs fixture (fresh nonce, known
+        # proof files cleared) live in src/runtime/tests; the runtime module still links no UI.
+        set(BLOOM_GPU_ROUTE_PROOF_DIR "${PROJECT_BINARY_DIR}/gpu-route-proofs")
+        set(BLOOM_HOST_ROUTE_PROOF_LOADER_ENV "")
+        if(UNIX AND NOT APPLE AND BLOOM_RENDER_ENABLE_VULKAN AND DEFINED BLOOM_DEPENDENCY_MODE
+           AND BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
+            find_package(VulkanLoader QUIET CONFIG PATHS "${BLOOM_DEPENDENCY_PREFIX}" NO_DEFAULT_PATH)
+            if(TARGET Vulkan::Loader)
+                list(APPEND BLOOM_HOST_ROUTE_PROOF_LOADER_ENV
+                     "BLOOM_TEST_VULKAN_LOADER=$<TARGET_FILE:Vulkan::Loader>")
+            endif()
+        endif()
+
+        bloom_add_test(
+            NAME bloom.host.export-route-proof.still
+            COMMAND bloom_host_frame_export_publication_test
+                    --route-proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}"
+            LABELS unit host output gpu contract
+            ENVIRONMENT ${BLOOM_HOST_ROUTE_PROOF_LOADER_ENV}
+            TIMEOUT 300
+        )
+        set_tests_properties(bloom.host.export-route-proof.still PROPERTIES
+            SKIP_RETURN_CODE 77
+            FIXTURES_REQUIRED gpu_route_proofs
+            FIXTURES_SETUP gpu_route_proof_writers)
+
+        bloom_add_test(
+            NAME bloom.host.export-route-proof.video
+            COMMAND bloom_host_sequence_export_runner_test
+                    "${CMAKE_CURRENT_BINARY_DIR}/sequence-export-proof-fixtures"
+                    --route-proof-dir "${BLOOM_GPU_ROUTE_PROOF_DIR}"
+            LABELS unit host media output gpu contract
+            ENVIRONMENT ${BLOOM_HOST_ROUTE_PROOF_LOADER_ENV}
+            TIMEOUT 300
+        )
+        set_tests_properties(bloom.host.export-route-proof.video PROPERTIES
+            SKIP_RETURN_CODE 77
+            FIXTURES_REQUIRED gpu_route_proofs
+            FIXTURES_SETUP gpu_route_proof_writers)
     endif()
 endif()
